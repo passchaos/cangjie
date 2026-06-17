@@ -1,0 +1,11 @@
+.{
+    .name = .cangjie,
+    .version = "0.1.0",
+    .fingerprint = 0xa8ce_58a0_7da4_dd3a,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -1,0 +1,1545 @@
+const std = @import("std");
+const Font = @import("font.zig").Font;
+const GlyphId = @import("glyph.zig").GlyphId;
+const gpos = @import("gpos.zig");
+const unicode = @import("unicode.zig");
+
+/// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
+/// adjustment. `cluster` is a byte offset into the original UTF-8 text, so
+/// hit testing and selection can map glyph positions back to source text.
+pub const GlyphPosition = struct {
+    glyph_id: GlyphId,
+    codepoint: u21,
+    cluster: usize,
+    x_advance: f32,
+    y_advance: f32 = 0,
+    x_offset: f32 = 0,
+    y_offset: f32 = 0,
+};
+
+/// A contiguous range of glyphs rendered by one font at one size.
+pub const GlyphRun = struct {
+    font: *const Font,
+    font_size: f32,
+    glyphs: []const GlyphPosition,
+
+    pub fn width(self: GlyphRun) f32 {
+        var total: f32 = 0;
+        for (self.glyphs) |glyph| total += glyph.x_advance;
+        return total;
+    }
+};
+
+/// A subrange of the shaped glyph stream selected from a font cascade.
+/// Multiple cascade runs can exist inside a single paragraph line.
+pub const CascadeRun = struct {
+    font: *const Font,
+    font_index: usize,
+    font_size: f32,
+    glyph_start: usize,
+    glyph_len: usize,
+    x_offset: f32,
+
+    pub fn glyphs(self: CascadeRun, shaped: ShapedText) []const GlyphPosition {
+        return shaped.glyphs[self.glyph_start .. self.glyph_start + self.glyph_len];
+    }
+
+    pub fn glyphRun(self: CascadeRun, shaped: ShapedText) GlyphRun {
+        return .{ .font = self.font, .font_size = self.font_size, .glyphs = self.glyphs(shaped) };
+    }
+};
+
+/// Flat shaping result. Glyphs are stored once, while runs describe which font
+/// owns each contiguous range.
+pub const ShapedText = struct {
+    glyphs: []const GlyphPosition,
+    runs: []const CascadeRun,
+
+    pub fn width(self: ShapedText) f32 {
+        var total: f32 = 0;
+        for (self.glyphs) |glyph| total += glyph.x_advance;
+        return total;
+    }
+};
+
+pub const ScriptedRun = struct {
+    script: unicode.Script,
+    script_tag: unicode.OpenTypeScriptTag,
+    language_tag: unicode.OpenTypeLanguageTag,
+    glyph_start: usize,
+    glyph_len: usize,
+    byte_start: usize,
+    byte_len: usize,
+
+    pub fn glyphs(self: ScriptedRun, text: ScriptedText) []const GlyphPosition {
+        return text.glyphs[self.glyph_start .. self.glyph_start + self.glyph_len];
+    }
+};
+
+pub const ScriptedText = struct {
+    glyphs: []const GlyphPosition,
+    font_runs: []const CascadeRun,
+    script_runs: []const ScriptedRun,
+};
+
+pub const TextDirection = enum {
+    ltr,
+    rtl,
+};
+
+pub const ShapeOptions = struct {
+    direction: TextDirection = .ltr,
+    language_tag: ?unicode.OpenTypeLanguageTag = null,
+    features: []const unicode.FeatureOverride = &.{},
+};
+
+/// Coarse shaping plan identity. It intentionally excludes the concrete font
+/// and text bytes; those live in `ShapedRunCacheKey`. This part captures the
+/// OpenType selection knobs that change which GSUB/GPOS lookups are active.
+pub const ShapePlanKey = struct {
+    direction: TextDirection = .ltr,
+    script_tag: unicode.OpenTypeScriptTag = .dflt,
+    language_tag: unicode.OpenTypeLanguageTag = .dflt,
+    feature_hash: u64 = 0,
+
+    pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
+        return .{
+            .direction = options.direction,
+            .script_tag = unicode.openTypeScriptTag(scriptForText(text)),
+            .language_tag = effectiveLanguageTag(text, options),
+            .feature_hash = featureOverridesHash(options.features),
+        };
+    }
+};
+
+pub const ShapePlan = struct {
+    key: ShapePlanKey,
+    hits: usize = 0,
+};
+
+pub const ShapePlanCache = struct {
+    allocator: std.mem.Allocator,
+    plans: std.ArrayList(ShapePlan) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) ShapePlanCache {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *ShapePlanCache) void {
+        self.plans.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    pub fn getOrPut(self: *ShapePlanCache, key: ShapePlanKey) !*ShapePlan {
+        for (self.plans.items) |*plan| {
+            if (shapePlanKeysEqual(plan.key, key)) {
+                plan.hits += 1;
+                return plan;
+            }
+        }
+        try self.plans.append(self.allocator, .{ .key = key, .hits = 1 });
+        return &self.plans.items[self.plans.items.len - 1];
+    }
+};
+
+pub const ShapedRunCacheKey = struct {
+    cascade_hash: u64,
+    text_hash: u64,
+    text_len: usize,
+    font_size_bits: u32,
+    plan: ShapePlanKey,
+};
+
+pub const ShapedRunCacheEntry = struct {
+    key: ShapedRunCacheKey,
+    glyphs: []GlyphPosition,
+    runs: []CascadeRun,
+    hits: usize = 0,
+};
+
+pub const ShapedRunCache = struct {
+    allocator: std.mem.Allocator,
+    entries: std.ArrayList(ShapedRunCacheEntry) = .empty,
+    hits: usize = 0,
+    misses: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) ShapedRunCache {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *ShapedRunCache) void {
+        self.clear();
+        self.entries.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *ShapedRunCache) void {
+        for (self.entries.items) |entry| {
+            self.allocator.free(entry.glyphs);
+            self.allocator.free(entry.runs);
+        }
+        self.entries.clearRetainingCapacity();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    pub fn key(cascade: FontCascade, text: []const u8, font_size: f32, options: ShapeOptions) ShapedRunCacheKey {
+        return .{
+            .cascade_hash = cascadeHash(cascade),
+            .text_hash = std.hash.Wyhash.hash(0, text),
+            .text_len = text.len,
+            .font_size_bits = @bitCast(font_size),
+            .plan = ShapePlanKey.fromText(text, options),
+        };
+    }
+
+    pub fn load(self: *ShapedRunCache, key_value: ShapedRunCacheKey, buffer: *LayoutBuffer) !?ShapedText {
+        for (self.entries.items) |*entry| {
+            if (!shapedRunCacheKeysEqual(entry.key, key_value)) continue;
+            self.hits += 1;
+            entry.hits += 1;
+            buffer.clear();
+            try buffer.glyphs.appendSlice(buffer.allocator, entry.glyphs);
+            try buffer.runs.appendSlice(buffer.allocator, entry.runs);
+            return buffer.shapedText();
+        }
+        self.misses += 1;
+        return null;
+    }
+
+    pub fn store(self: *ShapedRunCache, key_value: ShapedRunCacheKey, shaped: ShapedText) !void {
+        const glyphs = try self.allocator.dupe(GlyphPosition, shaped.glyphs);
+        errdefer self.allocator.free(glyphs);
+        const runs = try self.allocator.dupe(CascadeRun, shaped.runs);
+        errdefer self.allocator.free(runs);
+        try self.entries.append(self.allocator, .{
+            .key = key_value,
+            .glyphs = glyphs,
+            .runs = runs,
+        });
+    }
+};
+
+pub const TextAlign = enum {
+    left,
+    center,
+    right,
+};
+
+pub const BaselineMetrics = struct {
+    ascent: f32,
+    descent: f32,
+    leading: f32,
+
+    pub fn lineHeight(self: BaselineMetrics) f32 {
+        return self.ascent + self.descent + self.leading;
+    }
+};
+
+pub const TextMetrics = struct {
+    width: f32,
+    height: f32,
+    baseline: f32,
+    ascent: f32,
+    descent: f32,
+    leading: f32,
+};
+
+pub const ParagraphOptions = struct {
+    max_width: f32,
+    alignment: TextAlign = .left,
+    line_height: ?f32 = null,
+    direction: TextDirection = .ltr,
+    max_lines: ?usize = null,
+    ellipsis: bool = false,
+    tab_width: usize = 4,
+    letter_spacing: f32 = 0,
+    word_spacing: f32 = 0,
+    first_line_indent: f32 = 0,
+    paragraph_spacing: f32 = 0,
+};
+
+/// A laid-out visual line. Glyph and run ranges are indexes into the owning
+/// ParagraphLayout arrays, keeping line objects small and cheap to copy.
+pub const ParagraphLine = struct {
+    glyph_start: usize,
+    glyph_len: usize,
+    run_start: usize,
+    run_len: usize,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    baseline: f32,
+    ascent: f32,
+    descent: f32,
+    leading: f32,
+
+    pub fn glyphs(self: ParagraphLine, paragraph: ParagraphLayout) []const GlyphPosition {
+        return paragraph.glyphs[self.glyph_start .. self.glyph_start + self.glyph_len];
+    }
+
+    pub fn runs(self: ParagraphLine, paragraph: ParagraphLayout) []const CascadeRun {
+        return paragraph.runs[self.run_start .. self.run_start + self.run_len];
+    }
+};
+
+pub const TextPosition = struct {
+    glyph_index: usize,
+    cluster: usize,
+    trailing: bool = false,
+};
+
+pub const TextRect = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+};
+
+pub const ParagraphLayout = struct {
+    glyphs: []const GlyphPosition,
+    runs: []const CascadeRun,
+    lines: []const ParagraphLine,
+    width: f32,
+    height: f32,
+
+    /// Return the closest glyph caret for a point in paragraph coordinates.
+    /// This is midpoint-based: clicks in the left half of a glyph choose its
+    /// leading edge, and clicks in the right half choose its trailing edge.
+    pub fn hitTest(self: ParagraphLayout, x: f32, y: f32) TextPosition {
+        if (self.lines.len == 0) return .{ .glyph_index = 0, .cluster = 0 };
+        const line_index = self.lineIndexAtY(y);
+        const line = self.lines[line_index];
+        if (line.glyph_len == 0) return .{ .glyph_index = line.glyph_start, .cluster = 0 };
+
+        const local_x = x - line.x;
+        if (local_x <= 0) {
+            const glyph = self.glyphs[line.glyph_start];
+            return .{ .glyph_index = line.glyph_start, .cluster = glyph.cluster };
+        }
+
+        var pen_x: f32 = 0;
+        const glyph_end = line.glyph_start + line.glyph_len;
+        for (self.glyphs[line.glyph_start..glyph_end], line.glyph_start..) |glyph, glyph_index| {
+            const midpoint = pen_x + glyph.x_advance / 2;
+            if (local_x < midpoint) {
+                return .{ .glyph_index = glyph_index, .cluster = glyph.cluster };
+            }
+            if (local_x < pen_x + glyph.x_advance) {
+                return .{ .glyph_index = glyph_index, .cluster = glyph.cluster, .trailing = true };
+            }
+            pen_x += glyph.x_advance;
+        }
+
+        const last_index = glyph_end - 1;
+        const last = self.glyphs[last_index];
+        return .{ .glyph_index = last_index, .cluster = last.cluster, .trailing = true };
+    }
+
+    /// Convert a logical TextPosition back to a zero-width caret rectangle.
+    /// The y/height are taken from the resolved line metrics, not from glyph
+    /// bounds, so selections remain visually stable across mixed glyph shapes.
+    pub fn caretRect(self: ParagraphLayout, position: TextPosition) TextRect {
+        if (self.lines.len == 0) return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        const glyph_index = @min(position.glyph_index, self.glyphs.len);
+        const line = self.lineForCaret(glyph_index);
+        return .{
+            .x = self.caretXInLine(line, glyph_index, position.trailing),
+            .y = line.y,
+            .width = 0,
+            .height = line.height,
+        };
+    }
+
+    pub fn selectionRect(self: ParagraphLayout, start: usize, end: usize) TextRect {
+        if (self.lines.len == 0 or start == end) return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        var buffer: [32]TextRect = undefined;
+        const rects = self.selectionRectsInto(&buffer, start, end);
+        if (rects.len == 0) return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        var found = false;
+        var min_x: f32 = std.math.inf(f32);
+        var min_y: f32 = std.math.inf(f32);
+        var max_x: f32 = -std.math.inf(f32);
+        var max_y: f32 = -std.math.inf(f32);
+
+        for (rects) |rect| {
+            min_x = @min(min_x, rect.x);
+            min_y = @min(min_y, rect.y);
+            max_x = @max(max_x, rect.x + rect.width);
+            max_y = @max(max_y, rect.y + rect.height);
+            found = true;
+        }
+
+        if (!found) return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        return .{ .x = min_x, .y = min_y, .width = max_x - min_x, .height = max_y - min_y };
+    }
+
+    pub fn selectionRects(self: ParagraphLayout, allocator: std.mem.Allocator, start: usize, end: usize) ![]TextRect {
+        if (self.lines.len == 0 or start == end) return try allocator.alloc(TextRect, 0);
+        var rects = std.ArrayList(TextRect).empty;
+        errdefer rects.deinit(allocator);
+        const range_start = @min(start, end);
+        const range_end = @max(start, end);
+        for (self.lines) |line| {
+            if (selectionRectForLine(self, line, range_start, range_end)) |rect| {
+                try rects.append(allocator, rect);
+            }
+        }
+        return try rects.toOwnedSlice(allocator);
+    }
+
+    pub fn selectionRectsInto(self: ParagraphLayout, buffer: []TextRect, start: usize, end: usize) []TextRect {
+        if (self.lines.len == 0 or start == end or buffer.len == 0) return buffer[0..0];
+        const range_start = @min(start, end);
+        const range_end = @max(start, end);
+        var count: usize = 0;
+        for (self.lines) |line| {
+            if (count >= buffer.len) break;
+            if (selectionRectForLine(self, line, range_start, range_end)) |rect| {
+                buffer[count] = rect;
+                count += 1;
+            }
+        }
+        return buffer[0..count];
+    }
+
+    pub fn snapToGraphemeCaret(self: ParagraphLayout, clusters: []const unicode.GraphemeCluster, position: TextPosition) TextPosition {
+        if (clusters.len == 0) return position;
+        const byte_pos = positionByteOffset(self, position);
+        var best = clusters[0].byte_start;
+        for (clusters) |cluster| {
+            const start = cluster.byte_start;
+            const end = cluster.byte_start + cluster.byte_len;
+            if (byte_pos <= start) {
+                best = start;
+                break;
+            }
+            if (byte_pos < end) {
+                best = if (byte_pos - start < end - byte_pos) start else end;
+                break;
+            }
+            best = end;
+        }
+        return self.textPositionForCluster(best);
+    }
+
+    pub fn nextGraphemeCaret(self: ParagraphLayout, clusters: []const unicode.GraphemeCluster, position: TextPosition) TextPosition {
+        if (clusters.len == 0) return position;
+        const byte_pos = positionByteOffset(self, position);
+        for (clusters) |cluster| {
+            const end = cluster.byte_start + cluster.byte_len;
+            if (end > byte_pos) return self.textPositionForCluster(end);
+        }
+        return self.textPositionForCluster(clusters[clusters.len - 1].byte_start + clusters[clusters.len - 1].byte_len);
+    }
+
+    pub fn previousGraphemeCaret(self: ParagraphLayout, clusters: []const unicode.GraphemeCluster, position: TextPosition) TextPosition {
+        if (clusters.len == 0) return position;
+        const byte_pos = positionByteOffset(self, position);
+        var previous = clusters[0].byte_start;
+        for (clusters) |cluster| {
+            if (cluster.byte_start >= byte_pos) return self.textPositionForCluster(previous);
+            previous = cluster.byte_start;
+        }
+        return self.textPositionForCluster(previous);
+    }
+
+    pub fn snapToWordCaret(self: ParagraphLayout, words: []const unicode.WordSegment, position: TextPosition) TextPosition {
+        if (words.len == 0) return position;
+        const byte_pos = positionByteOffset(self, position);
+        var best = words[0].byte_start;
+        for (words) |word| {
+            const start = word.byte_start;
+            const end = word.byte_start + word.byte_len;
+            if (byte_pos <= start) {
+                best = start;
+                break;
+            }
+            if (byte_pos < end) {
+                best = if (byte_pos - start < end - byte_pos) start else end;
+                break;
+            }
+            best = end;
+        }
+        return self.textPositionForCluster(best);
+    }
+
+    pub fn nextWordCaret(self: ParagraphLayout, words: []const unicode.WordSegment, position: TextPosition) TextPosition {
+        if (words.len == 0) return position;
+        const byte_pos = positionByteOffset(self, position);
+        for (words) |word| {
+            const end = word.byte_start + word.byte_len;
+            if (end > byte_pos) return self.textPositionForCluster(end);
+        }
+        return self.textPositionForCluster(words[words.len - 1].byte_start + words[words.len - 1].byte_len);
+    }
+
+    pub fn previousWordCaret(self: ParagraphLayout, words: []const unicode.WordSegment, position: TextPosition) TextPosition {
+        if (words.len == 0) return position;
+        const byte_pos = positionByteOffset(self, position);
+        var previous = words[0].byte_start;
+        for (words) |word| {
+            if (word.byte_start >= byte_pos) return self.textPositionForCluster(previous);
+            previous = word.byte_start;
+        }
+        return self.textPositionForCluster(previous);
+    }
+
+    fn lineIndexAtY(self: ParagraphLayout, y: f32) usize {
+        if (y <= self.lines[0].y) return 0;
+        for (self.lines, 0..) |line, index| {
+            if (y < line.y + line.height) return index;
+        }
+        return self.lines.len - 1;
+    }
+
+    fn textPositionForCluster(self: ParagraphLayout, cluster: usize) TextPosition {
+        if (self.glyphs.len == 0) return .{ .glyph_index = 0, .cluster = cluster };
+        for (self.glyphs, 0..) |glyph, index| {
+            if (glyph.cluster >= cluster) return .{ .glyph_index = index, .cluster = glyph.cluster };
+        }
+        return .{ .glyph_index = self.glyphs.len - 1, .cluster = cluster, .trailing = true };
+    }
+
+    fn lineForCaret(self: ParagraphLayout, glyph_index: usize) ParagraphLine {
+        for (self.lines) |line| {
+            const line_start = line.glyph_start;
+            const line_end = line.glyph_start + line.glyph_len;
+            if (glyph_index >= line_start and glyph_index <= line_end) return line;
+        }
+        return self.lines[self.lines.len - 1];
+    }
+
+    fn caretXInLine(self: ParagraphLayout, line: ParagraphLine, glyph_index: usize, trailing: bool) f32 {
+        var x = line.x;
+        const clamped_index = @min(glyph_index, line.glyph_start + line.glyph_len);
+        var index = line.glyph_start;
+        while (index < clamped_index) : (index += 1) {
+            x += self.glyphs[index].x_advance;
+        }
+        if (trailing and clamped_index < line.glyph_start + line.glyph_len) {
+            x += self.glyphs[clamped_index].x_advance;
+        }
+        return x;
+    }
+};
+
+fn positionByteOffset(layout_value: ParagraphLayout, position: TextPosition) usize {
+    if (layout_value.glyphs.len == 0) return position.cluster;
+    if (position.glyph_index >= layout_value.glyphs.len) return position.cluster;
+    const glyph = layout_value.glyphs[position.glyph_index];
+    if (!position.trailing) return glyph.cluster;
+    if (position.glyph_index + 1 < layout_value.glyphs.len) return layout_value.glyphs[position.glyph_index + 1].cluster;
+    return position.cluster + 1;
+}
+
+fn selectionRectForLine(layout_value: ParagraphLayout, line: ParagraphLine, range_start: usize, range_end: usize) ?TextRect {
+    const line_start = line.glyph_start;
+    const line_end = line.glyph_start + line.glyph_len;
+    const overlap_start = @max(range_start, line_start);
+    const overlap_end = @min(range_end, line_end);
+    if (overlap_start >= overlap_end) return null;
+
+    const x0 = layout_value.caretXInLine(line, overlap_start, false);
+    const x1 = layout_value.caretXInLine(line, overlap_end, false);
+    return .{
+        .x = @min(x0, x1),
+        .y = line.y,
+        .width = @abs(x1 - x0),
+        .height = line.height,
+    };
+}
+
+pub const FontCascade = struct {
+    fonts: []const *const Font,
+
+    pub fn init(fonts: []const *const Font) FontCascade {
+        return .{ .fonts = fonts };
+    }
+
+    /// Pick the first font that maps the codepoint to a non-zero glyph id.
+    /// Glyph id 0 is treated as `.notdef`, so it does not count as coverage.
+    pub fn selectFont(self: FontCascade, codepoint: u21) !usize {
+        if (self.fonts.len == 0) return error.EmptyFontCascade;
+        for (self.fonts, 0..) |font, index| {
+            if (try font.glyphIndex(codepoint) != 0) return index;
+        }
+        return 0;
+    }
+};
+
+/// Caches codepoint-to-font decisions for a cascade. This is separate from the
+/// glyph-id cache because the same codepoint can map to different glyph ids in
+/// different fonts, while fallback only needs the winning font index.
+pub const FontFallbackCache = struct {
+    allocator: std.mem.Allocator,
+    entries: std.AutoHashMap(u21, usize),
+    hits: usize = 0,
+    misses: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) FontFallbackCache {
+        return .{
+            .allocator = allocator,
+            .entries = std.AutoHashMap(u21, usize).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *FontFallbackCache) void {
+        self.entries.deinit();
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *FontFallbackCache) void {
+        self.entries.clearRetainingCapacity();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    pub fn selectFont(self: *FontFallbackCache, cascade: FontCascade, codepoint: u21) !usize {
+        if (self.entries.get(codepoint)) |font_index| {
+            self.hits += 1;
+            return font_index;
+        }
+        self.misses += 1;
+        const font_index = try cascade.selectFont(codepoint);
+        try self.entries.put(codepoint, font_index);
+        return font_index;
+    }
+
+    pub fn selectFontWithGlyphCache(self: *FontFallbackCache, cascade: FontCascade, glyph_index_cache: *GlyphIndexCache, codepoint: u21) !usize {
+        if (self.entries.get(codepoint)) |font_index| {
+            self.hits += 1;
+            return font_index;
+        }
+        self.misses += 1;
+        const font_index = try selectFontUsingGlyphCache(cascade, glyph_index_cache, codepoint);
+        try self.entries.put(codepoint, font_index);
+        return font_index;
+    }
+};
+
+pub const GlyphMetrics = struct {
+    advance_width: u16,
+    left_side_bearing: i16,
+};
+
+const GlyphMetricsKey = struct {
+    font_addr: usize,
+    glyph_id: GlyphId,
+};
+
+pub const GlyphMetricsCache = struct {
+    allocator: std.mem.Allocator,
+    entries: std.AutoHashMap(GlyphMetricsKey, GlyphMetrics),
+    hits: usize = 0,
+    misses: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) GlyphMetricsCache {
+        return .{
+            .allocator = allocator,
+            .entries = std.AutoHashMap(GlyphMetricsKey, GlyphMetrics).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *GlyphMetricsCache) void {
+        self.entries.deinit();
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *GlyphMetricsCache) void {
+        self.entries.clearRetainingCapacity();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    pub fn horizontalMetrics(self: *GlyphMetricsCache, font: *const Font, glyph_id: GlyphId) !GlyphMetrics {
+        const key = glyphMetricsKey(font, glyph_id);
+        if (self.entries.get(key)) |metrics| {
+            self.hits += 1;
+            return metrics;
+        }
+        self.misses += 1;
+        const raw = try font.horizontalMetrics(glyph_id);
+        const metrics = GlyphMetrics{
+            .advance_width = raw.advance_width,
+            .left_side_bearing = raw.left_side_bearing,
+        };
+        try self.entries.put(key, metrics);
+        return metrics;
+    }
+};
+
+const GlyphIndexKey = struct {
+    font_addr: usize,
+    codepoint: u21,
+};
+
+pub const GlyphIndexCache = struct {
+    allocator: std.mem.Allocator,
+    entries: std.AutoHashMap(GlyphIndexKey, GlyphId),
+    hits: usize = 0,
+    misses: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) GlyphIndexCache {
+        return .{
+            .allocator = allocator,
+            .entries = std.AutoHashMap(GlyphIndexKey, GlyphId).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *GlyphIndexCache) void {
+        self.entries.deinit();
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *GlyphIndexCache) void {
+        self.entries.clearRetainingCapacity();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    pub fn glyphIndex(self: *GlyphIndexCache, font: *const Font, codepoint: u21) !GlyphId {
+        const key = glyphIndexKey(font, codepoint);
+        if (self.entries.get(key)) |glyph_id| {
+            self.hits += 1;
+            return glyph_id;
+        }
+        self.misses += 1;
+        const glyph_id = try font.glyphIndex(codepoint);
+        try self.entries.put(key, glyph_id);
+        return glyph_id;
+    }
+};
+
+pub const LayoutBuffer = struct {
+    allocator: std.mem.Allocator,
+    glyphs: std.ArrayList(GlyphPosition) = .empty,
+    runs: std.ArrayList(CascadeRun) = .empty,
+    lines: std.ArrayList(ParagraphLine) = .empty,
+    script_runs: std.ArrayList(ScriptedRun) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) LayoutBuffer {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *LayoutBuffer) void {
+        self.script_runs.deinit(self.allocator);
+        self.lines.deinit(self.allocator);
+        self.runs.deinit(self.allocator);
+        self.glyphs.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *LayoutBuffer) void {
+        self.glyphs.clearRetainingCapacity();
+        self.runs.clearRetainingCapacity();
+        self.lines.clearRetainingCapacity();
+        self.script_runs.clearRetainingCapacity();
+    }
+
+    pub fn run(self: *const LayoutBuffer, font: *const Font, font_size: f32) GlyphRun {
+        return .{ .font = font, .font_size = font_size, .glyphs = self.glyphs.items };
+    }
+
+    pub fn shapedText(self: *const LayoutBuffer) ShapedText {
+        return .{ .glyphs = self.glyphs.items, .runs = self.runs.items };
+    }
+
+    pub fn scriptedText(self: *const LayoutBuffer) ScriptedText {
+        return .{
+            .glyphs = self.glyphs.items,
+            .font_runs = self.runs.items,
+            .script_runs = self.script_runs.items,
+        };
+    }
+
+    pub fn paragraphLayout(self: *const LayoutBuffer) ParagraphLayout {
+        var max_width: f32 = 0;
+        var height: f32 = 0;
+        for (self.lines.items) |line| {
+            max_width = @max(max_width, line.x + line.width);
+            height = @max(height, line.y + line.height);
+        }
+        return .{
+            .glyphs = self.glyphs.items,
+            .runs = self.runs.items,
+            .lines = self.lines.items,
+            .width = max_width,
+            .height = height,
+        };
+    }
+};
+
+pub const TextShaper = struct {
+    pub fn shapeUtf8(font: *const Font, buffer: *LayoutBuffer, text: []const u8, font_size: f32) !GlyphRun {
+        return try shapeUtf8WithOptions(font, buffer, text, font_size, .{});
+    }
+
+    pub fn shapeUtf8WithOptions(font: *const Font, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
+        buffer.clear();
+        try shapeSegmentInto(font, null, null, buffer, text, font_size, 0, lookupOptionsForText(text, options));
+        applyDirection(buffer, options.direction);
+        return buffer.run(font, font_size);
+    }
+
+    pub fn shapeUtf8Cascade(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32) !ShapedText {
+        return try shapeUtf8CascadeWithOptions(cascade, buffer, text, font_size, .{});
+    }
+
+    pub fn shapeUtf8CascadeWithOptions(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
+        return try shapeUtf8CascadeCachedWithOptions(cascade, null, buffer, text, font_size, options);
+    }
+
+    pub fn shapeUtf8CascadeCached(cascade: FontCascade, cache: *FontFallbackCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32) !ShapedText {
+        return try shapeUtf8CascadeCachedWithOptions(cascade, cache, buffer, text, font_size, .{});
+    }
+
+    pub fn shapeUtf8CascadeCachedWithOptions(cascade: FontCascade, cache: ?*FontFallbackCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
+        return try shapeUtf8CascadeFullyCachedWithOptions(cascade, cache, null, null, buffer, text, font_size, options);
+    }
+
+    pub fn shapeUtf8CascadeFullyCached(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32) !ShapedText {
+        return try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, null, buffer, text, font_size, .{});
+    }
+
+    pub fn shapeUtf8CascadeFullyCachedWithOptions(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
+        return try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, null, buffer, text, font_size, options);
+    }
+
+    pub fn shapeUtf8CascadeWithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
+        const cache_key = if (shaped_cache != null) ShapedRunCache.key(cascade, text, font_size, options) else undefined;
+        if (shaped_cache) |cache| {
+            if (try cache.load(cache_key, buffer)) |cached| return cached;
+        }
+        buffer.clear();
+        if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+
+        // Split only when the selected fallback font changes. Each segment can
+        // then be shaped independently through its own font while preserving a
+        // single flat glyph stream for paragraph layout and rendering.
+        var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+        var segment_start: usize = 0;
+        var segment_font_index: ?usize = null;
+        var pen_x: f32 = 0;
+
+        while (it.i < text.len) {
+            const cluster = it.i;
+            const codepoint = it.nextCodepoint() orelse break;
+            const font_index = try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
+            if (segment_font_index == null) {
+                segment_start = cluster;
+                segment_font_index = font_index;
+            } else if (segment_font_index.? != font_index) {
+                pen_x = try appendCascadeRun(cascade.fonts[segment_font_index.?], metrics_cache, glyph_index_cache, segment_font_index.?, buffer, text[segment_start..cluster], font_size, segment_start, pen_x, lookupOptionsForText(text[segment_start..cluster], options));
+                segment_start = cluster;
+                segment_font_index = font_index;
+            }
+        }
+
+        if (segment_font_index) |font_index| {
+            _ = try appendCascadeRun(cascade.fonts[font_index], metrics_cache, glyph_index_cache, font_index, buffer, text[segment_start..], font_size, segment_start, pen_x, lookupOptionsForText(text[segment_start..], options));
+        }
+
+        applyDirection(buffer, options.direction);
+        const shaped = buffer.shapedText();
+        if (shaped_cache) |cache| {
+            try cache.store(cache_key, shaped);
+        }
+        return shaped;
+    }
+
+    pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
+        try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
+        applyDirection(buffer, options.direction);
+        try buildScriptRuns(buffer, text, options.direction, options.language_tag);
+        return buffer.scriptedText();
+    }
+
+    pub fn layoutParagraphUtf8(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        return try layoutParagraphUtf8WithOptions(cascade, buffer, text, font_size, options);
+    }
+
+    pub fn layoutParagraphUtf8WithOptions(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        return try layoutParagraphUtf8CachedWithOptions(cascade, null, buffer, text, font_size, options);
+    }
+
+    pub fn layoutParagraphUtf8Cached(cascade: FontCascade, cache: *FontFallbackCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        return try layoutParagraphUtf8CachedWithOptions(cascade, cache, buffer, text, font_size, options);
+    }
+
+    pub fn layoutParagraphUtf8CachedWithOptions(cascade: FontCascade, cache: ?*FontFallbackCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        return try layoutParagraphUtf8FullyCachedWithOptions(cascade, cache, null, null, buffer, text, font_size, options);
+    }
+
+    pub fn layoutParagraphUtf8FullyCached(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        return try layoutParagraphUtf8FullyCachedWithOptions(cascade, fallback_cache, metrics_cache, null, buffer, text, font_size, options);
+    }
+
+    pub fn layoutParagraphUtf8FullyCachedWithOptions(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        // Paragraph layout is deliberately staged: shape first, then line-wrap
+        // the finished glyph advances. That keeps OpenType substitution and
+        // positioning independent from wrapping policy.
+        _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, .{ .direction = options.direction });
+        try buildParagraphLines(buffer, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
+        return buffer.paragraphLayout();
+    }
+
+    pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, .{ .direction = options.direction });
+        try buildParagraphLines(buffer, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
+        return buffer.paragraphLayout();
+    }
+
+    pub fn measureParagraphUtf8(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !TextMetrics {
+        const paragraph = try layoutParagraphUtf8(cascade, buffer, text, font_size, options);
+        return textMetricsFromParagraph(paragraph);
+    }
+
+    pub fn measureParagraphsUtf8(allocator: std.mem.Allocator, cascade: FontCascade, texts: []const []const u8, font_size: f32, options: ParagraphOptions) ![]TextMetrics {
+        var buffer = LayoutBuffer.init(allocator);
+        defer buffer.deinit();
+        const metrics = try allocator.alloc(TextMetrics, texts.len);
+        errdefer allocator.free(metrics);
+        for (texts, 0..) |text, index| {
+            metrics[index] = try measureParagraphUtf8(cascade, &buffer, text, font_size, options);
+        }
+        return metrics;
+    }
+};
+
+fn textMetricsFromParagraph(paragraph: ParagraphLayout) TextMetrics {
+    if (paragraph.lines.len == 0) {
+        return .{ .width = 0, .height = 0, .baseline = 0, .ascent = 0, .descent = 0, .leading = 0 };
+    }
+    const first = paragraph.lines[0];
+    return .{
+        .width = paragraph.width,
+        .height = paragraph.height,
+        .baseline = first.y + first.baseline,
+        .ascent = first.ascent,
+        .descent = first.descent,
+        .leading = first.leading,
+    };
+}
+
+fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {
+    buffer.clear();
+    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+    const script_runs = try unicode.itemizeScriptRuns(buffer.allocator, text);
+    defer buffer.allocator.free(script_runs);
+
+    var pen_x: f32 = 0;
+    for (script_runs) |script_run| {
+        const run_text = text[script_run.byte_start .. script_run.byte_start + script_run.byte_len];
+        pen_x = try shapeCascadeSegmentInto(
+            cascade,
+            buffer,
+            run_text,
+            font_size,
+            script_run.byte_start,
+            pen_x,
+            .{
+                .script_tag = unicode.openTypeScriptTag(script_run.script),
+                .language_tag = effectiveLanguageTag(run_text, options),
+                .features = options.features,
+            },
+        );
+    }
+}
+
+fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen_x: f32, lookup_options: LookupOptions) !f32 {
+    // Script itemization happens outside this helper. This pass only performs
+    // fallback segmentation inside that script run, so each append keeps the
+    // same OpenType script/language lookup selection.
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    var segment_start: usize = 0;
+    var segment_font_index: ?usize = null;
+    var next_pen_x = pen_x;
+
+    while (it.i < text.len) {
+        const cluster = it.i;
+        const codepoint = it.nextCodepoint() orelse break;
+        const font_index = try cascade.selectFont(codepoint);
+        if (segment_font_index == null) {
+            segment_start = cluster;
+            segment_font_index = font_index;
+        } else if (segment_font_index.? != font_index) {
+            next_pen_x = try appendCascadeRun(cascade.fonts[segment_font_index.?], null, null, segment_font_index.?, buffer, text[segment_start..cluster], font_size, cluster_base + segment_start, next_pen_x, lookup_options);
+            segment_start = cluster;
+            segment_font_index = font_index;
+        }
+    }
+
+    if (segment_font_index) |font_index| {
+        next_pen_x = try appendCascadeRun(cascade.fonts[font_index], null, null, font_index, buffer, text[segment_start..], font_size, cluster_base + segment_start, next_pen_x, lookup_options);
+    }
+    return next_pen_x;
+}
+
+fn selectFontUsingGlyphCache(cascade: FontCascade, glyph_index_cache: *GlyphIndexCache, codepoint: u21) !usize {
+    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+    for (cascade.fonts, 0..) |font, index| {
+        if (try glyph_index_cache.glyphIndex(font, codepoint) != 0) return index;
+    }
+    return 0;
+}
+
+fn selectFontWithOptionalCache(cascade: FontCascade, cache: ?*FontFallbackCache, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21) !usize {
+    if (cache) |fallback_cache| {
+        if (glyph_index_cache) |glyph_cache| return try fallback_cache.selectFontWithGlyphCache(cascade, glyph_cache, codepoint);
+        return try fallback_cache.selectFont(cascade, codepoint);
+    }
+    if (glyph_index_cache) |glyph_cache| return try selectFontUsingGlyphCache(cascade, glyph_cache, codepoint);
+    return try cascade.selectFont(codepoint);
+}
+
+fn buildScriptRuns(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection, language_tag: ?unicode.OpenTypeLanguageTag) !void {
+    buffer.script_runs.clearRetainingCapacity();
+    const script_runs = try unicode.itemizeScriptRuns(buffer.allocator, text);
+    defer buffer.allocator.free(script_runs);
+
+    if (direction == .ltr) {
+        for (script_runs) |script_run| {
+            try appendScriptedRunForByteRange(buffer, text, script_run, language_tag);
+        }
+    } else {
+        var index = script_runs.len;
+        while (index > 0) {
+            index -= 1;
+            try appendScriptedRunForByteRange(buffer, text, script_runs[index], language_tag);
+        }
+    }
+}
+
+fn appendScriptedRunForByteRange(buffer: *LayoutBuffer, text: []const u8, script_run: unicode.ScriptRun, language_tag: ?unicode.OpenTypeLanguageTag) !void {
+    const byte_start = script_run.byte_start;
+    const byte_end = script_run.byte_start + script_run.byte_len;
+    var glyph_start: ?usize = null;
+    var glyph_end: usize = 0;
+    for (buffer.glyphs.items, 0..) |glyph, index| {
+        if (glyph.cluster < byte_start or glyph.cluster >= byte_end) continue;
+        if (glyph_start == null) glyph_start = index;
+        glyph_end = index + 1;
+    }
+    if (glyph_start == null) return;
+    try buffer.script_runs.append(buffer.allocator, .{
+        .script = script_run.script,
+        .script_tag = unicode.openTypeScriptTag(script_run.script),
+        .language_tag = language_tag orelse unicode.inferOpenTypeLanguageTag(text[byte_start..byte_end]),
+        .glyph_start = glyph_start.?,
+        .glyph_len = glyph_end - glyph_start.?,
+        .byte_start = byte_start,
+        .byte_len = script_run.byte_len,
+    });
+}
+
+fn applyDirection(buffer: *LayoutBuffer, direction: TextDirection) void {
+    if (direction == .ltr) return;
+    // The current bidi model reverses the shaped glyph/run order for RTL runs.
+    // After reversing, run offsets must be rebuilt from visual order.
+    std.mem.reverse(GlyphPosition, buffer.glyphs.items);
+    for (buffer.runs.items) |*run| {
+        run.glyph_start = buffer.glyphs.items.len - (run.glyph_start + run.glyph_len);
+        run.x_offset = 0;
+    }
+    std.mem.reverse(CascadeRun, buffer.runs.items);
+    recomputeRunOffsets(buffer);
+}
+
+fn recomputeRunOffsets(buffer: *LayoutBuffer) void {
+    var x_offset: f32 = 0;
+    for (buffer.runs.items) |*run| {
+        run.x_offset = x_offset;
+        x_offset += lineWidth(buffer.glyphs.items[run.glyph_start .. run.glyph_start + run.glyph_len]);
+    }
+}
+
+fn buildParagraphLines(buffer: *LayoutBuffer, options: ParagraphOptions, default_metrics: BaselineMetrics) !void {
+    buffer.lines.clearRetainingCapacity();
+    const line_height = options.line_height orelse default_metrics.lineHeight();
+    const line_metrics = metricsForLineHeight(default_metrics, line_height);
+    const max_width = if (options.max_width > 0) options.max_width else std.math.inf(f32);
+    const alignment = defaultAlignment(options);
+    var line_start: usize = 0;
+    var line_width: f32 = 0;
+    var last_break: ?usize = null;
+    var width_at_break: f32 = 0;
+    var y: f32 = 0;
+    var index: usize = 0;
+    var line_in_paragraph: usize = 0;
+    const max_lines = options.max_lines orelse std.math.maxInt(usize);
+    const space_advance = defaultSpaceAdvance(buffer.glyphs.items);
+    const tab_stop = @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
+
+    // Greedy line breaking tracks the most recent soft break. When a line
+    // overflows, it prefers that break; otherwise it breaks at the overflowing
+    // glyph so long words and CJK runs still make progress.
+    while (index < buffer.glyphs.items.len) : (index += 1) {
+        var glyph = &buffer.glyphs.items[index];
+        if (glyph.codepoint == '\n') {
+            try appendParagraphLine(buffer, line_start, index, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+            if (buffer.lines.items.len >= max_lines) {
+                try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment);
+                return;
+            }
+            y += line_height + options.paragraph_spacing;
+            line_start = index + 1;
+            line_width = 0;
+            last_break = null;
+            width_at_break = 0;
+            line_in_paragraph = 0;
+            continue;
+        }
+
+        if (glyph.codepoint == '\t') {
+            // Tabs are resolved during layout because their width depends on the
+            // current line pen position, not on font metrics alone.
+            glyph.x_advance = tabAdvance(line_width, tab_stop, space_advance);
+        }
+        glyph.x_advance += spacingForGlyph(glyph.codepoint, options);
+        line_width += glyph.x_advance;
+        const current_line_limit = lineWidthLimit(line_in_paragraph, max_width, options);
+        if (line_width > current_line_limit and index + 1 > line_start) {
+            const overflow_break = chooseOverflowBreak(glyph.*, index, line_start, last_break);
+            const break_end = overflow_break.index;
+            const break_width = if (overflow_break.uses_current_discardable)
+                line_width - glyph.x_advance
+            else if (break_end == index)
+                lineWidth(buffer.glyphs.items[line_start..break_end])
+            else
+                width_at_break;
+            try appendParagraphLine(buffer, line_start, break_end, break_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+            if (buffer.lines.items.len >= max_lines) {
+                try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment);
+                return;
+            }
+            y += line_height;
+            line_in_paragraph += 1;
+            line_start = break_end;
+            trimLeadingSoftBreaks(buffer.glyphs.items, &line_start);
+            line_width = lineWidth(buffer.glyphs.items[line_start .. index + 1]);
+            last_break = null;
+            width_at_break = 0;
+        }
+        if (isBreakOpportunity(glyph.codepoint)) {
+            last_break = breakIndexAfter(buffer.glyphs.items, index);
+            width_at_break = if (isDiscardableBreak(glyph.codepoint)) line_width - glyph.x_advance else line_width;
+        }
+    }
+
+    try appendParagraphLine(buffer, line_start, buffer.glyphs.items.len, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+    try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment);
+}
+
+fn chooseOverflowBreak(glyph: GlyphPosition, index: usize, line_start: usize, last_break: ?usize) struct { index: usize, uses_current_discardable: bool } {
+    if (isDiscardableBreak(glyph.codepoint)) return .{ .index = index, .uses_current_discardable = true };
+    if (last_break != null and last_break.? > line_start) return .{ .index = last_break.?, .uses_current_discardable = false };
+    return .{ .index = index, .uses_current_discardable = false };
+}
+
+fn defaultAlignment(options: ParagraphOptions) TextAlign {
+    if (options.direction == .rtl and options.alignment == .left) return .right;
+    return options.alignment;
+}
+
+fn lineIndent(line_index: usize, options: ParagraphOptions) f32 {
+    if (line_index == 0) return @max(0, options.first_line_indent);
+    return 0;
+}
+
+fn lineWidthLimit(line_index: usize, max_width: f32, options: ParagraphOptions) f32 {
+    return lineWidthLimitForIndent(max_width, lineIndent(line_index, options));
+}
+
+fn lineWidthLimitForIndent(max_width: f32, indent: f32) f32 {
+    if (!std.math.isFinite(max_width)) return max_width;
+    return @max(0, max_width - indent);
+}
+
+fn truncateParagraphLines(buffer: *LayoutBuffer, max_lines: usize, ellipsis: bool, max_width: f32, alignment: TextAlign) !void {
+    if (buffer.lines.items.len < max_lines) return;
+    if (max_lines == 0) {
+        buffer.lines.clearRetainingCapacity();
+        buffer.runs.clearRetainingCapacity();
+        buffer.glyphs.clearRetainingCapacity();
+        return;
+    }
+
+    buffer.lines.shrinkRetainingCapacity(max_lines);
+    const last_line = &buffer.lines.items[max_lines - 1];
+    const keep_glyphs = last_line.glyph_start + last_line.glyph_len;
+    buffer.glyphs.shrinkRetainingCapacity(keep_glyphs);
+    trimRunsToGlyphCount(buffer, keep_glyphs);
+
+    if (ellipsis and keep_glyphs > 0) {
+        try appendEllipsisToLastLine(buffer, max_width, alignment);
+    }
+}
+
+fn trimRunsToGlyphCount(buffer: *LayoutBuffer, glyph_count: usize) void {
+    // Truncation can cut through the last cascade run. Keep surviving run
+    // ranges consistent with the shortened glyph array and each line's range.
+    var run_count: usize = 0;
+    for (buffer.runs.items) |*run| {
+        if (run.glyph_start >= glyph_count) break;
+        if (run.glyph_start + run.glyph_len > glyph_count) {
+            run.glyph_len = glyph_count - run.glyph_start;
+        }
+        run_count += 1;
+    }
+    buffer.runs.shrinkRetainingCapacity(run_count);
+    for (buffer.lines.items) |*line| {
+        const run_range = runRangeForGlyphs(buffer.runs.items, line.glyph_start, line.glyph_start + line.glyph_len);
+        line.run_start = run_range.start;
+        line.run_len = run_range.len;
+    }
+}
+
+fn appendEllipsisToLastLine(buffer: *LayoutBuffer, max_width: f32, alignment: TextAlign) !void {
+    if (buffer.lines.items.len == 0 or buffer.runs.items.len == 0) return;
+    const line = &buffer.lines.items[buffer.lines.items.len - 1];
+    const ellipsis_count: usize = 3;
+    const run_index = line.run_start + line.run_len - 1;
+    var run = &buffer.runs.items[run_index];
+    const dot_metrics = try run.font.horizontalMetrics(try run.font.glyphIndex('.'));
+    const dot_advance = @as(f32, @floatFromInt(dot_metrics.advance_width)) * (run.font_size / @as(f32, @floatFromInt(run.font.units_per_em)));
+    const ellipsis_width = dot_advance * @as(f32, @floatFromInt(ellipsis_count));
+    const width_limit = if (std.math.isFinite(max_width)) max_width else std.math.inf(f32);
+
+    while (line.glyph_len > 0 and line.width + ellipsis_width > width_limit) {
+        const remove_index = line.glyph_start + line.glyph_len - 1;
+        line.width -= buffer.glyphs.items[remove_index].x_advance;
+        _ = buffer.glyphs.pop();
+        line.glyph_len -= 1;
+        if (run.glyph_len > 0) run.glyph_len -= 1;
+    }
+
+    const dot_glyph = try run.font.glyphIndex('.');
+    const cluster = if (line.glyph_len > 0)
+        buffer.glyphs.items[line.glyph_start + line.glyph_len - 1].cluster
+    else
+        0;
+    for (0..ellipsis_count) |_| {
+        try buffer.glyphs.append(buffer.allocator, .{
+            .glyph_id = dot_glyph,
+            .codepoint = '.',
+            .cluster = cluster,
+            .x_advance = dot_advance,
+        });
+        line.glyph_len += 1;
+        run.glyph_len += 1;
+        line.width += dot_advance;
+    }
+    line.run_len = runRangeForGlyphs(buffer.runs.items, line.glyph_start, line.glyph_start + line.glyph_len).len;
+    line.x = alignedLineX(line.width, max_width, alignment);
+}
+
+fn appendParagraphLine(buffer: *LayoutBuffer, glyph_start: usize, glyph_end: usize, width: f32, metrics: BaselineMetrics, y: f32, alignment: TextAlign, max_width: f32, indent: f32) !void {
+    const available_width = lineWidthLimitForIndent(max_width, indent);
+    const x = indent + alignedLineX(width, available_width, alignment);
+    const run_range = runRangeForGlyphs(buffer.runs.items, glyph_start, glyph_end);
+    try buffer.lines.append(buffer.allocator, .{
+        .glyph_start = glyph_start,
+        .glyph_len = glyph_end - glyph_start,
+        .run_start = run_range.start,
+        .run_len = run_range.len,
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = metrics.lineHeight(),
+        .baseline = metrics.ascent,
+        .ascent = metrics.ascent,
+        .descent = metrics.descent,
+        .leading = metrics.leading,
+    });
+}
+
+fn alignedLineX(width: f32, max_width: f32, alignment: TextAlign) f32 {
+    if (!std.math.isFinite(max_width)) return 0;
+    return switch (alignment) {
+        .left => 0,
+        .center => @max(0, (max_width - width) / 2),
+        .right => @max(0, max_width - width),
+    };
+}
+
+fn lineWidth(glyphs: []const GlyphPosition) f32 {
+    var width: f32 = 0;
+    for (glyphs) |glyph| width += glyph.x_advance;
+    return width;
+}
+
+fn defaultSpaceAdvance(glyphs: []const GlyphPosition) f32 {
+    for (glyphs) |glyph| {
+        if (glyph.codepoint == ' ') return @max(glyph.x_advance, 1);
+    }
+    for (glyphs) |glyph| {
+        if (glyph.codepoint != '\n' and glyph.codepoint != '\t' and glyph.x_advance > 0) {
+            return glyph.x_advance;
+        }
+    }
+    return 1;
+}
+
+fn tabAdvance(current_width: f32, tab_stop: f32, fallback_advance: f32) f32 {
+    if (tab_stop <= 0) return fallback_advance;
+    const stops_passed = @floor(current_width / tab_stop);
+    const next_stop = (stops_passed + 1) * tab_stop;
+    return @max(fallback_advance, next_stop - current_width);
+}
+
+fn spacingForGlyph(codepoint: u21, options: ParagraphOptions) f32 {
+    if (codepoint == '\n') return 0;
+    if (codepoint == ' ' or codepoint == '\t') return options.word_spacing;
+    return options.letter_spacing;
+}
+
+fn trimLeadingSoftBreaks(glyphs: []const GlyphPosition, start: *usize) void {
+    while (start.* < glyphs.len and isDiscardableBreak(glyphs[start.*].codepoint)) {
+        start.* += 1;
+    }
+}
+
+fn isDiscardableBreak(codepoint: u21) bool {
+    return codepoint == ' ' or codepoint == '\t';
+}
+
+fn isBreakOpportunity(codepoint: u21) bool {
+    return isDiscardableBreak(codepoint) or isEastAsianBreak(codepoint);
+}
+
+fn breakIndexAfter(glyphs: []const GlyphPosition, index: usize) usize {
+    if (isDiscardableBreak(glyphs[index].codepoint)) return index;
+    return index + 1;
+}
+
+fn isEastAsianBreak(codepoint: u21) bool {
+    return (codepoint >= 0x1100 and codepoint <= 0x11ff) or
+        (codepoint >= 0x2e80 and codepoint <= 0x2eff) or
+        (codepoint >= 0x2f00 and codepoint <= 0x2fdf) or
+        (codepoint >= 0x3040 and codepoint <= 0x30ff) or
+        (codepoint >= 0x3130 and codepoint <= 0x318f) or
+        (codepoint >= 0x31a0 and codepoint <= 0x31ff) or
+        (codepoint >= 0x3400 and codepoint <= 0x4dbf) or
+        (codepoint >= 0x4e00 and codepoint <= 0x9fff) or
+        (codepoint >= 0xac00 and codepoint <= 0xd7af) or
+        (codepoint >= 0xf900 and codepoint <= 0xfaff) or
+        (codepoint >= 0x20000 and codepoint <= 0x2fffd) or
+        (codepoint >= 0x30000 and codepoint <= 0x3fffd);
+}
+
+fn runRangeForGlyphs(runs: []const CascadeRun, glyph_start: usize, glyph_end: usize) struct { start: usize, len: usize } {
+    var start: ?usize = null;
+    var end: usize = 0;
+    for (runs, 0..) |run, index| {
+        const run_start = run.glyph_start;
+        const run_end = run.glyph_start + run.glyph_len;
+        if (run_end <= glyph_start or run_start >= glyph_end) continue;
+        if (start == null) start = index;
+        end = index + 1;
+    }
+    const actual_start = start orelse 0;
+    return .{ .start = actual_start, .len = end - actual_start };
+}
+
+fn defaultBaselineMetrics(font: *const Font, font_size: f32) BaselineMetrics {
+    const units = @as(f32, @floatFromInt(font.units_per_em));
+    const scale = font_size / units;
+    const ascender = @as(f32, @floatFromInt(font.ascender));
+    const descender = @as(f32, @floatFromInt(font.descender));
+    const line_gap = @as(f32, @floatFromInt(font.line_gap));
+    return .{
+        .ascent = ascender * scale,
+        .descent = -descender * scale,
+        .leading = line_gap * scale,
+    };
+}
+
+fn metricsForLineHeight(default_metrics: BaselineMetrics, line_height: f32) BaselineMetrics {
+    const natural_height = default_metrics.lineHeight();
+    if (natural_height <= 0) {
+        return .{ .ascent = line_height, .descent = 0, .leading = 0 };
+    }
+    const extra_leading = @max(0, line_height - natural_height);
+    return .{
+        .ascent = default_metrics.ascent + extra_leading / 2,
+        .descent = default_metrics.descent,
+        .leading = default_metrics.leading + extra_leading / 2,
+    };
+}
+
+fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, font_index: usize, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen_x: f32, lookup_options: LookupOptions) !f32 {
+    const glyph_start = buffer.glyphs.items.len;
+    try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, cluster_base, lookup_options);
+    const glyph_len = buffer.glyphs.items.len - glyph_start;
+    try buffer.runs.append(buffer.allocator, .{
+        .font = font,
+        .font_index = font_index,
+        .font_size = font_size,
+        .glyph_start = glyph_start,
+        .glyph_len = glyph_len,
+        .x_offset = pen_x,
+    });
+    var next_pen_x = pen_x;
+    for (buffer.glyphs.items[glyph_start..]) |glyph| next_pen_x += glyph.x_advance;
+    return next_pen_x;
+}
+
+const LookupOptions = struct {
+    script_tag: unicode.OpenTypeScriptTag = .dflt,
+    language_tag: unicode.OpenTypeLanguageTag = .dflt,
+    features: []const unicode.FeatureOverride = &.{},
+};
+
+fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
+    return .{
+        .script_tag = unicode.openTypeScriptTag(scriptForText(text)),
+        .language_tag = effectiveLanguageTag(text, options),
+        .features = options.features,
+    };
+}
+
+fn effectiveLanguageTag(text: []const u8, options: ShapeOptions) unicode.OpenTypeLanguageTag {
+    return options.language_tag orelse unicode.inferOpenTypeLanguageTag(text);
+}
+
+fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    for (features) |feature| {
+        hasher.update(std.mem.asBytes(&feature.tag));
+        const enabled: u8 = @intFromBool(feature.enabled);
+        hasher.update(std.mem.asBytes(&enabled));
+    }
+    return hasher.final();
+}
+
+fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
+    return a.direction == b.direction and
+        a.script_tag == b.script_tag and
+        a.language_tag == b.language_tag and
+        a.feature_hash == b.feature_hash;
+}
+
+fn shapedRunCacheKeysEqual(a: ShapedRunCacheKey, b: ShapedRunCacheKey) bool {
+    return a.cascade_hash == b.cascade_hash and
+        a.text_hash == b.text_hash and
+        a.text_len == b.text_len and
+        a.font_size_bits == b.font_size_bits and
+        shapePlanKeysEqual(a.plan, b.plan);
+}
+
+fn cascadeHash(cascade: FontCascade) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    for (cascade.fonts) |font| {
+        const addr = @intFromPtr(font);
+        hasher.update(std.mem.asBytes(&addr));
+    }
+    return hasher.final();
+}
+
+fn scriptForText(text: []const u8) unicode.Script {
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (it.nextCodepoint()) |codepoint| {
+        const script = unicode.scriptForCodepoint(codepoint);
+        if (script != .common and script != .inherited and script != .unknown) return script;
+    }
+    return .common;
+}
+
+fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, lookup_options: LookupOptions) !void {
+    const scale = font_size / @as(f32, @floatFromInt(font.units_per_em));
+    var glyph_ids = std.ArrayList(GlyphId).empty;
+    defer glyph_ids.deinit(buffer.allocator);
+    var codepoints = std.ArrayList(u21).empty;
+    defer codepoints.deinit(buffer.allocator);
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(buffer.allocator);
+
+    // Keep three parallel arrays through GSUB: glyph ids are mutable, while
+    // codepoints and clusters retain source-text identity for rendering,
+    // hit-testing, and debug output after substitutions.
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (it.i < text.len) {
+        const cluster = it.i;
+        const codepoint = it.nextCodepoint() orelse break;
+        try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint));
+        try codepoints.append(buffer.allocator, codepoint);
+        try clusters.append(buffer.allocator, cluster_base + cluster);
+    }
+    // GSUB can change glyph count. Later source metadata uses a clamped source
+    // index, which is sufficient for current single-glyph, ligature, and
+    // contextual substitutions until full cluster merging metadata is added.
+    try font.applyGsubWithOptions(&glyph_ids, buffer.allocator, .{
+        .script_tag = lookup_options.script_tag,
+        .language_tag = lookup_options.language_tag,
+        .features = lookup_options.features,
+    });
+
+    var gpos_adjustments = std.ArrayList(gpos.Adjustment).empty;
+    defer gpos_adjustments.deinit(buffer.allocator);
+    try font.collectGposAdjustmentsWithOptions(glyph_ids.items, &gpos_adjustments, buffer.allocator, .{
+        .script_tag = lookup_options.script_tag,
+        .language_tag = lookup_options.language_tag,
+        .features = lookup_options.features,
+    });
+
+    // GPOS adjustments and legacy kern are accumulated in font units, then
+    // scaled into user-space coordinates for the final GlyphPosition stream.
+    var previous_glyph: ?GlyphId = null;
+    for (glyph_ids.items, 0..) |glyph_id, index| {
+        const source_index = @min(index, codepoints.items.len -| 1);
+        const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
+        if (previous_glyph) |previous| {
+            const kern = try font.kerning(previous, glyph_id);
+            if (kern != 0 and buffer.glyphs.items.len > 0) {
+                buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern)) * scale;
+            }
+        }
+        const adjustment = findAdjustment(gpos_adjustments.items, index);
+        try buffer.glyphs.append(buffer.allocator, .{
+            .glyph_id = glyph_id,
+            .codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index],
+            .cluster = if (clusters.items.len == 0) cluster_base else clusters.items[source_index],
+            .x_advance = (@as(f32, @floatFromInt(metrics.advance_width)) + @as(f32, @floatFromInt(adjustment.x_advance))) * scale,
+            .x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale,
+            .y_offset = @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
+        });
+        previous_glyph = glyph_id;
+    }
+}
+
+fn glyphMetricsKey(font: *const Font, glyph_id: GlyphId) GlyphMetricsKey {
+    return .{
+        .font_addr = @intFromPtr(font),
+        .glyph_id = glyph_id,
+    };
+}
+
+fn glyphIndexKey(font: *const Font, codepoint: u21) GlyphIndexKey {
+    return .{
+        .font_addr = @intFromPtr(font),
+        .codepoint = codepoint,
+    };
+}
+
+fn glyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {
+    if (cache) |glyph_cache| return try glyph_cache.glyphIndex(font, codepoint);
+    return try font.glyphIndex(codepoint);
+}
+
+fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId) !GlyphMetrics {
+    if (cache) |metrics_cache| return try metrics_cache.horizontalMetrics(font, glyph_id);
+    const raw = try font.horizontalMetrics(glyph_id);
+    return .{
+        .advance_width = raw.advance_width,
+        .left_side_bearing = raw.left_side_bearing,
+    };
+}
+
+fn findAdjustment(adjustments: []const gpos.Adjustment, index: usize) gpos.Adjustment {
+    for (adjustments) |adjustment| {
+        if (adjustment.index == index) return adjustment;
+    }
+    return .{ .index = index };
+}

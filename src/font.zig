@@ -118,6 +118,16 @@ pub const SvgGlyphDocument = struct {
     data: []const u8,
 };
 
+pub const BitmapGlyphPng = struct {
+    ppem: u16,
+    ppi: u16,
+    origin_offset_x: i16,
+    origin_offset_y: i16,
+    width: u32,
+    height: u32,
+    data: []const u8,
+};
+
 pub const GlyphClass = enum(u16) {
     unclassified = 0,
     base = 1,
@@ -171,6 +181,7 @@ pub const Font = struct {
     colr: ?TableRecord,
     cpal: ?TableRecord,
     svg: ?TableRecord,
+    sbix: ?TableRecord,
     glyf: ?TableRecord,
     cff: ?TableRecord,
     cmap_subtables: []CmapSubtable,
@@ -243,6 +254,7 @@ pub const Font = struct {
         const colr = findTable(records, "COLR");
         const cpal = findTable(records, "CPAL");
         const svg = findTable(records, "SVG ");
+        const sbix = findTable(records, "sbix");
         const glyf = findTable(records, "glyf");
         const cff = findTable(records, "CFF ");
 
@@ -290,6 +302,7 @@ pub const Font = struct {
             .colr = colr,
             .cpal = cpal,
             .svg = svg,
+            .sbix = sbix,
             .glyf = glyf,
             .cff = cff,
             .cmap_subtables = cmap_subtables,
@@ -678,6 +691,45 @@ pub const Font = struct {
         return if (document) |value| value.data else null;
     }
 
+    pub fn bestBitmapStrikePpem(self: *const Font, size_px: f32) FontError!?u16 {
+        const sbix = self.sbix orelse return null;
+        const strike_count = try sbixStrikeCount(self.data, sbix);
+        if (strike_count == 0) return null;
+        var best_ppem: ?u16 = null;
+        var best_distance: f32 = std.math.inf(f32);
+        for (0..strike_count) |strike_index| {
+            const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
+            const distance = @abs(@as(f32, @floatFromInt(strike.ppem)) - size_px);
+            if (best_ppem == null or distance < best_distance) {
+                best_ppem = strike.ppem;
+                best_distance = distance;
+            }
+        }
+        return best_ppem;
+    }
+
+    pub fn bitmapGlyphPng(self: *const Font, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphPng {
+        const sbix = self.sbix orelse return null;
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const strike_count = try sbixStrikeCount(self.data, sbix);
+        if (strike_count == 0) return null;
+
+        var best: ?BitmapGlyphPng = null;
+        var best_distance: f32 = std.math.inf(f32);
+        for (0..strike_count) |strike_index| {
+            const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
+            const maybe_glyph = try sbixGlyphPng(self.data, strike, glyph_id);
+            if (maybe_glyph) |glyph| {
+                const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
+                if (best == null or distance < best_distance) {
+                    best = glyph;
+                    best_distance = distance;
+                }
+            }
+        }
+        return best;
+    }
+
     pub fn glyphOutline(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const metrics = try self.horizontalMetrics(glyph_id);
@@ -813,6 +865,71 @@ const Transform = struct {
         };
     }
 };
+
+const SbixStrike = struct {
+    ppem: u16,
+    ppi: u16,
+    offset: usize,
+    length: usize,
+};
+
+fn sbixStrikeCount(data: []const u8, sbix: TableRecord) FontError!usize {
+    if (sbix.length < 8) return error.BadSfnt;
+    const version = try bin.readU16At(data, sbix.offset);
+    if (version != 1) return error.BadSfnt;
+    const count = try bin.readU32At(data, sbix.offset + 4);
+    if (@as(usize, count) * 4 > sbix.length - 8) return error.BadSfnt;
+    return @intCast(count);
+}
+
+fn sbixStrike(data: []const u8, sbix: TableRecord, glyph_count: u16, strike_index: usize) FontError!SbixStrike {
+    const strike_count = try sbixStrikeCount(data, sbix);
+    if (strike_index >= strike_count) return error.BadSfnt;
+    const offset = try bin.readU32At(data, sbix.offset + 8 + strike_index * 4);
+    if (offset >= sbix.length) return error.BadSfnt;
+    const next_offset = if (strike_index + 1 < strike_count)
+        try bin.readU32At(data, sbix.offset + 8 + (strike_index + 1) * 4)
+    else
+        @as(u32, @intCast(sbix.length));
+    if (next_offset < offset or next_offset > sbix.length) return error.BadSfnt;
+
+    const absolute = sbix.offset + offset;
+    const length = @as(usize, next_offset - offset);
+    const offsets_len = (@as(usize, glyph_count) + 1) * 4;
+    if (length < 4 + offsets_len) return error.BadSfnt;
+    return .{
+        .ppem = try bin.readU16At(data, absolute),
+        .ppi = try bin.readU16At(data, absolute + 2),
+        .offset = absolute,
+        .length = length,
+    };
+}
+
+fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId) FontError!?BitmapGlyphPng {
+    const glyph_offset_pos = strike.offset + 4 + @as(usize, glyph_id) * 4;
+    const start = try bin.readU32At(data, glyph_offset_pos);
+    const end = try bin.readU32At(data, glyph_offset_pos + 4);
+    if (start == end) return null;
+    if (end < start or end > strike.length) return error.BadSfnt;
+    if (end - start < 8) return error.BadSfnt;
+
+    const glyph_start = strike.offset + start;
+    const glyph_end = strike.offset + end;
+    const graphic_type = try bin.readTagAt(data, glyph_start + 4);
+    if (!bin.tagEq(graphic_type, "png ")) return null;
+    const png = data[glyph_start + 8 .. glyph_end];
+    if (png.len < 24) return error.BadSfnt;
+    if (!std.mem.eql(u8, png[1..4], "PNG")) return error.BadSfnt;
+    return .{
+        .ppem = strike.ppem,
+        .ppi = strike.ppi,
+        .origin_offset_x = try bin.readI16At(data, glyph_start),
+        .origin_offset_y = try bin.readI16At(data, glyph_start + 2),
+        .width = try bin.readU32At(png, 16),
+        .height = try bin.readU32At(png, 20),
+        .data = png,
+    };
+}
 
 fn findTable(records: []const TableRecord, comptime table_tag: []const u8) ?TableRecord {
     for (records) |record| {

@@ -241,6 +241,29 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expect(covered > 10);
 }
 
+test "parses sbix PNG bitmap glyphs from Apple Color Emoji when available" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = "/System/Library/Fonts/Apple Color Emoji.ttc";
+    const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(256 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return,
+        error.AccessDenied => return,
+        else => return err,
+    };
+    defer allocator.free(data);
+
+    var font = try Font.parse(allocator, data);
+    defer font.deinit();
+
+    const glyph_id = try font.glyphIndex(0x1f600);
+    const bitmap = (try font.bitmapGlyphPng(glyph_id, 40)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expect(bitmap.data.len > 24);
+    try std.testing.expect(std.mem.eql(u8, bitmap.data[1..4], "PNG"));
+    try std.testing.expect(bitmap.width > 0);
+    try std.testing.expect(bitmap.height > 0);
+    try std.testing.expect((try font.bestBitmapStrikePpem(40)) != null);
+}
+
 test "detects scripts and itemizes script runs" {
     const allocator = std.testing.allocator;
 

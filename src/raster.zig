@@ -873,29 +873,15 @@ fn alignSmallGlyphToPixelGrid(lines: []Line, outline: *const glyph_mod.GlyphOutl
     const dx = @round(min_x) - min_x;
     const dy = @round(max_y) - max_y;
 
-    var sy: f32 = 1.0;
-    var y_anchor = max_y;
-    const glyph_height_units = outline.bounds.y_max - outline.bounds.y_min;
-    const glyph_height_px = @as(f32, @floatFromInt(glyph_height_units)) * scale;
-    const raster_scale = if (hint_size > 0.0) font_size / hint_size else 1.0;
-    if (outlineContourCount(outline) > 1 and glyph_height_px >= 4.0 * raster_scale and glyph_height_px <= 9.5 * raster_scale) {
-        const hinted_height = @max(@ceil(glyph_height_px), @round(hint_size * 0.72) * raster_scale);
-        if (hinted_height > glyph_height_px) {
-            sy = hinted_height / glyph_height_px;
-            y_anchor = max_y;
-        }
-    }
-
-    if (@abs(dx) < 0.001 and @abs(dy) < 0.001 and @abs(sy - 1.0) < 0.001) return;
+    _ = outline;
+    _ = scale;
+    _ = font_size;
+    if (@abs(dx) < 0.001 and @abs(dy) < 0.001) return;
     for (lines) |*line| {
         line.a.x += dx;
         line.b.x += dx;
         line.a.y += dy;
         line.b.y += dy;
-        if (sy != 1.0) {
-            line.a.y = y_anchor + (line.a.y - y_anchor) * sy;
-            line.b.y = y_anchor + (line.b.y - y_anchor) * sy;
-        }
     }
 }
 
@@ -2987,7 +2973,7 @@ test "small glyph alignment translates outline to pixel grid" {
     try std.testing.expect(@abs(lines[1].b.y - 10.0) < 0.001);
 }
 
-test "small multi-contour glyph alignment snaps x-height" {
+test "small multi-contour glyph alignment preserves outline height" {
     var lines = [_]Line{
         .{ .a = .{ .x = 2.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 4.2 } },
         .{ .a = .{ .x = 7.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 9.7 } },
@@ -2998,8 +2984,9 @@ test "small multi-contour glyph alignment snaps x-height" {
     try outline.commands.append(std.testing.allocator, .{ .move_to = .{ .x = 1, .y = 1 } });
     alignSmallGlyphToPixelGrid(&lines, &outline, 12.0 / 1000.0, 12, 12);
     try std.testing.expect(@abs(lines[0].a.x - 2.0) < 0.001);
-    try std.testing.expect(lines[0].a.y < 4.0);
-    try std.testing.expect(lines[1].b.y > 10.0);
+    try std.testing.expect(@abs(lines[0].a.y - 4.5) < 0.001);
+    try std.testing.expect(@abs(lines[1].b.y - 10.0) < 0.001);
+    try std.testing.expect(@abs((lines[1].b.y - lines[0].a.y) - 5.5) < 0.001);
 }
 
 test "large glyph alignment leaves outline unchanged" {

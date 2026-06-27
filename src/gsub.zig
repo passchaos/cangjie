@@ -171,7 +171,7 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
             1 => try applySingleSubstitution(table, subtable_offset, glyphs, lookup_flag, options),
             2 => try applyMultipleSubstitution(table, subtable_offset, glyphs, allocator),
             3 => try applyAlternateSubstitution(table, subtable_offset, glyphs),
-            4 => try applyLigatureSubstitution(table, subtable_offset, glyphs, allocator),
+            4 => try applyLigatureSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
             5 => try applyContextSubstitution(table, subtable_offset, glyphs, allocator),
             6 => try applyChainingContextSubstitution(table, subtable_offset, glyphs, allocator),
             7 => try applyExtensionSubstitution(table, subtable_offset, glyphs, allocator, options),
@@ -280,7 +280,7 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
         1 => try applySingleSubstitution(table, extension_subtable, glyphs, 0, options),
         2 => try applyMultipleSubstitution(table, extension_subtable, glyphs, allocator),
         3 => try applyAlternateSubstitution(table, extension_subtable, glyphs),
-        4 => try applyLigatureSubstitution(table, extension_subtable, glyphs, allocator),
+        4 => try applyLigatureSubstitution(table, extension_subtable, glyphs, allocator, 0, options),
         5 => try applyContextSubstitution(table, extension_subtable, glyphs, allocator),
         6 => try applyChainingContextSubstitution(table, extension_subtable, glyphs, allocator),
         8 => try applyReverseChainingSingleSubstitution(table, extension_subtable, glyphs),
@@ -288,7 +288,7 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
     }
 }
 
-fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
+fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
@@ -297,15 +297,18 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
     var i: usize = 0;
     while (i < glyphs.items.len) : (i += 1) {
         const first = glyphs.items[i];
+        if (lookupIgnoresGlyph(lookup_flag, options, first)) continue;
         const covered = try coverageIndex(table, coverage_offset, first) orelse continue;
         if (covered >= lig_set_count) continue;
         const set_offset = subtable_offset + try readU16(table, subtable_offset + 6 + covered * 2);
-        // Pick the longest ligature candidate for this glyph position. The
-        // winning ligature replaces the first component and removes the rest.
-        if (try ligatureAt(table, set_offset, glyphs.items[i..])) |match| {
+        if (try ligatureAt(table, set_offset, glyphs.items[i..], lookup_flag, options)) |match| {
             glyphs.items[i] = match.ligature;
             if (match.component_count > 1) {
-                try glyphs.replaceRange(allocator, i + 1, match.component_count - 1, &.{});
+                var component_index = match.component_count;
+                while (component_index > 1) {
+                    component_index -= 1;
+                    try glyphs.replaceRange(allocator, i + match.component_offsets[component_index], 1, &.{});
+                }
             }
         }
     }
@@ -731,26 +734,34 @@ fn reverseCoverageMatches(table: Table, subtable_offset: usize, glyphs: []const 
 const LigatureMatch = struct {
     ligature: GlyphId,
     component_count: usize,
+    component_offsets: [max_ligature_components]usize = [_]usize{0} ** max_ligature_components,
 };
 
-fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId) GsubError!?LigatureMatch {
+const max_ligature_components = 64;
+
+fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!?LigatureMatch {
     const ligature_count = try readU16(table, set_offset);
     var best: ?LigatureMatch = null;
     for (0..ligature_count) |i| {
         const lig_offset = set_offset + try readU16(table, set_offset + 2 + i * 2);
         const ligature = try readU16(table, lig_offset);
         const component_count = try readU16(table, lig_offset + 2);
-        if (component_count == 0 or component_count > glyphs.len) continue;
+        if (component_count == 0 or component_count > max_ligature_components) continue;
+        var component_offsets = [_]usize{0} ** max_ligature_components;
         var ok = true;
+        var cursor: usize = 1;
         for (1..component_count) |component_index| {
             const expected = try readU16(table, lig_offset + 4 + (component_index - 1) * 2);
-            if (glyphs[component_index] != expected) {
+            while (cursor < glyphs.len and lookupIgnoresGlyph(lookup_flag, options, glyphs[cursor])) : (cursor += 1) {}
+            if (cursor >= glyphs.len or glyphs[cursor] != expected) {
                 ok = false;
                 break;
             }
+            component_offsets[component_index] = cursor;
+            cursor += 1;
         }
         if (ok and (best == null or component_count > best.?.component_count)) {
-            best = .{ .ligature = ligature, .component_count = component_count };
+            best = .{ .ligature = ligature, .component_count = component_count, .component_offsets = component_offsets };
         }
     }
     return best;

@@ -33,6 +33,7 @@ pub const LookupOptions = struct {
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     features: []const unicode.FeatureOverride = &.{},
     glyph_classes: ?[]const u16 = null,
+    mark_attach_classes: ?[]const u16 = null,
 };
 
 /// Collect positioning adjustments for a post-GSUB glyph stream.
@@ -164,9 +165,9 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
             1 => try collectSingleAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             2 => try collectPairAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
-            4 => try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
-            5 => try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
-            6 => try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
+            4 => try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
+            5 => try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
+            6 => try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, options),
@@ -215,6 +216,12 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
     if ((lookup_flag & 0x0002) != 0 and class == 1) return true;
     if ((lookup_flag & 0x0004) != 0 and class == 2) return true;
     if ((lookup_flag & 0x0008) != 0 and class == 3) return true;
+    const mark_attachment_type = lookup_flag >> 8;
+    if (mark_attachment_type != 0 and class == 3) {
+        const attach_classes = options.mark_attach_classes orelse return true;
+        if (glyph >= attach_classes.len) return true;
+        return attach_classes[glyph] != mark_attachment_type;
+    }
     return false;
 }
 
@@ -229,9 +236,9 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
         1 => try collectSingleAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
         2 => try collectPairAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
         3 => try collectCursiveAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
-        4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
-        5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
-        6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
+        4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
+        5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
+        6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
         7 => try collectContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
         8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
         else => {},
@@ -404,7 +411,7 @@ fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
     }
 }
 
-fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
     const mark_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
@@ -419,8 +426,9 @@ fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []c
     @memset(attached_marks, false);
 
     for (glyphs, 0..) |glyph, i| {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse continue;
-        const base_position = try previousCoveredBaseGlyph(table, base_coverage_offset, glyphs, i, attached_marks) orelse continue;
+        const base_position = try previousCoveredBaseGlyph(table, base_coverage_offset, glyphs, i, attached_marks, lookup_flag, options) orelse continue;
         const base_index = try coverageIndex(table, base_coverage_offset, glyphs[base_position]) orelse continue;
         const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
         const mark_class = try readU16(table, mark_record_offset);
@@ -441,11 +449,12 @@ fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []c
     }
 }
 
-fn previousCoveredBaseGlyph(table: Table, base_coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool) GposError!?usize {
+fn previousCoveredBaseGlyph(table: Table, base_coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!?usize {
     var i = mark_index;
     while (i > 0) {
         i -= 1;
         if (i < attached_marks.len and attached_marks[i]) continue;
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
         if (try coverageIndex(table, base_coverage_offset, glyphs[i]) != null) return i;
     }
     return null;
@@ -866,7 +875,7 @@ fn collectNestedSingleAdjustment(table: Table, glyph: GlyphId, target_index: usi
     }
 }
 
-fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
     const mark_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
@@ -877,6 +886,7 @@ fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs:
     if (class_count == 0 or glyphs.len < 2) return;
 
     for (glyphs, 0..) |glyph, i| {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse continue;
         if (i == 0) continue;
         const ligature_index = try coverageIndex(table, ligature_coverage_offset, glyphs[i - 1]) orelse continue;
@@ -902,7 +912,7 @@ fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs:
     }
 }
 
-fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
     const mark_1_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
@@ -913,6 +923,7 @@ fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []c
     if (class_count == 0 or glyphs.len < 2) return;
 
     for (glyphs, 0..) |glyph, i| {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         const mark_1_index = try coverageIndex(table, mark_1_coverage_offset, glyph) orelse continue;
         if (i == 0) continue;
         const mark_2_index = try coverageIndex(table, mark_2_coverage_offset, glyphs[i - 1]) orelse continue;

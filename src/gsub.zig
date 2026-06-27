@@ -23,6 +23,7 @@ pub const LookupOptions = struct {
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     features: []const unicode.FeatureOverride = &.{},
     glyph_classes: ?[]const u16 = null,
+    mark_attach_classes: ?[]const u16 = null,
 };
 
 /// Apply default or explicitly enabled substitution features to the glyph
@@ -215,6 +216,12 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
     if ((lookup_flag & 0x0002) != 0 and class == 1) return true;
     if ((lookup_flag & 0x0004) != 0 and class == 2) return true;
     if ((lookup_flag & 0x0008) != 0 and class == 3) return true;
+    const mark_attachment_type = lookup_flag >> 8;
+    if (mark_attachment_type != 0 and class == 3) {
+        const attach_classes = options.mark_attach_classes orelse return true;
+        if (glyph >= attach_classes.len) return true;
+        return attach_classes[glyph] != mark_attachment_type;
+    }
     return false;
 }
 

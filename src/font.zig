@@ -394,16 +394,25 @@ pub const Font = struct {
         const gsub = self.gsub orelse return;
         var gsub_options = options;
         var glyph_classes: ?[]u16 = null;
+        var mark_attach_classes: ?[]u16 = null;
         if (self.gdef != null) {
             const classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(classes);
+            const attach_classes = try allocator.alloc(u16, self.glyph_count);
+            errdefer allocator.free(attach_classes);
             for (classes, 0..) |*class, glyph_id| {
                 class.* = @intFromEnum(try self.glyphClass(@intCast(glyph_id)));
             }
+            for (attach_classes, 0..) |*class, glyph_id| {
+                class.* = try self.markAttachClass(@intCast(glyph_id));
+            }
             glyph_classes = classes;
+            mark_attach_classes = attach_classes;
             gsub_options.glyph_classes = classes;
+            gsub_options.mark_attach_classes = attach_classes;
         }
         defer if (glyph_classes) |classes| allocator.free(classes);
+        defer if (mark_attach_classes) |classes| allocator.free(classes);
         try gsub_mod.applyWithOptions(self.data, gsub.offset, gsub.length, glyphs, allocator, gsub_options);
     }
 
@@ -418,16 +427,25 @@ pub const Font = struct {
         const gpos = self.gpos orelse return;
         var gpos_options = options;
         var glyph_classes: ?[]u16 = null;
+        var mark_attach_classes: ?[]u16 = null;
         if (self.gdef != null) {
             const classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(classes);
+            const attach_classes = try allocator.alloc(u16, self.glyph_count);
+            errdefer allocator.free(attach_classes);
             for (classes, 0..) |*class, glyph_id| {
                 class.* = @intFromEnum(try self.glyphClass(@intCast(glyph_id)));
             }
+            for (attach_classes, 0..) |*class, glyph_id| {
+                class.* = try self.markAttachClass(@intCast(glyph_id));
+            }
             glyph_classes = classes;
+            mark_attach_classes = attach_classes;
             gpos_options.glyph_classes = classes;
+            gpos_options.mark_attach_classes = attach_classes;
         }
         defer if (glyph_classes) |classes| allocator.free(classes);
+        defer if (mark_attach_classes) |classes| allocator.free(classes);
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
     }
 

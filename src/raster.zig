@@ -428,6 +428,7 @@ pub const Rasterizer = struct {
     allocator: std.mem.Allocator,
     samples_per_axis: u8 = 4,
     hint_size_px: ?f32 = null,
+    embolden_small_glyphs: bool = true,
 
     pub fn init(allocator: std.mem.Allocator) Rasterizer {
         return .{ .allocator = allocator };
@@ -441,7 +442,7 @@ pub const Rasterizer = struct {
         const hint_size = self.hint_size_px orelse font_size;
         alignSmallGlyphToPixelGrid(flattened.items, outline, scale, font_size, hint_size);
         try self.fillLines(target, flattened.items);
-        if (hint_size <= 20.0) {
+        if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);
         }
     }
@@ -2997,4 +2998,41 @@ test "large glyph alignment leaves outline unchanged" {
     alignSmallGlyphToPixelGrid(&lines, &outline, 24.0 / 1000.0, 24, 24);
     try std.testing.expect(@abs(lines[0].a.x - 2.3) < 0.001);
     try std.testing.expect(@abs(lines[0].b.y - 9.7) < 0.001);
+}
+
+test "small glyph embolden can be disabled for native-weight UI text" {
+    const allocator = std.testing.allocator;
+    var outline = glyph_mod.GlyphOutline.init(allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 700, .y_max = 700 }, 700, 0);
+    defer outline.deinit();
+    try outline.commands.append(allocator, .{ .move_to = .{ .x = 100, .y = 100 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 600, .y = 100 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 600, .y = 600 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 100, .y = 600 } });
+    try outline.commands.append(allocator, .close);
+
+    var normal = try RenderTarget.init(allocator, 20, 20);
+    defer normal.deinit();
+    var bold = try RenderTarget.init(allocator, 20, 20);
+    defer bold.deinit();
+
+    var normal_rasterizer = Rasterizer.init(allocator);
+    normal_rasterizer.samples_per_axis = 4;
+    normal_rasterizer.hint_size_px = 12;
+    normal_rasterizer.embolden_small_glyphs = false;
+    try normal_rasterizer.renderGlyph(&normal, &outline, 2, 14, 12, 1000);
+
+    var bold_rasterizer = Rasterizer.init(allocator);
+    bold_rasterizer.samples_per_axis = 4;
+    bold_rasterizer.hint_size_px = 12;
+    bold_rasterizer.embolden_small_glyphs = true;
+    try bold_rasterizer.renderGlyph(&bold, &outline, 2, 14, 12, 1000);
+
+    try std.testing.expect(alphaSum(&normal) > 0);
+    try std.testing.expect(alphaSum(&bold) > alphaSum(&normal));
+}
+
+fn alphaSum(target: *const RenderTarget) u32 {
+    var sum: u32 = 0;
+    for (target.pixels) |coverage| sum += coverage;
+    return sum;
 }

@@ -264,6 +264,26 @@ test "parses sbix PNG bitmap glyphs from Apple Color Emoji when available" {
     try std.testing.expect((try font.bestBitmapStrikePpem(40)) != null);
 }
 
+test "parses CBDT CBLC PNG bitmap glyphs" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildCbdtPngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const glyph_id = try font.glyphIndex('A');
+    const bitmap = (try font.bitmapGlyphPng(glyph_id, 16)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(u16, 16), bitmap.ppem);
+    try std.testing.expectEqual(@as(i16, 2), bitmap.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 13), bitmap.origin_offset_y);
+    try std.testing.expectEqual(@as(u32, 1), bitmap.width);
+    try std.testing.expectEqual(@as(u32, 1), bitmap.height);
+    try std.testing.expect(std.mem.eql(u8, bitmap.data[1..4], "PNG"));
+    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(18));
+}
+
 test "detects scripts and itemizes script runs" {
     const allocator = std.testing.allocator;
 

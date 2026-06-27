@@ -44,6 +44,10 @@ pub fn buildColorV1LayersTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1LayersTtfTables(allocator));
 }
 
+pub fn buildCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try cbdtPngTtfTables(allocator));
+}
+
 pub fn buildSvgTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try svgTtfTables(allocator));
 }
@@ -444,6 +448,22 @@ fn colorV1LayersTtfTables(allocator: std.mem.Allocator) ![]Table {
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "COLR", .data = try colrV1LayersTable(allocator) };
     tables[1] = .{ .tag = "CPAL", .data = try cpalTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn cbdtPngTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "CBDT", .data = try cbdtPngTable(allocator) };
+    tables[1] = .{ .tag = "CBLC", .data = try cblcPngTable(allocator) };
     tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
@@ -1665,6 +1685,72 @@ fn colrV1LayersTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 80, 1);
     writeF2Dot14(bytes, 82, 1.0);
     return bytes;
+}
+
+fn cbdtPngTable(allocator: std.mem.Allocator) ![]u8 {
+    const png = cbdtFixturePng();
+    const image_len = 5 + 4 + png.len;
+    const bytes = try allocator.alloc(u8, 4 + image_len);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 3);
+    writeU16(bytes, 2, 0);
+    const off = 4;
+    bytes[off + 0] = 1;
+    bytes[off + 1] = 1;
+    bytes[off + 2] = 2;
+    bytes[off + 3] = 13;
+    bytes[off + 4] = 12;
+    writeU32(bytes, off + 5, @intCast(png.len));
+    @memcpy(bytes[off + 9 .. off + 9 + png.len], png);
+    return bytes;
+}
+
+fn cblcPngTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8 + 48 + 8 + 12);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 3);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, 20);
+    writeU32(bytes, size + 8, 1);
+    bytes[size + 16] = 13;
+    bytes[size + 17] = @bitCast(@as(i8, -3));
+    bytes[size + 18] = 12;
+    bytes[size + 28] = 13;
+    bytes[size + 29] = @bitCast(@as(i8, -3));
+    bytes[size + 30] = 12;
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 1);
+    bytes[size + 44] = 16;
+    bytes[size + 45] = 16;
+    bytes[size + 46] = 32;
+
+    const record = 56;
+    writeU16(bytes, record + 0, 1);
+    writeU16(bytes, record + 2, 1);
+    writeU32(bytes, record + 4, 8);
+
+    const subtable = 64;
+    writeU16(bytes, subtable + 0, 3);
+    writeU16(bytes, subtable + 2, 17);
+    writeU32(bytes, subtable + 4, 4);
+    writeU16(bytes, subtable + 8, 0);
+    writeU16(bytes, subtable + 10, @intCast(5 + 4 + cbdtFixturePng().len));
+    return bytes;
+}
+
+fn cbdtFixturePng() []const u8 {
+    return &.{
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+        0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xd0,
+        0x00, 0x00, 0x04, 0x81, 0x01, 0x80, 0x2c, 0x55, 0xce, 0xb0, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    };
 }
 
 fn svgTable(allocator: std.mem.Allocator) ![]u8 {

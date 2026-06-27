@@ -182,6 +182,8 @@ pub const Font = struct {
     cpal: ?TableRecord,
     svg: ?TableRecord,
     sbix: ?TableRecord,
+    cblc: ?TableRecord,
+    cbdt: ?TableRecord,
     glyf: ?TableRecord,
     cff: ?TableRecord,
     cmap_subtables: []CmapSubtable,
@@ -255,6 +257,8 @@ pub const Font = struct {
         const cpal = findTable(records, "CPAL");
         const svg = findTable(records, "SVG ");
         const sbix = findTable(records, "sbix");
+        const cblc = findTable(records, "CBLC");
+        const cbdt = findTable(records, "CBDT");
         const glyf = findTable(records, "glyf");
         const cff = findTable(records, "CFF ");
 
@@ -303,6 +307,8 @@ pub const Font = struct {
             .cpal = cpal,
             .svg = svg,
             .sbix = sbix,
+            .cblc = cblc,
+            .cbdt = cbdt,
             .glyf = glyf,
             .cff = cff,
             .cmap_subtables = cmap_subtables,
@@ -692,42 +698,54 @@ pub const Font = struct {
     }
 
     pub fn bestBitmapStrikePpem(self: *const Font, size_px: f32) FontError!?u16 {
-        const sbix = self.sbix orelse return null;
-        const strike_count = try sbixStrikeCount(self.data, sbix);
-        if (strike_count == 0) return null;
         var best_ppem: ?u16 = null;
         var best_distance: f32 = std.math.inf(f32);
-        for (0..strike_count) |strike_index| {
-            const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-            const distance = @abs(@as(f32, @floatFromInt(strike.ppem)) - size_px);
-            if (best_ppem == null or distance < best_distance) {
-                best_ppem = strike.ppem;
-                best_distance = distance;
+
+        if (self.sbix) |sbix| {
+            const strike_count = try sbixStrikeCount(self.data, sbix);
+            for (0..strike_count) |strike_index| {
+                const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
+                recordBestBitmapPpem(strike.ppem, size_px, &best_ppem, &best_distance);
             }
         }
+
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const strike_count = try cblcStrikeCount(self.data, cblc);
+            for (0..strike_count) |strike_index| {
+                const strike = try cblcStrike(self.data, cblc, strike_index);
+                recordBestBitmapPpem(strike.ppem, size_px, &best_ppem, &best_distance);
+            }
+        }
+
         return best_ppem;
     }
 
     pub fn bitmapGlyphPng(self: *const Font, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphPng {
-        const sbix = self.sbix orelse return null;
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        const strike_count = try sbixStrikeCount(self.data, sbix);
-        if (strike_count == 0) return null;
 
-        var best: ?BitmapGlyphPng = null;
-        var best_distance: f32 = std.math.inf(f32);
-        for (0..strike_count) |strike_index| {
-            const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-            const maybe_glyph = try sbixGlyphPng(self.data, strike, glyph_id);
-            if (maybe_glyph) |glyph| {
-                const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
-                if (best == null or distance < best_distance) {
-                    best = glyph;
-                    best_distance = distance;
+        if (self.sbix) |sbix| {
+            const strike_count = try sbixStrikeCount(self.data, sbix);
+            var best: ?BitmapGlyphPng = null;
+            var best_distance: f32 = std.math.inf(f32);
+            for (0..strike_count) |strike_index| {
+                const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
+                const maybe_glyph = try sbixGlyphPng(self.data, strike, glyph_id);
+                if (maybe_glyph) |glyph| {
+                    const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
+                    if (best == null or distance < best_distance) {
+                        best = glyph;
+                        best_distance = distance;
+                    }
                 }
             }
+            if (best) |glyph| return glyph;
         }
-        return best;
+
+        if (self.cblc != null and self.cbdt != null) {
+            return try cblcGlyphPng(self.data, self.cblc.?, self.cbdt.?, self.glyph_count, glyph_id, size_px);
+        }
+        return null;
     }
 
     pub fn glyphOutline(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
@@ -873,6 +891,38 @@ const SbixStrike = struct {
     length: usize,
 };
 
+const CblcStrike = struct {
+    ppem: u16,
+    ppi: u16,
+    offset: usize,
+    index_tables_size: usize,
+    table_count: usize,
+    start_glyph: glyph_mod.GlyphId,
+    end_glyph: glyph_mod.GlyphId,
+};
+
+const CblcGlyphLocation = struct {
+    image_format: u16,
+    offset: usize,
+    length: usize,
+};
+
+const BitmapMetrics = struct {
+    height: u8,
+    width: u8,
+    bearing_x: i8,
+    bearing_y: i8,
+    advance: u8,
+};
+
+fn recordBestBitmapPpem(ppem: u16, size_px: f32, best_ppem: *?u16, best_distance: *f32) void {
+    const distance = @abs(@as(f32, @floatFromInt(ppem)) - size_px);
+    if (best_ppem.* == null or distance < best_distance.*) {
+        best_ppem.* = ppem;
+        best_distance.* = distance;
+    }
+}
+
 fn sbixStrikeCount(data: []const u8, sbix: TableRecord) FontError!usize {
     if (sbix.length < 8) return error.BadSfnt;
     const version = try bin.readU16At(data, sbix.offset);
@@ -928,6 +978,199 @@ fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphI
         .width = try bin.readU32At(png, 16),
         .height = try bin.readU32At(png, 20),
         .data = png,
+    };
+}
+
+fn cblcStrikeCount(data: []const u8, cblc: TableRecord) FontError!usize {
+    if (cblc.length < 8) return error.BadSfnt;
+    const major = try bin.readU16At(data, cblc.offset);
+    const minor = try bin.readU16At(data, cblc.offset + 2);
+    if ((major != 2 and major != 3) or minor != 0) return error.BadSfnt;
+    const count = try bin.readU32At(data, cblc.offset + 4);
+    if (@as(usize, count) * 48 > cblc.length - 8) return error.BadSfnt;
+    return @intCast(count);
+}
+
+fn cblcStrike(data: []const u8, cblc: TableRecord, strike_index: usize) FontError!CblcStrike {
+    const strike_count = try cblcStrikeCount(data, cblc);
+    if (strike_index >= strike_count) return error.BadSfnt;
+    const offset = cblc.offset + 8 + strike_index * 48;
+    const index_array_offset = try bin.readU32At(data, offset);
+    const index_tables_size = try bin.readU32At(data, offset + 4);
+    const table_count = try bin.readU32At(data, offset + 8);
+    if (index_array_offset > cblc.length) return error.BadSfnt;
+    if (index_tables_size > cblc.length - index_array_offset) return error.BadSfnt;
+    if (@as(usize, table_count) * 8 > index_tables_size) return error.BadSfnt;
+    const start_glyph = try bin.readU16At(data, offset + 40);
+    const end_glyph = try bin.readU16At(data, offset + 42);
+    if (start_glyph > end_glyph) return error.BadSfnt;
+    return .{
+        .ppem = data[offset + 44],
+        .ppi = 0,
+        .offset = cblc.offset + index_array_offset,
+        .index_tables_size = index_tables_size,
+        .table_count = table_count,
+        .start_glyph = start_glyph,
+        .end_glyph = end_glyph,
+    };
+}
+
+fn cblcGlyphPng(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphPng {
+    _ = glyph_count;
+    const strike_count = try cblcStrikeCount(data, cblc);
+    var best: ?BitmapGlyphPng = null;
+    var best_distance: f32 = std.math.inf(f32);
+    for (0..strike_count) |strike_index| {
+        const strike = try cblcStrike(data, cblc, strike_index);
+        if (glyph_id < strike.start_glyph or glyph_id > strike.end_glyph) continue;
+        const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
+        const glyph = try cbdtGlyphPng(data, cbdt, strike, location);
+        const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
+        if (best == null or distance < best_distance) {
+            best = glyph;
+            best_distance = distance;
+        }
+    }
+    return best;
+}
+
+fn cblcGlyphLocation(data: []const u8, strike: CblcStrike, glyph_id: glyph_mod.GlyphId) FontError!?CblcGlyphLocation {
+    for (0..strike.table_count) |table_index| {
+        const record = strike.offset + table_index * 8;
+        if (record + 8 > data.len or record + 8 > strike.offset + strike.index_tables_size) return error.BadSfnt;
+        const first = try bin.readU16At(data, record);
+        const last = try bin.readU16At(data, record + 2);
+        if (glyph_id < first or glyph_id > last) continue;
+        const subtable_offset = try bin.readU32At(data, record + 4);
+        if (subtable_offset >= strike.index_tables_size) return error.BadSfnt;
+        const subtable = strike.offset + subtable_offset;
+        if (subtable + 8 > data.len or subtable + 8 > strike.offset + strike.index_tables_size) return error.BadSfnt;
+        const index_format = try bin.readU16At(data, subtable);
+        const image_format = try bin.readU16At(data, subtable + 2);
+        const image_data_offset = try bin.readU32At(data, subtable + 4);
+        if (image_data_offset > std.math.maxInt(usize)) return error.BadSfnt;
+        const image_base: usize = @intCast(image_data_offset);
+        const local_index: usize = glyph_id - first;
+        return switch (index_format) {
+            1 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, first, last, local_index, image_format, image_base, 4),
+            3 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, first, last, local_index, image_format, image_base, 2),
+            4 => try cblcGlyphLocationFormat4(data, strike, subtable + 8, glyph_id, image_format, image_base),
+            5 => try cblcGlyphLocationFormat5(data, strike, subtable + 8, glyph_id, image_format, image_base),
+            else => null,
+        };
+    }
+    return null;
+}
+
+fn cblcGlyphLocationFormat1Or3(data: []const u8, strike: CblcStrike, offsets_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, local_index: usize, image_format: u16, image_base: usize, offset_size: usize) FontError!?CblcGlyphLocation {
+    const glyphs = @as(usize, last - first) + 1;
+    const offsets_len = (glyphs + 1) * offset_size;
+    if (offsets_offset + offsets_len > data.len or offsets_offset + offsets_len > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    const start = try readCblcOffset(data, offsets_offset + local_index * offset_size, offset_size);
+    const end = try readCblcOffset(data, offsets_offset + (local_index + 1) * offset_size, offset_size);
+    if (end <= start) return null;
+    return .{ .image_format = image_format, .offset = image_base + start, .length = end - start };
+}
+
+fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: usize, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
+    if (body_offset + 4 > data.len or body_offset + 4 > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    const pair_count = try bin.readU32At(data, body_offset);
+    const pairs_offset = body_offset + 4;
+    const pairs_len = (@as(usize, pair_count) + 1) * 4;
+    if (pairs_offset + pairs_len > data.len or pairs_offset + pairs_len > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    for (0..pair_count) |index| {
+        const pair = pairs_offset + @as(usize, index) * 4;
+        const current_glyph = try bin.readU16At(data, pair);
+        if (current_glyph != glyph_id) continue;
+        const start = try bin.readU16At(data, pair + 2);
+        const end = try bin.readU16At(data, pair + 6);
+        if (end <= start) return null;
+        return .{ .image_format = image_format, .offset = image_base + start, .length = end - start };
+    }
+    return null;
+}
+
+fn cblcGlyphLocationFormat5(data: []const u8, strike: CblcStrike, body_offset: usize, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
+    if (body_offset + 16 > data.len or body_offset + 16 > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    const image_size = try bin.readU32At(data, body_offset);
+    _ = try readBigBitmapMetrics(data, body_offset + 4);
+    const glyph_count = try bin.readU32At(data, body_offset + 12);
+    const glyphs_offset = body_offset + 16;
+    if (glyphs_offset + @as(usize, glyph_count) * 2 > data.len or glyphs_offset + @as(usize, glyph_count) * 2 > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    for (0..glyph_count) |index| {
+        const current_glyph = try bin.readU16At(data, glyphs_offset + @as(usize, index) * 2);
+        if (current_glyph != glyph_id) continue;
+        const offset = image_base + @as(usize, index) * image_size;
+        return .{ .image_format = image_format, .offset = offset, .length = image_size };
+    }
+    return null;
+}
+
+fn readCblcOffset(data: []const u8, offset: usize, size: usize) FontError!usize {
+    return switch (size) {
+        2 => try bin.readU16At(data, offset),
+        4 => try bin.readU32At(data, offset),
+        else => error.BadSfnt,
+    };
+}
+
+fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation) FontError!BitmapGlyphPng {
+    if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
+    const start = cbdt.offset + location.offset;
+    const end = start + location.length;
+    const slice = data[start..end];
+    const metrics_len: usize = switch (location.image_format) {
+        17 => 5,
+        18 => 8,
+        19 => 0,
+        else => return error.UnsupportedGlyph,
+    };
+    if (slice.len < metrics_len + 4) return error.BadSfnt;
+    const metrics = switch (location.image_format) {
+        17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
+        18 => readBigBitmapMetrics(slice, 0) catch unreachable,
+        19 => BitmapMetrics{ .height = 0, .width = 0, .bearing_x = 0, .bearing_y = 0, .advance = 0 },
+        else => unreachable,
+    };
+    const data_len = try bin.readU32At(slice, metrics_len);
+    if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
+    const png = slice[metrics_len + 4 .. metrics_len + 4 + data_len];
+    return bitmapGlyphPngFromData(png, strike.ppem, strike.ppi, metrics.bearing_x, metrics.bearing_y);
+}
+
+fn bitmapGlyphPngFromData(png: []const u8, ppem: u16, ppi: u16, origin_offset_x: i16, origin_offset_y: i16) FontError!BitmapGlyphPng {
+    if (png.len < 24) return error.BadSfnt;
+    if (!std.mem.eql(u8, png[1..4], "PNG")) return error.BadSfnt;
+    return .{
+        .ppem = ppem,
+        .ppi = ppi,
+        .origin_offset_x = origin_offset_x,
+        .origin_offset_y = origin_offset_y,
+        .width = try bin.readU32At(png, 16),
+        .height = try bin.readU32At(png, 20),
+        .data = png,
+    };
+}
+
+fn readSmallBitmapMetrics(data: []const u8, offset: usize) FontError!BitmapMetrics {
+    if (offset + 5 > data.len) return error.BadSfnt;
+    return .{
+        .height = data[offset],
+        .width = data[offset + 1],
+        .bearing_x = @bitCast(data[offset + 2]),
+        .bearing_y = @bitCast(data[offset + 3]),
+        .advance = data[offset + 4],
+    };
+}
+
+fn readBigBitmapMetrics(data: []const u8, offset: usize) FontError!BitmapMetrics {
+    if (offset + 8 > data.len) return error.BadSfnt;
+    return .{
+        .height = data[offset],
+        .width = data[offset + 1],
+        .bearing_x = @bitCast(data[offset + 2]),
+        .bearing_y = @bitCast(data[offset + 3]),
+        .advance = data[offset + 4],
     };
 }
 

@@ -19,6 +19,7 @@ pub const Adjustment = struct {
     y_advance: i16 = 0,
     pair_positioned: bool = false,
     mark_attachment: bool = false,
+    mark_base_index: ?usize = null,
 };
 
 const Table = struct {
@@ -341,6 +342,7 @@ fn appendAdjustment(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.
 const AdjustmentFlags = struct {
     pair_positioned: bool = false,
     mark_attachment: bool = false,
+    mark_base_index: ?usize = null,
 };
 
 fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment, flags: AdjustmentFlags) std.mem.Allocator.Error!void {
@@ -355,6 +357,7 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
             existing.y_advance += value.y_advance;
             existing.pair_positioned = existing.pair_positioned or flags.pair_positioned;
             existing.mark_attachment = existing.mark_attachment or flags.mark_attachment;
+            if (flags.mark_base_index) |base_index| existing.mark_base_index = base_index;
             return;
         }
     }
@@ -366,6 +369,7 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         .y_advance = value.y_advance,
         .pair_positioned = flags.pair_positioned,
         .mark_attachment = flags.mark_attachment,
+        .mark_base_index = flags.mark_base_index,
     });
 }
 
@@ -410,13 +414,14 @@ fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []c
     const base_array_offset = subtable_offset + try readU16(table, subtable_offset + 10);
     if (class_count == 0 or glyphs.len < 2) return;
 
-    // This simplified attachment model anchors a mark to the immediately
-    // preceding base glyph. It preserves the table math while keeping mark
-    // filtering explicit for future GDEF-aware expansion.
+    const attached_marks = try allocator.alloc(bool, glyphs.len);
+    defer allocator.free(attached_marks);
+    @memset(attached_marks, false);
+
     for (glyphs, 0..) |glyph, i| {
         const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse continue;
-        if (i == 0) continue;
-        const base_index = try coverageIndex(table, base_coverage_offset, glyphs[i - 1]) orelse continue;
+        const base_position = try previousCoveredBaseGlyph(table, base_coverage_offset, glyphs, i, attached_marks) orelse continue;
+        const base_index = try coverageIndex(table, base_coverage_offset, glyphs[base_position]) orelse continue;
         const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
         const mark_class = try readU16(table, mark_record_offset);
         if (mark_class >= class_count) continue;
@@ -431,8 +436,19 @@ fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []c
             .index = i,
             .x_placement = base_anchor.x - mark_anchor.x,
             .y_placement = base_anchor.y - mark_anchor.y,
-        }, .{ .mark_attachment = true });
+        }, .{ .mark_attachment = true, .mark_base_index = base_position });
+        attached_marks[i] = true;
     }
+}
+
+fn previousCoveredBaseGlyph(table: Table, base_coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool) GposError!?usize {
+    var i = mark_index;
+    while (i > 0) {
+        i -= 1;
+        if (i < attached_marks.len and attached_marks[i]) continue;
+        if (try coverageIndex(table, base_coverage_offset, glyphs[i]) != null) return i;
+    }
+    return null;
 }
 
 fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {

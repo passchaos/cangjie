@@ -1507,8 +1507,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         var adjustment = findAdjustment(gpos_adjustments.items, index);
         if (adjustment.mark_attachment) {
-            const previous_advance = if (buffer.glyphs.items.len > 0) buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance else 0.0;
-            adjustment.x_placement = @intFromFloat(@round(@as(f32, @floatFromInt(adjustment.x_placement)) - previous_advance / scale));
+            const advance_to_base = if (adjustment.mark_base_index) |base_index|
+                advanceBetweenGlyphs(buffer.glyphs.items, base_index, index)
+            else if (buffer.glyphs.items.len > 0)
+                buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance
+            else
+                0.0;
+            adjustment.x_placement = @intFromFloat(@round(@as(f32, @floatFromInt(adjustment.x_placement)) - advance_to_base / scale));
             adjustment.x_advance = -@as(i16, @intCast(metrics.advance_width));
         }
         const base_advance = if (glyph_class == .mark and !adjustment.mark_attachment) 0 else metrics.advance_width;
@@ -1522,6 +1527,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         });
         previous_glyph = glyph_id;
     }
+}
+
+fn advanceBetweenGlyphs(glyphs: []const GlyphPosition, base_index: usize, mark_index: usize) f32 {
+    if (mark_index <= base_index or base_index >= glyphs.len) return 0.0;
+    const end = @min(mark_index, glyphs.len);
+    var advance: f32 = 0.0;
+    for (glyphs[base_index..end]) |glyph| {
+        advance += glyph.x_advance;
+    }
+    return advance;
 }
 
 fn glyphMetricsKey(font: *const Font, glyph_id: GlyphId) GlyphMetricsKey {

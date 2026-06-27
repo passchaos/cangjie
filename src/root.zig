@@ -3563,6 +3563,29 @@ test "applies GPOS mark-to-base positioning during shaping" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.0), run.glyphs[1].y_offset, 0.001);
 }
 
+test "applies GPOS mark-to-base positioning across intervening marks" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalGposMarkTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AAA", 20);
+
+    try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[2].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[0].x_advance + run.glyphs[1].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[0].x_advance + run.glyphs[2].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), run.glyphs[1].y_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), run.glyphs[2].y_offset, 0.001);
+}
+
 test "applies GPOS mark-to-mark positioning during shaping" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

@@ -17,6 +17,8 @@ pub const Adjustment = struct {
     x_placement: i16 = 0,
     y_placement: i16 = 0,
     y_advance: i16 = 0,
+    pair_positioned: bool = false,
+    mark_attachment: bool = false,
 };
 
 const Table = struct {
@@ -159,13 +161,13 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
             1 => try collectSingleAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            2 => try collectPairAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
+            2 => try collectPairAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
             4 => try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
             5 => try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
             6 => try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
-            7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
-            8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
+            7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
+            8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, options),
             else => {},
         }
@@ -182,7 +184,7 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
             for (glyphs, 0..) |glyph, i| {
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph) != null) {
-                    try appendAdjustment(adjustments, allocator, i, value);
+                    try appendAdjustment(adjustments, allocator, i, value, false);
                 }
             }
         },
@@ -194,7 +196,7 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
                 if (try coverageIndex(table, coverage_offset, glyph)) |coverage| {
                     if (coverage < value_count) {
                         const value = try readValueRecord(table, subtable_offset + 8 + coverage * value_size, value_format);
-                        try appendAdjustment(adjustments, allocator, i, value);
+                        try appendAdjustment(adjustments, allocator, i, value, false);
                     }
                 }
             }
@@ -224,17 +226,18 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
     const extension_subtable = subtable_offset + extension_offset;
     switch (extension_lookup_type) {
         1 => try collectSingleAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
-        2 => try collectPairAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
+        2 => try collectPairAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
         3 => try collectCursiveAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
         4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
         5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
         6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
-        7 => try collectContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
+        7 => try collectContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
+        8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
         else => {},
     }
 }
 
-fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const value_format_1 = try readU16(table, subtable_offset + 4);
@@ -250,6 +253,8 @@ fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const G
             const pair_set_count = try readU16(table, subtable_offset + 8);
             var i: usize = 0;
             while (i + 1 < glyphs.len) : (i += 1) {
+                if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
+                const second_index = nextUnignoredGlyph(glyphs, i + 1, lookup_flag, options) orelse continue;
                 const coverage = try coverageIndex(table, coverage_offset, glyphs[i]) orelse continue;
                 if (coverage >= pair_set_count) continue;
                 const pair_set_offset = subtable_offset + try readU16(table, subtable_offset + 10 + coverage * 2);
@@ -260,10 +265,11 @@ fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const G
                     record_offset += 2;
                     const value_1 = try readValueRecord(table, record_offset, value_format_1);
                     record_offset += value_size_1;
-                    _ = try readValueRecord(table, record_offset, value_format_2);
+                    const value_2 = try readValueRecord(table, record_offset, value_format_2);
                     record_offset += value_size_2;
-                    if (second == glyphs[i + 1]) {
-                        try appendAdjustment(adjustments, allocator, i, value_1);
+                    if (second == glyphs[second_index]) {
+                        try appendAdjustment(adjustments, allocator, i, value_1, true);
+                        try appendAdjustment(adjustments, allocator, second_index, value_2, false);
                         break;
                     }
                 }
@@ -280,20 +286,64 @@ fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const G
             const matrix_offset = subtable_offset + 16;
             var i: usize = 0;
             while (i + 1 < glyphs.len) : (i += 1) {
+                if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
+                const second_index = nextUnignoredGlyph(glyphs, i + 1, lookup_flag, options) orelse continue;
                 if (try coverageIndex(table, coverage_offset, glyphs[i]) == null) continue;
                 const class_1 = try classValue(table, class_def_1, glyphs[i]);
-                const class_2 = try classValue(table, class_def_2, glyphs[i + 1]);
+                const class_2 = try classValue(table, class_def_2, glyphs[second_index]);
                 if (class_1 >= class_1_count or class_2 >= class_2_count) continue;
                 const record_offset = matrix_offset + (@as(usize, class_1) * class_2_count + class_2) * record_size;
                 const value_1 = try readValueRecord(table, record_offset, value_format_1);
-                try appendAdjustment(adjustments, allocator, i, value_1);
+                const value_2 = try readValueRecord(table, record_offset + value_size_1, value_format_2);
+                try appendAdjustment(adjustments, allocator, i, value_1, true);
+                try appendAdjustment(adjustments, allocator, second_index, value_2, false);
             }
         },
         else => return error.UnsupportedGpos,
     }
 }
 
-fn appendAdjustment(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment) std.mem.Allocator.Error!void {
+fn nextUnignoredGlyph(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions) ?usize {
+    var i = start;
+    while (i < glyphs.len) : (i += 1) {
+        if (!lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) return i;
+    }
+    return null;
+}
+
+fn collectForwardUnignoredGlyphs(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, out: []usize) bool {
+    var out_i: usize = 0;
+    var glyph_i = start;
+    while (glyph_i < glyphs.len and out_i < out.len) : (glyph_i += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_i])) continue;
+        out[out_i] = glyph_i;
+        out_i += 1;
+    }
+    return out_i == out.len;
+}
+
+fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_flag: u16, options: LookupOptions, out: []usize) bool {
+    var out_i: usize = 0;
+    var glyph_i = pos;
+    while (glyph_i > 0 and out_i < out.len) {
+        glyph_i -= 1;
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_i])) continue;
+        out[out_i] = glyph_i;
+        out_i += 1;
+    }
+    return out_i == out.len;
+}
+
+fn appendAdjustment(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment, pair_positioned: bool) std.mem.Allocator.Error!void {
+    return try appendAdjustmentEx(adjustments, allocator, index, value, .{ .pair_positioned = pair_positioned });
+}
+
+const AdjustmentFlags = struct {
+    pair_positioned: bool = false,
+    mark_attachment: bool = false,
+};
+
+fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment, flags: AdjustmentFlags) std.mem.Allocator.Error!void {
     // Multiple positioning subtables can target the same glyph. Accumulate all
     // deltas into one adjustment record per glyph index.
     if (value.x_advance == 0 and value.x_placement == 0 and value.y_placement == 0 and value.y_advance == 0) return;
@@ -303,6 +353,8 @@ fn appendAdjustment(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.
             existing.x_placement += value.x_placement;
             existing.y_placement += value.y_placement;
             existing.y_advance += value.y_advance;
+            existing.pair_positioned = existing.pair_positioned or flags.pair_positioned;
+            existing.mark_attachment = existing.mark_attachment or flags.mark_attachment;
             return;
         }
     }
@@ -312,6 +364,8 @@ fn appendAdjustment(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.
         .x_placement = value.x_placement,
         .y_placement = value.y_placement,
         .y_advance = value.y_advance,
+        .pair_positioned = flags.pair_positioned,
+        .mark_attachment = flags.mark_attachment,
     });
 }
 
@@ -342,7 +396,7 @@ fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
             .index = i,
             .x_placement = exit.x - entry.x,
             .y_placement = exit.y - entry.y,
-        });
+        }, false);
     }
 }
 
@@ -373,15 +427,15 @@ fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []c
         const base_anchor_offset = base_array_offset + base_anchor_relative;
         const mark_anchor = try readAnchor(table, mark_anchor_offset);
         const base_anchor = try readAnchor(table, base_anchor_offset);
-        try appendAdjustment(adjustments, allocator, i, .{
+        try appendAdjustmentEx(adjustments, allocator, i, .{
             .index = i,
             .x_placement = base_anchor.x - mark_anchor.x,
             .y_placement = base_anchor.y - mark_anchor.y,
-        });
+        }, .{ .mark_attachment = true });
     }
 }
 
-fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     switch (pos_format) {
         1 => {
@@ -389,79 +443,106 @@ fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
             const rule_set_count = try readU16(table, subtable_offset + 4);
             var pos: usize = 0;
             while (pos < glyphs.len) : (pos += 1) {
+                if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
                 const coverage = try coverageIndex(table, coverage_offset, glyphs[pos]) orelse continue;
                 if (coverage >= rule_set_count) continue;
                 const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
                 if (set_relative == 0) continue;
-                if (try collectPositionRuleSet(table, subtable_offset + set_relative, glyphs, pos, adjustments, allocator)) {
+                if (try collectPositionRuleSet(table, subtable_offset + set_relative, glyphs, pos, adjustments, allocator, lookup_flag, options)) {
                     pos += 1;
                 }
             }
         },
-        3 => try collectCoveragePositioning(table, subtable_offset, glyphs, adjustments, allocator),
+        2 => try collectClassPositioning(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
+        3 => try collectCoveragePositioning(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
         else => return error.UnsupportedGpos,
     }
 }
 
-fn collectCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectClassPositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const class_def_offset = subtable_offset + try readU16(table, subtable_offset + 4);
+    const class_set_count = try readU16(table, subtable_offset + 6);
+    var pos: usize = 0;
+    while (pos < glyphs.len) : (pos += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (try coverageIndex(table, coverage_offset, glyphs[pos]) == null) continue;
+        const class = try classValue(table, class_def_offset, glyphs[pos]);
+        if (class >= class_set_count) continue;
+        const set_relative = try readU16(table, subtable_offset + 8 + @as(usize, class) * 2);
+        if (set_relative == 0) continue;
+        if (try collectClassPositionRuleSet(table, subtable_offset + set_relative, class_def_offset, glyphs, pos, adjustments, allocator, lookup_flag, options)) {
+            pos += 1;
+        }
+    }
+}
+
+fn collectCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const glyph_count = try readU16(table, subtable_offset + 2);
     const pos_count = try readU16(table, subtable_offset + 4);
     if (glyph_count == 0) return;
     const coverage_offsets_pos = subtable_offset + 6;
     const records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
     var pos: usize = 0;
-    while (pos + glyph_count <= glyphs.len) : (pos += 1) {
+    while (pos < glyphs.len) : (pos += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        var input_indices_buf: [64]usize = undefined;
+        if (glyph_count > input_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
         var matched = true;
         for (0..glyph_count) |i| {
             const coverage_offset = subtable_offset + try readU16(table, coverage_offsets_pos + i * 2);
-            if (try coverageIndex(table, coverage_offset, glyphs[pos + i]) == null) {
+            if (try coverageIndex(table, coverage_offset, glyphs[input_indices_buf[i]]) == null) {
                 matched = false;
                 break;
             }
         }
         if (!matched) continue;
-        try collectPositionRecords(table, records_pos, pos_count, glyph_count, glyphs, pos, adjustments, allocator);
+        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator);
         pos += glyph_count - 1;
     }
 }
 
-fn collectChainingContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectChainingContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     switch (pos_format) {
-        1 => try collectChainingGlyphPositioning(table, subtable_offset, glyphs, adjustments, allocator),
-        2 => try collectChainingClassPositioning(table, subtable_offset, glyphs, adjustments, allocator),
-        3 => try collectChainingCoveragePositioning(table, subtable_offset, glyphs, adjustments, allocator),
+        1 => try collectChainingGlyphPositioning(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
+        2 => try collectChainingClassPositioning(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
+        3 => try collectChainingCoveragePositioning(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
         else => return error.UnsupportedGpos,
     }
 }
 
-fn collectChainingGlyphPositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectChainingGlyphPositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const chain_set_count = try readU16(table, subtable_offset + 4);
     var pos: usize = 0;
     while (pos < glyphs.len) : (pos += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         const coverage = try coverageIndex(table, coverage_offset, glyphs[pos]) orelse continue;
         if (coverage >= chain_set_count) continue;
         const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
         if (set_relative == 0) continue;
-        if (try collectChainingGlyphRuleSet(table, subtable_offset + set_relative, glyphs, pos, adjustments, allocator)) {
+        if (try collectChainingGlyphRuleSet(table, subtable_offset + set_relative, glyphs, pos, adjustments, allocator, lookup_flag, options)) {
             pos += 1;
         }
     }
 }
 
-fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!bool {
+fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     const rule_count = try readU16(table, set_offset);
     for (0..rule_count) |rule_i| {
         const rule_offset = set_offset + try readU16(table, set_offset + 2 + rule_i * 2);
         var cursor = rule_offset;
         const backtrack_count = try readU16(table, cursor);
         cursor += 2;
-        if (pos < backtrack_count) continue;
+        var backtrack_indices_buf: [64]usize = undefined;
+        if (backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count])) continue;
         var matched = true;
         for (0..backtrack_count) |i| {
             const expected = try readU16(table, cursor + i * 2);
-            if (glyphs[pos - 1 - i] != expected) {
+            if (glyphs[backtrack_indices_buf[i]] != expected) {
                 matched = false;
                 break;
             }
@@ -471,10 +552,13 @@ fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const 
 
         const input_count = try readU16(table, cursor);
         cursor += 2;
-        if (input_count == 0 or pos + input_count > glyphs.len) continue;
+        if (input_count == 0) continue;
+        var input_indices_buf: [64]usize = undefined;
+        if (input_count > input_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..input_count])) continue;
         for (1..input_count) |i| {
             const expected = try readU16(table, cursor + (i - 1) * 2);
-            if (glyphs[pos + i] != expected) {
+            if (glyphs[input_indices_buf[i]] != expected) {
                 matched = false;
                 break;
             }
@@ -484,10 +568,13 @@ fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const 
 
         const lookahead_count = try readU16(table, cursor);
         cursor += 2;
-        if (pos + input_count + lookahead_count > glyphs.len) continue;
+        const lookahead_start = input_indices_buf[input_count - 1] + 1;
+        var lookahead_indices_buf: [64]usize = undefined;
+        if (lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count])) continue;
         for (0..lookahead_count) |i| {
             const expected = try readU16(table, cursor + i * 2);
-            if (glyphs[pos + input_count + i] != expected) {
+            if (glyphs[lookahead_indices_buf[i]] != expected) {
                 matched = false;
                 break;
             }
@@ -497,13 +584,13 @@ fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const 
 
         const pos_count = try readU16(table, cursor);
         cursor += 2;
-        try collectPositionRecords(table, cursor, pos_count, input_count, glyphs, pos, adjustments, allocator);
+        try collectPositionRecordsMapped(table, cursor, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator);
         return true;
     }
     return false;
 }
 
-fn collectChainingClassPositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectChainingClassPositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const backtrack_class_def = subtable_offset + try readU16(table, subtable_offset + 4);
     const input_class_def = subtable_offset + try readU16(table, subtable_offset + 6);
@@ -511,18 +598,19 @@ fn collectChainingClassPositioning(table: Table, subtable_offset: usize, glyphs:
     const set_count = try readU16(table, subtable_offset + 10);
     var pos: usize = 0;
     while (pos < glyphs.len) : (pos += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         if (try coverageIndex(table, coverage_offset, glyphs[pos]) == null) continue;
         const input_class = try classValue(table, input_class_def, glyphs[pos]);
         if (input_class >= set_count) continue;
         const set_relative = try readU16(table, subtable_offset + 12 + @as(usize, input_class) * 2);
         if (set_relative == 0) continue;
-        if (try collectChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, adjustments, allocator)) {
+        if (try collectChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, adjustments, allocator, lookup_flag, options)) {
             pos += 1;
         }
     }
 }
 
-fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_def: usize, input_class_def: usize, lookahead_class_def: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!bool {
+fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_def: usize, input_class_def: usize, lookahead_class_def: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     const rule_count = try readU16(table, set_offset);
     for (0..rule_count) |rule_i| {
         const rule_offset = set_offset + try readU16(table, set_offset + 2 + rule_i * 2);
@@ -533,11 +621,13 @@ fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_
         // position records.
         const backtrack_count = try readU16(table, cursor);
         cursor += 2;
-        if (pos < backtrack_count) continue;
+        var backtrack_indices_buf: [64]usize = undefined;
+        if (backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count])) continue;
         var matched = true;
         for (0..backtrack_count) |i| {
             const expected_class = try readU16(table, cursor + i * 2);
-            const actual_class = try classValue(table, backtrack_class_def, glyphs[pos - 1 - i]);
+            const actual_class = try classValue(table, backtrack_class_def, glyphs[backtrack_indices_buf[i]]);
             if (actual_class != expected_class) {
                 matched = false;
                 break;
@@ -548,10 +638,13 @@ fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_
 
         const input_count = try readU16(table, cursor);
         cursor += 2;
-        if (input_count == 0 or pos + input_count > glyphs.len) continue;
+        if (input_count == 0) continue;
+        var input_indices_buf: [64]usize = undefined;
+        if (input_count > input_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..input_count])) continue;
         for (1..input_count) |i| {
             const expected_class = try readU16(table, cursor + (i - 1) * 2);
-            const actual_class = try classValue(table, input_class_def, glyphs[pos + i]);
+            const actual_class = try classValue(table, input_class_def, glyphs[input_indices_buf[i]]);
             if (actual_class != expected_class) {
                 matched = false;
                 break;
@@ -562,10 +655,13 @@ fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_
 
         const lookahead_count = try readU16(table, cursor);
         cursor += 2;
-        if (pos + input_count + lookahead_count > glyphs.len) continue;
+        const lookahead_start = input_indices_buf[input_count - 1] + 1;
+        var lookahead_indices_buf: [64]usize = undefined;
+        if (lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count])) continue;
         for (0..lookahead_count) |i| {
             const expected_class = try readU16(table, cursor + i * 2);
-            const actual_class = try classValue(table, lookahead_class_def, glyphs[pos + input_count + i]);
+            const actual_class = try classValue(table, lookahead_class_def, glyphs[lookahead_indices_buf[i]]);
             if (actual_class != expected_class) {
                 matched = false;
                 break;
@@ -576,13 +672,13 @@ fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_
 
         const pos_count = try readU16(table, cursor);
         cursor += 2;
-        try collectPositionRecords(table, cursor, pos_count, input_count, glyphs, pos, adjustments, allocator);
+        try collectPositionRecordsMapped(table, cursor, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator);
         return true;
     }
     return false;
 }
 
-fn collectChainingCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectChainingCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const backtrack_count = try readU16(table, subtable_offset + 2);
     const backtrack_offsets_pos = subtable_offset + 4;
     const input_count_pos = backtrack_offsets_pos + @as(usize, backtrack_count) * 2;
@@ -597,11 +693,22 @@ fn collectChainingCoveragePositioning(table: Table, subtable_offset: usize, glyp
     const records_pos = pos_count_pos + 2;
 
     var pos: usize = 0;
-    while (pos + input_count <= glyphs.len) : (pos += 1) {
-        if (!try gposCoverageSequenceMatches(table, subtable_offset, glyphs, pos, backtrack_offsets_pos, backtrack_count, true)) continue;
-        if (!try gposCoverageSequenceMatches(table, subtable_offset, glyphs, pos, input_offsets_pos, input_count, false)) continue;
-        if (!try gposLookaheadCoverageMatches(table, subtable_offset, glyphs, pos + input_count, lookahead_offsets_pos, lookahead_count)) continue;
-        try collectPositionRecords(table, records_pos, pos_count, input_count, glyphs, pos, adjustments, allocator);
+    while (pos < glyphs.len) : (pos += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        var input_indices_buf: [64]usize = undefined;
+        if (input_count > input_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..input_count])) continue;
+        var backtrack_indices_buf: [64]usize = undefined;
+        if (backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count])) continue;
+        const lookahead_start = input_indices_buf[input_count - 1] + 1;
+        var lookahead_indices_buf: [64]usize = undefined;
+        if (lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count])) continue;
+        if (!try gposCoverageIndicesMatch(table, subtable_offset, glyphs, backtrack_indices_buf[0..backtrack_count], backtrack_offsets_pos)) continue;
+        if (!try gposCoverageIndicesMatch(table, subtable_offset, glyphs, input_indices_buf[0..input_count], input_offsets_pos)) continue;
+        if (!try gposCoverageIndicesMatch(table, subtable_offset, glyphs, lookahead_indices_buf[0..lookahead_count], lookahead_offsets_pos)) continue;
+        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator);
         pos += input_count - 1;
     }
 }
@@ -626,24 +733,62 @@ fn gposLookaheadCoverageMatches(table: Table, base_offset: usize, glyphs: []cons
     return true;
 }
 
-fn collectPositionRuleSet(table: Table, rule_set_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!bool {
+fn gposCoverageIndicesMatch(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize) GposError!bool {
+    for (indices, 0..) |glyph_index, i| {
+        const coverage_offset = base_offset + try readU16(table, offsets_pos + i * 2);
+        if (try coverageIndex(table, coverage_offset, glyphs[glyph_index]) == null) return false;
+    }
+    return true;
+}
+
+fn collectPositionRuleSet(table: Table, rule_set_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     const rule_count = try readU16(table, rule_set_offset);
     for (0..rule_count) |rule_i| {
         const rule_offset = rule_set_offset + try readU16(table, rule_set_offset + 2 + rule_i * 2);
         const glyph_count = try readU16(table, rule_offset);
         const pos_count = try readU16(table, rule_offset + 2);
-        if (glyph_count == 0 or pos + glyph_count > glyphs.len) continue;
+        if (glyph_count == 0) continue;
+        var input_indices_buf: [64]usize = undefined;
+        if (glyph_count > input_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
         var matched = true;
         for (1..glyph_count) |i| {
             const expected = try readU16(table, rule_offset + 4 + (i - 1) * 2);
-            if (glyphs[pos + i] != expected) {
+            if (glyphs[input_indices_buf[i]] != expected) {
                 matched = false;
                 break;
             }
         }
         if (!matched) continue;
         const records_pos = rule_offset + 4 + (@as(usize, glyph_count) - 1) * 2;
-        try collectPositionRecords(table, records_pos, pos_count, glyph_count, glyphs, pos, adjustments, allocator);
+        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator);
+        return true;
+    }
+    return false;
+}
+
+fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    const rule_count = try readU16(table, set_offset);
+    for (0..rule_count) |rule_i| {
+        const rule_offset = set_offset + try readU16(table, set_offset + 2 + rule_i * 2);
+        const glyph_count = try readU16(table, rule_offset);
+        const pos_count = try readU16(table, rule_offset + 2);
+        if (glyph_count == 0) continue;
+        var input_indices_buf: [64]usize = undefined;
+        if (glyph_count > input_indices_buf.len) return error.UnsupportedGpos;
+        if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
+        var matched = true;
+        for (1..glyph_count) |i| {
+            const expected_class = try readU16(table, rule_offset + 4 + (i - 1) * 2);
+            const actual_class = try classValue(table, class_def_offset, glyphs[input_indices_buf[i]]);
+            if (actual_class != expected_class) {
+                matched = false;
+                break;
+            }
+        }
+        if (!matched) continue;
+        const records_pos = rule_offset + 4 + (@as(usize, glyph_count) - 1) * 2;
+        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator);
         return true;
     }
     return false;
@@ -658,6 +803,17 @@ fn collectPositionRecords(table: Table, records_pos: usize, record_count: usize,
         const lookup_index = try readU16(table, record_offset + 2);
         if (sequence_index >= glyph_count) continue;
         try collectNestedSingleAdjustment(table, glyphs[pos + sequence_index], pos + sequence_index, lookup_index, adjustments, allocator);
+    }
+}
+
+fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+    for (0..record_count) |record_i| {
+        const record_offset = records_pos + record_i * 4;
+        const sequence_index = try readU16(table, record_offset);
+        const lookup_index = try readU16(table, record_offset + 2);
+        if (sequence_index >= input_indices.len) continue;
+        const target_index = input_indices[sequence_index];
+        try collectNestedSingleAdjustment(table, glyphs[target_index], target_index, lookup_index, adjustments, allocator);
     }
 }
 
@@ -678,7 +834,7 @@ fn collectNestedSingleAdjustment(table: Table, glyph: GlyphId, target_index: usi
             1 => {
                 if (try coverageIndex(table, coverage_offset, glyph) != null) {
                     const value = try readValueRecord(table, subtable_offset + 6, value_format);
-                    try appendAdjustment(adjustments, allocator, target_index, value);
+                    try appendAdjustment(adjustments, allocator, target_index, value, false);
                 }
             },
             2 => {
@@ -687,7 +843,7 @@ fn collectNestedSingleAdjustment(table: Table, glyph: GlyphId, target_index: usi
                 if (coverage >= value_count) continue;
                 const value_size = valueRecordSize(value_format);
                 const value = try readValueRecord(table, subtable_offset + 8 + coverage * value_size, value_format);
-                try appendAdjustment(adjustments, allocator, target_index, value);
+                try appendAdjustment(adjustments, allocator, target_index, value, false);
             },
             else => return error.UnsupportedGpos,
         }
@@ -722,11 +878,11 @@ fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs:
         const ligature_anchor_offset = ligature_attach_offset + ligature_anchor_relative;
         const mark_anchor = try readAnchor(table, mark_anchor_offset);
         const ligature_anchor = try readAnchor(table, ligature_anchor_offset);
-        try appendAdjustment(adjustments, allocator, i, .{
+        try appendAdjustmentEx(adjustments, allocator, i, .{
             .index = i,
             .x_placement = ligature_anchor.x - mark_anchor.x,
             .y_placement = ligature_anchor.y - mark_anchor.y,
-        });
+        }, .{ .mark_attachment = true });
     }
 }
 
@@ -754,11 +910,11 @@ fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []c
         const mark_2_anchor_offset = mark_2_array_offset + mark_2_anchor_relative;
         const mark_1_anchor = try readAnchor(table, mark_1_anchor_offset);
         const mark_2_anchor = try readAnchor(table, mark_2_anchor_offset);
-        try appendAdjustment(adjustments, allocator, i, .{
+        try appendAdjustmentEx(adjustments, allocator, i, .{
             .index = i,
             .x_placement = mark_2_anchor.x - mark_1_anchor.x,
             .y_placement = mark_2_anchor.y - mark_1_anchor.y,
-        });
+        }, .{ .mark_attachment = true });
     }
 }
 

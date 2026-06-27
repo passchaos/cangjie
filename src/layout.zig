@@ -89,6 +89,7 @@ pub const TextDirection = enum {
 
 pub const ShapeOptions = struct {
     direction: TextDirection = .ltr,
+    script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
     features: []const unicode.FeatureOverride = &.{},
 };
@@ -105,7 +106,7 @@ pub const ShapePlanKey = struct {
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
         return .{
             .direction = options.direction,
-            .script_tag = unicode.openTypeScriptTag(scriptForText(text)),
+            .script_tag = effectiveScriptTag(text, options),
             .language_tag = effectiveLanguageTag(text, options),
             .feature_hash = featureOverridesHash(options.features),
         };
@@ -1394,10 +1395,14 @@ const LookupOptions = struct {
 
 fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
     return .{
-        .script_tag = unicode.openTypeScriptTag(scriptForText(text)),
+        .script_tag = effectiveScriptTag(text, options),
         .language_tag = effectiveLanguageTag(text, options),
         .features = options.features,
     };
+}
+
+fn effectiveScriptTag(text: []const u8, options: ShapeOptions) unicode.OpenTypeScriptTag {
+    return options.script_tag orelse unicode.openTypeScriptTag(scriptForText(text));
 }
 
 fn effectiveLanguageTag(text: []const u8, options: ShapeOptions) unicode.OpenTypeLanguageTag {
@@ -1490,18 +1495,28 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     for (glyph_ids.items, 0..) |glyph_id, index| {
         const source_index = @min(index, codepoints.items.len -| 1);
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
+        const glyph_class = font.glyphClass(glyph_id) catch .unclassified;
         if (previous_glyph) |previous| {
-            const kern = try font.kerning(previous, glyph_id);
-            if (kern != 0 and buffer.glyphs.items.len > 0) {
-                buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern)) * scale;
+            const previous_adjustment = findAdjustment(gpos_adjustments.items, index - 1);
+            if (!previous_adjustment.pair_positioned) {
+                const kern = try font.kerning(previous, glyph_id);
+                if (kern != 0 and buffer.glyphs.items.len > 0) {
+                    buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern)) * scale;
+                }
             }
         }
-        const adjustment = findAdjustment(gpos_adjustments.items, index);
+        var adjustment = findAdjustment(gpos_adjustments.items, index);
+        if (adjustment.mark_attachment) {
+            const previous_advance = if (buffer.glyphs.items.len > 0) buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance else 0.0;
+            adjustment.x_placement = @intFromFloat(@round(@as(f32, @floatFromInt(adjustment.x_placement)) - previous_advance / scale));
+            adjustment.x_advance = -@as(i16, @intCast(metrics.advance_width));
+        }
+        const base_advance = if (glyph_class == .mark and !adjustment.mark_attachment) 0 else metrics.advance_width;
         try buffer.glyphs.append(buffer.allocator, .{
             .glyph_id = glyph_id,
             .codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index],
             .cluster = if (clusters.items.len == 0) cluster_base else clusters.items[source_index],
-            .x_advance = (@as(f32, @floatFromInt(metrics.advance_width)) + @as(f32, @floatFromInt(adjustment.x_advance))) * scale,
+            .x_advance = (@as(f32, @floatFromInt(base_advance)) + @as(f32, @floatFromInt(adjustment.x_advance))) * scale,
             .x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale,
             .y_offset = @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
         });

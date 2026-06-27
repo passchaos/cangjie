@@ -255,6 +255,10 @@ pub fn buildMinimalGposTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGposTtfTables(allocator));
 }
 
+pub fn buildMinimalGposAndKernTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try minimalGposAndKernTtfTables(allocator));
+}
+
 pub fn buildMinimalGposSingleTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGposSingleTtfTables(allocator));
 }
@@ -1080,6 +1084,21 @@ fn minimalGposTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    return tables;
+}
+
+fn minimalGposAndKernTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "GPOS", .data = try gposTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     return tables;
 }
 
@@ -2768,7 +2787,7 @@ fn gposTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 26, 1);
     writeU16(bytes, 28, 22);
     writeU16(bytes, 30, 0x0004);
-    writeU16(bytes, 32, 0);
+    writeU16(bytes, 32, 0x0002);
     writeU16(bytes, 34, 1);
     writeU16(bytes, 36, 28);
 
@@ -2779,6 +2798,7 @@ fn gposTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 54, 1);
     writeU16(bytes, 56, 1);
     writeI16(bytes, 58, -100);
+    writeI16(bytes, 60, -50);
     return bytes;
 }
 

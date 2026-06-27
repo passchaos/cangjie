@@ -3448,6 +3448,25 @@ test "applies GPOS pair positioning during shaping" {
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 30.0), run.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.0), run.glyphs[1].y_offset, 0.001);
+}
+
+test "prefers GPOS pair positioning over legacy kern for same pair" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalGposAndKernTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 20);
+
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0), run.width(), 0.001);
 }
 
 test "applies GPOS single positioning offsets during shaping" {
@@ -3519,7 +3538,8 @@ test "applies GPOS mark-to-base positioning during shaping" {
     const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 20);
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[0].x_advance + run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2.0), run.glyphs[1].y_offset, 0.001);
 }
 
@@ -3538,7 +3558,8 @@ test "applies GPOS mark-to-mark positioning during shaping" {
     const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 20);
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.5), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), run.glyphs[0].x_advance + run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2.5), run.glyphs[1].y_offset, 0.001);
 }
 
@@ -3578,7 +3599,8 @@ test "applies GPOS mark-to-ligature positioning during shaping" {
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectEqual(@as(GlyphId, 2), run.glyphs[0].glyph_id);
     try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[1].glyph_id);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.2), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.2), run.glyphs[0].x_advance + run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2.4), run.glyphs[1].y_offset, 0.001);
 }
 

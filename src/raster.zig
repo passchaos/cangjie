@@ -441,7 +441,7 @@ pub const Rasterizer = struct {
         try flattenOutline(self.allocator, &flattened, outline, scale, x, baseline_y);
         const hint_size = self.hint_size_px orelse font_size;
         alignSmallGlyphToPixelGrid(flattened.items, outline, scale, font_size, hint_size);
-        try self.fillLines(target, flattened.items);
+        try self.fillLines(target, flattened.items, .non_zero);
         if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);
         }
@@ -560,10 +560,10 @@ pub const Rasterizer = struct {
         const origin_x = x - view_box.min_x * scale;
         const origin_y = baseline_y - font_size - view_box.min_y * scale;
         try flattenSvgOutline(self.allocator, &flattened, outline, transform, scale, origin_x, origin_y);
-        try self.fillLines(target, flattened.items);
+        try self.fillLines(target, flattened.items, .even_odd);
     }
 
-    fn fillLines(self: *Rasterizer, target: *RenderTarget, lines: []const Line) !void {
+    fn fillLines(self: *Rasterizer, target: *RenderTarget, lines: []const Line, fill_rule: GlyphFillRule) !void {
         if (lines.len == 0) return;
         var min_x: i32 = std.math.maxInt(i32);
         var min_y: i32 = std.math.maxInt(i32);
@@ -586,9 +586,9 @@ pub const Rasterizer = struct {
         const row_width_i32 = max_x - min_x + 1;
         if (row_width_i32 <= 0) return;
         const row_width: usize = @intCast(row_width_i32);
-        var coverage_counts = try self.allocator.alloc(u8, row_width);
+        const coverage_counts = try self.allocator.alloc(u8, row_width);
         defer self.allocator.free(coverage_counts);
-        var intersections: std.ArrayList(f32) = .empty;
+        var intersections: std.ArrayList(WindingIntersection) = .empty;
         defer intersections.deinit(self.allocator);
 
         var y = min_y;
@@ -603,27 +603,42 @@ pub const Rasterizer = struct {
                     const by = line.b.y;
                     if ((ay > py) == (by > py)) continue;
                     const x_intersect = (line.b.x - line.a.x) * (py - ay) / (by - ay) + line.a.x;
-                    try intersections.append(self.allocator, x_intersect);
+                    try intersections.append(self.allocator, .{
+                        .x = x_intersect,
+                        .delta = if (by > ay) 1 else -1,
+                    });
                 }
                 if (intersections.items.len < 2) continue;
-                std.sort.heap(f32, intersections.items, {}, lessThanF32);
+                std.sort.heap(WindingIntersection, intersections.items, {}, lessThanWindingIntersection);
 
-                var pair: usize = 0;
-                while (pair + 1 < intersections.items.len) : (pair += 2) {
-                    const start_f = intersections.items[pair];
-                    const end_f = intersections.items[pair + 1];
-                    if (end_f <= @as(f32, @floatFromInt(min_x)) or start_f >= @as(f32, @floatFromInt(max_x + 1))) continue;
-                    var x = @max(min_x, @as(i32, @intFromFloat(@floor(start_f))));
-                    const x_end = @min(max_x, @as(i32, @intFromFloat(@ceil(end_f))));
-                    while (x <= x_end) : (x += 1) {
-                        var sx: i32 = 0;
-                        while (sx < sample_axis) : (sx += 1) {
-                            const px = @as(f32, @floatFromInt(x)) + (@as(f32, @floatFromInt(sx)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
-                            if (px >= start_f and px < end_f) {
-                                coverage_counts[@intCast(x - min_x)] += 1;
+                switch (fill_rule) {
+                    .non_zero => {
+                        var winding: i32 = 0;
+                        var previous_x: ?f32 = null;
+                        var index: usize = 0;
+                        while (index < intersections.items.len) {
+                            const current_x = intersections.items[index].x;
+                            if (previous_x) |start_f| {
+                                const end_f = current_x;
+                                if (winding != 0) {
+                                    coverSpan(coverage_counts, min_x, max_x, sample_axis, start_f, end_f);
+                                }
                             }
+
+                            var delta_sum: i32 = 0;
+                            while (index < intersections.items.len and @abs(intersections.items[index].x - current_x) <= 0.000001) : (index += 1) {
+                                delta_sum += intersections.items[index].delta;
+                            }
+                            winding += delta_sum;
+                            previous_x = current_x;
                         }
-                    }
+                    },
+                    .even_odd => {
+                        var pair: usize = 0;
+                        while (pair + 1 < intersections.items.len) : (pair += 2) {
+                            coverSpan(coverage_counts, min_x, max_x, sample_axis, intersections.items[pair].x, intersections.items[pair + 1].x);
+                        }
+                    },
                 }
             }
             var x = min_x;
@@ -689,8 +704,33 @@ pub const Rasterizer = struct {
     }
 };
 
-fn lessThanF32(_: void, lhs: f32, rhs: f32) bool {
-    return lhs < rhs;
+const WindingIntersection = struct {
+    x: f32,
+    delta: i8,
+};
+
+const GlyphFillRule = enum {
+    non_zero,
+    even_odd,
+};
+
+fn lessThanWindingIntersection(_: void, lhs: WindingIntersection, rhs: WindingIntersection) bool {
+    return lhs.x < rhs.x;
+}
+
+fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_axis: i32, start_f: f32, end_f: f32) void {
+    if (end_f <= @as(f32, @floatFromInt(min_x)) or start_f >= @as(f32, @floatFromInt(max_x + 1))) return;
+    var x = @max(min_x, @as(i32, @intFromFloat(@floor(start_f))));
+    const x_end = @min(max_x, @as(i32, @intFromFloat(@ceil(end_f))));
+    while (x <= x_end) : (x += 1) {
+        var sx: i32 = 0;
+        while (sx < sample_axis) : (sx += 1) {
+            const px = @as(f32, @floatFromInt(x)) + (@as(f32, @floatFromInt(sx)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
+            if (px >= start_f and px < end_f) {
+                coverage_counts[@intCast(x - min_x)] += 1;
+            }
+        }
+    }
 }
 
 fn applySvgClipToMask(mask: *RenderTarget, clip: SvgClipShape, view_box: ViewBox, x: f32, baseline_y: f32, font_size: f32) void {
@@ -3029,6 +3069,34 @@ test "small glyph embolden can be disabled for native-weight UI text" {
 
     try std.testing.expect(alphaSum(&normal) > 0);
     try std.testing.expect(alphaSum(&bold) > alphaSum(&normal));
+}
+
+test "glyph fill uses non-zero winding for overlapping same-direction strokes" {
+    const allocator = std.testing.allocator;
+    var outline = glyph_mod.GlyphOutline.init(allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 800, .y_max = 300 }, 800, 0);
+    defer outline.deinit();
+
+    try outline.commands.append(allocator, .{ .move_to = .{ .x = 100, .y = 100 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 500, .y = 100 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 500, .y = 250 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 100, .y = 250 } });
+    try outline.commands.append(allocator, .close);
+    try outline.commands.append(allocator, .{ .move_to = .{ .x = 300, .y = 100 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 700, .y = 100 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 700, .y = 250 } });
+    try outline.commands.append(allocator, .{ .line_to = .{ .x = 300, .y = 250 } });
+    try outline.commands.append(allocator, .close);
+
+    var target = try RenderTarget.init(allocator, 20, 28);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.samples_per_axis = 4;
+    rasterizer.embolden_small_glyphs = false;
+    try rasterizer.renderGlyph(&target, &outline, 0, 24, 20, 1000);
+
+    try std.testing.expect(target.at(3, 20) > 0);
+    try std.testing.expect(target.at(8, 20) > 0);
+    try std.testing.expect(target.at(13, 20) > 0);
 }
 
 fn alphaSum(target: *const RenderTarget) u32 {

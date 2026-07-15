@@ -226,7 +226,67 @@ fn readNumber(data: []const u8, offset: *usize, first: u8) CffError!f32 {
         offset.* += 4;
         return @floatFromInt(value);
     }
+    if (first == 30) return try readRealNumber(data, offset);
     return error.UnsupportedCff;
+}
+
+fn readRealNumber(data: []const u8, offset: *usize) CffError!f32 {
+    // DICT real numbers are BCD-encoded nibbles terminated by 0xf. They appear
+    // in real-world OpenType CFF math fonts such as Latin Modern Math private
+    // dictionaries. Type2 charstrings do not use this encoding, but accepting it
+    // here keeps the shared number reader useful for both DICT and outline code.
+    var buf: [64]u8 = undefined;
+    var len: usize = 0;
+    while (offset.* < data.len) {
+        const byte = data[offset.*];
+        offset.* += 1;
+        const nibbles = [_]u4{ @intCast(byte >> 4), @intCast(byte & 0x0f) };
+        for (nibbles) |nibble| {
+            switch (nibble) {
+                0...9 => {
+                    if (len >= buf.len) return error.UnsupportedCff;
+                    buf[len] = '0' + @as(u8, @intCast(nibble));
+                    len += 1;
+                },
+                0x0a => {
+                    if (len >= buf.len) return error.UnsupportedCff;
+                    buf[len] = '.';
+                    len += 1;
+                },
+                0x0b => {
+                    if (len >= buf.len) return error.UnsupportedCff;
+                    buf[len] = 'E';
+                    len += 1;
+                },
+                0x0c => {
+                    if (len + 1 >= buf.len) return error.UnsupportedCff;
+                    buf[len] = 'E';
+                    buf[len + 1] = '-';
+                    len += 2;
+                },
+                0x0d => return error.UnsupportedCff,
+                0x0e => {
+                    if (len >= buf.len) return error.UnsupportedCff;
+                    buf[len] = '-';
+                    len += 1;
+                },
+                0x0f => {
+                    if (len == 0) return error.BadCff;
+                    return std.fmt.parseFloat(f32, buf[0..len]) catch error.BadCff;
+                },
+            }
+        }
+    }
+    return error.EndOfStream;
+}
+
+test "CFF DICT real numbers decode BCD nibble form" {
+    var offset: usize = 1;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.25), try readNumber(&.{ 30, 0x1a, 0x25, 0xff }, &offset, 30), 0.0001);
+    try std.testing.expectEqual(@as(usize, 4), offset);
+
+    offset = 1;
+    try std.testing.expectApproxEqAbs(@as(f32, -0.5), try readNumber(&.{ 30, 0xea, 0x5f }, &offset, 30), 0.0001);
 }
 
 const Type2Interpreter = struct {

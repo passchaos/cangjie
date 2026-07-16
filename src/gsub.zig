@@ -22,6 +22,7 @@ pub const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     features: []const unicode.FeatureOverride = &.{},
+    apply_all_if_unselected: bool = true,
     glyph_classes: ?[]const u16 = null,
     mark_attach_classes: ?[]const u16 = null,
 };
@@ -43,7 +44,20 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     // default-enabled lookups for the requested script/language.
     var selected_lookups = try selectedLookupIndices(table, allocator, options);
     defer selected_lookups.deinit(allocator);
-    if (options.features.len != 0 and selected_lookups.items.len == 0) return;
+    const script_list_offset = try readU16(table, 4);
+    const feature_list_offset = try readU16(table, 6);
+    const has_feature_topology = script_list_offset != 0 and
+        feature_list_offset != 0 and
+        try readU16(table, script_list_offset) != 0 and
+        try readU16(table, feature_list_offset) != 0;
+    // An empty selection means the active LangSys has no required/default
+    // feature to apply. Falling through used to execute every lookup in the
+    // font, enabling optional stylistic sets such as New Computer Modern's
+    // Devanagari digit substitutions for ordinary ASCII digits. Low-level
+    // callers can retain the historical all-lookup behavior; the text shaper
+    // explicitly disables it after Script/LangSys selection.
+    if (selected_lookups.items.len == 0 and
+        (options.features.len != 0 or (!options.apply_all_if_unselected and has_feature_topology))) return;
 
     const lookup_list_offset = try readU16(table, 8);
     const lookup_count = try readU16(table, lookup_list_offset);

@@ -1479,6 +1479,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
+        .apply_all_if_unselected = false,
     });
 
     var gpos_adjustments = std.ArrayList(gpos.Adjustment).empty;
@@ -1487,6 +1488,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
+        .apply_all_if_unselected = false,
     });
 
     // GPOS adjustments and legacy kern are accumulated in font units, then

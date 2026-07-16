@@ -226,6 +226,15 @@ fn readNumber(data: []const u8, offset: *usize, first: u8) CffError!f32 {
         offset.* += 4;
         return @floatFromInt(value);
     }
+    if (first == 255) {
+        // Type 2 charstrings encode 16.16 fixed-point operands with byte 255.
+        // STIX Two Math uses this form in global subroutines, so rejecting it
+        // prevents the whole OpenType MATH face from being rasterized.
+        if (offset.* + 4 > data.len) return error.EndOfStream;
+        const fixed: i32 = @bitCast(std.mem.readInt(u32, data[offset.*..][0..4], .big));
+        offset.* += 4;
+        return @as(f32, @floatFromInt(fixed)) / 65536.0;
+    }
     if (first == 30) return try readRealNumber(data, offset);
     return error.UnsupportedCff;
 }
@@ -287,6 +296,23 @@ test "CFF DICT real numbers decode BCD nibble form" {
 
     offset = 1;
     try std.testing.expectApproxEqAbs(@as(f32, -0.5), try readNumber(&.{ 30, 0xea, 0x5f }, &offset, 30), 0.0001);
+}
+
+test "CFF Type2 16.16 fixed-point operands decode byte 255 form" {
+    var offset: usize = 1;
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 1.5),
+        try readNumber(&.{ 255, 0x00, 0x01, 0x80, 0x00 }, &offset, 255),
+        0.0001,
+    );
+    try std.testing.expectEqual(@as(usize, 5), offset);
+
+    offset = 1;
+    try std.testing.expectApproxEqAbs(
+        @as(f32, -0.5),
+        try readNumber(&.{ 255, 0xff, 0xff, 0x80, 0x00 }, &offset, 255),
+        0.0001,
+    );
 }
 
 test "CFF Type2 hvcurveto and vhcurveto keep their implicit last axis" {

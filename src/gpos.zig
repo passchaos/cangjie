@@ -32,6 +32,7 @@ pub const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     features: []const unicode.FeatureOverride = &.{},
+    apply_all_if_unselected: bool = true,
     glyph_classes: ?[]const u16 = null,
     mark_attach_classes: ?[]const u16 = null,
 };
@@ -51,7 +52,18 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     // unless an explicit feature override disables them.
     var selected_lookups = try selectedLookupIndices(table, allocator, options);
     defer selected_lookups.deinit(allocator);
-    if (options.features.len != 0 and selected_lookups.items.len == 0) return;
+    const script_list_offset = try readU16(table, 4);
+    const feature_list_offset = try readU16(table, 6);
+    const has_feature_topology = script_list_offset != 0 and
+        feature_list_offset != 0 and
+        try readU16(table, script_list_offset) != 0 and
+        try readU16(table, feature_list_offset) != 0;
+    // As with GSUB, an empty active-feature selection means no lookup applies
+    // for this Script/LangSys. Executing the full lookup list would leak
+    // optional or unrelated-script positioning into the run. Low-level callers
+    // can opt into the historical all-lookup fallback.
+    if (selected_lookups.items.len == 0 and
+        (options.features.len != 0 or (!options.apply_all_if_unselected and has_feature_topology))) return;
 
     const lookup_list_offset = try readU16(table, 8);
     const lookup_count = try readU16(table, lookup_list_offset);

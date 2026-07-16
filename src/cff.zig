@@ -289,6 +289,93 @@ test "CFF DICT real numbers decode BCD nibble form" {
     try std.testing.expectApproxEqAbs(@as(f32, -0.5), try readNumber(&.{ 30, 0xea, 0x5f }, &offset, 30), 0.0001);
 }
 
+test "CFF Type2 hvcurveto and vhcurveto keep their implicit last axis" {
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+
+    var interpreter = testInterpreter(&outline);
+    interpreter.stack[0] = 10;
+    interpreter.stack[1] = 20;
+    interpreter.stack[2] = 30;
+    interpreter.stack[3] = 40;
+    interpreter.stack_len = 4;
+    try interpreter.hvcurveto();
+    try std.testing.expectEqual(@as(usize, 1), outline.commands.items.len);
+    switch (outline.commands.items[0]) {
+        .cubic_to => |curve| {
+            try std.testing.expectApproxEqAbs(@as(f32, 10), curve.c0.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 0), curve.c0.y, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 30), curve.c1.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 30), curve.c1.y, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 30), curve.end.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 70), curve.end.y, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    outline.commands.clearRetainingCapacity();
+    interpreter = testInterpreter(&outline);
+    interpreter.stack[0] = 10;
+    interpreter.stack[1] = 20;
+    interpreter.stack[2] = 30;
+    interpreter.stack[3] = 40;
+    interpreter.stack_len = 4;
+    try interpreter.vhcurveto();
+    try std.testing.expectEqual(@as(usize, 1), outline.commands.items.len);
+    switch (outline.commands.items[0]) {
+        .cubic_to => |curve| {
+            try std.testing.expectApproxEqAbs(@as(f32, 0), curve.c0.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 10), curve.c0.y, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 20), curve.c1.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 40), curve.c1.y, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 60), curve.end.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 40), curve.end.y, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "CFF Type2 flex operators expand to cubic outline segments" {
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+
+    var interpreter = testInterpreter(&outline);
+    const operands = [_]f32{ 10, 0, 20, 10, 30, -10, 40, 0, 50, 10, 60, -10, 5 };
+    @memcpy(interpreter.stack[0..operands.len], &operands);
+    interpreter.stack_len = operands.len;
+    try interpreter.escapedOperator(35);
+    try std.testing.expectEqual(@as(usize, 2), outline.commands.items.len);
+    switch (outline.commands.items[1]) {
+        .cubic_to => |curve| {
+            try std.testing.expectApproxEqAbs(@as(f32, 210), curve.end.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 0), curve.end.y, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+fn testInterpreter(outline: *glyph_mod.GlyphOutline) Type2Interpreter {
+    return .{
+        .allocator = std.testing.allocator,
+        .outline = outline,
+        .nominal_width_x = 0,
+        .default_width_x = 0,
+        .cff_data = &.{},
+        .global_subrs = .{ .count = 0, .off_size = 0, .offsets_pos = 0, .object_base = 0, .end = 0 },
+        .local_subrs = null,
+    };
+}
+
 const Type2Interpreter = struct {
     allocator: std.mem.Allocator,
     outline: *glyph_mod.GlyphOutline,
@@ -326,6 +413,12 @@ const Type2Interpreter = struct {
             }
             switch (b) {
                 1, 3, 18, 23 => self.readStems(),
+                12 => {
+                    if (offset >= bytes.len) return error.EndOfStream;
+                    const escaped = bytes[offset];
+                    offset += 1;
+                    try self.escapedOperator(escaped);
+                },
                 4 => try self.vmoveto(),
                 5 => try self.rlineto(),
                 6 => try self.hlineto(),
@@ -350,6 +443,24 @@ const Type2Interpreter = struct {
                 31 => try self.hvcurveto(),
                 else => return error.UnsupportedCff,
             }
+        }
+    }
+
+    fn escapedOperator(self: *Type2Interpreter, op: u8) CffError!void {
+        // Type 2 charstrings keep the compatibility "flex" operators behind
+        // the escaped operator byte. Latin Modern Math and STIX Math use these
+        // in ordinary letters, digits, and math symbols; treating byte 12 as an
+        // unknown operator made whole glyphs disappear from Zui formula text.
+        // Flex depth and hinting decisions are rasterizer quality hints for
+        // very small sizes, so this outline extractor expands them into the two
+        // cubic curves they describe and leaves antialiasing to the renderer.
+        switch (op) {
+            0 => self.stack_len = 0, // dotsection: deprecated Type 1 hint.
+            34 => try self.hflex(),
+            35 => try self.flex(),
+            36 => try self.hflex1(),
+            37 => try self.flex1(),
+            else => return error.UnsupportedCff,
         }
     }
 
@@ -473,6 +584,71 @@ const Type2Interpreter = struct {
         self.stack_len = 0;
     }
 
+    fn hflex(self: *Type2Interpreter) CffError!void {
+        self.takeWidth(7);
+        if (self.stack_len != 7) return error.StackUnderflow;
+        const dx1 = self.stack[0];
+        const dx2 = self.stack[1];
+        const dy2 = self.stack[2];
+        const dx3 = self.stack[3];
+        const dx4 = self.stack[4];
+        const dx5 = self.stack[5];
+        const dx6 = self.stack[6];
+        try self.curveByDeltas(dx1, 0, dx2, dy2, dx3, 0);
+        try self.curveByDeltas(dx4, 0, dx5, -dy2, dx6, 0);
+        self.stack_len = 0;
+    }
+
+    fn flex(self: *Type2Interpreter) CffError!void {
+        self.takeWidth(13);
+        if (self.stack_len != 13) return error.StackUnderflow;
+        try self.curveByDeltas(self.stack[0], self.stack[1], self.stack[2], self.stack[3], self.stack[4], self.stack[5]);
+        try self.curveByDeltas(self.stack[6], self.stack[7], self.stack[8], self.stack[9], self.stack[10], self.stack[11]);
+        // stack[12] is flex depth. It selects hinted flex rendering in legacy
+        // rasterizers and does not affect the outline geometry.
+        self.stack_len = 0;
+    }
+
+    fn hflex1(self: *Type2Interpreter) CffError!void {
+        self.takeWidth(9);
+        if (self.stack_len != 9) return error.StackUnderflow;
+        const dx1 = self.stack[0];
+        const dy1 = self.stack[1];
+        const dx2 = self.stack[2];
+        const dy2 = self.stack[3];
+        const dx3 = self.stack[4];
+        const dx4 = self.stack[5];
+        const dx5 = self.stack[6];
+        const dy5 = self.stack[7];
+        const dx6 = self.stack[8];
+        try self.curveByDeltas(dx1, dy1, dx2, dy2, dx3, 0);
+        try self.curveByDeltas(dx4, 0, dx5, dy5, dx6, -(dy1 + dy2 + dy5));
+        self.stack_len = 0;
+    }
+
+    fn flex1(self: *Type2Interpreter) CffError!void {
+        self.takeWidth(11);
+        if (self.stack_len != 11) return error.StackUnderflow;
+        const dx1 = self.stack[0];
+        const dy1 = self.stack[1];
+        const dx2 = self.stack[2];
+        const dy2 = self.stack[3];
+        const dx3 = self.stack[4];
+        const dy3 = self.stack[5];
+        const dx4 = self.stack[6];
+        const dy4 = self.stack[7];
+        const dx5 = self.stack[8];
+        const dy5 = self.stack[9];
+        const d6 = self.stack[10];
+        const dx_total = dx1 + dx2 + dx3 + dx4 + dx5;
+        const dy_total = dy1 + dy2 + dy3 + dy4 + dy5;
+        const dx6: f32 = if (@abs(dx_total) > @abs(dy_total)) d6 else -dx_total;
+        const dy6: f32 = if (@abs(dx_total) > @abs(dy_total)) -dy_total else d6;
+        try self.curveByDeltas(dx1, dy1, dx2, dy2, dx3, dy3);
+        try self.curveByDeltas(dx4, dy4, dx5, dy5, dx6, dy6);
+        self.stack_len = 0;
+    }
+
     fn rcurveline(self: *Type2Interpreter) CffError!void {
         if (self.stack_len < 8 or ((self.stack_len - 2) % 6) != 0) return error.StackUnderflow;
         var i: usize = 0;
@@ -545,9 +721,9 @@ const Type2Interpreter = struct {
             const last_curve = self.stack_len - i == 5;
             const d6 = if (last_curve) self.stack[i + 4] else 0;
             if (horizontal) {
-                try self.curveByDeltas(self.stack[i], 0, self.stack[i + 1], self.stack[i + 2], if (last_curve) d6 else self.stack[i + 3], if (last_curve) self.stack[i + 3] else 0);
+                try self.curveByDeltas(self.stack[i], 0, self.stack[i + 1], self.stack[i + 2], if (last_curve) d6 else 0, self.stack[i + 3]);
             } else {
-                try self.curveByDeltas(0, self.stack[i], self.stack[i + 1], self.stack[i + 2], if (last_curve) self.stack[i + 3] else 0, if (last_curve) d6 else self.stack[i + 3]);
+                try self.curveByDeltas(0, self.stack[i], self.stack[i + 1], self.stack[i + 2], self.stack[i + 3], if (last_curve) d6 else 0);
             }
             i += if (last_curve) 5 else 4;
             horizontal = !horizontal;

@@ -237,6 +237,8 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
                 else => {},
             }
         }
+        try collectExtensionAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+        return;
     }
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
@@ -313,6 +315,50 @@ fn collectExtensionPairAdjustmentLookup(table: Table, lookup_offset: usize, subt
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
             const extension_subtable = try extensionPositionSubtablePayload(table, subtable_offset, 2);
             if (try collectPairAdjustmentAt(table, extension_subtable, glyphs, first_index, adjustments, allocator, lookup_flag, options)) break;
+        }
+    }
+}
+
+fn collectExtensionAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    // Mixed ExtensionPos lookups are uncommon, but preserving ordering for each
+    // wrapped positioning kind still matters. In particular, two wrapped
+    // PairPos subtables remain alternatives for the same first glyph even when
+    // another wrapped type prevents the homogeneous fast path above.
+    const single_matched = try allocator.alloc(bool, glyphs.len);
+    defer allocator.free(single_matched);
+    @memset(single_matched, false);
+
+    const pair_matched = try allocator.alloc(bool, glyphs.len);
+    defer allocator.free(pair_matched);
+    @memset(pair_matched, false);
+
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const pos_format = try readU16(table, subtable_offset);
+        if (pos_format != 1) return error.UnsupportedGpos;
+        const extension_lookup_type = try readU16(table, subtable_offset + 2);
+        if (extension_lookup_type == 9) return error.UnsupportedGpos;
+        const extension_subtable = subtable_offset + try readU32(table, subtable_offset + 4);
+
+        switch (extension_lookup_type) {
+            1 => try collectSingleAdjustmentSubtable(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, single_matched),
+            2 => {
+                if (glyphs.len < 2) continue;
+                var first_index: usize = 0;
+                while (first_index + 1 < glyphs.len) : (first_index += 1) {
+                    if (pair_matched[first_index]) continue;
+                    if (try collectPairAdjustmentAt(table, extension_subtable, glyphs, first_index, adjustments, allocator, lookup_flag, options)) {
+                        pair_matched[first_index] = true;
+                    }
+                }
+            },
+            3 => try collectCursiveAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+            4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+            5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+            6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+            7 => try collectContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+            8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+            else => {},
         }
     }
 }
@@ -2483,6 +2529,86 @@ test "GPOS ExtensionPos single positioning subtables respect mark filtering orde
     // SinglePos alternatives: the first matching wrapper wins for the original
     // mark, while the unselected mark filtering-set member remains transparent.
     try std.testing.expectEqual(@as(i16, 25), adjustments.items[0].x_placement);
+}
+
+test "GPOS mixed ExtensionPos PairPos alternatives respect mark filtering" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 128;
+
+    writeU16Test(&bytes, 0, 9);
+    writeU16Test(&bytes, 2, 0x0010); // UseMarkFilteringSet; selected mark set index follows subtable offsets.
+    writeU16Test(&bytes, 4, 3);
+    writeU16Test(&bytes, 6, 14);
+    writeU16Test(&bytes, 8, 58);
+    writeU16Test(&bytes, 10, 82);
+    writeU16Test(&bytes, 12, 0);
+
+    const first_extension = 14;
+    writeU16Test(&bytes, first_extension + 0, 1);
+    writeU16Test(&bytes, first_extension + 2, 2);
+    writeU32Test(&bytes, first_extension + 4, 8);
+    const first_pair = first_extension + 8;
+    writeU16Test(&bytes, first_pair + 0, 1);
+    writeU16Test(&bytes, first_pair + 2, 22);
+    writeU16Test(&bytes, first_pair + 4, 0x0004);
+    writeU16Test(&bytes, first_pair + 6, 0);
+    writeU16Test(&bytes, first_pair + 8, 1);
+    writeU16Test(&bytes, first_pair + 10, 28);
+    writeCoverage1Test(&bytes, first_pair + 22, 10);
+    writeU16Test(&bytes, first_pair + 28, 1);
+    writeU16Test(&bytes, first_pair + 30, 11);
+    writeI16Test(&bytes, first_pair + 32, -30);
+
+    const middle_extension = 58;
+    writeU16Test(&bytes, middle_extension + 0, 1);
+    writeU16Test(&bytes, middle_extension + 2, 1);
+    writeU32Test(&bytes, middle_extension + 4, 8);
+    const single = middle_extension + 8;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 8);
+    writeU16Test(&bytes, single + 4, 0x0001);
+    writeI16Test(&bytes, single + 6, 25);
+    writeCoverage1Test(&bytes, single + 8, 99);
+
+    const second_extension = 82;
+    writeU16Test(&bytes, second_extension + 0, 1);
+    writeU16Test(&bytes, second_extension + 2, 2);
+    writeU32Test(&bytes, second_extension + 4, 8);
+    const second_pair = second_extension + 8;
+    writeU16Test(&bytes, second_pair + 0, 1);
+    writeU16Test(&bytes, second_pair + 2, 22);
+    writeU16Test(&bytes, second_pair + 4, 0x0004);
+    writeU16Test(&bytes, second_pair + 6, 0);
+    writeU16Test(&bytes, second_pair + 8, 1);
+    writeU16Test(&bytes, second_pair + 10, 28);
+    writeCoverage1Test(&bytes, second_pair + 22, 10);
+    writeU16Test(&bytes, second_pair + 28, 1);
+    writeU16Test(&bytes, second_pair + 30, 11);
+    writeI16Test(&bytes, second_pair + 32, -70);
+
+    const glyphs = [_]GlyphId{ 10, 12, 11 };
+    var glyph_classes = [_]u16{0} ** 13;
+    glyph_classes[12] = 3;
+    var mark_attach_classes = [_]u16{0} ** 13;
+    mark_attach_classes[12] = 2;
+    const mark_sets = [_][]const GlyphId{&.{13}};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+        .mark_attach_classes = &mark_attach_classes,
+        .mark_filtering_sets = &mark_sets,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expect(adjustments.items[0].pair_positioned);
+    // The middle ExtensionPos(SinglePos) makes the lookup heterogeneous, so it
+    // cannot use the homogeneous PairPos fast path. PairPos wrappers are still
+    // ordered alternatives for glyph 10, and mark filtering keeps glyph 12
+    // transparent when searching for the second glyph of the pair.
+    try std.testing.expectEqual(@as(i16, -30), adjustments.items[0].x_advance);
 }
 
 test "GPOS extension positioning preserves wrapper lookup flags" {

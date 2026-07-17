@@ -183,8 +183,8 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
             1 => try applySingleSubstitution(table, subtable_offset, glyphs, lookup_flag, options),
-            2 => try applyMultipleSubstitution(table, subtable_offset, glyphs, allocator),
-            3 => try applyAlternateSubstitution(table, subtable_offset, glyphs),
+            2 => try applyMultipleSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
+            3 => try applyAlternateSubstitution(table, subtable_offset, glyphs, lookup_flag, options),
             4 => try applyLigatureSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
             5 => try applyContextSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
             6 => try applyChainingContextSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
@@ -239,7 +239,7 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
     return false;
 }
 
-fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
+fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
@@ -247,6 +247,7 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
 
     var i: usize = 0;
     while (i < glyphs.items.len) : (i += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[i])) continue;
         const coverage = try coverageIndex(table, coverage_offset, glyphs.items[i]) orelse continue;
         if (coverage >= sequence_count) continue;
         const sequence_offset = subtable_offset + try readU16(table, subtable_offset + 6 + coverage * 2);
@@ -267,13 +268,14 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
     }
 }
 
-fn applyAlternateSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId)) GsubError!void {
+fn applyAlternateSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) GsubError!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const alternate_set_count = try readU16(table, subtable_offset + 4);
 
     for (glyphs.items) |*glyph| {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
         const coverage = try coverageIndex(table, coverage_offset, glyph.*) orelse continue;
         if (coverage >= alternate_set_count) continue;
         const alternate_set_offset = subtable_offset + try readU16(table, subtable_offset + 6 + coverage * 2);
@@ -294,8 +296,8 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
     // wrapper lookup still owns LookupFlag filtering for the enclosed lookup.
     switch (extension_lookup_type) {
         1 => try applySingleSubstitution(table, extension_subtable, glyphs, lookup_flag, options),
-        2 => try applyMultipleSubstitution(table, extension_subtable, glyphs, allocator),
-        3 => try applyAlternateSubstitution(table, extension_subtable, glyphs),
+        2 => try applyMultipleSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
+        3 => try applyAlternateSubstitution(table, extension_subtable, glyphs, lookup_flag, options),
         4 => try applyLigatureSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         5 => try applyContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         6 => try applyChainingContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
@@ -1112,6 +1114,69 @@ test "GSUB context substitution skips lookup-flag ignored glyphs" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 12 }, glyphs.items);
+}
+
+test "GSUB multiple substitution skips lookup-flag ignored glyphs" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 32;
+
+    writeU16Test(&bytes, 0, 2);
+    writeU16Test(&bytes, 2, 0x0008);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const multiple = 8;
+    writeU16Test(&bytes, multiple + 0, 1);
+    writeU16Test(&bytes, multiple + 2, 12);
+    writeU16Test(&bytes, multiple + 4, 1);
+    writeU16Test(&bytes, multiple + 6, 18);
+    writeCoverage1(&bytes, multiple + 12, 3);
+    const sequence = multiple + 18;
+    writeU16Test(&bytes, sequence + 0, 2);
+    writeU16Test(&bytes, sequence + 2, 30);
+    writeU16Test(&bytes, sequence + 4, 31);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 3, 4, 3 });
+
+    const glyph_classes = [_]u16{ 0, 0, 0, 3, 0 };
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4, 3 }, glyphs.items);
+}
+
+test "GSUB alternate substitution skips lookup-flag ignored glyphs" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 32;
+
+    writeU16Test(&bytes, 0, 3);
+    writeU16Test(&bytes, 2, 0x0008);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const alternate = 8;
+    writeU16Test(&bytes, alternate + 0, 1);
+    writeU16Test(&bytes, alternate + 2, 12);
+    writeU16Test(&bytes, alternate + 4, 1);
+    writeU16Test(&bytes, alternate + 6, 18);
+    writeCoverage1(&bytes, alternate + 12, 3);
+    const alternate_set = alternate + 18;
+    writeU16Test(&bytes, alternate_set + 0, 1);
+    writeU16Test(&bytes, alternate_set + 2, 30);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 3, 4, 3 });
+
+    const glyph_classes = [_]u16{ 0, 0, 0, 3, 0 };
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4, 3 }, glyphs.items);
 }
 
 test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {

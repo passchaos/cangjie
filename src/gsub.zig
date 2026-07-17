@@ -226,6 +226,12 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
         return;
     }
     if (lookup_type == 7) {
+        // ExtensionSubst is only an addressing wrapper, but malformed wrapped
+        // payloads can otherwise be discovered after an earlier wrapper in the
+        // same lookup has already substituted glyphs. Preflight every wrapper
+        // before choosing the optimized homogeneous path below so the lookup
+        // remains all-or-nothing for truncated variable arrays.
+        try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
         switch (try extensionLookupType(table, lookup_offset, subtable_count) orelse 0) {
             1 => {
                 try applyExtensionSingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
@@ -1230,6 +1236,13 @@ fn ensureSubstitutionRecordLookupsWithin(table: Table, records_offset: usize, re
     }
 }
 
+fn ensureExtensionSubstitutionLookupPayloadsWithin(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!void {
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = try checkedSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
+        try ensureExtensionSubstitutionPayloadWithin(table, subtable_offset);
+    }
+}
+
 fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
     if (lookup_offset > table.length or table.length - lookup_offset < 6) return error.BadGsub;
     const lookup_type = try readU16BadGsub(table, lookup_offset);
@@ -1243,10 +1256,7 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
         if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGsub;
     }
     if (lookup_type == 7) {
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = lookup_offset + try readU16BadGsub(table, subtable_offsets_pos + subtable_i * 2);
-            try ensureExtensionSubstitutionPayloadWithin(table, subtable_offset);
-        }
+        try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
     }
 }
 
@@ -1264,6 +1274,7 @@ fn ensureExtensionSubstitutionPayloadWithin(table: Table, subtable_offset: usize
     if (extension_offset > table.length - subtable_offset) return error.BadGsub;
     const extension_subtable = subtable_offset + extension_offset;
     try ensureSubstitutionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
+    try ensureSubstitutionSubtableVariableDataWithin(table, extension_subtable, extension_lookup_type);
 }
 
 fn ensureSubstitutionSubtableFixedHeaderWithin(table: Table, subtable_offset: usize, lookup_type: u16) GsubError!void {
@@ -1286,6 +1297,108 @@ fn ensureSubstitutionSubtableFixedHeaderWithin(table: Table, subtable_offset: us
         else => return,
     };
     if (table.length - subtable_offset < min_len) return error.BadGsub;
+}
+
+fn ensureSubstitutionSubtableVariableDataWithin(table: Table, subtable_offset: usize, lookup_type: u16) GsubError!void {
+    switch (lookup_type) {
+        1 => try ensureSingleSubstitutionSubtableWithin(table, subtable_offset),
+        2 => try ensureMultipleSubstitutionSubtableWithin(table, subtable_offset),
+        3 => try ensureAlternateSubstitutionSubtableWithin(table, subtable_offset),
+        4 => try ensureLigatureSubstitutionSubtableWithin(table, subtable_offset),
+        else => {},
+    }
+}
+
+fn ensureSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    try ensureCoverageTableWithin(table, coverage_offset);
+    switch (subst_format) {
+        1 => {},
+        2 => {
+            const glyph_count = try readU16BadGsub(table, subtable_offset + 4);
+            try ensureBytesWithin(table, subtable_offset + 6, @as(usize, glyph_count) * 2);
+        },
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn ensureMultipleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    if (subst_format != 1) return error.UnsupportedGsub;
+    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    try ensureCoverageTableWithin(table, coverage_offset);
+    const sequence_count = try readU16BadGsub(table, subtable_offset + 4);
+    const sequence_offsets_pos = subtable_offset + 6;
+    try ensureBytesWithin(table, sequence_offsets_pos, @as(usize, sequence_count) * 2);
+    for (0..sequence_count) |sequence_i| {
+        const sequence_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, sequence_offsets_pos + sequence_i * 2));
+        const glyph_count = try readU16BadGsub(table, sequence_offset);
+        try ensureBytesWithin(table, sequence_offset + 2, @as(usize, glyph_count) * 2);
+    }
+}
+
+fn ensureAlternateSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    if (subst_format != 1) return error.UnsupportedGsub;
+    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    try ensureCoverageTableWithin(table, coverage_offset);
+    const alternate_set_count = try readU16BadGsub(table, subtable_offset + 4);
+    const alternate_set_offsets_pos = subtable_offset + 6;
+    try ensureBytesWithin(table, alternate_set_offsets_pos, @as(usize, alternate_set_count) * 2);
+    for (0..alternate_set_count) |alternate_set_i| {
+        const alternate_set_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, alternate_set_offsets_pos + alternate_set_i * 2));
+        const glyph_count = try readU16BadGsub(table, alternate_set_offset);
+        try ensureBytesWithin(table, alternate_set_offset + 2, @as(usize, glyph_count) * 2);
+    }
+}
+
+fn ensureLigatureSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    if (subst_format != 1) return error.UnsupportedGsub;
+    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    try ensureCoverageTableWithin(table, coverage_offset);
+    const lig_set_count = try readU16BadGsub(table, subtable_offset + 4);
+    const lig_set_offsets_pos = subtable_offset + 6;
+    try ensureBytesWithin(table, lig_set_offsets_pos, @as(usize, lig_set_count) * 2);
+    for (0..lig_set_count) |set_i| {
+        const set_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, lig_set_offsets_pos + set_i * 2));
+        const ligature_count = try readU16BadGsub(table, set_offset);
+        const ligature_offsets_pos = set_offset + 2;
+        try ensureBytesWithin(table, ligature_offsets_pos, @as(usize, ligature_count) * 2);
+        for (0..ligature_count) |ligature_i| {
+            const ligature_offset = try checkedSubtableOffset(table, set_offset, try readU16BadGsub(table, ligature_offsets_pos + ligature_i * 2));
+            const component_count = try readU16BadGsub(table, ligature_offset + 2);
+            if (component_count == 0) return error.BadGsub;
+            try ensureBytesWithin(table, ligature_offset + 4, (@as(usize, component_count) - 1) * 2);
+        }
+    }
+}
+
+fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GsubError!void {
+    const format = try readU16BadGsub(table, coverage_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
+            try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
+        },
+        2 => {
+            const range_count = try readU16BadGsub(table, coverage_offset + 2);
+            try ensureBytesWithin(table, coverage_offset + 4, @as(usize, range_count) * 6);
+        },
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn checkedSubtableOffset(table: Table, base_offset: usize, relative_offset: u32) GsubError!usize {
+    if (relative_offset > std.math.maxInt(usize) - base_offset) return error.BadGsub;
+    const absolute = base_offset + @as(usize, @intCast(relative_offset));
+    if (absolute > table.length) return error.BadGsub;
+    return absolute;
+}
+
+fn ensureBytesWithin(table: Table, offset: usize, len: usize) GsubError!void {
+    if (offset > table.length or len > table.length - offset) return error.BadGsub;
 }
 
 fn readU16BadGsub(table: Table, relative: usize) GsubError!u16 {
@@ -1930,6 +2043,146 @@ test "GSUB contextual lookup preflight rejects nested extension payload atomical
 
     try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, allocator, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+}
+
+test "GSUB extension single substitution preflights wrapped coverage arrays atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 52;
+
+    writeU16Test(&bytes, 0, 7);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 32);
+
+    const first_extension = 10;
+    writeU16Test(&bytes, first_extension + 0, 1);
+    writeU16Test(&bytes, first_extension + 2, 1);
+    writeU32Test(&bytes, first_extension + 4, 8);
+    const first_single = first_extension + 8;
+    writeU16Test(&bytes, first_single + 0, 1);
+    writeU16Test(&bytes, first_single + 2, 6);
+    writeI16Test(&bytes, first_single + 4, 10);
+    writeCoverage1(&bytes, first_single + 6, 10);
+
+    const second_extension = 32;
+    writeU16Test(&bytes, second_extension + 0, 1);
+    writeU16Test(&bytes, second_extension + 2, 1);
+    writeU32Test(&bytes, second_extension + 4, 8);
+    const second_single = second_extension + 8;
+    writeU16Test(&bytes, second_single + 0, 1);
+    writeU16Test(&bytes, second_single + 2, 6);
+    writeI16Test(&bytes, second_single + 4, 1);
+    const truncated_coverage = second_single + 6;
+    writeU16Test(&bytes, truncated_coverage + 0, 1);
+    writeU16Test(&bytes, truncated_coverage + 2, 2);
+    writeU16Test(&bytes, truncated_coverage + 4, 30);
+    // Coverage declares two glyph ids but the second id falls beyond
+    // table.length. The second wrapper would discover this only after the first
+    // wrapper changed glyph 10 unless ExtensionSubst preflights wrapped arrays.
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 10, 30 });
+
+    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 30 }, glyphs.items);
+}
+
+test "GSUB extension multiple substitution preflights wrapped sequence arrays atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 66;
+
+    writeU16Test(&bytes, 0, 7);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 40);
+
+    const first_extension = 10;
+    writeU16Test(&bytes, first_extension + 0, 1);
+    writeU16Test(&bytes, first_extension + 2, 2);
+    writeU32Test(&bytes, first_extension + 4, 8);
+    const first_multiple = first_extension + 8;
+    writeU16Test(&bytes, first_multiple + 0, 1);
+    writeU16Test(&bytes, first_multiple + 2, 14);
+    writeU16Test(&bytes, first_multiple + 4, 1);
+    writeU16Test(&bytes, first_multiple + 6, 8);
+    const first_sequence = first_multiple + 8;
+    writeU16Test(&bytes, first_sequence + 0, 2);
+    writeU16Test(&bytes, first_sequence + 2, 20);
+    writeU16Test(&bytes, first_sequence + 4, 21);
+    writeCoverage1(&bytes, first_multiple + 14, 10);
+
+    const second_extension = 40;
+    writeU16Test(&bytes, second_extension + 0, 1);
+    writeU16Test(&bytes, second_extension + 2, 2);
+    writeU32Test(&bytes, second_extension + 4, 8);
+    const second_multiple = second_extension + 8;
+    writeU16Test(&bytes, second_multiple + 0, 1);
+    writeU16Test(&bytes, second_multiple + 2, 8);
+    writeU16Test(&bytes, second_multiple + 4, 1);
+    writeU16Test(&bytes, second_multiple + 6, 14);
+    writeCoverage1(&bytes, second_multiple + 8, 30);
+    const truncated_sequence = second_multiple + 14;
+    writeU16Test(&bytes, truncated_sequence + 0, 2);
+    writeU16Test(&bytes, truncated_sequence + 2, 31);
+    // Sequence declares two replacements but only the first replacement is in
+    // bounds. Reject the whole lookup before glyph 10 is expanded by wrapper 0.
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 10, 30 });
+
+    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 30 }, glyphs.items);
+}
+
+test "GSUB mixed extension substitution preflights wrapped ligature arrays atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 72;
+
+    writeU16Test(&bytes, 0, 7);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 40);
+
+    const first_extension = 10;
+    writeU16Test(&bytes, first_extension + 0, 1);
+    writeU16Test(&bytes, first_extension + 2, 1);
+    writeU32Test(&bytes, first_extension + 4, 8);
+    const first_single = first_extension + 8;
+    writeU16Test(&bytes, first_single + 0, 1);
+    writeU16Test(&bytes, first_single + 2, 6);
+    writeI16Test(&bytes, first_single + 4, 10);
+    writeCoverage1(&bytes, first_single + 6, 10);
+
+    const second_extension = 40;
+    writeU16Test(&bytes, second_extension + 0, 1);
+    writeU16Test(&bytes, second_extension + 2, 4);
+    writeU32Test(&bytes, second_extension + 4, 8);
+    const lig_subst = second_extension + 8;
+    writeU16Test(&bytes, lig_subst + 0, 1);
+    writeU16Test(&bytes, lig_subst + 2, 8);
+    writeU16Test(&bytes, lig_subst + 4, 1);
+    writeU16Test(&bytes, lig_subst + 6, 14);
+    writeCoverage1(&bytes, lig_subst + 8, 30);
+    const ligature_set = lig_subst + 14;
+    writeU16Test(&bytes, ligature_set + 0, 1);
+    writeU16Test(&bytes, ligature_set + 2, 4);
+    const truncated_ligature = ligature_set + 4;
+    writeU16Test(&bytes, truncated_ligature + 0, 40);
+    writeU16Test(&bytes, truncated_ligature + 2, 3);
+    writeU16Test(&bytes, truncated_ligature + 4, 31);
+    // The ligature declares two component glyph ids after the first glyph, but
+    // only one component id is present. This mixed-type ExtensionSubst lookup
+    // uses the generic wrapper path, which must still preflight all payloads
+    // before wrapper 0 mutates glyph 10.
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 10, 30, 31, 32 });
+
+    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 30, 31, 32 }, glyphs.items);
 }
 
 test "GSUB context substitution can apply nested multiple substitution" {

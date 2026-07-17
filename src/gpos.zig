@@ -198,11 +198,19 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
         // MarkAttachmentType mechanism when bit 4 is clear.
         lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
     }
+    if (lookup_type == 1) {
+        try collectSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+        return;
+    }
+    if (lookup_type == 2) {
+        try collectPairAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+        return;
+    }
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
-            1 => try collectSingleAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            2 => try collectPairAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            1 => {}, // SinglePos needs whole-lookup subtable ordering; handled above.
+            2 => {}, // PairPos needs whole-lookup subtable ordering; handled above.
             3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             4 => try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             5 => try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
@@ -212,6 +220,71 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
             9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
         }
+    }
+}
+
+fn collectPairAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    // PairPos subtables within one lookup are ordered alternatives for a
+    // position. Once a subtable handles a pair, later subtables in the same
+    // lookup must not add more deltas for that same first glyph; otherwise
+    // split pair data cascades instead of following OpenType lookup ordering.
+    if (glyphs.len < 2) return;
+    var first_index: usize = 0;
+    while (first_index + 1 < glyphs.len) : (first_index += 1) {
+        for (0..subtable_count) |subtable_i| {
+            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+            if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, first_index, adjustments, allocator, lookup_flag, options)) break;
+        }
+    }
+}
+
+fn collectSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    // Lookup subtables are tried in order as alternatives for each glyph. Track
+    // which input positions have already matched so overlapping SinglePos
+    // subtables do not accumulate deltas in the same lookup.
+    if (glyphs.len == 0) return;
+    const matched = try allocator.alloc(bool, glyphs.len);
+    defer allocator.free(matched);
+    @memset(matched, false);
+
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        try collectSingleAdjustmentSubtable(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options, matched);
+    }
+}
+
+fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, matched: []bool) (GposError || std.mem.Allocator.Error)!void {
+    const pos_format = try readU16(table, subtable_offset);
+    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const value_format = try readU16(table, subtable_offset + 4);
+    switch (pos_format) {
+        1 => {
+            const value = try readValueRecord(table, subtable_offset + 6, value_format);
+            for (glyphs, 0..) |glyph, i| {
+                if (matched[i]) continue;
+                if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+                if (try coverageIndex(table, coverage_offset, glyph) != null) {
+                    try appendAdjustment(adjustments, allocator, i, value, false);
+                    matched[i] = true;
+                }
+            }
+        },
+        2 => {
+            const value_count = try readU16(table, subtable_offset + 6);
+            const value_size = valueRecordSize(value_format);
+            for (glyphs, 0..) |glyph, i| {
+                if (matched[i]) continue;
+                if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+                if (try coverageIndex(table, coverage_offset, glyph)) |coverage| {
+                    if (coverage < value_count) {
+                        const value = try readValueRecord(table, subtable_offset + 8 + coverage * value_size, value_format);
+                        try appendAdjustment(adjustments, allocator, i, value, false);
+                        matched[i] = true;
+                    }
+                }
+            }
+        },
+        else => return error.UnsupportedGpos,
     }
 }
 
@@ -316,18 +389,18 @@ fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const G
     if (glyphs.len < 2) return;
     var i: usize = 0;
     while (i + 1 < glyphs.len) : (i += 1) {
-        try collectPairAdjustmentAt(table, subtable_offset, glyphs, i, adjustments, allocator, lookup_flag, options);
+        _ = try collectPairAdjustmentAt(table, subtable_offset, glyphs, i, adjustments, allocator, lookup_flag, options);
     }
 }
 
-fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, first_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, first_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     // Contextual positioning can invoke a PairPos lookup at a specific matched
     // sequence index. Keep the pair matcher index-addressable so top-level
     // PairPos and nested PosLookupRecord application share the same semantics,
     // including transparent lookup-flag ignored glyphs between the pair.
-    if (first_index + 1 >= glyphs.len) return;
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) return;
-    const second_index = nextUnignoredGlyph(glyphs, first_index + 1, lookup_flag, options) orelse return;
+    if (first_index + 1 >= glyphs.len) return false;
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) return false;
+    const second_index = nextUnignoredGlyph(glyphs, first_index + 1, lookup_flag, options) orelse return false;
 
     const pos_format = try readU16(table, subtable_offset);
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
@@ -341,8 +414,8 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
             // PairPos format 1 is a sparse list keyed by the first glyph's
             // coverage index, then searched by the second glyph.
             const pair_set_count = try readU16(table, subtable_offset + 8);
-            const coverage = try coverageIndex(table, coverage_offset, glyphs[first_index]) orelse return;
-            if (coverage >= pair_set_count) return;
+            const coverage = try coverageIndex(table, coverage_offset, glyphs[first_index]) orelse return false;
+            if (coverage >= pair_set_count) return false;
             const pair_set_offset = subtable_offset + try readU16(table, subtable_offset + 10 + coverage * 2);
             const pair_value_count = try readU16(table, pair_set_offset);
             var record_offset = pair_set_offset + 2;
@@ -356,9 +429,10 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
                 if (second == glyphs[second_index]) {
                     try appendAdjustment(adjustments, allocator, first_index, value_1, true);
                     try appendAdjustment(adjustments, allocator, second_index, value_2, false);
-                    break;
+                    return true;
                 }
             }
+            return false;
         },
         2 => {
             // PairPos format 2 maps both glyphs through class definitions and
@@ -369,15 +443,16 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
             const class_2_count = try readU16(table, subtable_offset + 14);
             const record_size = value_size_1 + value_size_2;
             const matrix_offset = subtable_offset + 16;
-            if (try coverageIndex(table, coverage_offset, glyphs[first_index]) == null) return;
+            if (try coverageIndex(table, coverage_offset, glyphs[first_index]) == null) return false;
             const class_1 = try classValue(table, class_def_1, glyphs[first_index]);
             const class_2 = try classValue(table, class_def_2, glyphs[second_index]);
-            if (class_1 >= class_1_count or class_2 >= class_2_count) return;
+            if (class_1 >= class_1_count or class_2 >= class_2_count) return false;
             const record_offset = matrix_offset + (@as(usize, class_1) * class_2_count + class_2) * record_size;
             const value_1 = try readValueRecord(table, record_offset, value_format_1);
             const value_2 = try readValueRecord(table, record_offset + value_size_1, value_format_2);
             try appendAdjustment(adjustments, allocator, first_index, value_1, true);
             try appendAdjustment(adjustments, allocator, second_index, value_2, false);
+            return true;
         },
         else => return error.UnsupportedGpos,
     }
@@ -965,7 +1040,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
             1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options),
-            2 => try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
+            2 => if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             9 => try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
         }
@@ -985,7 +1060,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
     // contextual target index when delegating to the wrapped lookup body.
     switch (extension_lookup_type) {
         1 => try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
-        2 => try collectPairAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+        2 => _ = try collectPairAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         else => {},
     }
 }
@@ -1506,6 +1581,43 @@ test "GPOS context nested lookup can apply pair positioning" {
     try std.testing.expectEqual(@as(i16, 20), adjustments.items[1].x_placement);
 }
 
+test "GPOS single positioning subtables do not cascade within lookup" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 40;
+
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 24);
+
+    const first_single = 10;
+    writeU16Test(&bytes, first_single + 0, 1);
+    writeU16Test(&bytes, first_single + 2, 8);
+    writeU16Test(&bytes, first_single + 4, 0x0001);
+    writeI16Test(&bytes, first_single + 6, 20);
+    writeCoverage1Test(&bytes, first_single + 8, 10);
+
+    const second_single = 24;
+    writeU16Test(&bytes, second_single + 0, 1);
+    writeU16Test(&bytes, second_single + 2, 8);
+    writeU16Test(&bytes, second_single + 4, 0x0001);
+    writeI16Test(&bytes, second_single + 6, 30);
+    writeCoverage1Test(&bytes, second_single + 8, 10);
+
+    const glyphs = [_]GlyphId{10};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    // Lookup subtables are ordered alternatives. The second overlapping
+    // SinglePos subtable must not add another xPlacement after the first match.
+    try std.testing.expectEqual(@as(i16, 20), adjustments.items[0].x_placement);
+}
+
 test "GPOS pair positioning records precedence when first value is empty" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 48;
@@ -1542,6 +1654,55 @@ test "GPOS pair positioning records precedence when first value is empty" {
     try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[1].index);
     try std.testing.expectEqual(@as(i16, 25), adjustments.items[1].x_placement);
+}
+
+test "GPOS pair positioning subtables do not cascade within lookup" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 80;
+
+    writeU16Test(&bytes, 0, 2);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 44);
+
+    const first_pair = 10;
+    writeU16Test(&bytes, first_pair + 0, 1);
+    writeU16Test(&bytes, first_pair + 2, 22);
+    writeU16Test(&bytes, first_pair + 4, 0x0004);
+    writeU16Test(&bytes, first_pair + 6, 0);
+    writeU16Test(&bytes, first_pair + 8, 1);
+    writeU16Test(&bytes, first_pair + 10, 28);
+    writeCoverage1Test(&bytes, first_pair + 22, 10);
+    writeU16Test(&bytes, first_pair + 28, 1);
+    writeU16Test(&bytes, first_pair + 30, 11);
+    writeI16Test(&bytes, first_pair + 32, -30);
+
+    const second_pair = 44;
+    writeU16Test(&bytes, second_pair + 0, 1);
+    writeU16Test(&bytes, second_pair + 2, 22);
+    writeU16Test(&bytes, second_pair + 4, 0x0004);
+    writeU16Test(&bytes, second_pair + 6, 0);
+    writeU16Test(&bytes, second_pair + 8, 1);
+    writeU16Test(&bytes, second_pair + 10, 28);
+    writeCoverage1Test(&bytes, second_pair + 22, 10);
+    writeU16Test(&bytes, second_pair + 28, 1);
+    writeU16Test(&bytes, second_pair + 30, 11);
+    writeI16Test(&bytes, second_pair + 32, -70);
+
+    const glyphs = [_]GlyphId{ 10, 11 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expect(adjustments.items[0].pair_positioned);
+    // Subtables in a lookup are alternatives. The first matching PairPos
+    // subtable wins for this pair; the later matching subtable must not add its
+    // xAdvance on top.
+    try std.testing.expectEqual(@as(i16, -30), adjustments.items[0].x_advance);
 }
 
 test "GPOS context nested lookup can apply extension positioning" {

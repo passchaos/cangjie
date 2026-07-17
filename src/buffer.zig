@@ -465,9 +465,27 @@ fn paragraphPositionForByte(paragraph: layout.ParagraphLayout, byte_offset: usiz
 fn textPositionByteOffset(paragraph: layout.ParagraphLayout, position: layout.TextPosition) usize {
     if (paragraph.glyphs.len == 0) return position.cluster;
     if (position.glyph_index >= paragraph.glyphs.len) return position.cluster;
-    if (!position.trailing) return paragraph.glyphs[position.glyph_index].cluster;
-    if (position.glyph_index + 1 < paragraph.glyphs.len) return paragraph.glyphs[position.glyph_index + 1].cluster;
-    return position.cluster + 1;
+    const glyph = paragraph.glyphs[position.glyph_index];
+    if (!position.trailing) return glyph.cluster;
+
+    // A trailing caret can represent more than "one byte after cluster":
+    // shaping folds variation selectors into their base glyph and GSUB can fold
+    // several source scalars into one ligature glyph. Prefer the byte offset
+    // carried by the TextPosition when it is already beyond the leading
+    // cluster, and otherwise recover the shaped source extent. This keeps
+    // vertical cursor movement from manufacturing invalid byte offsets at the
+    // end of folded glyphs.
+    if (position.cluster > glyph.cluster) return position.cluster;
+    return glyphTrailingByteOffset(paragraph, position.glyph_index);
+}
+
+fn glyphTrailingByteOffset(paragraph: layout.ParagraphLayout, glyph_index: usize) usize {
+    const glyph = paragraph.glyphs[glyph_index];
+    if (glyph_index + 1 < paragraph.glyphs.len) {
+        const next_cluster = paragraph.glyphs[glyph_index + 1].cluster;
+        if (next_cluster > glyph.cluster) return next_cluster;
+    }
+    return glyph.cluster + @max(glyph.source_byte_len, 1);
 }
 
 fn lineIndexForY(paragraph: layout.ParagraphLayout, y: f32) usize {
@@ -648,6 +666,39 @@ test "TextBuffer returns bidi visual selection rects" {
     try std.testing.expectEqual(@as(usize, 2), partial_rects.len);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), partial_rects[0].x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 16.0), partial_rects[1].x, 0.001);
+}
+
+test "TextBuffer vertical cursor keeps folded glyph trailing byte offsets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const config = LayoutConfig{
+        .cascade = layout.FontCascade.init(&fonts),
+        .font_size = 20,
+        .paragraph = .{
+            .max_width = 100,
+            .line_height = 24,
+        },
+    };
+
+    const text = "A\u{fe0f}";
+    var buffer = try TextBuffer.initText(allocator, text);
+    defer buffer.deinit();
+
+    try buffer.setCursor(text.len);
+    try buffer.moveCursorVertical(config, .next, false);
+
+    // There is no next glyph after the folded base+VS glyph. The trailing
+    // caret must therefore use the glyph's shaped source extent rather than
+    // fabricating `cluster + 1`, which would land inside/outside UTF-8 text.
+    try std.testing.expectEqual(@as(usize, text.len), buffer.cursor_byte);
 }
 
 test "TextBuffer relayout supports hit testing cursor and selection geometry" {

@@ -546,6 +546,9 @@ pub fn itemizeScriptRuns(allocator: std.mem.Allocator, text: []const u8) ![]Scri
             continue;
         }
         if (scriptBelongsToRun(script, current_script.?)) {
+            if (current_script.? == .common and script != .common and script != .inherited) {
+                current_script = script;
+            }
             run_end = next_index;
             continue;
         }

@@ -490,6 +490,19 @@ test "detects scripts and itemizes script runs" {
     try std.testing.expectEqual(Script.latin, combining_runs[0].script);
     try std.testing.expectEqual(@as(usize, 3), combining_runs[0].byte_len);
     try std.testing.expectEqual(Script.arabic, combining_runs[1].script);
+
+    const leading_common = try itemizeScriptRuns(allocator, "  (ab)");
+    defer allocator.free(leading_common);
+    try std.testing.expectEqual(@as(usize, 1), leading_common.len);
+    try std.testing.expectEqual(Script.latin, leading_common[0].script);
+    try std.testing.expectEqual(@as(usize, 0), leading_common[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 6), leading_common[0].byte_len);
+
+    const leading_inherited = try itemizeScriptRuns(allocator, "\u{0301}ب");
+    defer allocator.free(leading_inherited);
+    try std.testing.expectEqual(@as(usize, 1), leading_inherited.len);
+    try std.testing.expectEqual(Script.arabic, leading_inherited[0].script);
+    try std.testing.expectEqual(@as(usize, 0), leading_inherited[0].byte_start);
 }
 
 test "detects bidi classes and itemizes bidi runs" {

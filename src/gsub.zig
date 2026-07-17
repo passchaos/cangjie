@@ -1129,6 +1129,7 @@ const NestedGlyphChange = struct {
 
 fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     try ensureSubstitutionRecordListWithin(table, records_offset, record_count);
+    try ensureSubstitutionRecordLookupsWithin(table, records_offset, record_count);
 
     // SequenceLookupRecord sequence indexes are expressed in the input sequence
     // matched before any nested lookup runs. Keep a mutable index map so a
@@ -1210,6 +1211,45 @@ fn ensureSubstitutionRecordListWithin(table: Table, records_offset: usize, recor
     // malformed fonts cannot leave the caller with a partially substituted run.
     if (records_offset > table.length) return error.BadGsub;
     if (record_count > (table.length - records_offset) / 4) return error.BadGsub;
+}
+
+fn ensureSubstitutionRecordLookupsWithin(table: Table, records_offset: usize, record_count: usize) GsubError!void {
+    // A complete SequenceLookupRecord array is not enough for atomic contextual
+    // application: a later record may name a lookup whose variable-length
+    // Lookup header is truncated. Validate every referenced lookup's count and
+    // offset array before the first nested lookup mutates `glyphs`.
+    const lookup_list_offset = try readU16BadGsub(table, 8);
+    const lookup_count = try readU16BadGsub(table, lookup_list_offset);
+    for (0..record_count) |record_i| {
+        const record_offset = records_offset + record_i * 4;
+        const lookup_index = try readU16BadGsub(table, record_offset + 2);
+        if (lookup_index >= lookup_count) continue;
+        const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
+        const lookup_offset = lookup_list_offset + try readU16BadGsub(table, lookup_offset_pos);
+        try ensureLookupHeaderWithin(table, lookup_offset);
+    }
+}
+
+fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
+    if (lookup_offset > table.length or table.length - lookup_offset < 6) return error.BadGsub;
+    const lookup_flag = try readU16BadGsub(table, lookup_offset + 2);
+    const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
+    const subtable_offsets_pos = lookup_offset + 6;
+    const subtable_offsets_len = @as(usize, subtable_count) * 2;
+    if (subtable_offsets_pos > table.length or subtable_offsets_len > table.length - subtable_offsets_pos) return error.BadGsub;
+    if ((lookup_flag & 0x0010) != 0) {
+        const mark_filtering_set_pos = subtable_offsets_pos + subtable_offsets_len;
+        if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGsub;
+    }
+}
+
+fn readU16BadGsub(table: Table, relative: usize) GsubError!u16 {
+    return readU16(table, relative) catch |err| {
+        return switch (err) {
+            error.EndOfStream => error.BadGsub,
+            else => err,
+        };
+    };
 }
 
 fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, lookup_index: u16, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!NestedGlyphChange {
@@ -1730,6 +1770,56 @@ test "GSUB contextual record truncation is atomic" {
 
     const table = Table{ .data = &bytes, .offset = 0, .length = rule + 8 };
     try std.testing.expectError(error.BadGsub, applyLookup(table, 16, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+}
+
+test "GSUB contextual lookup preflight rejects later truncated lookup atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 96;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 18);
+    writeU16Test(&bytes, 14, 60);
+    writeU16Test(&bytes, 16, 80);
+
+    const context_lookup = 28;
+    writeU16Test(&bytes, context_lookup + 0, 5);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 24);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 2);
+    writeCoverage1(&bytes, context + 24, 1);
+
+    writeSingleDeltaLookup(&bytes, 70, 1, 9);
+
+    // Lookup 2 has a complete fixed header but declares one SubTable offset
+    // beyond table.length. The contextual matcher must reject it before
+    // applying lookup 1, otherwise glyph 1 would be partially substituted.
+    writeU16Test(&bytes, 90, 1);
+    writeU16Test(&bytes, 94, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 1);
+
+    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, allocator, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
 }
 

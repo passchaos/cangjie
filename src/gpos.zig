@@ -1216,6 +1216,7 @@ fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset
 
 fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     try ensurePositionRecordListWithin(table, records_pos, record_count);
+    try ensurePositionRecordLookupsWithin(table, records_pos, record_count);
 
     // Context positioning records name a glyph in the matched input sequence
     // and a lookup-list index. Nested lookups own their own LookupFlag, so a
@@ -1236,6 +1237,44 @@ fn ensurePositionRecordListWithin(table: Table, records_pos: usize, record_count
     // table cannot expose a partly-applied positioning result to the caller.
     if (records_pos > table.length) return error.BadGpos;
     if (record_count > (table.length - records_pos) / 4) return error.BadGpos;
+}
+
+fn ensurePositionRecordLookupsWithin(table: Table, records_pos: usize, record_count: usize) GposError!void {
+    // Contextual positioning appends adjustments as it walks PosLookupRecords.
+    // Preflight referenced lookup headers so a malformed later lookup count or
+    // UseMarkFilteringSet slot cannot leave earlier nested adjustments visible.
+    const lookup_list_offset = try readU16BadGpos(table, 8);
+    const lookup_count = try readU16BadGpos(table, lookup_list_offset);
+    for (0..record_count) |record_i| {
+        const record_offset = records_pos + record_i * 4;
+        const lookup_index = try readU16BadGpos(table, record_offset + 2);
+        if (lookup_index >= lookup_count) continue;
+        const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
+        const lookup_offset = lookup_list_offset + try readU16BadGpos(table, lookup_offset_pos);
+        try ensurePositionLookupHeaderWithin(table, lookup_offset);
+    }
+}
+
+fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposError!void {
+    if (lookup_offset > table.length or table.length - lookup_offset < 6) return error.BadGpos;
+    const lookup_flag = try readU16BadGpos(table, lookup_offset + 2);
+    const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
+    const subtable_offsets_pos = lookup_offset + 6;
+    const subtable_offsets_len = @as(usize, subtable_count) * 2;
+    if (subtable_offsets_pos > table.length or subtable_offsets_len > table.length - subtable_offsets_pos) return error.BadGpos;
+    if ((lookup_flag & 0x0010) != 0) {
+        const mark_filtering_set_pos = subtable_offsets_pos + subtable_offsets_len;
+        if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGpos;
+    }
+}
+
+fn readU16BadGpos(table: Table, relative: usize) GposError!u16 {
+    return readU16(table, relative) catch |err| {
+        return switch (err) {
+            error.EndOfStream => error.BadGpos,
+            else => err,
+        };
+    };
 }
 
 fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: usize, lookup_index: u16, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -1933,6 +1972,56 @@ test "GPOS contextual record truncation is atomic" {
 
     const table = Table{ .data = &bytes, .offset = 0, .length = rule + 8 };
     try std.testing.expectError(error.BadGpos, collectLookup(table, 16, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS contextual lookup preflight rejects later truncated lookup atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 96;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 18);
+    writeU16Test(&bytes, 14, 60);
+    writeU16Test(&bytes, 16, 80);
+
+    const context_lookup = 28;
+    writeU16Test(&bytes, context_lookup + 0, 7);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 24);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 2);
+    writeCoverage1Test(&bytes, context + 24, 1);
+
+    writeSinglePositionLookup(&bytes, 70, 1, 0, 45);
+
+    // Lookup 2 is referenced only after lookup 1 would append an adjustment.
+    // Its truncated SubTable offset array must be caught before collecting any
+    // nested result from the contextual match.
+    writeU16Test(&bytes, 90, 1);
+    writeU16Test(&bytes, 94, 1);
+
+    const glyphs = [_]GlyphId{1};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, &adjustments, allocator, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 

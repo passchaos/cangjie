@@ -395,6 +395,8 @@ pub const Font = struct {
         if (version != 0) return 0;
         const table_count = try bin.readU16At(self.data, kern.offset + 2);
         var subtable_offset = kern.offset + 4;
+        var total: i32 = 0;
+        var saw_matching_pair = false;
         for (0..table_count) |_| {
             if (subtable_offset + 6 > kern.offset + kern.length) return error.BadSfnt;
             const length = try bin.readU16At(self.data, subtable_offset + 2);
@@ -402,12 +404,23 @@ pub const Font = struct {
             if (length < 6 or subtable_offset + length > kern.offset + kern.length) return error.BadSfnt;
             const format = coverage >> 8;
             const horizontal = (coverage & 0x0001) != 0;
-            if (format == 0 and horizontal) {
-                return try kernFormat0(self.data[subtable_offset .. subtable_offset + length], left, right);
+            const minimum = (coverage & 0x0002) != 0;
+            const cross_stream = (coverage & 0x0004) != 0;
+            const override = (coverage & 0x0008) != 0;
+            if (format == 0 and horizontal and !minimum and !cross_stream) {
+                if (try kernFormat0(self.data[subtable_offset .. subtable_offset + length], left, right)) |value| {
+                    saw_matching_pair = true;
+                    if (override) {
+                        total = value;
+                    } else {
+                        total += value;
+                    }
+                }
             }
             subtable_offset += length;
         }
-        return 0;
+        if (!saw_matching_pair) return 0;
+        return @intCast(std.math.clamp(total, std.math.minInt(i16), std.math.maxInt(i16)));
     }
 
     pub fn applyGsub(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator) FontError!void {
@@ -1589,16 +1602,16 @@ fn glyphIndexFormat14NonDefault(data: []const u8, offset: usize, table_end: usiz
     return null;
 }
 
-fn kernFormat0(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
-    if (data.len < 14) return 0;
+fn kernFormat0(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!?i16 {
+    if (data.len < 14) return null;
     const pair_count = try bin.readU16At(data, 6);
+    if (@as(usize, pair_count) * 6 > data.len - 14) return error.BadSfnt;
     const needle = (@as(u32, left) << 16) | right;
     var lo: usize = 0;
     var hi: usize = pair_count;
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
         const offset = 14 + mid * 6;
-        if (offset + 6 > data.len) return error.BadSfnt;
         const pair = (@as(u32, try bin.readU16At(data, offset)) << 16) | try bin.readU16At(data, offset + 2);
         if (needle < pair) {
             hi = mid;
@@ -1608,7 +1621,7 @@ fn kernFormat0(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.Glyph
             return try bin.readI16At(data, offset + 4);
         }
     }
-    return 0;
+    return null;
 }
 
 fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour_count: u16, transform: Transform) FontError!void {
@@ -1807,4 +1820,91 @@ fn readI16FromSlice(data: []const u8, offset: usize) FontError!i16 {
     return bin.readI16At(data, offset) catch |err| switch (err) {
         error.EndOfStream => error.BadSfnt,
     };
+}
+
+test "legacy kern format 0 accumulates multiple horizontal subtables" {
+    var data: [44]u8 = .{0} ** 44;
+    writeU16Test(&data, 0, 0);
+    writeU16Test(&data, 2, 2);
+    writeKernFormat0Subtable(&data, 4, 0x0001, 1, 1, -40);
+    writeKernFormat0Subtable(&data, 24, 0x0001, 1, 1, -70);
+
+    const font = kernOnlyFont(&data);
+    try std.testing.expectEqual(@as(i16, -110), try font.kerning(1, 1));
+    try std.testing.expectEqual(@as(i16, 0), try font.kerning(0, 1));
+}
+
+test "legacy kern ignores minimum and cross-stream subtables" {
+    var data: [64]u8 = .{0} ** 64;
+    writeU16Test(&data, 0, 0);
+    writeU16Test(&data, 2, 3);
+    writeKernFormat0Subtable(&data, 4, 0x0003, 1, 1, -100);
+    writeKernFormat0Subtable(&data, 24, 0x0005, 1, 1, -80);
+    writeKernFormat0Subtable(&data, 44, 0x0001, 1, 1, -30);
+
+    const font = kernOnlyFont(&data);
+    try std.testing.expectEqual(@as(i16, -30), try font.kerning(1, 1));
+}
+
+fn kernOnlyFont(data: []const u8) Font {
+    const empty_tables: []TableRecord = &.{};
+    const empty_cmaps: []CmapSubtable = &.{};
+    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    return .{
+        .data = data,
+        .format = .truetype,
+        .units_per_em = 1000,
+        .index_to_loc_format = 0,
+        .glyph_count = 2,
+        .ascender = 0,
+        .descender = 0,
+        .line_gap = 0,
+        .number_of_h_metrics = 2,
+        .head = dummy_table,
+        .hhea = dummy_table,
+        .maxp = dummy_table,
+        .hmtx = dummy_table,
+        .loca = null,
+        .cmap = dummy_table,
+        .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = 0, .offset = 0, .length = data.len },
+        .os2 = null,
+        .gdef = null,
+        .gpos = null,
+        .gsub = null,
+        .name = null,
+        .fvar = null,
+        .avar = null,
+        .colr = null,
+        .cpal = null,
+        .svg = null,
+        .sbix = null,
+        .cblc = null,
+        .cbdt = null,
+        .glyf = null,
+        .cff = null,
+        .cmap_subtables = empty_cmaps,
+        .owned_tables = empty_tables,
+        .allocator = std.testing.allocator,
+    };
+}
+
+fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {
+    writeU16Test(bytes, offset + 0, 0);
+    writeU16Test(bytes, offset + 2, 20);
+    writeU16Test(bytes, offset + 4, coverage);
+    writeU16Test(bytes, offset + 6, 1);
+    writeU16Test(bytes, offset + 8, 6);
+    writeU16Test(bytes, offset + 10, 0);
+    writeU16Test(bytes, offset + 12, 0);
+    writeU16Test(bytes, offset + 14, left);
+    writeU16Test(bytes, offset + 16, right);
+    writeI16Test(bytes, offset + 18, value);
+}
+
+fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
+    std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {
+    std.mem.writeInt(i16, bytes[offset..][0..2], value, .big);
 }

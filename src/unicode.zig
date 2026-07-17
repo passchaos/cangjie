@@ -822,13 +822,27 @@ fn isWordExtender(codepoint: u21) bool {
         isCombiningMark(codepoint) or
         isVariationSelector(codepoint) or
         isEmojiModifier(codepoint) or
-        isSpacingMark(codepoint);
+        isSpacingMark(codepoint) or
+        isWordFormat(codepoint);
+}
+
+fn isWordFormat(codepoint: u21) bool {
+    return codepoint == 0x00ad or
+        codepoint == 0x061c or
+        codepoint == 0x180e or
+        codepoint == 0x200e or
+        codepoint == 0x200f or
+        (codepoint >= 0x202a and codepoint <= 0x202e) or
+        (codepoint >= 0x2060 and codepoint <= 0x2064) or
+        (codepoint >= 0x2066 and codepoint <= 0x206f) or
+        codepoint == 0xfeff;
 }
 
 fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize, zwj_after_extended_pictographic: bool) bool {
     // Keep this predicate conservative: it only returns true for continuation
     // codepoints that should share a caret stop with the previous codepoint.
     if (previous == '\r' and current == '\n') return true;
+    if (isGraphemePrependCodepoint(previous)) return true;
     if (current == 0x200d) return true;
     if (extendsHangulGrapheme(previous, current)) return true;
     if (isRegionalIndicator(previous) and isRegionalIndicator(current) and regional_indicator_count % 2 == 1) return true;
@@ -893,6 +907,14 @@ fn isGraphemeExtendCodepoint(codepoint: u21) bool {
         isVariationSelector(codepoint) or
         isEmojiModifier(codepoint) or
         isSpacingMark(codepoint);
+}
+
+fn isGraphemePrependCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x0600 and codepoint <= 0x0605) or
+        codepoint == 0x06dd or
+        codepoint == 0x070f or
+        (codepoint >= 0x0890 and codepoint <= 0x0891) or
+        codepoint == 0x08e2;
 }
 
 fn isExtendedPictographic(codepoint: u21) bool {

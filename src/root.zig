@@ -733,6 +733,29 @@ test "word segments retain combining marks variation selectors and joiners" {
     try std.testing.expectEqualStrings("क्\u{200d}ष", "क्\u{200d}ष ok"[devanagari_joiner[0].byte_start..][0..devanagari_joiner[0].byte_len]);
 }
 
+test "grapheme clusters keep Unicode prepend controls with following base" {
+    const allocator = std.testing.allocator;
+
+    const clusters = try itemizeGraphemeClusters(allocator, "\u{0600}a b");
+    defer allocator.free(clusters);
+    try std.testing.expectEqual(@as(usize, 3), clusters.len);
+    try std.testing.expectEqualStrings("\u{0600}a", "\u{0600}a b"[clusters[0].byte_start..][0..clusters[0].byte_len]);
+}
+
+test "word segments retain Unicode format controls" {
+    const allocator = std.testing.allocator;
+
+    const ltr_mark = try itemizeWordSegments(allocator, "ab\u{200e}cd ef");
+    defer allocator.free(ltr_mark);
+    try std.testing.expectEqual(@as(usize, 2), ltr_mark.len);
+    try std.testing.expectEqualStrings("ab\u{200e}cd", "ab\u{200e}cd ef"[ltr_mark[0].byte_start..][0..ltr_mark[0].byte_len]);
+
+    const word_joiner = try itemizeWordSegments(allocator, "hello\u{2060}world");
+    defer allocator.free(word_joiner);
+    try std.testing.expectEqual(@as(usize, 1), word_joiner.len);
+    try std.testing.expectEqualStrings("hello\u{2060}world", "hello\u{2060}world"[word_joiner[0].byte_start..][0..word_joiner[0].byte_len]);
+}
+
 test "itemizes basic sentence segments" {
     const allocator = std.testing.allocator;
     const text = "Hello world!  Are you ok? 好。再见！";

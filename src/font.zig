@@ -552,9 +552,17 @@ pub const Font = struct {
 
     fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {
         const gdef = self.gdef orelse return null;
-        if (gdef.length < 14) return null;
+        if (gdef.length < 4) return error.BadSfnt;
         const major = try bin.readU16At(self.data, gdef.offset);
+        const minor = try bin.readU16At(self.data, gdef.offset + 2);
         if (major != 1) return error.BadSfnt;
+        // MarkGlyphSetsDef was added in GDEF 1.2.  Version 1.0/1.1 tables may
+        // still be longer than the base header because their earlier offsets
+        // point to subtables placed immediately after it; reading byte 12 as a
+        // mark-set offset in those fonts misinterprets subtable data and can
+        // make otherwise valid fonts fail shaping.
+        if (minor < 2) return null;
+        if (gdef.length < 14) return null;
         const mark_glyph_sets_def_offset = try bin.readU16At(self.data, gdef.offset + 12);
         if (mark_glyph_sets_def_offset == 0) return null;
         if (mark_glyph_sets_def_offset >= gdef.length) return error.BadSfnt;
@@ -1950,6 +1958,21 @@ test "reads GDEF mark glyph filtering sets" {
     try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 20, 21, 30, 31, 32 }, sets[1]);
 }
 
+test "ignores mark glyph filtering offset field before GDEF 1.2" {
+    var bytes: [32]u8 = .{0} ** 32;
+    writeU16Test(&bytes, 0, 1); // major
+    writeU16Test(&bytes, 2, 0); // GDEF 1.0: no MarkGlyphSetsDef field.
+    writeU16Test(&bytes, 4, 14); // GlyphClassDef offset.
+    writeU16Test(&bytes, 12, 1); // First bytes of the class def, not a mark-set offset.
+    writeU16Test(&bytes, 14, 1); // ClassDef format 1.
+    writeU16Test(&bytes, 16, 3); // startGlyphID
+    writeU16Test(&bytes, 18, 1); // glyphCount
+    writeU16Test(&bytes, 20, 3); // class value: mark
+
+    const font = gdefOnlyFont(&bytes);
+    try std.testing.expectEqual(GlyphClass.mark, try font.glyphClass(3));
+    try std.testing.expect((try font.markFilteringSets(std.testing.allocator)) == null);
+}
 test "legacy kern format 0 accumulates multiple horizontal subtables" {
     var data: [44]u8 = .{0} ** 44;
     writeU16Test(&data, 0, 0);
@@ -1972,6 +1995,48 @@ test "legacy kern ignores minimum and cross-stream subtables" {
 
     const font = kernOnlyFont(&data);
     try std.testing.expectEqual(@as(i16, -30), try font.kerning(1, 1));
+}
+
+fn gdefOnlyFont(data: []const u8) Font {
+    const empty_tables: []TableRecord = &.{};
+    const empty_cmaps: []CmapSubtable = &.{};
+    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    return .{
+        .data = data,
+        .format = .truetype,
+        .units_per_em = 1000,
+        .index_to_loc_format = 0,
+        .glyph_count = 64,
+        .ascender = 0,
+        .descender = 0,
+        .line_gap = 0,
+        .number_of_h_metrics = 1,
+        .head = dummy_table,
+        .hhea = dummy_table,
+        .maxp = dummy_table,
+        .hmtx = dummy_table,
+        .loca = null,
+        .cmap = dummy_table,
+        .kern = null,
+        .os2 = null,
+        .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = data.len },
+        .gpos = null,
+        .gsub = null,
+        .name = null,
+        .fvar = null,
+        .avar = null,
+        .colr = null,
+        .cpal = null,
+        .svg = null,
+        .sbix = null,
+        .cblc = null,
+        .cbdt = null,
+        .glyf = null,
+        .cff = null,
+        .cmap_subtables = empty_cmaps,
+        .owned_tables = empty_tables,
+        .allocator = std.testing.allocator,
+    };
 }
 
 fn kernOnlyFont(data: []const u8) Font {

@@ -18,6 +18,11 @@ const Table = struct {
     length: usize,
 };
 
+const FeatureSelection = struct {
+    index: u16,
+    required: bool = false,
+};
+
 pub const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
@@ -71,7 +76,7 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!std.ArrayList(u16) {
-    var feature_indices = std.ArrayList(u16).empty;
+    var feature_indices = std.ArrayList(FeatureSelection).empty;
     defer feature_indices.deinit(allocator);
     var lookups = std.ArrayList(u16).empty;
     errdefer lookups.deinit(allocator);
@@ -91,11 +96,15 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     }
 
     const feature_count = try readU16(table, feature_list_offset);
-    for (feature_indices.items) |feature_index| {
+    for (feature_indices.items) |selection| {
+        const feature_index = selection.index;
         if (feature_index >= feature_count) continue;
         const feature_record = feature_list_offset + 2 + @as(usize, feature_index) * 6;
         const feature_tag = try readU32(table, feature_record);
-        if (!featureEnabled(feature_tag, options.features)) continue;
+        // LangSys.ReqFeatureIndex is an OpenType contract: the feature is
+        // necessary for that script/language system and must be applied even
+        // when its tag is normally optional or an override disables that tag.
+        if (!selection.required and !featureEnabled(feature_tag, options.features)) continue;
         const feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
         const lookup_index_count = try readU16(table, feature_offset + 2);
         for (0..lookup_index_count) |i| {
@@ -135,7 +144,7 @@ fn findScriptOffset(table: Table, script_list_offset: usize, script_count: u16, 
     return null;
 }
 
-fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag, feature_indices: *std.ArrayList(u16), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
+fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
     const default_lang_sys_offset = try readU16(table, script_offset);
     if (language_tag != .dflt) {
         if (try findLangSysOffset(table, script_offset, @intFromEnum(language_tag))) |lang_sys_offset| {
@@ -158,16 +167,25 @@ fn findLangSysOffset(table: Table, script_offset: usize, language_tag: u32) (Gsu
     return null;
 }
 
-fn collectLangSysFeatures(table: Table, lang_sys_offset: usize, feature_indices: *std.ArrayList(u16), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
+fn collectLangSysFeatures(table: Table, lang_sys_offset: usize, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
     const required_feature_index = try readU16(table, lang_sys_offset + 2);
-    if (required_feature_index != 0xffff and !containsLookup(feature_indices.items, required_feature_index)) {
-        try feature_indices.append(allocator, required_feature_index);
+    if (required_feature_index != 0xffff) {
+        try appendFeatureSelection(feature_indices, allocator, required_feature_index, true);
     }
     const feature_count = try readU16(table, lang_sys_offset + 4);
     for (0..feature_count) |i| {
         const feature_index = try readU16(table, lang_sys_offset + 6 + i * 2);
-        if (!containsLookup(feature_indices.items, feature_index)) try feature_indices.append(allocator, feature_index);
+        try appendFeatureSelection(feature_indices, allocator, feature_index, false);
     }
+}
+
+fn appendFeatureSelection(feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator, index: u16, required: bool) std.mem.Allocator.Error!void {
+    for (feature_indices.items) |*selection| {
+        if (selection.index != index) continue;
+        selection.required = selection.required or required;
+        return;
+    }
+    try feature_indices.append(allocator, .{ .index = index, .required = required });
 }
 
 fn containsLookup(items: []const u16, needle: u16) bool {
@@ -1009,6 +1027,26 @@ test "GSUB default features do not enable ordinals" {
     try std.testing.expect(!defaultFeatureEnabled(unicode.tag("sups")));
 }
 
+test "GSUB LangSys required feature bypasses optional feature filtering" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 72;
+    writeRequiredFeatureSelectionTable(&bytes, unicode.tag("ordn"), unicode.tag("liga"));
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    var lookups = try selectedLookupIndices(table, allocator, .{
+        .script_tag = .dflt,
+        // Even an explicit off override must not disable ReqFeatureIndex. It
+        // only disables the ordinary feature listed after it in FeatureIndex[].
+        .features = &.{
+            .{ .tag = unicode.tag("ordn"), .enabled = false },
+            .{ .tag = unicode.tag("liga"), .enabled = false },
+        },
+    });
+    defer lookups.deinit(allocator);
+
+    try std.testing.expectEqualSlices(u16, &.{0}, lookups.items);
+}
+
 test "GSUB chaining class substitution applies nested lookup" {
     const allocator = std.testing.allocator;
     const bytes = try allocator.alloc(u8, 112);
@@ -1447,6 +1485,34 @@ fn writeFeature(bytes: []u8, offset: usize, lookup_index: u16) void {
     writeU16Test(bytes, offset, 0);
     writeU16Test(bytes, offset + 2, 1);
     writeU16Test(bytes, offset + 4, lookup_index);
+}
+
+fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_tag: u32) void {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10);
+    writeU16Test(bytes, 6, 34);
+    writeU16Test(bytes, 8, 60);
+
+    writeU16Test(bytes, 10, 1);
+    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(bytes, 16, 8);
+
+    writeU16Test(bytes, 18, 4);
+    writeU16Test(bytes, 20, 0);
+    writeU16Test(bytes, 22, 0);
+    writeU16Test(bytes, 24, 0); // ReqFeatureIndex: feature 0.
+    writeU16Test(bytes, 26, 1);
+    writeU16Test(bytes, 28, 1); // Ordinary FeatureIndex[]: feature 1.
+
+    writeU16Test(bytes, 34, 2);
+    writeFeatureRecord(bytes, 36, required_tag, 14);
+    writeFeatureRecord(bytes, 42, optional_tag, 20);
+    writeFeature(bytes, 48, 0);
+    writeFeature(bytes, 54, 1);
+
+    writeU16Test(bytes, 60, 2);
+    writeU16Test(bytes, 62, 0);
+    writeU16Test(bytes, 64, 0);
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

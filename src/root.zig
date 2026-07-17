@@ -759,6 +759,21 @@ test "itemizes line break opportunities" {
     try std.testing.expectEqual(LineBreakKind.hard, crlf[0].kind);
 }
 
+test "line break opportunities stay on grapheme cluster boundaries" {
+    const allocator = std.testing.allocator;
+    const text = "\u{4e00}\u{e0100}丁";
+
+    const breaks = try itemizeLineBreaks(allocator, text);
+    defer allocator.free(breaks);
+
+    try std.testing.expectEqual(@as(usize, 2), breaks.len);
+    try std.testing.expectEqual(@as(usize, 7), breaks[0].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[0].kind);
+    try std.testing.expectEqualStrings("\u{4e00}\u{e0100}", text[0..breaks[0].byte_offset]);
+    try std.testing.expectEqual(@as(usize, text.len), breaks[1].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
+}
+
 test "shapes mixed-script text with script run metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

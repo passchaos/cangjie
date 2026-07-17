@@ -501,28 +501,22 @@ pub fn itemizeLineBreaks(allocator: std.mem.Allocator, text: []const u8) ![]Line
     errdefer breaks.deinit(allocator);
 
     // Emit hard breaks for CR/LF and soft opportunities after whitespace or
-    // East Asian characters. Paragraph layout currently uses a similar greedy
-    // break policy over shaped glyphs.
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < text.len) {
-        const byte_start = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        const byte_end = it.i;
-        if (codepoint == '\n') {
-            try breaks.append(allocator, .{ .byte_offset = byte_end, .kind = .hard });
-        } else if (codepoint == '\r') {
-            if (it.i < text.len and text[it.i] == '\n') {
-                _ = it.nextCodepoint();
-                try breaks.append(allocator, .{ .byte_offset = it.i, .kind = .hard });
-            } else {
-                try breaks.append(allocator, .{ .byte_offset = byte_end, .kind = .hard });
-            }
+    // East Asian grapheme clusters. Break offsets must point to cluster
+    // boundaries: otherwise an ideograph followed by a variation selector, or a
+    // kana base followed by a combining mark, could be split between the base
+    // and its visual modifier.
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    for (clusters) |cluster| {
+        const cluster_end = cluster.byte_start + cluster.byte_len;
+        const codepoint = firstCodepoint(text[cluster.byte_start..cluster_end]) orelse continue;
+        if (codepoint == '\n' or codepoint == '\r') {
+            try breaks.append(allocator, .{ .byte_offset = cluster_end, .kind = .hard });
         } else if (isLineBreakSpace(codepoint)) {
-            try breaks.append(allocator, .{ .byte_offset = byte_end, .kind = .soft });
+            try breaks.append(allocator, .{ .byte_offset = cluster_end, .kind = .soft });
         } else if (isLineBreakEastAsian(codepoint)) {
-            try breaks.append(allocator, .{ .byte_offset = byte_end, .kind = .soft });
+            try breaks.append(allocator, .{ .byte_offset = cluster_end, .kind = .soft });
         }
-        _ = byte_start;
     }
 
     return try breaks.toOwnedSlice(allocator);
@@ -667,6 +661,11 @@ fn appendCodepoints(allocator: std.mem.Allocator, output: *std.ArrayList(u21), t
     while (it.nextCodepoint()) |codepoint| {
         try output.append(allocator, codepoint);
     }
+}
+
+fn firstCodepoint(text: []const u8) ?u21 {
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    return it.nextCodepoint();
 }
 
 pub fn mirroredCodepoint(codepoint: u21) u21 {

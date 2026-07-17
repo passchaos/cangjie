@@ -827,6 +827,13 @@ pub const TextShaper = struct {
         while (it.i < text.len) {
             const cluster = it.i;
             const codepoint = it.nextCodepoint() orelse break;
+            if (isVariationSelector(codepoint)) {
+                // Keep variation selectors in the current segment so cmap
+                // format 14 can be applied by the font that shaped the base
+                // scalar. Selecting fallback for the selector itself would
+                // split the run and discard the variation relationship.
+                continue;
+            }
             const font_index = try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
             if (segment_font_index == null) {
                 segment_start = cluster;
@@ -961,6 +968,7 @@ fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []
     while (it.i < text.len) {
         const cluster = it.i;
         const codepoint = it.nextCodepoint() orelse break;
+        if (isVariationSelector(codepoint)) continue;
         const font_index = try cascade.selectFont(codepoint);
         if (segment_font_index == null) {
             segment_start = cluster;

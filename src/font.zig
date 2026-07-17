@@ -740,11 +740,17 @@ pub const Font = struct {
         const record_count = try bin.readU32At(self.data, list_start);
         const records_start = list_start + 4;
         if (@as(usize, record_count) * 6 > colr.offset + colr.length - records_start) return error.BadSfnt;
+        const paint_data_start = 4 + @as(usize, record_count) * 6;
         for (0..record_count) |index| {
             const record = records_start + index * 6;
             const base_glyph = try bin.readU16At(self.data, record);
             if (base_glyph != glyph_id) continue;
-            const paint_offset = try bin.readU32At(self.data, record + 2);
+            const paint_offset: usize = @intCast(try bin.readU32At(self.data, record + 2));
+            // BaseGlyphPaintRecord offsets are child-table offsets, not raw
+            // cursors into the BaseGlyphList header. Reject overlaps with the
+            // declared record array so malformed fonts cannot reinterpret
+            // glyph ids or offset bytes as PaintSolid/PaintGlyph payloads.
+            if (paint_offset < paint_data_start) return error.BadSfnt;
             if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
             return try readColorPaint(self.data, colr, list_start + paint_offset);
         }
@@ -764,7 +770,12 @@ pub const Font = struct {
         if (layer_index >= layer_count) return null;
         const offsets_start = list_start + 4;
         if (@as(usize, layer_count) * 4 > colr.offset + colr.length - offsets_start) return error.BadSfnt;
-        const paint_offset = try bin.readU32At(self.data, offsets_start + @as(usize, layer_index) * 4);
+        const paint_data_start = 4 + @as(usize, layer_count) * 4;
+        const paint_offset: usize = @intCast(try bin.readU32At(self.data, offsets_start + @as(usize, layer_index) * 4));
+        // LayerList Paint offsets have the same ownership rule as
+        // BaseGlyphList paint offsets: the target must be outside the declared
+        // offset array rather than borrowing bytes from list metadata.
+        if (paint_offset < paint_data_start) return error.BadSfnt;
         if (paint_offset > colr.length - layer_list_offset) return error.BadSfnt;
         return try readColorPaint(self.data, colr, list_start + paint_offset);
     }
@@ -2036,8 +2047,12 @@ fn readColorPaint(data: []const u8, colr: TableRecord, offset: usize) FontError!
         },
         10 => blk: {
             if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
-            const child_offset = try readU24At(data, offset + 1);
+            const child_offset: usize = @intCast(try readU24At(data, offset + 1));
             const glyph_id = try bin.readU16At(data, offset + 4);
+            // A PaintGlyph child starts after this six-byte parent record.
+            // Smaller offsets overlap the parent's Offset24/GlyphID fields;
+            // offset zero would recurse into the same PaintGlyph forever.
+            if (child_offset < 6) return error.BadSfnt;
             if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
             const child = try readColorPaint(data, colr, offset + child_offset);
             break :blk switch (child) {
@@ -2360,6 +2375,40 @@ test "CPAL palette entries stay inside declared color records" {
     try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
 }
 
+test "COLR v1 paint offsets cannot overlap parent metadata" {
+    var base_list_overlap: [44]u8 = .{0} ** 44;
+    writeU16Test(&base_list_overlap, 0, 1); // COLR version 1.
+    writeU32Test(&base_list_overlap, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&base_list_overlap, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&base_list_overlap, 38, 2); // glyph id; its low byte looks like PaintSolid format.
+    writeU32Test(&base_list_overlap, 40, 5); // Points into the BaseGlyphPaintRecord, not after it.
+
+    const base_font = colrOnlyFont(&base_list_overlap);
+    try std.testing.expectError(error.BadSfnt, base_font.colorPaint(2));
+
+    var layer_list_overlap: [46]u8 = .{0} ** 46;
+    writeU16Test(&layer_list_overlap, 0, 1); // COLR version 1.
+    writeU32Test(&layer_list_overlap, 18, 34); // LayerListOffset.
+    writeU32Test(&layer_list_overlap, 34, 2); // two PaintOffsets; low byte looks like PaintSolid.
+    writeU32Test(&layer_list_overlap, 38, 3); // Points into numLayers, not after both offsets.
+
+    const layer_font = colrOnlyFont(&layer_list_overlap);
+    try std.testing.expectError(error.BadSfnt, layer_font.colorPaintLayer(0));
+
+    var paint_glyph_overlap: [54]u8 = .{0} ** 54;
+    writeU16Test(&paint_glyph_overlap, 0, 1); // COLR version 1.
+    writeU32Test(&paint_glyph_overlap, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&paint_glyph_overlap, 34, 1);
+    writeU16Test(&paint_glyph_overlap, 38, 1);
+    writeU32Test(&paint_glyph_overlap, 40, 10); // Valid offset to the PaintGlyph below.
+    paint_glyph_overlap[44] = 10; // PaintGlyph.
+    paint_glyph_overlap[47] = 5; // Child paint offset overlaps the PaintGlyph's glyphID field.
+    writeU16Test(&paint_glyph_overlap, 48, 2); // low byte at +5 looks like PaintSolid format.
+
+    const paint_glyph_font = colrOnlyFont(&paint_glyph_overlap);
+    try std.testing.expectError(error.BadSfnt, paint_glyph_font.colorPaint(1));
+}
+
 fn gdefOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2389,6 +2438,48 @@ fn gdefOnlyFont(data: []const u8) Font {
         .fvar = null,
         .avar = null,
         .colr = null,
+        .cpal = null,
+        .svg = null,
+        .sbix = null,
+        .cblc = null,
+        .cbdt = null,
+        .glyf = null,
+        .cff = null,
+        .cmap_subtables = empty_cmaps,
+        .owned_tables = empty_tables,
+        .allocator = std.testing.allocator,
+    };
+}
+
+fn colrOnlyFont(data: []const u8) Font {
+    const empty_tables: []TableRecord = &.{};
+    const empty_cmaps: []CmapSubtable = &.{};
+    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    return .{
+        .data = data,
+        .format = .truetype,
+        .units_per_em = 1000,
+        .index_to_loc_format = 0,
+        .glyph_count = 16,
+        .ascender = 0,
+        .descender = 0,
+        .line_gap = 0,
+        .number_of_h_metrics = 2,
+        .head = dummy_table,
+        .hhea = dummy_table,
+        .maxp = dummy_table,
+        .hmtx = dummy_table,
+        .loca = null,
+        .cmap = dummy_table,
+        .kern = null,
+        .os2 = null,
+        .gdef = null,
+        .gpos = null,
+        .gsub = null,
+        .name = null,
+        .fvar = null,
+        .avar = null,
+        .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = data.len },
         .cpal = null,
         .svg = null,
         .sbix = null,

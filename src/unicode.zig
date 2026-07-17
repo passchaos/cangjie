@@ -481,7 +481,7 @@ pub fn itemizeSentenceSegments(allocator: std.mem.Allocator, text: []const u8) !
         const byte_end = it.i;
         sentence_end = byte_end;
 
-        if (pending_break and !isSentenceTrailingSpace(codepoint)) {
+        if (pending_break and !isSentenceTrailingSpace(codepoint) and !isSentenceTrailingClose(codepoint)) {
             try appendSentenceIfNotBlank(allocator, &sentences, text, sentence_start, byte_start);
             sentence_start = byte_start;
             pending_break = false;
@@ -724,6 +724,13 @@ fn isSentenceTerminator(codepoint: u21) bool {
 
 fn isSentenceTrailingSpace(codepoint: u21) bool {
     return codepoint == ' ' or codepoint == '\t' or codepoint == '\n' or codepoint == '\r';
+}
+
+fn isSentenceTrailingClose(codepoint: u21) bool {
+    return switch (codepoint) {
+        '\'', '"', ')', ']', '}', 0x00bb, 0x2019, 0x201d, 0x3009, 0x300b, 0x300d, 0x300f, 0x3011, 0x3015, 0x3017, 0x3019, 0x301b => true,
+        else => false,
+    };
 }
 
 fn isLineBreakSpace(codepoint: u21) bool {

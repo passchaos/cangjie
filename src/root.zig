@@ -734,6 +734,13 @@ test "itemizes basic sentence segments" {
     defer allocator.free(no_terminal);
     try std.testing.expectEqual(@as(usize, 1), no_terminal.len);
     try std.testing.expectEqualStrings("No terminator", "No terminator"[no_terminal[0].byte_start..][0..no_terminal[0].byte_len]);
+
+    const quoted_text = "He said ‘hi!’ Next.";
+    const quoted = try itemizeSentenceSegments(allocator, quoted_text);
+    defer allocator.free(quoted);
+    try std.testing.expectEqual(@as(usize, 2), quoted.len);
+    try std.testing.expectEqualStrings("He said ‘hi!’ ", quoted_text[quoted[0].byte_start..][0..quoted[0].byte_len]);
+    try std.testing.expectEqualStrings("Next.", quoted_text[quoted[1].byte_start..][0..quoted[1].byte_len]);
 }
 
 test "itemizes line break opportunities" {

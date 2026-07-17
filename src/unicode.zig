@@ -417,6 +417,20 @@ pub fn itemizeWordSegments(allocator: std.mem.Allocator, text: []const u8) ![]Wo
         const byte_end = it.i;
         const kind = wordKindForCodepoint(codepoint);
         if (kind == .none) {
+            if (isWordExtender(codepoint)) {
+                // UAX #29 treats Extend/Format-like codepoints as part of the
+                // surrounding word. Preserve their bytes so caret and selection
+                // logic does not strand accents, variation selectors, or joiners
+                // outside the word segment they visually modify.
+                if (current_kind != .none) {
+                    word_end = byte_end;
+                } else if (words.items.len > 0) {
+                    const last = &words.items[words.items.len - 1];
+                    const last_end = last.byte_start + last.byte_len;
+                    if (last_end == byte_start) last.byte_len = byte_end - last.byte_start;
+                }
+                continue;
+            }
             if (current_kind != .none) {
                 try words.append(allocator, .{ .byte_start = word_start, .byte_len = word_end - word_start });
                 current_kind = .none;
@@ -749,6 +763,15 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .devanagari => .devanagari,
         else => .none,
     };
+}
+
+fn isWordExtender(codepoint: u21) bool {
+    return codepoint == 0x200c or
+        codepoint == 0x200d or
+        isCombiningMark(codepoint) or
+        isVariationSelector(codepoint) or
+        isEmojiModifier(codepoint) or
+        isSpacingMark(codepoint);
 }
 
 fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize) bool {

@@ -698,6 +698,26 @@ test "itemizes basic word segments" {
     try std.testing.expectEqualStrings("can't", "can't stop"[apostrophe[0].byte_start..][0..apostrophe[0].byte_len]);
 }
 
+test "word segments retain combining marks variation selectors and joiners" {
+    const allocator = std.testing.allocator;
+
+    const latin_combining = try itemizeWordSegments(allocator, "cafe\u{0301} stop");
+    defer allocator.free(latin_combining);
+    try std.testing.expectEqual(@as(usize, 2), latin_combining.len);
+    try std.testing.expectEqualStrings("cafe\u{0301}", "cafe\u{0301} stop"[latin_combining[0].byte_start..][0..latin_combining[0].byte_len]);
+
+    const ideographic_variation = try itemizeWordSegments(allocator, "\u{4e00}\u{e0100}丁");
+    defer allocator.free(ideographic_variation);
+    try std.testing.expectEqual(@as(usize, 2), ideographic_variation.len);
+    try std.testing.expectEqualStrings("\u{4e00}\u{e0100}", "\u{4e00}\u{e0100}丁"[ideographic_variation[0].byte_start..][0..ideographic_variation[0].byte_len]);
+    try std.testing.expectEqualStrings("丁", "\u{4e00}\u{e0100}丁"[ideographic_variation[1].byte_start..][0..ideographic_variation[1].byte_len]);
+
+    const devanagari_joiner = try itemizeWordSegments(allocator, "क्\u{200d}ष ok");
+    defer allocator.free(devanagari_joiner);
+    try std.testing.expectEqual(@as(usize, 2), devanagari_joiner.len);
+    try std.testing.expectEqualStrings("क्\u{200d}ष", "क्\u{200d}ष ok"[devanagari_joiner[0].byte_start..][0..devanagari_joiner[0].byte_len]);
+}
+
 test "itemizes basic sentence segments" {
     const allocator = std.testing.allocator;
     const text = "Hello world!  Are you ok? 好。再见！";

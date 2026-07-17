@@ -579,11 +579,7 @@ fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
 fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
-    const mark_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
-    const base_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 4);
     const class_count = try readU16(table, subtable_offset + 6);
-    const mark_array_offset = subtable_offset + try readU16(table, subtable_offset + 8);
-    const base_array_offset = subtable_offset + try readU16(table, subtable_offset + 10);
     if (class_count == 0 or glyphs.len < 2) return;
 
     const attached_marks = try allocator.alloc(bool, glyphs.len);
@@ -592,26 +588,49 @@ fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []c
 
     for (glyphs, 0..) |glyph, i| {
         if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse continue;
-        const base_position = try previousCoveredBaseGlyph(table, mark_coverage_offset, base_coverage_offset, glyphs, i, attached_marks, lookup_flag, options) orelse continue;
-        const base_index = try coverageIndex(table, base_coverage_offset, glyphs[base_position]) orelse continue;
-        const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
-        const mark_class = try readU16(table, mark_record_offset);
-        if (mark_class >= class_count) continue;
-        const mark_anchor_offset = mark_array_offset + try readU16(table, mark_record_offset + 2);
-        const base_anchor_record = base_array_offset + 2 + (base_index * class_count + mark_class) * 2;
-        const base_anchor_relative = try readU16(table, base_anchor_record);
-        if (base_anchor_relative == 0) continue;
-        const base_anchor_offset = base_array_offset + base_anchor_relative;
-        const mark_anchor = try readAnchor(table, mark_anchor_offset);
-        const base_anchor = try readAnchor(table, base_anchor_offset);
-        try appendAdjustmentEx(adjustments, allocator, i, .{
-            .index = i,
-            .x_placement = base_anchor.x - mark_anchor.x,
-            .y_placement = base_anchor.y - mark_anchor.y,
-        }, .{ .mark_attachment = true, .mark_base_index = base_position });
-        attached_marks[i] = true;
+        if (try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, i, adjustments, allocator, lookup_flag, options, attached_marks)) {
+            attached_marks[i] = true;
+        }
     }
+}
+
+fn collectMarkToBaseAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, mark_position: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, attached_marks: []const bool) (GposError || std.mem.Allocator.Error)!bool {
+    // Contextual PosLookupRecord application names one glyph in the matched
+    // input sequence. MarkBasePos still needs the surrounding run to find the
+    // preceding base, but it must attach only that named mark instead of
+    // rescanning and positioning every mark covered by the nested lookup.
+    const pos_format = try readU16(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    if (mark_position >= glyphs.len) return false;
+    const glyph = glyphs[mark_position];
+    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+
+    const mark_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const base_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 4);
+    const class_count = try readU16(table, subtable_offset + 6);
+    const mark_array_offset = subtable_offset + try readU16(table, subtable_offset + 8);
+    const base_array_offset = subtable_offset + try readU16(table, subtable_offset + 10);
+    if (class_count == 0 or glyphs.len < 2) return false;
+
+    const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse return false;
+    const base_position = try previousCoveredBaseGlyph(table, mark_coverage_offset, base_coverage_offset, glyphs, mark_position, attached_marks, lookup_flag, options) orelse return false;
+    const base_index = try coverageIndex(table, base_coverage_offset, glyphs[base_position]) orelse return false;
+    const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
+    const mark_class = try readU16(table, mark_record_offset);
+    if (mark_class >= class_count) return false;
+    const mark_anchor_offset = mark_array_offset + try readU16(table, mark_record_offset + 2);
+    const base_anchor_record = base_array_offset + 2 + (base_index * class_count + mark_class) * 2;
+    const base_anchor_relative = try readU16(table, base_anchor_record);
+    if (base_anchor_relative == 0) return false;
+    const base_anchor_offset = base_array_offset + base_anchor_relative;
+    const mark_anchor = try readAnchor(table, mark_anchor_offset);
+    const base_anchor = try readAnchor(table, base_anchor_offset);
+    try appendAdjustmentEx(adjustments, allocator, mark_position, .{
+        .index = mark_position,
+        .x_placement = base_anchor.x - mark_anchor.x,
+        .y_placement = base_anchor.y - mark_anchor.y,
+    }, .{ .mark_attachment = true, .mark_base_index = base_position });
+    return true;
 }
 
 fn previousCoveredBaseGlyph(table: Table, mark_coverage_offset: usize, base_coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!?usize {
@@ -1041,6 +1060,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         switch (lookup_type) {
             1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options),
             2 => if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
+            4 => _ = try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, &.{}),
             9 => try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
         }
@@ -1061,6 +1081,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
     switch (extension_lookup_type) {
         1 => try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
         2 => _ = try collectPairAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+        4 => _ = try collectMarkToBaseAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, &.{}),
         else => {},
     }
 }
@@ -1761,6 +1782,80 @@ test "GPOS context nested lookup can apply extension positioning" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_advance);
+}
+
+test "GPOS context nested lookup can apply MarkBasePos" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 106;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 42);
+
+    writeU16Test(&bytes, 16, 7);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 8);
+
+    const context = 24;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 22);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 2);
+    writeU16Test(&bytes, rule + 2, 1);
+    writeU16Test(&bytes, rule + 4, 12);
+    // PosLookupRecord sequenceIndex=1 invokes MarkBasePos on the matched mark.
+    // The nested lookup still needs the full run so it can locate glyph 10 as
+    // the previous base, but it must not position marks outside this record.
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 1);
+    writeCoverage1Test(&bytes, context + 22, 10);
+
+    writeU16Test(&bytes, 52, 4);
+    writeU16Test(&bytes, 56, 1);
+    writeU16Test(&bytes, 58, 8);
+
+    const mark_base = 60;
+    writeU16Test(&bytes, mark_base + 0, 1);
+    writeU16Test(&bytes, mark_base + 2, 12);
+    writeU16Test(&bytes, mark_base + 4, 18);
+    writeU16Test(&bytes, mark_base + 6, 1);
+    writeU16Test(&bytes, mark_base + 8, 24);
+    writeU16Test(&bytes, mark_base + 10, 36);
+
+    writeCoverage1Test(&bytes, mark_base + 12, 12);
+    writeCoverage1Test(&bytes, mark_base + 18, 10);
+
+    const mark_array = mark_base + 24;
+    writeU16Test(&bytes, mark_array + 0, 1);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 6);
+    writeAnchor1Test(&bytes, mark_array + 6, 10, 15);
+
+    const base_array = mark_base + 36;
+    writeU16Test(&bytes, base_array + 0, 1);
+    writeU16Test(&bytes, base_array + 2, 4);
+    writeAnchor1Test(&bytes, base_array + 4, 80, 120);
+
+    const glyphs = [_]GlyphId{ 10, 12 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+    try std.testing.expect(adjustments.items[0].mark_attachment);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
 }
 
 test "GPOS extension positioning preserves wrapper lookup flags" {

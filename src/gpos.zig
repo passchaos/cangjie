@@ -487,6 +487,20 @@ fn previousCoveredBaseGlyph(table: Table, base_coverage_offset: usize, glyphs: [
     return null;
 }
 
+fn previousUnignoredCoveredGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {
+    var i = mark_index;
+    while (i > 0) {
+        i -= 1;
+        // Mark attachment lookups test the previous glyph after applying the
+        // lookup flag. Ignored glyphs are transparent for this adjacency check;
+        // the first non-ignored glyph either matches the target coverage or
+        // blocks the attachment.
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
+        return if (try coverageIndex(table, coverage_offset, glyphs[i]) != null) i else null;
+    }
+    return null;
+}
+
 fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     switch (pos_format) {
@@ -908,8 +922,8 @@ fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs:
     for (glyphs, 0..) |glyph, i| {
         if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse continue;
-        if (i == 0) continue;
-        const ligature_index = try coverageIndex(table, ligature_coverage_offset, glyphs[i - 1]) orelse continue;
+        const ligature_position = try previousUnignoredCoveredGlyph(table, ligature_coverage_offset, glyphs, i, lookup_flag, options) orelse continue;
+        const ligature_index = try coverageIndex(table, ligature_coverage_offset, glyphs[ligature_position]) orelse continue;
         const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
         const mark_class = try readU16(table, mark_record_offset);
         if (mark_class >= class_count) continue;
@@ -928,7 +942,7 @@ fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs:
             .index = i,
             .x_placement = ligature_anchor.x - mark_anchor.x,
             .y_placement = ligature_anchor.y - mark_anchor.y,
-        }, .{ .mark_attachment = true });
+        }, .{ .mark_attachment = true, .mark_base_index = ligature_position });
     }
 }
 
@@ -945,8 +959,8 @@ fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []c
     for (glyphs, 0..) |glyph, i| {
         if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         const mark_1_index = try coverageIndex(table, mark_1_coverage_offset, glyph) orelse continue;
-        if (i == 0) continue;
-        const mark_2_index = try coverageIndex(table, mark_2_coverage_offset, glyphs[i - 1]) orelse continue;
+        const mark_2_position = try previousUnignoredCoveredGlyph(table, mark_2_coverage_offset, glyphs, i, lookup_flag, options) orelse continue;
+        const mark_2_index = try coverageIndex(table, mark_2_coverage_offset, glyphs[mark_2_position]) orelse continue;
         const mark_1_record_offset = mark_1_array_offset + 2 + mark_1_index * 4;
         const mark_class = try readU16(table, mark_1_record_offset);
         if (mark_class >= class_count) continue;
@@ -961,7 +975,7 @@ fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []c
             .index = i,
             .x_placement = mark_2_anchor.x - mark_1_anchor.x,
             .y_placement = mark_2_anchor.y - mark_1_anchor.y,
-        }, .{ .mark_attachment = true });
+        }, .{ .mark_attachment = true, .mark_base_index = mark_2_position });
     }
 }
 
@@ -1256,6 +1270,109 @@ test "GPOS extension positioning preserves wrapper lookup flags" {
     });
 
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS mark-to-ligature attachment skips lookup-flag ignored glyphs" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 72;
+
+    writeU16Test(&bytes, 0, 5);
+    writeU16Test(&bytes, 2, 0x0002); // IgnoreBaseGlyphs between the ligature and mark.
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const mark_lig = 8;
+    writeU16Test(&bytes, mark_lig + 0, 1);
+    writeU16Test(&bytes, mark_lig + 2, 12);
+    writeU16Test(&bytes, mark_lig + 4, 18);
+    writeU16Test(&bytes, mark_lig + 6, 1);
+    writeU16Test(&bytes, mark_lig + 8, 24);
+    writeU16Test(&bytes, mark_lig + 10, 44);
+
+    writeCoverage1Test(&bytes, mark_lig + 12, 22);
+    writeCoverage1Test(&bytes, mark_lig + 18, 20);
+
+    const mark_array = mark_lig + 24;
+    writeU16Test(&bytes, mark_array + 0, 1);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 8);
+    writeAnchor1Test(&bytes, mark_array + 8, 0, 0);
+
+    const ligature_array = mark_lig + 44;
+    writeU16Test(&bytes, ligature_array + 0, 1);
+    writeU16Test(&bytes, ligature_array + 2, 4);
+    const ligature_attach = ligature_array + 4;
+    writeU16Test(&bytes, ligature_attach + 0, 1);
+    writeU16Test(&bytes, ligature_attach + 2, 4);
+    writeAnchor1Test(&bytes, ligature_attach + 4, 100, 120);
+
+    const glyphs = [_]GlyphId{ 20, 21, 22 };
+    var glyph_classes = [_]u16{0} ** 23;
+    glyph_classes[20] = 2;
+    glyph_classes[21] = 1;
+    glyph_classes[22] = 3;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 100), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 120), adjustments.items[0].y_placement);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+}
+
+test "GPOS mark-to-mark attachment skips lookup-flag ignored glyphs" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 72;
+
+    writeU16Test(&bytes, 0, 6);
+    writeU16Test(&bytes, 2, 0x0002); // IgnoreBaseGlyphs between the two marks.
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const mark_mark = 8;
+    writeU16Test(&bytes, mark_mark + 0, 1);
+    writeU16Test(&bytes, mark_mark + 2, 12);
+    writeU16Test(&bytes, mark_mark + 4, 18);
+    writeU16Test(&bytes, mark_mark + 6, 1);
+    writeU16Test(&bytes, mark_mark + 8, 24);
+    writeU16Test(&bytes, mark_mark + 10, 44);
+
+    writeCoverage1Test(&bytes, mark_mark + 12, 12);
+    writeCoverage1Test(&bytes, mark_mark + 18, 10);
+
+    const mark_1_array = mark_mark + 24;
+    writeU16Test(&bytes, mark_1_array + 0, 1);
+    writeU16Test(&bytes, mark_1_array + 2, 0);
+    writeU16Test(&bytes, mark_1_array + 4, 8);
+    writeAnchor1Test(&bytes, mark_1_array + 8, 0, 0);
+
+    const mark_2_array = mark_mark + 44;
+    writeU16Test(&bytes, mark_2_array + 0, 1);
+    writeU16Test(&bytes, mark_2_array + 2, 6);
+    writeAnchor1Test(&bytes, mark_2_array + 6, 50, 70);
+
+    const glyphs = [_]GlyphId{ 10, 11, 12 };
+    var glyph_classes = [_]u16{0} ** 13;
+    glyph_classes[10] = 3;
+    glyph_classes[11] = 1;
+    glyph_classes[12] = 3;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 50), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].y_placement);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
 }
 
 fn writeSinglePositionLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, lookup_flag: u16, x_placement: i16) void {

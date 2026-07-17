@@ -1243,7 +1243,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
-            1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options),
+            1 => if (try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             2 => if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             3 => _ = try collectCursiveAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             4 => _ = try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, &.{}),
@@ -1267,7 +1267,11 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
     // ExtensionPos only widens the subtable address, so keep using the
     // contextual target index when delegating to the wrapped lookup body.
     switch (extension_lookup_type) {
-        1 => try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
+        // SinglePos subtables inside one lookup are ordered alternatives for a
+        // target glyph. Returning the match status here lets the parent lookup
+        // stop after the first matching ExtensionPos(SinglePos) wrapper,
+        // matching the top-level lookup-level SinglePos collector.
+        1 => return try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
         // PairPos subtables are ordered alternatives even when the PairPos is
         // reached through ExtensionPos from a PosLookupRecord. Return the
         // wrapped pair match so the containing nested lookup can stop before a
@@ -1282,8 +1286,8 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
     return false;
 }
 
-fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return;
+fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
     const pos_format = try readU16(table, subtable_offset);
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const value_format = try readU16(table, subtable_offset + 4);
@@ -1292,15 +1296,18 @@ fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphI
             if (try coverageIndex(table, coverage_offset, glyph) != null) {
                 const value = try readValueRecord(table, subtable_offset + 6, value_format);
                 try appendAdjustment(adjustments, allocator, target_index, value, false);
+                return true;
             }
+            return false;
         },
         2 => {
-            const coverage = try coverageIndex(table, coverage_offset, glyph) orelse return;
+            const coverage = try coverageIndex(table, coverage_offset, glyph) orelse return false;
             const value_count = try readU16(table, subtable_offset + 6);
-            if (coverage >= value_count) return;
+            if (coverage >= value_count) return false;
             const value_size = valueRecordSize(value_format);
             const value = try readValueRecord(table, subtable_offset + 8 + coverage * value_size, value_format);
             try appendAdjustment(adjustments, allocator, target_index, value, false);
+            return true;
         },
         else => return error.UnsupportedGpos,
     }
@@ -2149,6 +2156,79 @@ test "GPOS context nested lookup can apply extension positioning" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_advance);
+}
+
+test "GPOS chaining coverage nested ExtensionPos SinglePos respects alternatives" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 140;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 70);
+
+    writeU16Test(&bytes, 16, 8);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 8);
+
+    const chaining = 24;
+    writeU16Test(&bytes, chaining + 0, 3);
+    writeU16Test(&bytes, chaining + 2, 1);
+    writeU16Test(&bytes, chaining + 4, 24);
+    writeU16Test(&bytes, chaining + 6, 2);
+    writeU16Test(&bytes, chaining + 8, 30);
+    writeU16Test(&bytes, chaining + 10, 36);
+    writeU16Test(&bytes, chaining + 12, 1);
+    writeU16Test(&bytes, chaining + 14, 42);
+    writeU16Test(&bytes, chaining + 16, 1);
+    // Match [10, 11] only when preceded by 7 and followed by 12, then apply
+    // lookup 1 to input sequenceIndex 1. The nested lookup contains two
+    // ExtensionPos(SinglePos) subtables for glyph 11; the first matching
+    // wrapper must win instead of cascading both SinglePos adjustments.
+    writeU16Test(&bytes, chaining + 18, 1);
+    writeU16Test(&bytes, chaining + 20, 1);
+    writeCoverage1Test(&bytes, chaining + 24, 7);
+    writeCoverage1Test(&bytes, chaining + 30, 10);
+    writeCoverage1Test(&bytes, chaining + 36, 11);
+    writeCoverage1Test(&bytes, chaining + 42, 12);
+
+    writeU16Test(&bytes, 80, 9);
+    writeU16Test(&bytes, 84, 2);
+    writeU16Test(&bytes, 86, 10);
+    writeU16Test(&bytes, 88, 32);
+
+    const first_extension = 90;
+    writeU16Test(&bytes, first_extension + 0, 1);
+    writeU16Test(&bytes, first_extension + 2, 1);
+    writeU32Test(&bytes, first_extension + 4, 8);
+    const first_single = first_extension + 8;
+    writeU16Test(&bytes, first_single + 0, 1);
+    writeU16Test(&bytes, first_single + 2, 8);
+    writeU16Test(&bytes, first_single + 4, 0x0004);
+    writeI16Test(&bytes, first_single + 6, 40);
+    writeCoverage1Test(&bytes, first_single + 8, 11);
+
+    const second_extension = 112;
+    writeU16Test(&bytes, second_extension + 0, 1);
+    writeU16Test(&bytes, second_extension + 2, 1);
+    writeU32Test(&bytes, second_extension + 4, 8);
+    const second_single = second_extension + 8;
+    writeU16Test(&bytes, second_single + 0, 1);
+    writeU16Test(&bytes, second_single + 2, 8);
+    writeU16Test(&bytes, second_single + 4, 0x0004);
+    writeI16Test(&bytes, second_single + 6, 90);
+    writeCoverage1Test(&bytes, second_single + 8, 11);
+
+    const glyphs = [_]GlyphId{ 7, 10, 11, 12 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 40), adjustments.items[0].x_advance);
 }
 
 test "GPOS context nested ExtensionPos PairPos respects alternatives with mark filtering" {

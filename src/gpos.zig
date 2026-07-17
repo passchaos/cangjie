@@ -176,7 +176,7 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
         switch (lookup_type) {
             1 => try collectSingleAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             2 => try collectPairAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator),
+            3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             4 => try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             5 => try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             6 => try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
@@ -249,7 +249,7 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
     switch (extension_lookup_type) {
         1 => try collectSingleAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         2 => try collectPairAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        3 => try collectCursiveAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
+        3 => try collectCursiveAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
@@ -394,34 +394,47 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
     });
 }
 
-fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const entry_exit_count = try readU16(table, subtable_offset + 4);
     if (glyphs.len < 2) return;
 
-    var i: usize = 1;
-    while (i < glyphs.len) : (i += 1) {
-        const current_index = try coverageIndex(table, coverage_offset, glyphs[i]) orelse continue;
-        const previous_index = try coverageIndex(table, coverage_offset, glyphs[i - 1]) orelse continue;
-        if (current_index >= entry_exit_count or previous_index >= entry_exit_count) continue;
+    var previous_covered_position: ?usize = null;
+    var previous_coverage_index: usize = 0;
+    for (glyphs, 0..) |glyph, i| {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+        const current_index = try coverageIndex(table, coverage_offset, glyph) orelse {
+            // A non-ignored, non-covered glyph breaks cursive adjacency. Ignored
+            // glyphs are skipped above, matching OpenType LookupFlag semantics.
+            previous_covered_position = null;
+            continue;
+        };
+        if (current_index >= entry_exit_count) {
+            previous_covered_position = null;
+            continue;
+        }
 
-        const current_record = subtable_offset + 6 + current_index * 4;
-        const previous_record = subtable_offset + 6 + previous_index * 4;
-        const entry_relative = try readU16(table, current_record);
-        const exit_relative = try readU16(table, previous_record + 2);
-        if (entry_relative == 0 or exit_relative == 0) continue;
-
-        // Position the current glyph so its entry anchor lands on the previous
-        // glyph's exit anchor.
-        const entry = try readAnchor(table, subtable_offset + entry_relative);
-        const exit = try readAnchor(table, subtable_offset + exit_relative);
-        try appendAdjustment(adjustments, allocator, i, .{
-            .index = i,
-            .x_placement = exit.x - entry.x,
-            .y_placement = exit.y - entry.y,
-        }, false);
+        if (previous_covered_position) |_| {
+            const current_record = subtable_offset + 6 + current_index * 4;
+            const previous_record = subtable_offset + 6 + previous_coverage_index * 4;
+            const entry_relative = try readU16(table, current_record);
+            const exit_relative = try readU16(table, previous_record + 2);
+            if (entry_relative != 0 and exit_relative != 0) {
+                // Position the current glyph so its entry anchor lands on the
+                // previous non-ignored covered glyph's exit anchor.
+                const entry = try readAnchor(table, subtable_offset + entry_relative);
+                const exit = try readAnchor(table, subtable_offset + exit_relative);
+                try appendAdjustment(adjustments, allocator, i, .{
+                    .index = i,
+                    .x_placement = exit.x - entry.x,
+                    .y_placement = exit.y - entry.y,
+                }, false);
+            }
+        }
+        previous_covered_position = i;
+        previous_coverage_index = current_index;
     }
 }
 
@@ -1126,6 +1139,45 @@ test "GPOS value records tolerate device and variation offset fields" {
     try std.testing.expectEqual(@as(i16, -10), value.y_advance);
 }
 
+test "GPOS cursive attachment skips lookup-flag ignored glyphs" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+
+    writeU16Test(&bytes, 0, 3);
+    writeU16Test(&bytes, 2, 0x0008); // IgnoreMarks: transparent marks must not break cursive joins.
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const cursive = 8;
+    writeU16Test(&bytes, cursive + 0, 1);
+    writeU16Test(&bytes, cursive + 2, 14);
+    writeU16Test(&bytes, cursive + 4, 2);
+    // Glyph 10 contributes only an exit anchor; glyph 12 contributes only an
+    // entry anchor. The ignored mark between them should be transparent.
+    writeU16Test(&bytes, cursive + 6, 0);
+    writeU16Test(&bytes, cursive + 8, 22);
+    writeU16Test(&bytes, cursive + 10, 28);
+    writeU16Test(&bytes, cursive + 12, 0);
+    writeCoverage1ListTest(&bytes, cursive + 14, &.{ 10, 12 });
+    writeAnchor1Test(&bytes, cursive + 22, 100, 30);
+    writeAnchor1Test(&bytes, cursive + 28, 20, 5);
+
+    const glyphs = [_]GlyphId{ 10, 11, 12 };
+    const glyph_classes = [_]u16{0} ** 13;
+    var mutable_classes = glyph_classes;
+    mutable_classes[11] = 3;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_classes = &mutable_classes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 80), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 25), adjustments.items[0].y_placement);
+}
 
 test "GPOS context nested lookup honors nested lookup flags" {
     const allocator = std.testing.allocator;
@@ -1224,6 +1276,20 @@ fn writeCoverage1Test(bytes: []u8, offset: usize, glyph: GlyphId) void {
     writeU16Test(bytes, offset + 0, 1);
     writeU16Test(bytes, offset + 2, 1);
     writeU16Test(bytes, offset + 4, glyph);
+}
+
+fn writeCoverage1ListTest(bytes: []u8, offset: usize, glyphs: []const GlyphId) void {
+    writeU16Test(bytes, offset + 0, 1);
+    writeU16Test(bytes, offset + 2, @intCast(glyphs.len));
+    for (glyphs, 0..) |glyph, i| {
+        writeU16Test(bytes, offset + 4 + i * 2, glyph);
+    }
+}
+
+fn writeAnchor1Test(bytes: []u8, offset: usize, x: i16, y: i16) void {
+    writeU16Test(bytes, offset + 0, 1);
+    writeI16Test(bytes, offset + 2, x);
+    writeI16Test(bytes, offset + 4, y);
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

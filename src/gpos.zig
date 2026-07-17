@@ -967,17 +967,26 @@ const Anchor = struct {
 fn readAnchor(table: Table, anchor_offset: usize) GposError!Anchor {
     const format = try readU16(table, anchor_offset);
     return switch (format) {
-        1 => .{
-            .x = try readI16(table, anchor_offset + 2),
-            .y = try readI16(table, anchor_offset + 4),
+        1 => blk: {
+            if (anchor_offset + 6 > table.length) return error.EndOfStream;
+            break :blk .{
+                .x = try readI16(table, anchor_offset + 2),
+                .y = try readI16(table, anchor_offset + 4),
+            };
         },
-        2 => .{
-            .x = try readI16(table, anchor_offset + 2),
-            .y = try readI16(table, anchor_offset + 4),
+        2 => blk: {
+            if (anchor_offset + 8 > table.length) return error.EndOfStream;
+            break :blk .{
+                .x = try readI16(table, anchor_offset + 2),
+                .y = try readI16(table, anchor_offset + 4),
+            };
         },
-        3 => .{
-            .x = try readI16(table, anchor_offset + 2),
-            .y = try readI16(table, anchor_offset + 4),
+        3 => blk: {
+            if (anchor_offset + 10 > table.length) return error.EndOfStream;
+            break :blk .{
+                .x = try readI16(table, anchor_offset + 2),
+                .y = try readI16(table, anchor_offset + 4),
+            };
         },
         else => error.UnsupportedGpos,
     };
@@ -1086,6 +1095,24 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+test "GPOS anchors validate format-specific record sizes" {
+    var bytes = [_]u8{0} ** 10;
+    writeU16Test(&bytes, 0, 1);
+    writeI16Test(&bytes, 2, 10);
+    writeI16Test(&bytes, 4, 20);
+    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 6 }, 0));
+
+    writeU16Test(&bytes, 0, 2);
+    writeU16Test(&bytes, 6, 3);
+    try std.testing.expectError(error.EndOfStream, readAnchor(.{ .data = &bytes, .offset = 0, .length = 6 }, 0));
+    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 8 }, 0));
+
+    writeU16Test(&bytes, 0, 3);
+    writeU16Test(&bytes, 8, 0);
+    try std.testing.expectError(error.EndOfStream, readAnchor(.{ .data = &bytes, .offset = 0, .length = 8 }, 0));
+    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 10 }, 0));
 }
 
 test "GPOS value records tolerate device and variation offset fields" {

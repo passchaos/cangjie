@@ -374,7 +374,12 @@ const AdjustmentFlags = struct {
 fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment, flags: AdjustmentFlags) std.mem.Allocator.Error!void {
     // Multiple positioning subtables can target the same glyph. Accumulate all
     // deltas into one adjustment record per glyph index.
-    if (value.x_advance == 0 and value.x_placement == 0 and value.y_placement == 0 and value.y_advance == 0) return;
+    const has_delta = value.x_advance != 0 or value.x_placement != 0 or value.y_placement != 0 or value.y_advance != 0;
+    // PairPos is also a precedence signal for higher-level shaping: when a
+    // GPOS pair matches, legacy 'kern' must not be applied to that same pair
+    // even if the first ValueRecord is empty and all numeric deltas live on the
+    // second glyph. Keep a zero-valued record when metadata carries that fact.
+    if (!has_delta and !flags.pair_positioned and !flags.mark_attachment) return;
     for (adjustments.items) |*existing| {
         if (existing.index == index) {
             existing.x_advance += value.x_advance;
@@ -1314,6 +1319,44 @@ test "GPOS context nested lookup can apply pair positioning" {
     try std.testing.expect(adjustments.items[0].pair_positioned);
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[1].index);
     try std.testing.expectEqual(@as(i16, 20), adjustments.items[1].x_placement);
+}
+
+test "GPOS pair positioning records precedence when first value is empty" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 48;
+
+    writeU16Test(&bytes, 0, 2);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const pair = 8;
+    writeU16Test(&bytes, pair + 0, 1);
+    writeU16Test(&bytes, pair + 2, 22);
+    writeU16Test(&bytes, pair + 4, 0x0000); // Empty valueFormat1 is common when only the second glyph moves.
+    writeU16Test(&bytes, pair + 6, 0x0001);
+    writeU16Test(&bytes, pair + 8, 1);
+    writeU16Test(&bytes, pair + 10, 28);
+    writeCoverage1Test(&bytes, pair + 22, 10);
+
+    const pair_set = pair + 28;
+    writeU16Test(&bytes, pair_set + 0, 1);
+    writeU16Test(&bytes, pair_set + 2, 11);
+    writeI16Test(&bytes, pair_set + 4, 25);
+
+    const glyphs = [_]GlyphId{ 10, 11 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expect(adjustments.items[0].pair_positioned);
+    try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_advance);
+    try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[1].index);
+    try std.testing.expectEqual(@as(i16, 25), adjustments.items[1].x_placement);
 }
 
 test "GPOS extension positioning preserves wrapper lookup flags" {

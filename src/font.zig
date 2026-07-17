@@ -1485,11 +1485,42 @@ fn readNameString(data: []const u8, name: TableRecord, name_id: u16, out: []u8) 
     if (format > 1) return error.InvalidName;
     const count = try bin.readU16At(data, name.offset + 2);
     const storage_offset = try bin.readU16At(data, name.offset + 4);
-    if (storage_offset > name.length) return error.BadSfnt;
+
+    const records_start: usize = 6;
+    const name_record_size: usize = 12;
+    const records_len = @as(usize, count) * name_record_size;
+    if (records_len > name.length - records_start) return error.BadSfnt;
+
+    // `stringOffset` is relative to the start of the name table but must point
+    // after all table metadata. Otherwise a malformed table can make a valid
+    // NameRecord read bytes from the record array (or from format-1 language
+    // tag records) as if they were string storage.
+    const records_end = records_start + records_len;
+    var minimum_storage_offset = records_end;
+    var lang_tag_records_start: usize = 0;
+    var lang_tag_count: usize = 0;
+    if (format == 1) {
+        if (records_end + 2 > name.length) return error.BadSfnt;
+        lang_tag_count = try bin.readU16At(data, name.offset + records_end);
+        lang_tag_records_start = records_end + 2;
+        const lang_tag_records_len = lang_tag_count * 4;
+        if (lang_tag_records_len > name.length - lang_tag_records_start) return error.BadSfnt;
+        minimum_storage_offset = lang_tag_records_start + lang_tag_records_len;
+    }
+    if (storage_offset < minimum_storage_offset or storage_offset > name.length) return error.BadSfnt;
+
+    if (format == 1) {
+        for (0..lang_tag_count) |i| {
+            const rec = name.offset + lang_tag_records_start + i * 4;
+            const length = try bin.readU16At(data, rec);
+            const offset = try bin.readU16At(data, rec + 2);
+            if (offset > name.length - storage_offset or length > name.length - storage_offset - offset) return error.BadSfnt;
+        }
+    }
 
     var best: ?NameRecord = null;
     for (0..count) |i| {
-        const rec = name.offset + 6 + i * 12;
+        const rec = name.offset + records_start + i * name_record_size;
         if (rec + 12 > name.offset + name.length) return error.BadSfnt;
         const record = NameRecord{
             .platform_id = try bin.readU16At(data, rec),
@@ -2199,6 +2230,48 @@ test "core metrics and loca stay inside declared table lengths" {
     }
 }
 
+test "name table storage offset cannot overlap metadata records" {
+    var out: [16]u8 = undefined;
+
+    var format0: [20]u8 = .{0} ** 20;
+    writeU16Test(&format0, 0, 0);
+    writeU16Test(&format0, 2, 1);
+    writeU16Test(&format0, 4, 6); // Points at the first NameRecord, not at string storage.
+    writeUtf16NameRecordTest(&format0, 6, 1, 2, 0);
+    try std.testing.expectError(error.BadSfnt, readNameString(&format0, nameTableRecord(format0.len), @intFromEnum(NameId.family), &out));
+
+    var format1: [28]u8 = .{0} ** 28;
+    writeU16Test(&format1, 0, 1);
+    writeU16Test(&format1, 2, 1);
+    writeU16Test(&format1, 4, 20); // After langTagCount, but still inside the LangTagRecord array.
+    writeUtf16NameRecordTest(&format1, 6, 1, 2, 0);
+    writeU16Test(&format1, 18, 1); // langTagCount
+    writeU16Test(&format1, 20, 4); // LangTagRecord.length
+    writeU16Test(&format1, 22, 2); // LangTagRecord.offset
+    try std.testing.expectError(error.BadSfnt, readNameString(&format1, nameTableRecord(format1.len), @intFromEnum(NameId.family), &out));
+}
+
+test "name table format 1 validates language tag storage ranges" {
+    var bytes: [32]u8 = .{0} ** 32;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 1);
+    writeU16Test(&bytes, 4, 24);
+    writeUtf16NameRecordTest(&bytes, 6, 1, 4, 0);
+    writeU16Test(&bytes, 18, 1);
+    writeU16Test(&bytes, 20, 4);
+    writeU16Test(&bytes, 22, 4);
+    bytes[25] = 'O';
+    bytes[27] = 'K';
+    bytes[29] = 'e';
+    bytes[31] = 'n';
+
+    var out: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("OK", (try readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out)).?);
+
+    writeU16Test(&bytes, 22, 6);
+    try std.testing.expectError(error.BadSfnt, readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out));
+}
+
 fn gdefOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2294,6 +2367,19 @@ fn setSfntTableLength(bytes: []u8, comptime table_tag: []const u8, length: u32) 
         return;
     }
     return error.MissingTable;
+}
+
+fn nameTableRecord(length: usize) TableRecord {
+    return .{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = 0, .length = length };
+}
+
+fn writeUtf16NameRecordTest(bytes: []u8, offset: usize, name_id: u16, length: u16, storage_offset: u16) void {
+    writeU16Test(bytes, offset + 0, 3);
+    writeU16Test(bytes, offset + 2, 1);
+    writeU16Test(bytes, offset + 4, 0x0409);
+    writeU16Test(bytes, offset + 6, name_id);
+    writeU16Test(bytes, offset + 8, length);
+    writeU16Test(bytes, offset + 10, storage_offset);
 }
 
 fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {

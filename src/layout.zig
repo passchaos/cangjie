@@ -834,7 +834,11 @@ pub const TextShaper = struct {
                 // split the run and discard the variation relationship.
                 continue;
             }
-            const font_index = try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
+            const variation_selector = nextVariationSelector(text, it.i);
+            const font_index = if (variation_selector) |selector|
+                try selectFontForVariation(cascade, fallback_cache, glyph_index_cache, codepoint, selector)
+            else
+                try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
             if (segment_font_index == null) {
                 segment_start = cluster;
                 segment_font_index = font_index;
@@ -969,7 +973,11 @@ fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []
         const cluster = it.i;
         const codepoint = it.nextCodepoint() orelse break;
         if (isVariationSelector(codepoint)) continue;
-        const font_index = try cascade.selectFont(codepoint);
+        const variation_selector = nextVariationSelector(text, it.i);
+        const font_index = if (variation_selector) |selector|
+            try selectFontForVariation(cascade, null, null, codepoint, selector)
+        else
+            try cascade.selectFont(codepoint);
         if (segment_font_index == null) {
             segment_start = cluster;
             segment_font_index = font_index;
@@ -984,6 +992,21 @@ fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []
         next_pen_x = try appendCascadeRun(cascade.fonts[font_index], null, null, font_index, buffer, text[segment_start..], font_size, cluster_base + segment_start, next_pen_x, lookup_options);
     }
     return next_pen_x;
+}
+
+fn nextVariationSelector(text: []const u8, byte_index: usize) ?u21 {
+    if (byte_index >= text.len) return null;
+    var lookahead = std.unicode.Utf8Iterator{ .bytes = text, .i = byte_index };
+    const selector = lookahead.nextCodepoint() orelse return null;
+    return if (isVariationSelector(selector)) selector else null;
+}
+
+fn selectFontForVariation(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21, variation_selector: u21) !usize {
+    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+    for (cascade.fonts, 0..) |font, index| {
+        if (try font.variationGlyphIndex(codepoint, variation_selector) != null) return index;
+    }
+    return try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
 }
 
 fn selectFontUsingGlyphCache(cascade: FontCascade, glyph_index_cache: *GlyphIndexCache, codepoint: u21) !usize {

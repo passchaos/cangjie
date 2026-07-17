@@ -408,6 +408,36 @@ test "cascade shaping keeps variation selectors with fallback base font" {
     try std.testing.expectEqual(@as(usize, 4), shaped.glyphs[1].cluster);
 }
 
+test "cascade fallback prefers fonts with variation selector records" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const primary_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 'A', "Primary", "Regular", "Primary Regular");
+    defer allocator.free(primary_bytes);
+    const variant_bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(variant_bytes);
+
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var variant = try Font.parse(allocator, variant_bytes);
+    defer variant.deinit();
+
+    const fonts = [_]*const Font{ &primary, &variant };
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const base = try TextShaper.shapeUtf8Cascade(FontCascade.init(&fonts), &layout_buffer, "A", 20);
+    try std.testing.expectEqual(@as(usize, 1), base.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 0), base.runs[0].font_index);
+    try std.testing.expectEqual(@as(GlyphId, 1), base.glyphs[0].glyph_id);
+
+    const varied = try TextShaper.shapeUtf8Cascade(FontCascade.init(&fonts), &layout_buffer, "A\u{fe0f}", 20);
+    try std.testing.expectEqual(@as(usize, 1), varied.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 1), varied.runs[0].font_index);
+    try std.testing.expectEqual(@as(GlyphId, 3), varied.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 0), varied.glyphs[0].cluster);
+}
+
 test "detects scripts and itemizes script runs" {
     const allocator = std.testing.allocator;
 

@@ -1172,7 +1172,11 @@ fn cblcGlyphLocationFormat1Or3(data: []const u8, strike: CblcStrike, offsets_off
     if (offsets_offset + offsets_len > data.len or offsets_offset + offsets_len > strike.offset + strike.index_tables_size) return error.BadSfnt;
     const start = try readCblcOffset(data, offsets_offset + local_index * offset_size, offset_size);
     const end = try readCblcOffset(data, offsets_offset + (local_index + 1) * offset_size, offset_size);
-    if (end <= start) return null;
+    // Equal adjacent offsets are the CBLC encoding for "no bitmap for this
+    // glyph". A decreasing range is different: it means the index subtable is
+    // corrupt and must not be silently treated as a missing glyph.
+    if (end < start) return error.BadSfnt;
+    if (end == start) return null;
     return .{ .image_format = image_format, .offset = image_base + start, .length = end - start };
 }
 
@@ -1188,7 +1192,8 @@ fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: u
         if (current_glyph != glyph_id) continue;
         const start = try bin.readU16At(data, pair + 2);
         const end = try bin.readU16At(data, pair + 6);
-        if (end <= start) return null;
+        if (end < start) return error.BadSfnt;
+        if (end == start) return null;
         return .{ .image_format = image_format, .offset = image_base + start, .length = end - start };
     }
     return null;
@@ -2121,6 +2126,45 @@ test "legacy kern ignores minimum and cross-stream subtables" {
 
     const font = kernOnlyFont(&data);
     try std.testing.expectEqual(@as(i16, -30), try font.kerning(1, 1));
+}
+
+test "CBLC bitmap index subtables reject decreasing image offsets" {
+    const strike = CblcStrike{
+        .ppem = 16,
+        .ppi = 0,
+        .offset = 0,
+        .index_tables_size = 0,
+        .table_count = 0,
+        .start_glyph = 1,
+        .end_glyph = 1,
+    };
+
+    var format3_offsets: [4]u8 = .{0} ** 4;
+    writeU16Test(&format3_offsets, 0, 10);
+    writeU16Test(&format3_offsets, 2, 4);
+    var format3_strike = strike;
+    format3_strike.index_tables_size = format3_offsets.len;
+    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat1Or3(
+        &format3_offsets,
+        format3_strike,
+        0,
+        1,
+        1,
+        0,
+        17,
+        0,
+        2,
+    ));
+
+    var format4_pairs: [12]u8 = .{0} ** 12;
+    writeU32Test(&format4_pairs, 0, 1);
+    writeU16Test(&format4_pairs, 4, 1);
+    writeU16Test(&format4_pairs, 6, 10);
+    writeU16Test(&format4_pairs, 8, 2);
+    writeU16Test(&format4_pairs, 10, 4);
+    var format4_strike = strike;
+    format4_strike.index_tables_size = format4_pairs.len;
+    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat4(&format4_pairs, format4_strike, 0, 1, 17, 0));
 }
 
 test "cmap format 4 idRangeOffset stays inside declared subtable length" {

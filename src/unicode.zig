@@ -887,6 +887,29 @@ fn hangulGraphemeClass(codepoint: u21) HangulGraphemeClass {
 
 fn isCombiningMark(codepoint: u21) bool {
     return (codepoint >= 0x0300 and codepoint <= 0x036f) or
+        // These compact script-specific ranges cover combining marks for the
+        // non-Latin scripts Cangjie already itemizes. Without them, accents,
+        // vowel signs, and viramas become separate grapheme/word units even
+        // though UAX #29 treats them as Extend.
+        (codepoint >= 0x0591 and codepoint <= 0x05bd) or
+        codepoint == 0x05bf or
+        (codepoint >= 0x05c1 and codepoint <= 0x05c2) or
+        (codepoint >= 0x05c4 and codepoint <= 0x05c5) or
+        codepoint == 0x05c7 or
+        (codepoint >= 0x0610 and codepoint <= 0x061a) or
+        (codepoint >= 0x064b and codepoint <= 0x065f) or
+        codepoint == 0x0670 or
+        (codepoint >= 0x06d6 and codepoint <= 0x06dc) or
+        (codepoint >= 0x06df and codepoint <= 0x06e4) or
+        (codepoint >= 0x06e7 and codepoint <= 0x06e8) or
+        (codepoint >= 0x06ea and codepoint <= 0x06ed) or
+        (codepoint >= 0x0900 and codepoint <= 0x0902) or
+        codepoint == 0x093a or
+        codepoint == 0x093c or
+        (codepoint >= 0x0941 and codepoint <= 0x0948) or
+        codepoint == 0x094d or
+        (codepoint >= 0x0951 and codepoint <= 0x0957) or
+        (codepoint >= 0x0962 and codepoint <= 0x0963) or
         (codepoint >= 0x1ab0 and codepoint <= 0x1aff) or
         (codepoint >= 0x1dc0 and codepoint <= 0x1dff) or
         (codepoint >= 0x20d0 and codepoint <= 0x20ff) or
@@ -907,7 +930,8 @@ fn isRegionalIndicator(codepoint: u21) bool {
 }
 
 fn isGraphemeExtendCodepoint(codepoint: u21) bool {
-    return isCombiningMark(codepoint) or
+    return codepoint == 0x200c or
+        isCombiningMark(codepoint) or
         isVariationSelector(codepoint) or
         isEmojiModifier(codepoint) or
         isSpacingMark(codepoint);

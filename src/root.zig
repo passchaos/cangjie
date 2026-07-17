@@ -657,6 +657,28 @@ test "itemizes emoji regional indicator and spacing-mark grapheme clusters" {
     try std.testing.expectEqual(@as(usize, 6), spacing_mark[0].byte_len);
 }
 
+test "grapheme clusters retain supported-script combining marks and ZWNJ" {
+    const allocator = std.testing.allocator;
+
+    const arabic_fatha = try itemizeGraphemeClusters(allocator, "بَت");
+    defer allocator.free(arabic_fatha);
+    try std.testing.expectEqual(@as(usize, 2), arabic_fatha.len);
+    try std.testing.expectEqualStrings("بَ", "بَت"[arabic_fatha[0].byte_start..][0..arabic_fatha[0].byte_len]);
+    try std.testing.expectEqualStrings("ت", "بَت"[arabic_fatha[1].byte_start..][0..arabic_fatha[1].byte_len]);
+
+    const hebrew_qamats = try itemizeGraphemeClusters(allocator, "שָל");
+    defer allocator.free(hebrew_qamats);
+    try std.testing.expectEqual(@as(usize, 2), hebrew_qamats.len);
+    try std.testing.expectEqualStrings("שָ", "שָל"[hebrew_qamats[0].byte_start..][0..hebrew_qamats[0].byte_len]);
+    try std.testing.expectEqualStrings("ל", "שָל"[hebrew_qamats[1].byte_start..][0..hebrew_qamats[1].byte_len]);
+
+    const devanagari_zwnj = try itemizeGraphemeClusters(allocator, "क्\u{200c}ष");
+    defer allocator.free(devanagari_zwnj);
+    try std.testing.expectEqual(@as(usize, 2), devanagari_zwnj.len);
+    try std.testing.expectEqualStrings("क्\u{200c}", "क्\u{200c}ष"[devanagari_zwnj[0].byte_start..][0..devanagari_zwnj[0].byte_len]);
+    try std.testing.expectEqualStrings("ष", "क्\u{200c}ष"[devanagari_zwnj[1].byte_start..][0..devanagari_zwnj[1].byte_len]);
+}
+
 test "grapheme clusters only let ZWJ join extended pictographs" {
     const allocator = std.testing.allocator;
 

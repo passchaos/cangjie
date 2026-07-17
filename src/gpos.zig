@@ -182,7 +182,7 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
             6 => try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, options),
+            9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
             else => {},
         }
     }
@@ -237,22 +237,24 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
     return false;
 }
 
-fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
     const extension_offset = try readU32(table, subtable_offset + 4);
     const extension_subtable = subtable_offset + extension_offset;
+    // The extension wrapper extends addressing only; LookupFlag still belongs
+    // to the outer lookup and must filter glyph classes in the delegated body.
     switch (extension_lookup_type) {
-        1 => try collectSingleAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
-        2 => try collectPairAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
+        1 => try collectSingleAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+        2 => try collectPairAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         3 => try collectCursiveAdjustment(table, extension_subtable, glyphs, adjustments, allocator),
-        4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
-        5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
-        6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
-        7 => try collectContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
-        8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, 0, options),
+        4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+        5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+        6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+        7 => try collectContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+        8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         else => {},
     }
 }
@@ -1078,6 +1080,57 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+test "GPOS extension positioning preserves wrapper lookup flags" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 30;
+
+    writeU16Test(&bytes, 0, 9);
+    writeU16Test(&bytes, 2, 0x0008);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const extension = 8;
+    writeU16Test(&bytes, extension + 0, 1);
+    writeU16Test(&bytes, extension + 2, 1);
+    writeU32Test(&bytes, extension + 4, 8);
+
+    const single = extension + 8;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 8);
+    writeU16Test(&bytes, single + 4, 0x0001);
+    writeI16Test(&bytes, single + 6, 50);
+    writeCoverage1Test(&bytes, single + 8, 3);
+
+    const glyphs = [_]GlyphId{3};
+    const glyph_classes = [_]u16{ 0, 1, 2, 3 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+fn writeCoverage1Test(bytes: []u8, offset: usize, glyph: GlyphId) void {
+    writeU16Test(bytes, offset + 0, 1);
+    writeU16Test(bytes, offset + 2, 1);
+    writeU16Test(bytes, offset + 4, glyph);
+}
+
+fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
+    std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {
+    std.mem.writeInt(i16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
+    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
 }
 
 fn readU16(table: Table, relative: usize) GposError!u16 {

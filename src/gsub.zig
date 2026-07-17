@@ -188,7 +188,7 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
             4 => try applyLigatureSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
             5 => try applyContextSubstitution(table, subtable_offset, glyphs, allocator),
             6 => try applyChainingContextSubstitution(table, subtable_offset, glyphs, allocator),
-            7 => try applyExtensionSubstitution(table, subtable_offset, glyphs, allocator, options),
+            7 => try applyExtensionSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
             8 => try applyReverseChainingSingleSubstitution(table, subtable_offset, glyphs),
             else => {},
         }
@@ -283,18 +283,20 @@ fn applyAlternateSubstitution(table: Table, subtable_offset: usize, glyphs: *std
     }
 }
 
-fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
     const extension_offset = try readU32(table, subtable_offset + 4);
     const extension_subtable = subtable_offset + extension_offset;
+    // Extension subtables only move the payload past 16-bit offset limits; the
+    // wrapper lookup still owns LookupFlag filtering for the enclosed lookup.
     switch (extension_lookup_type) {
-        1 => try applySingleSubstitution(table, extension_subtable, glyphs, 0, options),
+        1 => try applySingleSubstitution(table, extension_subtable, glyphs, lookup_flag, options),
         2 => try applyMultipleSubstitution(table, extension_subtable, glyphs, allocator),
         3 => try applyAlternateSubstitution(table, extension_subtable, glyphs),
-        4 => try applyLigatureSubstitution(table, extension_subtable, glyphs, allocator, 0, options),
+        4 => try applyLigatureSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         5 => try applyContextSubstitution(table, extension_subtable, glyphs, allocator),
         6 => try applyChainingContextSubstitution(table, extension_subtable, glyphs, allocator),
         8 => try applyReverseChainingSingleSubstitution(table, extension_subtable, glyphs),
@@ -985,6 +987,38 @@ test "GSUB chaining coverage substitution applies nested lookup" {
     try applyLookup(.{ .data = bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 1 }, glyphs.items);
+}
+
+test "GSUB extension substitution preserves wrapper lookup flags" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 28;
+
+    writeU16Test(&bytes, 0, 7);
+    writeU16Test(&bytes, 2, 0x0008);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const extension = 8;
+    writeU16Test(&bytes, extension + 0, 1);
+    writeU16Test(&bytes, extension + 2, 1);
+    writeU32Test(&bytes, extension + 4, 8);
+
+    const single = extension + 8;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 6);
+    writeI16Test(&bytes, single + 4, 1);
+    writeCoverage1(&bytes, single + 6, 3);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 3);
+
+    const glyph_classes = [_]u16{ 0, 1, 2, 3 };
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{3}, glyphs.items);
 }
 
 fn writeSingleDeltaLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, delta: i16) void {

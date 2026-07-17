@@ -1546,7 +1546,17 @@ fn glyphIndexFormat2(data: []const u8, offset: usize, codepoint: u21) FontError!
 
 fn glyphIndexFormat4(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
     if (codepoint > 0xffff) return 0;
-    const seg_count = (try bin.readU16At(data, offset + 6)) / 2;
+    if (offset > data.len or data.len - offset < 8) return error.BadSfnt;
+    const length = try bin.readU16At(data, offset + 2);
+    if (length > data.len - offset) return error.BadSfnt;
+
+    const seg_count_x2 = try bin.readU16At(data, offset + 6);
+    if (seg_count_x2 == 0 or (seg_count_x2 & 1) != 0) return error.BadSfnt;
+    const seg_count = @as(usize, seg_count_x2 / 2);
+    const minimum_length = 16 + seg_count * 8;
+    if (length < minimum_length) return error.BadSfnt;
+
+    const table_end = offset + @as(usize, length);
     const end_codes = offset + 14;
     const start_codes = end_codes + @as(usize, seg_count) * 2 + 2;
     const id_deltas = start_codes + @as(usize, seg_count) * 2;
@@ -1563,6 +1573,11 @@ fn glyphIndexFormat4(data: []const u8, offset: usize, codepoint: u21) FontError!
             return @intCast(@as(u16, @bitCast(@as(i16, @bitCast(cp)) +% delta)));
         }
         const glyph_offset = id_range_offsets + i * 2 + range_offset + (@as(usize, cp - start) * 2);
+        // idRangeOffset addresses are relative to the idRangeOffset word, but
+        // the resolved glyph id still belongs to this format-4 subtable. Do
+        // not let malformed cmaps read arbitrary bytes from the containing SFNT
+        // when the subtable's declared length ends before the glyph array.
+        if (glyph_offset + 2 > table_end) return error.BadSfnt;
         const glyph = try bin.readU16At(data, glyph_offset);
         if (glyph == 0) return 0;
         return @intCast(@as(u16, @bitCast(@as(i16, @bitCast(glyph)) +% delta)));
@@ -1995,6 +2010,30 @@ test "legacy kern ignores minimum and cross-stream subtables" {
 
     const font = kernOnlyFont(&data);
     try std.testing.expectEqual(@as(i16, -30), try font.kerning(1, 1));
+}
+
+test "cmap format 4 idRangeOffset stays inside declared subtable length" {
+    var valid: [26]u8 = .{0} ** 26;
+    writeU16Test(&valid, 0, 4);
+    writeU16Test(&valid, 2, valid.len);
+    writeU16Test(&valid, 6, 2); // one segment
+    writeU16Test(&valid, 14, 'A'); // endCode[0]
+    writeU16Test(&valid, 18, 'A'); // startCode[0]
+    writeI16Test(&valid, 20, 0); // idDelta[0]
+    writeU16Test(&valid, 22, 2); // glyphIdArray starts immediately after idRangeOffset[0]
+    writeU16Test(&valid, 24, 99);
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 99), try glyphIndexFormat4(&valid, 0, 'A'));
+
+    var truncated: [32]u8 = .{0} ** 32;
+    writeU16Test(&truncated, 0, 4);
+    writeU16Test(&truncated, 2, 24);
+    writeU16Test(&truncated, 6, 2);
+    writeU16Test(&truncated, 14, 'A');
+    writeU16Test(&truncated, 18, 'A');
+    writeI16Test(&truncated, 20, 0);
+    writeU16Test(&truncated, 22, 2);
+    writeU16Test(&truncated, 24, 99);
+    try std.testing.expectError(error.BadSfnt, glyphIndexFormat4(&truncated, 0, 'A'));
 }
 
 fn gdefOnlyFont(data: []const u8) Font {

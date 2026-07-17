@@ -742,6 +742,36 @@ test "grapheme clusters keep Unicode prepend controls with following base" {
     try std.testing.expectEqualStrings("\u{0600}a", "\u{0600}a b"[clusters[0].byte_start..][0..clusters[0].byte_len]);
 }
 
+test "grapheme clusters keep controls atomic" {
+    const allocator = std.testing.allocator;
+
+    const before_mark = try itemizeGraphemeClusters(allocator, "a\n\u{0301}b");
+    defer allocator.free(before_mark);
+    try std.testing.expectEqual(@as(usize, 4), before_mark.len);
+    try std.testing.expectEqualStrings("a", "a\n\u{0301}b"[before_mark[0].byte_start..][0..before_mark[0].byte_len]);
+    try std.testing.expectEqualStrings("\n", "a\n\u{0301}b"[before_mark[1].byte_start..][0..before_mark[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{0301}", "a\n\u{0301}b"[before_mark[2].byte_start..][0..before_mark[2].byte_len]);
+    try std.testing.expectEqualStrings("b", "a\n\u{0301}b"[before_mark[3].byte_start..][0..before_mark[3].byte_len]);
+
+    const before_zwj = try itemizeGraphemeClusters(allocator, "a\n\u{200d}b");
+    defer allocator.free(before_zwj);
+    try std.testing.expectEqual(@as(usize, 4), before_zwj.len);
+    try std.testing.expectEqualStrings("\n", "a\n\u{200d}b"[before_zwj[1].byte_start..][0..before_zwj[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{200d}", "a\n\u{200d}b"[before_zwj[2].byte_start..][0..before_zwj[2].byte_len]);
+
+    const after_control = try itemizeGraphemeClusters(allocator, "\u{0600}\na");
+    defer allocator.free(after_control);
+    try std.testing.expectEqual(@as(usize, 3), after_control.len);
+    try std.testing.expectEqualStrings("\u{0600}", "\u{0600}\na"[after_control[0].byte_start..][0..after_control[0].byte_len]);
+    try std.testing.expectEqualStrings("\n", "\u{0600}\na"[after_control[1].byte_start..][0..after_control[1].byte_len]);
+
+    const crlf = try itemizeGraphemeClusters(allocator, "a\r\n\u{0301}");
+    defer allocator.free(crlf);
+    try std.testing.expectEqual(@as(usize, 3), crlf.len);
+    try std.testing.expectEqualStrings("\r\n", "a\r\n\u{0301}"[crlf[1].byte_start..][0..crlf[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{0301}", "a\r\n\u{0301}"[crlf[2].byte_start..][0..crlf[2].byte_len]);
+}
+
 test "word segments retain Unicode format controls" {
     const allocator = std.testing.allocator;
 

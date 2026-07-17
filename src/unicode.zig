@@ -842,6 +842,10 @@ fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize,
     // Keep this predicate conservative: it only returns true for continuation
     // codepoints that should share a caret stop with the previous codepoint.
     if (previous == '\r' and current == '\n') return true;
+    // UAX #29 GB4/GB5 make controls atomic grapheme clusters. Check this
+    // before Prepend/Extend/ZWJ rules so stray format or paragraph controls do
+    // not absorb adjacent marks and hide caret stops around them.
+    if (isGraphemeControl(previous) or isGraphemeControl(current)) return false;
     if (isGraphemePrependCodepoint(previous)) return true;
     if (current == 0x200d) return true;
     if (extendsHangulGrapheme(previous, current)) return true;
@@ -915,6 +919,11 @@ fn isGraphemePrependCodepoint(codepoint: u21) bool {
         codepoint == 0x070f or
         (codepoint >= 0x0890 and codepoint <= 0x0891) or
         codepoint == 0x08e2;
+}
+
+fn isGraphemeControl(codepoint: u21) bool {
+    return (codepoint >= 0x0000 and codepoint <= 0x001f) or
+        (codepoint >= 0x007f and codepoint <= 0x009f);
 }
 
 fn isExtendedPictographic(codepoint: u21) bool {

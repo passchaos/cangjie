@@ -1468,6 +1468,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     while (it.i < text.len) {
         const cluster = it.i;
         const codepoint = it.nextCodepoint() orelse break;
+        if (isVariationSelector(codepoint)) {
+            if (glyph_ids.items.len != 0) {
+                if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
+                    glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
+                }
+            }
+            // Variation selectors refine the preceding scalar and do not
+            // advance text themselves. Keeping them out of the glyph stream
+            // preserves caret/cluster identity on the base character while
+            // still allowing cmap format 14 to select emoji/text or IVS glyphs.
+            continue;
+        }
         try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint));
         try codepoints.append(buffer.allocator, codepoint);
         try clusters.append(buffer.allocator, cluster_base + cluster);
@@ -1539,6 +1551,11 @@ fn advanceBetweenGlyphs(glyphs: []const GlyphPosition, base_index: usize, mark_i
         advance += glyph.x_advance;
     }
     return advance;
+}
+
+fn isVariationSelector(codepoint: u21) bool {
+    return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
+        (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
 }
 
 fn glyphMetricsKey(font: *const Font, glyph_id: GlyphId) GlyphMetricsKey {

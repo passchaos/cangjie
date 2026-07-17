@@ -358,6 +358,28 @@ test "maps cmap format 14 variation selector records" {
     try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndexWithVariation('A', 0xfe0e));
 }
 
+test "shapes cmap format 14 variation selectors as base glyph variants" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "A\u{fe0f}B", 20);
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 3), run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(u21, 'A'), run.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), run.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(GlyphId, 2), run.glyphs[1].glyph_id);
+    try std.testing.expectEqual(@as(u21, 'B'), run.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(usize, 4), run.glyphs[1].cluster);
+}
+
 test "detects scripts and itemizes script runs" {
     const allocator = std.testing.allocator;
 

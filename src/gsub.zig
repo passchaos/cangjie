@@ -528,6 +528,32 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
     }
 }
 
+fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
+    const subst_format = try readU16(table, subtable_offset);
+    if (subst_format != 1) return error.UnsupportedGsub;
+    if (glyph_index >= glyphs.items.len) return null;
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) return null;
+
+    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const sequence_count = try readU16(table, subtable_offset + 4);
+    const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return null;
+    if (coverage >= sequence_count) return null;
+    const sequence_offset = subtable_offset + try readU16(table, subtable_offset + 6 + coverage * 2);
+    const glyph_count = try readU16(table, sequence_offset);
+
+    const replacement = try allocator.alloc(GlyphId, glyph_count);
+    defer allocator.free(replacement);
+    for (replacement, 0..) |*glyph, replacement_index| {
+        glyph.* = try readU16(table, sequence_offset + 2 + replacement_index * 2);
+    }
+
+    try glyphs.replaceRange(allocator, glyph_index, 1, replacement);
+    if (replacement.len != 1) {
+        try replaceSourceMetadata(allocator, options, glyph_index, 1, replacement.len, sourceForGlyph(options, glyph_index));
+    }
+    return .{ .removed_len = 1, .inserted_len = replacement.len };
+}
+
 fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
@@ -1064,6 +1090,19 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
         }
         return .{};
     }
+    if (lookup_type == 2) {
+        // MultipleSubst is cardinality-changing, so contextual records must
+        // observe only the first matching subtable for the target glyph. Running
+        // the whole lookup on a scratch glyph can feed the replacement into
+        // later subtables and report the wrong insert count to the record map.
+        for (0..subtable_count) |subtable_i| {
+            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
+            if (try applyMultipleSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
+                return change;
+            }
+        }
+        return .{};
+    }
     if (lookup_type == 7) {
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
@@ -1100,14 +1139,15 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
     const extension_subtable = subtable_offset + try readU32(table, subtable_offset + 4);
 
-    // ExtensionSubst is only an offset-widening wrapper. When a contextual
-    // record targets an extension-wrapped LigatureSubst, the ligature still
-    // needs the real glyph run after the target so LookupFlag-transparent marks
-    // can be skipped and consumed components can be removed from the buffer.
-    if (extension_lookup_type == 4) {
-        return try applyLigatureSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options);
+    // ExtensionSubst is only an offset-widening wrapper. Contextual records,
+    // however, name one target glyph inside the pre-match input sequence. Apply
+    // wrapped cardinality-changing subtables at that real target so the caller
+    // can remap later records from the actual removal/insertion shape.
+    switch (extension_lookup_type) {
+        2 => return try applyMultipleSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
+        4 => return try applyLigatureSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
+        else => return null,
     }
-    return null;
 }
 
 fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) GsubError!void {
@@ -1709,6 +1749,75 @@ test "GSUB context nested extension ligature uses real glyph run" {
     // run when the wrapped subtable is LigatureSubst: the ligature needs to see
     // and consume the following component in the original glyph buffer.
     try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
+}
+
+test "GSUB contextual records remap across extension multiple substitution" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 132;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 8);
+    writeU16Test(&bytes, 14, 60);
+    writeU16Test(&bytes, 16, 100);
+
+    writeU16Test(&bytes, 18, 5);
+    writeU16Test(&bytes, 22, 1);
+    writeU16Test(&bytes, 24, 8);
+
+    const context = 26;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 32);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 3);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 2);
+    writeU16Test(&bytes, rule + 6, 3);
+    writeU16Test(&bytes, rule + 8, 1);
+    writeU16Test(&bytes, rule + 10, 1);
+    writeU16Test(&bytes, rule + 12, 2);
+    writeU16Test(&bytes, rule + 14, 2);
+    writeCoverage1(&bytes, context + 32, 1);
+
+    writeU16Test(&bytes, 70, 7);
+    writeU16Test(&bytes, 74, 1);
+    writeU16Test(&bytes, 76, 8);
+    const extension = 78;
+    writeU16Test(&bytes, extension + 0, 1);
+    writeU16Test(&bytes, extension + 2, 2);
+    writeU32Test(&bytes, extension + 4, 8);
+
+    const multiple = extension + 8;
+    writeU16Test(&bytes, multiple + 0, 1);
+    writeU16Test(&bytes, multiple + 2, 12);
+    writeU16Test(&bytes, multiple + 4, 1);
+    writeU16Test(&bytes, multiple + 6, 18);
+    writeCoverage1(&bytes, multiple + 12, 2);
+    const sequence = multiple + 18;
+    writeU16Test(&bytes, sequence + 0, 2);
+    writeU16Test(&bytes, sequence + 2, 20);
+    writeU16Test(&bytes, sequence + 4, 21);
+
+    writeSingleDeltaLookup(&bytes, 110, 3, 10);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 18, &glyphs, allocator, .{});
+
+    // The first record inserts an extra glyph through ExtensionSubst wrapping
+    // MultipleSubst. The second record still names sequenceIndex 2 from the
+    // pre-substitution match, so it must be shifted past both inserted glyphs
+    // and apply to original glyph 3 rather than to replacement glyph 21.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 20, 21, 13 }, glyphs.items);
 }
 
 test "GSUB contextual ligature remaps records across ignored components" {

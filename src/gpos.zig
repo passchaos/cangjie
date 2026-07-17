@@ -1061,6 +1061,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
             1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options),
             2 => if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             4 => _ = try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, &.{}),
+            6 => _ = try collectMarkToMarkAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             9 => try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
         }
@@ -1082,6 +1083,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
         1 => try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
         2 => _ = try collectPairAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         4 => _ = try collectMarkToBaseAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, &.{}),
+        6 => _ = try collectMarkToMarkAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         else => {},
     }
 }
@@ -1150,34 +1152,51 @@ fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs:
 fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
+    const class_count = try readU16(table, subtable_offset + 6);
+    if (class_count == 0 or glyphs.len < 2) return;
+
+    for (glyphs, 0..) |_, i| {
+        _ = try collectMarkToMarkAdjustmentAt(table, subtable_offset, glyphs, i, adjustments, allocator, lookup_flag, options);
+    }
+}
+
+fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, mark_1_position: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    // Contextual PosLookupRecord application targets one matched input glyph,
+    // not every mark covered by the nested MarkToMarkPos lookup. Keep the full
+    // glyph run for the backwards Mark2Coverage search, but append an
+    // adjustment only for the requested Mark1 position.
+    const pos_format = try readU16(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    if (mark_1_position >= glyphs.len) return false;
+    const glyph = glyphs[mark_1_position];
+    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+
     const mark_1_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const mark_2_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 4);
     const class_count = try readU16(table, subtable_offset + 6);
     const mark_1_array_offset = subtable_offset + try readU16(table, subtable_offset + 8);
     const mark_2_array_offset = subtable_offset + try readU16(table, subtable_offset + 10);
-    if (class_count == 0 or glyphs.len < 2) return;
+    if (class_count == 0 or glyphs.len < 2) return false;
 
-    for (glyphs, 0..) |glyph, i| {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        const mark_1_index = try coverageIndex(table, mark_1_coverage_offset, glyph) orelse continue;
-        const mark_2_position = try previousUnignoredCoveredGlyph(table, mark_2_coverage_offset, glyphs, i, lookup_flag, options) orelse continue;
-        const mark_2_index = try coverageIndex(table, mark_2_coverage_offset, glyphs[mark_2_position]) orelse continue;
-        const mark_1_record_offset = mark_1_array_offset + 2 + mark_1_index * 4;
-        const mark_class = try readU16(table, mark_1_record_offset);
-        if (mark_class >= class_count) continue;
-        const mark_1_anchor_offset = mark_1_array_offset + try readU16(table, mark_1_record_offset + 2);
-        const mark_2_anchor_record = mark_2_array_offset + 2 + (mark_2_index * class_count + mark_class) * 2;
-        const mark_2_anchor_relative = try readU16(table, mark_2_anchor_record);
-        if (mark_2_anchor_relative == 0) continue;
-        const mark_2_anchor_offset = mark_2_array_offset + mark_2_anchor_relative;
-        const mark_1_anchor = try readAnchor(table, mark_1_anchor_offset);
-        const mark_2_anchor = try readAnchor(table, mark_2_anchor_offset);
-        try appendAdjustmentEx(adjustments, allocator, i, .{
-            .index = i,
-            .x_placement = mark_2_anchor.x - mark_1_anchor.x,
-            .y_placement = mark_2_anchor.y - mark_1_anchor.y,
-        }, .{ .mark_attachment = true, .mark_base_index = mark_2_position });
-    }
+    const mark_1_index = try coverageIndex(table, mark_1_coverage_offset, glyph) orelse return false;
+    const mark_2_position = try previousUnignoredCoveredGlyph(table, mark_2_coverage_offset, glyphs, mark_1_position, lookup_flag, options) orelse return false;
+    const mark_2_index = try coverageIndex(table, mark_2_coverage_offset, glyphs[mark_2_position]) orelse return false;
+    const mark_1_record_offset = mark_1_array_offset + 2 + mark_1_index * 4;
+    const mark_class = try readU16(table, mark_1_record_offset);
+    if (mark_class >= class_count) return false;
+    const mark_1_anchor_offset = mark_1_array_offset + try readU16(table, mark_1_record_offset + 2);
+    const mark_2_anchor_record = mark_2_array_offset + 2 + (mark_2_index * class_count + mark_class) * 2;
+    const mark_2_anchor_relative = try readU16(table, mark_2_anchor_record);
+    if (mark_2_anchor_relative == 0) return false;
+    const mark_2_anchor_offset = mark_2_array_offset + mark_2_anchor_relative;
+    const mark_1_anchor = try readAnchor(table, mark_1_anchor_offset);
+    const mark_2_anchor = try readAnchor(table, mark_2_anchor_offset);
+    try appendAdjustmentEx(adjustments, allocator, mark_1_position, .{
+        .index = mark_1_position,
+        .x_placement = mark_2_anchor.x - mark_1_anchor.x,
+        .y_placement = mark_2_anchor.y - mark_1_anchor.y,
+    }, .{ .mark_attachment = true, .mark_base_index = mark_2_position });
+    return true;
 }
 
 const Anchor = struct {
@@ -1845,6 +1864,83 @@ test "GPOS context nested lookup can apply MarkBasePos" {
     writeAnchor1Test(&bytes, base_array + 4, 80, 120);
 
     const glyphs = [_]GlyphId{ 10, 12 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+    try std.testing.expect(adjustments.items[0].mark_attachment);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+}
+
+test "GPOS context nested lookup applies MarkToMarkPos only at sequence index" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 116;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 42);
+
+    writeU16Test(&bytes, 16, 7);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 8);
+
+    const context = 24;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 22);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 2);
+    writeU16Test(&bytes, rule + 2, 1);
+    writeU16Test(&bytes, rule + 4, 12);
+    // The matched input is [10, 12], and sequenceIndex=1 targets only that
+    // second glyph. A later [13, 12] mark pair is covered by MarkToMarkPos too,
+    // so a nested implementation that rescans the entire run would incorrectly
+    // attach the final glyph as well.
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 1);
+    writeCoverage1Test(&bytes, context + 22, 10);
+
+    writeU16Test(&bytes, 52, 6);
+    writeU16Test(&bytes, 56, 1);
+    writeU16Test(&bytes, 58, 8);
+
+    const mark_mark = 60;
+    writeU16Test(&bytes, mark_mark + 0, 1);
+    writeU16Test(&bytes, mark_mark + 2, 12);
+    writeU16Test(&bytes, mark_mark + 4, 18);
+    writeU16Test(&bytes, mark_mark + 6, 1);
+    writeU16Test(&bytes, mark_mark + 8, 26);
+    writeU16Test(&bytes, mark_mark + 10, 38);
+
+    writeCoverage1Test(&bytes, mark_mark + 12, 12);
+    writeCoverage1ListTest(&bytes, mark_mark + 18, &.{ 10, 13 });
+
+    const mark_1_array = mark_mark + 26;
+    writeU16Test(&bytes, mark_1_array + 0, 1);
+    writeU16Test(&bytes, mark_1_array + 2, 0);
+    writeU16Test(&bytes, mark_1_array + 4, 6);
+    writeAnchor1Test(&bytes, mark_1_array + 6, 10, 15);
+
+    const mark_2_array = mark_mark + 38;
+    writeU16Test(&bytes, mark_2_array + 0, 2);
+    writeU16Test(&bytes, mark_2_array + 2, 6);
+    writeU16Test(&bytes, mark_2_array + 4, 12);
+    writeAnchor1Test(&bytes, mark_2_array + 6, 80, 120);
+    writeAnchor1Test(&bytes, mark_2_array + 12, 200, 220);
+
+    const glyphs = [_]GlyphId{ 10, 12, 13, 12 };
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
 

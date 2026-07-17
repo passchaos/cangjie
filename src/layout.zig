@@ -11,6 +11,12 @@ pub const GlyphPosition = struct {
     glyph_id: GlyphId,
     codepoint: u21,
     cluster: usize,
+    /// Number of UTF-8 bytes in the source span represented by this glyph.
+    /// This is usually one scalar, but it can include skipped variation
+    /// selectors or all components collapsed into a GSUB ligature. Keeping the
+    /// extent next to the cluster start lets caret logic recover the trailing
+    /// source byte offset even when there is no following glyph.
+    source_byte_len: usize = 0,
     x_advance: f32,
     y_advance: f32 = 0,
     x_offset: f32 = 0,
@@ -531,8 +537,12 @@ fn positionByteOffset(layout_value: ParagraphLayout, position: TextPosition) usi
     if (position.glyph_index >= layout_value.glyphs.len) return position.cluster;
     const glyph = layout_value.glyphs[position.glyph_index];
     if (!position.trailing) return glyph.cluster;
-    if (position.glyph_index + 1 < layout_value.glyphs.len) return layout_value.glyphs[position.glyph_index + 1].cluster;
-    return position.cluster + 1;
+    const glyph_end = glyph.cluster + @max(glyph.source_byte_len, 1);
+    if (position.glyph_index + 1 < layout_value.glyphs.len) {
+        const next_cluster = layout_value.glyphs[position.glyph_index + 1].cluster;
+        if (next_cluster > glyph.cluster) return next_cluster;
+    }
+    return glyph_end;
 }
 
 fn selectionRectForLine(layout_value: ParagraphLayout, line: ParagraphLine, range_start: usize, range_end: usize) ?TextRect {
@@ -1491,6 +1501,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     defer codepoints.deinit(buffer.allocator);
     var clusters = std.ArrayList(usize).empty;
     defer clusters.deinit(buffer.allocator);
+    var source_ends = std.ArrayList(usize).empty;
+    defer source_ends.deinit(buffer.allocator);
     var glyph_source_indices = std.ArrayList(usize).empty;
     defer glyph_source_indices.deinit(buffer.allocator);
     var ligature_components = std.ArrayList(gpos.LigatureComponentInfo).empty;
@@ -1508,6 +1520,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
                     glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
                 }
+                source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
             }
             // Variation selectors refine the preceding scalar and do not
             // advance text themselves. Keeping them out of the glyph stream
@@ -1518,6 +1531,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint));
         try codepoints.append(buffer.allocator, codepoint);
         try clusters.append(buffer.allocator, cluster_base + cluster);
+        try source_ends.append(buffer.allocator, cluster_base + it.i);
         try glyph_source_indices.append(buffer.allocator, glyph_source_indices.items.len);
         try ligature_components.append(buffer.allocator, defaultLigatureComponentInfo(glyph_source_indices.items.len - 1));
     }
@@ -1553,6 +1567,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
         else
             @min(index, codepoints.items.len -| 1);
+        const source_span = sourceSpanForGlyph(index, source_index, clusters.items, source_ends.items, ligature_components.items) orelse
+            SourceSpan{ .start = cluster_base, .end = cluster_base };
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
         const glyph_class = font.glyphClass(glyph_id) catch .unclassified;
         if (previous_glyph) |previous| {
@@ -1579,13 +1595,46 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try buffer.glyphs.append(buffer.allocator, .{
             .glyph_id = glyph_id,
             .codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index],
-            .cluster = if (clusters.items.len == 0) cluster_base else clusters.items[source_index],
+            .cluster = source_span.start,
+            .source_byte_len = source_span.end - source_span.start,
             .x_advance = (@as(f32, @floatFromInt(base_advance)) + @as(f32, @floatFromInt(adjustment.x_advance))) * scale,
             .x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale,
             .y_offset = @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
         });
         previous_glyph = glyph_id;
     }
+}
+
+const SourceSpan = struct {
+    start: usize,
+    end: usize,
+};
+
+fn sourceSpanForGlyph(glyph_index: usize, fallback_source_index: usize, starts: []const usize, ends: []const usize, ligature_components: []const gpos.LigatureComponentInfo) ?SourceSpan {
+    if (glyph_index < ligature_components.len and ligature_components[glyph_index].component_count > 1) {
+        const info = ligature_components[glyph_index];
+        var span: ?SourceSpan = null;
+        const component_count = @min(info.component_count, gpos.max_ligature_components);
+        for (0..component_count) |component_index| {
+            const component_span = sourceSpanForIndex(info.component_sources[component_index], starts, ends) orelse continue;
+            if (span) |*accumulated| {
+                accumulated.start = @min(accumulated.start, component_span.start);
+                accumulated.end = @max(accumulated.end, component_span.end);
+            } else {
+                span = component_span;
+            }
+        }
+        if (span) |value| return value;
+    }
+    return sourceSpanForIndex(fallback_source_index, starts, ends);
+}
+
+fn sourceSpanForIndex(source_index: usize, starts: []const usize, ends: []const usize) ?SourceSpan {
+    if (starts.len == 0) return null;
+    const index = @min(source_index, starts.len - 1);
+    const start = starts[index];
+    const end = if (index < ends.len) @max(ends[index], start) else start;
+    return .{ .start = start, .end = end };
 }
 
 fn defaultLigatureComponentInfo(source_index: usize) gpos.LigatureComponentInfo {

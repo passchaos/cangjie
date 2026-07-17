@@ -3594,6 +3594,40 @@ test "moves paragraph carets across grapheme cluster boundaries" {
     try std.testing.expectEqual(@as(usize, 0), inside_mark.cluster);
 }
 
+test "paragraph carets use shaped glyph source extents" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const text = "A\u{fe0f}";
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, text, 20, .{
+        .max_width = 100,
+        .line_height = 24,
+    });
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 1), paragraph.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 3), paragraph.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, text.len), paragraph.glyphs[0].source_byte_len);
+    // A variation selector does not produce its own glyph, so the last glyph's
+    // trailing edge must carry the selector byte extent. Otherwise snapping a
+    // clicked trailing caret would jump back to the start of the grapheme.
+    const snapped = paragraph.snapToGraphemeCaret(clusters, .{ .glyph_index = 0, .cluster = 0, .trailing = true });
+    try std.testing.expect(snapped.trailing);
+    try std.testing.expectEqual(@as(usize, text.len), snapped.cluster);
+}
+
 test "moves paragraph carets across word boundaries" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -3645,6 +3679,7 @@ test "applies GSUB ligature substitution during shaping" {
 
     try std.testing.expectEqual(@as(usize, 1), run.glyphs.len);
     try std.testing.expectEqual(@as(GlyphId, 2), run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs[0].source_byte_len);
     try std.testing.expectApproxEqAbs(@as(f32, 20.0), run.width(), 0.001);
 }
 

@@ -339,6 +339,25 @@ test "maps trimmed 32-bit cmap format 10 glyph arrays" {
     try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0x1f603));
 }
 
+test "maps cmap format 14 variation selector records" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex('A'));
+    try std.testing.expectEqual(@as(GlyphId, 2), try font.glyphIndex('B'));
+    try std.testing.expectEqual(@as(?GlyphId, 3), try font.variationGlyphIndex('A', 0xfe0f));
+    try std.testing.expectEqual(@as(GlyphId, 3), try font.glyphIndexWithVariation('A', 0xfe0f));
+    try std.testing.expectEqual(@as(?GlyphId, 2), try font.variationGlyphIndex('B', 0xfe0f));
+    try std.testing.expectEqual(@as(GlyphId, 2), try font.glyphIndexWithVariation('B', 0xfe0f));
+    try std.testing.expectEqual(@as(?GlyphId, null), try font.variationGlyphIndex('A', 0xfe0e));
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndexWithVariation('A', 0xfe0e));
+}
+
 test "detects scripts and itemizes script runs" {
     const allocator = std.testing.allocator;
 

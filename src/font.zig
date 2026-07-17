@@ -367,6 +367,26 @@ pub const Font = struct {
         };
     }
 
+    /// Map a Unicode variation sequence to a glyph id. If the font does not
+    /// advertise a cmap format 14 record for the sequence, callers receive the
+    /// base character mapping so unsupported variation selectors degrade like
+    /// normal text renderers instead of producing a missing glyph.
+    pub fn glyphIndexWithVariation(self: *const Font, codepoint: u21, variation_selector: u21) FontError!glyph_mod.GlyphId {
+        return (try self.variationGlyphIndex(codepoint, variation_selector)) orelse try self.glyphIndex(codepoint);
+    }
+
+    /// Return the cmap format 14 result for a Unicode variation sequence. A
+    /// non-default UVS mapping returns the explicit glyph id; a default UVS
+    /// range returns the base cmap glyph id; null means the font has no record
+    /// for that variation sequence.
+    pub fn variationGlyphIndex(self: *const Font, codepoint: u21, variation_selector: u21) FontError!?glyph_mod.GlyphId {
+        for (self.cmap_subtables) |subtable| {
+            if (subtable.format != 14) continue;
+            if (try glyphIndexFormat14(self, subtable.offset, codepoint, variation_selector)) |glyph_id| return glyph_id;
+        }
+        return null;
+    }
+
     pub fn kerning(self: *const Font, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
         const kern = self.kern orelse return 0;
         if (kern.length < 4) return 0;
@@ -1466,6 +1486,68 @@ fn glyphIndexFormat13(data: []const u8, offset: usize, codepoint: u21) FontError
         }
     }
     return 0;
+}
+
+fn glyphIndexFormat14(self: *const Font, offset: usize, codepoint: u21, variation_selector: u21) FontError!?glyph_mod.GlyphId {
+    if (variation_selector > 0xffffff or codepoint > 0xffffff) return null;
+    const data = self.data;
+    const length = try bin.readU32At(data, offset + 2);
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table_end = offset + @as(usize, length);
+    const record_count = try bin.readU32At(data, offset + 6);
+    if (@as(usize, record_count) * 11 > @as(usize, length) - 10) return error.BadSfnt;
+
+    const selector: u32 = @intCast(variation_selector);
+    for (0..record_count) |index| {
+        const record = offset + 10 + index * 11;
+        const record_selector = try readU24At(data, record);
+        if (selector < record_selector) return null;
+        if (selector > record_selector) continue;
+
+        const default_offset = try bin.readU32At(data, record + 3);
+        const non_default_offset = try bin.readU32At(data, record + 7);
+        if (non_default_offset != 0) {
+            if (non_default_offset >= length) return error.BadSfnt;
+            if (try glyphIndexFormat14NonDefault(data, offset + @as(usize, non_default_offset), table_end, codepoint)) |glyph_id| return glyph_id;
+        }
+        if (default_offset != 0) {
+            if (default_offset >= length) return error.BadSfnt;
+            if (try glyphIndexFormat14DefaultContains(data, offset + @as(usize, default_offset), table_end, codepoint)) {
+                return try self.glyphIndex(codepoint);
+            }
+        }
+        return null;
+    }
+    return null;
+}
+
+fn glyphIndexFormat14DefaultContains(data: []const u8, offset: usize, table_end: usize, codepoint: u21) FontError!bool {
+    if (offset + 4 > table_end) return error.BadSfnt;
+    const range_count = try bin.readU32At(data, offset);
+    if (@as(usize, range_count) * 4 > table_end - (offset + 4)) return error.BadSfnt;
+    const cp: u32 = @intCast(codepoint);
+    for (0..range_count) |index| {
+        const range = offset + 4 + index * 4;
+        const start = try readU24At(data, range);
+        const end = start + data[range + 3];
+        if (cp >= start and cp <= end) return true;
+    }
+    return false;
+}
+
+fn glyphIndexFormat14NonDefault(data: []const u8, offset: usize, table_end: usize, codepoint: u21) FontError!?glyph_mod.GlyphId {
+    if (offset + 4 > table_end) return error.BadSfnt;
+    const mapping_count = try bin.readU32At(data, offset);
+    if (@as(usize, mapping_count) * 5 > table_end - (offset + 4)) return error.BadSfnt;
+    const cp: u32 = @intCast(codepoint);
+    for (0..mapping_count) |index| {
+        const mapping = offset + 4 + index * 5;
+        const unicode_value = try readU24At(data, mapping);
+        if (cp < unicode_value) return null;
+        if (cp > unicode_value) continue;
+        return try bin.readU16At(data, mapping + 3);
+    }
+    return null;
 }
 
 fn kernFormat0(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {

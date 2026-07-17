@@ -184,6 +184,10 @@ pub fn buildTrimmed32CmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trimmed32CmapTtfTables(allocator));
 }
 
+pub fn buildVariationSelectorCmapTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try variationSelectorCmapTtfTables(allocator));
+}
+
 pub fn buildNamedCjkLanguageGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try namedCjkLanguageGsubTtfTables(allocator));
 }
@@ -999,6 +1003,20 @@ fn trimmed32CmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn variationSelectorCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat14VariationTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
 fn namedCjkLanguageGsubTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
@@ -1477,6 +1495,48 @@ fn cmapFormat10Table(allocator: std.mem.Allocator, start_code: u32, glyph_ids: [
     for (glyph_ids, 0..) |glyph_id, index| {
         writeU16(bytes, off + 20 + index * 2, glyph_id);
     }
+    return bytes;
+}
+
+fn cmapFormat14VariationTable(allocator: std.mem.Allocator) ![]u8 {
+    const base_len: usize = 14;
+    const variation_len: usize = 38;
+    const base_off: usize = 20;
+    const variation_off = base_off + base_len;
+    const bytes = try allocator.alloc(u8, variation_off + variation_len);
+    @memset(bytes, 0);
+
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 2);
+    writeU16(bytes, 4, 3);
+    writeU16(bytes, 6, 1);
+    writeU32(bytes, 8, @intCast(base_off));
+    writeU16(bytes, 12, 0);
+    writeU16(bytes, 14, 5);
+    writeU32(bytes, 16, @intCast(variation_off));
+
+    writeU16(bytes, base_off + 0, 6);
+    writeU16(bytes, base_off + 2, @intCast(base_len));
+    writeU16(bytes, base_off + 4, 0);
+    writeU16(bytes, base_off + 6, 'A');
+    writeU16(bytes, base_off + 8, 2);
+    writeU16(bytes, base_off + 10, 1);
+    writeU16(bytes, base_off + 12, 2);
+
+    writeU16(bytes, variation_off + 0, 14);
+    writeU32(bytes, variation_off + 2, @intCast(variation_len));
+    writeU32(bytes, variation_off + 6, 1);
+    writeU24(bytes, variation_off + 10, 0xfe0f);
+    writeU32(bytes, variation_off + 13, 21);
+    writeU32(bytes, variation_off + 17, 29);
+
+    writeU32(bytes, variation_off + 21, 1);
+    writeU24(bytes, variation_off + 25, 'B');
+    bytes[variation_off + 28] = 0;
+
+    writeU32(bytes, variation_off + 29, 1);
+    writeU24(bytes, variation_off + 33, 'A');
+    writeU16(bytes, variation_off + 36, 3);
     return bytes;
 }
 
@@ -3810,6 +3870,12 @@ fn checksum(data: []const u8) u32 {
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeU24(bytes: []u8, offset: usize, value: u32) void {
+    bytes[offset] = @intCast((value >> 16) & 0xff);
+    bytes[offset + 1] = @intCast((value >> 8) & 0xff);
+    bytes[offset + 2] = @intCast(value & 0xff);
 }
 
 fn writeI16(bytes: []u8, offset: usize, value: i16) void {

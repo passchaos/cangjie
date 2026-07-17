@@ -469,10 +469,10 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
     const classes = options.glyph_classes;
     const class = if (classes) |items| if (glyph < items.len) items[glyph] else 0 else 0;
 
-    // UseMarkFilteringSet shares the high byte with MarkAttachmentType. When it
-    // is set, the high byte names a GDEF MarkGlyphSetsDef entry instead. The
-    // filter is mark-specific: bases and ligatures continue to participate in
-    // contextual matching while marks outside the selected set are transparent.
+    // UseMarkFilteringSet appends a set index after the SubTable offsets; it
+    // does not consume the high-byte MarkAttachmentType bits. Apply both mark
+    // filters independently so a lookup can require a selected mark set and a
+    // selected GDEF mark attachment class at the same time.
     if ((lookup_flag & 0x0010) != 0) {
         const mark_filtering_set_index = options.active_mark_filtering_set orelse return class == 3;
         const mark_sets = options.mark_filtering_sets orelse return class == 3;
@@ -482,15 +482,23 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
         if (is_mark and !in_selected_set) return true;
     }
 
-    if (classes == null) return false;
-    if ((lookup_flag & 0x0002) != 0 and class == 1) return true;
-    if ((lookup_flag & 0x0004) != 0 and class == 2) return true;
-    if ((lookup_flag & 0x0008) != 0 and class == 3) return true;
+    if (classes != null) {
+        if ((lookup_flag & 0x0002) != 0 and class == 1) return true;
+        if ((lookup_flag & 0x0004) != 0 and class == 2) return true;
+        if ((lookup_flag & 0x0008) != 0 and class == 3) return true;
+    }
     const mark_attachment_type = lookup_flag >> 8;
-    if (mark_attachment_type != 0 and class == 3 and (lookup_flag & 0x0010) == 0) {
-        const attach_classes = options.mark_attach_classes orelse return true;
-        if (glyph >= attach_classes.len) return true;
-        return attach_classes[glyph] != mark_attachment_type;
+    if (mark_attachment_type != 0) {
+        const attach_classes = options.mark_attach_classes orelse return class == 3;
+        if (glyph >= attach_classes.len) return class == 3;
+        const attach_class = attach_classes[glyph];
+        // MarkAttachClassDef is mark-only data. Some fonts provide it without a
+        // useful GlyphClassDef; treat non-zero attachment classes as marks for
+        // MarkAttachmentType filtering while still letting an explicit mark
+        // glyph class cover attachment class zero.
+        const is_mark = class == 3 or (class == 0 and attach_class != 0);
+        if (!is_mark) return false;
+        return attach_class != mark_attachment_type;
     }
     return false;
 }
@@ -2989,6 +2997,43 @@ test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 4, 9, 5, 3 }, glyphs.items);
 }
 
+test "GSUB MarkAttachmentType uses MarkAttachClassDef without glyph classes" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 24;
+
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0x0100); // MarkAttachmentType 1.
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const single = 8;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 6);
+    writeI16Test(&bytes, single + 4, 10);
+    writeU16Test(&bytes, single + 6, 1);
+    writeU16Test(&bytes, single + 8, 3);
+    writeU16Test(&bytes, single + 10, 5);
+    writeU16Test(&bytes, single + 12, 7);
+    writeU16Test(&bytes, single + 14, 8);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 5, 7, 8 });
+
+    var mark_attach_classes = [_]u16{0} ** 9;
+    mark_attach_classes[5] = 2;
+    mark_attach_classes[7] = 1;
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .mark_attach_classes = &mark_attach_classes,
+    });
+
+    // Fonts may omit useful GlyphClassDef data while still classifying marks in
+    // MarkAttachClassDef. Non-zero attachment classes must therefore activate
+    // MarkAttachmentType filtering; ordinary glyphs (class zero and attachment
+    // class zero) still participate.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 5, 17, 18 }, glyphs.items);
+}
+
 test "GSUB lookup flags honor GDEF mark filtering sets" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 22;
@@ -3015,6 +3060,42 @@ test "GSUB lookup flags honor GDEF mark filtering sets" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 15, 7 }, glyphs.items);
+}
+
+test "GSUB lookup flags combine mark filtering set and attachment type" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 26;
+
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0x0210); // MarkAttachmentType 2 + UseMarkFilteringSet.
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 0); // MarkFilteringSet index.
+
+    const single = 10;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 8);
+    writeI16Test(&bytes, single + 4, 10);
+    writeCoverage1List(&bytes, single + 8, &.{ 5, 7 });
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 5, 7 });
+
+    var glyph_classes = [_]u16{0} ** 8;
+    glyph_classes[5] = 3;
+    glyph_classes[7] = 3;
+    var mark_attach_classes = [_]u16{0} ** 8;
+    mark_attach_classes[5] = 1;
+    mark_attach_classes[7] = 2;
+    const mark_sets = [_][]const GlyphId{&.{ 5, 7 }};
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .glyph_classes = &glyph_classes,
+        .mark_attach_classes = &mark_attach_classes,
+        .mark_filtering_sets = &mark_sets,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 5, 17 }, glyphs.items);
 }
 
 test "GSUB extension substitution preserves wrapper lookup flags" {
@@ -3064,6 +3145,14 @@ fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {
     writeU16Test(bytes, offset + 0, 1);
     writeU16Test(bytes, offset + 2, 1);
     writeU16Test(bytes, offset + 4, glyph);
+}
+
+fn writeCoverage1List(bytes: []u8, offset: usize, glyphs: []const GlyphId) void {
+    writeU16Test(bytes, offset + 0, 1);
+    writeU16Test(bytes, offset + 2, @intCast(glyphs.len));
+    for (glyphs, 0..) |glyph, i| {
+        writeU16Test(bytes, offset + 4 + i * 2, glyph);
+    }
 }
 
 fn writeClassDef1(bytes: []u8, offset: usize, start: GlyphId, class: u16) void {

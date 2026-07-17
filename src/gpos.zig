@@ -224,6 +224,11 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
         return;
     }
     if (lookup_type == 9) {
+        // ExtensionPos only widens offsets, but a lookup still applies as an
+        // all-or-nothing unit. Preflight wrapped variable-length arrays before
+        // collecting any adjustments so a later malformed wrapper cannot leave
+        // earlier wrapper results visible to the caller.
+        try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
         if (try extensionPositionLookupType(table, lookup_offset, subtable_count)) |wrapped_type| {
             switch (wrapped_type) {
                 1 => {
@@ -1268,10 +1273,14 @@ fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposErro
         if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGpos;
     }
     if (lookup_type == 9) {
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = lookup_offset + try readU16BadGpos(table, subtable_offsets_pos + subtable_i * 2);
-            try ensureExtensionPositionPayloadWithin(table, subtable_offset);
-        }
+        try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
+    }
+}
+
+fn ensureExtensionPositionLookupPayloadsWithin(table: Table, lookup_offset: usize, subtable_count: u16) GposError!void {
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = try checkedPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
+        try ensureExtensionPositionPayloadWithin(table, subtable_offset);
     }
 }
 
@@ -1284,10 +1293,9 @@ fn ensureExtensionPositionPayloadWithin(table: Table, subtable_offset: usize) Gp
     if (pos_format != 1) return error.UnsupportedGpos;
     const extension_lookup_type = try readU16BadGpos(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_offset = try readU32BadGpos(table, subtable_offset + 4);
-    if (extension_offset > table.length - subtable_offset) return error.BadGpos;
-    const extension_subtable = subtable_offset + extension_offset;
+    const extension_subtable = try checkedPositionOffset(table, subtable_offset, try readU32BadGpos(table, subtable_offset + 4));
     try ensurePositionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
+    try ensurePositionSubtableVariableDataWithin(table, extension_subtable, extension_lookup_type);
 }
 
 fn ensurePositionSubtableFixedHeaderWithin(table: Table, subtable_offset: usize, lookup_type: u16) GposError!void {
@@ -1312,6 +1320,109 @@ fn ensurePositionSubtableFixedHeaderWithin(table: Table, subtable_offset: usize,
         else => return,
     };
     if (table.length - subtable_offset < min_len) return error.BadGpos;
+}
+
+fn ensurePositionSubtableVariableDataWithin(table: Table, subtable_offset: usize, lookup_type: u16) GposError!void {
+    switch (lookup_type) {
+        1 => try ensureSinglePositionSubtableWithin(table, subtable_offset),
+        2 => try ensurePairPositionSubtableWithin(table, subtable_offset),
+        else => {},
+    }
+}
+
+fn ensureSinglePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    const coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+    try ensureCoverageTableWithin(table, coverage_offset);
+    const value_format = try readU16BadGpos(table, subtable_offset + 4);
+    switch (pos_format) {
+        1 => try ensureValueRecordWithin(table, subtable_offset + 6, value_format),
+        2 => {
+            const value_count = try readU16BadGpos(table, subtable_offset + 6);
+            try ensureBytesWithin(table, subtable_offset + 8, @as(usize, value_count) * valueRecordSize(value_format));
+        },
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    const coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+    try ensureCoverageTableWithin(table, coverage_offset);
+    const value_format_1 = try readU16BadGpos(table, subtable_offset + 4);
+    const value_format_2 = try readU16BadGpos(table, subtable_offset + 6);
+    const value_size_1 = valueRecordSize(value_format_1);
+    const value_size_2 = valueRecordSize(value_format_2);
+
+    switch (pos_format) {
+        1 => {
+            const pair_set_count = try readU16BadGpos(table, subtable_offset + 8);
+            const pair_set_offsets_pos = subtable_offset + 10;
+            try ensureBytesWithin(table, pair_set_offsets_pos, @as(usize, pair_set_count) * 2);
+            const pair_record_size = 2 + value_size_1 + value_size_2;
+            for (0..pair_set_count) |pair_set_i| {
+                const pair_set_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, pair_set_offsets_pos + pair_set_i * 2));
+                const pair_value_count = try readU16BadGpos(table, pair_set_offset);
+                try ensureBytesWithin(table, pair_set_offset + 2, @as(usize, pair_value_count) * pair_record_size);
+            }
+        },
+        2 => {
+            const class_def_1 = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+            const class_def_2 = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
+            try ensureClassDefTableWithin(table, class_def_1);
+            try ensureClassDefTableWithin(table, class_def_2);
+            const class_1_count = try readU16BadGpos(table, subtable_offset + 12);
+            const class_2_count = try readU16BadGpos(table, subtable_offset + 14);
+            const record_size = value_size_1 + value_size_2;
+            try ensureBytesWithin(table, subtable_offset + 16, @as(usize, class_1_count) * @as(usize, class_2_count) * record_size);
+        },
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn ensureValueRecordWithin(table: Table, offset: usize, format: u16) GposError!void {
+    try ensureBytesWithin(table, offset, valueRecordSize(format));
+}
+
+fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!void {
+    const format = try readU16BadGpos(table, coverage_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16BadGpos(table, coverage_offset + 2);
+            try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
+        },
+        2 => {
+            const range_count = try readU16BadGpos(table, coverage_offset + 2);
+            try ensureBytesWithin(table, coverage_offset + 4, @as(usize, range_count) * 6);
+        },
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GposError!void {
+    const format = try readU16BadGpos(table, class_def_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16BadGpos(table, class_def_offset + 4);
+            try ensureBytesWithin(table, class_def_offset + 6, @as(usize, glyph_count) * 2);
+        },
+        2 => {
+            const range_count = try readU16BadGpos(table, class_def_offset + 2);
+            try ensureBytesWithin(table, class_def_offset + 4, @as(usize, range_count) * 6);
+        },
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn checkedPositionOffset(table: Table, base_offset: usize, relative_offset: u32) GposError!usize {
+    if (relative_offset > std.math.maxInt(usize) - base_offset) return error.BadGpos;
+    const absolute = base_offset + @as(usize, @intCast(relative_offset));
+    if (absolute > table.length) return error.BadGpos;
+    return absolute;
+}
+
+fn ensureBytesWithin(table: Table, offset: usize, len: usize) GposError!void {
+    if (offset > table.length or len > table.length - offset) return error.BadGpos;
 }
 
 fn readU16BadGpos(table: Table, relative: usize) GposError!u16 {
@@ -2132,6 +2243,49 @@ test "GPOS contextual lookup preflight rejects nested extension payload atomical
     defer adjustments.deinit(allocator);
 
     try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS extension single positioning preflights wrapped value arrays atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 60;
+
+    writeU16Test(&bytes, 0, 9);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 32);
+
+    const first_extension = 10;
+    writeU16Test(&bytes, first_extension + 0, 1);
+    writeU16Test(&bytes, first_extension + 2, 1);
+    writeU32Test(&bytes, first_extension + 4, 8);
+    const first_single = first_extension + 8;
+    writeU16Test(&bytes, first_single + 0, 1);
+    writeU16Test(&bytes, first_single + 2, 8);
+    writeU16Test(&bytes, first_single + 4, 0x0001);
+    writeI16Test(&bytes, first_single + 6, 45);
+    writeCoverage1Test(&bytes, first_single + 8, 10);
+
+    const second_extension = 32;
+    writeU16Test(&bytes, second_extension + 0, 1);
+    writeU16Test(&bytes, second_extension + 2, 1);
+    writeU32Test(&bytes, second_extension + 4, 8);
+    const second_single = second_extension + 8;
+    writeU16Test(&bytes, second_single + 0, 2);
+    writeU16Test(&bytes, second_single + 2, 14);
+    writeU16Test(&bytes, second_single + 4, 0x0001);
+    writeU16Test(&bytes, second_single + 6, 7);
+    writeCoverage1Test(&bytes, second_single + 14, 30);
+    // The second wrapped SinglePos declares seven value records, extending past
+    // table.length. Reject the whole ExtensionPos lookup before the first
+    // wrapper appends its otherwise valid adjustment for glyph 10.
+
+    const glyphs = [_]GlyphId{ 10, 30 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 

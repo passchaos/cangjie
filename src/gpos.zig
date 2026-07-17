@@ -537,7 +537,7 @@ fn collectCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []co
             }
         }
         if (!matched) continue;
-        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator);
+        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator, options);
         pos += glyph_count - 1;
     }
 }
@@ -623,7 +623,7 @@ fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const 
 
         const pos_count = try readU16(table, cursor);
         cursor += 2;
-        try collectPositionRecordsMapped(table, cursor, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator);
+        try collectPositionRecordsMapped(table, cursor, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator, options);
         return true;
     }
     return false;
@@ -711,7 +711,7 @@ fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_
 
         const pos_count = try readU16(table, cursor);
         cursor += 2;
-        try collectPositionRecordsMapped(table, cursor, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator);
+        try collectPositionRecordsMapped(table, cursor, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator, options);
         return true;
     }
     return false;
@@ -747,7 +747,7 @@ fn collectChainingCoveragePositioning(table: Table, subtable_offset: usize, glyp
         if (!try gposCoverageIndicesMatch(table, subtable_offset, glyphs, backtrack_indices_buf[0..backtrack_count], backtrack_offsets_pos)) continue;
         if (!try gposCoverageIndicesMatch(table, subtable_offset, glyphs, input_indices_buf[0..input_count], input_offsets_pos)) continue;
         if (!try gposCoverageIndicesMatch(table, subtable_offset, glyphs, lookahead_indices_buf[0..lookahead_count], lookahead_offsets_pos)) continue;
-        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator);
+        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator, options);
         pos += input_count - 1;
     }
 }
@@ -800,7 +800,7 @@ fn collectPositionRuleSet(table: Table, rule_set_offset: usize, glyphs: []const 
         }
         if (!matched) continue;
         const records_pos = rule_offset + 4 + (@as(usize, glyph_count) - 1) * 2;
-        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator);
+        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator, options);
         return true;
     }
     return false;
@@ -827,42 +827,35 @@ fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset
         }
         if (!matched) continue;
         const records_pos = rule_offset + 4 + (@as(usize, glyph_count) - 1) * 2;
-        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator);
+        try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator, options);
         return true;
     }
     return false;
 }
 
-fn collectPositionRecords(table: Table, records_pos: usize, record_count: usize, glyph_count: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
-    // Each contextual positioning record points to an input-sequence glyph and a
-    // nested lookup. Only nested SinglePos lookups are applied here.
-    for (0..record_count) |record_i| {
-        const record_offset = records_pos + record_i * 4;
-        const sequence_index = try readU16(table, record_offset);
-        const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= glyph_count) continue;
-        try collectNestedSingleAdjustment(table, glyphs[pos + sequence_index], pos + sequence_index, lookup_index, adjustments, allocator);
-    }
-}
-
-fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    // Context positioning records name a glyph in the matched input sequence
+    // and a lookup-list index. Nested lookups own their own LookupFlag, so a
+    // mark/base/ligature ignored by that nested flag must not receive deltas.
     for (0..record_count) |record_i| {
         const record_offset = records_pos + record_i * 4;
         const sequence_index = try readU16(table, record_offset);
         const lookup_index = try readU16(table, record_offset + 2);
         if (sequence_index >= input_indices.len) continue;
         const target_index = input_indices[sequence_index];
-        try collectNestedSingleAdjustment(table, glyphs[target_index], target_index, lookup_index, adjustments, allocator);
+        try collectNestedSingleAdjustment(table, glyphs[target_index], target_index, lookup_index, adjustments, allocator, options);
     }
 }
 
-fn collectNestedSingleAdjustment(table: Table, glyph: GlyphId, target_index: usize, lookup_index: u16, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
+fn collectNestedSingleAdjustment(table: Table, glyph: GlyphId, target_index: usize, lookup_index: u16, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const lookup_list_offset = try readU16(table, 8);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (lookup_index >= lookup_count) return;
     const lookup_offset = lookup_list_offset + try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2);
     const lookup_type = try readU16(table, lookup_offset);
     if (lookup_type != 1) return;
+    const lookup_flag = try readU16(table, lookup_offset + 2);
+    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return;
     const subtable_count = try readU16(table, lookup_offset + 4);
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
@@ -1133,6 +1126,53 @@ test "GPOS value records tolerate device and variation offset fields" {
     try std.testing.expectEqual(@as(i16, -10), value.y_advance);
 }
 
+
+test "GPOS context nested lookup honors nested lookup flags" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 74;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 42);
+
+    writeU16Test(&bytes, 16, 7);
+    writeU16Test(&bytes, 18, 0);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 8);
+
+    const context = 24;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 22);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 2);
+    writeU16Test(&bytes, rule + 2, 1);
+    writeU16Test(&bytes, rule + 4, 2);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 1);
+
+    writeCoverage1Test(&bytes, context + 22, 1);
+    writeSinglePositionLookup(&bytes, 52, 2, 0x0008, 50);
+
+    const glyphs = [_]GlyphId{ 1, 2 };
+    const glyph_classes = [_]u16{ 0, 1, 3 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, &adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
 test "GPOS extension positioning preserves wrapper lookup flags" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 30;
@@ -1164,6 +1204,20 @@ test "GPOS extension positioning preserves wrapper lookup flags" {
     });
 
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+fn writeSinglePositionLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, lookup_flag: u16, x_placement: i16) void {
+    writeU16Test(bytes, lookup_offset + 0, 1);
+    writeU16Test(bytes, lookup_offset + 2, lookup_flag);
+    writeU16Test(bytes, lookup_offset + 4, 1);
+    writeU16Test(bytes, lookup_offset + 6, 8);
+
+    const single = lookup_offset + 8;
+    writeU16Test(bytes, single + 0, 1);
+    writeU16Test(bytes, single + 2, 8);
+    writeU16Test(bytes, single + 4, 0x0001);
+    writeI16Test(bytes, single + 6, x_placement);
+    writeCoverage1Test(bytes, single + 8, glyph);
 }
 
 fn writeCoverage1Test(bytes: []u8, offset: usize, glyph: GlyphId) void {

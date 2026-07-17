@@ -223,6 +223,21 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
         try collectPairAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
         return;
     }
+    if (lookup_type == 9) {
+        if (try extensionPositionLookupType(table, lookup_offset, subtable_count)) |wrapped_type| {
+            switch (wrapped_type) {
+                1 => {
+                    try collectExtensionSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+                    return;
+                },
+                2 => {
+                    try collectExtensionPairAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+                    return;
+                },
+                else => {},
+            }
+        }
+    }
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
@@ -236,6 +251,68 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
             8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
+        }
+    }
+}
+
+fn extensionPositionLookupType(table: Table, lookup_offset: usize, subtable_count: u16) GposError!?u16 {
+    // ExtensionPos is an addressing wrapper. When one lookup contains only
+    // ExtensionPos subtables around the same order-sensitive type, we can keep
+    // direct lookup semantics instead of delegating each wrapper over the whole
+    // glyph run independently. Mixed wrapped types intentionally fall back to
+    // generic per-subtable collection because their interactions are not simple
+    // alternatives for one positioning kind.
+    var common_type: ?u16 = null;
+    for (0..subtable_count) |i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
+        if (try readU16(table, subtable_offset) != 1) return null;
+        const wrapped_type = try readU16(table, subtable_offset + 2);
+        if (wrapped_type == 9) return error.UnsupportedGpos;
+        if (common_type) |existing| {
+            if (existing != wrapped_type) return null;
+        } else {
+            common_type = wrapped_type;
+        }
+    }
+    return common_type;
+}
+
+fn extensionPositionSubtablePayload(table: Table, subtable_offset: usize, expected_lookup_type: u16) GposError!usize {
+    const pos_format = try readU16(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    const extension_lookup_type = try readU16(table, subtable_offset + 2);
+    if (extension_lookup_type == 9) return error.UnsupportedGpos;
+    if (extension_lookup_type != expected_lookup_type) return error.UnsupportedGpos;
+    return subtable_offset + try readU32(table, subtable_offset + 4);
+}
+
+fn collectExtensionSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    // Preserve SinglePos lookup ordering through ExtensionPos. Without a
+    // lookup-level matched set, overlapping wrapped subtables would stack their
+    // deltas even though OpenType treats subtables in one lookup as ordered
+    // alternatives for each original glyph position.
+    if (glyphs.len == 0) return;
+    const matched = try allocator.alloc(bool, glyphs.len);
+    defer allocator.free(matched);
+    @memset(matched, false);
+
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const extension_subtable = try extensionPositionSubtablePayload(table, subtable_offset, 1);
+        try collectSingleAdjustmentSubtable(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, matched);
+    }
+}
+
+fn collectExtensionPairAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    // PairPos has the same lookup-subtable alternative rule under ExtensionPos
+    // as it does directly: the first matching wrapped PairPos handles the pair.
+    if (glyphs.len < 2) return;
+    var first_index: usize = 0;
+    while (first_index + 1 < glyphs.len) : (first_index += 1) {
+        for (0..subtable_count) |subtable_i| {
+            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+            const extension_subtable = try extensionPositionSubtablePayload(table, subtable_offset, 2);
+            if (try collectPairAdjustmentAt(table, extension_subtable, glyphs, first_index, adjustments, allocator, lookup_flag, options)) break;
         }
     }
 }
@@ -2257,6 +2334,56 @@ test "GPOS context nested lookup applies MarkToMarkPos only at sequence index" {
     try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
     try std.testing.expect(adjustments.items[0].mark_attachment);
     try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+}
+
+test "GPOS ExtensionPos single positioning subtables respect mark filtering ordering" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 72;
+
+    writeU16Test(&bytes, 0, 9);
+    writeU16Test(&bytes, 2, 0x0010); // UseMarkFilteringSet; selected mark set index follows subtable offsets.
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 12);
+    writeU16Test(&bytes, 8, 36);
+    writeU16Test(&bytes, 10, 0);
+
+    const first_extension = 12;
+    writeU16Test(&bytes, first_extension + 0, 1);
+    writeU16Test(&bytes, first_extension + 2, 1);
+    writeU32Test(&bytes, first_extension + 4, 8);
+    const first_single = first_extension + 8;
+    writeU16Test(&bytes, first_single + 0, 1);
+    writeU16Test(&bytes, first_single + 2, 8);
+    writeU16Test(&bytes, first_single + 4, 0x0001);
+    writeI16Test(&bytes, first_single + 6, 25);
+    writeCoverage1Test(&bytes, first_single + 8, 5);
+
+    const second_extension = 36;
+    writeU16Test(&bytes, second_extension + 0, 1);
+    writeU16Test(&bytes, second_extension + 2, 1);
+    writeU32Test(&bytes, second_extension + 4, 8);
+    const second_single = second_extension + 8;
+    writeU16Test(&bytes, second_single + 0, 1);
+    writeU16Test(&bytes, second_single + 2, 8);
+    writeU16Test(&bytes, second_single + 4, 0x0001);
+    writeI16Test(&bytes, second_single + 6, 40);
+    writeCoverage1Test(&bytes, second_single + 8, 5);
+
+    const glyphs = [_]GlyphId{ 5, 7 };
+    const mark_sets = [_][]const GlyphId{ &.{5}, &.{7} };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .mark_filtering_sets = &mark_sets,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    // Homogeneous ExtensionPos(SinglePos) subtables must behave like direct
+    // SinglePos alternatives: the first matching wrapper wins for the original
+    // mark, while the unselected mark filtering-set member remains transparent.
+    try std.testing.expectEqual(@as(i16, 25), adjustments.items[0].x_placement);
 }
 
 test "GPOS extension positioning preserves wrapper lookup flags" {

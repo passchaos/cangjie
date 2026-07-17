@@ -973,23 +973,31 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
     // matched before any nested lookup runs. Keep a mutable index map so a
     // cardinality-changing nested lookup (notably MultipleSubst) shifts later
     // records to the glyphs they originally named instead of the now-stale raw
-    // buffer positions.
+    // buffer positions. The map also tracks whether an input glyph still has a
+    // replacement in the current buffer: a deletion should not make a repeated
+    // record for the deleted sequence index accidentally operate on the next
+    // glyph that shifted into the same physical slot.
     var mapped_buf: [64]usize = undefined;
+    var mapped_live_buf: [64]bool = undefined;
     if (input_indices.len > mapped_buf.len) return error.UnsupportedGsub;
     @memcpy(mapped_buf[0..input_indices.len], input_indices);
     const mapped = mapped_buf[0..input_indices.len];
+    const mapped_live = mapped_live_buf[0..input_indices.len];
+    @memset(mapped_live, true);
 
     for (0..record_count) |subst_i| {
         const record_offset = records_offset + subst_i * 4;
         const sequence_index = try readU16(table, record_offset);
         const lookup_index = try readU16(table, record_offset + 2);
         if (sequence_index >= mapped.len) continue;
+        if (!mapped_live[sequence_index]) continue;
         const target_index = mapped[sequence_index];
         if (target_index >= glyphs.items.len) continue;
         const change = try applyNestedGlyphLookup(table, glyphs, target_index, lookup_index, allocator, options);
         if (change.removed_len == change.inserted_len) continue;
         if (change.component_offsets) |component_offsets| {
-            for (mapped) |*mapped_index| {
+            for (mapped, 0..) |*mapped_index, mapped_i| {
+                if (!mapped_live[mapped_i]) continue;
                 if (mapped_index.* <= target_index) continue;
                 const relative_index = mapped_index.* - target_index;
                 var removed_before: usize = 0;
@@ -1013,12 +1021,19 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
             }
             continue;
         }
-        for (mapped) |*mapped_index| {
-            if (mapped_index.* <= target_index) continue;
+        for (mapped, 0..) |*mapped_index, mapped_i| {
+            if (!mapped_live[mapped_i]) continue;
+            if (mapped_index.* < target_index) continue;
             if (mapped_index.* < target_index + change.removed_len) {
-                // A non-ligature nested lookup consumed this later input glyph;
-                // map its record to the replacement at the target index.
-                mapped_index.* = target_index;
+                // A non-ligature nested lookup consumed this input glyph. If
+                // it produced replacements, later records for the same
+                // sequence index operate on the first replacement. If it was a
+                // deletion, there is no surviving glyph to target.
+                if (change.inserted_len == 0) {
+                    mapped_live[mapped_i] = false;
+                } else {
+                    mapped_index.* = target_index;
+                }
             } else if (change.inserted_len > change.removed_len) {
                 mapped_index.* += change.inserted_len - change.removed_len;
             } else {
@@ -1480,6 +1495,70 @@ test "GSUB context substitution can apply nested multiple substitution" {
     try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 20, 21, 3 }, glyphs.items);
+}
+
+test "GSUB contextual records skip deleted input sequence targets" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 160;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 4);
+    writeU16Test(&bytes, 12, 10);
+    writeU16Test(&bytes, 14, 60);
+    writeU16Test(&bytes, 16, 92);
+    writeU16Test(&bytes, 18, 124);
+
+    writeU16Test(&bytes, 20, 5);
+    writeU16Test(&bytes, 24, 1);
+    writeU16Test(&bytes, 26, 8);
+
+    const context = 28;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 34);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 3);
+    writeU16Test(&bytes, rule + 2, 3);
+    writeU16Test(&bytes, rule + 4, 2);
+    writeU16Test(&bytes, rule + 6, 3);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 1);
+    writeU16Test(&bytes, rule + 12, 0);
+    writeU16Test(&bytes, rule + 14, 2);
+    writeU16Test(&bytes, rule + 16, 1);
+    writeU16Test(&bytes, rule + 18, 3);
+    writeCoverage1(&bytes, context + 34, 1);
+
+    writeU16Test(&bytes, 70, 2);
+    writeU16Test(&bytes, 74, 1);
+    writeU16Test(&bytes, 76, 8);
+    const delete_multiple = 78;
+    writeU16Test(&bytes, delete_multiple + 0, 1);
+    writeU16Test(&bytes, delete_multiple + 2, 8);
+    writeU16Test(&bytes, delete_multiple + 4, 1);
+    writeU16Test(&bytes, delete_multiple + 6, 14);
+    writeCoverage1(&bytes, delete_multiple + 8, 1);
+    writeU16Test(&bytes, delete_multiple + 14, 0);
+
+    writeSingleDeltaLookup(&bytes, 102, 2, 10);
+    writeSingleDeltaLookup(&bytes, 134, 2, 20);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 20, &glyphs, allocator, .{});
+
+    // The second record repeats sequenceIndex 0 after the first record deletes
+    // that input glyph. It must be skipped rather than applied to glyph 2 after
+    // glyph 2 shifts into the deleted glyph's buffer slot.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 22, 3 }, glyphs.items);
 }
 
 test "GSUB context nested lookup can apply ligature substitution" {

@@ -176,6 +176,10 @@ pub fn buildTrimmedCmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trimmedCmapTtfTables(allocator));
 }
 
+pub fn buildByteEncodingCmapTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try byteEncodingCmapTtfTables(allocator));
+}
+
 pub fn buildNamedCjkLanguageGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try namedCjkLanguageGsubTtfTables(allocator));
 }
@@ -963,6 +967,20 @@ fn trimmedCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn byteEncodingCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat0Table(allocator, &.{ .{ .code = 'A', .glyph = 1 }, .{ .code = 0xff, .glyph = 3 } }) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
 fn namedCjkLanguageGsubTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
@@ -1439,6 +1457,24 @@ fn cmapFormat12RangeTable(allocator: std.mem.Allocator, start: u32, end: u32, gl
     writeU32(bytes, off + 16, start);
     writeU32(bytes, off + 20, end);
     writeU32(bytes, off + 24, glyph_start);
+    return bytes;
+}
+
+fn cmapFormat0Table(allocator: std.mem.Allocator, mappings: []const struct { code: u8, glyph: u8 }) ![]u8 {
+    const bytes = try allocator.alloc(u8, 12 + 262);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 1);
+    writeU16(bytes, 4, 1);
+    writeU16(bytes, 6, 0);
+    writeU32(bytes, 8, 12);
+    const off = 12;
+    writeU16(bytes, off + 0, 0);
+    writeU16(bytes, off + 2, 262);
+    writeU16(bytes, off + 4, 0);
+    for (mappings) |mapping| {
+        bytes[off + 6 + @as(usize, mapping.code)] = mapping.glyph;
+    }
     return bytes;
 }
 

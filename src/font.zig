@@ -332,11 +332,12 @@ pub const Font = struct {
     pub fn glyphIndex(self: *const Font, codepoint: u21) FontError!glyph_mod.GlyphId {
         var best: ?CmapSubtable = null;
         for (self.cmap_subtables) |subtable| {
-            if (subtable.format != 4 and subtable.format != 6 and subtable.format != 12 and subtable.format != 13) continue;
+            if (subtable.format != 0 and subtable.format != 4 and subtable.format != 6 and subtable.format != 12 and subtable.format != 13) continue;
             if (best == null or scoreCmap(subtable) > scoreCmap(best.?)) best = subtable;
         }
         const chosen = best orelse return error.UnsupportedCmap;
         return switch (chosen.format) {
+            0 => try glyphIndexFormat0(self.data, chosen.offset, codepoint),
             4 => try glyphIndexFormat4(self.data, chosen.offset, codepoint),
             6 => try glyphIndexFormat6(self.data, chosen.offset, codepoint),
             12 => try glyphIndexFormat12(self.data, chosen.offset, codepoint),
@@ -1353,7 +1354,15 @@ fn scoreCmap(subtable: CmapSubtable) u8 {
     if (subtable.format == 13 and subtable.platform_id == 3 and subtable.encoding_id == 10) return 3;
     if (subtable.format == 13 and subtable.platform_id == 0) return 2;
     if (subtable.format == 6 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 1;
+    if (subtable.format == 0) return 1;
     return 0;
+}
+
+fn glyphIndexFormat0(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
+    if (codepoint > 0xff) return 0;
+    const length = try bin.readU16At(data, offset + 2);
+    if (length < 262) return error.BadSfnt;
+    return data[offset + 6 + @as(usize, codepoint)];
 }
 
 fn glyphIndexFormat4(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {

@@ -702,14 +702,23 @@ pub const Font = struct {
         const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
         const color_count = try bin.readU16At(self.data, cpal.offset + 6);
         const color_records_offset = try bin.readU32At(self.data, cpal.offset + 8);
-        if (palette_index >= palette_count or color_index >= palette_entries) return null;
+
+        // The first-color-index array is part of the CPAL header payload and
+        // has one u16 entry per declared palette. Validate the whole declared
+        // array before consulting an individual palette, otherwise a malformed
+        // table can point ColorRecordsArray into the still-declared palette
+        // index area and make palette 0 borrow palette 1 metadata as BGRA data.
+        const palette_indices_len = @as(usize, palette_count) * 2;
+        if (palette_indices_len > cpal.length - 12) return error.BadSfnt;
         if (color_records_offset > cpal.length) return error.BadSfnt;
-        if (@as(usize, color_count) * 4 > cpal.length - color_records_offset) return error.BadSfnt;
+        if (color_records_offset < 12 + palette_indices_len) return error.BadSfnt;
+        if (@as(usize, color_count) > (cpal.length - color_records_offset) / 4) return error.BadSfnt;
+
+        if (palette_index >= palette_count or color_index >= palette_entries) return null;
         const palette_start_offset = cpal.offset + 12 + @as(usize, palette_index) * 2;
-        if (palette_start_offset + 2 > cpal.offset + cpal.length) return error.BadSfnt;
         const first_color_index = try bin.readU16At(self.data, palette_start_offset);
+        if (@as(usize, first_color_index) > @as(usize, color_count) or @as(usize, palette_entries) > @as(usize, color_count) - first_color_index) return error.BadSfnt;
         const record_index = @as(usize, first_color_index) + color_index;
-        if (record_index >= color_count) return null;
         const record = cpal.offset + color_records_offset + record_index * 4;
         return .{
             .blue = self.data[record],
@@ -2316,6 +2325,41 @@ test "name table format 1 validates language tag storage ranges" {
     try std.testing.expectError(error.BadSfnt, readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out));
 }
 
+test "CPAL color records cannot overlap palette index array" {
+    var bytes: [20]u8 = .{0} ** 20;
+    writeU16Test(&bytes, 0, 0); // version
+    writeU16Test(&bytes, 2, 1); // numPaletteEntries
+    writeU16Test(&bytes, 4, 2); // numPalettes: first-color-index array is 4 bytes.
+    writeU16Test(&bytes, 6, 1); // numColorRecords
+    writeU32Test(&bytes, 8, 14); // Must be at least 16 to sit after both palette entries.
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 0);
+    bytes[16] = 10;
+    bytes[17] = 20;
+    bytes[18] = 30;
+    bytes[19] = 40;
+
+    const font = cpalOnlyFont(&bytes);
+    try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
+}
+
+test "CPAL palette entries stay inside declared color records" {
+    var bytes: [18]u8 = .{0} ** 18;
+    writeU16Test(&bytes, 0, 0); // version
+    writeU16Test(&bytes, 2, 2); // numPaletteEntries claims two colors.
+    writeU16Test(&bytes, 4, 1); // numPalettes
+    writeU16Test(&bytes, 6, 1); // numColorRecords only has one color.
+    writeU32Test(&bytes, 8, 14);
+    writeU16Test(&bytes, 12, 0);
+    bytes[14] = 10;
+    bytes[15] = 20;
+    bytes[16] = 30;
+    bytes[17] = 40;
+
+    const font = cpalOnlyFont(&bytes);
+    try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
+}
+
 fn gdefOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2346,6 +2390,48 @@ fn gdefOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .svg = null,
+        .sbix = null,
+        .cblc = null,
+        .cbdt = null,
+        .glyf = null,
+        .cff = null,
+        .cmap_subtables = empty_cmaps,
+        .owned_tables = empty_tables,
+        .allocator = std.testing.allocator,
+    };
+}
+
+fn cpalOnlyFont(data: []const u8) Font {
+    const empty_tables: []TableRecord = &.{};
+    const empty_cmaps: []CmapSubtable = &.{};
+    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    return .{
+        .data = data,
+        .format = .truetype,
+        .units_per_em = 1000,
+        .index_to_loc_format = 0,
+        .glyph_count = 2,
+        .ascender = 0,
+        .descender = 0,
+        .line_gap = 0,
+        .number_of_h_metrics = 2,
+        .head = dummy_table,
+        .hhea = dummy_table,
+        .maxp = dummy_table,
+        .hmtx = dummy_table,
+        .loca = null,
+        .cmap = dummy_table,
+        .kern = null,
+        .os2 = null,
+        .gdef = null,
+        .gpos = null,
+        .gsub = null,
+        .name = null,
+        .fvar = null,
+        .avar = null,
+        .colr = null,
+        .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = data.len },
         .svg = null,
         .sbix = null,
         .cblc = null,

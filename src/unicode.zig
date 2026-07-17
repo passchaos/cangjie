@@ -354,6 +354,8 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
     var cluster_start: ?usize = null;
     var cluster_end: usize = 0;
     var previous_codepoint: ?u21 = null;
+    var last_non_extend_codepoint: ?u21 = null;
+    var zwj_after_extended_pictographic = false;
     var regional_indicator_count: usize = 0;
     // Approximate UAX #29 extended grapheme clusters for the scripts supported
     // here: combining marks, variation selectors, emoji modifiers, ZWJ chains,
@@ -367,12 +369,29 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
             cluster_start = byte_start;
             cluster_end = byte_end;
             previous_codepoint = codepoint;
+            last_non_extend_codepoint = if (isGraphemeExtendCodepoint(codepoint) or codepoint == 0x200d) null else codepoint;
+            zwj_after_extended_pictographic = false;
             regional_indicator_count = if (isRegionalIndicator(codepoint)) 1 else 0;
             continue;
         }
 
-        if (extendsGrapheme(previous_codepoint.?, codepoint, regional_indicator_count)) {
+        if (extendsGrapheme(previous_codepoint.?, codepoint, regional_indicator_count, zwj_after_extended_pictographic)) {
             cluster_end = byte_end;
+            if (codepoint == 0x200d) {
+                // GB11 only suppresses the break after ZWJ for emoji ZWJ
+                // sequences. A generic "letter + ZWJ + letter" should keep the
+                // ZWJ with the previous cluster (GB9) but still break before the
+                // following non-emoji letter.
+                zwj_after_extended_pictographic = if (last_non_extend_codepoint) |last|
+                    isExtendedPictographic(last)
+                else
+                    false;
+            } else {
+                zwj_after_extended_pictographic = false;
+                if (!isGraphemeExtendCodepoint(codepoint)) {
+                    last_non_extend_codepoint = codepoint;
+                }
+            }
             previous_codepoint = codepoint;
             if (isRegionalIndicator(codepoint)) {
                 regional_indicator_count += 1;
@@ -389,6 +408,8 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
         cluster_start = byte_start;
         cluster_end = byte_end;
         previous_codepoint = codepoint;
+        last_non_extend_codepoint = if (isGraphemeExtendCodepoint(codepoint) or codepoint == 0x200d) null else codepoint;
+        zwj_after_extended_pictographic = false;
         regional_indicator_count = if (isRegionalIndicator(codepoint)) 1 else 0;
     }
 
@@ -474,6 +495,7 @@ pub fn itemizeSentenceSegments(allocator: std.mem.Allocator, text: []const u8) !
     var sentence_start: usize = 0;
     var sentence_end: usize = 0;
     var pending_break = false;
+    var previous_codepoint: ?u21 = null;
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (it.i < text.len) {
         const byte_start = it.i;
@@ -487,9 +509,10 @@ pub fn itemizeSentenceSegments(allocator: std.mem.Allocator, text: []const u8) !
             pending_break = false;
         }
 
-        if (isSentenceTerminator(codepoint)) {
+        if (isSentenceTerminator(codepoint) and !isMidNumberSentencePeriod(codepoint, previous_codepoint, text, byte_end)) {
             pending_break = true;
         }
+        previous_codepoint = codepoint;
     }
 
     try appendSentenceIfNotBlank(allocator, &sentences, text, sentence_start, sentence_end);
@@ -722,6 +745,28 @@ fn isSentenceTerminator(codepoint: u21) bool {
         codepoint == 0x3002 or codepoint == 0xff01 or codepoint == 0xff1f;
 }
 
+fn isMidNumberSentencePeriod(codepoint: u21, previous: ?u21, text: []const u8, byte_end: usize) bool {
+    // UAX #29 keeps full stops and similar STerm codepoints inside numeric
+    // tokens (SB8), e.g. version strings and decimal values. The segmenter is
+    // intentionally compact, but avoiding breaks in the common digit '.' digit
+    // case prevents obviously incorrect sentence cuts in UI text.
+    if (codepoint != '.') return false;
+    const before = previous orelse return false;
+    if (!isAsciiDigit(before)) return false;
+    const after = nextCodepointAt(text, byte_end) orelse return false;
+    return isAsciiDigit(after);
+}
+
+fn nextCodepointAt(text: []const u8, offset: usize) ?u21 {
+    if (offset >= text.len) return null;
+    var it = std.unicode.Utf8Iterator{ .bytes = text[offset..], .i = 0 };
+    return it.nextCodepoint();
+}
+
+fn isAsciiDigit(codepoint: u21) bool {
+    return codepoint >= '0' and codepoint <= '9';
+}
+
 fn isSentenceTrailingSpace(codepoint: u21) bool {
     return codepoint == ' ' or codepoint == '\t' or codepoint == '\n' or codepoint == '\r';
 }
@@ -780,15 +825,16 @@ fn isWordExtender(codepoint: u21) bool {
         isSpacingMark(codepoint);
 }
 
-fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize) bool {
+fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize, zwj_after_extended_pictographic: bool) bool {
     // Keep this predicate conservative: it only returns true for continuation
     // codepoints that should share a caret stop with the previous codepoint.
     if (previous == '\r' and current == '\n') return true;
-    if (previous == 0x200d) return true;
     if (current == 0x200d) return true;
     if (extendsHangulGrapheme(previous, current)) return true;
     if (isRegionalIndicator(previous) and isRegionalIndicator(current) and regional_indicator_count % 2 == 1) return true;
-    return isCombiningMark(current) or isVariationSelector(current) or isEmojiModifier(current) or isSpacingMark(current);
+    if (isGraphemeExtendCodepoint(current)) return true;
+    if (previous == 0x200d) return zwj_after_extended_pictographic and isExtendedPictographic(current);
+    return false;
 }
 
 const HangulGraphemeClass = enum {
@@ -840,6 +886,48 @@ fn isEmojiModifier(codepoint: u21) bool {
 
 fn isRegionalIndicator(codepoint: u21) bool {
     return codepoint >= 0x1f1e6 and codepoint <= 0x1f1ff;
+}
+
+fn isGraphemeExtendCodepoint(codepoint: u21) bool {
+    return isCombiningMark(codepoint) or
+        isVariationSelector(codepoint) or
+        isEmojiModifier(codepoint) or
+        isSpacingMark(codepoint);
+}
+
+fn isExtendedPictographic(codepoint: u21) bool {
+    // Compact Extended_Pictographic coverage for emoji families/professions and
+    // symbol ZWJ sequences commonly encountered by text editors. This is not
+    // the full emoji-data.txt table, but it makes GB11 conditional instead of
+    // treating every ZWJ as a universal grapheme glue.
+    return codepoint == 0x00a9 or
+        codepoint == 0x00ae or
+        codepoint == 0x203c or
+        codepoint == 0x2049 or
+        codepoint == 0x2122 or
+        codepoint == 0x2139 or
+        (codepoint >= 0x2194 and codepoint <= 0x21aa) or
+        codepoint == 0x231a or
+        codepoint == 0x231b or
+        codepoint == 0x2328 or
+        codepoint == 0x23cf or
+        (codepoint >= 0x23e9 and codepoint <= 0x23f3) or
+        (codepoint >= 0x23f8 and codepoint <= 0x23fa) or
+        codepoint == 0x24c2 or
+        codepoint == 0x25aa or
+        codepoint == 0x25ab or
+        codepoint == 0x25b6 or
+        codepoint == 0x25c0 or
+        (codepoint >= 0x25fb and codepoint <= 0x25fe) or
+        (codepoint >= 0x2600 and codepoint <= 0x27bf) or
+        codepoint == 0x2934 or
+        codepoint == 0x2935 or
+        (codepoint >= 0x2b05 and codepoint <= 0x2b55) or
+        codepoint == 0x3030 or
+        codepoint == 0x303d or
+        codepoint == 0x3297 or
+        codepoint == 0x3299 or
+        (codepoint >= 0x1f000 and codepoint <= 0x1faff);
 }
 
 fn isSpacingMark(codepoint: u21) bool {

@@ -657,6 +657,21 @@ test "itemizes emoji regional indicator and spacing-mark grapheme clusters" {
     try std.testing.expectEqual(@as(usize, 6), spacing_mark[0].byte_len);
 }
 
+test "grapheme clusters only let ZWJ join extended pictographs" {
+    const allocator = std.testing.allocator;
+
+    const emoji_zwj = try itemizeGraphemeClusters(allocator, "👩\u{0301}‍💻!");
+    defer allocator.free(emoji_zwj);
+    try std.testing.expectEqual(@as(usize, 2), emoji_zwj.len);
+    try std.testing.expectEqualStrings("👩\u{0301}‍💻", "👩\u{0301}‍💻!"[emoji_zwj[0].byte_start..][0..emoji_zwj[0].byte_len]);
+
+    const generic_zwj = try itemizeGraphemeClusters(allocator, "a‍b");
+    defer allocator.free(generic_zwj);
+    try std.testing.expectEqual(@as(usize, 2), generic_zwj.len);
+    try std.testing.expectEqualStrings("a‍", "a‍b"[generic_zwj[0].byte_start..][0..generic_zwj[0].byte_len]);
+    try std.testing.expectEqualStrings("b", "a‍b"[generic_zwj[1].byte_start..][0..generic_zwj[1].byte_len]);
+}
+
 test "itemizes Hangul Jamo grapheme clusters" {
     const allocator = std.testing.allocator;
 
@@ -741,6 +756,18 @@ test "itemizes basic sentence segments" {
     try std.testing.expectEqual(@as(usize, 2), quoted.len);
     try std.testing.expectEqualStrings("He said ‘hi!’ ", quoted_text[quoted[0].byte_start..][0..quoted[0].byte_len]);
     try std.testing.expectEqualStrings("Next.", quoted_text[quoted[1].byte_start..][0..quoted[1].byte_len]);
+}
+
+test "sentence segments keep decimal full stops inside numbers" {
+    const allocator = std.testing.allocator;
+    const text = "Version 1.2 works. Next.";
+
+    const sentences = try itemizeSentenceSegments(allocator, text);
+    defer allocator.free(sentences);
+
+    try std.testing.expectEqual(@as(usize, 2), sentences.len);
+    try std.testing.expectEqualStrings("Version 1.2 works. ", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
+    try std.testing.expectEqualStrings("Next.", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
 }
 
 test "itemizes line break opportunities" {

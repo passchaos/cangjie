@@ -897,8 +897,27 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         switch (lookup_type) {
             1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
             2 => try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+            9 => try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, options),
             else => {},
         }
+    }
+}
+
+fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    const pos_format = try readU16(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    const extension_lookup_type = try readU16(table, subtable_offset + 2);
+    if (extension_lookup_type == 9) return error.UnsupportedGpos;
+    const extension_offset = try readU32(table, subtable_offset + 4);
+    const extension_subtable = subtable_offset + extension_offset;
+
+    // PosLookupRecord names one glyph in an already-matched input sequence.
+    // ExtensionPos only widens the subtable address, so keep using the
+    // contextual target index when delegating to the wrapped lookup body.
+    switch (extension_lookup_type) {
+        1 => try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
+        2 => try collectPairAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+        else => {},
     }
 }
 
@@ -1357,6 +1376,64 @@ test "GPOS pair positioning records precedence when first value is empty" {
     try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[1].index);
     try std.testing.expectEqual(@as(i16, 25), adjustments.items[1].x_placement);
+}
+
+test "GPOS context nested lookup can apply extension positioning" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 90;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 42);
+
+    writeU16Test(&bytes, 16, 7);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 8);
+
+    const context = 24;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 22);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 1);
+    // PosLookupRecord invokes lookup 1, an ExtensionPos wrapping SinglePos, at
+    // sequenceIndex 0. Nested extension handling must preserve the context
+    // target index rather than ignoring the lookup or applying it globally.
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeCoverage1Test(&bytes, context + 22, 3);
+
+    writeU16Test(&bytes, 52, 9);
+    writeU16Test(&bytes, 56, 1);
+    writeU16Test(&bytes, 58, 8);
+    const extension = 60;
+    writeU16Test(&bytes, extension + 0, 1);
+    writeU16Test(&bytes, extension + 2, 1);
+    writeU32Test(&bytes, extension + 4, 8);
+    const single = extension + 8;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 8);
+    writeU16Test(&bytes, single + 4, 0x0004);
+    writeI16Test(&bytes, single + 6, 70);
+    writeCoverage1Test(&bytes, single + 8, 3);
+
+    const glyphs = [_]GlyphId{3};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_advance);
 }
 
 test "GPOS extension positioning preserves wrapper lookup flags" {

@@ -1061,6 +1061,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
             1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options),
             2 => if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             4 => _ = try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, &.{}),
+            5 => _ = try collectMarkToLigatureAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             6 => _ = try collectMarkToMarkAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             9 => try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
@@ -1083,6 +1084,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
         1 => try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
         2 => _ = try collectPairAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         4 => _ = try collectMarkToBaseAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, &.{}),
+        5 => _ = try collectMarkToLigatureAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         6 => _ = try collectMarkToMarkAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         else => {},
     }
@@ -1115,38 +1117,55 @@ fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphI
 fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
+    const class_count = try readU16(table, subtable_offset + 6);
+    if (class_count == 0 or glyphs.len < 2) return;
+
+    for (glyphs, 0..) |_, i| {
+        _ = try collectMarkToLigatureAdjustmentAt(table, subtable_offset, glyphs, i, adjustments, allocator, lookup_flag, options);
+    }
+}
+
+fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, mark_position: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    // Contextual PosLookupRecord application names one mark in the matched
+    // input sequence. MarkLigPos still needs the complete glyph run so the
+    // backwards ligature search observes the nested lookup's LookupFlag, but
+    // only the record's sequenceIndex target may receive an adjustment.
+    const pos_format = try readU16(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    if (mark_position >= glyphs.len) return false;
+    const glyph = glyphs[mark_position];
+    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+
     const mark_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const ligature_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 4);
     const class_count = try readU16(table, subtable_offset + 6);
     const mark_array_offset = subtable_offset + try readU16(table, subtable_offset + 8);
     const ligature_array_offset = subtable_offset + try readU16(table, subtable_offset + 10);
-    if (class_count == 0 or glyphs.len < 2) return;
+    if (class_count == 0 or glyphs.len < 2) return false;
 
-    for (glyphs, 0..) |glyph, i| {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse continue;
-        const ligature_position = try previousUnignoredCoveredGlyph(table, ligature_coverage_offset, glyphs, i, lookup_flag, options) orelse continue;
-        const ligature_index = try coverageIndex(table, ligature_coverage_offset, glyphs[ligature_position]) orelse continue;
-        const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
-        const mark_class = try readU16(table, mark_record_offset);
-        if (mark_class >= class_count) continue;
-        const mark_anchor_offset = mark_array_offset + try readU16(table, mark_record_offset + 2);
-        const ligature_attach_offset = ligature_array_offset + try readU16(table, ligature_array_offset + 2 + ligature_index * 2);
-        const component_count = try readU16(table, ligature_attach_offset);
-        if (component_count == 0) continue;
-        const component_index: usize = 0;
-        const anchor_record = ligature_attach_offset + 2 + (component_index * class_count + mark_class) * 2;
-        const ligature_anchor_relative = try readU16(table, anchor_record);
-        if (ligature_anchor_relative == 0) continue;
-        const ligature_anchor_offset = ligature_attach_offset + ligature_anchor_relative;
-        const mark_anchor = try readAnchor(table, mark_anchor_offset);
-        const ligature_anchor = try readAnchor(table, ligature_anchor_offset);
-        try appendAdjustmentEx(adjustments, allocator, i, .{
-            .index = i,
-            .x_placement = ligature_anchor.x - mark_anchor.x,
-            .y_placement = ligature_anchor.y - mark_anchor.y,
-        }, .{ .mark_attachment = true, .mark_base_index = ligature_position });
-    }
+    const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse return false;
+    const ligature_position = try previousUnignoredCoveredGlyph(table, ligature_coverage_offset, glyphs, mark_position, lookup_flag, options) orelse return false;
+    const ligature_index = try coverageIndex(table, ligature_coverage_offset, glyphs[ligature_position]) orelse return false;
+    const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
+    const mark_class = try readU16(table, mark_record_offset);
+    if (mark_class >= class_count) return false;
+    const mark_anchor_offset = mark_array_offset + try readU16(table, mark_record_offset + 2);
+    const ligature_attach_offset = ligature_array_offset + try readU16(table, ligature_array_offset + 2 + ligature_index * 2);
+    const component_count = try readU16(table, ligature_attach_offset);
+    if (component_count == 0) return false;
+    const component_index: usize = 0;
+    const anchor_record = ligature_attach_offset + 2 + (component_index * class_count + mark_class) * 2;
+    const ligature_anchor_relative = try readU16(table, anchor_record);
+    if (ligature_anchor_relative == 0) return false;
+    const ligature_anchor_offset = ligature_attach_offset + ligature_anchor_relative;
+    const mark_anchor = try readAnchor(table, mark_anchor_offset);
+    const ligature_anchor = try readAnchor(table, ligature_anchor_offset);
+    try appendAdjustmentEx(adjustments, allocator, mark_position, .{
+        .index = mark_position,
+        .x_placement = ligature_anchor.x - mark_anchor.x,
+        .y_placement = ligature_anchor.y - mark_anchor.y,
+    }, .{ .mark_attachment = true, .mark_base_index = ligature_position });
+    return true;
 }
 
 fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -1872,6 +1891,91 @@ test "GPOS context nested lookup can apply MarkBasePos" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+    try std.testing.expect(adjustments.items[0].mark_attachment);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+}
+
+test "GPOS context nested lookup applies MarkLigPos only at sequence index" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 128;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 42);
+
+    writeU16Test(&bytes, 16, 7);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 8);
+
+    const context = 24;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 22);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 2);
+    writeU16Test(&bytes, rule + 2, 1);
+    writeU16Test(&bytes, rule + 4, 22);
+    // The context matches only [20, 22], but the nested MarkLigPos subtable
+    // also covers the later [21, 22] cluster. PosLookupRecord sequenceIndex=1
+    // must therefore attach just the matched mark while still using the full
+    // run to find glyph 20 as its preceding ligature.
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 1);
+    writeCoverage1Test(&bytes, context + 22, 20);
+
+    writeU16Test(&bytes, 52, 5);
+    writeU16Test(&bytes, 56, 1);
+    writeU16Test(&bytes, 58, 8);
+
+    const mark_lig = 60;
+    writeU16Test(&bytes, mark_lig + 0, 1);
+    writeU16Test(&bytes, mark_lig + 2, 12);
+    writeU16Test(&bytes, mark_lig + 4, 18);
+    writeU16Test(&bytes, mark_lig + 6, 1);
+    writeU16Test(&bytes, mark_lig + 8, 26);
+    writeU16Test(&bytes, mark_lig + 10, 38);
+
+    writeCoverage1Test(&bytes, mark_lig + 12, 22);
+    writeCoverage1ListTest(&bytes, mark_lig + 18, &.{ 20, 21 });
+
+    const mark_array = mark_lig + 26;
+    writeU16Test(&bytes, mark_array + 0, 1);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 6);
+    writeAnchor1Test(&bytes, mark_array + 6, 10, 15);
+
+    const ligature_array = mark_lig + 38;
+    writeU16Test(&bytes, ligature_array + 0, 2);
+    writeU16Test(&bytes, ligature_array + 2, 6);
+    writeU16Test(&bytes, ligature_array + 4, 16);
+
+    const first_ligature_attach = ligature_array + 6;
+    writeU16Test(&bytes, first_ligature_attach + 0, 1);
+    writeU16Test(&bytes, first_ligature_attach + 2, 4);
+    writeAnchor1Test(&bytes, first_ligature_attach + 4, 100, 120);
+
+    const second_ligature_attach = ligature_array + 16;
+    writeU16Test(&bytes, second_ligature_attach + 0, 1);
+    writeU16Test(&bytes, second_ligature_attach + 2, 4);
+    writeAnchor1Test(&bytes, second_ligature_attach + 4, 200, 220);
+
+    const glyphs = [_]GlyphId{ 20, 22, 21, 22 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
     try std.testing.expect(adjustments.items[0].mark_attachment);
     try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);

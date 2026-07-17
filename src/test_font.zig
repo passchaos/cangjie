@@ -168,6 +168,10 @@ pub fn buildNamedCjkTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try namedCjkTtfTables(allocator));
 }
 
+pub fn buildLastResortCmapTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try lastResortCmapTtfTables(allocator));
+}
+
 pub fn buildNamedCjkLanguageGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try namedCjkLanguageGsubTtfTables(allocator));
 }
@@ -927,6 +931,20 @@ fn namedCjkTtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn lastResortCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat13RangeTable(allocator, 0, 0x10ffff, 1) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
 fn namedCjkLanguageGsubTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
@@ -1403,6 +1421,26 @@ fn cmapFormat12RangeTable(allocator: std.mem.Allocator, start: u32, end: u32, gl
     writeU32(bytes, off + 16, start);
     writeU32(bytes, off + 20, end);
     writeU32(bytes, off + 24, glyph_start);
+    return bytes;
+}
+
+fn cmapFormat13RangeTable(allocator: std.mem.Allocator, start: u32, end: u32, glyph_id: u32) ![]u8 {
+    const bytes = try allocator.alloc(u8, 40);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 1);
+    writeU16(bytes, 4, 3);
+    writeU16(bytes, 6, 10);
+    writeU32(bytes, 8, 12);
+    const off = 12;
+    writeU16(bytes, off + 0, 13);
+    writeU16(bytes, off + 2, 0);
+    writeU32(bytes, off + 4, 28);
+    writeU32(bytes, off + 8, 0);
+    writeU32(bytes, off + 12, 1);
+    writeU32(bytes, off + 16, start);
+    writeU32(bytes, off + 20, end);
+    writeU32(bytes, off + 24, glyph_id);
     return bytes;
 }
 

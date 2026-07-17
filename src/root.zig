@@ -277,6 +277,20 @@ test "parses CBDT CBLC PNG bitmap glyphs" {
     try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(18));
 }
 
+test "maps many-to-one cmap format 13 last-resort ranges" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex('A'));
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex(0x4e00));
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex(0x1f600));
+}
+
 test "detects scripts and itemizes script runs" {
     const allocator = std.testing.allocator;
 

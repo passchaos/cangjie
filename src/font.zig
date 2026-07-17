@@ -325,18 +325,21 @@ pub const Font = struct {
 
     /// Map a Unicode scalar value to a glyph id using the best supported cmap.
     ///
-    /// Format 12 is preferred for full Unicode coverage, which matters for CJK
-    /// extension planes. Format 4 is retained for older BMP-only fonts.
+    /// Format 12 is preferred for precise full-Unicode coverage, which matters
+    /// for CJK extension planes. Format 13 is the OpenType "many-to-one"
+    /// fallback cmap used by last-resort fonts; it is less specific than
+    /// format 12 but still materially better than reporting UnsupportedCmap.
     pub fn glyphIndex(self: *const Font, codepoint: u21) FontError!glyph_mod.GlyphId {
         var best: ?CmapSubtable = null;
         for (self.cmap_subtables) |subtable| {
-            if (subtable.format != 4 and subtable.format != 12) continue;
+            if (subtable.format != 4 and subtable.format != 12 and subtable.format != 13) continue;
             if (best == null or scoreCmap(subtable) > scoreCmap(best.?)) best = subtable;
         }
         const chosen = best orelse return error.UnsupportedCmap;
         return switch (chosen.format) {
             4 => try glyphIndexFormat4(self.data, chosen.offset, codepoint),
             12 => try glyphIndexFormat12(self.data, chosen.offset, codepoint),
+            13 => try glyphIndexFormat13(self.data, chosen.offset, codepoint),
             else => error.UnsupportedCmap,
         };
     }
@@ -1342,10 +1345,12 @@ fn decodeSingleByteName(data: []const u8, out: []u8) FontError![]const u8 {
 }
 
 fn scoreCmap(subtable: CmapSubtable) u8 {
-    if (subtable.platform_id == 3 and subtable.encoding_id == 10) return 5;
-    if (subtable.platform_id == 0 and subtable.format == 12) return 4;
-    if (subtable.platform_id == 3 and subtable.encoding_id == 1) return 3;
-    if (subtable.platform_id == 0 and subtable.format == 4) return 2;
+    if (subtable.format == 12 and subtable.platform_id == 3 and subtable.encoding_id == 10) return 7;
+    if (subtable.format == 12 and subtable.platform_id == 0) return 6;
+    if (subtable.format == 4 and subtable.platform_id == 3 and subtable.encoding_id == 1) return 5;
+    if (subtable.format == 4 and subtable.platform_id == 0) return 4;
+    if (subtable.format == 13 and subtable.platform_id == 3 and subtable.encoding_id == 10) return 3;
+    if (subtable.format == 13 and subtable.platform_id == 0) return 2;
     return 1;
 }
 
@@ -1393,6 +1398,32 @@ fn glyphIndexFormat12(data: []const u8, offset: usize, codepoint: u21) FontError
         } else {
             const first = try bin.readU32At(data, group_offset + 8);
             return @intCast(first + codepoint - start);
+        }
+    }
+    return 0;
+}
+
+fn glyphIndexFormat13(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
+    // Format 13 shares the segmented 32-bit group layout with format 12, but
+    // each group maps every scalar in the range to the same glyph id. This is
+    // how last-resort fonts cover huge Unicode ranges without carrying per-code
+    // point glyph indices.
+    const groups = try bin.readU32At(data, offset + 12);
+    var lo: usize = 0;
+    var hi: usize = groups;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const group_offset = offset + 16 + mid * 12;
+        const start = try bin.readU32At(data, group_offset);
+        const end = try bin.readU32At(data, group_offset + 4);
+        if (codepoint < start) {
+            hi = mid;
+        } else if (codepoint > end) {
+            lo = mid + 1;
+        } else {
+            const glyph_id = try bin.readU32At(data, group_offset + 8);
+            if (glyph_id > std.math.maxInt(glyph_mod.GlyphId)) return error.BadSfnt;
+            return @intCast(glyph_id);
         }
     }
     return 0;

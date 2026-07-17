@@ -528,7 +528,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
     }
 }
 
-fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?usize {
+fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
     if (glyph_index >= glyphs.items.len) return null;
@@ -551,7 +551,12 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
             try replaceSourceMetadata(allocator, options, glyph_index + match.component_offsets[component_index], 1, 0, 0);
         }
     }
-    return match.component_count;
+    return .{
+        .removed_len = match.component_count,
+        .inserted_len = 1,
+        .component_offsets = match.component_offsets,
+        .component_count = match.component_count,
+    };
 }
 
 fn applyContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -953,8 +958,14 @@ fn applyChainingRuleSet(table: Table, chain_set_offset: usize, glyphs: *std.Arra
 }
 
 const NestedGlyphChange = struct {
+    /// Number of matched input glyphs replaced by the nested lookup, counting
+    /// the target glyph. Non-ligature substitutions replace a contiguous target
+    /// run; ligatures additionally fill `component_offsets` because LookupFlag
+    /// ignored glyphs may remain physically between matched components.
     removed_len: usize = 1,
     inserted_len: usize = 1,
+    component_offsets: ?[max_ligature_components]usize = null,
+    component_count: usize = 0,
 };
 
 fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -977,13 +988,36 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
         if (target_index >= glyphs.items.len) continue;
         const change = try applyNestedGlyphLookup(table, glyphs, target_index, lookup_index, allocator, options);
         if (change.removed_len == change.inserted_len) continue;
+        if (change.component_offsets) |component_offsets| {
+            for (mapped) |*mapped_index| {
+                if (mapped_index.* <= target_index) continue;
+                const relative_index = mapped_index.* - target_index;
+                var removed_before: usize = 0;
+                var consumed_component = false;
+                for (component_offsets[1..change.component_count]) |component_offset| {
+                    if (relative_index == component_offset) {
+                        consumed_component = true;
+                        break;
+                    }
+                    if (component_offset < relative_index) removed_before += 1;
+                }
+                if (consumed_component) {
+                    // Later records can name a component consumed by this
+                    // ligature. Retarget those records to the replacement
+                    // glyph, but leave LookupFlag-ignored glyphs that survived
+                    // between components addressable at their shifted indices.
+                    mapped_index.* = target_index;
+                } else {
+                    mapped_index.* -= removed_before;
+                }
+            }
+            continue;
+        }
         for (mapped) |*mapped_index| {
             if (mapped_index.* <= target_index) continue;
             if (mapped_index.* < target_index + change.removed_len) {
-                // A nested ligature lookup can consume later input glyphs that
-                // other SequenceLookupRecords still name. Map such records to
-                // the replacement glyph so they do not point past the changed
-                // run; records after the consumed span are shifted below.
+                // A non-ligature nested lookup consumed this later input glyph;
+                // map its record to the replacement at the target index.
                 mapped_index.* = target_index;
             } else if (change.inserted_len > change.removed_len) {
                 mapped_index.* += change.inserted_len - change.removed_len;
@@ -1009,8 +1043,8 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     if (lookup_type == 4) {
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if (try applyLigatureSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |removed_len| {
-                return .{ .removed_len = removed_len, .inserted_len = 1 };
+            if (try applyLigatureSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
+                return change;
             }
         }
         return .{};
@@ -1506,6 +1540,104 @@ test "GSUB context nested lookup can apply ligature substitution" {
     try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
+}
+
+test "GSUB contextual ligature remaps records across ignored components" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 112;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 8);
+    writeU16Test(&bytes, 14, 50);
+    writeU16Test(&bytes, 16, 82);
+
+    writeU16Test(&bytes, 18, 5);
+    writeU16Test(&bytes, 22, 1);
+    writeU16Test(&bytes, 24, 8);
+
+    const context = 26;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 28);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 3);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 99);
+    writeU16Test(&bytes, rule + 6, 2);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 1);
+    writeU16Test(&bytes, rule + 12, 2);
+    writeU16Test(&bytes, rule + 14, 2);
+    writeCoverage1(&bytes, context + 28, 1);
+
+    writeU16Test(&bytes, 60, 4);
+    writeU16Test(&bytes, 62, 0x0008);
+    writeU16Test(&bytes, 64, 1);
+    writeU16Test(&bytes, 66, 8);
+    const lig_subst = 68;
+    writeU16Test(&bytes, lig_subst + 0, 1);
+    writeU16Test(&bytes, lig_subst + 2, 18);
+    writeU16Test(&bytes, lig_subst + 4, 1);
+    writeU16Test(&bytes, lig_subst + 6, 8);
+    const ligature_set = lig_subst + 8;
+    writeU16Test(&bytes, ligature_set + 0, 1);
+    writeU16Test(&bytes, ligature_set + 2, 4);
+    const ligature = ligature_set + 4;
+    writeU16Test(&bytes, ligature + 0, 40);
+    writeU16Test(&bytes, ligature + 2, 2);
+    writeU16Test(&bytes, ligature + 4, 2);
+    writeCoverage1(&bytes, lig_subst + 18, 1);
+
+    writeU16Test(&bytes, 92, 1);
+    writeU16Test(&bytes, 96, 1);
+    writeU16Test(&bytes, 98, 8);
+    const single = 100;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 6);
+    writeI16Test(&bytes, single + 4, 1);
+    writeCoverage1(&bytes, single + 6, 40);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 99, 2 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+
+    var ligature_components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    defer ligature_components.deinit(allocator);
+    try ligature_components.appendSlice(allocator, &.{
+        defaultLigatureComponentInfo(0),
+        defaultLigatureComponentInfo(1),
+        defaultLigatureComponentInfo(2),
+    });
+
+    var glyph_classes = [_]u16{0} ** 100;
+    glyph_classes[99] = 3;
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 18, &glyphs, allocator, .{
+        .glyph_classes = &glyph_classes,
+        .glyph_source_indices = &sources,
+        .ligature_components = &ligature_components,
+    });
+
+    // The ligature lookup ignores the mark at source 1 while consuming source
+    // 2. The following contextual record still names sequenceIndex 2 in the
+    // pre-substitution match, so it must retarget the replacement ligature, not
+    // the surviving ignored mark that shifted into the old component slot.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 41, 99 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
+    try std.testing.expectEqual(@as(u8, 2), ligature_components.items[0].component_count);
+    try std.testing.expectEqual(@as(usize, 0), ligature_components.items[0].component_sources[0]);
+    try std.testing.expectEqual(@as(usize, 2), ligature_components.items[0].component_sources[1]);
+    try std.testing.expectEqual(@as(usize, 1), ligature_components.items[1].component_sources[0]);
 }
 
 test "GSUB single substitution subtables do not cascade within lookup" {

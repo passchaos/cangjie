@@ -266,6 +266,15 @@ pub const Font = struct {
         if (format == .truetype and (glyf == null or loca == null)) return error.MissingTable;
         if (format == .opentype_cff and cff == null) return error.MissingTable;
 
+        // The offsets in the directory have already been checked against the
+        // whole SFNT byte slice. These minimum sizes deliberately check the
+        // *declared table records* before reading cross-table fields below, so
+        // a truncated head/hhea/maxp table cannot borrow bytes from the next
+        // physical table in the file.
+        try requireTableLength(head, 54);
+        try requireTableLength(hhea, 36);
+        try requireTableLength(maxp, 6);
+
         const units_per_em = try bin.readU16At(data, head.offset + 18);
         const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
         const ascender = try bin.readI16At(data, hhea.offset + 4);
@@ -273,7 +282,8 @@ pub const Font = struct {
         const line_gap = try bin.readI16At(data, hhea.offset + 8);
         const number_of_h_metrics = try bin.readU16At(data, hhea.offset + 34);
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
-        if (number_of_h_metrics == 0 or number_of_h_metrics > glyph_count) return error.InvalidMetrics;
+        const required_hmtx_length = try hmtxRequiredLength(glyph_count, number_of_h_metrics);
+        if (hmtx.length < required_hmtx_length) return error.InvalidMetrics;
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
         // supported Unicode mapping per lookup without reparsing the directory.
@@ -354,6 +364,8 @@ pub const Font = struct {
     /// per-glyph left side bearing.
     pub fn horizontalMetrics(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!struct { advance_width: u16, left_side_bearing: i16 } {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const required_length = try hmtxRequiredLength(self.glyph_count, self.number_of_h_metrics);
+        if (self.hmtx.length < required_length) return error.InvalidMetrics;
         if (glyph_id < self.number_of_h_metrics) {
             const offset = self.hmtx.offset + @as(usize, glyph_id) * 4;
             return .{
@@ -879,6 +891,8 @@ pub const Font = struct {
     fn locaOffset(self: *const Font, glyph_id: u32) FontError!usize {
         if (glyph_id > self.glyph_count) return error.InvalidGlyph;
         const loca = self.loca orelse return error.MissingTable;
+        const required_length = try locaEntryRequiredLength(glyph_id, self.index_to_loc_format);
+        if (loca.length < required_length) return error.InvalidLoca;
         return switch (self.index_to_loc_format) {
             0 => @as(usize, try bin.readU16At(self.data, loca.offset + @as(usize, glyph_id) * 2)) * 2,
             1 => try bin.readU32At(self.data, loca.offset + @as(usize, glyph_id) * 4),
@@ -1269,6 +1283,24 @@ fn findTable(records: []const TableRecord, comptime table_tag: []const u8) ?Tabl
         if (bin.tagEq(record.tag, table_tag)) return record;
     }
     return null;
+}
+
+fn requireTableLength(record: TableRecord, minimum_length: usize) FontError!void {
+    if (record.length < minimum_length) return error.BadSfnt;
+}
+
+fn hmtxRequiredLength(glyph_count: u16, number_of_h_metrics: u16) FontError!usize {
+    if (number_of_h_metrics == 0 or number_of_h_metrics > glyph_count) return error.InvalidMetrics;
+    return @as(usize, number_of_h_metrics) * 4 + @as(usize, glyph_count - number_of_h_metrics) * 2;
+}
+
+fn locaEntryRequiredLength(glyph_id: u32, index_to_loc_format: i16) FontError!usize {
+    const entry_count = @as(usize, glyph_id) + 1;
+    return switch (index_to_loc_format) {
+        0 => entry_count * 2,
+        1 => entry_count * 4,
+        else => error.InvalidLoca,
+    };
 }
 
 fn sfntOffset(data: []const u8, face_index: usize) FontError!usize {
@@ -2139,6 +2171,34 @@ test "cmap parser rejects subtable length past cmap table boundary" {
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &data, cmap));
 }
 
+test "core metrics and loca stay inside declared table lengths" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    inline for (.{ "head", "hhea", "maxp" }, .{ 52, 34, 4 }) |tag, length| {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        try setSfntTableLength(bytes, tag, length);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        try setSfntTableLength(bytes, "hmtx", 6);
+        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        try setSfntTableLength(bytes, "loca", 4);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(error.InvalidLoca, font.glyphOutline(allocator, 1));
+    }
+}
+
 fn gdefOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2221,6 +2281,19 @@ fn kernOnlyFont(data: []const u8) Font {
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
     };
+}
+
+fn setSfntTableLength(bytes: []u8, comptime table_tag: []const u8, length: u32) FontError!void {
+    if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
+    const table_count = try bin.readU16At(bytes, 4);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (record_offset + 16 > bytes.len) return error.BadSfnt;
+        if (!std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) continue;
+        writeU32Test(bytes, record_offset + 12, length);
+        return;
+    }
+    return error.MissingTable;
 }
 
 fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {

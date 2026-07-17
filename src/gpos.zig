@@ -964,10 +964,20 @@ const Anchor = struct {
 
 fn readAnchor(table: Table, anchor_offset: usize) GposError!Anchor {
     const format = try readU16(table, anchor_offset);
-    if (format != 1) return error.UnsupportedGpos;
-    return .{
-        .x = try readI16(table, anchor_offset + 2),
-        .y = try readI16(table, anchor_offset + 4),
+    return switch (format) {
+        1 => .{
+            .x = try readI16(table, anchor_offset + 2),
+            .y = try readI16(table, anchor_offset + 4),
+        },
+        2 => .{
+            .x = try readI16(table, anchor_offset + 2),
+            .y = try readI16(table, anchor_offset + 4),
+        },
+        3 => .{
+            .x = try readI16(table, anchor_offset + 2),
+            .y = try readI16(table, anchor_offset + 4),
+        },
+        else => error.UnsupportedGpos,
     };
 }
 

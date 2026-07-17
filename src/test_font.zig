@@ -303,6 +303,10 @@ pub fn buildMinimalGposMarkTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGposMarkTtfTables(allocator));
 }
 
+pub fn buildGposMarkAnchorFormatsTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try gposMarkAnchorFormatsTtfTables(allocator));
+}
+
 pub fn buildMinimalGposMarkToMarkTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGposMarkToMarkTtfTables(allocator));
 }
@@ -1276,6 +1280,20 @@ fn minimalGposMarkTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 8);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "GPOS", .data = try gposMarkTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithLigature(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
+    return tables;
+}
+
+fn gposMarkAnchorFormatsTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "GPOS", .data = try gposMarkAnchorFormatsTable(allocator) };
     tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
@@ -3311,6 +3329,60 @@ fn gposMarkTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 74, 1);
     writeI16(bytes, 76, 50);
     writeI16(bytes, 78, 100);
+    return bytes;
+}
+
+fn gposMarkAnchorFormatsTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 86);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 12);
+    writeU16(bytes, 8, 14);
+
+    writeU16(bytes, 10, 0);
+    writeU16(bytes, 12, 0);
+
+    writeU16(bytes, 14, 1);
+    writeU16(bytes, 16, 4);
+
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 1);
+    writeU16(bytes, 24, 8);
+
+    writeU16(bytes, 26, 1);
+    writeU16(bytes, 28, 12);
+    writeU16(bytes, 30, 18);
+    writeU16(bytes, 32, 1);
+    writeU16(bytes, 34, 24);
+    writeU16(bytes, 36, 36);
+
+    writeU16(bytes, 38, 1);
+    writeU16(bytes, 40, 1);
+    writeU16(bytes, 42, 1);
+
+    writeU16(bytes, 44, 1);
+    writeU16(bytes, 46, 1);
+    writeU16(bytes, 48, 1);
+
+    writeU16(bytes, 50, 1);
+    writeU16(bytes, 52, 0);
+    writeU16(bytes, 54, 18);
+
+    writeU16(bytes, 62, 1);
+    writeU16(bytes, 64, 14);
+
+    writeU16(bytes, 68, 2);
+    writeI16(bytes, 70, 0);
+    writeI16(bytes, 72, 0);
+    writeU16(bytes, 74, 7);
+
+    writeU16(bytes, 76, 3);
+    writeI16(bytes, 78, 50);
+    writeI16(bytes, 80, 100);
+    writeU16(bytes, 82, 0);
+    writeU16(bytes, 84, 0);
     return bytes;
 }
 

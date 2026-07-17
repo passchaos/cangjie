@@ -3,6 +3,15 @@ const bin = @import("binary.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
 const unicode = @import("unicode.zig");
 
+pub const max_ligature_components = 64;
+
+pub const LigatureComponentInfo = struct {
+    /// Source-order positions for the logical components that produced this
+    /// ligature glyph. Non-ligature glyphs may leave component_count at 1.
+    component_count: u8 = 1,
+    component_sources: [max_ligature_components]usize = [_]usize{0} ** max_ligature_components,
+};
+
 /// GPOS produces additive adjustments instead of mutating glyph ids. The caller
 /// applies these deltas while constructing final glyph positions.
 pub const GposError = error{
@@ -42,6 +51,14 @@ pub const LookupOptions = struct {
     mark_attach_classes: ?[]const u16 = null,
     mark_filtering_sets: ?[]const []const GlyphId = null,
     active_mark_filtering_set: ?u16 = null,
+    /// Optional source-order index per shaped glyph. MarkLigPos uses this with
+    /// `ligature_components` to attach marks to the logical component whose
+    /// source position most closely precedes the mark. Without this metadata,
+    /// the parser falls back to a conservative positional heuristic.
+    glyph_source_indices: ?[]const usize = null,
+    /// Optional ligature component metadata parallel to the post-GSUB glyph
+    /// stream. Entries are only meaningful for ligature glyph positions.
+    ligature_components: ?[]const LigatureComponentInfo = null,
 };
 
 /// Collect positioning adjustments for a post-GSUB glyph stream.
@@ -1189,15 +1206,41 @@ fn previousCoveredLigatureGlyph(table: Table, mark_coverage_offset: usize, ligat
 fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, ligature_position: usize, mark_position: usize, component_count: usize, lookup_flag: u16, options: LookupOptions) GposError!usize {
     if (component_count <= 1) return 0;
 
+    if (options.glyph_source_indices) |sources| {
+        if (mark_position < sources.len) {
+            if (options.ligature_components) |components| {
+                if (ligature_position < components.len) {
+                    const info = components[ligature_position];
+                    const available_count = @min(@as(usize, info.component_count), component_count);
+                    if (available_count > 0) {
+                        const mark_source = sources[mark_position];
+                        var chosen: usize = 0;
+                        // Component source positions are monotonically ordered
+                        // by the GSUB ligature trace. A mark belongs to the
+                        // latest component whose source position is not after
+                        // that mark, which handles marks originally typed
+                        // between ligature components as well as marks after
+                        // the full ligature sequence.
+                        for (info.component_sources[0..available_count], 0..) |component_source, component_i| {
+                            if (component_source > mark_source) break;
+                            chosen = component_i;
+                        }
+                        return chosen;
+                    }
+                }
+            }
+        }
+    }
+
     var covered_marks_before_target: usize = 0;
     var pos = ligature_position + 1;
     while (pos < mark_position) : (pos += 1) {
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         // OpenType engines normally know the original GSUB ligature component
-        // for each remaining mark. This low-level glyph-id API does not carry
-        // that metadata, so use the mark's position within the post-ligature
-        // covered mark run as the best available component hint. Clamp to the
-        // final component so extra stacked marks still choose a valid anchor.
+        // for each remaining mark. When the caller does not provide that
+        // metadata, use the mark's order within the post-ligature covered mark
+        // run as the best available component hint. Clamp to the final
+        // component so extra stacked marks still choose a valid anchor.
         if (try coverageIndex(table, mark_coverage_offset, glyphs[pos]) != null) {
             covered_marks_before_target += 1;
         }
@@ -2133,6 +2176,74 @@ test "GPOS extension positioning preserves wrapper lookup flags" {
     });
 
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS mark-to-ligature uses source metadata for component choice" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 72;
+
+    writeU16Test(&bytes, 0, 5);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const mark_lig = 8;
+    writeU16Test(&bytes, mark_lig + 0, 1);
+    writeU16Test(&bytes, mark_lig + 2, 12);
+    writeU16Test(&bytes, mark_lig + 4, 18);
+    writeU16Test(&bytes, mark_lig + 6, 1);
+    writeU16Test(&bytes, mark_lig + 8, 24);
+    writeU16Test(&bytes, mark_lig + 10, 36);
+
+    writeCoverage1Test(&bytes, mark_lig + 12, 22);
+    writeCoverage1Test(&bytes, mark_lig + 18, 20);
+
+    const mark_array = mark_lig + 24;
+    writeU16Test(&bytes, mark_array + 0, 1);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 6);
+    writeAnchor1Test(&bytes, mark_array + 6, 10, 15);
+
+    const ligature_array = mark_lig + 36;
+    writeU16Test(&bytes, ligature_array + 0, 1);
+    writeU16Test(&bytes, ligature_array + 2, 4);
+    const ligature_attach = ligature_array + 4;
+    writeU16Test(&bytes, ligature_attach + 0, 2);
+    writeU16Test(&bytes, ligature_attach + 2, 8);
+    writeU16Test(&bytes, ligature_attach + 4, 14);
+    writeAnchor1Test(&bytes, ligature_attach + 8, 100, 120);
+    writeAnchor1Test(&bytes, ligature_attach + 14, 260, 300);
+
+    const glyphs = [_]GlyphId{ 20, 22 };
+    const sources = [_]usize{ 0, 2 };
+    const ligature_components = [_]LigatureComponentInfo{
+        .{
+            .component_count = 2,
+            .component_sources = blk: {
+                var component_sources = [_]usize{0} ** max_ligature_components;
+                component_sources[0] = 0;
+                component_sources[1] = 1;
+                break :blk component_sources;
+            },
+        },
+        .{},
+    };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_source_indices = &sources,
+        .ligature_components = &ligature_components,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    // This is the first mark after the ligature in the post-GSUB stream, so
+    // the mark-order fallback would choose component 0. Source metadata shows
+    // that it originated after the second component's source position, so it
+    // must use component 1.
+    try std.testing.expectEqual(@as(i16, 250), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 285), adjustments.items[0].y_placement);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
 }
 
 test "GPOS mark-to-ligature attachment skips lookup-flag ignored glyphs" {

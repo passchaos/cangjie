@@ -290,12 +290,7 @@ pub fn visualOrderCodepoints(allocator: std.mem.Allocator, text: []const u8, bas
         const run = runs[run_index];
         const slice = text[run.byte_start .. run.byte_start + run.byte_len];
         if (run.direction == .rtl) {
-            const start_len = output.items.len;
-            try appendCodepoints(allocator, &output, slice);
-            std.mem.reverse(u21, output.items[start_len..]);
-            for (output.items[start_len..]) |*codepoint| {
-                codepoint.* = mirroredCodepoint(codepoint.*);
-            }
+            try appendRtlCodepointsByGrapheme(allocator, &output, slice);
         } else {
             try appendCodepoints(allocator, &output, slice);
         }
@@ -335,11 +330,7 @@ pub fn buildBidiMap(allocator: std.mem.Allocator, text: []const u8, base_directi
         const run = runs[run_index];
         const range = logicalRangeForBytes(logical, run.byte_start, run.byte_start + run.byte_len);
         if (run.direction == .rtl) {
-            var index = range.end;
-            while (index > range.start) {
-                index -= 1;
-                try appendVisualBidiItem(allocator, &items, logical_to_visual, logical[index], run.direction);
-            }
+            try appendRtlVisualBidiItemsByGrapheme(allocator, &items, logical_to_visual, logical, text, run, range);
         } else {
             var index = range.start;
             while (index < range.end) : (index += 1) {
@@ -596,7 +587,9 @@ fn collectLogicalBidiItems(allocator: std.mem.Allocator, text: []const u8) ![]Bi
     return try items.toOwnedSlice(allocator);
 }
 
-fn logicalRangeForBytes(logical: []const BidiMapItem, byte_start: usize, byte_end: usize) struct { start: usize, end: usize } {
+const LogicalRange = struct { start: usize, end: usize };
+
+fn logicalRangeForBytes(logical: []const BidiMapItem, byte_start: usize, byte_end: usize) LogicalRange {
     var start: ?usize = null;
     var end: usize = 0;
     for (logical, 0..) |item, index| {
@@ -606,6 +599,39 @@ fn logicalRangeForBytes(logical: []const BidiMapItem, byte_start: usize, byte_en
         end = index + 1;
     }
     return .{ .start = start orelse 0, .end = end };
+}
+
+fn appendRtlCodepointsByGrapheme(allocator: std.mem.Allocator, output: *std.ArrayList(u21), text: []const u8) !void {
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    var cluster_index = clusters.len;
+    while (cluster_index > 0) {
+        cluster_index -= 1;
+        const cluster = clusters[cluster_index];
+        const start_len = output.items.len;
+        try appendCodepoints(allocator, output, text[cluster.byte_start .. cluster.byte_start + cluster.byte_len]);
+        for (output.items[start_len..]) |*codepoint| {
+            codepoint.* = mirroredCodepoint(codepoint.*);
+        }
+    }
+}
+
+fn appendRtlVisualBidiItemsByGrapheme(allocator: std.mem.Allocator, items: *std.ArrayList(BidiMapItem), logical_to_visual: []usize, logical: []const BidiMapItem, text: []const u8, run: BidiRun, range: LogicalRange) !void {
+    const clusters = try itemizeGraphemeClusters(allocator, text[run.byte_start .. run.byte_start + run.byte_len]);
+    defer allocator.free(clusters);
+    var cluster_index = clusters.len;
+    while (cluster_index > 0) {
+        cluster_index -= 1;
+        const cluster = clusters[cluster_index];
+        const cluster_start = run.byte_start + cluster.byte_start;
+        const cluster_end = cluster_start + cluster.byte_len;
+        const cluster_range = logicalRangeForBytes(logical, cluster_start, cluster_end);
+        var index = @max(cluster_range.start, range.start);
+        const end = @min(cluster_range.end, range.end);
+        while (index < end) : (index += 1) {
+            try appendVisualBidiItem(allocator, items, logical_to_visual, logical[index], run.direction);
+        }
+    }
 }
 
 fn appendVisualBidiItem(allocator: std.mem.Allocator, items: *std.ArrayList(BidiMapItem), logical_to_visual: []usize, logical: BidiMapItem, direction: BidiClass) !void {

@@ -547,6 +547,10 @@ test "detects bidi classes and itemizes bidi runs" {
     defer allocator.free(mirrored_utf8);
     try std.testing.expectEqualStrings("(בא)", mirrored_utf8);
 
+    const variation_visual = try visualOrderCodepoints(allocator, "א\u{fe0f}ב", .rtl);
+    defer allocator.free(variation_visual);
+    try std.testing.expectEqualSlices(u21, &.{ 0x05d1, 0x05d0, 0xfe0f }, variation_visual);
+
     const neutral_prefix = try itemizeBidiRuns(allocator, "  ב", .rtl);
     defer allocator.free(neutral_prefix);
     try std.testing.expectEqual(@as(usize, 1), neutral_prefix.len);
@@ -571,6 +575,16 @@ test "builds bidi logical visual maps" {
     try std.testing.expectEqual(@as(u21, 0x05d2), ltr_map.items[2].visual_codepoint);
     try std.testing.expectEqual(@as(u21, 0x05d1), ltr_map.items[3].visual_codepoint);
     try std.testing.expectEqual(BidiClass.rtl, ltr_map.items[2].direction);
+
+    var variation_map = try buildBidiMap(allocator, "א\u{fe0f}ב", .rtl);
+    defer variation_map.deinit();
+    try std.testing.expectEqual(@as(usize, 3), variation_map.items.len);
+    try std.testing.expectEqual(@as(u21, 0x05d1), variation_map.items[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x05d0), variation_map.items[1].codepoint);
+    try std.testing.expectEqual(@as(u21, 0xfe0f), variation_map.items[2].codepoint);
+    try std.testing.expectEqual(@as(usize, 1), variation_map.logicalToVisual(0).?);
+    try std.testing.expectEqual(@as(usize, 2), variation_map.logicalToVisual(1).?);
+    try std.testing.expectEqual(@as(usize, 0), variation_map.logicalToVisual(2).?);
 
     var rtl_map = try buildBidiMap(allocator, "abבגcd", .rtl);
     defer rtl_map.deinit();

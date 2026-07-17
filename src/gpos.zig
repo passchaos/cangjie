@@ -500,7 +500,7 @@ fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []c
     for (glyphs, 0..) |glyph, i| {
         if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse continue;
-        const base_position = try previousCoveredBaseGlyph(table, base_coverage_offset, glyphs, i, attached_marks, lookup_flag, options) orelse continue;
+        const base_position = try previousCoveredBaseGlyph(table, mark_coverage_offset, base_coverage_offset, glyphs, i, attached_marks, lookup_flag, options) orelse continue;
         const base_index = try coverageIndex(table, base_coverage_offset, glyphs[base_position]) orelse continue;
         const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
         const mark_class = try readU16(table, mark_record_offset);
@@ -521,13 +521,25 @@ fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []c
     }
 }
 
-fn previousCoveredBaseGlyph(table: Table, base_coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!?usize {
+fn previousCoveredBaseGlyph(table: Table, mark_coverage_offset: usize, base_coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!?usize {
     var i = mark_index;
     while (i > 0) {
         i -= 1;
         if (i < attached_marks.len and attached_marks[i]) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
         if (try coverageIndex(table, base_coverage_offset, glyphs[i]) != null) return i;
+
+        // MarkBasePos attaches to the nearest previous participating base. A
+        // non-mark glyph that is not in BaseCoverage is a real blocker; walking
+        // past it would incorrectly attach the mark to an older base across an
+        // intervening base/ligature. Marks remain transparent for stacked-mark
+        // clusters; use GDEF classes when present and fall back to this
+        // subtable's MarkCoverage for minimal fonts that omit GDEF.
+        const class_is_mark = if (options.glyph_classes) |classes|
+            glyphs[i] < classes.len and classes[glyphs[i]] == 3
+        else
+            false;
+        if (!class_is_mark and try coverageIndex(table, mark_coverage_offset, glyphs[i]) == null) return null;
     }
     return null;
 }
@@ -1266,6 +1278,52 @@ test "GPOS cursive attachment skips lookup-flag ignored glyphs" {
     try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 80), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 25), adjustments.items[0].y_placement);
+}
+
+test "GPOS mark-to-base stops at intervening non-covered base" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+
+    writeU16Test(&bytes, 0, 4);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const mark_base = 8;
+    writeU16Test(&bytes, mark_base + 0, 1);
+    writeU16Test(&bytes, mark_base + 2, 12);
+    writeU16Test(&bytes, mark_base + 4, 18);
+    writeU16Test(&bytes, mark_base + 6, 1);
+    writeU16Test(&bytes, mark_base + 8, 24);
+    writeU16Test(&bytes, mark_base + 10, 38);
+
+    writeCoverage1Test(&bytes, mark_base + 12, 12);
+    writeCoverage1Test(&bytes, mark_base + 18, 10);
+
+    const mark_array = mark_base + 24;
+    writeU16Test(&bytes, mark_array + 0, 1);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 8);
+    writeAnchor1Test(&bytes, mark_array + 8, 0, 0);
+
+    const base_array = mark_base + 38;
+    writeU16Test(&bytes, base_array + 0, 1);
+    writeU16Test(&bytes, base_array + 2, 4);
+    writeAnchor1Test(&bytes, base_array + 4, 100, 120);
+
+    const glyphs = [_]GlyphId{ 10, 11, 12 };
+    var glyph_classes = [_]u16{0} ** 13;
+    glyph_classes[10] = 1;
+    glyph_classes[11] = 1;
+    glyph_classes[12] = 3;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 test "GPOS lookup flags honor GDEF mark filtering sets" {

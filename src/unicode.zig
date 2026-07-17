@@ -956,7 +956,22 @@ fn isGraphemePrependCodepoint(codepoint: u21) bool {
 
 fn isGraphemeControl(codepoint: u21) bool {
     return (codepoint >= 0x0000 and codepoint <= 0x001f) or
-        (codepoint >= 0x007f and codepoint <= 0x009f);
+        (codepoint >= 0x007f and codepoint <= 0x009f) or
+        // Grapheme_Cluster_Break=Control also includes several format and
+        // separator scalars. They are invisible text controls, but UAX #29
+        // still gives them their own caret stop; otherwise a following Extend
+        // mark can be incorrectly absorbed into the control's cluster.
+        codepoint == 0x00ad or
+        codepoint == 0x061c or
+        codepoint == 0x180e or
+        codepoint == 0x200b or
+        (codepoint >= 0x200e and codepoint <= 0x200f) or
+        codepoint == 0x2028 or
+        codepoint == 0x2029 or
+        (codepoint >= 0x202a and codepoint <= 0x202e) or
+        (codepoint >= 0x2060 and codepoint <= 0x206f) or
+        codepoint == 0xfeff or
+        (codepoint >= 0xfff0 and codepoint <= 0xfff8);
 }
 
 fn isExtendedPictographic(codepoint: u21) bool {

@@ -808,6 +808,20 @@ test "grapheme clusters keep controls atomic" {
     try std.testing.expectEqual(@as(usize, 3), crlf.len);
     try std.testing.expectEqualStrings("\r\n", "a\r\n\u{0301}"[crlf[1].byte_start..][0..crlf[1].byte_len]);
     try std.testing.expectEqualStrings("\u{0301}", "a\r\n\u{0301}"[crlf[2].byte_start..][0..crlf[2].byte_len]);
+
+    const format_control = try itemizeGraphemeClusters(allocator, "a\u{200e}\u{0301}b");
+    defer allocator.free(format_control);
+    try std.testing.expectEqual(@as(usize, 4), format_control.len);
+    try std.testing.expectEqualStrings("a", "a\u{200e}\u{0301}b"[format_control[0].byte_start..][0..format_control[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{200e}", "a\u{200e}\u{0301}b"[format_control[1].byte_start..][0..format_control[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{0301}", "a\u{200e}\u{0301}b"[format_control[2].byte_start..][0..format_control[2].byte_len]);
+    try std.testing.expectEqualStrings("b", "a\u{200e}\u{0301}b"[format_control[3].byte_start..][0..format_control[3].byte_len]);
+
+    const paragraph_separator = try itemizeGraphemeClusters(allocator, "x\u{2029}\u{0301}y");
+    defer allocator.free(paragraph_separator);
+    try std.testing.expectEqual(@as(usize, 4), paragraph_separator.len);
+    try std.testing.expectEqualStrings("\u{2029}", "x\u{2029}\u{0301}y"[paragraph_separator[1].byte_start..][0..paragraph_separator[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{0301}", "x\u{2029}\u{0301}y"[paragraph_separator[2].byte_start..][0..paragraph_separator[2].byte_len]);
 }
 
 test "word segments retain Unicode format controls" {

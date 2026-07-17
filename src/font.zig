@@ -435,6 +435,7 @@ pub const Font = struct {
         var gsub_options = options;
         var glyph_classes: ?[]u16 = null;
         var mark_attach_classes: ?[]u16 = null;
+        var mark_filtering_sets: ?[][]glyph_mod.GlyphId = null;
         if (self.gdef != null) {
             const classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(classes);
@@ -450,9 +451,14 @@ pub const Font = struct {
             mark_attach_classes = attach_classes;
             gsub_options.glyph_classes = classes;
             gsub_options.mark_attach_classes = attach_classes;
+            if (try self.markFilteringSets(allocator)) |sets| {
+                mark_filtering_sets = sets;
+                gsub_options.mark_filtering_sets = sets;
+            }
         }
         defer if (glyph_classes) |classes| allocator.free(classes);
         defer if (mark_attach_classes) |classes| allocator.free(classes);
+        defer if (mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
         try gsub_mod.applyWithOptions(self.data, gsub.offset, gsub.length, glyphs, allocator, gsub_options);
     }
 
@@ -468,6 +474,7 @@ pub const Font = struct {
         var gpos_options = options;
         var glyph_classes: ?[]u16 = null;
         var mark_attach_classes: ?[]u16 = null;
+        var mark_filtering_sets: ?[][]glyph_mod.GlyphId = null;
         if (self.gdef != null) {
             const classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(classes);
@@ -483,9 +490,14 @@ pub const Font = struct {
             mark_attach_classes = attach_classes;
             gpos_options.glyph_classes = classes;
             gpos_options.mark_attach_classes = attach_classes;
+            if (try self.markFilteringSets(allocator)) |sets| {
+                mark_filtering_sets = sets;
+                gpos_options.mark_filtering_sets = sets;
+            }
         }
         defer if (glyph_classes) |classes| allocator.free(classes);
         defer if (mark_attach_classes) |classes| allocator.free(classes);
+        defer if (mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
     }
 
@@ -536,6 +548,17 @@ pub const Font = struct {
         if (mark_attach_class_def_offset == 0) return 0;
         if (mark_attach_class_def_offset >= gdef.length) return error.BadSfnt;
         return try classDefValue(self.data[gdef.offset .. gdef.offset + gdef.length], mark_attach_class_def_offset, glyph_id);
+    }
+
+    fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {
+        const gdef = self.gdef orelse return null;
+        if (gdef.length < 14) return null;
+        const major = try bin.readU16At(self.data, gdef.offset);
+        if (major != 1) return error.BadSfnt;
+        const mark_glyph_sets_def_offset = try bin.readU16At(self.data, gdef.offset + 12);
+        if (mark_glyph_sets_def_offset == 0) return null;
+        if (mark_glyph_sets_def_offset >= gdef.length) return error.BadSfnt;
+        return try readMarkGlyphSetsDef(allocator, self.data[gdef.offset .. gdef.offset + gdef.length], mark_glyph_sets_def_offset);
     }
 
     pub fn styleAttributes(self: *const Font) FontError!StyleAttributes {
@@ -1299,6 +1322,80 @@ fn classDefValue(data: []const u8, offset: usize, glyph_id: glyph_mod.GlyphId) F
     }
 }
 
+fn readMarkGlyphSetsDef(allocator: std.mem.Allocator, data: []const u8, offset: usize) FontError![][]glyph_mod.GlyphId {
+    if (offset + 4 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    if (format != 1) return error.BadSfnt;
+    const set_count = try bin.readU16At(data, offset + 2);
+    if (@as(usize, set_count) * 4 > data.len - (offset + 4)) return error.BadSfnt;
+
+    const sets = try allocator.alloc([]glyph_mod.GlyphId, set_count);
+    errdefer allocator.free(sets);
+    var initialized: usize = 0;
+    errdefer {
+        for (sets[0..initialized]) |set| allocator.free(set);
+    }
+
+    for (sets, 0..) |*set, index| {
+        const coverage_relative = try bin.readU32At(data, offset + 4 + index * 4);
+        if (coverage_relative > data.len - offset) return error.BadSfnt;
+        set.* = try coverageGlyphs(allocator, data, offset + coverage_relative);
+        initialized += 1;
+    }
+    return sets;
+}
+
+fn coverageGlyphs(allocator: std.mem.Allocator, data: []const u8, offset: usize) FontError![]glyph_mod.GlyphId {
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    switch (format) {
+        1 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const glyph_count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, glyph_count) * 2 > data.len - (offset + 4)) return error.BadSfnt;
+            const glyphs = try allocator.alloc(glyph_mod.GlyphId, glyph_count);
+            errdefer allocator.free(glyphs);
+            for (glyphs, 0..) |*glyph, index| {
+                glyph.* = try bin.readU16At(data, offset + 4 + index * 2);
+            }
+            return glyphs;
+        },
+        2 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const range_count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
+            var glyph_total: usize = 0;
+            for (0..range_count) |index| {
+                const range_offset = offset + 4 + index * 6;
+                const start = try bin.readU16At(data, range_offset);
+                const end = try bin.readU16At(data, range_offset + 2);
+                if (end < start) return error.BadSfnt;
+                glyph_total += @as(usize, end) - start + 1;
+            }
+
+            const glyphs = try allocator.alloc(glyph_mod.GlyphId, glyph_total);
+            errdefer allocator.free(glyphs);
+            var out: usize = 0;
+            for (0..range_count) |index| {
+                const range_offset = offset + 4 + index * 6;
+                const start = try bin.readU16At(data, range_offset);
+                const end = try bin.readU16At(data, range_offset + 2);
+                for (start..@as(usize, end) + 1) |glyph| {
+                    glyphs[out] = @intCast(glyph);
+                    out += 1;
+                }
+            }
+            return glyphs;
+        },
+        else => return error.BadSfnt,
+    }
+}
+
+fn freeMarkFilteringSets(allocator: std.mem.Allocator, sets: [][]glyph_mod.GlyphId) void {
+    for (sets) |set| allocator.free(set);
+    allocator.free(sets);
+}
+
 const NameRecord = struct {
     platform_id: u16,
     encoding_id: u16,
@@ -1822,6 +1919,37 @@ fn readI16FromSlice(data: []const u8, offset: usize) FontError!i16 {
     };
 }
 
+test "reads GDEF mark glyph filtering sets" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 52;
+
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 2);
+    writeU32Test(&bytes, 4, 12);
+    writeU32Test(&bytes, 8, 22);
+
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 5);
+    writeU16Test(&bytes, 18, 9);
+
+    writeU16Test(&bytes, 22, 2);
+    writeU16Test(&bytes, 24, 2);
+    writeU16Test(&bytes, 26, 20);
+    writeU16Test(&bytes, 28, 21);
+    writeU16Test(&bytes, 30, 0);
+    writeU16Test(&bytes, 32, 30);
+    writeU16Test(&bytes, 34, 32);
+    writeU16Test(&bytes, 36, 2);
+
+    const sets = try readMarkGlyphSetsDef(allocator, &bytes, 0);
+    defer freeMarkFilteringSets(allocator, sets);
+
+    try std.testing.expectEqual(@as(usize, 2), sets.len);
+    try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 5, 9 }, sets[0]);
+    try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 20, 21, 30, 31, 32 }, sets[1]);
+}
+
 test "legacy kern format 0 accumulates multiple horizontal subtables" {
     var data: [44]u8 = .{0} ** 44;
     writeU16Test(&data, 0, 0);
@@ -1903,6 +2031,10 @@ fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: gly
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
+    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
 }
 
 fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {

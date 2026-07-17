@@ -35,6 +35,8 @@ pub const LookupOptions = struct {
     apply_all_if_unselected: bool = true,
     glyph_classes: ?[]const u16 = null,
     mark_attach_classes: ?[]const u16 = null,
+    mark_filtering_sets: ?[]const []const GlyphId = null,
+    active_mark_filtering_set: ?u16 = null,
 };
 
 /// Collect positioning adjustments for a post-GSUB glyph stream.
@@ -171,18 +173,25 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
+    var lookup_options = options;
+    if ((lookup_flag & 0x0010) != 0) {
+        // UseMarkFilteringSet stores its set index after the variable-length
+        // SubTable offset array. The high byte remains reserved for the older
+        // MarkAttachmentType mechanism when bit 4 is clear.
+        lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
+    }
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
-            1 => try collectSingleAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            2 => try collectPairAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            4 => try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            5 => try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            6 => try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
-            9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
+            1 => try collectSingleAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            2 => try collectPairAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            4 => try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            5 => try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            6 => try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
         }
     }
@@ -220,19 +229,45 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
 }
 
 fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) bool {
-    // Lookup flags share GDEF glyph class semantics with GSUB. If a font has no
-    // GDEF class data, the lookup applies to all glyphs.
-    const classes = options.glyph_classes orelse return false;
-    if (glyph >= classes.len) return false;
-    const class = classes[glyph];
+    const classes = options.glyph_classes;
+    const class = if (classes) |items| if (glyph < items.len) items[glyph] else 0 else 0;
+
+    // UseMarkFilteringSet shares the high byte with MarkAttachmentType. When it
+    // is set, the high byte names a GDEF MarkGlyphSetsDef entry instead. The
+    // filter is mark-specific: bases and ligatures continue to participate in
+    // contextual matching while marks outside the selected set are transparent.
+    if ((lookup_flag & 0x0010) != 0) {
+        const mark_filtering_set_index = options.active_mark_filtering_set orelse return class == 3;
+        const mark_sets = options.mark_filtering_sets orelse return class == 3;
+        if (mark_filtering_set_index >= mark_sets.len) return class == 3;
+        const in_selected_set = glyphInMarkFilteringSet(mark_sets[mark_filtering_set_index], glyph);
+        const is_mark = class == 3 or glyphInAnyMarkFilteringSet(mark_sets, glyph);
+        if (is_mark and !in_selected_set) return true;
+    }
+
+    if (classes == null) return false;
     if ((lookup_flag & 0x0002) != 0 and class == 1) return true;
     if ((lookup_flag & 0x0004) != 0 and class == 2) return true;
     if ((lookup_flag & 0x0008) != 0 and class == 3) return true;
     const mark_attachment_type = lookup_flag >> 8;
-    if (mark_attachment_type != 0 and class == 3) {
+    if (mark_attachment_type != 0 and class == 3 and (lookup_flag & 0x0010) == 0) {
         const attach_classes = options.mark_attach_classes orelse return true;
         if (glyph >= attach_classes.len) return true;
         return attach_classes[glyph] != mark_attachment_type;
+    }
+    return false;
+}
+
+fn glyphInAnyMarkFilteringSet(mark_sets: []const []const GlyphId, glyph: GlyphId) bool {
+    for (mark_sets) |set| {
+        if (glyphInMarkFilteringSet(set, glyph)) return true;
+    }
+    return false;
+}
+
+fn glyphInMarkFilteringSet(glyphs: []const GlyphId, glyph: GlyphId) bool {
+    for (glyphs) |candidate| {
+        if (candidate == glyph) return true;
     }
     return false;
 }
@@ -892,12 +927,16 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
+    var lookup_options = options;
+    if ((lookup_flag & 0x0010) != 0) {
+        lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
+    }
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
-            1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
-            2 => try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, options),
-            9 => try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+            1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options),
+            2 => try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
+            9 => try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
         }
     }
@@ -1227,6 +1266,37 @@ test "GPOS cursive attachment skips lookup-flag ignored glyphs" {
     try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 80), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 25), adjustments.items[0].y_placement);
+}
+
+test "GPOS lookup flags honor GDEF mark filtering sets" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 24;
+
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0x0010); // UseMarkFilteringSet.
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 1); // MarkFilteringSet index.
+
+    const single = 10;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 8);
+    writeU16Test(&bytes, single + 4, 0x0001);
+    writeI16Test(&bytes, single + 6, 33);
+    writeCoverage1Test(&bytes, single + 8, 5);
+
+    const glyphs = [_]GlyphId{ 5, 7 };
+    const mark_sets = [_][]const GlyphId{ &.{7}, &.{5} };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .mark_filtering_sets = &mark_sets,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 33), adjustments.items[0].x_placement);
 }
 
 test "GPOS context nested lookup honors nested lookup flags" {

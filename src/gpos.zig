@@ -593,6 +593,51 @@ fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
     }
 }
 
+fn collectCursiveAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    // Contextual PosLookupRecords target exactly one matched input glyph.
+    // CursivePos still needs the preceding participating glyph from the real
+    // run, but a nested context lookup must not rescan and position every
+    // covered cursive join in the run.
+    const pos_format = try readU16(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    if (target_index >= glyphs.len) return false;
+    const glyph = glyphs[target_index];
+    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+
+    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const entry_exit_count = try readU16(table, subtable_offset + 4);
+    const current_index = try coverageIndex(table, coverage_offset, glyph) orelse return false;
+    if (current_index >= entry_exit_count) return false;
+    const previous_position = try previousCoveredCursiveGlyph(table, coverage_offset, glyphs, target_index, entry_exit_count, lookup_flag, options) orelse return false;
+    const previous_index = (try coverageIndex(table, coverage_offset, glyphs[previous_position])) orelse return false;
+
+    const current_record = subtable_offset + 6 + current_index * 4;
+    const previous_record = subtable_offset + 6 + previous_index * 4;
+    const entry_relative = try readU16(table, current_record);
+    const exit_relative = try readU16(table, previous_record + 2);
+    if (entry_relative == 0 or exit_relative == 0) return false;
+
+    const entry = try readAnchor(table, subtable_offset + entry_relative);
+    const exit = try readAnchor(table, subtable_offset + exit_relative);
+    try appendAdjustment(adjustments, allocator, target_index, .{
+        .index = target_index,
+        .x_placement = exit.x - entry.x,
+        .y_placement = exit.y - entry.y,
+    }, false);
+    return true;
+}
+
+fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, target_index: usize, entry_exit_count: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {
+    var i = target_index;
+    while (i > 0) {
+        i -= 1;
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
+        const coverage = try coverageIndex(table, coverage_offset, glyphs[i]) orelse return null;
+        return if (coverage < entry_exit_count) i else null;
+    }
+    return null;
+}
+
 fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
@@ -1077,6 +1122,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         switch (lookup_type) {
             1 => try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options),
             2 => if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
+            3 => _ = try collectCursiveAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             4 => _ = try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, &.{}),
             5 => _ = try collectMarkToLigatureAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             6 => _ = try collectMarkToMarkAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
@@ -1100,6 +1146,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
     switch (extension_lookup_type) {
         1 => try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
         2 => _ = try collectPairAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+        3 => _ = try collectCursiveAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         4 => _ = try collectMarkToBaseAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, &.{}),
         5 => _ = try collectMarkToLigatureAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         6 => _ = try collectMarkToMarkAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
@@ -1725,6 +1772,73 @@ test "GPOS context nested lookup can apply pair positioning" {
     try std.testing.expect(adjustments.items[0].pair_positioned);
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[1].index);
     try std.testing.expectEqual(@as(i16, 20), adjustments.items[1].x_placement);
+}
+
+test "GPOS context nested lookup can apply cursive positioning" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 124;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 42);
+
+    writeU16Test(&bytes, 16, 7);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 8);
+
+    const context = 24;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 22);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 2);
+    writeU16Test(&bytes, rule + 2, 1);
+    writeU16Test(&bytes, rule + 4, 22);
+    // The PosLookupRecord targets sequenceIndex 1. A nested CursivePos must
+    // use glyph 20 as the previous cursive glyph, while leaving the unrelated
+    // earlier 10-12 join untouched.
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 1);
+    writeCoverage1Test(&bytes, context + 22, 20);
+
+    writeU16Test(&bytes, 52, 3);
+    writeU16Test(&bytes, 56, 1);
+    writeU16Test(&bytes, 58, 8);
+    const cursive = 60;
+    writeU16Test(&bytes, cursive + 0, 1);
+    writeU16Test(&bytes, cursive + 2, 22);
+    writeU16Test(&bytes, cursive + 4, 4);
+    writeU16Test(&bytes, cursive + 6, 0);
+    writeU16Test(&bytes, cursive + 8, 34);
+    writeU16Test(&bytes, cursive + 10, 40);
+    writeU16Test(&bytes, cursive + 12, 0);
+    writeU16Test(&bytes, cursive + 14, 0);
+    writeU16Test(&bytes, cursive + 16, 46);
+    writeU16Test(&bytes, cursive + 18, 52);
+    writeU16Test(&bytes, cursive + 20, 0);
+    writeCoverage1ListTest(&bytes, cursive + 22, &.{ 10, 12, 20, 22 });
+    writeAnchor1Test(&bytes, cursive + 34, 100, 30);
+    writeAnchor1Test(&bytes, cursive + 40, 20, 5);
+    writeAnchor1Test(&bytes, cursive + 46, 200, 70);
+    writeAnchor1Test(&bytes, cursive + 52, 50, 10);
+
+    const glyphs = [_]GlyphId{ 10, 12, 20, 22 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 3), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 150), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 60), adjustments.items[0].y_placement);
 }
 
 test "GPOS single positioning subtables do not cascade within lookup" {

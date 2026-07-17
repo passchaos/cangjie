@@ -323,6 +323,22 @@ test "maps byte-encoding cmap format 0 glyph arrays" {
     try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0x1f600));
 }
 
+test "maps mixed byte cmap format 2 subheaders" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMixedEncodingCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex('A'));
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex('B'));
+    try std.testing.expectEqual(@as(GlyphId, 3), try font.glyphIndex(0x0102));
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0x0101));
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0x0202));
+}
+
 test "maps trimmed 32-bit cmap format 10 glyph arrays" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

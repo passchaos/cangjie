@@ -180,6 +180,10 @@ pub fn buildByteEncodingCmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try byteEncodingCmapTtfTables(allocator));
 }
 
+pub fn buildMixedEncodingCmapTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try mixedEncodingCmapTtfTables(allocator));
+}
+
 pub fn buildTrimmed32CmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trimmed32CmapTtfTables(allocator));
 }
@@ -989,6 +993,20 @@ fn byteEncodingCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn mixedEncodingCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat2Table(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
 fn trimmed32CmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 8);
     errdefer allocator.free(tables);
@@ -1557,6 +1575,38 @@ fn cmapFormat12RangeTable(allocator: std.mem.Allocator, start: u32, end: u32, gl
     writeU32(bytes, off + 16, start);
     writeU32(bytes, off + 20, end);
     writeU32(bytes, off + 24, glyph_start);
+    return bytes;
+}
+
+fn cmapFormat2Table(allocator: std.mem.Allocator) ![]u8 {
+    const length: usize = 550;
+    const bytes = try allocator.alloc(u8, 12 + length);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 1);
+    writeU16(bytes, 4, 3);
+    writeU16(bytes, 6, 1);
+    writeU32(bytes, 8, 12);
+
+    const off = 12;
+    writeU16(bytes, off + 0, 2);
+    writeU16(bytes, off + 2, @intCast(length));
+    writeU16(bytes, off + 4, 0);
+
+    writeU16(bytes, off + 6 + 1 * 2, 8);
+    const subheaders = off + 6 + 512;
+    writeU16(bytes, subheaders + 0, 'A');
+    writeU16(bytes, subheaders + 2, 1);
+    writeI16(bytes, subheaders + 4, 0);
+    writeU16(bytes, subheaders + 6, 10);
+
+    writeU16(bytes, subheaders + 8, 2);
+    writeU16(bytes, subheaders + 10, 1);
+    writeI16(bytes, subheaders + 12, 0);
+    writeU16(bytes, subheaders + 14, 4);
+
+    writeU16(bytes, subheaders + 16, 1);
+    writeU16(bytes, subheaders + 18, 3);
     return bytes;
 }
 

@@ -332,12 +332,13 @@ pub const Font = struct {
     pub fn glyphIndex(self: *const Font, codepoint: u21) FontError!glyph_mod.GlyphId {
         var best: ?CmapSubtable = null;
         for (self.cmap_subtables) |subtable| {
-            if (subtable.format != 0 and subtable.format != 4 and subtable.format != 6 and subtable.format != 10 and subtable.format != 12 and subtable.format != 13) continue;
+            if (subtable.format != 0 and subtable.format != 2 and subtable.format != 4 and subtable.format != 6 and subtable.format != 10 and subtable.format != 12 and subtable.format != 13) continue;
             if (best == null or scoreCmap(subtable) > scoreCmap(best.?)) best = subtable;
         }
         const chosen = best orelse return error.UnsupportedCmap;
         return switch (chosen.format) {
             0 => try glyphIndexFormat0(self.data, chosen.offset, codepoint),
+            2 => try glyphIndexFormat2(self.data, chosen.offset, codepoint),
             4 => try glyphIndexFormat4(self.data, chosen.offset, codepoint),
             6 => try glyphIndexFormat6(self.data, chosen.offset, codepoint),
             10 => try glyphIndexFormat10(self.data, chosen.offset, codepoint),
@@ -1375,6 +1376,7 @@ fn scoreCmap(subtable: CmapSubtable) u8 {
     if (subtable.format == 13 and subtable.platform_id == 3 and subtable.encoding_id == 10) return 3;
     if (subtable.format == 13 and subtable.platform_id == 0) return 2;
     if (subtable.format == 10 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 2;
+    if (subtable.format == 2 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 1;
     if (subtable.format == 6 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 1;
     if (subtable.format == 0) return 1;
     return 0;
@@ -1385,6 +1387,43 @@ fn glyphIndexFormat0(data: []const u8, offset: usize, codepoint: u21) FontError!
     const length = try bin.readU16At(data, offset + 2);
     if (length < 262) return error.BadSfnt;
     return data[offset + 6 + @as(usize, codepoint)];
+}
+
+fn glyphIndexFormat2(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
+    if (codepoint > 0xffff) return 0;
+    const length = try bin.readU16At(data, offset + 2);
+    if (length < 526) return error.BadSfnt;
+    const table_end = offset + @as(usize, length);
+    if (table_end > data.len) return error.BadSfnt;
+
+    const high_byte: u8 = @intCast((codepoint >> 8) & 0xff);
+    const low_byte: u8 = @intCast(codepoint & 0xff);
+    const key = try bin.readU16At(data, offset + 6 + @as(usize, high_byte) * 2);
+    if ((key % 8) != 0) return error.BadSfnt;
+    const subheader_index = key / 8;
+    const subheader_offset = offset + 6 + 512 + @as(usize, subheader_index) * 8;
+    if (subheader_offset + 8 > table_end) return error.BadSfnt;
+
+    // The first subheader also maps one-byte character codes. For non-zero
+    // high bytes, only a referenced subheader is valid; an absent high-byte
+    // key means the two-byte character is unmapped rather than falling through
+    // the single-byte table.
+    if (high_byte != 0 and subheader_index == 0) return 0;
+
+    const first_code = try bin.readU16At(data, subheader_offset);
+    const entry_count = try bin.readU16At(data, subheader_offset + 2);
+    const id_delta = try bin.readI16At(data, subheader_offset + 4);
+    const id_range_offset = try bin.readU16At(data, subheader_offset + 6);
+    const char_code = if (high_byte == 0) @as(u16, low_byte) else @as(u16, low_byte);
+    if (char_code < first_code) return 0;
+    const entry_index = @as(usize, char_code - first_code);
+    if (entry_index >= entry_count) return 0;
+
+    const glyph_offset = subheader_offset + 6 + @as(usize, id_range_offset) + entry_index * 2;
+    if (glyph_offset + 2 > table_end) return error.BadSfnt;
+    const glyph = try bin.readU16At(data, glyph_offset);
+    if (glyph == 0) return 0;
+    return @intCast(@as(u16, @bitCast(@as(i16, @bitCast(glyph)) +% id_delta)));
 }
 
 fn glyphIndexFormat4(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {

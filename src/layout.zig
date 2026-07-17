@@ -1491,6 +1491,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     defer codepoints.deinit(buffer.allocator);
     var clusters = std.ArrayList(usize).empty;
     defer clusters.deinit(buffer.allocator);
+    var glyph_source_indices = std.ArrayList(usize).empty;
+    defer glyph_source_indices.deinit(buffer.allocator);
+    var ligature_components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    defer ligature_components.deinit(buffer.allocator);
 
     // Keep three parallel arrays through GSUB: glyph ids are mutable, while
     // codepoints and clusters retain source-text identity for rendering,
@@ -1514,15 +1518,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint));
         try codepoints.append(buffer.allocator, codepoint);
         try clusters.append(buffer.allocator, cluster_base + cluster);
+        try glyph_source_indices.append(buffer.allocator, glyph_source_indices.items.len);
+        try ligature_components.append(buffer.allocator, defaultLigatureComponentInfo(glyph_source_indices.items.len - 1));
     }
-    // GSUB can change glyph count. Later source metadata uses a clamped source
-    // index, which is sufficient for current single-glyph, ligature, and
-    // contextual substitutions until full cluster merging metadata is added.
+    // Keep source metadata parallel to glyph ids through GSUB. GPOS MarkLigPos
+    // needs the original component sources for a ligature glyph; otherwise a
+    // mark after a ligature can only guess a component from post-substitution
+    // mark order.
     try font.applyGsubWithOptions(&glyph_ids, buffer.allocator, .{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
         .apply_all_if_unselected = false,
+        .glyph_source_indices = &glyph_source_indices,
+        .ligature_components = &ligature_components,
     });
 
     var gpos_adjustments = std.ArrayList(gpos.Adjustment).empty;
@@ -1532,13 +1541,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
         .apply_all_if_unselected = false,
+        .glyph_source_indices = glyph_source_indices.items,
+        .ligature_components = ligature_components.items,
     });
 
     // GPOS adjustments and legacy kern are accumulated in font units, then
     // scaled into user-space coordinates for the final GlyphPosition stream.
     var previous_glyph: ?GlyphId = null;
     for (glyph_ids.items, 0..) |glyph_id, index| {
-        const source_index = @min(index, codepoints.items.len -| 1);
+        const source_index = if (index < glyph_source_indices.items.len)
+            @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
+        else
+            @min(index, codepoints.items.len -| 1);
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
         const glyph_class = font.glyphClass(glyph_id) catch .unclassified;
         if (previous_glyph) |previous| {
@@ -1572,6 +1586,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         });
         previous_glyph = glyph_id;
     }
+}
+
+fn defaultLigatureComponentInfo(source_index: usize) gpos.LigatureComponentInfo {
+    var info = gpos.LigatureComponentInfo{};
+    info.component_sources[0] = source_index;
+    return info;
 }
 
 fn advanceBetweenGlyphs(glyphs: []const GlyphPosition, base_index: usize, mark_index: usize) f32 {

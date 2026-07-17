@@ -3956,6 +3956,28 @@ test "applies GPOS mark-to-ligature positioning during shaping" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.4), run.glyphs[1].y_offset, 0.001);
 }
 
+test "passes GSUB ligature component sources into GPOS mark-to-ligature shaping" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGsubGposMarkToLigatureComponentsTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AAA", 20);
+
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 2), run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[1].glyph_id);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.6), run.glyphs[0].x_advance + run.glyphs[1].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.4), run.glyphs[1].y_offset, 0.001);
+}
+
 test "applies GPOS coverage-based contextual positioning" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

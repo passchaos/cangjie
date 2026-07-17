@@ -1,6 +1,7 @@
 const std = @import("std");
 const bin = @import("binary.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
+const gpos = @import("gpos.zig");
 const unicode = @import("unicode.zig");
 
 /// GSUB parsing is table-driven and intentionally tolerant of unsupported
@@ -32,6 +33,12 @@ pub const LookupOptions = struct {
     mark_attach_classes: ?[]const u16 = null,
     mark_filtering_sets: ?[]const []const GlyphId = null,
     active_mark_filtering_set: ?u16 = null,
+    /// Optional source-order metadata parallel to `glyphs`. When provided by
+    /// higher-level shapers, cardinality-changing substitutions keep these
+    /// arrays in lockstep with the post-GSUB glyph stream so later GPOS lookups
+    /// can reason about the original source components of ligatures.
+    glyph_source_indices: ?*std.ArrayList(usize) = null,
+    ligature_components: ?*std.ArrayList(gpos.LigatureComponentInfo) = null,
 };
 
 /// Apply default or explicitly enabled substitution features to the glyph
@@ -363,6 +370,56 @@ fn glyphInMarkFilteringSet(glyphs: []const GlyphId, glyph: GlyphId) bool {
     return false;
 }
 
+fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {
+    const sources = options.glyph_source_indices orelse return glyph_index;
+    if (glyph_index >= sources.items.len) return glyph_index;
+    return sources.items[glyph_index];
+}
+
+fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
+    var info = gpos.LigatureComponentInfo{};
+    info.component_sources[0] = source;
+    return info;
+}
+
+fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, glyph_index: usize, removed_len: usize, inserted_len: usize, source: usize) std.mem.Allocator.Error!void {
+    if (options.glyph_source_indices) |sources| {
+        if (glyph_index <= sources.items.len) {
+            const remove_count = @min(removed_len, sources.items.len - glyph_index);
+            const replacements = try allocator.alloc(usize, inserted_len);
+            defer allocator.free(replacements);
+            @memset(replacements, source);
+            try sources.replaceRange(allocator, glyph_index, remove_count, replacements);
+        }
+    }
+    if (options.ligature_components) |components| {
+        if (glyph_index <= components.items.len) {
+            const remove_count = @min(removed_len, components.items.len - glyph_index);
+            const replacements = try allocator.alloc(gpos.LigatureComponentInfo, inserted_len);
+            defer allocator.free(replacements);
+            @memset(replacements, defaultLigatureComponentInfo(source));
+            try components.replaceRange(allocator, glyph_index, remove_count, replacements);
+        }
+    }
+}
+
+fn ligatureComponentInfoForMatch(options: LookupOptions, glyph_index: usize, match: LigatureMatch) gpos.LigatureComponentInfo {
+    var info = gpos.LigatureComponentInfo{};
+    const component_count = @min(match.component_count, gpos.max_ligature_components);
+    info.component_count = @intCast(component_count);
+    info.component_sources[0] = sourceForGlyph(options, glyph_index);
+    for (1..component_count) |component_index| {
+        info.component_sources[component_index] = sourceForGlyph(options, glyph_index + match.component_offsets[component_index]);
+    }
+    return info;
+}
+
+fn setLigatureMetadata(options: LookupOptions, glyph_index: usize, info: gpos.LigatureComponentInfo) void {
+    if (options.ligature_components) |components| {
+        if (glyph_index < components.items.len) components.items[glyph_index] = info;
+    }
+}
+
 fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
@@ -379,6 +436,7 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         if (glyph_count == 0) {
             // A zero-length sequence deletes the covered glyph.
             try glyphs.replaceRange(allocator, i, 1, &.{});
+            try replaceSourceMetadata(allocator, options, i, 1, 0, 0);
             if (i > 0) i -= 1;
             continue;
         }
@@ -388,6 +446,9 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
             glyph.* = try readU16(table, sequence_offset + 2 + replacement_index * 2);
         }
         try glyphs.replaceRange(allocator, i, 1, replacement);
+        if (replacement.len != 1) {
+            try replaceSourceMetadata(allocator, options, i, 1, replacement.len, sourceForGlyph(options, i));
+        }
         i += glyph_count - 1;
     }
 }
@@ -452,12 +513,15 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         if (covered >= lig_set_count) continue;
         const set_offset = subtable_offset + try readU16(table, subtable_offset + 6 + covered * 2);
         if (try ligatureAt(table, set_offset, glyphs.items[i..], lookup_flag, options)) |match| {
+            const component_info = ligatureComponentInfoForMatch(options, i, match);
             glyphs.items[i] = match.ligature;
+            setLigatureMetadata(options, i, component_info);
             if (match.component_count > 1) {
                 var component_index = match.component_count;
                 while (component_index > 1) {
                     component_index -= 1;
                     try glyphs.replaceRange(allocator, i + match.component_offsets[component_index], 1, &.{});
+                    try replaceSourceMetadata(allocator, options, i + match.component_offsets[component_index], 1, 0, 0);
                 }
             }
         }
@@ -476,12 +540,15 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     if (covered >= lig_set_count) return null;
     const set_offset = subtable_offset + try readU16(table, subtable_offset + 6 + covered * 2);
     const match = try ligatureAt(table, set_offset, glyphs.items[glyph_index..], lookup_flag, options) orelse return null;
+    const component_info = ligatureComponentInfoForMatch(options, glyph_index, match);
     glyphs.items[glyph_index] = match.ligature;
+    setLigatureMetadata(options, glyph_index, component_info);
     if (match.component_count > 1) {
         var component_index = match.component_count;
         while (component_index > 1) {
             component_index -= 1;
             try glyphs.replaceRange(allocator, glyph_index + match.component_offsets[component_index], 1, &.{});
+            try replaceSourceMetadata(allocator, options, glyph_index + match.component_offsets[component_index], 1, 0, 0);
         }
     }
     return match.component_count;
@@ -958,8 +1025,14 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     var slice = std.ArrayList(GlyphId).empty;
     defer slice.deinit(allocator);
     try slice.append(allocator, glyphs.items[glyph_index]);
-    try applyLookup(table, nested_lookup_offset, &slice, allocator, options);
+    var scratch_options = options;
+    scratch_options.glyph_source_indices = null;
+    scratch_options.ligature_components = null;
+    try applyLookup(table, nested_lookup_offset, &slice, allocator, scratch_options);
     try glyphs.replaceRange(allocator, glyph_index, 1, slice.items);
+    if (slice.items.len != 1) {
+        try replaceSourceMetadata(allocator, options, glyph_index, 1, slice.items.len, sourceForGlyph(options, glyph_index));
+    }
     return .{ .removed_len = 1, .inserted_len = slice.items.len };
 }
 

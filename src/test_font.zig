@@ -319,6 +319,10 @@ pub fn buildMinimalGposMarkToLigatureTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGposMarkToLigatureTtfTables(allocator));
 }
 
+pub fn buildGsubGposMarkToLigatureComponentsTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try gsubGposMarkToLigatureComponentsTtfTables(allocator));
+}
+
 pub fn buildMinimalGposContextTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGposContextTtfTables(allocator));
 }
@@ -1336,6 +1340,21 @@ fn minimalGposMarkToLigatureTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 9);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "GPOS", .data = try gposMarkToLigatureTable(allocator) };
+    tables[1] = .{ .tag = "GSUB", .data = try gsubTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTableWithLigature(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
+    return tables;
+}
+
+fn gsubGposMarkToLigatureComponentsTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "GPOS", .data = try gposMarkToLigatureComponentsTable(allocator) };
     tables[1] = .{ .tag = "GSUB", .data = try gsubTable(allocator) };
     tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
@@ -3529,6 +3548,68 @@ fn gposMarkToLigatureTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 76, 1);
     writeI16(bytes, 78, 60);
     writeI16(bytes, 80, 120);
+    return bytes;
+}
+
+fn gposMarkToLigatureComponentsTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 84);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 12);
+    writeU16(bytes, 8, 14);
+
+    writeU16(bytes, 10, 0);
+
+    writeU16(bytes, 12, 0);
+
+    writeU16(bytes, 14, 1);
+    writeU16(bytes, 16, 4);
+
+    writeU16(bytes, 18, 5);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 1);
+    writeU16(bytes, 24, 8);
+
+    const mark_lig = 26;
+    writeU16(bytes, mark_lig + 0, 1);
+    writeU16(bytes, mark_lig + 2, 12);
+    writeU16(bytes, mark_lig + 4, 18);
+    writeU16(bytes, mark_lig + 6, 1);
+    writeU16(bytes, mark_lig + 8, 24);
+    writeU16(bytes, mark_lig + 10, 36);
+
+    writeU16(bytes, 38, 1);
+    writeU16(bytes, 40, 1);
+    writeU16(bytes, 42, 1);
+
+    writeU16(bytes, 44, 1);
+    writeU16(bytes, 46, 1);
+    writeU16(bytes, 48, 2);
+
+    writeU16(bytes, 50, 1);
+    writeU16(bytes, 52, 0);
+    writeU16(bytes, 54, 6);
+    writeU16(bytes, 56, 1);
+    writeI16(bytes, 58, 0);
+    writeI16(bytes, 60, 0);
+
+    writeU16(bytes, 62, 1);
+    writeU16(bytes, 64, 4);
+    const ligature_attach = 66;
+    writeU16(bytes, ligature_attach + 0, 2);
+    writeU16(bytes, ligature_attach + 2, 6);
+    writeU16(bytes, ligature_attach + 4, 12);
+    // Component 0 is deliberately distinct from component 1. End-to-end
+    // shaping should choose component 1 for the mark that originated after the
+    // second GSUB ligature component; a post-GSUB mark-order fallback would
+    // choose component 0 instead.
+    writeU16(bytes, ligature_attach + 6, 1);
+    writeI16(bytes, ligature_attach + 8, 20);
+    writeI16(bytes, ligature_attach + 10, 40);
+    writeU16(bytes, ligature_attach + 12, 1);
+    writeI16(bytes, ligature_attach + 14, 80);
+    writeI16(bytes, ligature_attach + 16, 120);
     return bytes;
 }
 

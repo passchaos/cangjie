@@ -934,7 +934,16 @@ fn isGraphemeExtendCodepoint(codepoint: u21) bool {
         isCombiningMark(codepoint) or
         isVariationSelector(codepoint) or
         isEmojiModifier(codepoint) or
+        isEmojiTagCodepoint(codepoint) or
         isSpacingMark(codepoint);
+}
+
+fn isEmojiTagCodepoint(codepoint: u21) bool {
+    // Emoji flag tag sequences (for example subdivision flags such as England)
+    // encode their tag letters in Plane 14. Unicode assigns these scalars
+    // Grapheme_Cluster_Break=Extend, so they must stay attached to the
+    // preceding pictograph instead of creating one caret stop per tag byte.
+    return codepoint >= 0xe0020 and codepoint <= 0xe007f;
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {

@@ -628,6 +628,22 @@ test "itemizes basic grapheme clusters" {
     try std.testing.expectEqual(@as(usize, 2), leading_mark[0].byte_len);
 }
 
+test "grapheme clusters keep emoji tag sequences atomic" {
+    const allocator = std.testing.allocator;
+
+    const england = try itemizeGraphemeClusters(allocator, "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}!");
+    defer allocator.free(england);
+    try std.testing.expectEqual(@as(usize, 2), england.len);
+    try std.testing.expectEqualStrings("🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}", "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}!"[england[0].byte_start..][0..england[0].byte_len]);
+    try std.testing.expectEqualStrings("!", "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}!"[england[1].byte_start..][0..england[1].byte_len]);
+
+    const dangling_tag = try itemizeGraphemeClusters(allocator, "a\u{e0067}b");
+    defer allocator.free(dangling_tag);
+    try std.testing.expectEqual(@as(usize, 2), dangling_tag.len);
+    try std.testing.expectEqualStrings("a\u{e0067}", "a\u{e0067}b"[dangling_tag[0].byte_start..][0..dangling_tag[0].byte_len]);
+    try std.testing.expectEqualStrings("b", "a\u{e0067}b"[dangling_tag[1].byte_start..][0..dangling_tag[1].byte_len]);
+}
+
 test "itemizes emoji regional indicator and spacing-mark grapheme clusters" {
     const allocator = std.testing.allocator;
 

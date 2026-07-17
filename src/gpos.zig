@@ -998,7 +998,9 @@ fn valueRecordSize(format: u16) usize {
 
 fn readValueRecord(table: Table, offset: usize, format: u16) GposError!Adjustment {
     // ValueFormat bits decide which signed fields are present and in what order.
-    // Device-table offsets are intentionally unsupported for now.
+    // Device/variation-index offset fields are parsed and skipped for now: the
+    // base placement/advance remains valid, while size-specific deltas can be
+    // layered in later without rejecting common production fonts outright.
     var value = Adjustment{ .index = 0 };
     var cursor = offset;
     if ((format & 0x0001) != 0) {
@@ -1017,7 +1019,11 @@ fn readValueRecord(table: Table, offset: usize, format: u16) GposError!Adjustmen
         value.y_advance = try readI16(table, cursor);
         cursor += 2;
     }
-    if ((format & 0x00f0) != 0) return error.UnsupportedGpos;
+    if ((format & 0x0010) != 0) cursor += 2;
+    if ((format & 0x0020) != 0) cursor += 2;
+    if ((format & 0x0040) != 0) cursor += 2;
+    if ((format & 0x0080) != 0) cursor += 2;
+    if (cursor > table.length) return error.EndOfStream;
     return value;
 }
 
@@ -1080,6 +1086,24 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+test "GPOS value records tolerate device and variation offset fields" {
+    var bytes = [_]u8{0} ** 16;
+    writeI16Test(&bytes, 0, 50);
+    writeI16Test(&bytes, 2, -25);
+    writeI16Test(&bytes, 4, 30);
+    writeI16Test(&bytes, 6, -10);
+    writeU16Test(&bytes, 8, 12);
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 14);
+    writeU16Test(&bytes, 14, 0);
+
+    const value = try readValueRecord(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, 0x00ff);
+    try std.testing.expectEqual(@as(i16, 50), value.x_placement);
+    try std.testing.expectEqual(@as(i16, -25), value.y_placement);
+    try std.testing.expectEqual(@as(i16, 30), value.x_advance);
+    try std.testing.expectEqual(@as(i16, -10), value.y_advance);
 }
 
 test "GPOS extension positioning preserves wrapper lookup flags" {

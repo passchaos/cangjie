@@ -334,14 +334,12 @@ pub const ParagraphLayout = struct {
                 return .{ .glyph_index = glyph_index, .cluster = glyph.cluster };
             }
             if (local_x < pen_x + glyph.x_advance) {
-                return .{ .glyph_index = glyph_index, .cluster = glyph.cluster, .trailing = true };
+                return textPositionAtGlyphTrailingEdge(self, glyph_index);
             }
             pen_x += glyph.x_advance;
         }
 
-        const last_index = glyph_end - 1;
-        const last = self.glyphs[last_index];
-        return .{ .glyph_index = last_index, .cluster = last.cluster, .trailing = true };
+        return textPositionAtGlyphTrailingEdge(self, glyph_end - 1);
     }
 
     /// Convert a logical TextPosition back to a zero-width caret rectangle.
@@ -537,9 +535,28 @@ fn positionByteOffset(layout_value: ParagraphLayout, position: TextPosition) usi
     if (position.glyph_index >= layout_value.glyphs.len) return position.cluster;
     const glyph = layout_value.glyphs[position.glyph_index];
     if (!position.trailing) return glyph.cluster;
+    return trailingByteOffsetForGlyph(layout_value, position.glyph_index);
+}
+
+fn textPositionAtGlyphTrailingEdge(layout_value: ParagraphLayout, glyph_index: usize) TextPosition {
+    return .{
+        .glyph_index = glyph_index,
+        // `TextPosition.cluster` is the byte offset represented by the caret.
+        // For a trailing edge this may be beyond the glyph's leading cluster
+        // when source metadata folded variation selectors or a GSUB ligature
+        // into a single rendered glyph. Keeping the visible hit-test result and
+        // the internal byte-offset conversion in sync avoids snapping trailing
+        // clicks back to the start of an extended source span.
+        .cluster = trailingByteOffsetForGlyph(layout_value, glyph_index),
+        .trailing = true,
+    };
+}
+
+fn trailingByteOffsetForGlyph(layout_value: ParagraphLayout, glyph_index: usize) usize {
+    const glyph = layout_value.glyphs[glyph_index];
     const glyph_end = glyph.cluster + @max(glyph.source_byte_len, 1);
-    if (position.glyph_index + 1 < layout_value.glyphs.len) {
-        const next_cluster = layout_value.glyphs[position.glyph_index + 1].cluster;
+    if (glyph_index + 1 < layout_value.glyphs.len) {
+        const next_cluster = layout_value.glyphs[glyph_index + 1].cluster;
         if (next_cluster > glyph.cluster) return next_cluster;
     }
     return glyph_end;

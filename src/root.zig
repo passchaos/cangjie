@@ -3594,6 +3594,41 @@ test "moves paragraph carets across grapheme cluster boundaries" {
     try std.testing.expectEqual(@as(usize, 0), inside_mark.cluster);
 }
 
+test "hit testing reports trailing source byte offsets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const text = "A\u{fe0f}";
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, text, 20, .{
+        .max_width = 100,
+        .line_height = 24,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), paragraph.glyphs.len);
+    try std.testing.expectEqual(@as(usize, text.len), paragraph.glyphs[0].source_byte_len);
+
+    const leading = paragraph.hitTest(1, 8);
+    try std.testing.expectEqual(@as(usize, 0), leading.glyph_index);
+    try std.testing.expectEqual(@as(usize, 0), leading.cluster);
+    try std.testing.expect(!leading.trailing);
+
+    const trailing = paragraph.hitTest(15, 8);
+    try std.testing.expectEqual(@as(usize, 0), trailing.glyph_index);
+    try std.testing.expectEqual(@as(usize, text.len), trailing.cluster);
+    try std.testing.expect(trailing.trailing);
+}
+
 test "paragraph carets use shaped glyph source extents" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

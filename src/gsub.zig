@@ -1232,6 +1232,7 @@ fn ensureSubstitutionRecordLookupsWithin(table: Table, records_offset: usize, re
 
 fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
     if (lookup_offset > table.length or table.length - lookup_offset < 6) return error.BadGsub;
+    const lookup_type = try readU16BadGsub(table, lookup_offset);
     const lookup_flag = try readU16BadGsub(table, lookup_offset + 2);
     const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
     const subtable_offsets_pos = lookup_offset + 6;
@@ -1241,10 +1242,63 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
         const mark_filtering_set_pos = subtable_offsets_pos + subtable_offsets_len;
         if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGsub;
     }
+    if (lookup_type == 7) {
+        for (0..subtable_count) |subtable_i| {
+            const subtable_offset = lookup_offset + try readU16BadGsub(table, subtable_offsets_pos + subtable_i * 2);
+            try ensureExtensionSubstitutionPayloadWithin(table, subtable_offset);
+        }
+    }
+}
+
+fn ensureExtensionSubstitutionPayloadWithin(table: Table, subtable_offset: usize) GsubError!void {
+    // A contextual record may reference ExtensionSubst after earlier records
+    // have already mutated the glyph stream. Preflight both the wrapper and the
+    // wrapped subtable's fixed header so a malformed extension payload fails
+    // before any record in the contextual match is applied.
+    if (subtable_offset > table.length or table.length - subtable_offset < 8) return error.BadGsub;
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    if (subst_format != 1) return error.UnsupportedGsub;
+    const extension_lookup_type = try readU16BadGsub(table, subtable_offset + 2);
+    if (extension_lookup_type == 7) return error.UnsupportedGsub;
+    const extension_offset = try readU32BadGsub(table, subtable_offset + 4);
+    if (extension_offset > table.length - subtable_offset) return error.BadGsub;
+    const extension_subtable = subtable_offset + extension_offset;
+    try ensureSubstitutionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
+}
+
+fn ensureSubstitutionSubtableFixedHeaderWithin(table: Table, subtable_offset: usize, lookup_type: u16) GsubError!void {
+    if (subtable_offset > table.length or table.length - subtable_offset < 2) return error.BadGsub;
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    const min_len: usize = switch (lookup_type) {
+        1, 2, 3, 4 => 6,
+        5 => switch (subst_format) {
+            1, 3 => 6,
+            2 => 8,
+            else => return error.UnsupportedGsub,
+        },
+        6 => switch (subst_format) {
+            1 => 6,
+            2 => 12,
+            3 => 4,
+            else => return error.UnsupportedGsub,
+        },
+        8 => 6,
+        else => return,
+    };
+    if (table.length - subtable_offset < min_len) return error.BadGsub;
 }
 
 fn readU16BadGsub(table: Table, relative: usize) GsubError!u16 {
     return readU16(table, relative) catch |err| {
+        return switch (err) {
+            error.EndOfStream => error.BadGsub,
+            else => err,
+        };
+    };
+}
+
+fn readU32BadGsub(table: Table, relative: usize) GsubError!u32 {
+    return readU32(table, relative) catch |err| {
         return switch (err) {
             error.EndOfStream => error.BadGsub,
             else => err,
@@ -1814,6 +1868,61 @@ test "GSUB contextual lookup preflight rejects later truncated lookup atomically
     // applying lookup 1, otherwise glyph 1 would be partially substituted.
     writeU16Test(&bytes, 90, 1);
     writeU16Test(&bytes, 94, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 1);
+
+    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+}
+
+test "GSUB contextual lookup preflight rejects nested extension payload atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 112;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 18);
+    writeU16Test(&bytes, 14, 60);
+    writeU16Test(&bytes, 16, 80);
+
+    const context_lookup = 28;
+    writeU16Test(&bytes, context_lookup + 0, 5);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 24);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 2);
+    writeCoverage1(&bytes, context + 24, 1);
+
+    writeSingleDeltaLookup(&bytes, 70, 1, 9);
+
+    writeU16Test(&bytes, 90, 7);
+    writeU16Test(&bytes, 94, 1);
+    writeU16Test(&bytes, 96, 8);
+    const extension = 98;
+    writeU16Test(&bytes, extension + 0, 1);
+    writeU16Test(&bytes, extension + 2, 1);
+    // The ExtensionSubst wrapper is complete, but its payload address falls
+    // past table.length. The contextual preflight must catch that before the
+    // earlier single-substitution record changes glyph 1 to glyph 10.
+    writeU32Test(&bytes, extension + 4, 20);
 
     var glyphs = std.ArrayList(GlyphId).empty;
     defer glyphs.deinit(allocator);

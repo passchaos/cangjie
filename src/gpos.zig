@@ -1257,6 +1257,7 @@ fn ensurePositionRecordLookupsWithin(table: Table, records_pos: usize, record_co
 
 fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposError!void {
     if (lookup_offset > table.length or table.length - lookup_offset < 6) return error.BadGpos;
+    const lookup_type = try readU16BadGpos(table, lookup_offset);
     const lookup_flag = try readU16BadGpos(table, lookup_offset + 2);
     const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
     const subtable_offsets_pos = lookup_offset + 6;
@@ -1266,10 +1267,64 @@ fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposErro
         const mark_filtering_set_pos = subtable_offsets_pos + subtable_offsets_len;
         if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGpos;
     }
+    if (lookup_type == 9) {
+        for (0..subtable_count) |subtable_i| {
+            const subtable_offset = lookup_offset + try readU16BadGpos(table, subtable_offsets_pos + subtable_i * 2);
+            try ensureExtensionPositionPayloadWithin(table, subtable_offset);
+        }
+    }
+}
+
+fn ensureExtensionPositionPayloadWithin(table: Table, subtable_offset: usize) GposError!void {
+    // PosLookupRecords are applied eagerly. If a later record references a
+    // malformed ExtensionPos wrapper, reject the entire contextual match before
+    // earlier records can append partial adjustments.
+    if (subtable_offset > table.length or table.length - subtable_offset < 8) return error.BadGpos;
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    const extension_lookup_type = try readU16BadGpos(table, subtable_offset + 2);
+    if (extension_lookup_type == 9) return error.UnsupportedGpos;
+    const extension_offset = try readU32BadGpos(table, subtable_offset + 4);
+    if (extension_offset > table.length - subtable_offset) return error.BadGpos;
+    const extension_subtable = subtable_offset + extension_offset;
+    try ensurePositionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
+}
+
+fn ensurePositionSubtableFixedHeaderWithin(table: Table, subtable_offset: usize, lookup_type: u16) GposError!void {
+    if (subtable_offset > table.length or table.length - subtable_offset < 2) return error.BadGpos;
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    const min_len: usize = switch (lookup_type) {
+        1 => 6,
+        2 => 8,
+        3 => 6,
+        4, 5, 6 => 12,
+        7 => switch (pos_format) {
+            1, 3 => 6,
+            2 => 8,
+            else => return error.UnsupportedGpos,
+        },
+        8 => switch (pos_format) {
+            1 => 6,
+            2 => 12,
+            3 => 4,
+            else => return error.UnsupportedGpos,
+        },
+        else => return,
+    };
+    if (table.length - subtable_offset < min_len) return error.BadGpos;
 }
 
 fn readU16BadGpos(table: Table, relative: usize) GposError!u16 {
     return readU16(table, relative) catch |err| {
+        return switch (err) {
+            error.EndOfStream => error.BadGpos,
+            else => err,
+        };
+    };
+}
+
+fn readU32BadGpos(table: Table, relative: usize) GposError!u32 {
+    return readU32(table, relative) catch |err| {
         return switch (err) {
             error.EndOfStream => error.BadGpos,
             else => err,
@@ -2016,6 +2071,61 @@ test "GPOS contextual lookup preflight rejects later truncated lookup atomically
     // nested result from the contextual match.
     writeU16Test(&bytes, 90, 1);
     writeU16Test(&bytes, 94, 1);
+
+    const glyphs = [_]GlyphId{1};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS contextual lookup preflight rejects nested extension payload atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 112;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 18);
+    writeU16Test(&bytes, 14, 60);
+    writeU16Test(&bytes, 16, 80);
+
+    const context_lookup = 28;
+    writeU16Test(&bytes, context_lookup + 0, 7);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 24);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 2);
+    writeCoverage1Test(&bytes, context + 24, 1);
+
+    writeSinglePositionLookup(&bytes, 70, 1, 0, 45);
+
+    writeU16Test(&bytes, 90, 9);
+    writeU16Test(&bytes, 94, 1);
+    writeU16Test(&bytes, 96, 8);
+    const extension = 98;
+    writeU16Test(&bytes, extension + 0, 1);
+    writeU16Test(&bytes, extension + 2, 1);
+    // The ExtensionPos wrapper header is present, but its wrapped SinglePos
+    // payload is outside this table. Reject the whole contextual match before
+    // the preceding record appends its adjustment.
+    writeU32Test(&bytes, extension + 4, 20);
 
     const glyphs = [_]GlyphId{1};
     var adjustments = std.ArrayList(Adjustment).empty;

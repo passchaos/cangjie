@@ -189,7 +189,7 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
             5 => try applyContextSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
             6 => try applyChainingContextSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
             7 => try applyExtensionSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
-            8 => try applyReverseChainingSingleSubstitution(table, subtable_offset, glyphs),
+            8 => try applyReverseChainingSingleSubstitution(table, subtable_offset, glyphs, lookup_flag, options),
             else => {},
         }
     }
@@ -299,7 +299,7 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
         4 => try applyLigatureSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         5 => try applyContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         6 => try applyChainingContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
-        8 => try applyReverseChainingSingleSubstitution(table, extension_subtable, glyphs),
+        8 => try applyReverseChainingSingleSubstitution(table, extension_subtable, glyphs, lookup_flag, options),
         else => {},
     }
 }
@@ -778,7 +778,7 @@ fn applyNestedSingleGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), g
     if (slice.items.len == 1) glyphs.items[glyph_index] = slice.items[0];
 }
 
-fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId)) GsubError!void {
+fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) GsubError!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
@@ -804,23 +804,26 @@ fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, 
     var pos = glyphs.items.len;
     while (pos > 0) {
         pos -= 1;
-        const coverage = try coverageIndex(table, coverage_offset, glyphs.items[pos]) orelse continue;
+        const glyph = glyphs.items[pos];
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+        const coverage = try coverageIndex(table, coverage_offset, glyph) orelse continue;
         if (coverage >= glyph_count) continue;
-        if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, backtrack_offsets_pos, backtrack_count, true)) continue;
-        if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, lookahead_offsets_pos, lookahead_count, false)) continue;
+        if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, backtrack_offsets_pos, backtrack_count, true, lookup_flag, options)) continue;
+        if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, lookahead_offsets_pos, lookahead_count, false, lookup_flag, options)) continue;
         glyphs.items[pos] = try readU16(table, substitutes_pos + coverage * 2);
     }
 }
 
-fn reverseCoverageMatches(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, offsets_pos: usize, count: usize, backtrack: bool) GsubError!bool {
-    if (backtrack and pos < count) return false;
-    if (!backtrack and pos + 1 + count > glyphs.len) return false;
-    for (0..count) |i| {
-        const coverage_offset = subtable_offset + try readU16(table, offsets_pos + i * 2);
-        const glyph = if (backtrack) glyphs[pos - 1 - i] else glyphs[pos + 1 + i];
-        if (try coverageIndex(table, coverage_offset, glyph) == null) return false;
-    }
-    return true;
+fn reverseCoverageMatches(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, offsets_pos: usize, count: usize, backtrack: bool, lookup_flag: u16, options: LookupOptions) GsubError!bool {
+    var indices_buf: [64]usize = undefined;
+    if (count > indices_buf.len) return error.UnsupportedGsub;
+    const indices = indices_buf[0..count];
+    const has_context = if (backtrack)
+        collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, indices)
+    else
+        collectForwardUnignoredGlyphs(glyphs, pos + 1, lookup_flag, options, indices);
+    if (!has_context) return false;
+    return try coverageIndicesMatch(table, subtable_offset, glyphs, indices, offsets_pos);
 }
 
 const LigatureMatch = struct {
@@ -1109,6 +1112,40 @@ test "GSUB context substitution skips lookup-flag ignored glyphs" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 12 }, glyphs.items);
+}
+
+test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 46;
+
+    writeU16Test(&bytes, 0, 8);
+    writeU16Test(&bytes, 2, 0x0008);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const reverse = 8;
+    writeU16Test(&bytes, reverse + 0, 1);
+    writeU16Test(&bytes, reverse + 2, 20);
+    writeU16Test(&bytes, reverse + 4, 1);
+    writeU16Test(&bytes, reverse + 6, 26);
+    writeU16Test(&bytes, reverse + 8, 1);
+    writeU16Test(&bytes, reverse + 10, 32);
+    writeU16Test(&bytes, reverse + 12, 1);
+    writeU16Test(&bytes, reverse + 14, 9);
+    writeCoverage1(&bytes, reverse + 20, 2);
+    writeCoverage1(&bytes, reverse + 26, 1);
+    writeCoverage1(&bytes, reverse + 32, 3);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 4, 2, 5, 3 });
+
+    const glyph_classes = [_]u16{ 0, 0, 0, 0, 3, 3 };
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 4, 9, 5, 3 }, glyphs.items);
 }
 
 test "GSUB extension substitution preserves wrapper lookup flags" {

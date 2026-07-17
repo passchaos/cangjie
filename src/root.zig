@@ -291,6 +291,22 @@ test "maps many-to-one cmap format 13 last-resort ranges" {
     try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex(0x1f600));
 }
 
+test "maps trimmed cmap format 6 glyph arrays" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildTrimmedCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex('A'));
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex('B'));
+    try std.testing.expectEqual(@as(GlyphId, 3), try font.glyphIndex('C'));
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex('D'));
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0x1f600));
+}
+
 test "detects scripts and itemizes script runs" {
     const allocator = std.testing.allocator;
 

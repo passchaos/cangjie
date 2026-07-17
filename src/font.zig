@@ -332,12 +332,13 @@ pub const Font = struct {
     pub fn glyphIndex(self: *const Font, codepoint: u21) FontError!glyph_mod.GlyphId {
         var best: ?CmapSubtable = null;
         for (self.cmap_subtables) |subtable| {
-            if (subtable.format != 4 and subtable.format != 12 and subtable.format != 13) continue;
+            if (subtable.format != 4 and subtable.format != 6 and subtable.format != 12 and subtable.format != 13) continue;
             if (best == null or scoreCmap(subtable) > scoreCmap(best.?)) best = subtable;
         }
         const chosen = best orelse return error.UnsupportedCmap;
         return switch (chosen.format) {
             4 => try glyphIndexFormat4(self.data, chosen.offset, codepoint),
+            6 => try glyphIndexFormat6(self.data, chosen.offset, codepoint),
             12 => try glyphIndexFormat12(self.data, chosen.offset, codepoint),
             13 => try glyphIndexFormat13(self.data, chosen.offset, codepoint),
             else => error.UnsupportedCmap,
@@ -1351,7 +1352,8 @@ fn scoreCmap(subtable: CmapSubtable) u8 {
     if (subtable.format == 4 and subtable.platform_id == 0) return 4;
     if (subtable.format == 13 and subtable.platform_id == 3 and subtable.encoding_id == 10) return 3;
     if (subtable.format == 13 and subtable.platform_id == 0) return 2;
-    return 1;
+    if (subtable.format == 6 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 1;
+    return 0;
 }
 
 fn glyphIndexFormat4(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
@@ -1378,6 +1380,20 @@ fn glyphIndexFormat4(data: []const u8, offset: usize, codepoint: u21) FontError!
         return @intCast(@as(u16, @bitCast(@as(i16, @bitCast(glyph)) +% delta)));
     }
     return 0;
+}
+
+fn glyphIndexFormat6(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
+    if (codepoint > 0xffff) return 0;
+    const length = try bin.readU16At(data, offset + 2);
+    if (length < 10) return error.BadSfnt;
+    const first_code = try bin.readU16At(data, offset + 6);
+    const entry_count = try bin.readU16At(data, offset + 8);
+    if (@as(usize, entry_count) * 2 > @as(usize, length) - 10) return error.BadSfnt;
+    const cp: u16 = @intCast(codepoint);
+    if (cp < first_code) return 0;
+    const index = @as(usize, cp - first_code);
+    if (index >= entry_count) return 0;
+    return try bin.readU16At(data, offset + 10 + index * 2);
 }
 
 fn glyphIndexFormat12(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {

@@ -889,7 +889,6 @@ const max_ligature_components = 64;
 
 fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!?LigatureMatch {
     const ligature_count = try readU16(table, set_offset);
-    var best: ?LigatureMatch = null;
     for (0..ligature_count) |i| {
         const lig_offset = set_offset + try readU16(table, set_offset + 2 + i * 2);
         const ligature = try readU16(table, lig_offset);
@@ -908,11 +907,14 @@ fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, lookup_f
             component_offsets[component_index] = cursor;
             cursor += 1;
         }
-        if (ok and (best == null or component_count > best.?.component_count)) {
-            best = .{ .ligature = ligature, .component_count = component_count, .component_offsets = component_offsets };
+        if (ok) {
+            // LigatureSet records are ordered by font-authored preference. Do
+            // not choose the longest matching sequence: a font may deliberately
+            // place a shorter ligature before a longer one to control shaping.
+            return .{ .ligature = ligature, .component_count = component_count, .component_offsets = component_offsets };
         }
     }
-    return best;
+    return null;
 }
 
 fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GsubError!?usize {
@@ -1302,6 +1304,50 @@ test "GSUB alternate substitution skips lookup-flag ignored glyphs" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4, 3 }, glyphs.items);
+}
+
+test "GSUB ligature substitution honors LigatureSet order" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 42;
+
+    writeU16Test(&bytes, 0, 4);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const lig_subst = 8;
+    writeU16Test(&bytes, lig_subst + 0, 1);
+    writeU16Test(&bytes, lig_subst + 2, 28);
+    writeU16Test(&bytes, lig_subst + 4, 1);
+    writeU16Test(&bytes, lig_subst + 6, 8);
+
+    const ligature_set = lig_subst + 8;
+    writeU16Test(&bytes, ligature_set + 0, 2);
+    writeU16Test(&bytes, ligature_set + 2, 6);
+    writeU16Test(&bytes, ligature_set + 4, 14);
+
+    // Both records match the input prefix. OpenType gives priority to the
+    // first Ligature table in the set, even when a later record consumes more
+    // components.
+    const first_ligature = ligature_set + 6;
+    writeU16Test(&bytes, first_ligature + 0, 40);
+    writeU16Test(&bytes, first_ligature + 2, 2);
+    writeU16Test(&bytes, first_ligature + 4, 2);
+
+    const later_longer_ligature = ligature_set + 14;
+    writeU16Test(&bytes, later_longer_ligature + 0, 50);
+    writeU16Test(&bytes, later_longer_ligature + 2, 3);
+    writeU16Test(&bytes, later_longer_ligature + 4, 2);
+    writeU16Test(&bytes, later_longer_ligature + 6, 3);
+
+    writeCoverage1(&bytes, lig_subst + 28, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{});
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
 }
 
 test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {

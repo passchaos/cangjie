@@ -1593,7 +1593,13 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError
                 const start = try readU16(table, range_offset);
                 const end = try readU16(table, range_offset + 2);
                 const start_index = try readU16(table, range_offset + 4);
-                if (glyph >= start and glyph <= end) return start_index + glyph - start;
+                if (glyph >= start and glyph <= end) {
+                    // Keep coverage-index arithmetic in usize. Malformed or
+                    // edge-of-glyph-space ranges can otherwise overflow u16 in
+                    // safety builds before callers get a chance to bounds-check
+                    // the resulting index against their subtable-specific counts.
+                    return @as(usize, start_index) + (@as(usize, glyph) - @as(usize, start));
+                }
             }
             return null;
         },
@@ -1607,8 +1613,15 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u
         1 => {
             const start = try readU16(table, class_def_offset + 2);
             const count = try readU16(table, class_def_offset + 4);
-            if (glyph < start or glyph >= start + count) return 0;
-            return try readU16(table, class_def_offset + 6 + @as(usize, glyph - start) * 2);
+            // ClassDef format 1 describes a half-open range, but `start +
+            // count` is not guaranteed to fit in GlyphId's u16 type near the
+            // upper glyph boundary. Widen before comparing so edge-range class
+            // definitions behave deterministically instead of trapping.
+            const glyph_index = @as(usize, glyph);
+            const start_index = @as(usize, start);
+            const end_exclusive = start_index + @as(usize, count);
+            if (glyph_index < start_index or glyph_index >= end_exclusive) return 0;
+            return try readU16(table, class_def_offset + 6 + (glyph_index - start_index) * 2);
         },
         2 => {
             const range_count = try readU16(table, class_def_offset + 2);
@@ -1623,6 +1636,33 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+test "GPOS coverage format 2 widens boundary coverage indexes" {
+    var bytes = [_]u8{0} ** 16;
+    writeU16Test(&bytes, 0, 2);
+    writeU16Test(&bytes, 2, 1);
+    writeU16Test(&bytes, 4, 0xfffe);
+    writeU16Test(&bytes, 6, 0xffff);
+    writeU16Test(&bytes, 8, 0xffff);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectEqual(@as(?usize, 0xffff), try coverageIndex(table, 0, 0xfffe));
+    try std.testing.expectEqual(@as(?usize, 0x10000), try coverageIndex(table, 0, 0xffff));
+}
+
+test "GPOS class format 1 handles upper glyph boundary" {
+    var bytes = [_]u8{0} ** 12;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0xfffe);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 7);
+    writeU16Test(&bytes, 8, 9);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectEqual(@as(u16, 7), try classValue(table, 0, 0xfffe));
+    try std.testing.expectEqual(@as(u16, 9), try classValue(table, 0, 0xffff));
+    try std.testing.expectEqual(@as(u16, 0), try classValue(table, 0, 0xfffd));
 }
 
 test "GPOS anchors validate format-specific record sizes" {

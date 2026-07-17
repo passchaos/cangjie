@@ -1215,6 +1215,8 @@ fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset
 }
 
 fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    try ensurePositionRecordListWithin(table, records_pos, record_count);
+
     // Context positioning records name a glyph in the matched input sequence
     // and a lookup-list index. Nested lookups own their own LookupFlag, so a
     // mark/base/ligature ignored by that nested flag must not receive deltas.
@@ -1226,6 +1228,14 @@ fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: 
         const target_index = input_indices[sequence_index];
         try collectNestedAdjustment(table, glyphs, target_index, lookup_index, adjustments, allocator, options);
     }
+}
+
+fn ensurePositionRecordListWithin(table: Table, records_pos: usize, record_count: usize) GposError!void {
+    // PosLookupRecord arrays are an all-or-nothing part of a contextual match:
+    // detect truncation before appending any nested adjustment so a malformed
+    // table cannot expose a partly-applied positioning result to the caller.
+    if (records_pos > table.length) return error.BadGpos;
+    if (record_count > (table.length - records_pos) / 4) return error.BadGpos;
 }
 
 fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: usize, lookup_index: u16, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -1881,6 +1891,48 @@ test "GPOS context nested lookup honors nested lookup flags" {
         .glyph_classes = &glyph_classes,
     });
 
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS contextual record truncation is atomic" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 96;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 14);
+
+    writeU16Test(&bytes, 16, 7);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 28);
+
+    writeSinglePositionLookup(&bytes, 24, 1, 0, 40);
+
+    const context = 44;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 8);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 14);
+    writeCoverage1Test(&bytes, context + 8, 1);
+
+    const set = context + 14;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    // The second declared PosLookupRecord is beyond table.length below.
+
+    const glyphs = [_]GlyphId{1};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = rule + 8 };
+    try std.testing.expectError(error.BadGpos, collectLookup(table, 16, &glyphs, &adjustments, allocator, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 

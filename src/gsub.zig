@@ -1128,6 +1128,8 @@ const NestedGlyphChange = struct {
 };
 
 fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    try ensureSubstitutionRecordListWithin(table, records_offset, record_count);
+
     // SequenceLookupRecord sequence indexes are expressed in the input sequence
     // matched before any nested lookup runs. Keep a mutable index map so a
     // cardinality-changing nested lookup (notably MultipleSubst) shifts later
@@ -1200,6 +1202,14 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
             }
         }
     }
+}
+
+fn ensureSubstitutionRecordListWithin(table: Table, records_offset: usize, record_count: usize) GsubError!void {
+    // Contextual lookup records are applied eagerly and may mutate the glyph
+    // stream. Reject a truncated record array before the first nested lookup so
+    // malformed fonts cannot leave the caller with a partially substituted run.
+    if (records_offset > table.length) return error.BadGsub;
+    if (record_count > (table.length - records_offset) / 4) return error.BadGsub;
 }
 
 fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, lookup_index: u16, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!NestedGlyphChange {
@@ -1679,6 +1689,48 @@ test "GSUB context substitution skips lookup-flag ignored glyphs" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 12 }, glyphs.items);
+}
+
+test "GSUB contextual record truncation is atomic" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 96;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 14);
+
+    writeU16Test(&bytes, 16, 5);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 28);
+
+    writeSingleDeltaLookup(&bytes, 24, 1, 9);
+
+    const context = 44;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 8);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 14);
+    writeCoverage1(&bytes, context + 8, 1);
+
+    const set = context + 14;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    // The second declared SequenceLookupRecord is beyond table.length below.
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = rule + 8 };
+    try std.testing.expectError(error.BadGsub, applyLookup(table, 16, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
 }
 
 test "GSUB context substitution can apply nested multiple substitution" {

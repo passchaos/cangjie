@@ -180,6 +180,10 @@ pub fn buildByteEncodingCmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try byteEncodingCmapTtfTables(allocator));
 }
 
+pub fn buildTrimmed32CmapTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try trimmed32CmapTtfTables(allocator));
+}
+
 pub fn buildNamedCjkLanguageGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try namedCjkLanguageGsubTtfTables(allocator));
 }
@@ -981,6 +985,20 @@ fn byteEncodingCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn trimmed32CmapTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat10Table(allocator, 0x1f600, &.{ 1, 0, 3 }) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
 fn namedCjkLanguageGsubTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
@@ -1437,6 +1455,28 @@ fn cmapSingleCodepointTable(allocator: std.mem.Allocator, codepoint: u16) ![]u8 
     writeI16(bytes, off + 26, 1);
     writeU16(bytes, off + 28, 0);
     writeU16(bytes, off + 30, 0);
+    return bytes;
+}
+
+fn cmapFormat10Table(allocator: std.mem.Allocator, start_code: u32, glyph_ids: []const u16) ![]u8 {
+    const length = 20 + glyph_ids.len * 2;
+    const bytes = try allocator.alloc(u8, 12 + length);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 1);
+    writeU16(bytes, 4, 3);
+    writeU16(bytes, 6, 10);
+    writeU32(bytes, 8, 12);
+    const off = 12;
+    writeU16(bytes, off + 0, 10);
+    writeU16(bytes, off + 2, 0);
+    writeU32(bytes, off + 4, @intCast(length));
+    writeU32(bytes, off + 8, 0);
+    writeU32(bytes, off + 12, start_code);
+    writeU32(bytes, off + 16, @intCast(glyph_ids.len));
+    for (glyph_ids, 0..) |glyph_id, index| {
+        writeU16(bytes, off + 20 + index * 2, glyph_id);
+    }
     return bytes;
 }
 

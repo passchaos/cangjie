@@ -4,6 +4,10 @@ pub fn buildMinimalTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalTtfTables(allocator));
 }
 
+pub fn buildVerticalMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try verticalMetricsTtfTables(allocator));
+}
+
 pub fn buildSingleCodepointTtf(allocator: std.mem.Allocator, codepoint: u16) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try singleCodepointTtfTables(allocator, codepoint));
 }
@@ -358,6 +362,22 @@ fn minimalTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn verticalMetricsTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "vhea", .data = try vheaTableWithMetrics(allocator, 1) };
+    tables[8] = .{ .tag = "vmtx", .data = try vmtxTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -2485,6 +2505,16 @@ fn hheaTableWithMetrics(allocator: std.mem.Allocator, h_metrics: u16) ![]u8 {
     return bytes;
 }
 
+fn vheaTableWithMetrics(allocator: std.mem.Allocator, v_metrics: u16) ![]u8 {
+    const bytes = try allocator.alloc(u8, 36);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00011000);
+    writeI16(bytes, 4, 800);
+    writeI16(bytes, 6, -200);
+    writeU16(bytes, 34, v_metrics);
+    return bytes;
+}
+
 fn hmtxTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 8);
     writeU16(bytes, 0, 500);
@@ -2543,6 +2573,14 @@ fn hmtxTableWithColorGlyphs(allocator: std.mem.Allocator) ![]u8 {
     writeI16(bytes, 10, 0);
     writeU16(bytes, 12, 800);
     writeI16(bytes, 14, 0);
+    return bytes;
+}
+
+fn vmtxTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 6);
+    writeU16(bytes, 0, 1000);
+    writeI16(bytes, 2, 0);
+    writeI16(bytes, 4, 0);
     return bytes;
 }
 

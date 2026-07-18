@@ -404,30 +404,76 @@ pub const Font = struct {
     pub fn kerning(self: *const Font, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
         const kern = self.kern orelse return 0;
         if (kern.length < 4) return 0;
-        const version = try bin.readU16At(self.data, kern.offset);
-        if (version != 0) return 0;
-        const table_count = try bin.readU16At(self.data, kern.offset + 2);
+        const version = try bin.readU32At(self.data, kern.offset);
+        if (version == 0x00010000) {
+            return try appleKernKerning(self.data, kern, left, right);
+        }
+        if ((version >> 16) != 0) return 0;
+        return try legacyKernKerning(self.data, kern, left, right);
+    }
+
+    fn legacyKernKerning(data: []const u8, kern: TableRecord, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
+        const table_count = try bin.readU16At(data, kern.offset + 2);
+        const table_end = kern.offset + kern.length;
         var subtable_offset = kern.offset + 4;
         var total: i32 = 0;
         var saw_matching_pair = false;
         for (0..table_count) |_| {
-            if (subtable_offset + 6 > kern.offset + kern.length) return error.BadSfnt;
-            const length = try bin.readU16At(self.data, subtable_offset + 2);
-            const coverage = try bin.readU16At(self.data, subtable_offset + 4);
-            if (length < 6 or subtable_offset + length > kern.offset + kern.length) return error.BadSfnt;
+            if (subtable_offset > table_end or table_end - subtable_offset < 6) return error.BadSfnt;
+            const length = try bin.readU16At(data, subtable_offset + 2);
+            const coverage = try bin.readU16At(data, subtable_offset + 4);
+            if (length < 6 or length > table_end - subtable_offset) return error.BadSfnt;
             const format = coverage >> 8;
             const horizontal = (coverage & 0x0001) != 0;
             const minimum = (coverage & 0x0002) != 0;
             const cross_stream = (coverage & 0x0004) != 0;
             const override = (coverage & 0x0008) != 0;
             if (format == 0 and horizontal and !minimum and !cross_stream) {
-                if (try kernFormat0(self.data[subtable_offset .. subtable_offset + length], left, right)) |value| {
+                // OpenType/Windows subtables have a six-byte common header
+                // before the format-0 binary-search payload.
+                if (try kernFormat0Body(data[subtable_offset + 6 .. subtable_offset + length], left, right)) |value| {
                     saw_matching_pair = true;
                     if (override) {
                         total = value;
                     } else {
                         total += value;
                     }
+                }
+            }
+            subtable_offset += length;
+        }
+        if (!saw_matching_pair) return 0;
+        return @intCast(std.math.clamp(total, std.math.minInt(i16), std.math.maxInt(i16)));
+    }
+
+    fn appleKernKerning(data: []const u8, kern: TableRecord, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
+        if (kern.length < 8) return error.BadSfnt;
+        const table_count = try bin.readU32At(data, kern.offset + 4);
+        const table_end = kern.offset + kern.length;
+        var subtable_offset = kern.offset + 8;
+        var total: i32 = 0;
+        var saw_matching_pair = false;
+        for (0..table_count) |_| {
+            if (subtable_offset > table_end or table_end - subtable_offset < 8) return error.BadSfnt;
+            const length = try bin.readU32At(data, subtable_offset);
+            const coverage = try bin.readU16At(data, subtable_offset + 4);
+            if (length < 8 or length > table_end - subtable_offset) return error.BadSfnt;
+
+            // Apple/AAT version-1 subtables use different coverage bits from
+            // the legacy OpenType header: format lives in the low byte, while a
+            // clear vertical bit means normal horizontal kerning. Variation and
+            // cross-stream tables need extra state this API does not provide, so
+            // they are skipped rather than applying incorrect horizontal deltas.
+            const format = coverage & 0x00ff;
+            const vertical = (coverage & 0x8000) != 0;
+            const cross_stream = (coverage & 0x4000) != 0;
+            const variation = (coverage & 0x2000) != 0;
+            if (format == 0 and !vertical and !cross_stream and !variation) {
+                // AAT subtables have an eight-byte common header (including
+                // tupleIndex) before the same format-0 pair-search payload.
+                if (try kernFormat0Body(data[subtable_offset + 8 .. subtable_offset + length], left, right)) |value| {
+                    saw_matching_pair = true;
+                    total += value;
                 }
             }
             subtable_offset += length;
@@ -1891,19 +1937,18 @@ fn glyphIndexFormat14NonDefault(data: []const u8, offset: usize, table_end: usiz
     return null;
 }
 
-fn kernFormat0(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!?i16 {
-    // A format-0 subtable is not valid until the full binary-search header is
-    // present. Treating a short declared length as "no pair" lets the parent
-    // kern table hide a malformed subtable by truncating exactly before nPairs.
-    if (data.len < 14) return error.BadSfnt;
-    const pair_count = try bin.readU16At(data, 6);
-    if (@as(usize, pair_count) * 6 > data.len - 14) return error.BadSfnt;
+fn kernFormat0Body(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!?i16 {
+    // The format-0 body begins with the binary-search header; the surrounding
+    // kern table variant owns the common subtable header length.
+    if (data.len < 8) return error.BadSfnt;
+    const pair_count = try bin.readU16At(data, 0);
+    if (@as(usize, pair_count) * 6 > data.len - 8) return error.BadSfnt;
     const needle = (@as(u32, left) << 16) | right;
     var lo: usize = 0;
     var hi: usize = pair_count;
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        const offset = 14 + mid * 6;
+        const offset = 8 + mid * 6;
         const pair = (@as(u32, try bin.readU16At(data, offset)) << 16) | try bin.readU16At(data, offset + 2);
         if (needle < pair) {
             hi = mid;
@@ -2195,6 +2240,29 @@ test "legacy kern format 0 rejects truncated binary-search header" {
     writeU16Test(&data, 4, 0); // subtable version
     writeU16Test(&data, 6, 12); // Stops before the required rangeShift field.
     writeU16Test(&data, 8, 0x0001); // format 0, horizontal
+
+    const font = kernOnlyFont(&data);
+    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
+}
+
+test "Apple kern v1 format 0 applies horizontal pair subtables" {
+    var data: [54]u8 = .{0} ** 54;
+    writeU32Test(&data, 0, 0x00010000); // Apple/AAT kern table version.
+    writeU32Test(&data, 4, 2);
+    writeAppleKernFormat0Subtable(&data, 8, 0x0000, 1, 1, -35);
+    writeAppleKernFormat0Subtable(&data, 31, 0x0000, 1, 1, -45);
+
+    const font = kernOnlyFont(&data);
+    try std.testing.expectEqual(@as(i16, -80), try font.kerning(1, 1));
+    try std.testing.expectEqual(@as(i16, 0), try font.kerning(0, 1));
+}
+
+test "Apple kern v1 validates declared subtable lengths" {
+    var data: [22]u8 = .{0} ** 22;
+    writeU32Test(&data, 0, 0x00010000);
+    writeU32Test(&data, 4, 1);
+    writeU32Test(&data, 8, 14); // Stops before the format-0 rangeShift field.
+    writeU16Test(&data, 12, 0x0000); // horizontal format 0.
 
     const font = kernOnlyFont(&data);
     try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
@@ -2787,13 +2855,24 @@ fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: gly
     writeU16Test(bytes, offset + 0, 0);
     writeU16Test(bytes, offset + 2, 20);
     writeU16Test(bytes, offset + 4, coverage);
-    writeU16Test(bytes, offset + 6, 1);
-    writeU16Test(bytes, offset + 8, 6);
-    writeU16Test(bytes, offset + 10, 0);
-    writeU16Test(bytes, offset + 12, 0);
-    writeU16Test(bytes, offset + 14, left);
-    writeU16Test(bytes, offset + 16, right);
-    writeI16Test(bytes, offset + 18, value);
+    writeKernFormat0Body(bytes, offset + 6, left, right, value);
+}
+
+fn writeAppleKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {
+    writeU32Test(bytes, offset + 0, 23);
+    writeU16Test(bytes, offset + 4, coverage);
+    writeU16Test(bytes, offset + 6, 0); // tupleIndex
+    writeKernFormat0Body(bytes, offset + 8, left, right, value);
+}
+
+fn writeKernFormat0Body(bytes: []u8, offset: usize, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {
+    writeU16Test(bytes, offset + 0, 1);
+    writeU16Test(bytes, offset + 2, 6);
+    writeU16Test(bytes, offset + 4, 0);
+    writeU16Test(bytes, offset + 6, 0);
+    writeU16Test(bytes, offset + 8, left);
+    writeU16Test(bytes, offset + 10, right);
+    writeI16Test(bytes, offset + 12, value);
 }
 
 fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32, default: f32, max: f32, name_id: u16) void {

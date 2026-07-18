@@ -381,13 +381,15 @@ pub const Font = struct {
     /// Map a Unicode scalar value to a glyph id using the best supported cmap.
     ///
     /// Format 12 is preferred for precise full-Unicode coverage, which matters
-    /// for CJK extension planes. Format 13 is the OpenType "many-to-one"
-    /// fallback cmap used by last-resort fonts; it is less specific than
-    /// format 12 but still materially better than reporting UnsupportedCmap.
+    /// for CJK extension planes. Format 8 is a rarely used mixed-width Unicode
+    /// map, but it still carries supplementary-plane coverage and should win
+    /// over BMP-only maps. Format 13 is the OpenType "many-to-one" fallback
+    /// cmap used by last-resort fonts; it is less specific than format 12 but
+    /// still materially better than reporting UnsupportedCmap.
     pub fn glyphIndex(self: *const Font, codepoint: u21) FontError!glyph_mod.GlyphId {
         var best: ?CmapSubtable = null;
         for (self.cmap_subtables) |subtable| {
-            if (subtable.format != 0 and subtable.format != 2 and subtable.format != 4 and subtable.format != 6 and subtable.format != 10 and subtable.format != 12 and subtable.format != 13) continue;
+            if (subtable.format != 0 and subtable.format != 2 and subtable.format != 4 and subtable.format != 6 and subtable.format != 8 and subtable.format != 10 and subtable.format != 12 and subtable.format != 13) continue;
             if (best == null or scoreCmap(subtable) > scoreCmap(best.?)) best = subtable;
         }
         const chosen = best orelse return error.UnsupportedCmap;
@@ -396,6 +398,7 @@ pub const Font = struct {
             2 => try glyphIndexFormat2(self.data, chosen.offset, chosen.length, codepoint),
             4 => try glyphIndexFormat4(self.data, chosen.offset, codepoint),
             6 => try glyphIndexFormat6(self.data, chosen.offset, codepoint),
+            8 => try glyphIndexFormat8(self.data, chosen.offset, chosen.length, codepoint),
             10 => try glyphIndexFormat10(self.data, chosen.offset, chosen.length, codepoint),
             12 => try glyphIndexFormat12(self.data, chosen.offset, chosen.length, codepoint),
             13 => try glyphIndexFormat13(self.data, chosen.offset, chosen.length, codepoint),
@@ -2129,7 +2132,7 @@ fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, fo
             if (available < 4) return error.BadSfnt;
             break :blk try bin.readU16At(data, absolute + 2);
         },
-        10, 12, 13 => blk: {
+        8, 10, 12, 13 => blk: {
             if (available < 8) return error.BadSfnt;
             break :blk try bin.readU32At(data, absolute + 4);
         },
@@ -2142,7 +2145,7 @@ fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, fo
 
     // Cmap offsets are scoped to the declared cmap table, not to the whole
     // SFNT file. Remembering each subtable's own declared length prevents a
-    // malformed format 10/12/13 table from satisfying its glyph array or group
+    // malformed format 8/10/12/13 table from satisfying its glyph array or group
     // reads with bytes that actually belong to the next SFNT table.
     if (length == 0 or length > available) return error.BadSfnt;
     return length;
@@ -2154,6 +2157,7 @@ fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: 
     switch (format) {
         2 => try validateCmapFormat2(data, offset, length),
         6 => try validateCmapFormat6(data, offset, length, validate_bmp_scalars),
+        8 => try validateCmapFormat8(data, offset, length),
         10 => try validateCmapFormat10(data, offset, length),
         4 => try validateCmapFormat4(data, offset, length, validate_bmp_scalars),
         12, 13 => try validateSegmentedCmapGroups(data, offset, length),
@@ -2266,6 +2270,7 @@ fn validateCmapGlyphIds(data: []const u8, offset: usize, length: usize, format: 
                 try validateCmapGlyphId(try bin.readU16At(data, offset + 10 + index * 2), glyph_count);
             }
         },
+        8 => try validateCmapFormat8GlyphIds(data, offset, length, glyph_count),
         10 => {
             const entry_count: usize = @intCast(try bin.readU32At(data, offset + 16));
             for (0..entry_count) |index| {
@@ -2345,6 +2350,20 @@ fn validateCmapFormat4GlyphIds(data: []const u8, offset: usize, length: usize, g
             try validateCmapGlyphId(glyph_id, glyph_count);
             if (codepoint == end) break;
         }
+    }
+}
+
+fn validateCmapFormat8GlyphIds(data: []const u8, offset: usize, length: usize, glyph_count: u16) FontError!void {
+    const group_count: usize = @intCast(try bin.readU32At(data, offset + cmap_format8_groups_offset - 4));
+    _ = length;
+    for (0..group_count) |index| {
+        const group_offset = offset + cmap_format8_groups_offset + index * 12;
+        const start = try bin.readU32At(data, group_offset);
+        const end = try bin.readU32At(data, group_offset + 4);
+        const first_glyph = try bin.readU32At(data, group_offset + 8);
+        const span = end - start;
+        if (first_glyph > std.math.maxInt(u32) - span) return error.BadSfnt;
+        try validateCmapGlyphId(first_glyph + span, glyph_count);
     }
 }
 
@@ -2441,6 +2460,69 @@ fn validateCmapFormat6(data: []const u8, offset: usize, length: usize, validate_
             if (first_code < 0xe000 and last_code > 0xd7ff) return error.BadSfnt;
         }
     }
+}
+
+const cmap_format8_is32_offset = 12;
+const cmap_format8_is32_len = 8192;
+const cmap_format8_groups_offset = cmap_format8_is32_offset + cmap_format8_is32_len + 4;
+
+fn validateCmapFormat8(data: []const u8, offset: usize, length: usize) FontError!void {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (length < cmap_format8_groups_offset) return error.BadSfnt;
+
+    const reserved = try bin.readU16At(data, offset + 2);
+    if (reserved != 0) return error.BadSfnt;
+    const group_bytes = length - cmap_format8_groups_offset;
+    if (group_bytes % 12 != 0) return error.BadSfnt;
+    const group_count: usize = @intCast(try bin.readU32At(data, offset + cmap_format8_groups_offset - 4));
+    if (group_count != group_bytes / 12) return error.BadSfnt;
+
+    var previous_end: ?u32 = null;
+    for (0..group_count) |index| {
+        const group_offset = offset + cmap_format8_groups_offset + index * 12;
+        const start = try bin.readU32At(data, group_offset);
+        const end = try bin.readU32At(data, group_offset + 4);
+        if (end < start) return error.BadSfnt;
+        if (!isUnicodeScalarValue(start) or !isUnicodeScalarValue(end)) return error.BadSfnt;
+        if (start < 0xe000 and end > 0xd7ff) return error.BadSfnt;
+        if (previous_end) |last_end| {
+            // Format 8 lookups use the same sorted group search as format 12,
+            // with an additional is32 bitset to identify UTF-16 high words.
+            // Enforce ordering at parse time so malformed group arrays cannot
+            // make scalar-to-glyph mapping depend on record order.
+            if (start <= last_end) return error.BadSfnt;
+        }
+        previous_end = end;
+
+        try validateCmapFormat8RangeWidth(data, offset, start, end);
+    }
+}
+
+fn validateCmapFormat8RangeWidth(data: []const u8, offset: usize, start: u32, end: u32) FontError!void {
+    // The is32 bitset is part of format 8's decoding contract, not merely a
+    // hint. A BMP codepoint named by a group must be marked as a standalone
+    // 16-bit character, while every high word used by supplementary-plane
+    // groups must be marked as the first half of a 32-bit character code.
+    if (start <= 0xffff) {
+        var word = start;
+        const last_bmp = @min(end, 0xffff);
+        while (word <= last_bmp) : (word += 1) {
+            if (cmapFormat8Is32(data, offset, @intCast(word))) return error.BadSfnt;
+        }
+    }
+    if (end > 0xffff) {
+        var high_word = @max(start, 0x10000) >> 16;
+        const last_high_word = end >> 16;
+        while (high_word <= last_high_word) : (high_word += 1) {
+            if (!cmapFormat8Is32(data, offset, @intCast(high_word))) return error.BadSfnt;
+        }
+    }
+}
+
+fn cmapFormat8Is32(data: []const u8, offset: usize, word: u16) bool {
+    const byte_offset = offset + cmap_format8_is32_offset + @as(usize, word) / 8;
+    const bit_mask: u8 = @as(u8, 0x80) >> @intCast(word & 7);
+    return (data[byte_offset] & bit_mask) != 0;
 }
 
 fn validateCmapFormat10(data: []const u8, offset: usize, length: usize) FontError!void {
@@ -3172,8 +3254,9 @@ fn decodeSingleByteName(data: []const u8, out: []u8) FontError![]const u8 {
 }
 
 fn scoreCmap(subtable: CmapSubtable) u8 {
-    if (subtable.format == 12 and subtable.platform_id == 3 and subtable.encoding_id == 10) return 7;
-    if (subtable.format == 12 and subtable.platform_id == 0) return 6;
+    if (subtable.format == 12 and subtable.platform_id == 3 and subtable.encoding_id == 10) return 8;
+    if (subtable.format == 12 and subtable.platform_id == 0) return 7;
+    if (subtable.format == 8 and subtable.platform_id == 0 and subtable.encoding_id == 4) return 6;
     if (subtable.format == 4 and subtable.platform_id == 3 and subtable.encoding_id == 1) return 5;
     if (subtable.format == 4 and subtable.platform_id == 0) return 4;
     if (subtable.format == 13 and subtable.platform_id == 0 and subtable.encoding_id == 6) return 2;
@@ -3276,6 +3359,11 @@ fn glyphIndexFormat6(data: []const u8, offset: usize, codepoint: u21) FontError!
     return try bin.readU16At(data, offset + 10 + index * 2);
 }
 
+fn glyphIndexFormat8(data: []const u8, offset: usize, length: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
+    try validateCmapFormat8(data, offset, length);
+    return try glyphIndexSequentialMapGroups(data, offset, cmap_format8_groups_offset, length, codepoint);
+}
+
 fn glyphIndexFormat10(data: []const u8, offset: usize, length: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
     try validateCmapFormat10(data, offset, length);
     const start_code = try bin.readU32At(data, offset + 12);
@@ -3287,35 +3375,7 @@ fn glyphIndexFormat10(data: []const u8, offset: usize, length: usize, codepoint:
 }
 
 fn glyphIndexFormat12(data: []const u8, offset: usize, length: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
-    // Format 12 groups are sorted by startCharCode. Binary search avoids a
-    // linear scan through very large CJK fonts with thousands of ranges.
-    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
-    if (length < 16) return error.BadSfnt;
-    const groups = try bin.readU32At(data, offset + 12);
-    if (@as(usize, groups) > (length - 16) / 12) return error.BadSfnt;
-
-    var lo: usize = 0;
-    var hi: usize = @intCast(groups);
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const group_offset = offset + 16 + mid * 12;
-        const start = try bin.readU32At(data, group_offset);
-        const end = try bin.readU32At(data, group_offset + 4);
-        if (end < start) return error.BadSfnt;
-        if (codepoint < start) {
-            hi = mid;
-        } else if (codepoint > end) {
-            lo = mid + 1;
-        } else {
-            const first = try bin.readU32At(data, group_offset + 8);
-            const delta = @as(u32, codepoint) - start;
-            if (first > std.math.maxInt(u32) - delta) return error.BadSfnt;
-            const glyph_id = first + delta;
-            if (glyph_id > std.math.maxInt(glyph_mod.GlyphId)) return error.BadSfnt;
-            return @intCast(glyph_id);
-        }
-    }
-    return 0;
+    return try glyphIndexSequentialMapGroups(data, offset, 16, length, codepoint);
 }
 
 fn glyphIndexFormat13(data: []const u8, offset: usize, length: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
@@ -3342,6 +3402,39 @@ fn glyphIndexFormat13(data: []const u8, offset: usize, length: usize, codepoint:
             lo = mid + 1;
         } else {
             const glyph_id = try bin.readU32At(data, group_offset + 8);
+            if (glyph_id > std.math.maxInt(glyph_mod.GlyphId)) return error.BadSfnt;
+            return @intCast(glyph_id);
+        }
+    }
+    return 0;
+}
+
+fn glyphIndexSequentialMapGroups(data: []const u8, offset: usize, groups_offset: usize, length: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
+    // SequentialMapGroup records are sorted by startCharCode. Binary search
+    // avoids a linear scan through very large CJK fonts with thousands of
+    // ranges and is shared by format 8 and format 12.
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (groups_offset < 4 or groups_offset > length) return error.BadSfnt;
+    const groups = try bin.readU32At(data, offset + groups_offset - 4);
+    if (@as(usize, groups) > (length - groups_offset) / 12) return error.BadSfnt;
+
+    var lo: usize = 0;
+    var hi: usize = @intCast(groups);
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const group_offset = offset + groups_offset + mid * 12;
+        const start = try bin.readU32At(data, group_offset);
+        const end = try bin.readU32At(data, group_offset + 4);
+        if (end < start) return error.BadSfnt;
+        if (codepoint < start) {
+            hi = mid;
+        } else if (codepoint > end) {
+            lo = mid + 1;
+        } else {
+            const first = try bin.readU32At(data, group_offset + 8);
+            const delta = @as(u32, codepoint) - start;
+            if (first > std.math.maxInt(u32) - delta) return error.BadSfnt;
+            const glyph_id = first + delta;
             if (glyph_id > std.math.maxInt(glyph_mod.GlyphId)) return error.BadSfnt;
             return @intCast(glyph_id);
         }
@@ -5421,6 +5514,53 @@ test "cmap glyph ids are validated against maxp glyph count" {
     }
 }
 
+test "cmap format 8 validates mixed-width structure and lookup" {
+    const allocator = std.testing.allocator;
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 8244,
+    };
+
+    var valid: [8244]u8 = .{0} ** 8244;
+    writeCmapFormat8HeaderTest(&valid, valid.len - 12, 2);
+    setCmapFormat8Is32Test(&valid, 1, true);
+    writeCmapGroupTest(&valid, 8220, 'A', 'A', 5);
+    writeCmapGroupTest(&valid, 8232, 0x10000, 0x10001, 6);
+
+    const subtables = try parseCmapSubtables(allocator, &valid, cmap, 16);
+    defer allocator.free(subtables);
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 5), try glyphIndexFormat8(&valid, 12, valid.len - 12, 'A'));
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 6), try glyphIndexFormat8(&valid, 12, valid.len - 12, 0x10000));
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 7), try glyphIndexFormat8(&valid, 12, valid.len - 12, 0x10001));
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 0), try glyphIndexFormat8(&valid, 12, valid.len - 12, 0x20000));
+
+    var bad_reserved = valid;
+    writeU16Test(&bad_reserved, 14, 1);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bad_reserved, cmap, 16));
+
+    var extra_bytes = valid;
+    writeU32Test(&extra_bytes, 16, valid.len - 10);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &extra_bytes, cmap, 16));
+
+    var missing_is32 = valid;
+    setCmapFormat8Is32Test(&missing_is32, 1, false);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &missing_is32, cmap, 16));
+
+    var bmp_marked_32 = valid;
+    setCmapFormat8Is32Test(&bmp_marked_32, 'A', true);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bmp_marked_32, cmap, 16));
+
+    var unsorted = valid;
+    writeCmapGroupTest(&unsorted, 8232, 0x40, 0x40, 6);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &unsorted, cmap, 16));
+
+    var bad_glyph = valid;
+    writeCmapGroupTest(&bad_glyph, 8232, 0x10000, 0x10001, 15);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bad_glyph, cmap, 16));
+}
+
 test "cmap segmented groups must be sorted and disjoint" {
     const allocator = std.testing.allocator;
     const cmap: TableRecord = .{
@@ -7472,6 +7612,27 @@ fn writeF16Dot16Test(bytes: []u8, offset: usize, value: f32) void {
 
 fn writeF2Dot14Test(bytes: []u8, offset: usize, value: f32) void {
     writeI16Test(bytes, offset, @intFromFloat(value * 16384.0));
+}
+
+fn writeCmapFormat8HeaderTest(bytes: []u8, length: u32, groups: u32) void {
+    writeU16Test(bytes, 0, 0);
+    writeU16Test(bytes, 2, 1);
+    writeU16Test(bytes, 4, 0);
+    writeU16Test(bytes, 6, 4);
+    writeU32Test(bytes, 8, 12);
+    writeU16Test(bytes, 12, 8);
+    writeU32Test(bytes, 16, length);
+    writeU32Test(bytes, 8216, groups);
+}
+
+fn setCmapFormat8Is32Test(bytes: []u8, word: u16, value: bool) void {
+    const byte_offset = 24 + @as(usize, word) / 8;
+    const mask: u8 = @as(u8, 0x80) >> @intCast(word & 7);
+    if (value) {
+        bytes[byte_offset] |= mask;
+    } else {
+        bytes[byte_offset] &= ~mask;
+    }
 }
 
 fn writeCmapFormat12HeaderTest(bytes: []u8, length: u32, groups: u32) void {

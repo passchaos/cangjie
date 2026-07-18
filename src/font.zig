@@ -302,6 +302,8 @@ pub const Font = struct {
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
         if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
+        if (colr) |colr_table| try validateColrGlyphBounds(data, colr_table, glyph_count);
+        if (svg) |svg_table| try validateSvgGlyphBounds(data, svg_table, glyph_count);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
         // supported Unicode mapping per lookup without reparsing the directory.
@@ -3217,6 +3219,139 @@ fn mapAvarSegment(segment_data: []const u8, normalized: f32) FontError!f32 {
     return previous_to;
 }
 
+fn validateSvgGlyphBounds(data: []const u8, svg: TableRecord, glyph_count: u16) FontError!void {
+    if (svg.length < 10) return error.BadSfnt;
+    const version = try bin.readU16At(data, svg.offset);
+    if (version != 0) return error.BadSfnt;
+    const document_list_offset: usize = @intCast(try bin.readU32At(data, svg.offset + 2));
+    if (document_list_offset < 10) return error.BadSfnt;
+    if (document_list_offset > svg.length or 2 > svg.length - document_list_offset) return error.BadSfnt;
+
+    const list_start = svg.offset + document_list_offset;
+    const list_end = svg.offset + svg.length;
+    const entry_count = try bin.readU16At(data, list_start);
+    const records_start = list_start + 2;
+    const record_bytes = @as(usize, entry_count) * 12;
+    if (record_bytes > list_end - records_start) return error.BadSfnt;
+    const document_data_start = 2 + record_bytes;
+
+    for (0..entry_count) |index| {
+        const record = records_start + index * 12;
+        const start_glyph_id = try bin.readU16At(data, record);
+        const end_glyph_id = try bin.readU16At(data, record + 2);
+        const document_offset: usize = @intCast(try bin.readU32At(data, record + 4));
+        const document_length: usize = @intCast(try bin.readU32At(data, record + 8));
+        // SVGDocumentRecords are global glyph metadata, so every advertised
+        // inclusive range must fit maxp.numGlyphs even if callers never request
+        // that document. Otherwise an accepted font can later surface a color
+        // glyph id that has no metrics, outline, or bitmap contract.
+        if (end_glyph_id < start_glyph_id) return error.BadSfnt;
+        try validateGlyphIdInMaxp(start_glyph_id, glyph_count);
+        try validateGlyphIdInMaxp(end_glyph_id, glyph_count);
+        if (document_offset < document_data_start) return error.BadSfnt;
+        if (document_offset > svg.length - document_list_offset or document_length > svg.length - document_list_offset - document_offset) return error.BadSfnt;
+    }
+}
+
+fn validateColrGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
+    if (colr.length < 2) return error.BadSfnt;
+    const version = try bin.readU16At(data, colr.offset);
+    switch (version) {
+        0 => try validateColrV0GlyphBounds(data, colr, glyph_count),
+        1 => try validateColrV1GlyphBounds(data, colr, glyph_count),
+        else => {},
+    }
+}
+
+fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
+    if (colr.length < 14) return error.BadSfnt;
+    const base_count = try bin.readU16At(data, colr.offset + 2);
+    const base_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 4));
+    const layer_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 8));
+    const layer_count = try bin.readU16At(data, colr.offset + 12);
+    if (base_offset > colr.length or layer_offset > colr.length) return error.BadSfnt;
+    if (@as(usize, base_count) * 6 > colr.length - base_offset) return error.BadSfnt;
+    if (@as(usize, layer_count) * 4 > colr.length - layer_offset) return error.BadSfnt;
+
+    for (0..base_count) |index| {
+        const record = colr.offset + base_offset + index * 6;
+        try validateGlyphIdInMaxp(try bin.readU16At(data, record), glyph_count);
+        const first_layer = try bin.readU16At(data, record + 2);
+        const num_layers = try bin.readU16At(data, record + 4);
+        if (first_layer > layer_count or num_layers > layer_count - first_layer) return error.BadSfnt;
+    }
+    for (0..layer_count) |index| {
+        const layer_record = colr.offset + layer_offset + index * 4;
+        try validateGlyphIdInMaxp(try bin.readU16At(data, layer_record), glyph_count);
+    }
+}
+
+fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
+    if (colr.length < 34) return error.BadSfnt;
+    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
+    if (base_glyph_list_offset != 0) {
+        if (base_glyph_list_offset > colr.length or 4 > colr.length - base_glyph_list_offset) return error.BadSfnt;
+        const list_start = colr.offset + base_glyph_list_offset;
+        const record_count: usize = @intCast(try bin.readU32At(data, list_start));
+        const records_start = list_start + 4;
+        if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
+        const paint_data_start = 4 + record_count * 6;
+        for (0..record_count) |index| {
+            const record = records_start + index * 6;
+            try validateGlyphIdInMaxp(try bin.readU16At(data, record), glyph_count);
+            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
+            if (paint_offset < paint_data_start) return error.BadSfnt;
+            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
+            var guard = ColorPaintGraphGuard{};
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, list_start + paint_offset, &guard);
+        }
+    }
+
+    if (try colrLayerList(data, colr)) |layer_list| {
+        for (0..layer_list.layer_count) |layer_index| {
+            const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
+            var guard = ColorPaintGraphGuard{};
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, paint_offset, &guard);
+        }
+    }
+}
+
+fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
+    if (offset >= colr.offset + colr.length) return error.BadSfnt;
+    try guard.enter(offset);
+    defer guard.leave();
+
+    const format = data[offset];
+    switch (format) {
+        1 => {
+            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
+            const layer_count = data[offset + 1];
+            const first_layer_index = try bin.readU32At(data, offset + 2);
+            if (layer_count == 0) return;
+            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const first: usize = @intCast(first_layer_index);
+            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
+            for (0..layer_count) |layer_offset| {
+                const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
+                try validateColorPaintGlyphBounds(data, colr, glyph_count, paint_offset, guard);
+            }
+        },
+        10 => {
+            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
+            const child_offset: usize = @intCast(try readU24At(data, offset + 1));
+            try validateGlyphIdInMaxp(try bin.readU16At(data, offset + 4), glyph_count);
+            if (child_offset < 6) return error.BadSfnt;
+            if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, offset + child_offset, guard);
+        },
+        else => return,
+    }
+}
+
+fn validateGlyphIdInMaxp(glyph_id: u32, glyph_count: u16) FontError!void {
+    if (glyph_id >= glyph_count) return error.BadSfnt;
+}
+
 const max_colr_paint_graph_depth = 64;
 
 const ColorPaintGraphGuard = struct {
@@ -4299,6 +4434,24 @@ test "name table format 1 validates language tag storage ranges" {
     try std.testing.expectError(error.BadSfnt, readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out));
 }
 
+test "SVG document glyph ranges stay within maxp glyph count" {
+    var bytes: [28]u8 = .{0} ** 28;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU16Test(&bytes, 10, 1); // one SVGDocumentRecord.
+    writeU16Test(&bytes, 12, 1); // startGlyphID.
+    writeU16Test(&bytes, 14, 2); // endGlyphID is invalid when maxp.numGlyphs == 2.
+    writeU32Test(&bytes, 16, 14); // document data starts after the record array.
+    writeU32Test(&bytes, 20, 4);
+    @memcpy(bytes[24..28], "<svg");
+
+    const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(&bytes, svg, 2));
+
+    writeU16Test(&bytes, 14, 1);
+    try validateSvgGlyphBounds(&bytes, svg, 2);
+}
+
 test "SVG document offsets cannot overlap table metadata" {
     var header_overlap: [18]u8 = .{0} ** 18;
     writeU16Test(&header_overlap, 0, 0);
@@ -4353,6 +4506,44 @@ test "CPAL palette entries stay inside declared color records" {
 
     const font = cpalOnlyFont(&bytes);
     try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
+}
+
+test "COLR glyph references stay within maxp glyph count" {
+    var colr_v0: [24]u8 = .{0} ** 24;
+    writeU16Test(&colr_v0, 0, 0); // COLR version 0.
+    writeU16Test(&colr_v0, 2, 1); // one BaseGlyphRecord.
+    writeU32Test(&colr_v0, 4, 14);
+    writeU32Test(&colr_v0, 8, 20);
+    writeU16Test(&colr_v0, 12, 1); // one LayerRecord.
+    writeU16Test(&colr_v0, 14, 1); // base glyph.
+    writeU16Test(&colr_v0, 16, 0);
+    writeU16Test(&colr_v0, 18, 1);
+    writeU16Test(&colr_v0, 20, 2); // Invalid layer glyph for maxp.numGlyphs == 2.
+
+    const colr_v0_record = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_v0.len };
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&colr_v0, colr_v0_record, 2));
+
+    writeU16Test(&colr_v0, 20, 1);
+    try validateColrGlyphBounds(&colr_v0, colr_v0_record, 2);
+
+    var colr_v1: [55]u8 = .{0} ** 55;
+    writeU16Test(&colr_v1, 0, 1); // COLR version 1.
+    writeU32Test(&colr_v1, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&colr_v1, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&colr_v1, 38, 1); // base glyph.
+    writeU32Test(&colr_v1, 40, 10); // PaintGlyph at byte 44.
+    colr_v1[44] = 10; // PaintGlyph.
+    writeU24Test(&colr_v1, 45, 6); // child PaintSolid at byte 50.
+    writeU16Test(&colr_v1, 48, 2); // Invalid PaintGlyph glyphID for maxp.numGlyphs == 2.
+    colr_v1[50] = 2; // PaintSolid.
+    writeU16Test(&colr_v1, 51, 0);
+    writeF2Dot14Test(&colr_v1, 53, 1.0);
+
+    const colr_v1_record = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_v1.len };
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&colr_v1, colr_v1_record, 2));
+
+    writeU16Test(&colr_v1, 48, 1);
+    try validateColrGlyphBounds(&colr_v1, colr_v1_record, 2);
 }
 
 test "COLR palette indices must be declared by CPAL" {

@@ -298,6 +298,7 @@ pub const Font = struct {
         if (format == .truetype) try validateLocaTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
+        if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
         // supported Unicode mapping per lookup without reparsing the directory.
@@ -2095,6 +2096,138 @@ fn validateClassDefFormat2Ranges(data: []const u8, offset: usize, range_count: u
     }
 }
 
+fn validateGdefTable(data: []const u8, gdef: TableRecord, glyph_count: u16) FontError!void {
+    if (gdef.length < 12) return error.BadSfnt;
+    const table = data[gdef.offset .. gdef.offset + gdef.length];
+    const major = try bin.readU16At(table, 0);
+    const minor = try bin.readU16At(table, 2);
+    if (major != 1) return error.BadSfnt;
+
+    const header_len = minimumGdefHeaderLength(minor);
+    if (gdef.length < header_len) return error.BadSfnt;
+
+    const glyph_class_def_offset = try bin.readU16At(table, 4);
+    const attach_list_offset = try bin.readU16At(table, 6);
+    const lig_caret_list_offset = try bin.readU16At(table, 8);
+    const mark_attach_class_def_offset = try bin.readU16At(table, 10);
+    if (glyph_class_def_offset != 0) {
+        try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
+        try validateClassDefGlyphBounds(table, glyph_class_def_offset, glyph_count);
+    }
+    if (attach_list_offset != 0) try validateGdefChildOffset(attach_list_offset, gdef.length, header_len);
+    if (lig_caret_list_offset != 0) try validateGdefChildOffset(lig_caret_list_offset, gdef.length, header_len);
+    if (mark_attach_class_def_offset != 0) {
+        try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
+        try validateClassDefGlyphBounds(table, mark_attach_class_def_offset, glyph_count);
+    }
+
+    if (minor >= 2) {
+        const mark_glyph_sets_def_offset = try bin.readU16At(table, 12);
+        if (mark_glyph_sets_def_offset != 0) {
+            try validateGdefChildOffset(mark_glyph_sets_def_offset, gdef.length, header_len);
+            try validateMarkGlyphSetsDefGlyphBounds(table, mark_glyph_sets_def_offset, glyph_count);
+        }
+    }
+    if (minor >= 3) {
+        const item_var_store_offset: usize = @intCast(try bin.readU32At(table, 14));
+        if (item_var_store_offset != 0) try validateGdefChildOffset(item_var_store_offset, gdef.length, header_len);
+    }
+}
+
+fn minimumGdefHeaderLength(minor: u16) usize {
+    return if (minor >= 3) 18 else if (minor >= 2) 14 else 12;
+}
+
+fn validateGdefChildOffset(offset: usize, table_len: usize, header_len: usize) FontError!void {
+    // GDEF top-level offsets are relative to the GDEF table and name child
+    // subtables, not bytes inside the versioned header.  Keeping them past the
+    // header prevents a malformed table from reinterpreting offset fields as a
+    // ClassDef or Coverage payload during lookup-flag filtering.
+    if (offset < header_len or offset >= table_len) return error.BadSfnt;
+}
+
+fn validateClassDefGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    switch (format) {
+        1 => {
+            if (offset + 6 > data.len) return error.BadSfnt;
+            const start_glyph = try bin.readU16At(data, offset + 2);
+            const count = try bin.readU16At(data, offset + 4);
+            if (@as(usize, count) * 2 > data.len - (offset + 6)) return error.BadSfnt;
+            if (count == 0) return;
+            if (start_glyph >= glyph_count) return error.BadSfnt;
+            if (@as(usize, count) > @as(usize, glyph_count - start_glyph)) return error.BadSfnt;
+        },
+        2 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const range_count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
+            try validateClassDefFormat2Ranges(data, offset, range_count);
+            for (0..range_count) |index| {
+                const range_offset = offset + 4 + index * 6;
+                const end = try bin.readU16At(data, range_offset + 2);
+                if (end >= glyph_count) return error.BadSfnt;
+            }
+        },
+        else => return error.BadSfnt,
+    }
+}
+
+fn validateMarkGlyphSetsDefGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
+    if (offset + 4 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    if (format != 1) return error.BadSfnt;
+    const set_count = try bin.readU16At(data, offset + 2);
+    if (@as(usize, set_count) * 4 > data.len - (offset + 4)) return error.BadSfnt;
+    const coverage_data_start = 4 + @as(usize, set_count) * 4;
+    for (0..set_count) |index| {
+        const coverage_relative = try bin.readU32At(data, offset + 4 + index * 4);
+        if (coverage_relative < coverage_data_start) return error.BadSfnt;
+        if (coverage_relative > data.len - offset) return error.BadSfnt;
+        try validateCoverageGlyphBounds(data, offset + coverage_relative, glyph_count);
+    }
+}
+
+fn validateCoverageGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    switch (format) {
+        1 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, count) * 2 > data.len - (offset + 4)) return error.BadSfnt;
+            var previous: ?glyph_mod.GlyphId = null;
+            for (0..count) |index| {
+                const glyph_id = try bin.readU16At(data, offset + 4 + index * 2);
+                if (previous) |last| {
+                    if (glyph_id <= last) return error.BadSfnt;
+                }
+                if (glyph_id >= glyph_count) return error.BadSfnt;
+                previous = glyph_id;
+            }
+        },
+        2 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const range_count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
+            var previous_end: ?glyph_mod.GlyphId = null;
+            for (0..range_count) |index| {
+                const range_offset = offset + 4 + index * 6;
+                const start = try bin.readU16At(data, range_offset);
+                const end = try bin.readU16At(data, range_offset + 2);
+                if (end < start) return error.BadSfnt;
+                if (previous_end) |last_end| {
+                    if (start <= last_end) return error.BadSfnt;
+                }
+                if (end >= glyph_count) return error.BadSfnt;
+                previous_end = end;
+            }
+        },
+        else => return error.BadSfnt,
+    }
+}
+
 fn readMarkGlyphSetsDef(allocator: std.mem.Allocator, data: []const u8, offset: usize) FontError![][]glyph_mod.GlyphId {
     if (offset + 4 > data.len) return error.BadSfnt;
     const format = try bin.readU16At(data, offset);
@@ -3293,6 +3426,40 @@ test "GDEF ClassDef format 2 rejects overlapping and reversed ranges" {
 
     writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
     try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 18));
+}
+
+test "GDEF parse validation rejects class and mark-set glyph ids past maxp" {
+    var valid_classdef: [22]u8 = .{0} ** 22;
+    writeU16Test(&valid_classdef, 0, 1); // GDEF major.
+    writeU16Test(&valid_classdef, 2, 0); // GDEF 1.0 header.
+    writeU16Test(&valid_classdef, 4, 12); // GlyphClassDef follows the header.
+    writeU16Test(&valid_classdef, 12, 1); // ClassDef format 1.
+    writeU16Test(&valid_classdef, 14, 2); // startGlyphID.
+    writeU16Test(&valid_classdef, 16, 2); // Covers glyphs 2 and 3 in a four-glyph font.
+    writeU16Test(&valid_classdef, 18, @intFromEnum(GlyphClass.mark));
+    writeU16Test(&valid_classdef, 20, @intFromEnum(GlyphClass.mark));
+    try validateGdefTable(&valid_classdef, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = valid_classdef.len }, 4);
+
+    var classdef_past_maxp = valid_classdef;
+    writeU16Test(&classdef_past_maxp, 16, 3); // Would cover glyph 4, outside maxp.numGlyphs.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&classdef_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = classdef_past_maxp.len }, 4));
+
+    var child_offset_overlap = valid_classdef;
+    writeU16Test(&child_offset_overlap, 4, 4); // Reinterprets GDEF header bytes as ClassDef data.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&child_offset_overlap, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = child_offset_overlap.len }, 4));
+
+    var mark_set_past_maxp: [30]u8 = .{0} ** 30;
+    writeU16Test(&mark_set_past_maxp, 0, 1); // GDEF major.
+    writeU16Test(&mark_set_past_maxp, 2, 2); // GDEF 1.2 includes MarkGlyphSetsDef.
+    writeU16Test(&mark_set_past_maxp, 12, 14); // MarkGlyphSetsDef follows the v1.2 header.
+    writeU16Test(&mark_set_past_maxp, 14, 1); // MarkGlyphSetsDef format 1.
+    writeU16Test(&mark_set_past_maxp, 16, 1);
+    writeU32Test(&mark_set_past_maxp, 18, 8); // Coverage starts after the set offset array.
+    writeU16Test(&mark_set_past_maxp, 22, 1); // Coverage format 1.
+    writeU16Test(&mark_set_past_maxp, 24, 2);
+    writeU16Test(&mark_set_past_maxp, 26, 1);
+    writeU16Test(&mark_set_past_maxp, 28, 4); // Invalid for maxp.numGlyphs == 4.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&mark_set_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mark_set_past_maxp.len }, 4));
 }
 
 test "legacy kern format 0 accumulates multiple horizontal subtables" {

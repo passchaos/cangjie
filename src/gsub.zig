@@ -203,9 +203,15 @@ fn containsLookup(items: []const u16, needle: u16) bool {
 }
 
 fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    try ensureLookupHeaderWithin(table, lookup_offset);
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
+    // A GSUB lookup is an ordered list of alternative subtables and must apply
+    // as one unit. Validate every supported direct subtable before touching the
+    // glyph run; otherwise a malformed later subtable can leak substitutions
+    // already made by an earlier subtable in the same lookup.
+    try ensureSubstitutionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
     var lookup_options = options;
     if ((lookup_flag & 0x0010) != 0) {
         // UseMarkFilteringSet stores its set index after the variable-length
@@ -1268,6 +1274,18 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
     }
 }
 
+fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GsubError!void {
+    switch (lookup_type) {
+        1, 2, 3, 4 => {},
+        else => return,
+    }
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = try checkedSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
+        try ensureSubstitutionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
+        try ensureSubstitutionSubtableVariableDataWithin(table, subtable_offset, lookup_type);
+    }
+}
+
 fn ensureExtensionSubstitutionPayloadWithin(table: Table, subtable_offset: usize) GsubError!void {
     // A contextual record may reference ExtensionSubst after earlier records
     // have already mutated the glyph stream. Preflight both the wrapper and the
@@ -2179,6 +2197,40 @@ test "GSUB extension single substitution preflights wrapped coverage arrays atom
     // Coverage declares two glyph ids but the second id falls beyond
     // table.length. The second wrapper would discover this only after the first
     // wrapper changed glyph 10 unless ExtensionSubst preflights wrapped arrays.
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 10, 30 });
+
+    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 30 }, glyphs.items);
+}
+
+test "GSUB direct single substitution preflights all subtables atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 36;
+
+    writeU16Test(&bytes, 0, 1); // SingleSubst lookup.
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 24);
+
+    const first_single = 10;
+    writeU16Test(&bytes, first_single + 0, 1);
+    writeU16Test(&bytes, first_single + 2, 6);
+    writeI16Test(&bytes, first_single + 4, 10);
+    writeCoverage1(&bytes, first_single + 6, 10);
+
+    const second_single = 24;
+    writeU16Test(&bytes, second_single + 0, 1);
+    writeU16Test(&bytes, second_single + 2, 6);
+    writeI16Test(&bytes, second_single + 4, 1);
+    const truncated_coverage = second_single + 6;
+    writeU16Test(&bytes, truncated_coverage + 0, 1);
+    writeU16Test(&bytes, truncated_coverage + 2, 2);
+    writeU16Test(&bytes, truncated_coverage + 4, 30);
+    // The second subtable's Coverage declares a missing second glyph id. Lookup
+    // preflight must reject it before the first subtable changes glyph 10.
 
     var glyphs = std.ArrayList(GlyphId).empty;
     defer glyphs.deinit(allocator);

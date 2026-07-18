@@ -205,9 +205,14 @@ fn containsLookup(items: []const u16, needle: u16) bool {
 }
 
 fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    try ensurePositionLookupHeaderWithin(table, lookup_offset);
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
+    // Positioning results are appended incrementally, but OpenType lookups are
+    // atomic units. Preflight supported direct subtables before collecting any
+    // adjustment so malformed later subtables cannot leave partial positioning.
+    try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
     var lookup_options = options;
     if ((lookup_flag & 0x0010) != 0) {
         // UseMarkFilteringSet stores its set index after the variable-length
@@ -1282,6 +1287,18 @@ fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposErro
     }
     if (lookup_type == 9) {
         try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
+    }
+}
+
+fn ensurePositionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GposError!void {
+    switch (lookup_type) {
+        1, 2 => {},
+        else => return,
+    }
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = try checkedPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
+        try ensurePositionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
+        try ensurePositionSubtableVariableDataWithin(table, subtable_offset, lookup_type);
     }
 }
 
@@ -2448,6 +2465,41 @@ test "GPOS extension single positioning preflights wrapped value arrays atomical
     // The second wrapped SinglePos declares seven value records, extending past
     // table.length. Reject the whole ExtensionPos lookup before the first
     // wrapper appends its otherwise valid adjustment for glyph 10.
+
+    const glyphs = [_]GlyphId{ 10, 30 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS direct single positioning preflights all subtables atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 46;
+
+    writeU16Test(&bytes, 0, 1); // SinglePos lookup.
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 26);
+
+    const first_single = 10;
+    writeU16Test(&bytes, first_single + 0, 1);
+    writeU16Test(&bytes, first_single + 2, 8);
+    writeU16Test(&bytes, first_single + 4, 0x0001);
+    writeI16Test(&bytes, first_single + 6, 45);
+    writeCoverage1Test(&bytes, first_single + 8, 10);
+
+    const second_single = 26;
+    writeU16Test(&bytes, second_single + 0, 2);
+    writeU16Test(&bytes, second_single + 2, 14);
+    writeU16Test(&bytes, second_single + 4, 0x0001);
+    writeU16Test(&bytes, second_single + 6, 7);
+    writeCoverage1Test(&bytes, second_single + 14, 30);
+    // The second SinglePos subtable declares seven ValueRecords, extending past
+    // table.length. Reject the lookup before collecting the first subtable's
+    // otherwise valid xAdvance adjustment.
 
     const glyphs = [_]GlyphId{ 10, 30 };
     var adjustments = std.ArrayList(Adjustment).empty;

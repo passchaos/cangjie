@@ -1035,6 +1035,7 @@ const SbixStrike = struct {
     ppi: u16,
     offset: usize,
     length: usize,
+    bitmap_data_offset: usize,
 };
 
 const CblcStrike = struct {
@@ -1082,7 +1083,11 @@ fn sbixStrike(data: []const u8, sbix: TableRecord, glyph_count: u16, strike_inde
     const strike_count = try sbixStrikeCount(data, sbix);
     if (strike_index >= strike_count) return error.BadSfnt;
     const offset = try bin.readU32At(data, sbix.offset + 8 + strike_index * 4);
-    if (offset >= sbix.length) return error.BadSfnt;
+    // Strike offsets are relative to the sbix table, but their targets are
+    // strike payloads.  A target inside the sbix header/strike-offset array
+    // would reinterpret table metadata as ppem/ppi and glyph offsets.
+    const minimum_strike_offset = 8 + strike_count * 4;
+    if (offset < minimum_strike_offset or offset >= sbix.length) return error.BadSfnt;
     const next_offset = if (strike_index + 1 < strike_count)
         try bin.readU32At(data, sbix.offset + 8 + (strike_index + 1) * 4)
     else
@@ -1098,6 +1103,7 @@ fn sbixStrike(data: []const u8, sbix: TableRecord, glyph_count: u16, strike_inde
         .ppi = try bin.readU16At(data, absolute + 2),
         .offset = absolute,
         .length = length,
+        .bitmap_data_offset = 4 + offsets_len,
     };
 }
 
@@ -1105,8 +1111,13 @@ fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphI
     const glyph_offset_pos = strike.offset + 4 + @as(usize, glyph_id) * 4;
     const start = try bin.readU32At(data, glyph_offset_pos);
     const end = try bin.readU32At(data, glyph_offset_pos + 4);
-    if (start == end) return null;
+    // Glyph data offsets must start after the strike header and the complete
+    // glyph-offset array.  Offsets into that metadata are malformed even when
+    // equal, because "missing glyph" markers should still point at a legal
+    // data boundary rather than hiding a corrupt offset array.
+    if (start < strike.bitmap_data_offset or end < strike.bitmap_data_offset) return error.BadSfnt;
     if (end < start or end > strike.length) return error.BadSfnt;
+    if (end == start) return null;
     if (end - start < 8) return error.BadSfnt;
 
     const glyph_start = strike.offset + start;
@@ -2172,6 +2183,27 @@ test "legacy kern ignores minimum and cross-stream subtables" {
 
     const font = kernOnlyFont(&data);
     try std.testing.expectEqual(@as(i16, -30), try font.kerning(1, 1));
+}
+
+test "sbix offsets cannot overlap table or strike metadata" {
+    var table_overlap: [32]u8 = .{0} ** 32;
+    writeU16Test(&table_overlap, 0, 1); // version
+    writeU32Test(&table_overlap, 4, 1); // one strike offset follows
+    writeU32Test(&table_overlap, 8, 8); // Points at the strike-offset array.
+    const sbix = TableRecord{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = table_overlap.len };
+    try std.testing.expectError(error.BadSfnt, sbixStrike(&table_overlap, sbix, 1, 0));
+
+    var glyph_overlap: [48]u8 = .{0} ** 48;
+    writeU16Test(&glyph_overlap, 0, 1); // version
+    writeU32Test(&glyph_overlap, 4, 1);
+    writeU32Test(&glyph_overlap, 8, 12); // First strike begins after sbix metadata.
+    writeU16Test(&glyph_overlap, 12, 16); // ppem
+    writeU16Test(&glyph_overlap, 14, 72); // ppi
+    writeU32Test(&glyph_overlap, 16, 4); // Non-empty glyph points back into the offset array.
+    writeU32Test(&glyph_overlap, 20, 20);
+
+    const strike = try sbixStrike(&glyph_overlap, sbix, 1, 0);
+    try std.testing.expectError(error.BadSfnt, sbixGlyphPng(&glyph_overlap, strike, 0));
 }
 
 test "CBLC bitmap index subtables reject decreasing image offsets" {

@@ -890,42 +890,23 @@ pub const Font = struct {
     pub fn svgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const svg = self.svg orelse return null;
-        if (svg.length < 10) return error.BadSfnt;
-        const version = try bin.readU16At(self.data, svg.offset);
-        if (version != 0) return error.BadSfnt;
-        const document_list_offset: usize = @intCast(try bin.readU32At(self.data, svg.offset + 2));
-        // Offsets in the SVG table are relative to the SVG table or the
-        // SVGDocumentList. Keep both child regions past their fixed metadata so
-        // malformed fonts cannot reinterpret the header or records as XML.
-        if (document_list_offset < 10) return error.BadSfnt;
-        if (document_list_offset > svg.length or 2 > svg.length - document_list_offset) return error.BadSfnt;
+        const document_list = try svgDocumentList(self.data, svg);
 
-        const list_start = svg.offset + document_list_offset;
-        const list_end = svg.offset + svg.length;
-        const entry_count = try bin.readU16At(self.data, list_start);
-        const records_start = list_start + 2;
-        const record_bytes = @as(usize, entry_count) * 12;
-        if (record_bytes > list_end - records_start) return error.BadSfnt;
-        const document_data_start = 2 + record_bytes;
-
-        for (0..entry_count) |index| {
-            const record = records_start + index * 12;
-            const start_glyph_id = try bin.readU16At(self.data, record);
-            const end_glyph_id = try bin.readU16At(self.data, record + 2);
-            const document_offset: usize = @intCast(try bin.readU32At(self.data, record + 4));
-            const document_length: usize = @intCast(try bin.readU32At(self.data, record + 8));
-            if (end_glyph_id < start_glyph_id) return error.BadSfnt;
-            if (glyph_id < start_glyph_id or glyph_id > end_glyph_id) continue;
-            if (document_offset < document_data_start) return error.BadSfnt;
-            if (document_offset > svg.length - document_list_offset or document_length > svg.length - document_list_offset - document_offset) return error.BadSfnt;
-            const document_start = list_start + document_offset;
-            return .{
-                .start_glyph_id = start_glyph_id,
-                .end_glyph_id = end_glyph_id,
-                .data = self.data[document_start .. document_start + document_length],
-            };
+        var previous_end_glyph_id: ?glyph_mod.GlyphId = null;
+        var match: ?SvgGlyphDocument = null;
+        for (0..document_list.entry_count) |index| {
+            const record = try readSvgDocumentRecord(self.data, document_list.records_start + index * 12);
+            try validateSvgDocumentRecord(record, document_list, self.glyph_count, &previous_end_glyph_id);
+            if (glyph_id >= record.start_glyph_id and glyph_id <= record.end_glyph_id) {
+                const document_start = document_list.start + record.document_offset;
+                match = .{
+                    .start_glyph_id = record.start_glyph_id,
+                    .end_glyph_id = record.end_glyph_id,
+                    .data = self.data[document_start .. document_start + record.document_length],
+                };
+            }
         }
-        return null;
+        return match;
     }
 
     pub fn svgDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
@@ -4568,37 +4549,85 @@ fn mapAvarSegment(segment_data: []const u8, normalized: f32) FontError!f32 {
     return previous_to;
 }
 
-fn validateSvgGlyphBounds(data: []const u8, svg: TableRecord, glyph_count: u16) FontError!void {
+const SvgDocumentList = struct {
+    start: usize,
+    length: usize,
+    entry_count: usize,
+    records_start: usize,
+    document_data_start: usize,
+};
+
+const SvgDocumentRecord = struct {
+    start_glyph_id: glyph_mod.GlyphId,
+    end_glyph_id: glyph_mod.GlyphId,
+    document_offset: usize,
+    document_length: usize,
+};
+
+fn svgDocumentList(data: []const u8, svg: TableRecord) FontError!SvgDocumentList {
     if (svg.length < 10) return error.BadSfnt;
     const version = try bin.readU16At(data, svg.offset);
     if (version != 0) return error.BadSfnt;
     const document_list_offset: usize = @intCast(try bin.readU32At(data, svg.offset + 2));
+    // Offsets in the SVG table are relative to the SVG table or to the
+    // SVGDocumentList. Keep both child regions past their fixed metadata so
+    // malformed fonts cannot reinterpret the header or records as XML data.
     if (document_list_offset < 10) return error.BadSfnt;
     if (document_list_offset > svg.length or 2 > svg.length - document_list_offset) return error.BadSfnt;
 
     const list_start = svg.offset + document_list_offset;
-    const list_end = svg.offset + svg.length;
+    const list_length = svg.length - document_list_offset;
     const entry_count = try bin.readU16At(data, list_start);
     const records_start = list_start + 2;
     const record_bytes = @as(usize, entry_count) * 12;
-    if (record_bytes > list_end - records_start) return error.BadSfnt;
-    const document_data_start = 2 + record_bytes;
+    if (record_bytes > list_length - 2) return error.BadSfnt;
+    return .{
+        .start = list_start,
+        .length = list_length,
+        .entry_count = entry_count,
+        .records_start = records_start,
+        .document_data_start = 2 + record_bytes,
+    };
+}
 
-    for (0..entry_count) |index| {
-        const record = records_start + index * 12;
-        const start_glyph_id = try bin.readU16At(data, record);
-        const end_glyph_id = try bin.readU16At(data, record + 2);
-        const document_offset: usize = @intCast(try bin.readU32At(data, record + 4));
-        const document_length: usize = @intCast(try bin.readU32At(data, record + 8));
-        // SVGDocumentRecords are global glyph metadata, so every advertised
-        // inclusive range must fit maxp.numGlyphs even if callers never request
-        // that document. Otherwise an accepted font can later surface a color
-        // glyph id that has no metrics, outline, or bitmap contract.
-        if (end_glyph_id < start_glyph_id) return error.BadSfnt;
-        try validateGlyphIdInMaxp(start_glyph_id, glyph_count);
-        try validateGlyphIdInMaxp(end_glyph_id, glyph_count);
-        if (document_offset < document_data_start) return error.BadSfnt;
-        if (document_offset > svg.length - document_list_offset or document_length > svg.length - document_list_offset - document_offset) return error.BadSfnt;
+fn readSvgDocumentRecord(data: []const u8, offset: usize) FontError!SvgDocumentRecord {
+    return .{
+        .start_glyph_id = try bin.readU16At(data, offset),
+        .end_glyph_id = try bin.readU16At(data, offset + 2),
+        .document_offset = @intCast(try bin.readU32At(data, offset + 4)),
+        .document_length = @intCast(try bin.readU32At(data, offset + 8)),
+    };
+}
+
+fn validateSvgDocumentRecord(record: SvgDocumentRecord, document_list: SvgDocumentList, glyph_count: u16, previous_end_glyph_id: *?glyph_mod.GlyphId) FontError!void {
+    // SVGDocumentRecords are global glyph metadata, so every advertised
+    // inclusive range must fit maxp.numGlyphs even if callers never request
+    // that document. Otherwise an accepted font can later surface a color
+    // glyph id that has no metrics, outline, or bitmap contract.
+    if (record.end_glyph_id < record.start_glyph_id) return error.BadSfnt;
+    try validateGlyphIdInMaxp(record.start_glyph_id, glyph_count);
+    try validateGlyphIdInMaxp(record.end_glyph_id, glyph_count);
+
+    // The OpenType SVG document list is a sorted search table over glyph-id
+    // ranges. Enforcing monotonic, disjoint ranges at parse time avoids
+    // ambiguous ownership when two records could both describe the same glyph
+    // and keeps later lookups independent of linear-scan accident.
+    if (previous_end_glyph_id.*) |previous_end| {
+        if (record.start_glyph_id <= previous_end) return error.BadSfnt;
+    }
+    previous_end_glyph_id.* = record.end_glyph_id;
+
+    if (record.document_offset < document_list.document_data_start) return error.BadSfnt;
+    if (record.document_offset > document_list.length or record.document_length > document_list.length - record.document_offset) return error.BadSfnt;
+}
+
+fn validateSvgGlyphBounds(data: []const u8, svg: TableRecord, glyph_count: u16) FontError!void {
+    const document_list = try svgDocumentList(data, svg);
+
+    var previous_end_glyph_id: ?glyph_mod.GlyphId = null;
+    for (0..document_list.entry_count) |index| {
+        const record = try readSvgDocumentRecord(data, document_list.records_start + index * 12);
+        try validateSvgDocumentRecord(record, document_list, glyph_count, &previous_end_glyph_id);
     }
 }
 
@@ -6535,6 +6564,61 @@ test "SVG document glyph ranges stay within maxp glyph count" {
 
     writeU16Test(&bytes, 14, 1);
     try validateSvgGlyphBounds(&bytes, svg, 2);
+}
+
+test "SVG document glyph ranges must be sorted and disjoint" {
+    var bytes: [44]u8 = .{0} ** 44;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU16Test(&bytes, 10, 2); // two SVGDocumentRecords.
+    writeU16Test(&bytes, 12, 1); // first record covers glyph 1.
+    writeU16Test(&bytes, 14, 1);
+    writeU32Test(&bytes, 16, 26); // document data starts after both records.
+    writeU32Test(&bytes, 20, 4);
+    writeU16Test(&bytes, 24, 2); // second record covers glyphs 2 and 3.
+    writeU16Test(&bytes, 26, 3);
+    writeU32Test(&bytes, 28, 30);
+    writeU32Test(&bytes, 32, 4);
+    @memcpy(bytes[36..40], "<svg");
+    @memcpy(bytes[40..44], "<svg");
+
+    const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try validateSvgGlyphBounds(&bytes, svg, 4);
+
+    var overlapping = bytes;
+    writeU16Test(&overlapping, 24, 1); // Overlaps glyph 1 from the first range.
+    writeU16Test(&overlapping, 26, 2);
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(&overlapping, svg, 4));
+
+    var unsorted = bytes;
+    writeU16Test(&unsorted, 12, 2);
+    writeU16Test(&unsorted, 14, 2);
+    writeU16Test(&unsorted, 24, 1); // Disjoint, but out of ascending glyph order.
+    writeU16Test(&unsorted, 26, 1);
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(&unsorted, svg, 4));
+}
+
+test "SVG document glyph range ordering is enforced at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildSvgTtf(allocator);
+    defer allocator.free(bytes);
+    const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
+
+    writeU16Test(bytes, svg_offset + 0, 0); // SVG table version.
+    writeU32Test(bytes, svg_offset + 2, 10); // SVGDocumentListOffset.
+    writeU16Test(bytes, svg_offset + 10, 2); // two SVGDocumentRecords.
+    writeU16Test(bytes, svg_offset + 12, 1);
+    writeU16Test(bytes, svg_offset + 14, 1);
+    writeU32Test(bytes, svg_offset + 16, 26); // first document starts after both records.
+    writeU32Test(bytes, svg_offset + 20, 4);
+    writeU16Test(bytes, svg_offset + 24, 1); // Invalid: overlaps the previous glyph range.
+    writeU16Test(bytes, svg_offset + 26, 1);
+    writeU32Test(bytes, svg_offset + 28, 30);
+    writeU32Test(bytes, svg_offset + 32, 4);
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
 test "SVG document offsets cannot overlap table metadata" {

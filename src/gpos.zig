@@ -61,6 +61,8 @@ pub const LookupOptions = struct {
     ligature_components: ?[]const LigatureComponentInfo = null,
 };
 
+const max_context_preflight_depth = 16;
+
 /// Collect positioning adjustments for a post-GSUB glyph stream.
 pub fn collectAdjustments(data: []const u8, offset: usize, length: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
     return try collectAdjustmentsWithOptions(data, offset, length, glyphs, adjustments, allocator, .{});
@@ -1258,9 +1260,17 @@ fn ensurePositionRecordListWithin(table: Table, records_pos: usize, record_count
 }
 
 fn ensurePositionRecordLookupsWithin(table: Table, records_pos: usize, record_count: usize) GposError!void {
+    return ensurePositionRecordLookupsWithinDepth(table, records_pos, record_count, 0);
+}
+
+fn ensurePositionRecordLookupsWithinDepth(table: Table, records_pos: usize, record_count: usize, depth: usize) GposError!void {
     // Contextual positioning appends adjustments as it walks PosLookupRecords.
     // Preflight referenced lookup headers so a malformed later lookup count or
     // UseMarkFilteringSet slot cannot leave earlier nested adjustments visible.
+    // Contextual lookups are allowed to reference other contextual lookups; cap
+    // validation recursion so cyclic lookup graphs are reported as unsupported
+    // instead of overflowing the validator stack.
+    if (depth > max_context_preflight_depth) return error.UnsupportedGpos;
     const lookup_list_offset = try readU16BadGpos(table, 8);
     const lookup_count = try readU16BadGpos(table, lookup_list_offset);
     for (0..record_count) |record_i| {
@@ -1272,7 +1282,7 @@ fn ensurePositionRecordLookupsWithin(table: Table, records_pos: usize, record_co
         try ensurePositionLookupHeaderWithin(table, lookup_offset);
         const lookup_type = try readU16BadGpos(table, lookup_offset);
         const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
-        try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
+        try ensurePositionLookupSubtablesWithinDepth(table, lookup_offset, lookup_type, subtable_count, depth + 1);
     }
 }
 
@@ -1294,14 +1304,18 @@ fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposErro
 }
 
 fn ensurePositionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GposError!void {
+    return ensurePositionLookupSubtablesWithinDepth(table, lookup_offset, lookup_type, subtable_count, 0);
+}
+
+fn ensurePositionLookupSubtablesWithinDepth(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16, depth: usize) GposError!void {
     switch (lookup_type) {
-        1, 2, 3, 4, 5, 6 => {},
+        1, 2, 3, 4, 5, 6, 7, 8 => {},
         else => return,
     }
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = try checkedPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
         try ensurePositionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
-        try ensurePositionSubtableVariableDataWithin(table, subtable_offset, lookup_type);
+        try ensurePositionSubtableVariableDataWithinDepth(table, subtable_offset, lookup_type, depth);
     }
 }
 
@@ -1351,6 +1365,10 @@ fn ensurePositionSubtableFixedHeaderWithin(table: Table, subtable_offset: usize,
 }
 
 fn ensurePositionSubtableVariableDataWithin(table: Table, subtable_offset: usize, lookup_type: u16) GposError!void {
+    return ensurePositionSubtableVariableDataWithinDepth(table, subtable_offset, lookup_type, 0);
+}
+
+fn ensurePositionSubtableVariableDataWithinDepth(table: Table, subtable_offset: usize, lookup_type: u16, depth: usize) GposError!void {
     switch (lookup_type) {
         1 => try ensureSinglePositionSubtableWithin(table, subtable_offset),
         2 => try ensurePairPositionSubtableWithin(table, subtable_offset),
@@ -1358,6 +1376,8 @@ fn ensurePositionSubtableVariableDataWithin(table: Table, subtable_offset: usize
         4 => try ensureMarkToBasePositionSubtableWithin(table, subtable_offset),
         5 => try ensureMarkToLigaturePositionSubtableWithin(table, subtable_offset),
         6 => try ensureMarkToMarkPositionSubtableWithin(table, subtable_offset),
+        7 => try ensureContextPositionSubtableWithin(table, subtable_offset, depth),
+        8 => try ensureChainingContextPositionSubtableWithin(table, subtable_offset, depth),
         else => {},
     }
 }
@@ -1477,6 +1497,174 @@ fn ensureMarkToMarkPositionSubtableWithin(table: Table, subtable_offset: usize) 
     try ensureCoverageIndicesWithin(table, mark_2_coverage_offset, mark_2_count);
 }
 
+fn ensureContextPositionSubtableWithin(table: Table, subtable_offset: usize, depth: usize) GposError!void {
+    // ContextPos uses the same variable-length topology as ContextSubst, but
+    // each matched rule references PosLookupRecords. Validate every rule and
+    // referenced lookup before any earlier subtable in the same lookup can
+    // append adjustments, preserving lookup-level atomicity.
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    switch (pos_format) {
+        1 => {
+            const coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+            try ensureCoverageTableWithin(table, coverage_offset);
+            const rule_set_count = try readU16BadGpos(table, subtable_offset + 4);
+            const rule_set_offsets_pos = subtable_offset + 6;
+            try ensureBytesWithin(table, rule_set_offsets_pos, @as(usize, rule_set_count) * 2);
+            for (0..rule_set_count) |set_i| {
+                const set_relative = try readU16BadGpos(table, rule_set_offsets_pos + set_i * 2);
+                if (set_relative == 0) continue;
+                try ensurePositionRuleSetWithin(table, try checkedPositionOffset(table, subtable_offset, set_relative), depth);
+            }
+        },
+        2 => {
+            const coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+            const class_def_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
+            try ensureCoverageTableWithin(table, coverage_offset);
+            try ensureClassDefTableWithin(table, class_def_offset);
+            const class_set_count = try readU16BadGpos(table, subtable_offset + 6);
+            const class_set_offsets_pos = subtable_offset + 8;
+            try ensureBytesWithin(table, class_set_offsets_pos, @as(usize, class_set_count) * 2);
+            for (0..class_set_count) |set_i| {
+                const set_relative = try readU16BadGpos(table, class_set_offsets_pos + set_i * 2);
+                if (set_relative == 0) continue;
+                try ensurePositionRuleSetWithin(table, try checkedPositionOffset(table, subtable_offset, set_relative), depth);
+            }
+        },
+        3 => {
+            const glyph_count = try readU16BadGpos(table, subtable_offset + 2);
+            if (glyph_count == 0) return error.BadGpos;
+            const pos_count = try readU16BadGpos(table, subtable_offset + 4);
+            const coverage_offsets_pos = subtable_offset + 6;
+            try ensureCoverageOffsetArrayWithin(table, subtable_offset, coverage_offsets_pos, glyph_count);
+            const records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
+            try ensurePositionRecordListWithin(table, records_pos, pos_count);
+            try ensurePositionRecordLookupsWithinDepth(table, records_pos, pos_count, depth);
+        },
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn ensurePositionRuleSetWithin(table: Table, rule_set_offset: usize, depth: usize) GposError!void {
+    const rule_count = try readU16BadGpos(table, rule_set_offset);
+    const rule_offsets_pos = rule_set_offset + 2;
+    try ensureBytesWithin(table, rule_offsets_pos, @as(usize, rule_count) * 2);
+    for (0..rule_count) |rule_i| {
+        const rule_offset = try checkedPositionOffset(table, rule_set_offset, try readU16BadGpos(table, rule_offsets_pos + rule_i * 2));
+        try ensurePositionRuleWithin(table, rule_offset, depth);
+    }
+}
+
+fn ensurePositionRuleWithin(table: Table, rule_offset: usize, depth: usize) GposError!void {
+    const glyph_count = try readU16BadGpos(table, rule_offset);
+    if (glyph_count == 0) return error.BadGpos;
+    const pos_count = try readU16BadGpos(table, rule_offset + 2);
+    const input_pos = rule_offset + 4;
+    try ensureBytesWithin(table, input_pos, (@as(usize, glyph_count) - 1) * 2);
+    const records_pos = input_pos + (@as(usize, glyph_count) - 1) * 2;
+    try ensurePositionRecordListWithin(table, records_pos, pos_count);
+    try ensurePositionRecordLookupsWithinDepth(table, records_pos, pos_count, depth);
+}
+
+fn ensureChainingContextPositionSubtableWithin(table: Table, subtable_offset: usize, depth: usize) GposError!void {
+    // ChainingContextPos contains backtrack, input, and lookahead regions
+    // before its PosLookupRecords. Preflighting all three regions avoids a
+    // malformed later subtable leaking adjustments from an earlier context
+    // subtable in the same lookup.
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    switch (pos_format) {
+        1 => {
+            const coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+            try ensureCoverageTableWithin(table, coverage_offset);
+            const chain_set_count = try readU16BadGpos(table, subtable_offset + 4);
+            const chain_set_offsets_pos = subtable_offset + 6;
+            try ensureBytesWithin(table, chain_set_offsets_pos, @as(usize, chain_set_count) * 2);
+            for (0..chain_set_count) |set_i| {
+                const set_relative = try readU16BadGpos(table, chain_set_offsets_pos + set_i * 2);
+                if (set_relative == 0) continue;
+                try ensureChainingPositionRuleSetWithin(table, try checkedPositionOffset(table, subtable_offset, set_relative), depth);
+            }
+        },
+        2 => {
+            const coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+            const backtrack_class_def = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
+            const input_class_def = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 6));
+            const lookahead_class_def = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+            try ensureCoverageTableWithin(table, coverage_offset);
+            try ensureClassDefTableWithin(table, backtrack_class_def);
+            try ensureClassDefTableWithin(table, input_class_def);
+            try ensureClassDefTableWithin(table, lookahead_class_def);
+            const set_count = try readU16BadGpos(table, subtable_offset + 10);
+            const set_offsets_pos = subtable_offset + 12;
+            try ensureBytesWithin(table, set_offsets_pos, @as(usize, set_count) * 2);
+            for (0..set_count) |set_i| {
+                const set_relative = try readU16BadGpos(table, set_offsets_pos + set_i * 2);
+                if (set_relative == 0) continue;
+                try ensureChainingPositionRuleSetWithin(table, try checkedPositionOffset(table, subtable_offset, set_relative), depth);
+            }
+        },
+        3 => try ensureChainingCoveragePositionSubtableWithin(table, subtable_offset, depth),
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn ensureChainingPositionRuleSetWithin(table: Table, rule_set_offset: usize, depth: usize) GposError!void {
+    const rule_count = try readU16BadGpos(table, rule_set_offset);
+    const rule_offsets_pos = rule_set_offset + 2;
+    try ensureBytesWithin(table, rule_offsets_pos, @as(usize, rule_count) * 2);
+    for (0..rule_count) |rule_i| {
+        const rule_offset = try checkedPositionOffset(table, rule_set_offset, try readU16BadGpos(table, rule_offsets_pos + rule_i * 2));
+        try ensureChainingPositionRuleWithin(table, rule_offset, depth);
+    }
+}
+
+fn ensureChainingPositionRuleWithin(table: Table, rule_offset: usize, depth: usize) GposError!void {
+    var cursor = rule_offset;
+    const backtrack_count = try readU16BadGpos(table, cursor);
+    cursor += 2;
+    try ensureBytesWithin(table, cursor, @as(usize, backtrack_count) * 2);
+    cursor += @as(usize, backtrack_count) * 2;
+
+    const input_count = try readU16BadGpos(table, cursor);
+    if (input_count == 0) return error.BadGpos;
+    cursor += 2;
+    try ensureBytesWithin(table, cursor, (@as(usize, input_count) - 1) * 2);
+    cursor += (@as(usize, input_count) - 1) * 2;
+
+    const lookahead_count = try readU16BadGpos(table, cursor);
+    cursor += 2;
+    try ensureBytesWithin(table, cursor, @as(usize, lookahead_count) * 2);
+    cursor += @as(usize, lookahead_count) * 2;
+
+    const pos_count = try readU16BadGpos(table, cursor);
+    cursor += 2;
+    try ensurePositionRecordListWithin(table, cursor, pos_count);
+    try ensurePositionRecordLookupsWithinDepth(table, cursor, pos_count, depth);
+}
+
+fn ensureChainingCoveragePositionSubtableWithin(table: Table, subtable_offset: usize, depth: usize) GposError!void {
+    var cursor = subtable_offset + 2;
+    const backtrack_count = try readU16BadGpos(table, cursor);
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, backtrack_count);
+    cursor += @as(usize, backtrack_count) * 2;
+
+    const input_count = try readU16BadGpos(table, cursor);
+    if (input_count == 0) return error.BadGpos;
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, input_count);
+    cursor += @as(usize, input_count) * 2;
+
+    const lookahead_count = try readU16BadGpos(table, cursor);
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, lookahead_count);
+    cursor += @as(usize, lookahead_count) * 2;
+
+    const pos_count = try readU16BadGpos(table, cursor);
+    cursor += 2;
+    try ensurePositionRecordListWithin(table, cursor, pos_count);
+    try ensurePositionRecordLookupsWithinDepth(table, cursor, pos_count, depth);
+}
+
 fn ensureMarkArrayWithin(table: Table, mark_array_offset: usize, class_count: u16) GposError!usize {
     const mark_count = try readU16BadGpos(table, mark_array_offset);
     try ensureBytesWithin(table, mark_array_offset + 2, @as(usize, mark_count) * 4);
@@ -1562,6 +1750,14 @@ fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_coun
             }
         },
         else => return error.UnsupportedGpos,
+    }
+}
+
+fn ensureCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GposError!void {
+    try ensureBytesWithin(table, offsets_pos, @as(usize, count) * 2);
+    for (0..count) |i| {
+        const coverage_offset = try checkedPositionOffset(table, base_offset, try readU16BadGpos(table, offsets_pos + i * 2));
+        try ensureCoverageTableWithin(table, coverage_offset);
     }
 }
 
@@ -2759,6 +2955,57 @@ test "GPOS direct mark-to-base positioning preflights anchor arrays atomically" 
     defer adjustments.deinit(allocator);
 
     try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS context lookup preflights later malformed subtable atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 140;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6); // Lookup 0: ContextPos with two subtables.
+    writeU16Test(&bytes, 14, 30); // Lookup 1: nested SinglePos.
+
+    writeU16Test(&bytes, 16, 7);
+    writeU16Test(&bytes, 20, 2);
+    writeU16Test(&bytes, 22, 48);
+    writeU16Test(&bytes, 24, 80);
+    writeSinglePositionLookup(&bytes, 40, 5, 0, 33);
+
+    const first_context = 64;
+    writeU16Test(&bytes, first_context + 0, 1);
+    writeU16Test(&bytes, first_context + 2, 22);
+    writeU16Test(&bytes, first_context + 4, 1);
+    writeU16Test(&bytes, first_context + 6, 8);
+    writeU16Test(&bytes, first_context + 8, 1);
+    writeU16Test(&bytes, first_context + 10, 4);
+    writeU16Test(&bytes, first_context + 12, 1);
+    writeU16Test(&bytes, first_context + 14, 1);
+    writeU16Test(&bytes, first_context + 16, 0);
+    writeU16Test(&bytes, first_context + 18, 1);
+    writeCoverage1Test(&bytes, first_context + 22, 5);
+
+    const malformed_context = 96;
+    writeU16Test(&bytes, malformed_context + 0, 1);
+    writeU16Test(&bytes, malformed_context + 2, 16);
+    writeU16Test(&bytes, malformed_context + 4, 1);
+    writeU16Test(&bytes, malformed_context + 6, 24);
+    writeCoverage1Test(&bytes, malformed_context + 16, 5);
+    writeU16Test(&bytes, malformed_context + 24, 1);
+    writeU16Test(&bytes, malformed_context + 26, 4);
+    writeU16Test(&bytes, malformed_context + 28, 1);
+    writeU16Test(&bytes, malformed_context + 30, 2);
+    writeU16Test(&bytes, malformed_context + 32, 0);
+    writeU16Test(&bytes, malformed_context + 34, 1);
+    // The second declared PosLookupRecord begins exactly at table.length below.
+
+    const glyphs = [_]GlyphId{5};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = 132 }, 16, &glyphs, &adjustments, allocator, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 

@@ -4569,6 +4569,9 @@ const SvgDocumentByteRange = struct {
     end: usize,
 };
 
+const gzip_magic = [_]u8{ 0x1f, 0x8b };
+const gzip_deflate_method = 8;
+
 fn svgDocumentList(data: []const u8, svg: TableRecord) FontError!SvgDocumentList {
     if (svg.length < 10) return error.BadSfnt;
     const version = try bin.readU16At(data, svg.offset);
@@ -4648,6 +4651,234 @@ fn validateSvgDocumentByteRanges(ranges: []SvgDocumentByteRange) FontError!void 
     }
 }
 
+fn validateSvgDocumentPayload(allocator: std.mem.Allocator, document: []const u8) FontError!void {
+    const payload = stripUtf8Bom(document);
+    if (payload.len == 0) return error.BadSfnt;
+    if (isGzipSvgDocument(payload)) return;
+
+    var stack = std.ArrayList([]const u8).empty;
+    defer stack.deinit(allocator);
+
+    var cursor = try skipXmlBeforeRootTrivia(payload, 0);
+    var root_seen = false;
+    while (cursor < payload.len) {
+        if (payload[cursor] != '<') {
+            const next_tag = std.mem.indexOfScalarPos(u8, payload, cursor, '<') orelse payload.len;
+            if (stack.items.len == 0 and !isXmlWhitespaceOnly(payload[cursor..next_tag])) return error.BadSfnt;
+            cursor = next_tag;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, payload[cursor..], "<!--")) {
+            cursor = (try xmlCommentEnd(payload, cursor)) + 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, payload[cursor..], "<?")) {
+            cursor = (try xmlProcessingInstructionEnd(payload, cursor)) + 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, payload[cursor..], "<![CDATA[")) {
+            if (stack.items.len == 0) return error.BadSfnt;
+            cursor = (try xmlCdataEnd(payload, cursor)) + 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, payload[cursor..], "<!DOCTYPE")) {
+            // A DOCTYPE declaration is only part of the XML prolog. Accepting
+            // it after the root has started would let a second top-level
+            // construct hide behind markup the renderer never expects.
+            if (root_seen or stack.items.len != 0) return error.BadSfnt;
+            cursor = (try xmlDeclarationEnd(payload, cursor)) + 1;
+            cursor = try skipXmlBeforeRootTrivia(payload, cursor);
+            continue;
+        }
+        if (std.mem.startsWith(u8, payload[cursor..], "<!")) return error.BadSfnt;
+
+        const tag_end = try xmlTagEnd(payload, cursor);
+        const closing = cursor + 1 < payload.len and payload[cursor + 1] == '/';
+        const name = xmlTagName(payload, cursor, tag_end, closing) orelse return error.BadSfnt;
+        if (closing) {
+            if (stack.items.len == 0) return error.BadSfnt;
+            const active_name = stack.items[stack.items.len - 1];
+            stack.items.len -= 1;
+            if (!std.mem.eql(u8, active_name, name)) return error.BadSfnt;
+            cursor = tag_end + 1;
+            if (stack.items.len == 0) {
+                cursor = try skipXmlTrailingTrivia(payload, cursor);
+                if (cursor != payload.len) return error.BadSfnt;
+                return;
+            }
+            continue;
+        }
+
+        if (stack.items.len == 0) {
+            if (root_seen) return error.BadSfnt;
+            if (!std.mem.eql(u8, xmlLocalName(name), "svg")) return error.BadSfnt;
+            root_seen = true;
+        }
+        if (xmlTagSelfCloses(payload, cursor, tag_end)) {
+            cursor = tag_end + 1;
+            if (stack.items.len == 0) {
+                cursor = try skipXmlTrailingTrivia(payload, cursor);
+                if (cursor != payload.len) return error.BadSfnt;
+                return;
+            }
+        } else {
+            try stack.append(allocator, name);
+            cursor = tag_end + 1;
+        }
+    }
+
+    if (!root_seen or stack.items.len != 0) return error.BadSfnt;
+}
+
+fn stripUtf8Bom(document: []const u8) []const u8 {
+    return if (std.mem.startsWith(u8, document, "\xef\xbb\xbf")) document[3..] else document;
+}
+
+fn isGzipSvgDocument(document: []const u8) bool {
+    if (!std.mem.startsWith(u8, document, &gzip_magic)) return false;
+    // OpenType SVG documents may be gzip-compressed. The renderer currently
+    // only consumes cleartext XML, so parse-time validation merely recognizes a
+    // well-formed gzip header prefix and leaves decompression support to a
+    // future renderer path instead of rejecting otherwise valid SFNT metadata.
+    return document.len >= 10 and document[2] == gzip_deflate_method;
+}
+
+fn skipXmlBeforeRootTrivia(document: []const u8, start: usize) FontError!usize {
+    var cursor = start;
+    while (cursor < document.len) {
+        cursor = skipXmlWhitespace(document, cursor);
+        if (std.mem.startsWith(u8, document[cursor..], "<?")) {
+            cursor = (try xmlProcessingInstructionEnd(document, cursor)) + 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, document[cursor..], "<!--")) {
+            cursor = (try xmlCommentEnd(document, cursor)) + 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, document[cursor..], "<!DOCTYPE")) {
+            cursor = (try xmlDeclarationEnd(document, cursor)) + 1;
+            continue;
+        }
+        return cursor;
+    }
+    return cursor;
+}
+
+fn skipXmlTrailingTrivia(document: []const u8, start: usize) FontError!usize {
+    var cursor = start;
+    while (cursor < document.len) {
+        cursor = skipXmlWhitespace(document, cursor);
+        if (std.mem.startsWith(u8, document[cursor..], "<?")) {
+            cursor = (try xmlProcessingInstructionEnd(document, cursor)) + 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, document[cursor..], "<!--")) {
+            cursor = (try xmlCommentEnd(document, cursor)) + 1;
+            continue;
+        }
+        return cursor;
+    }
+    return cursor;
+}
+
+fn skipXmlWhitespace(document: []const u8, start: usize) usize {
+    var cursor = start;
+    while (cursor < document.len and isXmlWhitespace(document[cursor])) : (cursor += 1) {}
+    return cursor;
+}
+
+fn isXmlWhitespaceOnly(bytes: []const u8) bool {
+    for (bytes) |byte| {
+        if (!isXmlWhitespace(byte)) return false;
+    }
+    return true;
+}
+
+fn isXmlWhitespace(byte: u8) bool {
+    return byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r';
+}
+
+fn xmlProcessingInstructionEnd(document: []const u8, start: usize) FontError!usize {
+    return std.mem.indexOfPos(u8, document, start + 2, "?>") orelse error.BadSfnt;
+}
+
+fn xmlCommentEnd(document: []const u8, start: usize) FontError!usize {
+    return (std.mem.indexOfPos(u8, document, start + 4, "-->") orelse return error.BadSfnt) + 2;
+}
+
+fn xmlCdataEnd(document: []const u8, start: usize) FontError!usize {
+    return (std.mem.indexOfPos(u8, document, start + "<![CDATA[".len, "]]>") orelse return error.BadSfnt) + 2;
+}
+
+fn xmlDeclarationEnd(document: []const u8, start: usize) FontError!usize {
+    var cursor = start + 2;
+    var quote: ?u8 = null;
+    var bracket_depth: usize = 0;
+    while (cursor < document.len) : (cursor += 1) {
+        const byte = document[cursor];
+        if (quote) |active_quote| {
+            if (byte == active_quote) quote = null;
+            continue;
+        }
+        switch (byte) {
+            '"', '\'' => quote = byte,
+            '[' => bracket_depth += 1,
+            ']' => if (bracket_depth != 0) {
+                bracket_depth -= 1;
+            },
+            '>' => if (bracket_depth == 0) return cursor,
+            else => {},
+        }
+    }
+    return error.BadSfnt;
+}
+
+fn xmlTagEnd(document: []const u8, start: usize) FontError!usize {
+    var cursor = start + 1;
+    var quote: ?u8 = null;
+    while (cursor < document.len) : (cursor += 1) {
+        const byte = document[cursor];
+        if (quote) |active_quote| {
+            if (byte == active_quote) quote = null;
+            continue;
+        }
+        switch (byte) {
+            '"', '\'' => quote = byte,
+            '>' => return cursor,
+            else => {},
+        }
+    }
+    return error.BadSfnt;
+}
+
+fn xmlTagName(document: []const u8, tag_start: usize, tag_end: usize, closing: bool) ?[]const u8 {
+    var cursor = tag_start + 1;
+    if (closing) cursor += 1;
+    if (cursor >= tag_end or !isXmlNameByte(document[cursor])) return null;
+    const name_start = cursor;
+    while (cursor < tag_end and isXmlNameByte(document[cursor])) : (cursor += 1) {}
+    return document[name_start..cursor];
+}
+
+fn xmlTagSelfCloses(document: []const u8, tag_start: usize, tag_end: usize) bool {
+    var cursor = tag_end;
+    while (cursor > tag_start + 1) {
+        cursor -= 1;
+        if (isXmlWhitespace(document[cursor])) continue;
+        return document[cursor] == '/';
+    }
+    return false;
+}
+
+fn xmlLocalName(name: []const u8) []const u8 {
+    return if (std.mem.lastIndexOfScalar(u8, name, ':')) |colon| name[colon + 1 ..] else name;
+}
+
+fn isXmlNameByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-' or byte == ':' or byte == '.';
+}
+
 fn validateSvgGlyphBounds(allocator: std.mem.Allocator, data: []const u8, svg: TableRecord, glyph_count: u16) FontError!void {
     const document_list = try svgDocumentList(data, svg);
 
@@ -4662,6 +4893,8 @@ fn validateSvgGlyphBounds(allocator: std.mem.Allocator, data: []const u8, svg: T
             .start = record.document_offset,
             .end = record.document_offset + record.document_length,
         };
+        const document_start = document_list.start + record.document_offset;
+        try validateSvgDocumentPayload(allocator, data[document_start .. document_start + record.document_length]);
     }
     try validateSvgDocumentByteRanges(byte_ranges);
 }
@@ -6584,15 +6817,15 @@ test "name table format 1 language ids reference valid UTF-16 language tags" {
 }
 
 test "SVG document glyph ranges stay within maxp glyph count" {
-    var bytes: [28]u8 = .{0} ** 28;
+    var bytes: [30]u8 = .{0} ** 30;
     writeU16Test(&bytes, 0, 0); // SVG table version.
     writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
     writeU16Test(&bytes, 10, 1); // one SVGDocumentRecord.
     writeU16Test(&bytes, 12, 1); // startGlyphID.
     writeU16Test(&bytes, 14, 2); // endGlyphID is invalid when maxp.numGlyphs == 2.
     writeU32Test(&bytes, 16, 14); // document data starts after the record array.
-    writeU32Test(&bytes, 20, 4);
-    @memcpy(bytes[24..28], "<svg");
+    writeU32Test(&bytes, 20, 6);
+    @memcpy(bytes[24..30], "<svg/>");
 
     const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
     try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2));
@@ -6602,20 +6835,20 @@ test "SVG document glyph ranges stay within maxp glyph count" {
 }
 
 test "SVG document glyph ranges must be sorted and disjoint" {
-    var bytes: [44]u8 = .{0} ** 44;
+    var bytes: [48]u8 = .{0} ** 48;
     writeU16Test(&bytes, 0, 0); // SVG table version.
     writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
     writeU16Test(&bytes, 10, 2); // two SVGDocumentRecords.
     writeU16Test(&bytes, 12, 1); // first record covers glyph 1.
     writeU16Test(&bytes, 14, 1);
     writeU32Test(&bytes, 16, 26); // document data starts after both records.
-    writeU32Test(&bytes, 20, 4);
+    writeU32Test(&bytes, 20, 6);
     writeU16Test(&bytes, 24, 2); // second record covers glyphs 2 and 3.
     writeU16Test(&bytes, 26, 3);
-    writeU32Test(&bytes, 28, 30);
-    writeU32Test(&bytes, 32, 4);
-    @memcpy(bytes[36..40], "<svg");
-    @memcpy(bytes[40..44], "<svg");
+    writeU32Test(&bytes, 28, 32);
+    writeU32Test(&bytes, 32, 6);
+    @memcpy(bytes[36..42], "<svg/>");
+    @memcpy(bytes[42..48], "<svg/>");
 
     const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
     try validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 4);
@@ -6640,29 +6873,81 @@ test "SVG document byte ranges reject partial overlaps" {
     writeU16Test(&bytes, 10, 2); // two SVGDocumentRecords.
     writeU16Test(&bytes, 12, 0); // first record covers glyph 0.
     writeU16Test(&bytes, 14, 0);
-    writeU32Test(&bytes, 16, 30); // Byte ranges need not follow glyph order.
-    writeU32Test(&bytes, 20, 8);
+    writeU32Test(&bytes, 16, 32); // Byte ranges need not follow glyph order.
+    writeU32Test(&bytes, 20, 6);
     writeU16Test(&bytes, 24, 1); // second record covers glyph 1.
     writeU16Test(&bytes, 26, 1);
     writeU32Test(&bytes, 28, 26);
-    writeU32Test(&bytes, 32, 4);
+    writeU32Test(&bytes, 32, 6);
+    @memcpy(bytes[36..42], "<svg/>");
+    @memcpy(bytes[42..48], "<svg/>");
 
     const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
     try validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2);
 
     var shared_document = bytes;
     writeU32Test(&shared_document, 16, 26);
-    writeU32Test(&shared_document, 20, 8);
+    writeU32Test(&shared_document, 20, 6);
     writeU32Test(&shared_document, 28, 26);
-    writeU32Test(&shared_document, 32, 8);
+    writeU32Test(&shared_document, 32, 6);
     try validateSvgGlyphBounds(std.testing.allocator, &shared_document, svg, 2);
 
-    var partial_overlap = bytes;
+    var partial_overlap: [53]u8 = .{0} ** 53;
+    writeU16Test(&partial_overlap, 0, 0);
+    writeU32Test(&partial_overlap, 2, 10);
+    writeU16Test(&partial_overlap, 10, 2);
+    writeU16Test(&partial_overlap, 12, 0);
+    writeU16Test(&partial_overlap, 14, 0);
     writeU32Test(&partial_overlap, 16, 26);
-    writeU32Test(&partial_overlap, 20, 8);
-    writeU32Test(&partial_overlap, 28, 30); // Borrows the tail of the first document.
-    writeU32Test(&partial_overlap, 32, 8);
-    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &partial_overlap, svg, 2));
+    writeU32Test(&partial_overlap, 20, 17);
+    writeU16Test(&partial_overlap, 24, 1);
+    writeU16Test(&partial_overlap, 26, 1);
+    writeU32Test(&partial_overlap, 28, 31); // Points at the nested <svg/> inside the first document.
+    writeU32Test(&partial_overlap, 32, 6);
+    @memcpy(partial_overlap[36..53], "<svg><svg/></svg>");
+    const overlap_svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = partial_overlap.len };
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &partial_overlap, overlap_svg, 2));
+}
+
+test "SVG document payload must have a single svg root" {
+    var bytes: [44]u8 = .{0} ** 44;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU16Test(&bytes, 10, 1); // one SVGDocumentRecord.
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 1);
+    writeU32Test(&bytes, 16, 14);
+    writeU32Test(&bytes, 20, 20);
+
+    const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    @memcpy(bytes[24..44], "<svg><g></g></svg>  ");
+    try validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2);
+
+    @memcpy(bytes[24..44], "<g></g>             ");
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2));
+
+    @memcpy(bytes[24..44], "<svg></g>           ");
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2));
+
+    @memcpy(bytes[24..44], "<svg/><svg/>        ");
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2));
+}
+
+test "SVG document payload root is validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildSvgTtf(allocator);
+    defer allocator.free(bytes);
+    const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
+    const document_list_offset: usize = @intCast(try bin.readU32At(bytes, svg_offset + 2));
+    const document_list_start = svg_offset + document_list_offset;
+    const record_start = document_list_start + 2;
+    const document_offset: usize = @intCast(try bin.readU32At(bytes, record_start + 4));
+    const document_start = document_list_start + document_offset;
+    bytes[document_start + 1] = 'g'; // Changes the root element from <svg ...> to a non-SVG root.
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
 test "SVG document glyph range ordering is enforced at parse time" {

@@ -315,6 +315,7 @@ pub const Font = struct {
         if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
         if (colr) |colr_table| try validateColrGlyphBounds(data, colr_table, glyph_count);
         if (svg) |svg_table| try validateSvgGlyphBounds(data, svg_table, glyph_count);
+        if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
         // supported Unicode mapping per lookup without reparsing the directory.
@@ -1227,6 +1228,32 @@ fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphI
         .height = try bin.readU32At(png, 20),
         .data = png,
     };
+}
+
+fn validateSbixTable(data: []const u8, sbix: TableRecord, glyph_count: u16) FontError!void {
+    const strike_count = try sbixStrikeCount(data, sbix);
+    for (0..strike_count) |strike_index| {
+        const strike = try sbixStrike(data, sbix, glyph_count, strike_index);
+        try validateSbixStrikeGlyphOffsets(data, strike, glyph_count);
+    }
+}
+
+fn validateSbixStrikeGlyphOffsets(data: []const u8, strike: SbixStrike, glyph_count: u16) FontError!void {
+    var previous = try bin.readU32At(data, strike.offset + 4);
+    if (previous < strike.bitmap_data_offset or previous > strike.length) return error.BadSfnt;
+
+    for (0..glyph_count) |glyph_index| {
+        const offset_pos = strike.offset + 4 + (glyph_index + 1) * 4;
+        const current = try bin.readU32At(data, offset_pos);
+        // The glyph offset array is a monotonic list of boundaries relative to
+        // the strike start. Validate the entire array at parse time so bitmap
+        // selection APIs cannot accept a font whose unused glyph records point
+        // back into strike metadata or beyond the declared sbix table.
+        if (current < previous) return error.BadSfnt;
+        if (current < strike.bitmap_data_offset or current > strike.length) return error.BadSfnt;
+        if (current != previous and current - previous < 8) return error.BadSfnt;
+        previous = current;
+    }
 }
 
 fn cblcStrikeCount(data: []const u8, cblc: TableRecord) FontError!usize {
@@ -3928,6 +3955,31 @@ test "sbix offsets cannot overlap table or strike metadata" {
 
     const strike = try sbixStrike(&glyph_overlap, sbix, 1, 0);
     try std.testing.expectError(error.BadSfnt, sbixGlyphPng(&glyph_overlap, strike, 0));
+}
+
+test "sbix parse validation checks every strike glyph offset" {
+    var bytes: [64]u8 = .{0} ** 64;
+    writeU16Test(&bytes, 0, 1); // sbix version
+    writeU32Test(&bytes, 4, 1); // one strike
+    writeU32Test(&bytes, 8, 12); // strike data starts after the strike-offset array
+    writeU16Test(&bytes, 12, 16); // ppem
+    writeU16Test(&bytes, 14, 72); // ppi
+
+    const sbix = TableRecord{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = bytes.len };
+
+    // Two glyphs require three offsets. The second glyph is "unused" for many
+    // runtime lookups, but parse-time validation must still reject its
+    // decreasing boundary so malformed payloads cannot hide behind glyph choice.
+    writeU32Test(&bytes, 16, 24);
+    writeU32Test(&bytes, 20, 32);
+    writeU32Test(&bytes, 24, 28);
+    try std.testing.expectError(error.BadSfnt, validateSbixTable(&bytes, sbix, 2));
+
+    writeU32Test(&bytes, 24, 36); // Non-empty glyph payload is shorter than the sbix origin+type header.
+    try std.testing.expectError(error.BadSfnt, validateSbixTable(&bytes, sbix, 2));
+
+    writeU32Test(&bytes, 24, 40);
+    try validateSbixTable(&bytes, sbix, 2);
 }
 
 test "CBLC bitmap index subtables reject decreasing image offsets" {

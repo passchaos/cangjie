@@ -351,7 +351,7 @@ pub const Font = struct {
         const chosen = best orelse return error.UnsupportedCmap;
         return switch (chosen.format) {
             0 => try glyphIndexFormat0(self.data, chosen.offset, codepoint),
-            2 => try glyphIndexFormat2(self.data, chosen.offset, codepoint),
+            2 => try glyphIndexFormat2(self.data, chosen.offset, chosen.length, codepoint),
             4 => try glyphIndexFormat4(self.data, chosen.offset, codepoint),
             6 => try glyphIndexFormat6(self.data, chosen.offset, codepoint),
             10 => try glyphIndexFormat10(self.data, chosen.offset, chosen.length, codepoint),
@@ -1564,11 +1564,73 @@ fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, fo
 
 fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: u16) FontError!void {
     switch (format) {
+        2 => try validateCmapFormat2(data, offset, length),
+        6 => try validateCmapFormat6(data, offset, length),
+        10 => try validateCmapFormat10(data, offset, length),
         4 => try validateCmapFormat4(data, offset, length),
         12, 13 => try validateSegmentedCmapGroups(data, offset, length),
         14 => try validateCmapFormat14(data, offset, length),
         else => {},
     }
+}
+
+fn validateCmapFormat2(data: []const u8, offset: usize, length: usize) FontError!void {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (length < 526) return error.BadSfnt;
+
+    const table_end = offset + length;
+    var max_subheader_index: u16 = 0;
+    for (0..256) |high_byte| {
+        const key = try bin.readU16At(data, offset + 6 + high_byte * 2);
+        // SubHeaderKeys are byte offsets divided by the fixed eight-byte
+        // SubHeader size. Requiring alignment at parse time prevents lookup
+        // from interpreting the middle of one SubHeader as another.
+        if ((key & 7) != 0) return error.BadSfnt;
+        max_subheader_index = @max(max_subheader_index, key / 8);
+    }
+
+    const subheaders_offset = offset + 6 + 512;
+    const subheaders_len = (@as(usize, max_subheader_index) + 1) * 8;
+    if (subheaders_len > table_end - subheaders_offset) return error.BadSfnt;
+    const glyph_array_start = subheaders_offset + subheaders_len;
+
+    for (0..@as(usize, max_subheader_index) + 1) |subheader_index| {
+        const subheader_offset = subheaders_offset + subheader_index * 8;
+        const first_code = try bin.readU16At(data, subheader_offset);
+        const entry_count = try bin.readU16At(data, subheader_offset + 2);
+        _ = try bin.readI16At(data, subheader_offset + 4);
+        const id_range_offset = try bin.readU16At(data, subheader_offset + 6);
+        if (entry_count == 0) continue;
+
+        const last_entry_index = @as(usize, entry_count) - 1;
+        if (@as(usize, first_code) + last_entry_index > 0xff) return error.BadSfnt;
+        if ((id_range_offset & 1) != 0) return error.BadSfnt;
+        const first_glyph = subheader_offset + 6 + @as(usize, id_range_offset);
+        const last_glyph = first_glyph + last_entry_index * 2;
+        // idRangeOffset is relative to its own word. The glyph index array is
+        // conceptually after the declared SubHeader array, so disallow offsets
+        // that point back into SubHeader metadata or beyond the declared cmap.
+        if (first_glyph < glyph_array_start or last_glyph > table_end or table_end - last_glyph < 2) return error.BadSfnt;
+    }
+}
+
+fn validateCmapFormat6(data: []const u8, offset: usize, length: usize) FontError!void {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (length < 10) return error.BadSfnt;
+    const entry_count = try bin.readU16At(data, offset + 8);
+    if (@as(usize, entry_count) * 2 != length - 10) return error.BadSfnt;
+}
+
+fn validateCmapFormat10(data: []const u8, offset: usize, length: usize) FontError!void {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (length < 20) return error.BadSfnt;
+    const start_code = try bin.readU32At(data, offset + 12);
+    if (start_code > 0x10ffff) return error.BadSfnt;
+    const num_chars = try bin.readU32At(data, offset + 16);
+    if (@as(u64, num_chars) * 2 != @as(u64, length - 20)) return error.BadSfnt;
+    if (num_chars == 0) return;
+    const last_code = @as(u64, start_code) + @as(u64, num_chars) - 1;
+    if (last_code > 0x10ffff) return error.BadSfnt;
 }
 
 fn validateCmapFormat4(data: []const u8, offset: usize, length: usize) FontError!void {
@@ -1997,20 +2059,15 @@ fn glyphIndexFormat0(data: []const u8, offset: usize, codepoint: u21) FontError!
     return data[offset + 6 + @as(usize, codepoint)];
 }
 
-fn glyphIndexFormat2(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
+fn glyphIndexFormat2(data: []const u8, offset: usize, length: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
     if (codepoint > 0xffff) return 0;
-    const length = try bin.readU16At(data, offset + 2);
-    if (length < 526) return error.BadSfnt;
-    const table_end = offset + @as(usize, length);
-    if (table_end > data.len) return error.BadSfnt;
+    try validateCmapFormat2(data, offset, length);
 
     const high_byte: u8 = @intCast((codepoint >> 8) & 0xff);
     const low_byte: u8 = @intCast(codepoint & 0xff);
     const key = try bin.readU16At(data, offset + 6 + @as(usize, high_byte) * 2);
-    if ((key % 8) != 0) return error.BadSfnt;
     const subheader_index = key / 8;
     const subheader_offset = offset + 6 + 512 + @as(usize, subheader_index) * 8;
-    if (subheader_offset + 8 > table_end) return error.BadSfnt;
 
     // The first subheader also maps one-byte character codes. For non-zero
     // high bytes, only a referenced subheader is valid; an absent high-byte
@@ -2022,13 +2079,12 @@ fn glyphIndexFormat2(data: []const u8, offset: usize, codepoint: u21) FontError!
     const entry_count = try bin.readU16At(data, subheader_offset + 2);
     const id_delta = try bin.readI16At(data, subheader_offset + 4);
     const id_range_offset = try bin.readU16At(data, subheader_offset + 6);
-    const char_code = if (high_byte == 0) @as(u16, low_byte) else @as(u16, low_byte);
+    const char_code = @as(u16, low_byte);
     if (char_code < first_code) return 0;
     const entry_index = @as(usize, char_code - first_code);
     if (entry_index >= entry_count) return 0;
 
     const glyph_offset = subheader_offset + 6 + @as(usize, id_range_offset) + entry_index * 2;
-    if (glyph_offset + 2 > table_end) return error.BadSfnt;
     const glyph = try bin.readU16At(data, glyph_offset);
     if (glyph == 0) return 0;
     return @intCast(@as(u16, @bitCast(@as(i16, @bitCast(glyph)) +% id_delta)));
@@ -2078,10 +2134,9 @@ fn glyphIndexFormat4(data: []const u8, offset: usize, codepoint: u21) FontError!
 fn glyphIndexFormat6(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
     if (codepoint > 0xffff) return 0;
     const length = try bin.readU16At(data, offset + 2);
-    if (length < 10) return error.BadSfnt;
+    try validateCmapFormat6(data, offset, length);
     const first_code = try bin.readU16At(data, offset + 6);
     const entry_count = try bin.readU16At(data, offset + 8);
-    if (@as(usize, entry_count) * 2 > @as(usize, length) - 10) return error.BadSfnt;
     const cp: u16 = @intCast(codepoint);
     if (cp < first_code) return 0;
     const index = @as(usize, cp - first_code);
@@ -2090,11 +2145,9 @@ fn glyphIndexFormat6(data: []const u8, offset: usize, codepoint: u21) FontError!
 }
 
 fn glyphIndexFormat10(data: []const u8, offset: usize, length: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
-    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
-    if (length < 20) return error.BadSfnt;
+    try validateCmapFormat10(data, offset, length);
     const start_code = try bin.readU32At(data, offset + 12);
     const num_chars = try bin.readU32At(data, offset + 16);
-    if (@as(usize, num_chars) > (length - 20) / 2) return error.BadSfnt;
     if (codepoint < start_code) return 0;
     const index = @as(usize, codepoint - start_code);
     if (index >= num_chars) return 0;
@@ -2848,6 +2901,79 @@ test "cmap 32-bit subtables stay inside declared lengths" {
     writeU32Test(&format13, 24, 3);
     try std.testing.expectError(error.BadSfnt, glyphIndexFormat13(&format13, 0, 16, 'A'));
     try std.testing.expectEqual(@as(glyph_mod.GlyphId, 3), try glyphIndexFormat13(&format13, 0, 28, 0x1f600));
+}
+
+test "cmap format 2 validates subheader and glyph-array bounds" {
+    var valid: [12 + 536]u8 = .{0} ** (12 + 536);
+    writeU16Test(&valid, 2, 1);
+    writeU16Test(&valid, 4, 3);
+    writeU16Test(&valid, 6, 1);
+    writeU32Test(&valid, 8, 12);
+    const subtable = 12;
+    writeU16Test(&valid, subtable, 2);
+    writeU16Test(&valid, subtable + 2, 536);
+    writeU16Test(&valid, subtable + 6 + 0x12 * 2, 8); // High byte 0x12 uses SubHeader[1].
+    writeU16Test(&valid, subtable + 518, 0);
+    writeU16Test(&valid, subtable + 520, 0);
+    writeU16Test(&valid, subtable + 526, 0x34);
+    writeU16Test(&valid, subtable + 528, 1);
+    writeI16Test(&valid, subtable + 530, 0);
+    writeU16Test(&valid, subtable + 532, 2);
+    writeU16Test(&valid, subtable + 534, 77);
+
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = valid.len,
+    };
+    const subtables = try parseCmapSubtables(std.testing.allocator, &valid, cmap);
+    defer std.testing.allocator.free(subtables);
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 77), try glyphIndexFormat2(&valid, subtable, 536, 0x1234));
+
+    var unaligned_key = valid;
+    writeU16Test(&unaligned_key, subtable + 6 + 0x12 * 2, 10);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(std.testing.allocator, &unaligned_key, cmap));
+
+    var backwards_range = valid;
+    writeU16Test(&backwards_range, subtable + 532, 0);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(std.testing.allocator, &backwards_range, cmap));
+}
+
+test "cmap format 6 and 10 validate declared array size and Unicode range" {
+    var format6: [12]u8 = .{0} ** 12;
+    writeU16Test(&format6, 0, 6);
+    writeU16Test(&format6, 2, format6.len);
+    writeU16Test(&format6, 6, 'A');
+    writeU16Test(&format6, 8, 1);
+    writeU16Test(&format6, 10, 5);
+    try validateCmapFormat6(&format6, 0, format6.len);
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 5), try glyphIndexFormat6(&format6, 0, 'A'));
+
+    var truncated_format6 = format6;
+    writeU16Test(&truncated_format6, 2, 10);
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat6(&truncated_format6, 0, 10));
+
+    var format10: [22]u8 = .{0} ** 22;
+    writeU16Test(&format10, 0, 10);
+    writeU32Test(&format10, 4, format10.len);
+    writeU32Test(&format10, 12, 0x10ffff);
+    writeU32Test(&format10, 16, 1);
+    writeU16Test(&format10, 20, 9);
+    try validateCmapFormat10(&format10, 0, format10.len);
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 9), try glyphIndexFormat10(&format10, 0, format10.len, 0x10ffff));
+
+    var overflowing_format10 = format10;
+    writeU32Test(&overflowing_format10, 12, 0x110000);
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat10(&overflowing_format10, 0, overflowing_format10.len));
+
+    var extra_bytes_format10: [24]u8 = .{0} ** 24;
+    writeU16Test(&extra_bytes_format10, 0, 10);
+    writeU32Test(&extra_bytes_format10, 4, extra_bytes_format10.len);
+    writeU32Test(&extra_bytes_format10, 12, 'A');
+    writeU32Test(&extra_bytes_format10, 16, 1);
+    writeU16Test(&extra_bytes_format10, 20, 9);
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat10(&extra_bytes_format10, 0, extra_bytes_format10.len));
 }
 
 test "cmap parser rejects subtable length past cmap table boundary" {

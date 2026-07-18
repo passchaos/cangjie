@@ -1523,6 +1523,7 @@ fn parseCmapSubtables(allocator: std.mem.Allocator, data: []const u8, cmap: Tabl
         const absolute = cmap.offset + sub_offset;
         const format = try bin.readU16At(data, absolute);
         const length = try cmapSubtableLength(data, cmap, @intCast(sub_offset), format);
+        try validateCmapSubtable(data, absolute, length, format);
         try subtables.append(allocator, .{
             .platform_id = try bin.readU16At(data, rec),
             .encoding_id = try bin.readU16At(data, rec + 2),
@@ -1559,6 +1560,36 @@ fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, fo
     // reads with bytes that actually belong to the next SFNT table.
     if (length == 0 or length > available) return error.BadSfnt;
     return length;
+}
+
+fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: u16) FontError!void {
+    switch (format) {
+        12, 13 => try validateSegmentedCmapGroups(data, offset, length),
+        else => {},
+    }
+}
+
+fn validateSegmentedCmapGroups(data: []const u8, offset: usize, length: usize) FontError!void {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (length < 16) return error.BadSfnt;
+    const group_count: usize = @intCast(try bin.readU32At(data, offset + 12));
+    if (group_count > (length - 16) / 12) return error.BadSfnt;
+
+    var previous_end: ?u32 = null;
+    for (0..group_count) |index| {
+        const group_offset = offset + 16 + index * 12;
+        const start = try bin.readU32At(data, group_offset);
+        const end = try bin.readU32At(data, group_offset + 4);
+        if (end < start) return error.BadSfnt;
+        if (previous_end) |last_end| {
+            // Format 12/13 group arrays are searched as sorted, disjoint
+            // intervals. Rejecting overlap and out-of-order starts at parse
+            // time keeps malformed cmap data from producing order-dependent
+            // glyph mappings later.
+            if (start <= last_end) return error.BadSfnt;
+        }
+        previous_end = end;
+    }
 }
 
 fn classDefValue(data: []const u8, offset: usize, glyph_id: glyph_mod.GlyphId) FontError!u16 {
@@ -2608,6 +2639,31 @@ test "cmap parser rejects subtable length past cmap table boundary" {
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &data, cmap));
 }
 
+test "cmap segmented groups must be sorted and disjoint" {
+    const allocator = std.testing.allocator;
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 52,
+    };
+
+    var valid: [52]u8 = .{0} ** 52;
+    writeCmapFormat12HeaderTest(&valid, valid.len - 12, 2);
+    writeCmapGroupTest(&valid, 28, 0x100, 0x1ff, 4);
+    writeCmapGroupTest(&valid, 40, 0x200, 0x200, 0x104);
+    const subtables = try parseCmapSubtables(allocator, &valid, cmap);
+    allocator.free(subtables);
+
+    var unsorted = valid;
+    writeCmapGroupTest(&unsorted, 40, 0x050, 0x060, 0x104);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &unsorted, cmap));
+
+    var overlapping = valid;
+    writeCmapGroupTest(&overlapping, 40, 0x1ff, 0x200, 0x104);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &overlapping, cmap));
+}
+
 test "simple glyf contours reject non-increasing end points" {
     var glyph_data: [24]u8 = .{0} ** 24;
     writeI16Test(&glyph_data, 0, 2); // contourCount
@@ -3362,6 +3418,23 @@ fn writeF16Dot16Test(bytes: []u8, offset: usize, value: f32) void {
 
 fn writeF2Dot14Test(bytes: []u8, offset: usize, value: f32) void {
     writeI16Test(bytes, offset, @intFromFloat(value * 16384.0));
+}
+
+fn writeCmapFormat12HeaderTest(bytes: []u8, length: u32, groups: u32) void {
+    writeU16Test(bytes, 0, 0);
+    writeU16Test(bytes, 2, 1);
+    writeU16Test(bytes, 4, 3);
+    writeU16Test(bytes, 6, 10);
+    writeU32Test(bytes, 8, 12);
+    writeU16Test(bytes, 12, 12);
+    writeU32Test(bytes, 16, length);
+    writeU32Test(bytes, 24, groups);
+}
+
+fn writeCmapGroupTest(bytes: []u8, offset: usize, start: u32, end: u32, glyph_id: u32) void {
+    writeU32Test(bytes, offset, start);
+    writeU32Test(bytes, offset + 4, end);
+    writeU32Test(bytes, offset + 8, glyph_id);
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

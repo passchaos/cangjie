@@ -295,7 +295,10 @@ pub const Font = struct {
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
         const required_hmtx_length = try hmtxRequiredLength(glyph_count, number_of_h_metrics);
         if (hmtx.length < required_hmtx_length) return error.InvalidMetrics;
-        if (format == .truetype) try validateLocaTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
+        if (format == .truetype) {
+            try validateLocaTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
+            try validateGlyfTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
+        }
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
         if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
@@ -1570,6 +1573,70 @@ fn validateLocaTable(data: []const u8, loca: TableRecord, glyf: TableRecord, gly
         };
         if (current < previous or current > glyf.length) return error.InvalidLoca;
         previous = current;
+    }
+}
+
+fn glyfOffsetFromLoca(data: []const u8, loca: TableRecord, index_to_loc_format: i16, glyph_index: usize) FontError!usize {
+    return switch (index_to_loc_format) {
+        0 => @as(usize, try bin.readU16At(data, loca.offset + glyph_index * 2)) * 2,
+        1 => try bin.readU32At(data, loca.offset + glyph_index * 4),
+        else => error.InvalidLoca,
+    };
+}
+
+fn validateGlyfTable(data: []const u8, loca: TableRecord, glyf: TableRecord, glyph_count: u16, index_to_loc_format: i16) FontError!void {
+    // `loca` proves where each glyph byte range lives; `glyf` still owns the
+    // structure inside those ranges. Validate the cheap cross-table contracts
+    // at parse time so a malformed compound glyph cannot be accepted and then
+    // fail only when the specific glyph is outlined during layout or fallback.
+    for (0..glyph_count) |glyph_index| {
+        const start = try glyfOffsetFromLoca(data, loca, index_to_loc_format, glyph_index);
+        const end = try glyfOffsetFromLoca(data, loca, index_to_loc_format, glyph_index + 1);
+        if (end == start) continue;
+        if (end < start or end > glyf.length) return error.InvalidLoca;
+
+        const glyph_data = data[glyf.offset + start .. glyf.offset + end];
+        if (glyph_data.len < 10) return error.InvalidGlyph;
+        const contour_count = try bin.readI16At(glyph_data, 0);
+        if (contour_count < 0) {
+            try validateCompoundGlyphDescription(glyph_data, glyph_count);
+        }
+    }
+}
+
+fn validateCompoundGlyphDescription(glyph_data: []const u8, glyph_count: u16) FontError!void {
+    var offset: usize = 10; // numberOfContours + x/y bounds.
+    while (true) {
+        if (offset + 4 > glyph_data.len) return error.InvalidGlyph;
+        const flags = try bin.readU16At(glyph_data, offset);
+        const component_glyph = try bin.readU16At(glyph_data, offset + 2);
+        if (component_glyph >= glyph_count) return error.InvalidGlyph;
+        offset += 4;
+
+        const argument_bytes: usize = if ((flags & 0x0001) != 0) 4 else 2;
+        if (argument_bytes > glyph_data.len - offset) return error.InvalidGlyph;
+        offset += argument_bytes;
+
+        const has_scale = (flags & 0x0008) != 0;
+        const has_xy_scale = (flags & 0x0040) != 0;
+        const has_two_by_two = (flags & 0x0080) != 0;
+        const scale_flag_count = @as(u8, @intFromBool(has_scale)) +
+            @as(u8, @intFromBool(has_xy_scale)) +
+            @as(u8, @intFromBool(has_two_by_two));
+        if (scale_flag_count > 1) return error.InvalidGlyph;
+        const scale_bytes: usize = if (has_scale) 2 else if (has_xy_scale) 4 else if (has_two_by_two) 8 else 0;
+        if (scale_bytes > glyph_data.len - offset) return error.InvalidGlyph;
+        offset += scale_bytes;
+
+        if ((flags & 0x0020) == 0) {
+            if ((flags & 0x0100) != 0) {
+                if (offset + 2 > glyph_data.len) return error.InvalidGlyph;
+                const instruction_length = try bin.readU16At(glyph_data, offset);
+                offset += 2;
+                if (@as(usize, instruction_length) > glyph_data.len - offset) return error.InvalidGlyph;
+            }
+            return;
+        }
     }
 }
 
@@ -4026,6 +4093,45 @@ test "loca offsets are validated against glyf at parse time" {
         writeU16Test(bytes, loca_offset + 4, 22); // Short format stores offsets divided by two; 44 > glyf.len.
         try std.testing.expectError(error.InvalidLoca, Font.parse(allocator, bytes));
     }
+}
+
+test "compound glyf components are validated against maxp at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    const glyf_offset = try sfntTableOffset(bytes, "glyf");
+    const glyph_one = glyf_offset + 12;
+    writeI16Test(bytes, glyph_one, -1); // Compound glyph.
+    writeU16Test(bytes, glyph_one + 10, 0x0002); // ARGS_ARE_XY_VALUES, byte args.
+    writeU16Test(bytes, glyph_one + 12, 2); // maxp.numGlyphs is 2, so glyph id 2 is out of range.
+    bytes[glyph_one + 14] = 0;
+    bytes[glyph_one + 15] = 0;
+
+    try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+}
+
+test "compound glyf component flags reject conflicting transforms" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    const glyf_offset = try sfntTableOffset(bytes, "glyf");
+    const glyph_one = glyf_offset + 12;
+    writeI16Test(bytes, glyph_one, -1); // Compound glyph.
+    // WE_HAVE_A_SCALE and WE_HAVE_AN_X_AND_Y_SCALE are mutually exclusive in a
+    // component record. Accepting both would desynchronize the remaining
+    // component stream and hide malformed glyph data until outline expansion.
+    writeU16Test(bytes, glyph_one + 10, 0x0002 | 0x0008 | 0x0040);
+    writeU16Test(bytes, glyph_one + 12, 0);
+    bytes[glyph_one + 14] = 0;
+    bytes[glyph_one + 15] = 0;
+
+    try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
 }
 
 test "maxp table version and length must match the outline format" {

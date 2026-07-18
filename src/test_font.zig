@@ -1621,8 +1621,8 @@ fn cmapFormat10Table(allocator: std.mem.Allocator, start_code: u32, glyph_ids: [
     @memset(bytes, 0);
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, 1);
-    writeU16(bytes, 4, 3);
-    writeU16(bytes, 6, 10);
+    writeU16(bytes, 4, 0);
+    writeU16(bytes, 6, 4);
     writeU32(bytes, 8, 12);
     const off = 12;
     writeU16(bytes, off + 0, 10);
@@ -1647,8 +1647,8 @@ fn cmapFormat14VariationTable(allocator: std.mem.Allocator) ![]u8 {
 
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, 2);
-    writeU16(bytes, 4, 3);
-    writeU16(bytes, 6, 1);
+    writeU16(bytes, 4, 0);
+    writeU16(bytes, 6, 3);
     writeU32(bytes, 8, @intCast(base_off));
     writeU16(bytes, 12, 0);
     writeU16(bytes, 14, 5);
@@ -1706,7 +1706,7 @@ fn cmapFormat2Table(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, 1);
     writeU16(bytes, 4, 3);
-    writeU16(bytes, 6, 1);
+    writeU16(bytes, 6, 2);
     writeU32(bytes, 8, 12);
 
     const off = 12;
@@ -1755,8 +1755,8 @@ fn cmapFormat6Table(allocator: std.mem.Allocator, first_code: u16, glyph_ids: []
     @memset(bytes, 0);
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, 1);
-    writeU16(bytes, 4, 3);
-    writeU16(bytes, 6, 1);
+    writeU16(bytes, 4, 0);
+    writeU16(bytes, 6, 3);
     writeU32(bytes, 8, 12);
     const off = 12;
     writeU16(bytes, off + 0, 6);
@@ -1780,8 +1780,8 @@ fn cmapFormat13RangesTable(allocator: std.mem.Allocator, ranges: []const struct 
     @memset(bytes, 0);
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, 1);
-    writeU16(bytes, 4, 3);
-    writeU16(bytes, 6, 10);
+    writeU16(bytes, 4, 0);
+    writeU16(bytes, 6, 6);
     writeU32(bytes, 8, 12);
     const off = 12;
     writeU16(bytes, off + 0, 13);

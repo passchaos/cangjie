@@ -2135,6 +2135,7 @@ fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, fo
 }
 
 fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: u16, platform_id: u16, encoding_id: u16) FontError!void {
+    try validateCmapEncodingCompatibility(platform_id, encoding_id, format);
     const validate_bmp_scalars = cmapSubtableUsesUnicodeScalars(platform_id, encoding_id);
     switch (format) {
         2 => try validateCmapFormat2(data, offset, length),
@@ -2145,6 +2146,69 @@ fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: 
         14 => try validateCmapFormat14(data, offset, length),
         else => {},
     }
+}
+
+fn validateCmapEncodingCompatibility(platform_id: u16, encoding_id: u16, format: u16) FontError!void {
+    const valid = switch (platform_id) {
+        0 => switch (encoding_id) {
+            // Deprecated Unicode encodings are still Unicode character maps, but
+            // their historical fonts predate the modern BMP/full-repertoire
+            // split. Keep accepting numeric mapping formats while still keeping
+            // the format-13/14 special-purpose encodings exclusive below.
+            0, 1, 2 => isGeneralCharacterCmapFormat(format),
+            3 => isUnicodeBmpCmapFormat(format),
+            4 => isUnicodeFullRepertoireCmapFormat(format),
+            5 => format == 14,
+            6 => format == 13,
+            else => false,
+        },
+        1 => isLegacyByteOrBmpCmapFormat(format),
+        2 => encoding_id <= 2 and isGeneralCharacterCmapFormat(format),
+        3 => switch (encoding_id) {
+            0, 1 => format == 4,
+            // Windows CJK code-page cmaps are not Unicode scalar maps; both the
+            // mixed-byte format 2 and segmented format 4 encodings are seen in
+            // legacy fonts.
+            2, 3, 4, 5, 6 => format == 2 or format == 4,
+            10 => format == 12,
+            else => false,
+        },
+        // Custom and user-defined platforms can use the ordinary character-code
+        // mapping formats, but format 13 and 14 have Unicode-platform-only
+        // contracts: last-resort scalar ranges and variation sequences.
+        4, 240...255 => isCustomPlatformCmapFormat(format),
+        else => false,
+    };
+    if (!valid) return error.BadSfnt;
+}
+
+fn isLegacyByteOrBmpCmapFormat(format: u16) bool {
+    return switch (format) {
+        0, 2, 4, 6 => true,
+        else => false,
+    };
+}
+
+fn isGeneralCharacterCmapFormat(format: u16) bool {
+    return switch (format) {
+        0, 2, 4, 6, 8, 10, 12 => true,
+        else => false,
+    };
+}
+
+fn isUnicodeBmpCmapFormat(format: u16) bool {
+    return format == 4 or format == 6;
+}
+
+fn isUnicodeFullRepertoireCmapFormat(format: u16) bool {
+    return format == 8 or format == 10 or format == 12;
+}
+
+fn isCustomPlatformCmapFormat(format: u16) bool {
+    return switch (format) {
+        0, 2, 4, 6, 8, 10, 12 => true,
+        else => false,
+    };
 }
 
 fn cmapSubtableUsesUnicodeScalars(platform_id: u16, encoding_id: u16) bool {
@@ -3098,9 +3162,8 @@ fn scoreCmap(subtable: CmapSubtable) u8 {
     if (subtable.format == 12 and subtable.platform_id == 0) return 6;
     if (subtable.format == 4 and subtable.platform_id == 3 and subtable.encoding_id == 1) return 5;
     if (subtable.format == 4 and subtable.platform_id == 0) return 4;
-    if (subtable.format == 13 and subtable.platform_id == 3 and subtable.encoding_id == 10) return 3;
-    if (subtable.format == 13 and subtable.platform_id == 0) return 2;
-    if (subtable.format == 10 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 2;
+    if (subtable.format == 13 and subtable.platform_id == 0 and subtable.encoding_id == 6) return 2;
+    if (subtable.format == 10 and subtable.platform_id == 0 and subtable.encoding_id == 4) return 2;
     if (subtable.format == 2 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 1;
     if (subtable.format == 6 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 1;
     if (subtable.format == 0) return 1;
@@ -4916,7 +4979,7 @@ test "cmap format 2 validates subheader and glyph-array bounds" {
     var valid: [12 + 536]u8 = .{0} ** (12 + 536);
     writeU16Test(&valid, 2, 1);
     writeU16Test(&valid, 4, 3);
-    writeU16Test(&valid, 6, 1);
+    writeU16Test(&valid, 6, 2);
     writeU32Test(&valid, 8, 12);
     const subtable = 12;
     writeU16Test(&valid, subtable, 2);
@@ -5141,6 +5204,85 @@ test "Unicode cmap subtables reject surrogate and non-scalar character ranges" {
         var nonscalar_format12 = surrogate_format12;
         writeCmapGroupTest(&nonscalar_format12, 28, 0x110000, 0x110000, 1);
         try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &nonscalar_format12, cmap, 512));
+    }
+}
+
+test "cmap platform and encoding records allow only compatible formats" {
+    const allocator = std.testing.allocator;
+
+    {
+        const cmap: TableRecord = .{
+            .tag = .{ 'c', 'm', 'a', 'p' },
+            .checksum = 0,
+            .offset = 0,
+            .length = 44,
+        };
+        var format4: [44]u8 = .{0} ** 44;
+        writeCmapFormat4TwoSegmentHeaderTest(&format4, format4.len - 12);
+        writeCmapFormat4SegmentTest(&format4, 0, 'A', 'A', @as(i16, 1) - @as(i16, @bitCast(@as(u16, 'A'))), 0);
+        writeCmapFormat4SegmentTest(&format4, 1, 0xffff, 0xffff, 1, 0);
+        const subtables = try parseCmapSubtables(allocator, &format4, cmap, 512);
+        allocator.free(subtables);
+
+        var variation_sequence_format4 = format4;
+        writeU16Test(&variation_sequence_format4, 4, 0);
+        writeU16Test(&variation_sequence_format4, 6, 5);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &variation_sequence_format4, cmap, 512));
+
+        var full_repertoire_format4 = format4;
+        writeU16Test(&full_repertoire_format4, 6, 10);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &full_repertoire_format4, cmap, 512));
+    }
+
+    {
+        const cmap: TableRecord = .{
+            .tag = .{ 'c', 'm', 'a', 'p' },
+            .checksum = 0,
+            .offset = 0,
+            .length = 40,
+        };
+        var format12: [40]u8 = .{0} ** 40;
+        writeCmapFormat12HeaderTest(&format12, format12.len - 12, 1);
+        writeCmapGroupTest(&format12, 28, 0x100, 0x100, 1);
+        const subtables = try parseCmapSubtables(allocator, &format12, cmap, 512);
+        allocator.free(subtables);
+
+        var bmp_format12 = format12;
+        writeU16Test(&bmp_format12, 6, 1);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bmp_format12, cmap, 512));
+
+        var last_resort_format12 = format12;
+        writeU16Test(&last_resort_format12, 4, 0);
+        writeU16Test(&last_resort_format12, 6, 6);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &last_resort_format12, cmap, 512));
+
+        var format13 = last_resort_format12;
+        writeU16Test(&format13, 12, 13);
+        const format13_subtables = try parseCmapSubtables(allocator, &format13, cmap, 512);
+        allocator.free(format13_subtables);
+
+        var windows_format13 = format13;
+        writeU16Test(&windows_format13, 4, 3);
+        writeU16Test(&windows_format13, 6, 10);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &windows_format13, cmap, 512));
+    }
+
+    {
+        const cmap: TableRecord = .{
+            .tag = .{ 'c', 'm', 'a', 'p' },
+            .checksum = 0,
+            .offset = 0,
+            .length = 22,
+        };
+        var format14: [22]u8 = .{0} ** 22;
+        writeCmapFormat14HeaderTest(&format14, 10, 0);
+        const subtables = try parseCmapSubtables(allocator, &format14, cmap, 512);
+        allocator.free(subtables);
+
+        var non_uvs_format14 = format14;
+        writeU16Test(&non_uvs_format14, 4, 3);
+        writeU16Test(&non_uvs_format14, 6, 10);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &non_uvs_format14, cmap, 512));
     }
 }
 

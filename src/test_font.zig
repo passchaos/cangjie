@@ -1807,7 +1807,7 @@ fn variableNameTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn os2Table(allocator: std.mem.Allocator, weight: u16, width: u16, italic: bool, bold: bool) ![]u8 {
-    const bytes = try allocator.alloc(u8, 64);
+    const bytes = try allocator.alloc(u8, 96);
     @memset(bytes, 0);
     writeU16(bytes, 0, 4);
     writeU16(bytes, 4, weight);

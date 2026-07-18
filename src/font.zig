@@ -630,7 +630,10 @@ pub const Font = struct {
 
     pub fn styleAttributes(self: *const Font) FontError!StyleAttributes {
         const os2 = self.os2 orelse return .{};
-        if (os2.length < 64) return error.BadSfnt;
+        if (os2.length < 2) return error.BadSfnt;
+        const version = try bin.readU16At(self.data, os2.offset);
+        const minimum_length = minimumOs2TableLength(version);
+        if (os2.length < minimum_length) return error.BadSfnt;
         const weight = try bin.readU16At(self.data, os2.offset + 4);
         const width = try bin.readU16At(self.data, os2.offset + 6);
         const fs_selection = try bin.readU16At(self.data, os2.offset + 62);
@@ -1391,6 +1394,19 @@ fn findTable(records: []const TableRecord, comptime table_tag: []const u8) ?Tabl
 
 fn requireTableLength(record: TableRecord, minimum_length: usize) FontError!void {
     if (record.length < minimum_length) return error.BadSfnt;
+}
+
+fn minimumOs2TableLength(version: u16) usize {
+    // usWeightClass/usWidthClass/fsSelection all live in the original OS/2
+    // payload, but the SFNT directory length is still the table's versioned
+    // contract. Enforcing the full minimum keeps a truncated v4/v5 OS/2 table
+    // from being accepted just because the early style fields happen to fit.
+    return switch (version) {
+        0 => 78,
+        1 => 86,
+        2...4 => 96,
+        else => 100,
+    };
 }
 
 fn hmtxRequiredLength(glyph_count: u16, number_of_h_metrics: u16) FontError!usize {
@@ -2752,6 +2768,31 @@ test "avar validates every declared segment map before returning a coordinate" {
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(99, 0.5));
 }
 
+test "OS/2 style attributes respect versioned table lengths" {
+    var valid_v4: [96]u8 = .{0} ** 96;
+    writeU16Test(&valid_v4, 0, 4); // OS/2 v4 requires the 96-byte v2+ payload.
+    writeU16Test(&valid_v4, 4, 650);
+    writeU16Test(&valid_v4, 6, 3);
+    writeU16Test(&valid_v4, 62, 0x0021); // italic + bold
+
+    const valid_font = os2OnlyFont(&valid_v4, valid_v4.len);
+    const attributes = try valid_font.styleAttributes();
+    try std.testing.expectEqual(@as(u16, 650), attributes.weight);
+    try std.testing.expectEqual(@as(u16, 3), attributes.width);
+    try std.testing.expect(attributes.italic);
+    try std.testing.expect(attributes.bold);
+
+    const truncated_v4 = os2OnlyFont(&valid_v4, 64);
+    try std.testing.expectError(error.BadSfnt, truncated_v4.styleAttributes());
+
+    var truncated_v5: [100]u8 = .{0} ** 100;
+    writeU16Test(&truncated_v5, 0, 5); // v5 extends v2-v4 by optical size fields.
+    writeU16Test(&truncated_v5, 4, 400);
+    writeU16Test(&truncated_v5, 6, 5);
+    const short_v5 = os2OnlyFont(&truncated_v5, 96);
+    try std.testing.expectError(error.BadSfnt, short_v5.styleAttributes());
+}
+
 fn gdefOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2775,6 +2816,48 @@ fn gdefOnlyFont(data: []const u8) Font {
         .kern = null,
         .os2 = null,
         .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = data.len },
+        .gpos = null,
+        .gsub = null,
+        .name = null,
+        .fvar = null,
+        .avar = null,
+        .colr = null,
+        .cpal = null,
+        .svg = null,
+        .sbix = null,
+        .cblc = null,
+        .cbdt = null,
+        .glyf = null,
+        .cff = null,
+        .cmap_subtables = empty_cmaps,
+        .owned_tables = empty_tables,
+        .allocator = std.testing.allocator,
+    };
+}
+
+fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
+    const empty_tables: []TableRecord = &.{};
+    const empty_cmaps: []CmapSubtable = &.{};
+    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    return .{
+        .data = data,
+        .format = .truetype,
+        .units_per_em = 1000,
+        .index_to_loc_format = 0,
+        .glyph_count = 2,
+        .ascender = 0,
+        .descender = 0,
+        .line_gap = 0,
+        .number_of_h_metrics = 2,
+        .head = dummy_table,
+        .hhea = dummy_table,
+        .maxp = dummy_table,
+        .hmtx = dummy_table,
+        .loca = null,
+        .cmap = dummy_table,
+        .kern = null,
+        .os2 = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = 0, .offset = 0, .length = declared_length },
+        .gdef = null,
         .gpos = null,
         .gsub = null,
         .name = null,

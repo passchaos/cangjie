@@ -1725,6 +1725,7 @@ fn readMarkGlyphSetsDef(allocator: std.mem.Allocator, data: []const u8, offset: 
     if (format != 1) return error.BadSfnt;
     const set_count = try bin.readU16At(data, offset + 2);
     if (@as(usize, set_count) * 4 > data.len - (offset + 4)) return error.BadSfnt;
+    const coverage_data_start = 4 + @as(usize, set_count) * 4;
 
     const sets = try allocator.alloc([]glyph_mod.GlyphId, set_count);
     errdefer allocator.free(sets);
@@ -1735,6 +1736,11 @@ fn readMarkGlyphSetsDef(allocator: std.mem.Allocator, data: []const u8, offset: 
 
     for (sets, 0..) |*set, index| {
         const coverage_relative = try bin.readU32At(data, offset + 4 + index * 4);
+        // Coverage offsets are relative to the MarkGlyphSetsDef table. Require
+        // every child Coverage table to start after the declared offset array so
+        // malformed GDEF data cannot reinterpret the MarkGlyphSetsDef header or
+        // sibling offset entries as a synthetic glyph set.
+        if (coverage_relative < coverage_data_start) return error.BadSfnt;
         if (coverage_relative > data.len - offset) return error.BadSfnt;
         set.* = try coverageGlyphs(allocator, data, offset + coverage_relative);
         initialized += 1;
@@ -1752,8 +1758,14 @@ fn coverageGlyphs(allocator: std.mem.Allocator, data: []const u8, offset: usize)
             if (@as(usize, glyph_count) * 2 > data.len - (offset + 4)) return error.BadSfnt;
             const glyphs = try allocator.alloc(glyph_mod.GlyphId, glyph_count);
             errdefer allocator.free(glyphs);
+            var previous: ?glyph_mod.GlyphId = null;
             for (glyphs, 0..) |*glyph, index| {
-                glyph.* = try bin.readU16At(data, offset + 4 + index * 2);
+                const glyph_id = try bin.readU16At(data, offset + 4 + index * 2);
+                if (previous) |last| {
+                    if (glyph_id <= last) return error.BadSfnt;
+                }
+                previous = glyph_id;
+                glyph.* = glyph_id;
             }
             return glyphs;
         },
@@ -1762,12 +1774,17 @@ fn coverageGlyphs(allocator: std.mem.Allocator, data: []const u8, offset: usize)
             const range_count = try bin.readU16At(data, offset + 2);
             if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
             var glyph_total: usize = 0;
+            var previous_end: ?glyph_mod.GlyphId = null;
             for (0..range_count) |index| {
                 const range_offset = offset + 4 + index * 6;
                 const start = try bin.readU16At(data, range_offset);
                 const end = try bin.readU16At(data, range_offset + 2);
                 if (end < start) return error.BadSfnt;
-                glyph_total += @as(usize, end) - start + 1;
+                if (previous_end) |last_end| {
+                    if (start <= last_end) return error.BadSfnt;
+                }
+                previous_end = end;
+                glyph_total += @as(usize, end) - @as(usize, start) + 1;
             }
 
             const glyphs = try allocator.alloc(glyph_mod.GlyphId, glyph_total);
@@ -2521,6 +2538,38 @@ test "reads GDEF mark glyph filtering sets" {
     try std.testing.expectEqual(@as(usize, 2), sets.len);
     try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 5, 9 }, sets[0]);
     try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 20, 21, 30, 31, 32 }, sets[1]);
+}
+
+test "GDEF MarkGlyphSetsDef rejects coverage offsets into its header" {
+    var bytes: [16]u8 = .{0} ** 16;
+    writeU16Test(&bytes, 0, 1); // MarkGlyphSetsDef format.
+    writeU16Test(&bytes, 2, 1); // One CoverageOffset entry follows.
+    writeU32Test(&bytes, 4, 0); // Would reinterpret the MarkGlyphSetsDef header as Coverage format 1.
+
+    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(std.testing.allocator, &bytes, 0));
+}
+
+test "GDEF MarkGlyphSetsDef rejects malformed coverage ordering" {
+    var bytes: [28]u8 = .{0} ** 28;
+    writeU16Test(&bytes, 0, 1); // MarkGlyphSetsDef format.
+    writeU16Test(&bytes, 2, 1);
+    writeU32Test(&bytes, 4, 8);
+
+    writeU16Test(&bytes, 8, 1); // Coverage format 1.
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 9);
+    writeU16Test(&bytes, 14, 5); // Unsorted; mark sets must use canonical Coverage data.
+    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(std.testing.allocator, &bytes, 0));
+
+    writeU16Test(&bytes, 8, 2); // Coverage format 2.
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 5);
+    writeU16Test(&bytes, 14, 9);
+    writeU16Test(&bytes, 16, 0);
+    writeU16Test(&bytes, 18, 9); // Overlaps the previous inclusive range.
+    writeU16Test(&bytes, 20, 11);
+    writeU16Test(&bytes, 22, 5);
+    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(std.testing.allocator, &bytes, 0));
 }
 
 test "ignores mark glyph filtering offset field before GDEF 1.2" {

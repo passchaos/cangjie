@@ -1398,10 +1398,12 @@ fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!voi
         1 => {
             const glyph_count = try readU16BadGpos(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
+            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
         },
         2 => {
             const range_count = try readU16BadGpos(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, range_count) * 6);
+            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
         },
         else => return error.UnsupportedGpos,
     }
@@ -1789,11 +1791,15 @@ fn readValueRecord(table: Table, offset: usize, format: u16) GposError!Adjustmen
 
 fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError!?usize {
     // Coverage handling mirrors GSUB so coverage index semantics remain
-    // identical between substitution and positioning code.
+    // identical between substitution and positioning code. The OpenType
+    // contract requires sorted glyph arrays and sorted, non-overlapping ranges;
+    // enforcing that here keeps malformed positioning data from quietly
+    // selecting the wrong value record.
     const format = try readU16(table, coverage_offset);
     switch (format) {
         1 => {
             const glyph_count = try readU16(table, coverage_offset + 2);
+            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
             var lo: usize = 0;
             var hi: usize = glyph_count;
             while (lo < hi) {
@@ -1811,6 +1817,7 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError
         },
         2 => {
             const range_count = try readU16(table, coverage_offset + 2);
+            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
             for (0..range_count) |i| {
                 const range_offset = coverage_offset + 4 + i * 6;
                 const start = try readU16(table, range_offset);
@@ -1827,6 +1834,31 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError
             return null;
         },
         else => return error.UnsupportedGpos,
+    }
+}
+
+fn validateCoverageFormat1Order(table: Table, coverage_offset: usize, glyph_count: u16) GposError!void {
+    var previous: ?GlyphId = null;
+    for (0..glyph_count) |index| {
+        const glyph = try readU16BadGpos(table, coverage_offset + 4 + index * 2);
+        if (previous) |last| {
+            if (glyph <= last) return error.BadGpos;
+        }
+        previous = glyph;
+    }
+}
+
+fn validateCoverageFormat2Ranges(table: Table, coverage_offset: usize, range_count: u16) GposError!void {
+    var previous_end: ?GlyphId = null;
+    for (0..range_count) |index| {
+        const range_offset = coverage_offset + 4 + index * 6;
+        const start = try readU16BadGpos(table, range_offset);
+        const end = try readU16BadGpos(table, range_offset + 2);
+        if (end < start) return error.BadGpos;
+        if (previous_end) |last_end| {
+            if (start <= last_end) return error.BadGpos;
+        }
+        previous_end = end;
     }
 }
 
@@ -1872,6 +1904,25 @@ test "GPOS coverage format 2 widens boundary coverage indexes" {
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
     try std.testing.expectEqual(@as(?usize, 0xffff), try coverageIndex(table, 0, 0xfffe));
     try std.testing.expectEqual(@as(?usize, 0x10000), try coverageIndex(table, 0, 0xffff));
+}
+
+test "GPOS rejects malformed coverage ordering before positioning" {
+    var bytes = [_]u8{0} ** 20;
+    writeU16Test(&bytes, 0, 1); // SinglePos format 1.
+    writeU16Test(&bytes, 2, 10); // Coverage table.
+    writeU16Test(&bytes, 4, 0x0004); // ValueFormat: xAdvance.
+    writeU16Test(&bytes, 6, 30);
+    writeU16Test(&bytes, 10, 1); // Coverage format 1.
+    writeU16Test(&bytes, 12, 2);
+    writeU16Test(&bytes, 14, 10);
+    writeU16Test(&bytes, 16, 5); // Out-of-order; binary search would be unsound.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+
+    try std.testing.expectError(error.BadGpos, collectSingleAdjustment(table, 0, &.{10}, &adjustments, std.testing.allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 test "GPOS class format 1 handles upper glyph boundary" {

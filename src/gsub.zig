@@ -1389,10 +1389,12 @@ fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GsubError!voi
         1 => {
             const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
+            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
         },
         2 => {
             const range_count = try readU16BadGsub(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, range_count) * 6);
+            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
         },
         else => return error.UnsupportedGsub,
     }
@@ -1596,11 +1598,15 @@ fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, lookup_f
 
 fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GsubError!?usize {
     // Coverage tables are the common membership/index primitive used by nearly
-    // every GSUB subtable. Format 1 is sorted glyph ids; format 2 is ranges.
+    // every GSUB subtable. Format 1 is sorted glyph ids; format 2 is sorted
+    // and non-overlapping. Validate those ordering invariants before relying on
+    // binary search or range scans so malformed layout data cannot silently
+    // suppress or redirect a substitution.
     const format = try readU16(table, coverage_offset);
     switch (format) {
         1 => {
             const glyph_count = try readU16(table, coverage_offset + 2);
+            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
             var lo: usize = 0;
             var hi: usize = glyph_count;
             while (lo < hi) {
@@ -1618,6 +1624,7 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GsubError
         },
         2 => {
             const range_count = try readU16(table, coverage_offset + 2);
+            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
             for (0..range_count) |i| {
                 const range_offset = coverage_offset + 4 + i * 6;
                 const start = try readU16(table, range_offset);
@@ -1634,6 +1641,31 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GsubError
             return null;
         },
         else => return error.UnsupportedGsub,
+    }
+}
+
+fn validateCoverageFormat1Order(table: Table, coverage_offset: usize, glyph_count: u16) GsubError!void {
+    var previous: ?GlyphId = null;
+    for (0..glyph_count) |index| {
+        const glyph = try readU16BadGsub(table, coverage_offset + 4 + index * 2);
+        if (previous) |last| {
+            if (glyph <= last) return error.BadGsub;
+        }
+        previous = glyph;
+    }
+}
+
+fn validateCoverageFormat2Ranges(table: Table, coverage_offset: usize, range_count: u16) GsubError!void {
+    var previous_end: ?GlyphId = null;
+    for (0..range_count) |index| {
+        const range_offset = coverage_offset + 4 + index * 6;
+        const start = try readU16BadGsub(table, range_offset);
+        const end = try readU16BadGsub(table, range_offset + 2);
+        if (end < start) return error.BadGsub;
+        if (previous_end) |last_end| {
+            if (start <= last_end) return error.BadGsub;
+        }
+        previous_end = end;
     }
 }
 
@@ -1700,6 +1732,26 @@ test "GSUB coverage format 2 widens boundary coverage indexes" {
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
     try std.testing.expectEqual(@as(?usize, 0xffff), try coverageIndex(table, 0, 0xfffe));
     try std.testing.expectEqual(@as(?usize, 0x10000), try coverageIndex(table, 0, 0xffff));
+}
+
+test "GSUB rejects malformed coverage ordering before substitution" {
+    var bytes = [_]u8{0} ** 18;
+    writeU16Test(&bytes, 0, 2); // SingleSubst format 2.
+    writeU16Test(&bytes, 2, 10); // Coverage table.
+    writeU16Test(&bytes, 4, 1); // Substitute array has one entry.
+    writeU16Test(&bytes, 6, 20);
+    writeU16Test(&bytes, 10, 1); // Coverage format 1.
+    writeU16Test(&bytes, 12, 2);
+    writeU16Test(&bytes, 14, 10);
+    writeU16Test(&bytes, 16, 5); // Out-of-order; binary search would be unsound.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 10);
+
+    try std.testing.expectError(error.BadGsub, applySingleSubstitution(table, 0, &glyphs, 0, .{}));
+    try std.testing.expectEqual(@as(GlyphId, 10), glyphs.items[0]);
 }
 
 test "GSUB class format 1 handles upper glyph boundary" {

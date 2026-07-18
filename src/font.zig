@@ -5273,14 +5273,12 @@ fn validateColrV1PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette
 }
 
 fn validateColorPaintPaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
-    if (offset >= colr.offset + colr.length) return error.BadSfnt;
+    const info = try validateColorPaintRecordBounds(data, colr, offset);
     try guard.enter(offset);
     defer guard.leave();
 
-    const format = data[offset];
-    switch (format) {
-        1 => {
-            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
+    switch (info.kind) {
+        .colr_layers => {
             const layer_count = data[offset + 1];
             const first_layer_index = try bin.readU32At(data, offset + 2);
             if (layer_count == 0) return;
@@ -5292,18 +5290,17 @@ fn validateColorPaintPaletteBounds(data: []const u8, colr: TableRecord, cpal_pal
                 try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, guard);
             }
         },
-        2 => {
-            if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
+        .solid => {
             try validateColrPaletteIndexBounds(try bin.readU16At(data, offset + 1), cpal_palette_entries);
         },
-        10 => {
-            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
-            const child_offset: usize = @intCast(try readU24At(data, offset + 1));
-            if (child_offset < 6) return error.BadSfnt;
-            if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
-            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, offset + child_offset, guard);
+        .glyph, .single_child => {
+            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
         },
-        else => return,
+        .composite => {
+            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
+            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), guard);
+        },
+        .colr_glyph, .terminal => return,
     }
 }
 
@@ -5371,14 +5368,12 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
 }
 
 fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
-    if (offset >= colr.offset + colr.length) return error.BadSfnt;
+    const info = try validateColorPaintRecordBounds(data, colr, offset);
     try guard.enter(offset);
     defer guard.leave();
 
-    const format = data[offset];
-    switch (format) {
-        1 => {
-            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
+    switch (info.kind) {
+        .colr_layers => {
             const layer_count = data[offset + 1];
             const first_layer_index = try bin.readU32At(data, offset + 2);
             if (layer_count == 0) return;
@@ -5390,15 +5385,17 @@ fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_coun
                 try validateColorPaintGlyphBounds(data, colr, glyph_count, paint_offset, guard);
             }
         },
-        10 => {
-            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
-            const child_offset: usize = @intCast(try readU24At(data, offset + 1));
+        .glyph => {
             try validateGlyphIdInMaxp(try bin.readU16At(data, offset + 4), glyph_count);
-            if (child_offset < 6) return error.BadSfnt;
-            if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, offset + child_offset, guard);
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
         },
-        else => return,
+        .colr_glyph => try validateGlyphIdInMaxp(try bin.readU16At(data, offset + 1), glyph_count),
+        .single_child => try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard),
+        .composite => {
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), guard);
+        },
+        .solid, .terminal => return,
     }
 }
 
@@ -5426,6 +5423,66 @@ const ColorPaintGraphGuard = struct {
         self.depth -= 1;
     }
 };
+
+const ColorPaintKind = enum {
+    terminal,
+    colr_layers,
+    solid,
+    glyph,
+    colr_glyph,
+    single_child,
+    composite,
+};
+
+const ColorPaintFormatInfo = struct {
+    min_size: usize,
+    kind: ColorPaintKind,
+};
+
+fn colorPaintFormatInfo(format: u8) ?ColorPaintFormatInfo {
+    return switch (format) {
+        1 => .{ .min_size = 6, .kind = .colr_layers },
+        2, 3 => .{ .min_size = if (format == 2) 5 else 9, .kind = .solid },
+        4, 6 => .{ .min_size = 16, .kind = .terminal },
+        5, 7 => .{ .min_size = 20, .kind = .terminal },
+        8 => .{ .min_size = 12, .kind = .terminal },
+        9 => .{ .min_size = 16, .kind = .terminal },
+        10 => .{ .min_size = 6, .kind = .glyph },
+        11 => .{ .min_size = 3, .kind = .colr_glyph },
+        12 => .{ .min_size = 7, .kind = .single_child },
+        13 => .{ .min_size = 7, .kind = .single_child },
+        14, 16, 28 => .{ .min_size = 8, .kind = .single_child },
+        15, 17, 29 => .{ .min_size = 12, .kind = .single_child },
+        18 => .{ .min_size = 12, .kind = .single_child },
+        19 => .{ .min_size = 16, .kind = .single_child },
+        20, 24 => .{ .min_size = 6, .kind = .single_child },
+        21, 25 => .{ .min_size = 10, .kind = .single_child },
+        22, 26 => .{ .min_size = 10, .kind = .single_child },
+        23, 27 => .{ .min_size = 14, .kind = .single_child },
+        30 => .{ .min_size = 12, .kind = .single_child },
+        31 => .{ .min_size = 16, .kind = .single_child },
+        32 => .{ .min_size = 8, .kind = .composite },
+        else => null,
+    };
+}
+
+fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: usize) FontError!ColorPaintFormatInfo {
+    const colr_end = colr.offset + colr.length;
+    if (offset >= colr_end) return error.BadSfnt;
+    const info = colorPaintFormatInfo(data[offset]) orelse return error.BadSfnt;
+    // Rejecting reserved paint format bytes at parse time prevents malformed
+    // COLR v1 graphs from being accepted merely because the current renderer
+    // would later report the same record as unsupported.
+    if (info.min_size > colr_end - offset) return error.BadSfnt;
+    return info;
+}
+
+fn colorPaintChildOffset(data: []const u8, colr: TableRecord, offset: usize, parent_size: usize, field_offset: usize) FontError!usize {
+    const child_offset: usize = @intCast(try readU24At(data, offset + field_offset));
+    if (child_offset < parent_size) return error.BadSfnt;
+    if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
+    return offset + child_offset;
+}
 
 const ColrLayerList = struct {
     start: usize,
@@ -7660,6 +7717,27 @@ test "COLR palette indices are validated at parse time" {
         defer allocator.free(bytes);
         const colr_offset = try sfntTableOffset(bytes, "COLR");
         writeU16Test(bytes, colr_offset + 80, 2); // PaintColrLayers-reachable layer paint.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
+test "COLR v1 reachable paint formats are validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildColorV1Ttf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        bytes[colr_offset + 44] = 0; // Reserved, not a valid COLR v1 Paint format.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildColorV1LayersTtf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        bytes[colr_offset + 73] = 33; // Reserved format reachable through PaintColrLayers.
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 }

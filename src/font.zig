@@ -3905,7 +3905,8 @@ fn validateStatAxisValue(data: []const u8, stat: TableRecord, axis_value_offset:
             if (axis_count == 0) return error.BadSfnt;
             const flags = try bin.readU16At(data, absolute + 4);
             try validateStatAxisValueFlags(flags);
-            try validateNameIdReference(name_index, try bin.readU16At(data, absolute + 6));
+            const name_id = try bin.readU16At(data, absolute + 6);
+            try validateNameIdReference(name_index, name_id);
             if (axis_count > (stat.length - axis_value_offset - 8) / 6) return error.BadSfnt;
             for (0..axis_count) |axis_record_index| {
                 const axis_record = absolute + 8 + axis_record_index * 6;
@@ -3915,6 +3916,25 @@ fn validateStatAxisValue(data: []const u8, stat: TableRecord, axis_value_offset:
                     const previous_axis_record = absolute + 8 + previous_record_index * 6;
                     if (axis_index == try bin.readU16At(data, previous_axis_record)) return error.BadSfnt;
                 }
+            }
+            if (axis_count == 1) {
+                const coordinate = try readStatMultiAxisCoordinate(data, stat, axis_value_offset, 0);
+                // A single-coordinate format 4 AxisValue has no extra
+                // combination specificity over formats 1/2/3. Treating it as
+                // a point for cross-record validation keeps style-name
+                // selection from depending on table order when it duplicates a
+                // point or sits ambiguously inside a single-axis range.
+                return .{
+                    .offset = axis_value_offset,
+                    .length = 8 + axis_count * 6,
+                    .kind = .{ .point = .{
+                        .axis_index = coordinate.axis_index,
+                        .value = coordinate.value,
+                        .flags = flags,
+                        .name_id = name_id,
+                        .format = format,
+                    } },
+                };
             }
             return .{
                 .offset = axis_value_offset,
@@ -7206,6 +7226,42 @@ test "STAT format 4 AxisValue records reference each axis once" {
     const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = duplicate_axis.len };
     const names = nameIndexForTest(&.{ 0, 2, 256, 258 });
     try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_axis, stat, null, &names));
+}
+
+test "STAT single-axis format 4 values must not duplicate point or range labels" {
+    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = 80 };
+    const names = nameIndexForTest(&.{ 0, 2, 256, 258, 259, 260 });
+
+    var bytes: [80]u8 = .{0} ** 80;
+    writeStatHeaderTest(&bytes, 0, 1, 3, 28);
+    writeStatAxisTest(&bytes, 20, "wght", 256, 0);
+    writeU16Test(&bytes, 28, 6);
+    writeU16Test(&bytes, 30, 18);
+    writeU16Test(&bytes, 32, 38);
+    writeStatAxisValueFormat1WithValueTest(&bytes, 34, 0, 258, 700.0);
+    writeStatAxisValueFormat2Test(&bytes, 46, 0, 259, 450.0, 400.0, 500.0);
+    writeStatAxisValueFormat4Test(&bytes, 66, 260, &.{
+        .{ .axis_index = 0, .value = 300.0 },
+    });
+    try validateStatTable(std.testing.allocator, &bytes, stat, null, &names);
+
+    var duplicate_point = bytes;
+    writeStatAxisValueFormat4Test(&duplicate_point, 66, 260, &.{
+        .{ .axis_index = 0, .value = 700.0 },
+    });
+    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_point, stat, null, &names));
+
+    var inside_range = bytes;
+    writeStatAxisValueFormat4Test(&inside_range, 66, 260, &.{
+        .{ .axis_index = 0, .value = 450.0 },
+    });
+    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &inside_range, stat, null, &names));
+
+    var boundary = bytes;
+    writeStatAxisValueFormat4Test(&boundary, 66, 260, &.{
+        .{ .axis_index = 0, .value = 400.0 },
+    });
+    try validateStatTable(std.testing.allocator, &boundary, stat, null, &names);
 }
 
 test "STAT format 4 AxisValue coordinate sets must be unique" {

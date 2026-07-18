@@ -177,6 +177,7 @@ pub const Font = struct {
     gpos: ?TableRecord,
     gsub: ?TableRecord,
     name: ?TableRecord,
+    stat: ?TableRecord,
     fvar: ?TableRecord,
     avar: ?TableRecord,
     colr: ?TableRecord,
@@ -257,6 +258,7 @@ pub const Font = struct {
         const gpos = findTable(records, "GPOS");
         const gsub = findTable(records, "GSUB");
         const name = findTable(records, "name");
+        const stat = findTable(records, "STAT");
         const fvar = findTable(records, "fvar");
         const avar = findTable(records, "avar");
         const colr = findTable(records, "COLR");
@@ -289,6 +291,7 @@ pub const Font = struct {
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
         const required_hmtx_length = try hmtxRequiredLength(glyph_count, number_of_h_metrics);
         if (hmtx.length < required_hmtx_length) return error.InvalidMetrics;
+        if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
         // supported Unicode mapping per lookup without reparsing the directory.
@@ -317,6 +320,7 @@ pub const Font = struct {
             .gpos = gpos,
             .gsub = gsub,
             .name = name,
+            .stat = stat,
             .fvar = fvar,
             .avar = avar,
             .colr = colr,
@@ -2484,6 +2488,101 @@ const FvarInfo = struct {
     axis_size: usize,
 };
 
+fn validateStatTable(data: []const u8, stat: TableRecord, fvar: ?TableRecord) FontError!void {
+    if (stat.length < 20) return error.BadSfnt;
+    const major = try bin.readU16At(data, stat.offset);
+    const minor = try bin.readU16At(data, stat.offset + 2);
+    if (major != 1 or minor > 2) return error.BadSfnt;
+
+    const design_axis_size: usize = @intCast(try bin.readU16At(data, stat.offset + 4));
+    const design_axis_count: usize = @intCast(try bin.readU16At(data, stat.offset + 6));
+    const design_axes_offset: usize = @intCast(try bin.readU32At(data, stat.offset + 8));
+    const axis_value_count: usize = @intCast(try bin.readU16At(data, stat.offset + 12));
+    const axis_value_offsets_offset: usize = @intCast(try bin.readU32At(data, stat.offset + 14));
+
+    if (design_axis_size < 8) return error.BadSfnt;
+    if (design_axis_count != 0) {
+        if (design_axes_offset < 20 or design_axes_offset > stat.length) return error.BadSfnt;
+        if (design_axis_count > (stat.length - design_axes_offset) / design_axis_size) return error.BadSfnt;
+    } else if (design_axes_offset != 0 and design_axes_offset < 20) {
+        return error.BadSfnt;
+    }
+
+    if (axis_value_count != 0) {
+        if (axis_value_offsets_offset < 20 or axis_value_offsets_offset > stat.length) return error.BadSfnt;
+        if (axis_value_count > (stat.length - axis_value_offsets_offset) / 2) return error.BadSfnt;
+    } else if (axis_value_offsets_offset != 0 and axis_value_offsets_offset < 20) {
+        return error.BadSfnt;
+    }
+
+    if (fvar) |fvar_table| {
+        const fvar_info = try readFvarInfo(data, fvar_table);
+        if (design_axis_count != fvar_info.axis_count) return error.BadSfnt;
+        for (0..design_axis_count) |index| {
+            const stat_axis = stat.offset + design_axes_offset + index * design_axis_size;
+            const fvar_axis = fvar_table.offset + fvar_info.axes_array_offset + index * fvar_info.axis_size;
+            const stat_tag = try bin.readTagAt(data, stat_axis);
+            const fvar_tag = try bin.readTagAt(data, fvar_axis);
+            // STAT axis records provide user-facing names and ordering for the
+            // variation axes. Keeping them in fvar order prevents later style
+            // selection from binding a STAT AxisValue to the wrong coordinate.
+            if (!std.mem.eql(u8, &stat_tag, &fvar_tag)) return error.BadSfnt;
+        }
+    }
+
+    for (0..axis_value_count) |index| {
+        const entry_offset = stat.offset + axis_value_offsets_offset + index * 2;
+        const axis_value_offset: usize = @intCast(try bin.readU16At(data, entry_offset));
+        if (axis_value_offset < 20 or axis_value_offset > stat.length - 4) return error.BadSfnt;
+        try validateStatAxisValue(data, stat, axis_value_offset, design_axis_count, design_axes_offset, design_axis_size, axis_value_offsets_offset, axis_value_count);
+    }
+}
+
+fn validateStatAxisValue(data: []const u8, stat: TableRecord, axis_value_offset: usize, design_axis_count: usize, design_axes_offset: usize, design_axis_size: usize, axis_value_offsets_offset: usize, axis_value_count: usize) FontError!void {
+    const absolute = stat.offset + axis_value_offset;
+    if (absolute + 4 > stat.offset + stat.length) return error.BadSfnt;
+    const format = try bin.readU16At(data, absolute);
+
+    // AxisValue offsets are STAT-relative and should identify real payload,
+    // not the DesignAxisRecord array or the offset array that points at
+    // payload. Without these guards a malformed font can reinterpret metadata
+    // as an AxisValue table.
+    const design_axes_end = design_axes_offset + design_axis_count * design_axis_size;
+    if (axis_value_offset >= design_axes_offset and axis_value_offset < design_axes_end) return error.BadSfnt;
+    const offset_array_end = axis_value_offsets_offset + axis_value_count * 2;
+    if (axis_value_offset >= axis_value_offsets_offset and axis_value_offset < offset_array_end) return error.BadSfnt;
+
+    switch (format) {
+        1 => {
+            if (axis_value_offset + 12 > stat.length) return error.BadSfnt;
+            const axis_index = try bin.readU16At(data, absolute + 2);
+            if (axis_index >= design_axis_count) return error.BadSfnt;
+        },
+        2 => {
+            if (axis_value_offset + 20 > stat.length) return error.BadSfnt;
+            const axis_index = try bin.readU16At(data, absolute + 2);
+            if (axis_index >= design_axis_count) return error.BadSfnt;
+        },
+        3 => {
+            if (axis_value_offset + 16 > stat.length) return error.BadSfnt;
+            const axis_index = try bin.readU16At(data, absolute + 2);
+            if (axis_index >= design_axis_count) return error.BadSfnt;
+        },
+        4 => {
+            if (axis_value_offset + 8 > stat.length) return error.BadSfnt;
+            const axis_count: usize = @intCast(try bin.readU16At(data, absolute + 2));
+            if (axis_count == 0) return error.BadSfnt;
+            if (axis_count > (stat.length - axis_value_offset - 8) / 6) return error.BadSfnt;
+            for (0..axis_count) |axis_record_index| {
+                const axis_record = absolute + 8 + axis_record_index * 6;
+                const axis_index = try bin.readU16At(data, axis_record);
+                if (axis_index >= design_axis_count) return error.BadSfnt;
+            }
+        },
+        else => return error.BadSfnt,
+    }
+}
+
 fn readFvarInfo(data: []const u8, fvar: TableRecord) FontError!FvarInfo {
     if (fvar.length < 16) return error.BadSfnt;
     const major = try bin.readU16At(data, fvar.offset);
@@ -3679,6 +3778,45 @@ test "avar axis count must match fvar axis count when both tables exist" {
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 0.0));
 }
 
+test "STAT design axes must match fvar axis ordering" {
+    var bytes: [78]u8 = .{0} ** 78;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+
+    const stat_offset = 36;
+    writeStatHeaderTest(&bytes, stat_offset, 1, 1, 28);
+    writeStatAxisTest(&bytes, stat_offset + 20, "wght", 256, 0);
+    writeU16Test(&bytes, stat_offset + 28, 30);
+    writeStatAxisValueFormat1Test(&bytes, stat_offset + 30, 0);
+
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
+    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = stat_offset, .length = bytes.len - stat_offset };
+    try validateStatTable(&bytes, stat, fvar);
+
+    var mismatched = bytes;
+    writeTagTest(&mismatched, stat_offset + 20, "wdth");
+    try std.testing.expectError(error.BadSfnt, validateStatTable(&mismatched, stat, fvar));
+}
+
+test "STAT AxisValue offsets and axis indexes stay inside declared records" {
+    var metadata_overlap: [42]u8 = .{0} ** 42;
+    writeStatHeaderTest(&metadata_overlap, 0, 1, 1, 28);
+    writeStatAxisTest(&metadata_overlap, 20, "wght", 256, 0);
+    writeU16Test(&metadata_overlap, 28, 28); // Points back into the AxisValue offsets array.
+    writeStatAxisValueFormat1Test(&metadata_overlap, 30, 0);
+
+    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = metadata_overlap.len };
+    try std.testing.expectError(error.BadSfnt, validateStatTable(&metadata_overlap, stat, null));
+
+    var bad_axis_index = metadata_overlap;
+    writeU16Test(&bad_axis_index, 28, 30);
+    writeStatAxisValueFormat1Test(&bad_axis_index, 30, 1); // Only axis 0 is declared.
+    try std.testing.expectError(error.BadSfnt, validateStatTable(&bad_axis_index, stat, null));
+}
+
 test "OS/2 style attributes respect versioned table lengths" {
     var valid_v4: [96]u8 = .{0} ** 96;
     writeU16Test(&valid_v4, 0, 4); // OS/2 v4 requires the 96-byte v2+ payload.
@@ -3730,6 +3868,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .stat = null,
         .fvar = null,
         .avar = null,
         .colr = null,
@@ -3772,6 +3911,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .stat = null,
         .fvar = null,
         .avar = null,
         .colr = null,
@@ -3814,6 +3954,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .stat = null,
         .fvar = null,
         .avar = null,
         .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = data.len },
@@ -3863,6 +4004,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .stat = null,
         .fvar = null,
         .avar = null,
         .colr = null,
@@ -3905,6 +4047,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .stat = null,
         .fvar = null,
         .avar = null,
         .colr = null,
@@ -3947,6 +4090,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .stat = null,
         .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len },
         .avar = null,
         .colr = null,
@@ -4003,6 +4147,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .stat = null,
         .fvar = null,
         .avar = null,
         .colr = null,
@@ -4128,6 +4273,31 @@ fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32,
     writeF16Dot16Test(bytes, offset + 12, max);
     writeU16Test(bytes, offset + 16, 0);
     writeU16Test(bytes, offset + 18, name_id);
+}
+
+fn writeStatHeaderTest(bytes: []u8, offset: usize, design_axis_count: u16, axis_value_count: u16, axis_value_offsets_offset: u32) void {
+    writeU16Test(bytes, offset + 0, 1);
+    writeU16Test(bytes, offset + 2, 1);
+    writeU16Test(bytes, offset + 4, 8);
+    writeU16Test(bytes, offset + 6, design_axis_count);
+    writeU32Test(bytes, offset + 8, 20);
+    writeU16Test(bytes, offset + 12, axis_value_count);
+    writeU32Test(bytes, offset + 14, axis_value_offsets_offset);
+    writeU16Test(bytes, offset + 18, 2); // elidedFallbackNameID
+}
+
+fn writeStatAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, name_id: u16, ordering: u16) void {
+    writeTagTest(bytes, offset, tag_text);
+    writeU16Test(bytes, offset + 4, name_id);
+    writeU16Test(bytes, offset + 6, ordering);
+}
+
+fn writeStatAxisValueFormat1Test(bytes: []u8, offset: usize, axis_index: u16) void {
+    writeU16Test(bytes, offset + 0, 1);
+    writeU16Test(bytes, offset + 2, axis_index);
+    writeU16Test(bytes, offset + 4, 258);
+    writeU16Test(bytes, offset + 6, 0);
+    writeF16Dot16Test(bytes, offset + 8, 400.0);
 }
 
 fn writeTagTest(bytes: []u8, offset: usize, tag_text: []const u8) void {

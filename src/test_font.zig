@@ -4,6 +4,10 @@ pub fn buildMinimalTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalTtfTables(allocator));
 }
 
+pub fn buildMinimalTtfWithPost(allocator: std.mem.Allocator, post: []const u8) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try minimalTtfWithPostTables(allocator, post));
+}
+
 pub fn buildVerticalMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try verticalMetricsTtfTables(allocator));
 }
@@ -362,6 +366,38 @@ fn minimalTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn minimalTtfWithPostTables(allocator: std.mem.Allocator, post: []const u8) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    var initialized: usize = 0;
+    errdefer {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    }
+
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    initialized += 1;
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    initialized += 1;
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    initialized += 1;
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    initialized += 1;
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    initialized += 1;
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    initialized += 1;
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    initialized += 1;
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    initialized += 1;
+    // The caller supplies deliberately varied `post` payloads for parser
+    // regression tests. Duplicate it because buildSfnt takes ownership of
+    // Table.data and frees each payload after writing the SFNT.
+    tables[8] = .{ .tag = "post", .data = try allocator.dupe(u8, post) };
+    initialized += 1;
     return tables;
 }
 

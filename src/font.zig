@@ -258,6 +258,7 @@ pub const Font = struct {
         const gpos = findTable(records, "GPOS");
         const gsub = findTable(records, "GSUB");
         const name = findTable(records, "name");
+        const post = findTable(records, "post");
         const stat = findTable(records, "STAT");
         const fvar = findTable(records, "fvar");
         const avar = findTable(records, "avar");
@@ -288,6 +289,7 @@ pub const Font = struct {
         try validateMaxpTable(data, maxp, format);
 
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
+        if (post) |post_table| try validatePostTable(data, post_table, glyph_count);
         const number_of_h_metrics = try validateHorizontalMetricsTables(data, hhea, hmtx, glyph_count);
         try validateVerticalMetricsTables(data, glyph_count, vhea, vmtx);
 
@@ -1655,6 +1657,81 @@ fn validateMetricHeaderReservedFields(data: []const u8, header: TableRecord) Fon
     for (0..5) |index| {
         if (try bin.readU16At(data, header.offset + 24 + index * 2) != 0) return error.InvalidMetrics;
     }
+}
+
+fn validatePostTable(data: []const u8, post: TableRecord, glyph_count: u16) FontError!void {
+    try requireTableLength(post, 32);
+    const version = try bin.readU32At(data, post.offset);
+    switch (version) {
+        0x00010000 => {
+            // Format 1.0 implies the complete standard Macintosh glyph-name
+            // set. If maxp advertises a different glyph count, consumers that
+            // synthesize glyph names from `post` and consumers that use maxp
+            // for metrics/outlines disagree on the addressable glyph set.
+            if (glyph_count != 258) return error.BadSfnt;
+        },
+        0x00020000 => try validatePostFormat2(data, post, glyph_count),
+        0x00025000 => try validatePostFormat25(data, post, glyph_count),
+        0x00030000 => {},
+        0x00040000 => try validatePostFormat4(post, glyph_count),
+        else => return error.BadSfnt,
+    }
+}
+
+fn validatePostFormat2(data: []const u8, post: TableRecord, glyph_count: u16) FontError!void {
+    const table = data[post.offset .. post.offset + post.length];
+    if (post.length - 32 < 2) return error.BadSfnt;
+    const number_of_glyphs = try bin.readU16At(table, 32);
+    if (number_of_glyphs != glyph_count) return error.BadSfnt;
+    const glyph_name_indices_offset: usize = 34;
+    const glyph_name_indices_len = @as(usize, number_of_glyphs) * 2;
+    if (glyph_name_indices_len > post.length - glyph_name_indices_offset) return error.BadSfnt;
+
+    var custom_name_count: usize = 0;
+    for (0..number_of_glyphs) |glyph_index| {
+        const name_index = try bin.readU16At(table, glyph_name_indices_offset + glyph_index * 2);
+        if (name_index >= 258) {
+            custom_name_count = @max(custom_name_count, @as(usize, name_index) - 257);
+        }
+    }
+
+    var cursor = glyph_name_indices_offset + glyph_name_indices_len;
+    for (0..custom_name_count) |_| {
+        if (cursor >= post.length) return error.BadSfnt;
+        const name_len = table[cursor];
+        cursor += 1;
+        if (name_len == 0 or name_len > 63) return error.BadSfnt;
+        if (@as(usize, name_len) > post.length - cursor) return error.BadSfnt;
+        if (!isPostGlyphName(table[cursor .. cursor + name_len])) return error.BadSfnt;
+        cursor += name_len;
+    }
+}
+
+fn validatePostFormat25(data: []const u8, post: TableRecord, glyph_count: u16) FontError!void {
+    const table = data[post.offset .. post.offset + post.length];
+    if (post.length - 32 < 2) return error.BadSfnt;
+    const number_of_glyphs = try bin.readU16At(table, 32);
+    if (number_of_glyphs != glyph_count) return error.BadSfnt;
+    const offsets_offset: usize = 34;
+    if (@as(usize, number_of_glyphs) > post.length - offsets_offset) return error.BadSfnt;
+
+    for (0..number_of_glyphs) |glyph_index| {
+        const signed_delta: i8 = @bitCast(table[offsets_offset + glyph_index]);
+        const standard_index = @as(i32, @intCast(glyph_index)) + @as(i32, signed_delta);
+        if (standard_index < 0 or standard_index >= 258) return error.BadSfnt;
+    }
+}
+
+fn validatePostFormat4(post: TableRecord, glyph_count: u16) FontError!void {
+    if (@as(usize, glyph_count) * 2 > post.length - 32) return error.BadSfnt;
+}
+
+fn isPostGlyphName(name: []const u8) bool {
+    for (name) |byte| {
+        if (std.ascii.isAlphanumeric(byte) or byte == '.' or byte == '_') continue;
+        return false;
+    }
+    return true;
 }
 
 fn hmtxRequiredLength(glyph_count: u16, number_of_h_metrics: u16) FontError!usize {
@@ -4830,6 +4907,137 @@ test "maxp table version and length must match the outline format" {
     }
 }
 
+test "post table structural contracts are validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        var post: [32]u8 = .{0} ** 32;
+        writePostHeaderTest(&post, 0x00030000);
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        var post: [44]u8 = .{0} ** 44;
+        writePostHeaderTest(&post, 0x00020000);
+        writeU16Test(&post, 32, 2);
+        writeU16Test(&post, 34, 0);
+        writeU16Test(&post, 36, 258);
+        post[38] = 5;
+        @memcpy(post[39..44], "A.alt");
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        var post: [36]u8 = .{0} ** 36;
+        writePostHeaderTest(&post, 0x00020000);
+        writeU16Test(&post, 32, 3); // Must match maxp.numGlyphs == 2.
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [42]u8 = .{0} ** 42;
+        writePostHeaderTest(&post, 0x00020000);
+        writeU16Test(&post, 32, 2);
+        writeU16Test(&post, 34, 0);
+        writeU16Test(&post, 36, 258);
+        post[38] = 4; // Only three bytes of the Pascal string are present.
+        @memcpy(post[39..42], "Alt");
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [43]u8 = .{0} ** 43;
+        writePostHeaderTest(&post, 0x00020000);
+        writeU16Test(&post, 32, 2);
+        writeU16Test(&post, 34, 0);
+        writeU16Test(&post, 36, 258);
+        post[38] = 4;
+        @memcpy(post[39..43], "bad-"); // Hyphen is not valid in `post` glyph names.
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [36]u8 = .{0} ** 36;
+        writePostHeaderTest(&post, 0x00025000);
+        writeU16Test(&post, 32, 2);
+        post[34] = 0;
+        post[35] = 0;
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        var post: [36]u8 = .{0} ** 36;
+        writePostHeaderTest(&post, 0x00025000);
+        writeU16Test(&post, 32, 2);
+        post[34] = 0xff; // Glyph 0 would map to standard index -1.
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [36]u8 = .{0} ** 36;
+        writePostHeaderTest(&post, 0x00040000);
+        writeU16Test(&post, 32, 0xffff);
+        writeU16Test(&post, 34, 'A');
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        var post: [34]u8 = .{0} ** 34;
+        writePostHeaderTest(&post, 0x00040000);
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [32]u8 = .{0} ** 32;
+        writePostHeaderTest(&post, 0x00010000); // Format 1.0 implies exactly 258 glyphs.
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [32]u8 = .{0} ** 32;
+        writePostHeaderTest(&post, 0x00050000);
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
 test "TTC face offsets cannot overlap collection metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -5839,6 +6047,18 @@ fn writeKernFormat0Body(bytes: []u8, offset: usize, left: glyph_mod.GlyphId, rig
     writeU16Test(bytes, offset + 8, left);
     writeU16Test(bytes, offset + 10, right);
     writeI16Test(bytes, offset + 12, value);
+}
+
+fn writePostHeaderTest(bytes: []u8, version: u32) void {
+    writeU32Test(bytes, 0, version);
+    writeU32Test(bytes, 4, 0); // italicAngle.
+    writeI16Test(bytes, 8, 0); // underlinePosition.
+    writeI16Test(bytes, 10, 0); // underlineThickness.
+    writeU32Test(bytes, 12, 0); // isFixedPitch.
+    writeU32Test(bytes, 16, 0); // minMemType42.
+    writeU32Test(bytes, 20, 0); // maxMemType42.
+    writeU32Test(bytes, 24, 0); // minMemType1.
+    writeU32Test(bytes, 28, 0); // maxMemType1.
 }
 
 fn writeSingleEntryCpalTest(bytes: []u8, offset: usize) void {

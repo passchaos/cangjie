@@ -284,7 +284,7 @@ pub const Font = struct {
         // physical table in the file.
         try requireTableLength(head, 54);
         try requireTableLength(hhea, 36);
-        try requireTableLength(maxp, 6);
+        try validateMaxpTable(data, maxp, format);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
         const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
@@ -1499,6 +1499,29 @@ fn rangesOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) boo
 
 fn requireTableLength(record: TableRecord, minimum_length: usize) FontError!void {
     if (record.length < minimum_length) return error.BadSfnt;
+}
+
+fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) FontError!void {
+    try requireTableLength(maxp, 6);
+    const version = try bin.readU32At(data, maxp.offset);
+    switch (format) {
+        .truetype => {
+            // TrueType outlines require the version 1.0 maxp payload because
+            // rasterizers use its glyph-program and composite limits when
+            // validating glyf instructions. Accepting the six-byte CFF shape
+            // here would silently classify an internally inconsistent SFNT as
+            // a usable TrueType face.
+            if (version != 0x00010000) return error.BadSfnt;
+            try requireTableLength(maxp, 32);
+        },
+        .opentype_cff => {
+            // CFF-backed OpenType fonts use maxp version 0.5, whose contract is
+            // only the version and numGlyphs fields. A version 1.0 maxp table
+            // belongs to glyf-based fonts and indicates a mismatched outline
+            // stack even when the CFF table is otherwise present.
+            if (version != 0x00005000) return error.BadSfnt;
+        },
+    }
 }
 
 fn minimumOs2TableLength(version: u16) usize {
@@ -3626,6 +3649,48 @@ test "core metrics and loca stay inside declared table lengths" {
         var font = try Font.parse(allocator, bytes);
         defer font.deinit();
         try std.testing.expectError(error.InvalidLoca, font.glyphOutline(allocator, 1));
+    }
+}
+
+test "maxp table version and length must match the outline format" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const maxp_offset = try sfntTableOffset(bytes, "maxp");
+        writeU32Test(bytes, maxp_offset, 0x00005000);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        try setSfntTableLength(bytes, "maxp", 6);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalOtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildMinimalOtf(allocator);
+        defer allocator.free(bytes);
+        const maxp_offset = try sfntTableOffset(bytes, "maxp");
+        writeU32Test(bytes, maxp_offset, 0x00010000);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 }
 

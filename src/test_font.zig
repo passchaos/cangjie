@@ -1444,7 +1444,7 @@ fn minimalOtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
-    tables[5] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[5] = .{ .tag = "maxp", .data = try cffMaxpTable(allocator) };
     return tables;
 }
 
@@ -3969,9 +3969,17 @@ fn maxpTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn maxpTableWithGlyphs(allocator: std.mem.Allocator, glyph_count: u16) ![]u8 {
-    const bytes = try allocator.alloc(u8, 6);
+    const bytes = try allocator.alloc(u8, 32);
+    @memset(bytes, 0);
     writeU32(bytes, 0, 0x00010000);
     writeU16(bytes, 4, glyph_count);
+    return bytes;
+}
+
+fn cffMaxpTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 6);
+    writeU32(bytes, 0, 0x00005000);
+    writeU16(bytes, 4, 2);
     return bytes;
 }
 

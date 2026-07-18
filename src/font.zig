@@ -313,6 +313,7 @@ pub const Font = struct {
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
         if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
+        if (gsub) |gsub_table| try gsub_mod.validateGlyphBounds(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
         if (colr) |colr_table| try validateColrGlyphBounds(data, colr_table, glyph_count);
         if (svg) |svg_table| try validateSvgGlyphBounds(data, svg_table, glyph_count);
@@ -4350,6 +4351,33 @@ test "GPOS glyph ids are validated against maxp glyph count" {
         const gpos_offset = try sfntTableOffset(bytes, "GPOS");
         writeU16Test(bytes, gpos_offset + 42, 2); // SinglePos Coverage glyph.
         try std.testing.expectError(error.BadGpos, Font.parse(allocator, bytes));
+    }
+}
+
+test "GSUB glyph ids are validated against maxp glyph count at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalGsubTtf(allocator);
+        defer allocator.free(bytes);
+        const gsub_offset = try sfntTableOffset(bytes, "GSUB");
+        // The fixture declares maxp.numGlyphs == 3. A ligature result glyph of
+        // 3 is structurally well-formed GSUB data, but it cannot be shaped into
+        // this face because later metrics/outline lookups only cover glyphs 0-2.
+        writeU16Test(bytes, gsub_offset + 46, 3);
+        try std.testing.expectError(error.BadGsub, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildReverseChainingGsubTtf(allocator);
+        defer allocator.free(bytes);
+        const gsub_offset = try sfntTableOffset(bytes, "GSUB");
+        // ReverseChainSingleSubst substitutes are often applied late and only
+        // for matching context. Parse-time validation should still reject a
+        // latent out-of-range replacement before shaping exposes it.
+        writeU16Test(bytes, gsub_offset + 72, 4);
+        try std.testing.expectError(error.BadGsub, Font.parse(allocator, bytes));
     }
 }
 

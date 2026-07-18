@@ -2813,7 +2813,7 @@ fn selectiveGsubTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 58, 1);
     writeU16(bytes, 60, 8);
     writeU16(bytes, 62, 1);
-    writeU16(bytes, 64, 14);
+    writeU16(bytes, 64, 6);
     writeI16(bytes, 66, 2);
     writeU16(bytes, 68, 1);
     writeU16(bytes, 70, 1);

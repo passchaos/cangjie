@@ -17,6 +17,11 @@ const Table = struct {
     data: []const u8,
     offset: usize,
     length: usize,
+    /// Optional maxp.numGlyphs bound supplied by Font.parse. Runtime GSUB
+    /// application historically validates only table structure because callers
+    /// may use detached GSUB data; parse-time validation attaches this bound so
+    /// every supported glyph reference can be proven to name a real glyph.
+    glyph_count: ?u16 = null,
 };
 
 const FeatureSelection = struct {
@@ -79,6 +84,33 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
         if (selected_lookups.items.len != 0 and !containsLookup(selected_lookups.items, @intCast(i))) continue;
         const lookup_offset = try readU16(table, lookup_list_offset + 2 + i * 2);
         try applyLookup(table, lookup_list_offset + lookup_offset, glyphs, allocator, options);
+    }
+}
+
+/// Validate GSUB glyph references that are meaningful at font-load time.
+///
+/// Runtime shaping only reaches records whose lookup and coverage match the
+/// current glyph stream. A dangling glyph id in an unused alternate, ligature,
+/// reverse-chain substitute, or contextual coverage can therefore remain latent
+/// until a later shaping path tries to feed it into metrics or outline code.
+/// This pass walks every supported lookup with maxp.numGlyphs attached to the
+/// table, preserving the shaping path's "skip unsupported lookup types" policy
+/// while rejecting malformed supported subtables and out-of-range glyph ids.
+pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph_count: u16) GsubError!void {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    const table = Table{ .data = data, .offset = offset, .length = length, .glyph_count = glyph_count };
+    const major = try readU16BadGsub(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+
+    const lookup_list_offset = try checkedSubtableOffset(table, 0, try readU16BadGsub(table, 8));
+    const lookup_count = try readU16BadGsub(table, lookup_list_offset);
+    try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
+    for (0..lookup_count) |lookup_i| {
+        const lookup_offset = try checkedSubtableOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
+        try ensureLookupHeaderWithin(table, lookup_offset);
+        const lookup_type = try readU16BadGsub(table, lookup_offset);
+        const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
+        try ensureSubstitutionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
     }
 }
 
@@ -1343,10 +1375,16 @@ fn ensureSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) 
     const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     switch (subst_format) {
-        1 => {},
+        1 => if (table.glyph_count != null) {
+            const delta = try readI16BadGsub(table, subtable_offset + 4);
+            try ensureSingleDeltaSubstitutionWithinMaxp(table, coverage_offset, delta);
+        },
         2 => {
             const glyph_count = try readU16BadGsub(table, subtable_offset + 4);
             try ensureBytesWithin(table, subtable_offset + 6, @as(usize, glyph_count) * 2);
+            for (0..glyph_count) |glyph_i| {
+                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, subtable_offset + 6 + glyph_i * 2));
+            }
         },
         else => return error.UnsupportedGsub,
     }
@@ -1364,6 +1402,9 @@ fn ensureMultipleSubstitutionSubtableWithin(table: Table, subtable_offset: usize
         const sequence_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, sequence_offsets_pos + sequence_i * 2));
         const glyph_count = try readU16BadGsub(table, sequence_offset);
         try ensureBytesWithin(table, sequence_offset + 2, @as(usize, glyph_count) * 2);
+        for (0..glyph_count) |glyph_i| {
+            try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, sequence_offset + 2 + glyph_i * 2));
+        }
     }
 }
 
@@ -1379,6 +1420,9 @@ fn ensureAlternateSubstitutionSubtableWithin(table: Table, subtable_offset: usiz
         const alternate_set_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, alternate_set_offsets_pos + alternate_set_i * 2));
         const glyph_count = try readU16BadGsub(table, alternate_set_offset);
         try ensureBytesWithin(table, alternate_set_offset + 2, @as(usize, glyph_count) * 2);
+        for (0..glyph_count) |glyph_i| {
+            try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, alternate_set_offset + 2 + glyph_i * 2));
+        }
     }
 }
 
@@ -1397,9 +1441,13 @@ fn ensureLigatureSubstitutionSubtableWithin(table: Table, subtable_offset: usize
         try ensureBytesWithin(table, ligature_offsets_pos, @as(usize, ligature_count) * 2);
         for (0..ligature_count) |ligature_i| {
             const ligature_offset = try checkedSubtableOffset(table, set_offset, try readU16BadGsub(table, ligature_offsets_pos + ligature_i * 2));
+            try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, ligature_offset));
             const component_count = try readU16BadGsub(table, ligature_offset + 2);
             if (component_count == 0) return error.BadGsub;
             try ensureBytesWithin(table, ligature_offset + 4, (@as(usize, component_count) - 1) * 2);
+            for (1..component_count) |component_i| {
+                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, ligature_offset + 4 + (component_i - 1) * 2));
+            }
         }
     }
 }
@@ -1467,6 +1515,9 @@ fn ensureContextRuleWithin(table: Table, rule_offset: usize) GsubError!void {
     const subst_count = try readU16BadGsub(table, rule_offset + 2);
     const input_pos = rule_offset + 4;
     try ensureBytesWithin(table, input_pos, (@as(usize, glyph_count) - 1) * 2);
+    for (1..glyph_count) |input_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, input_pos + (input_i - 1) * 2));
+    }
     const records_offset = input_pos + (@as(usize, glyph_count) - 1) * 2;
     try ensureSubstitutionRecordListWithin(table, records_offset, subst_count);
     try ensureSubstitutionRecordLookupsWithin(table, records_offset, subst_count);
@@ -1529,17 +1580,26 @@ fn ensureChainingRuleWithin(table: Table, rule_offset: usize) GsubError!void {
     const backtrack_count = try readU16BadGsub(table, cursor);
     cursor += 2;
     try ensureBytesWithin(table, cursor, @as(usize, backtrack_count) * 2);
+    for (0..backtrack_count) |backtrack_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, cursor + backtrack_i * 2));
+    }
     cursor += @as(usize, backtrack_count) * 2;
 
     const input_count = try readU16BadGsub(table, cursor);
     if (input_count == 0) return error.BadGsub;
     cursor += 2;
     try ensureBytesWithin(table, cursor, (@as(usize, input_count) - 1) * 2);
+    for (1..input_count) |input_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, cursor + (input_i - 1) * 2));
+    }
     cursor += (@as(usize, input_count) - 1) * 2;
 
     const lookahead_count = try readU16BadGsub(table, cursor);
     cursor += 2;
     try ensureBytesWithin(table, cursor, @as(usize, lookahead_count) * 2);
+    for (0..lookahead_count) |lookahead_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, cursor + lookahead_i * 2));
+    }
     cursor += @as(usize, lookahead_count) * 2;
 
     const subst_count = try readU16BadGsub(table, cursor);
@@ -1593,6 +1653,9 @@ fn ensureReverseChainingSingleSubstitutionSubtableWithin(table: Table, subtable_
     cursor += 2;
     try ensureCoverageIndicesWithin(table, coverage_offset, glyph_count);
     try ensureBytesWithin(table, cursor, @as(usize, glyph_count) * 2);
+    for (0..glyph_count) |glyph_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, cursor + glyph_i * 2));
+    }
 }
 
 fn ensureCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GsubError!void {
@@ -1629,13 +1692,26 @@ fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GsubError!vo
     const format = try readU16BadGsub(table, class_def_offset);
     switch (format) {
         1 => {
+            const start_glyph = try readU16BadGsub(table, class_def_offset + 2);
             const glyph_count = try readU16BadGsub(table, class_def_offset + 4);
             try ensureBytesWithin(table, class_def_offset + 6, @as(usize, glyph_count) * 2);
+            if (glyph_count != 0) {
+                const end_glyph = @as(usize, start_glyph) + @as(usize, glyph_count) - 1;
+                try ensureGlyphIdWithinMaxp(table, end_glyph);
+            }
         },
         2 => {
             const range_count = try readU16BadGsub(table, class_def_offset + 2);
             try ensureBytesWithin(table, class_def_offset + 4, @as(usize, range_count) * 6);
             try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
+            for (0..range_count) |range_i| {
+                const range_offset = class_def_offset + 4 + range_i * 6;
+                try ensureGlyphRangeWithinMaxp(
+                    table,
+                    try readU16BadGsub(table, range_offset),
+                    try readU16BadGsub(table, range_offset + 2),
+                );
+            }
         },
         else => return error.UnsupportedGsub,
     }
@@ -1648,14 +1724,69 @@ fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GsubError!voi
             const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
             try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            for (0..glyph_count) |glyph_i| {
+                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, coverage_offset + 4 + glyph_i * 2));
+            }
         },
         2 => {
             const range_count = try readU16BadGsub(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, range_count) * 6);
             try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                try ensureGlyphRangeWithinMaxp(
+                    table,
+                    try readU16BadGsub(table, range_offset),
+                    try readU16BadGsub(table, range_offset + 2),
+                );
+            }
         },
         else => return error.UnsupportedGsub,
     }
+}
+
+fn ensureSingleDeltaSubstitutionWithinMaxp(table: Table, coverage_offset: usize, delta: i16) GsubError!void {
+    // SingleSubst format 1 computes substitutes with modulo-16-bit addition.
+    // At font load time the whole covered domain must still map back into
+    // maxp.numGlyphs; otherwise the first shaped text that hits the boundary
+    // can produce a glyph id with no metrics or outline data.
+    const format = try readU16BadGsub(table, coverage_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
+            for (0..glyph_count) |glyph_i| {
+                const glyph = try readU16BadGsub(table, coverage_offset + 4 + glyph_i * 2);
+                try ensureGlyphIdWithinMaxp(table, singleSubstDeltaResult(glyph, delta));
+            }
+        },
+        2 => {
+            const range_count = try readU16BadGsub(table, coverage_offset + 2);
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                const start = try readU16BadGsub(table, range_offset);
+                const end = try readU16BadGsub(table, range_offset + 2);
+                for (@as(usize, start)..@as(usize, end) + 1) |glyph| {
+                    try ensureGlyphIdWithinMaxp(table, singleSubstDeltaResult(@intCast(glyph), delta));
+                }
+            }
+        },
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn singleSubstDeltaResult(glyph_id: GlyphId, delta: i16) GlyphId {
+    return @bitCast(@as(i16, @bitCast(glyph_id)) +% delta);
+}
+
+fn ensureGlyphIdWithinMaxp(table: Table, glyph_id: usize) GsubError!void {
+    if (table.glyph_count) |glyph_count| {
+        if (glyph_id >= glyph_count) return error.BadGsub;
+    }
+}
+
+fn ensureGlyphRangeWithinMaxp(table: Table, start_glyph: u16, end_glyph: u16) GsubError!void {
+    try ensureGlyphIdWithinMaxp(table, start_glyph);
+    try ensureGlyphIdWithinMaxp(table, end_glyph);
 }
 
 fn checkedSubtableOffset(table: Table, base_offset: usize, relative_offset: u32) GsubError!usize {
@@ -1671,6 +1802,15 @@ fn ensureBytesWithin(table: Table, offset: usize, len: usize) GsubError!void {
 
 fn readU16BadGsub(table: Table, relative: usize) GsubError!u16 {
     return readU16(table, relative) catch |err| {
+        return switch (err) {
+            error.EndOfStream => error.BadGsub,
+            else => err,
+        };
+    };
+}
+
+fn readI16BadGsub(table: Table, relative: usize) GsubError!i16 {
+    return readI16(table, relative) catch |err| {
         return switch (err) {
             error.EndOfStream => error.BadGsub,
             else => err,
@@ -2064,6 +2204,110 @@ test "GSUB rejects malformed ClassDef format 2 ranges" {
 
     writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
     try std.testing.expectError(error.BadGsub, classValue(table, 0, 18));
+}
+
+test "GSUB glyph ids are validated against maxp glyph count" {
+    const max_glyphs: u16 = 3;
+
+    {
+        var bytes = [_]u8{0} ** 38;
+        const subtable = writeSingleLookupGsubTest(&bytes, 1);
+        writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
+        writeU16Test(&bytes, subtable + 2, 6);
+        writeI16Test(&bytes, subtable + 4, 0);
+        writeCoverage1(&bytes, subtable + 6, 3); // Invalid Coverage glyph.
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 42;
+        const subtable = writeSingleLookupGsubTest(&bytes, 1);
+        writeU16Test(&bytes, subtable + 0, 2); // SingleSubst format 2.
+        writeU16Test(&bytes, subtable + 2, 10);
+        writeU16Test(&bytes, subtable + 4, 1);
+        writeU16Test(&bytes, subtable + 6, 3); // Invalid substitute glyph.
+        writeCoverage1(&bytes, subtable + 10, 1);
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 46;
+        const subtable = writeSingleLookupGsubTest(&bytes, 2);
+        writeU16Test(&bytes, subtable + 0, 1);
+        writeU16Test(&bytes, subtable + 2, 14);
+        writeU16Test(&bytes, subtable + 4, 1);
+        writeU16Test(&bytes, subtable + 6, 8);
+        writeU16Test(&bytes, subtable + 8, 2);
+        writeU16Test(&bytes, subtable + 10, 1);
+        writeU16Test(&bytes, subtable + 12, 3); // Invalid MultipleSubst sequence glyph.
+        writeCoverage1(&bytes, subtable + 14, 1);
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 46;
+        const subtable = writeSingleLookupGsubTest(&bytes, 3);
+        writeU16Test(&bytes, subtable + 0, 1);
+        writeU16Test(&bytes, subtable + 2, 14);
+        writeU16Test(&bytes, subtable + 4, 1);
+        writeU16Test(&bytes, subtable + 6, 8);
+        writeU16Test(&bytes, subtable + 8, 2);
+        writeU16Test(&bytes, subtable + 10, 2);
+        writeU16Test(&bytes, subtable + 12, 3); // Invalid alternate glyph.
+        writeCoverage1(&bytes, subtable + 14, 1);
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 50;
+        const subtable = writeSingleLookupGsubTest(&bytes, 4);
+        writeU16Test(&bytes, subtable + 0, 1);
+        writeU16Test(&bytes, subtable + 2, 18);
+        writeU16Test(&bytes, subtable + 4, 1);
+        writeU16Test(&bytes, subtable + 6, 8);
+        writeU16Test(&bytes, subtable + 8, 1);
+        writeU16Test(&bytes, subtable + 10, 4);
+        writeU16Test(&bytes, subtable + 12, 2);
+        writeU16Test(&bytes, subtable + 14, 2);
+        writeU16Test(&bytes, subtable + 16, 3); // Invalid ligature component glyph.
+        writeCoverage1(&bytes, subtable + 18, 1);
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 48;
+        const subtable = writeSingleLookupGsubTest(&bytes, 5);
+        writeU16Test(&bytes, subtable + 0, 2); // ContextSubst format 2.
+        writeU16Test(&bytes, subtable + 2, 8);
+        writeU16Test(&bytes, subtable + 4, 14);
+        writeU16Test(&bytes, subtable + 6, 0);
+        writeCoverage1(&bytes, subtable + 8, 1);
+        writeU16Test(&bytes, subtable + 14, 1); // ClassDef format 1.
+        writeU16Test(&bytes, subtable + 16, 3); // Invalid ClassDef glyph range start.
+        writeU16Test(&bytes, subtable + 18, 1);
+        writeU16Test(&bytes, subtable + 20, 1);
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 44;
+        const subtable = writeSingleLookupGsubTest(&bytes, 8);
+        writeU16Test(&bytes, subtable + 0, 1);
+        writeU16Test(&bytes, subtable + 2, 12);
+        writeU16Test(&bytes, subtable + 4, 0);
+        writeU16Test(&bytes, subtable + 6, 0);
+        writeU16Test(&bytes, subtable + 8, 1);
+        writeU16Test(&bytes, subtable + 10, 3); // Invalid ReverseChainSingle substitute.
+        writeCoverage1(&bytes, subtable + 12, 1);
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
 }
 
 test "GSUB lookup selection honors script and language tags" {
@@ -3621,6 +3865,22 @@ fn writeSingleDeltaLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, del
     writeU16Test(bytes, subtable + 2, 6);
     writeI16Test(bytes, subtable + 4, delta);
     writeCoverage1(bytes, subtable + 6, glyph);
+}
+
+fn writeSingleLookupGsubTest(bytes: []u8, lookup_type: u16) usize {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10);
+    writeU16Test(bytes, 6, 12);
+    writeU16Test(bytes, 8, 14);
+    writeU16Test(bytes, 10, 0);
+    writeU16Test(bytes, 12, 0);
+    writeU16Test(bytes, 14, 1);
+    writeU16Test(bytes, 16, 4);
+    writeU16Test(bytes, 18, lookup_type);
+    writeU16Test(bytes, 20, 0);
+    writeU16Test(bytes, 22, 1);
+    writeU16Test(bytes, 24, 8);
+    return 26;
 }
 
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {

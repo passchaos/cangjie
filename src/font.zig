@@ -269,6 +269,10 @@ pub const Font = struct {
         const cbdt = findTable(records, "CBDT");
         const glyf = findTable(records, "glyf");
         const cff = findTable(records, "CFF ");
+        const gvar = findTable(records, "gvar");
+        const hvar = findTable(records, "HVAR");
+        const mvar = findTable(records, "MVAR");
+        const vvar = findTable(records, "VVAR");
 
         if (format == .truetype and (glyf == null or loca == null)) return error.MissingTable;
         if (format == .opentype_cff and cff == null) return error.MissingTable;
@@ -291,6 +295,7 @@ pub const Font = struct {
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
         const required_hmtx_length = try hmtxRequiredLength(glyph_count, number_of_h_metrics);
         if (hmtx.length < required_hmtx_length) return error.InvalidMetrics;
+        try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
@@ -2650,6 +2655,165 @@ fn readFvarInfo(data: []const u8, fvar: TableRecord) FontError!FvarInfo {
     };
 }
 
+fn validateVariationDataTables(data: []const u8, glyph_count: u16, fvar: ?TableRecord, gvar: ?TableRecord, hvar: ?TableRecord, mvar: ?TableRecord, vvar: ?TableRecord) FontError!void {
+    if (gvar == null and hvar == null and mvar == null and vvar == null) return;
+    const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
+    if (gvar) |table| try validateGvarTable(data, table, glyph_count, fvar_info.axis_count);
+    if (hvar) |table| try validateMetricVariationTable(data, table, fvar_info.axis_count, 20);
+    if (vvar) |table| try validateMetricVariationTable(data, table, fvar_info.axis_count, 24);
+    if (mvar) |table| try validateMvarTable(data, table, fvar_info.axis_count);
+}
+
+fn validateGvarTable(data: []const u8, gvar: TableRecord, glyph_count: u16, fvar_axis_count: usize) FontError!void {
+    if (gvar.length < 20) return error.BadSfnt;
+    const major = try bin.readU16At(data, gvar.offset);
+    const minor = try bin.readU16At(data, gvar.offset + 2);
+    if (major != 1 or minor != 0) return error.BadSfnt;
+    const axis_count: usize = @intCast(try bin.readU16At(data, gvar.offset + 4));
+    const shared_tuple_count: usize = @intCast(try bin.readU16At(data, gvar.offset + 6));
+    const shared_tuple_offset: usize = @intCast(try bin.readU32At(data, gvar.offset + 8));
+    const table_glyph_count = try bin.readU16At(data, gvar.offset + 12);
+    const flags = try bin.readU16At(data, gvar.offset + 14);
+    const glyph_data_offset: usize = @intCast(try bin.readU32At(data, gvar.offset + 16));
+
+    if (axis_count != fvar_axis_count or table_glyph_count != glyph_count) return error.BadSfnt;
+
+    const offset_size: usize = if ((flags & 0x0001) != 0) 4 else 2;
+    const offsets_len = (@as(usize, glyph_count) + 1) * offset_size;
+    if (offsets_len > gvar.length - 20) return error.BadSfnt;
+
+    // The glyph offset array is fixed immediately after the gvar header. The
+    // glyph variation data block must start after that array; otherwise offset
+    // entries can be reinterpreted as per-glyph tuple data.
+    const minimum_glyph_data_offset = 20 + offsets_len;
+    if (glyph_data_offset < minimum_glyph_data_offset or glyph_data_offset > gvar.length) return error.BadSfnt;
+
+    if (shared_tuple_count != 0) {
+        if (shared_tuple_offset < 20 or shared_tuple_offset > gvar.length) return error.BadSfnt;
+        const tuple_bytes = shared_tuple_count * axis_count * 2;
+        if (tuple_bytes > gvar.length - shared_tuple_offset) return error.BadSfnt;
+    }
+
+    var previous: usize = 0;
+    for (0..@as(usize, glyph_count) + 1) |index| {
+        const raw_offset = try readGvarGlyphDataOffset(data, gvar.offset + 20 + index * offset_size, offset_size);
+        const current = if (offset_size == 2) raw_offset * 2 else raw_offset;
+        if (current < previous) return error.BadSfnt;
+        if (current > gvar.length - glyph_data_offset) return error.BadSfnt;
+        previous = current;
+    }
+}
+
+fn readGvarGlyphDataOffset(data: []const u8, offset: usize, size: usize) FontError!usize {
+    return switch (size) {
+        2 => try bin.readU16At(data, offset),
+        4 => try bin.readU32At(data, offset),
+        else => error.BadSfnt,
+    };
+}
+
+fn validateMetricVariationTable(data: []const u8, table: TableRecord, fvar_axis_count: usize, minimum_length: usize) FontError!void {
+    if (table.length < minimum_length) return error.BadSfnt;
+    const major = try bin.readU16At(data, table.offset);
+    const minor = try bin.readU16At(data, table.offset + 2);
+    if (major != 1 or minor != 0) return error.BadSfnt;
+    const store_offset: usize = @intCast(try bin.readU32At(data, table.offset + 4));
+    _ = try validateItemVariationStore(data, table, store_offset, fvar_axis_count, minimum_length);
+}
+
+fn validateMvarTable(data: []const u8, mvar: TableRecord, fvar_axis_count: usize) FontError!void {
+    if (mvar.length < 12) return error.BadSfnt;
+    const major = try bin.readU16At(data, mvar.offset);
+    const minor = try bin.readU16At(data, mvar.offset + 2);
+    if (major != 1 or minor != 0) return error.BadSfnt;
+    const reserved = try bin.readU16At(data, mvar.offset + 4);
+    const value_record_size: usize = @intCast(try bin.readU16At(data, mvar.offset + 6));
+    const value_record_count: usize = @intCast(try bin.readU16At(data, mvar.offset + 8));
+    const store_offset: usize = @intCast(try bin.readU16At(data, mvar.offset + 10));
+    if (reserved != 0 or value_record_size < 8) return error.BadSfnt;
+    if (value_record_count > (mvar.length - 12) / value_record_size) return error.BadSfnt;
+
+    const records_end = 12 + value_record_count * value_record_size;
+    const item_data_count = try validateItemVariationStore(data, mvar, store_offset, fvar_axis_count, records_end);
+    for (0..value_record_count) |index| {
+        const record = mvar.offset + 12 + index * value_record_size;
+        const outer_index: usize = @intCast(try bin.readU16At(data, record + 4));
+        const inner_index: usize = @intCast(try bin.readU16At(data, record + 6));
+        if (outer_index >= item_data_count) return error.BadSfnt;
+        const item_count = try itemVariationDataItemCount(data, mvar, store_offset, outer_index);
+        if (inner_index >= item_count) return error.BadSfnt;
+    }
+}
+
+fn validateItemVariationStore(data: []const u8, table: TableRecord, store_offset: usize, fvar_axis_count: usize, minimum_store_offset: usize) FontError!usize {
+    if (store_offset < minimum_store_offset or store_offset > table.length or table.length - store_offset < 8) return error.BadSfnt;
+    const store = table.offset + store_offset;
+    const format = try bin.readU16At(data, store);
+    if (format != 1) return error.BadSfnt;
+    const region_list_offset: usize = @intCast(try bin.readU32At(data, store + 2));
+    const item_data_count: usize = @intCast(try bin.readU16At(data, store + 6));
+    const offsets_array_end = 8 + item_data_count * 4;
+    if (offsets_array_end > table.length - store_offset) return error.BadSfnt;
+
+    const region_count = try validateVariationRegionList(data, table, store_offset, region_list_offset, fvar_axis_count, offsets_array_end);
+    for (0..item_data_count) |index| {
+        const item_data_offset: usize = @intCast(try bin.readU32At(data, store + 8 + index * 4));
+        if (item_data_offset < offsets_array_end) return error.BadSfnt;
+        _ = try validateItemVariationData(data, table, store_offset, item_data_offset, region_count);
+    }
+    return item_data_count;
+}
+
+fn validateVariationRegionList(data: []const u8, table: TableRecord, store_offset: usize, region_list_offset: usize, fvar_axis_count: usize, minimum_region_offset: usize) FontError!usize {
+    if (region_list_offset < minimum_region_offset or region_list_offset > table.length - store_offset or table.length - store_offset - region_list_offset < 4) return error.BadSfnt;
+    const region_list = table.offset + store_offset + region_list_offset;
+    const axis_count: usize = @intCast(try bin.readU16At(data, region_list));
+    const region_count: usize = @intCast(try bin.readU16At(data, region_list + 2));
+    if (axis_count != fvar_axis_count) return error.BadSfnt;
+    const region_bytes = region_count * axis_count * 6;
+    if (region_bytes > table.length - store_offset - region_list_offset - 4) return error.BadSfnt;
+    return region_count;
+}
+
+fn validateItemVariationData(data: []const u8, table: TableRecord, store_offset: usize, item_data_offset: usize, region_count: usize) FontError!usize {
+    if (item_data_offset > table.length - store_offset or table.length - store_offset - item_data_offset < 6) return error.BadSfnt;
+    const item_data = table.offset + store_offset + item_data_offset;
+    const item_count: usize = @intCast(try bin.readU16At(data, item_data));
+    const raw_word_delta_count = try bin.readU16At(data, item_data + 2);
+    const region_index_count: usize = @intCast(try bin.readU16At(data, item_data + 4));
+    const word_delta_count: usize = @intCast(raw_word_delta_count & 0x7fff);
+    const long_words = (raw_word_delta_count & 0x8000) != 0;
+    if (word_delta_count > region_index_count) return error.BadSfnt;
+    if (region_index_count > region_count) return error.BadSfnt;
+
+    const region_indexes_offset = item_data + 6;
+    const region_indexes_bytes = region_index_count * 2;
+    if (region_indexes_bytes > table.length - store_offset - item_data_offset - 6) return error.BadSfnt;
+    for (0..region_index_count) |index| {
+        const region_index = try bin.readU16At(data, region_indexes_offset + index * 2);
+        if (region_index >= region_count) return error.BadSfnt;
+    }
+
+    const remaining = table.length - store_offset - item_data_offset - 6 - region_indexes_bytes;
+    const narrow_delta_count = region_index_count - word_delta_count;
+    const row_size = if (long_words)
+        word_delta_count * 4 + narrow_delta_count * 2
+    else
+        word_delta_count * 2 + narrow_delta_count;
+    if (row_size != 0 and item_count > remaining / row_size) return error.BadSfnt;
+    if (row_size == 0 and item_count != 0) return error.BadSfnt;
+    return item_count;
+}
+
+fn itemVariationDataItemCount(data: []const u8, table: TableRecord, store_offset: usize, outer_index: usize) FontError!usize {
+    const store = table.offset + store_offset;
+    const item_data_count: usize = @intCast(try bin.readU16At(data, store + 6));
+    if (outer_index >= item_data_count) return error.BadSfnt;
+    const item_data_offset: usize = @intCast(try bin.readU32At(data, store + 8 + outer_index * 4));
+    if (item_data_offset > table.length - store_offset or table.length - store_offset - item_data_offset < 2) return error.BadSfnt;
+    return try bin.readU16At(data, table.offset + store_offset + item_data_offset);
+}
+
 fn mapAvarSegment(segment_data: []const u8, normalized: f32) FontError!f32 {
     const pair_count = segment_data.len / 4;
     if (pair_count == 0) return normalized;
@@ -4465,6 +4629,32 @@ fn writeStatAxisValueFormat1Test(bytes: []u8, offset: usize, axis_index: u16) vo
     writeU16Test(bytes, offset + 4, 258);
     writeU16Test(bytes, offset + 6, 0);
     writeF16Dot16Test(bytes, offset + 8, 400.0);
+}
+
+fn writeHvarTableWithOneItemVariationData(bytes: []u8) void {
+    writeU16Test(bytes, 0, 1);
+    writeU16Test(bytes, 2, 0);
+    writeU32Test(bytes, 4, 20); // ItemVariationStore offset.
+    writeItemVariationStoreWithOneItem(bytes, 20);
+}
+
+fn writeItemVariationStoreWithOneItem(bytes: []u8, offset: usize) void {
+    writeU16Test(bytes, offset + 0, 1); // format.
+    writeU32Test(bytes, offset + 2, 12); // VariationRegionList offset.
+    writeU16Test(bytes, offset + 6, 1); // itemVariationDataCount.
+    writeU32Test(bytes, offset + 8, 24); // ItemVariationData offset.
+
+    writeU16Test(bytes, offset + 12, 1); // axisCount.
+    writeU16Test(bytes, offset + 14, 1); // regionCount.
+    writeF2Dot14Test(bytes, offset + 16, -1.0);
+    writeF2Dot14Test(bytes, offset + 18, 0.0);
+    writeF2Dot14Test(bytes, offset + 20, 1.0);
+
+    writeU16Test(bytes, offset + 24, 1); // itemCount.
+    writeU16Test(bytes, offset + 26, 1); // wordDeltaCount.
+    writeU16Test(bytes, offset + 28, 1); // regionIndexCount.
+    writeU16Test(bytes, offset + 30, 0); // regionIndexes[0].
+    writeI16Test(bytes, offset + 32, 7); // one delta row.
 }
 
 fn writeTagTest(bytes: []u8, offset: usize, tag_text: []const u8) void {

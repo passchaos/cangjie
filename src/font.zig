@@ -1669,8 +1669,17 @@ fn classDefValue(data: []const u8, offset: usize, glyph_id: glyph_mod.GlyphId) F
             if (offset + 6 > data.len) return error.BadSfnt;
             const start_glyph = try bin.readU16At(data, offset + 2);
             const glyph_count = try bin.readU16At(data, offset + 4);
-            if (glyph_id < start_glyph or glyph_id >= start_glyph + glyph_count) return 0;
-            const class_offset = offset + 6 + @as(usize, glyph_id - start_glyph) * 2;
+            if (@as(usize, glyph_count) * 2 > data.len - (offset + 6)) return error.BadSfnt;
+            // ClassDef format 1 covers `glyph_count` glyph IDs starting at
+            // `startGlyphID`. GDEF tables often use the same ClassDef shape as
+            // GSUB/GPOS; validate the full declared class array and keep the
+            // boundary arithmetic widened so edge ranges near 0xffff do not
+            // overflow before validation can run.
+            const glyph_index = @as(usize, glyph_id);
+            const start_index = @as(usize, start_glyph);
+            const end_exclusive = start_index + @as(usize, glyph_count);
+            if (glyph_index < start_index or glyph_index >= end_exclusive) return 0;
+            const class_offset = offset + 6 + (glyph_index - start_index) * 2;
             if (class_offset + 2 > data.len) return error.BadSfnt;
             return try bin.readU16At(data, class_offset);
         },
@@ -2509,6 +2518,22 @@ test "ignores mark glyph filtering offset field before GDEF 1.2" {
     const font = gdefOnlyFont(&bytes);
     try std.testing.expectEqual(GlyphClass.mark, try font.glyphClass(3));
     try std.testing.expect((try font.markFilteringSets(std.testing.allocator)) == null);
+}
+
+test "GDEF ClassDef format 1 validates upper glyph boundary without overflow" {
+    var bytes: [14]u8 = .{0} ** 14;
+    writeU16Test(&bytes, 0, 1); // ClassDef format 1.
+    writeU16Test(&bytes, 2, 0xffff); // startGlyphID at the u16 boundary.
+    writeU16Test(&bytes, 4, 1); // Only one class value follows.
+    writeU16Test(&bytes, 6, @intFromEnum(GlyphClass.mark));
+
+    try std.testing.expectEqual(@as(u16, @intFromEnum(GlyphClass.mark)), try classDefValue(&bytes, 0, 0xffff));
+
+    // The declared ClassDef span can exceed the physical table when widened.
+    // This must report malformed GDEF/SFNT data, not wrap `startGlyphID +
+    // glyphCount` and silently treat the boundary glyph as unclassified.
+    writeU16Test(&bytes, 4, 5);
+    try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 0xffff));
 }
 test "legacy kern format 0 accumulates multiple horizontal subtables" {
     var data: [44]u8 = .{0} ** 44;

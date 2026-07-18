@@ -2080,18 +2080,32 @@ fn sfntOffset(data: []const u8, face_index: usize) FontError!usize {
 
 fn parseCmapSubtables(allocator: std.mem.Allocator, data: []const u8, cmap: TableRecord, glyph_count: u16) FontError![]CmapSubtable {
     if (cmap.length < 4) return error.BadSfnt;
+    const version = try bin.readU16At(data, cmap.offset);
+    if (version != 0) return error.BadSfnt;
     const count = try bin.readU16At(data, cmap.offset + 2);
     if (@as(usize, count) * 8 > cmap.length - 4) return error.BadSfnt;
 
     var subtables = std.ArrayList(CmapSubtable).empty;
     errdefer subtables.deinit(allocator);
+    var previous_encoding: ?struct { platform_id: u16, encoding_id: u16 } = null;
     for (0..count) |i| {
         const rec = cmap.offset + 4 + i * 8;
+        const platform_id = try bin.readU16At(data, rec);
+        const encoding_id = try bin.readU16At(data, rec + 2);
+        if (previous_encoding) |previous| {
+            // Encoding records are a directory keyed by platform/encoding ID.
+            // Enforcing the OpenType sort order also rejects duplicate keys,
+            // avoiding ambiguous cmap selection when two records claim the
+            // same platform-specific character map.
+            if (platform_id < previous.platform_id or (platform_id == previous.platform_id and encoding_id <= previous.encoding_id)) {
+                return error.BadSfnt;
+            }
+        }
+        previous_encoding = .{ .platform_id = platform_id, .encoding_id = encoding_id };
+
         const sub_offset = try bin.readU32At(data, rec + 4);
         if (sub_offset > cmap.length - 2) return error.BadSfnt;
         const absolute = cmap.offset + sub_offset;
-        const platform_id = try bin.readU16At(data, rec);
-        const encoding_id = try bin.readU16At(data, rec + 2);
         const format = try bin.readU16At(data, absolute);
         const length = try cmapSubtableLength(data, cmap, @intCast(sub_offset), format);
         try validateCmapSubtable(data, absolute, length, format, platform_id, encoding_id);
@@ -5092,6 +5106,45 @@ test "cmap parser rejects subtable length past cmap table boundary" {
     writeU32Test(&data, 36, 9);
 
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &data, cmap, 128));
+}
+
+test "cmap header version and encoding records are canonical" {
+    const allocator = std.testing.allocator;
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 282,
+    };
+
+    var valid: [282]u8 = .{0} ** 282;
+    writeU16Test(&valid, 0, 0);
+    writeU16Test(&valid, 2, 2);
+    writeU16Test(&valid, 4, 0);
+    writeU16Test(&valid, 6, 0);
+    writeU32Test(&valid, 8, 20);
+    writeU16Test(&valid, 12, 0);
+    writeU16Test(&valid, 14, 1);
+    writeU32Test(&valid, 16, 20);
+    writeU16Test(&valid, 20, 0);
+    writeU16Test(&valid, 22, 262);
+
+    const subtables = try parseCmapSubtables(allocator, &valid, cmap, 1);
+    defer allocator.free(subtables);
+    try std.testing.expectEqual(@as(usize, 2), subtables.len);
+
+    var bad_version = valid;
+    writeU16Test(&bad_version, 0, 1);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bad_version, cmap, 1));
+
+    var duplicate_encoding = valid;
+    writeU16Test(&duplicate_encoding, 14, 0);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &duplicate_encoding, cmap, 1));
+
+    var unsorted_encoding = valid;
+    writeU16Test(&unsorted_encoding, 6, 1);
+    writeU16Test(&unsorted_encoding, 14, 0);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &unsorted_encoding, cmap, 1));
 }
 
 test "cmap format 4 parser rejects malformed segment metadata" {

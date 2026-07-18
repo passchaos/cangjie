@@ -1565,6 +1565,7 @@ fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, fo
 fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: u16) FontError!void {
     switch (format) {
         12, 13 => try validateSegmentedCmapGroups(data, offset, length),
+        14 => try validateCmapFormat14(data, offset, length),
         else => {},
     }
 }
@@ -1589,6 +1590,74 @@ fn validateSegmentedCmapGroups(data: []const u8, offset: usize, length: usize) F
             if (start <= last_end) return error.BadSfnt;
         }
         previous_end = end;
+    }
+}
+
+fn validateCmapFormat14(data: []const u8, offset: usize, length: usize) FontError!void {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (length < 10) return error.BadSfnt;
+    const record_count: usize = @intCast(try bin.readU32At(data, offset + 6));
+    if (record_count > (length - 10) / 11) return error.BadSfnt;
+
+    const records_end = 10 + record_count * 11;
+    const table_end = offset + length;
+    var previous_selector: ?u32 = null;
+    for (0..record_count) |index| {
+        const record = offset + 10 + index * 11;
+        const selector = try readU24At(data, record);
+        if (previous_selector) |last_selector| {
+            // Variation selector records are consumed with an early-exit search
+            // in glyphIndexFormat14. Reject unsorted/duplicate selectors here
+            // so malformed cmaps cannot make mappings depend on record order.
+            if (selector <= last_selector) return error.BadSfnt;
+        }
+        previous_selector = selector;
+
+        const default_offset = try bin.readU32At(data, record + 3);
+        const non_default_offset = try bin.readU32At(data, record + 7);
+        if (default_offset != 0) {
+            if (default_offset < records_end or default_offset >= length) return error.BadSfnt;
+            try validateCmapFormat14DefaultUvs(data, offset + @as(usize, default_offset), table_end);
+        }
+        if (non_default_offset != 0) {
+            if (non_default_offset < records_end or non_default_offset >= length) return error.BadSfnt;
+            try validateCmapFormat14NonDefaultUvs(data, offset + @as(usize, non_default_offset), table_end);
+        }
+    }
+}
+
+fn validateCmapFormat14DefaultUvs(data: []const u8, offset: usize, table_end: usize) FontError!void {
+    if (offset + 4 > table_end) return error.BadSfnt;
+    const range_count: usize = @intCast(try bin.readU32At(data, offset));
+    if (range_count > (table_end - (offset + 4)) / 4) return error.BadSfnt;
+
+    var previous_end: ?u32 = null;
+    for (0..range_count) |index| {
+        const range = offset + 4 + index * 4;
+        const start = try readU24At(data, range);
+        const end_u64 = @as(u64, start) + data[range + 3];
+        if (end_u64 > 0x00ff_ffff) return error.BadSfnt;
+        const end: u32 = @intCast(end_u64);
+        if (previous_end) |last_end| {
+            if (start <= last_end) return error.BadSfnt;
+        }
+        previous_end = end;
+    }
+}
+
+fn validateCmapFormat14NonDefaultUvs(data: []const u8, offset: usize, table_end: usize) FontError!void {
+    if (offset + 4 > table_end) return error.BadSfnt;
+    const mapping_count: usize = @intCast(try bin.readU32At(data, offset));
+    if (mapping_count > (table_end - (offset + 4)) / 5) return error.BadSfnt;
+
+    var previous_unicode: ?u32 = null;
+    for (0..mapping_count) |index| {
+        const mapping = offset + 4 + index * 5;
+        const unicode_value = try readU24At(data, mapping);
+        if (previous_unicode) |last_unicode| {
+            if (unicode_value <= last_unicode) return error.BadSfnt;
+        }
+        previous_unicode = unicode_value;
     }
 }
 
@@ -2664,6 +2733,35 @@ test "cmap segmented groups must be sorted and disjoint" {
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &overlapping, cmap));
 }
 
+test "cmap format 14 UVS offsets cannot overlap selector records" {
+    const allocator = std.testing.allocator;
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 41,
+    };
+
+    var valid: [41]u8 = .{0} ** 41;
+    writeCmapFormat14HeaderTest(&valid, 29, 1);
+    writeU24Test(&valid, 22, 0x00fe0f); // Variation selector.
+    writeU32Test(&valid, 25, 21); // Default UVS table starts after the selector record array.
+    writeU32Test(&valid, 33, 1); // One default UVS range.
+    writeU24Test(&valid, 37, 'A');
+    valid[40] = 0; // additionalCount.
+    const subtables = try parseCmapSubtables(allocator, &valid, cmap);
+    allocator.free(subtables);
+
+    var default_overlap = valid;
+    writeU32Test(&default_overlap, 25, 17); // Reinterprets selector-record fields as DefaultUVS data.
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &default_overlap, cmap));
+
+    var non_default_overlap = valid;
+    writeU32Test(&non_default_overlap, 25, 0);
+    writeU32Test(&non_default_overlap, 29, 17); // Same metadata-overlap issue for NonDefaultUVS.
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &non_default_overlap, cmap));
+}
+
 test "simple glyf contours reject non-increasing end points" {
     var glyph_data: [24]u8 = .{0} ** 24;
     writeI16Test(&glyph_data, 0, 2); // contourCount
@@ -3431,6 +3529,17 @@ fn writeCmapFormat12HeaderTest(bytes: []u8, length: u32, groups: u32) void {
     writeU32Test(bytes, 24, groups);
 }
 
+fn writeCmapFormat14HeaderTest(bytes: []u8, length: u32, records: u32) void {
+    writeU16Test(bytes, 0, 0);
+    writeU16Test(bytes, 2, 1);
+    writeU16Test(bytes, 4, 0);
+    writeU16Test(bytes, 6, 5);
+    writeU32Test(bytes, 8, 12);
+    writeU16Test(bytes, 12, 14);
+    writeU32Test(bytes, 14, length);
+    writeU32Test(bytes, 18, records);
+}
+
 fn writeCmapGroupTest(bytes: []u8, offset: usize, start: u32, end: u32, glyph_id: u32) void {
     writeU32Test(bytes, offset, start);
     writeU32Test(bytes, offset + 4, end);
@@ -3439,6 +3548,13 @@ fn writeCmapGroupTest(bytes: []u8, offset: usize, start: u32, end: u32, glyph_id
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeU24Test(bytes: []u8, offset: usize, value: u32) void {
+    std.debug.assert(value <= 0x00ff_ffff);
+    bytes[offset] = @intCast(value >> 16);
+    bytes[offset + 1] = @intCast((value >> 8) & 0xff);
+    bytes[offset + 2] = @intCast(value & 0xff);
 }
 
 fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {

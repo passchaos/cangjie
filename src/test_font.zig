@@ -2547,10 +2547,17 @@ fn hmtxTableWithColorGlyphs(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn locaTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 6);
+    const bytes = try allocator.alloc(u8, 12);
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, 6);
     writeU16(bytes, 4, 20);
+    // Most synthetic fixtures only outline glyphs 0 and 1, but several tests
+    // raise maxp.numGlyphs to exercise cmap/GSUB/GPOS paths. The extra loca
+    // entries mark those higher glyph ids as empty so stricter parse-time
+    // loca validation can keep the fixtures valid without inventing outlines.
+    writeU16(bytes, 6, 20);
+    writeU16(bytes, 8, 20);
+    writeU16(bytes, 10, 20);
     return bytes;
 }
 

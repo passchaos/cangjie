@@ -295,6 +295,7 @@ pub const Font = struct {
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
         const required_hmtx_length = try hmtxRequiredLength(glyph_count, number_of_h_metrics);
         if (hmtx.length < required_hmtx_length) return error.InvalidMetrics;
+        if (format == .truetype) try validateLocaTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
 
@@ -1549,6 +1550,26 @@ fn locaEntryRequiredLength(glyph_id: u32, index_to_loc_format: i16) FontError!us
         1 => entry_count * 4,
         else => error.InvalidLoca,
     };
+}
+
+fn validateLocaTable(data: []const u8, loca: TableRecord, glyf: TableRecord, glyph_count: u16, index_to_loc_format: i16) FontError!void {
+    const required_length = try locaEntryRequiredLength(glyph_count, index_to_loc_format);
+    if (loca.length < required_length) return error.InvalidLoca;
+
+    // The loca table is the authoritative glyf byte map. Validate the complete
+    // offset array at parse time instead of deferring malformed entries until a
+    // specific glyph is outlined; otherwise a font can be accepted while later
+    // glyph ids reveal decreasing offsets or pointers beyond the glyf table.
+    var previous: usize = 0;
+    for (0..@as(usize, glyph_count) + 1) |index| {
+        const current = switch (index_to_loc_format) {
+            0 => @as(usize, try bin.readU16At(data, loca.offset + index * 2)) * 2,
+            1 => try bin.readU32At(data, loca.offset + index * 4),
+            else => return error.InvalidLoca,
+        };
+        if (current < previous or current > glyf.length) return error.InvalidLoca;
+        previous = current;
+    }
 }
 
 const TtcHeader = struct {
@@ -3646,9 +3667,28 @@ test "core metrics and loca stay inside declared table lengths" {
         const bytes = try test_font.buildMinimalTtf(allocator);
         defer allocator.free(bytes);
         try setSfntTableLength(bytes, "loca", 4);
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-        try std.testing.expectError(error.InvalidLoca, font.glyphOutline(allocator, 1));
+        try std.testing.expectError(error.InvalidLoca, Font.parse(allocator, bytes));
+    }
+}
+
+test "loca offsets are validated against glyf at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const loca_offset = try sfntTableOffset(bytes, "loca");
+        writeU16Test(bytes, loca_offset + 4, 1); // Third entry moves backward from glyph 0's end.
+        try std.testing.expectError(error.InvalidLoca, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const loca_offset = try sfntTableOffset(bytes, "loca");
+        writeU16Test(bytes, loca_offset + 4, 22); // Short format stores offsets divided by two; 44 > glyf.len.
+        try std.testing.expectError(error.InvalidLoca, Font.parse(allocator, bytes));
     }
 }
 

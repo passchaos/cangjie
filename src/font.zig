@@ -3676,11 +3676,14 @@ fn validateGvarTable(data: []const u8, gvar: TableRecord, glyph_count: u16, fvar
     const minimum_glyph_data_offset = 20 + offsets_len;
     if (glyph_data_offset < minimum_glyph_data_offset or glyph_data_offset > gvar.length) return error.BadSfnt;
 
-    if (shared_tuple_count != 0) {
+    const shared_tuples: []const u8 = if (shared_tuple_count != 0) blk: {
         if (shared_tuple_offset < minimum_glyph_data_offset or shared_tuple_offset > glyph_data_offset) return error.BadSfnt;
         const tuple_bytes = shared_tuple_count * axis_count * 2;
         if (tuple_bytes > glyph_data_offset - shared_tuple_offset) return error.BadSfnt;
-    }
+        const tuple_data = data[gvar.offset + shared_tuple_offset .. gvar.offset + shared_tuple_offset + tuple_bytes];
+        try validateGvarTupleCoordinateArray(tuple_data, axis_count * shared_tuple_count);
+        break :blk tuple_data;
+    } else &.{};
 
     const glyph_data_limit = gvar.length - glyph_data_offset;
     var previous = blk: {
@@ -3700,7 +3703,7 @@ fn validateGvarTable(data: []const u8, gvar: TableRecord, glyph_count: u16, fvar
                 try gvarGlyphTargetCount(data, context, @intCast(glyph_index))
             else
                 null;
-            try validateGvarGlyphVariationData(data[glyph_data_start .. gvar.offset + glyph_data_offset + current], axis_count, shared_tuple_count, target_count);
+            try validateGvarGlyphVariationData(data[glyph_data_start .. gvar.offset + glyph_data_offset + current], axis_count, shared_tuple_count, shared_tuples, target_count);
         }
         previous = current;
     }
@@ -3770,7 +3773,7 @@ const GvarTupleHeader = struct {
     }
 };
 
-fn validateGvarGlyphVariationData(glyph_data: []const u8, axis_count: usize, shared_tuple_count: usize, target_count: ?usize) FontError!void {
+fn validateGvarGlyphVariationData(glyph_data: []const u8, axis_count: usize, shared_tuple_count: usize, shared_tuples: []const u8, target_count: ?usize) FontError!void {
     if (glyph_data.len < 4) return error.BadSfnt;
     const raw_tuple_count = try bin.readU16At(glyph_data, 0);
     if ((raw_tuple_count & 0x7000) != 0) return error.BadSfnt;
@@ -3785,7 +3788,7 @@ fn validateGvarGlyphVariationData(glyph_data: []const u8, axis_count: usize, sha
     var tuple_data_bytes: usize = 0;
     for (0..tuple_count) |_| {
         if (header_cursor > data_offset) return error.BadSfnt;
-        const header = try readGvarTupleHeader(glyph_data, header_cursor, axis_count, shared_tuple_count);
+        const header = try readGvarTupleHeader(glyph_data, header_cursor, axis_count, shared_tuple_count, shared_tuples);
         if (header.header_size > data_offset - header_cursor) return error.BadSfnt;
         header_cursor += header.header_size;
         if (header.variation_data_size > glyph_data.len - data_offset - tuple_data_bytes) return error.BadSfnt;
@@ -3806,7 +3809,7 @@ fn validateGvarGlyphVariationData(glyph_data: []const u8, axis_count: usize, sha
     header_cursor = 4;
     var tuple_cursor = data_cursor;
     for (0..tuple_count) |_| {
-        const header = try readGvarTupleHeader(glyph_data, header_cursor, axis_count, shared_tuple_count);
+        const header = try readGvarTupleHeader(glyph_data, header_cursor, axis_count, shared_tuple_count, shared_tuples);
         header_cursor += header.header_size;
 
         const tuple_end = tuple_cursor + header.variation_data_size;
@@ -3842,7 +3845,7 @@ fn gvarDeltaCountForPointSelection(points: GvarPointSelection, target_count: ?us
     }
 }
 
-fn readGvarTupleHeader(glyph_data: []const u8, offset: usize, axis_count: usize, shared_tuple_count: usize) FontError!GvarTupleHeader {
+fn readGvarTupleHeader(glyph_data: []const u8, offset: usize, axis_count: usize, shared_tuple_count: usize, shared_tuples: []const u8) FontError!GvarTupleHeader {
     if (offset > glyph_data.len or glyph_data.len - offset < 4) return error.BadSfnt;
     const variation_data_size: usize = @intCast(try bin.readU16At(glyph_data, offset));
     const tuple_index = try bin.readU16At(glyph_data, offset + 2);
@@ -3855,12 +3858,64 @@ fn readGvarTupleHeader(glyph_data: []const u8, offset: usize, axis_count: usize,
     if (embedded_peak_tuple) header_size += axis_count * 2;
     if ((tuple_index & 0x4000) != 0) header_size += axis_count * 4;
     if (header_size > glyph_data.len - offset) return error.BadSfnt;
+    try validateGvarTupleHeaderCoordinates(glyph_data, offset, axis_count, tuple_index, shared_tuples, shared_tuple_count);
 
     return .{
         .variation_data_size = variation_data_size,
         .tuple_index = tuple_index,
         .header_size = header_size,
     };
+}
+
+fn validateGvarTupleCoordinateArray(tuple_data: []const u8, coordinate_count: usize) FontError!void {
+    if (coordinate_count * 2 != tuple_data.len) return error.BadSfnt;
+    for (0..coordinate_count) |index| {
+        _ = try readGvarNormalizedCoordinate(tuple_data, index * 2);
+    }
+}
+
+fn validateGvarTupleHeaderCoordinates(glyph_data: []const u8, offset: usize, axis_count: usize, tuple_index: u16, shared_tuples: []const u8, shared_tuple_count: usize) FontError!void {
+    const embedded_peak_tuple = (tuple_index & 0x8000) != 0;
+    const intermediate_region = (tuple_index & 0x4000) != 0;
+    const embedded_peak_offset = offset + 4;
+    const intermediate_start_offset = embedded_peak_offset + if (embedded_peak_tuple) axis_count * 2 else 0;
+    const intermediate_end_offset = intermediate_start_offset + axis_count * 2;
+    const shared_tuple_index: usize = @intCast(tuple_index & 0x0fff);
+    const shared_peak_offset = shared_tuple_index * axis_count * 2;
+
+    if (!embedded_peak_tuple and (shared_tuple_index >= shared_tuple_count or shared_peak_offset + axis_count * 2 > shared_tuples.len)) return error.BadSfnt;
+
+    for (0..axis_count) |axis_index| {
+        const peak = if (embedded_peak_tuple)
+            try readGvarNormalizedCoordinate(glyph_data, embedded_peak_offset + axis_index * 2)
+        else
+            try readGvarNormalizedCoordinate(shared_tuples, shared_peak_offset + axis_index * 2);
+
+        if (intermediate_region) {
+            const start = try readGvarNormalizedCoordinate(glyph_data, intermediate_start_offset + axis_index * 2);
+            const end = try readGvarNormalizedCoordinate(glyph_data, intermediate_end_offset + axis_index * 2);
+            try validateGvarIntermediateAxis(start, peak, end);
+        }
+    }
+}
+
+fn readGvarNormalizedCoordinate(data: []const u8, offset: usize) FontError!i16 {
+    const value = bin.readI16At(data, offset) catch return error.BadSfnt;
+    // Tuple records use F2DOT14 values, whose bit pattern can represent
+    // nearly +/-2.0. In gvar they are normalized design-space coordinates and
+    // must stay inside the [-1, +1] variation-space cube.
+    if (value < -0x4000 or value > 0x4000) return error.BadSfnt;
+    return value;
+}
+
+fn validateGvarIntermediateAxis(start: i16, peak: i16, end: i16) FontError!void {
+    // The interpolation scalar treats invalid axis triples as "ignored" in the
+    // spec pseudo-code, but accepting such data at parse time can hide a tuple
+    // region that never behaves as authored. Keep intermediate regions ordered
+    // and on one side of the default point unless a zero peak deliberately
+    // marks this axis as non-participating.
+    if (start > peak or peak > end) return error.BadSfnt;
+    if (start < 0 and end > 0 and peak != 0) return error.BadSfnt;
 }
 
 fn validateGvarPackedPointNumbers(data: []const u8, cursor: *usize, limit: usize) FontError!GvarPointSelection {
@@ -6221,6 +6276,64 @@ test "gvar glyph variation data validates tuple payloads" {
     try std.testing.expectError(error.BadSfnt, validateVariationDataTables(&reserved_flags, 1, fvar, gvar, null, null, null, null));
 }
 
+test "gvar tuple coordinates validate normalized peaks and intermediate regions" {
+    const gvar_offset = 36;
+
+    var embedded_peak: [76]u8 = .{0} ** 76;
+    writeU32Test(&embedded_peak, 0, 0x00010000);
+    writeU16Test(&embedded_peak, 4, 16);
+    writeU16Test(&embedded_peak, 8, 1);
+    writeU16Test(&embedded_peak, 10, 20);
+    writeFvarAxisTest(&embedded_peak, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeGvarOneGlyphPrivatePointTupleTest(&embedded_peak, gvar_offset);
+
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = gvar_offset };
+    const embedded_gvar = TableRecord{ .tag = .{ 'g', 'v', 'a', 'r' }, .checksum = 0, .offset = gvar_offset, .length = embedded_peak.len - gvar_offset };
+    try validateVariationDataTables(&embedded_peak, 1, fvar, embedded_gvar, null, null, null, null);
+
+    var peak_outside_normalized_space = embedded_peak;
+    writeI16Test(&peak_outside_normalized_space, gvar_offset + 24 + 8, 0x4001);
+    try std.testing.expectError(error.BadSfnt, validateVariationDataTables(&peak_outside_normalized_space, 1, fvar, embedded_gvar, null, null, null, null));
+
+    var shared_peak: [78]u8 = .{0} ** 78;
+    writeU32Test(&shared_peak, 0, 0x00010000);
+    writeU16Test(&shared_peak, 4, 16);
+    writeU16Test(&shared_peak, 8, 1);
+    writeU16Test(&shared_peak, 10, 20);
+    writeFvarAxisTest(&shared_peak, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeGvarOneGlyphSharedTupleTest(&shared_peak, gvar_offset, 1.0);
+
+    const shared_gvar = TableRecord{ .tag = .{ 'g', 'v', 'a', 'r' }, .checksum = 0, .offset = gvar_offset, .length = shared_peak.len - gvar_offset };
+    try validateVariationDataTables(&shared_peak, 1, fvar, shared_gvar, null, null, null, null);
+
+    var shared_peak_outside_normalized_space = shared_peak;
+    writeI16Test(&shared_peak_outside_normalized_space, gvar_offset + 24, 0x4001);
+    try std.testing.expectError(error.BadSfnt, validateVariationDataTables(&shared_peak_outside_normalized_space, 1, fvar, shared_gvar, null, null, null, null));
+
+    var intermediate: [80]u8 = .{0} ** 80;
+    writeU32Test(&intermediate, 0, 0x00010000);
+    writeU16Test(&intermediate, 4, 16);
+    writeU16Test(&intermediate, 8, 1);
+    writeU16Test(&intermediate, 10, 20);
+    writeFvarAxisTest(&intermediate, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeGvarOneGlyphIntermediateTupleTest(&intermediate, gvar_offset, 0.0, 0.5, 1.0);
+
+    const intermediate_gvar = TableRecord{ .tag = .{ 'g', 'v', 'a', 'r' }, .checksum = 0, .offset = gvar_offset, .length = intermediate.len - gvar_offset };
+    try validateVariationDataTables(&intermediate, 1, fvar, intermediate_gvar, null, null, null, null);
+
+    var reversed_intermediate = intermediate;
+    writeF2Dot14Test(&reversed_intermediate, gvar_offset + 24 + 10, 0.75); // start > peak.
+    try std.testing.expectError(error.BadSfnt, validateVariationDataTables(&reversed_intermediate, 1, fvar, intermediate_gvar, null, null, null, null));
+
+    var crossing_intermediate = intermediate;
+    writeF2Dot14Test(&crossing_intermediate, gvar_offset + 24 + 10, -1.0); // Crosses zero with a non-zero peak.
+    try std.testing.expectError(error.BadSfnt, validateVariationDataTables(&crossing_intermediate, 1, fvar, intermediate_gvar, null, null, null, null));
+
+    var ignored_axis_intermediate = intermediate;
+    writeGvarOneGlyphIntermediateTupleTest(&ignored_axis_intermediate, gvar_offset, -1.0, 0.0, 1.0);
+    try validateVariationDataTables(&ignored_axis_intermediate, 1, fvar, intermediate_gvar, null, null, null, null);
+}
+
 test "VariationStore data validates axis and region indexes" {
     var bytes: [54]u8 = .{0} ** 54;
     writeHvarTableWithOneItemVariationData(&bytes);
@@ -6930,6 +7043,56 @@ fn writeGvarOneGlyphPrivatePointTupleTest(bytes: []u8, offset: usize) void {
     bytes[glyph_data + 13] = 0x80; // one zero X delta.
     bytes[glyph_data + 14] = 0; // one byte-sized Y delta.
     bytes[glyph_data + 15] = 7;
+}
+
+fn writeGvarOneGlyphSharedTupleTest(bytes: []u8, offset: usize, peak: f32) void {
+    writeU16Test(bytes, offset + 0, 1); // majorVersion.
+    writeU16Test(bytes, offset + 2, 0); // minorVersion.
+    writeU16Test(bytes, offset + 4, 1); // axisCount.
+    writeU16Test(bytes, offset + 6, 1); // one shared tuple.
+    writeU32Test(bytes, offset + 8, 24); // Shared tuple array starts after the short offsets.
+    writeU16Test(bytes, offset + 12, 1); // glyphCount.
+    writeU32Test(bytes, offset + 16, 26); // GlyphVariationData follows the shared tuple.
+    writeU16Test(bytes, offset + 20, 0);
+    writeU16Test(bytes, offset + 22, 8); // One 16-byte GlyphVariationData block.
+    writeF2Dot14Test(bytes, offset + 24, peak);
+
+    const glyph_data = offset + 26;
+    writeU16Test(bytes, glyph_data + 0, 1); // one TupleVariationHeader.
+    writeU16Test(bytes, glyph_data + 2, 8); // serialized data starts after the shared tuple reference header.
+    writeU16Test(bytes, glyph_data + 4, 6); // private point numbers plus X/Y packed deltas.
+    writeU16Test(bytes, glyph_data + 6, 0x2000); // shared peak tuple index 0 and private point numbers.
+    bytes[glyph_data + 8] = 1;
+    bytes[glyph_data + 9] = 0;
+    bytes[glyph_data + 10] = 0;
+    bytes[glyph_data + 11] = 0x80;
+    bytes[glyph_data + 12] = 0;
+    bytes[glyph_data + 13] = 7;
+}
+
+fn writeGvarOneGlyphIntermediateTupleTest(bytes: []u8, offset: usize, start: f32, peak: f32, end: f32) void {
+    writeU16Test(bytes, offset + 0, 1); // majorVersion.
+    writeU16Test(bytes, offset + 2, 0); // minorVersion.
+    writeU16Test(bytes, offset + 4, 1); // axisCount.
+    writeU16Test(bytes, offset + 12, 1); // glyphCount.
+    writeU32Test(bytes, offset + 16, 24); // GlyphVariationData array after two short offsets.
+    writeU16Test(bytes, offset + 20, 0);
+    writeU16Test(bytes, offset + 22, 10); // One 20-byte GlyphVariationData block.
+
+    const glyph_data = offset + 24;
+    writeU16Test(bytes, glyph_data + 0, 1); // one TupleVariationHeader.
+    writeU16Test(bytes, glyph_data + 2, 14); // serialized data starts after peak/start/end tuples.
+    writeU16Test(bytes, glyph_data + 4, 6); // private point numbers plus X/Y packed deltas.
+    writeU16Test(bytes, glyph_data + 6, 0xe000); // embedded peak, intermediate region, private points.
+    writeF2Dot14Test(bytes, glyph_data + 8, peak);
+    writeF2Dot14Test(bytes, glyph_data + 10, start);
+    writeF2Dot14Test(bytes, glyph_data + 12, end);
+    bytes[glyph_data + 14] = 1;
+    bytes[glyph_data + 15] = 0;
+    bytes[glyph_data + 16] = 0;
+    bytes[glyph_data + 17] = 0x80;
+    bytes[glyph_data + 18] = 0;
+    bytes[glyph_data + 19] = 7;
 }
 
 fn writeTagTest(bytes: []u8, offset: usize, tag_text: []const u8) void {

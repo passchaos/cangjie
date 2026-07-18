@@ -329,6 +329,7 @@ pub const Font = struct {
         if (colr) |colr_table| try validateColrGlyphBounds(data, colr_table, glyph_count);
         if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
         if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
+        if (cblc != null and cbdt != null) try validateCblcCbdtTables(data, cblc.?, cbdt.?, glyph_count);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
         // supported Unicode mapping per lookup without reparsing the directory.
@@ -1310,6 +1311,39 @@ fn cblcGlyphPng(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_co
         }
     }
     return best;
+}
+
+fn validateCblcCbdtTables(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16) FontError!void {
+    const strike_count = try cblcStrikeCount(data, cblc);
+    for (0..strike_count) |strike_index| {
+        const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
+        for (strike.start_glyph..@as(usize, strike.end_glyph) + 1) |glyph_index| {
+            const location = (try cblcGlyphLocation(data, strike, @intCast(glyph_index))) orelse continue;
+            try validateCbdtGlyphData(data, cbdt, location);
+        }
+    }
+}
+
+fn validateCbdtGlyphData(data: []const u8, cbdt: TableRecord, location: CblcGlyphLocation) FontError!void {
+    if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
+
+    // CBLC is an index over CBDT payloads, so all non-empty locations must be
+    // structurally safe even when this library does not render that bitmap
+    // format. Validating every referenced payload at parse time prevents an
+    // unused strike or glyph from hiding an out-of-bounds CBDT slice that would
+    // otherwise surface only during a later bitmap lookup.
+    const start = cbdt.offset + location.offset;
+    const end = start + location.length;
+    const slice = data[start..end];
+    const metrics_len: usize = switch (location.image_format) {
+        17 => 5,
+        18 => 8,
+        19 => 0,
+        else => return,
+    };
+    if (slice.len < metrics_len + 4) return error.BadSfnt;
+    const data_len = try bin.readU32At(slice, metrics_len);
+    if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
 }
 
 fn cblcGlyphLocation(data: []const u8, strike: CblcStrike, glyph_id: glyph_mod.GlyphId) FontError!?CblcGlyphLocation {
@@ -5693,6 +5727,32 @@ test "CBLC image locations reject arithmetic overflow before CBDT slicing" {
     const location = (try cblcImageLocation(17, 10, 4, 8)).?;
     try std.testing.expectEqual(@as(usize, 14), location.offset);
     try std.testing.expectEqual(@as(usize, 4), location.length);
+}
+
+test "CBLC CBDT parse validation checks every referenced bitmap payload" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCbdtPngTtf(allocator);
+    defer allocator.free(bytes);
+
+    const cblc_offset = try sfntTableOffset(bytes, "CBLC");
+    const cbdt_offset = try sfntTableOffset(bytes, "CBDT");
+    const original_data_len = try bin.readU32At(bytes, cbdt_offset + 9);
+
+    // The CBLC fixture references one format-17 CBDT PNG payload. Corrupting
+    // its embedded dataLen leaves all CBLC offsets/ranges intact, so only a
+    // parse-time walk that checks referenced CBDT records catches the defect
+    // before a specific bitmap glyph is requested.
+    writeU32Test(bytes, cbdt_offset + 9, 0xffff_ffff);
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+
+    // Restore the CBDT payload and instead point the CBLC location just past
+    // the declared CBDT table. The glyph is valid only if both the bitmap index
+    // and the data table agree on the referenced byte range.
+    writeU32Test(bytes, cbdt_offset + 9, original_data_len);
+    writeU32Test(bytes, cblc_offset + 68, 0xffff_ff00); // indexSubTable.imageDataOffset
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
 test "CBDT non-PNG image formats are skipped by PNG lookup" {

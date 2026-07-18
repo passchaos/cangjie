@@ -1974,6 +1974,7 @@ fn validateCompoundGlyphDescription(allocator: std.mem.Allocator, glyph_data: []
     while (true) {
         if (offset + 4 > glyph_data.len) return error.InvalidGlyph;
         const flags = try bin.readU16At(glyph_data, offset);
+        try validateCompoundGlyphFlags(flags);
         const component_glyph = try bin.readU16At(glyph_data, offset + 2);
         if (component_glyph >= glyph_count) return error.InvalidGlyph;
         try components.append(allocator, component_glyph);
@@ -2004,6 +2005,24 @@ fn validateCompoundGlyphDescription(allocator: std.mem.Allocator, glyph_data: []
             return .{ .glyphs = try components.toOwnedSlice(allocator) };
         }
     }
+}
+
+fn validateCompoundGlyphFlags(flags: u16) FontError!void {
+    // Composite glyph flags are part of the glyf bytecode grammar, not an
+    // opaque renderer hint. Rejecting unknown bits at parse time prevents the
+    // component stream from being interpreted with semantics this parser does
+    // not implement, and catches the obsolete bit 4 before it can masquerade as
+    // a normal component.
+    const known_flags: u16 = 0x0001 | 0x0002 | 0x0004 | 0x0008 |
+        0x0020 | 0x0040 | 0x0080 | 0x0100 |
+        0x0200 | 0x0400 | 0x0800 | 0x1000;
+    if ((flags & ~known_flags) != 0) return error.InvalidGlyph;
+
+    // SCALED_COMPONENT_OFFSET and UNSCALED_COMPONENT_OFFSET give opposite
+    // meanings to the same component arguments; accepting both would leave
+    // component placement dependent on whichever interpretation a later
+    // renderer happens to choose.
+    if ((flags & 0x0800) != 0 and (flags & 0x1000) != 0) return error.InvalidGlyph;
 }
 
 fn validateCompoundGlyphGraph(allocator: std.mem.Allocator, adjacency: []const CompoundGlyphLinks, max_component_depth: u16) FontError!void {
@@ -6940,6 +6959,30 @@ test "compound glyf component flags reject conflicting transforms" {
     bytes[glyph_one + 15] = 0;
 
     try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+}
+
+test "compound glyf component flags reject reserved and conflicting offset semantics" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    inline for (.{
+        @as(u16, 0x0002 | 0x0010), // Bit 4 is obsolete/reserved in composite glyph records.
+        @as(u16, 0x0002 | 0x0800 | 0x1000), // Scaled and unscaled offsets are mutually exclusive.
+        @as(u16, 0x0002 | 0x2000), // Bits above OVERLAP_COMPOUND are not defined by glyf.
+    }) |flags| {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const glyph_one = glyf_offset + 12;
+        writeI16Test(bytes, glyph_one, -1); // Compound glyph.
+        writeU16Test(bytes, glyph_one + 10, flags);
+        writeU16Test(bytes, glyph_one + 12, 0);
+        bytes[glyph_one + 14] = 0;
+        bytes[glyph_one + 15] = 0;
+
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
 }
 
 test "compound glyf component graph rejects cycles at parse time" {

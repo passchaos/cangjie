@@ -652,35 +652,12 @@ pub const Font = struct {
 
     pub fn variationAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationAxis {
         const fvar = self.fvar orelse return try allocator.alloc(VariationAxis, 0);
-        if (fvar.length < 16) return error.BadSfnt;
-        const major = try bin.readU16At(self.data, fvar.offset);
-        const minor = try bin.readU16At(self.data, fvar.offset + 2);
-        if (major != 1 or minor != 0) return error.BadSfnt;
-        const axes_array_offset = try bin.readU16At(self.data, fvar.offset + 4);
-        const axis_count = try bin.readU16At(self.data, fvar.offset + 8);
-        const axis_size = try bin.readU16At(self.data, fvar.offset + 10);
-        const instance_count = try bin.readU16At(self.data, fvar.offset + 12);
-        const instance_size = try bin.readU16At(self.data, fvar.offset + 14);
-        if (axis_size < 20) return error.BadSfnt;
-        // fvar offsets are relative to the start of the fvar table. The axis
-        // array must begin after the fixed 16-byte header, and the optional
-        // instance array follows the whole declared axis array. Validate both
-        // regions up front so malformed offsets cannot reinterpret header or
-        // neighbouring table bytes as variation metadata.
-        if (axes_array_offset < 16 or axes_array_offset > fvar.length) return error.BadSfnt;
-        if (@as(usize, axis_count) > (fvar.length - axes_array_offset) / axis_size) return error.BadSfnt;
-        const axes_bytes = @as(usize, axis_count) * axis_size;
-        const instances_offset = axes_array_offset + axes_bytes;
-        if (instance_count != 0) {
-            const minimum_instance_size = 4 + @as(usize, axis_count) * 4;
-            if (instance_size < minimum_instance_size) return error.BadSfnt;
-        }
-        if (instance_size != 0 and @as(usize, instance_count) > (fvar.length - instances_offset) / instance_size) return error.BadSfnt;
+        const info = try readFvarInfo(self.data, fvar);
 
-        const axes = try allocator.alloc(VariationAxis, axis_count);
+        const axes = try allocator.alloc(VariationAxis, info.axis_count);
         errdefer allocator.free(axes);
         for (axes, 0..) |*axis, index| {
-            const axis_offset = fvar.offset + axes_array_offset + index * axis_size;
+            const axis_offset = fvar.offset + info.axes_array_offset + index * info.axis_size;
             axis.* = .{
                 .tag = try bin.readTagAt(self.data, axis_offset),
                 .min_value = fixed16_16ToF32(try bin.readI32At(self.data, axis_offset + 4)),
@@ -689,6 +666,10 @@ pub const Font = struct {
                 .flags = try bin.readU16At(self.data, axis_offset + 16),
                 .name_id = try bin.readU16At(self.data, axis_offset + 18),
             };
+            if (axis.min_value > axis.default_value or axis.default_value > axis.max_value) return error.BadSfnt;
+            for (axes[0..index]) |previous| {
+                if (std.mem.eql(u8, &previous.tag, &axis.tag)) return error.BadSfnt;
+            }
         }
         return axes;
     }
@@ -699,8 +680,13 @@ pub const Font = struct {
         const table = self.data[avar.offset .. avar.offset + avar.length];
         if (avar.length < 8) return error.BadSfnt;
         const major = try bin.readU16At(table, 0);
-        if (major != 1) return error.BadSfnt;
+        const minor = try bin.readU16At(table, 2);
+        if (major != 1 or minor != 0) return error.BadSfnt;
         const axis_count = try bin.readU16At(table, 6);
+        if (self.fvar) |fvar| {
+            const fvar_info = try readFvarInfo(self.data, fvar);
+            if (axis_count != fvar_info.axis_count) return error.BadSfnt;
+        }
 
         var offset: usize = 8;
         var mapped = normalized;
@@ -763,6 +749,7 @@ pub const Font = struct {
                     .glyph_id = try bin.readU16At(self.data, layer_record),
                     .palette_index = try bin.readU16At(self.data, layer_record + 2),
                 };
+                try self.validateColorPaletteIndex(layer.palette_index);
             }
             return layers;
         }
@@ -830,10 +817,19 @@ pub const Font = struct {
             if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
             const paint_start = list_start + paint_offset;
             var graph_guard = ColorPaintGraphGuard{};
-            try validateColorPaintGraph(self.data, colr, paint_start, &graph_guard);
-            return try readColorPaint(self.data, colr, paint_start);
+            try validateColorPaintGraph(self, paint_start, &graph_guard);
+            return try readColorPaint(self, paint_start);
         }
         return null;
+    }
+
+    fn validateColorPaletteIndex(self: *const Font, color_index: u16) FontError!void {
+        // COLR palette indices are only meaningful when a CPAL table declares a
+        // color slot for them.  Validate at parse/read boundaries so rendering
+        // code does not silently drop malformed color layers or paints as if
+        // they merely selected an absent runtime palette.
+        if (self.cpal == null) return error.BadSfnt;
+        _ = (try self.paletteColor(0, color_index)) orelse return error.BadSfnt;
     }
 
     pub fn colorPaintLayer(self: *const Font, layer_index: u32) FontError!?ColorPaint {
@@ -845,8 +841,8 @@ pub const Font = struct {
         if (layer_index >= layer_list.layer_count) return null;
         const paint_start = try colrLayerPaintOffset(self.data, colr, layer_list, layer_index);
         var graph_guard = ColorPaintGraphGuard{};
-        try validateColorPaintLayer(self.data, colr, layer_list, layer_index, &graph_guard);
-        return try readColorPaint(self.data, colr, paint_start);
+        try validateColorPaintLayer(self, layer_list, layer_index, &graph_guard);
+        return try readColorPaint(self, paint_start);
     }
 
     pub fn svgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
@@ -911,7 +907,7 @@ pub const Font = struct {
             const cblc = self.cblc.?;
             const strike_count = try cblcStrikeCount(self.data, cblc);
             for (0..strike_count) |strike_index| {
-                const strike = try cblcStrike(self.data, cblc, strike_index);
+                const strike = try cblcStrike(self.data, cblc, self.glyph_count, strike_index);
                 recordBestBitmapPpem(strike.ppem, size_px, &best_ppem, &best_distance);
             }
         }
@@ -1202,7 +1198,7 @@ fn cblcStrikeCount(data: []const u8, cblc: TableRecord) FontError!usize {
     return @intCast(count);
 }
 
-fn cblcStrike(data: []const u8, cblc: TableRecord, strike_index: usize) FontError!CblcStrike {
+fn cblcStrike(data: []const u8, cblc: TableRecord, glyph_count: u16, strike_index: usize) FontError!CblcStrike {
     const strike_count = try cblcStrikeCount(data, cblc);
     if (strike_index >= strike_count) return error.BadSfnt;
     const offset = cblc.offset + 8 + strike_index * 48;
@@ -1215,6 +1211,7 @@ fn cblcStrike(data: []const u8, cblc: TableRecord, strike_index: usize) FontErro
     const start_glyph = try bin.readU16At(data, offset + 40);
     const end_glyph = try bin.readU16At(data, offset + 42);
     if (start_glyph > end_glyph) return error.BadSfnt;
+    if (end_glyph >= glyph_count) return error.BadSfnt;
     return .{
         .ppem = data[offset + 44],
         .ppi = 0,
@@ -1227,12 +1224,11 @@ fn cblcStrike(data: []const u8, cblc: TableRecord, strike_index: usize) FontErro
 }
 
 fn cblcGlyphPng(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphPng {
-    _ = glyph_count;
     const strike_count = try cblcStrikeCount(data, cblc);
     var best: ?BitmapGlyphPng = null;
     var best_distance: f32 = std.math.inf(f32);
     for (0..strike_count) |strike_index| {
-        const strike = try cblcStrike(data, cblc, strike_index);
+        const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
         if (glyph_id < strike.start_glyph or glyph_id > strike.end_glyph) continue;
         const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
         const glyph = try cbdtGlyphPng(data, cbdt, strike, location);
@@ -2482,6 +2478,46 @@ fn fixed16_16ToF32(value: i32) f32 {
     return @as(f32, @floatFromInt(value)) / 65536.0;
 }
 
+const FvarInfo = struct {
+    axes_array_offset: usize,
+    axis_count: usize,
+    axis_size: usize,
+};
+
+fn readFvarInfo(data: []const u8, fvar: TableRecord) FontError!FvarInfo {
+    if (fvar.length < 16) return error.BadSfnt;
+    const major = try bin.readU16At(data, fvar.offset);
+    const minor = try bin.readU16At(data, fvar.offset + 2);
+    if (major != 1 or minor != 0) return error.BadSfnt;
+    const axes_array_offset: usize = @intCast(try bin.readU16At(data, fvar.offset + 4));
+    const axis_count: usize = @intCast(try bin.readU16At(data, fvar.offset + 8));
+    const axis_size: usize = @intCast(try bin.readU16At(data, fvar.offset + 10));
+    const instance_count: usize = @intCast(try bin.readU16At(data, fvar.offset + 12));
+    const instance_size: usize = @intCast(try bin.readU16At(data, fvar.offset + 14));
+    if (axis_size < 20) return error.BadSfnt;
+
+    // fvar offsets are relative to the start of the fvar table. The axis
+    // array must begin after the fixed 16-byte header, and the optional
+    // instance array follows the whole declared axis array. Validate both
+    // regions up front so malformed offsets cannot reinterpret header or
+    // neighbouring table bytes as variation metadata.
+    if (axes_array_offset < 16 or axes_array_offset > fvar.length) return error.BadSfnt;
+    if (axis_count > (fvar.length - axes_array_offset) / axis_size) return error.BadSfnt;
+    const axes_bytes = axis_count * axis_size;
+    const instances_offset = axes_array_offset + axes_bytes;
+    if (instance_count != 0) {
+        const minimum_instance_size = 4 + axis_count * 4;
+        if (instance_size < minimum_instance_size) return error.BadSfnt;
+    }
+    if (instance_size != 0 and instance_count > (fvar.length - instances_offset) / instance_size) return error.BadSfnt;
+
+    return .{
+        .axes_array_offset = axes_array_offset,
+        .axis_count = axis_count,
+        .axis_size = axis_size,
+    };
+}
+
 fn mapAvarSegment(segment_data: []const u8, normalized: f32) FontError!f32 {
     const pair_count = segment_data.len / 4;
     if (pair_count == 0) return normalized;
@@ -2562,12 +2598,15 @@ fn colrLayerPaintOffset(data: []const u8, colr: TableRecord, layer_list: ColrLay
     return layer_list.start + paint_offset;
 }
 
-fn validateColorPaintLayer(data: []const u8, colr: TableRecord, layer_list: ColrLayerList, layer_index: u32, guard: *ColorPaintGraphGuard) FontError!void {
-    const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, layer_index);
-    try validateColorPaintGraph(data, colr, paint_offset, guard);
+fn validateColorPaintLayer(font: *const Font, layer_list: ColrLayerList, layer_index: u32, guard: *ColorPaintGraphGuard) FontError!void {
+    const colr = font.colr orelse return error.BadSfnt;
+    const paint_offset = try colrLayerPaintOffset(font.data, colr, layer_list, layer_index);
+    try validateColorPaintGraph(font, paint_offset, guard);
 }
 
-fn validateColorPaintGraph(data: []const u8, colr: TableRecord, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
+fn validateColorPaintGraph(font: *const Font, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
+    const colr = font.colr orelse return error.BadSfnt;
+    const data = font.data;
     if (offset >= colr.offset + colr.length) return error.BadSfnt;
     try guard.enter(offset);
     defer guard.leave();
@@ -2583,18 +2622,19 @@ fn validateColorPaintGraph(data: []const u8, colr: TableRecord, offset: usize, g
             const first: usize = @intCast(first_layer_index);
             if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
             for (0..layer_count) |layer_offset| {
-                try validateColorPaintLayer(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)), guard);
+                try validateColorPaintLayer(font, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)), guard);
             }
         },
         2 => {
             if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
+            try font.validateColorPaletteIndex(try bin.readU16At(data, offset + 1));
         },
         10 => {
             if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
             const child_offset: usize = @intCast(try readU24At(data, offset + 1));
             if (child_offset < 6) return error.BadSfnt;
             if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
-            try validateColorPaintGraph(data, colr, offset + child_offset, guard);
+            try validateColorPaintGraph(font, offset + child_offset, guard);
         },
         // Unsupported paint formats are left for `readColorPaint` to report
         // when callers ask for that specific paint.  Graph validation only
@@ -2604,14 +2644,20 @@ fn validateColorPaintGraph(data: []const u8, colr: TableRecord, offset: usize, g
     }
 }
 
-fn readColorPaint(data: []const u8, colr: TableRecord, offset: usize) FontError!ColorPaint {
+fn readColorPaint(font: *const Font, offset: usize) FontError!ColorPaint {
+    const colr = font.colr orelse return error.BadSfnt;
+    const data = font.data;
     if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
     const format = data[offset];
     return switch (format) {
-        2 => .{ .solid = .{
-            .palette_index = try bin.readU16At(data, offset + 1),
-            .alpha = f2dot14(try bin.readI16At(data, offset + 3)),
-        } },
+        2 => blk: {
+            const palette_index = try bin.readU16At(data, offset + 1);
+            try font.validateColorPaletteIndex(palette_index);
+            break :blk .{ .solid = .{
+                .palette_index = palette_index,
+                .alpha = f2dot14(try bin.readI16At(data, offset + 3)),
+            } };
+        },
         1 => blk: {
             if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
             break :blk .{ .layers = .{
@@ -2628,7 +2674,7 @@ fn readColorPaint(data: []const u8, colr: TableRecord, offset: usize) FontError!
             // offset zero would recurse into the same PaintGlyph forever.
             if (child_offset < 6) return error.BadSfnt;
             if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
-            const child = try readColorPaint(data, colr, offset + child_offset);
+            const child = try readColorPaint(font, offset + child_offset);
             break :blk switch (child) {
                 .solid => |solid| .{ .glyph = .{ .glyph_id = glyph_id, .solid = solid } },
                 else => error.UnsupportedGlyph,
@@ -2888,6 +2934,22 @@ test "CBLC bitmap index subtables reject decreasing image offsets" {
     var format4_strike = strike;
     format4_strike.index_tables_size = format4_pairs.len;
     try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat4(&format4_pairs, format4_strike, 0, 1, 17, 0));
+}
+
+test "CBLC strike glyph ranges stay within maxp glyph count" {
+    var bytes: [56]u8 = .{0} ** 56;
+    writeU16Test(&bytes, 0, 2); // major version.
+    writeU16Test(&bytes, 2, 0); // minor version.
+    writeU32Test(&bytes, 4, 1); // one strike.
+    writeU32Test(&bytes, 8, 56); // indexSubTableArrayOffset at end: empty index array.
+    writeU32Test(&bytes, 12, 0);
+    writeU32Test(&bytes, 16, 0);
+    writeU16Test(&bytes, 48, 0); // startGlyphIndex.
+    writeU16Test(&bytes, 50, 2); // endGlyphIndex exceeds a two-glyph font's max glyph id.
+    bytes[52] = 16;
+
+    const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, cblcStrike(&bytes, cblc, 2, 0));
 }
 
 test "cmap format 4 idRangeOffset stays inside declared subtable length" {
@@ -3379,6 +3441,40 @@ test "CPAL palette entries stay inside declared color records" {
     try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
 }
 
+test "COLR palette indices must be declared by CPAL" {
+    const allocator = std.testing.allocator;
+
+    var colr_v0_with_cpal: [42]u8 = .{0} ** 42;
+    writeU16Test(&colr_v0_with_cpal, 0, 0); // COLR version 0.
+    writeU16Test(&colr_v0_with_cpal, 2, 1); // one BaseGlyphRecord.
+    writeU32Test(&colr_v0_with_cpal, 4, 14);
+    writeU32Test(&colr_v0_with_cpal, 8, 20);
+    writeU16Test(&colr_v0_with_cpal, 12, 1);
+    writeU16Test(&colr_v0_with_cpal, 14, 1); // base glyph.
+    writeU16Test(&colr_v0_with_cpal, 16, 0);
+    writeU16Test(&colr_v0_with_cpal, 18, 1);
+    writeU16Test(&colr_v0_with_cpal, 20, 1); // layer glyph.
+    writeU16Test(&colr_v0_with_cpal, 22, 1); // Invalid: CPAL only declares color index 0.
+    writeSingleEntryCpalTest(&colr_v0_with_cpal, 24);
+
+    const colr_v0_font = colrCpalOnlyFont(&colr_v0_with_cpal, 24);
+    try std.testing.expectError(error.BadSfnt, colr_v0_font.colorLayers(allocator, 1));
+
+    var colr_v1_with_cpal: [67]u8 = .{0} ** 67;
+    writeU16Test(&colr_v1_with_cpal, 0, 1); // COLR version 1.
+    writeU32Test(&colr_v1_with_cpal, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&colr_v1_with_cpal, 34, 1);
+    writeU16Test(&colr_v1_with_cpal, 38, 1);
+    writeU32Test(&colr_v1_with_cpal, 40, 10); // PaintSolid at byte 44.
+    colr_v1_with_cpal[44] = 2;
+    writeU16Test(&colr_v1_with_cpal, 45, 1); // Invalid: CPAL only declares color index 0.
+    writeF2Dot14Test(&colr_v1_with_cpal, 47, 1.0);
+    writeSingleEntryCpalTest(&colr_v1_with_cpal, 49);
+
+    const colr_v1_font = colrCpalOnlyFont(&colr_v1_with_cpal, 49);
+    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaint(1));
+}
+
 test "COLR v1 paint offsets cannot overlap parent metadata" {
     var base_list_overlap: [44]u8 = .{0} ** 44;
     writeU16Test(&base_list_overlap, 0, 1); // COLR version 1.
@@ -3524,6 +3620,31 @@ test "fvar axes and instance arrays stay inside declared table regions" {
     try std.testing.expectEqualStrings("wght", &axes[0].tag);
 }
 
+test "fvar axis records require ordered ranges and unique tags" {
+    const allocator = std.testing.allocator;
+
+    var invalid_range: [36]u8 = .{0} ** 36;
+    writeU32Test(&invalid_range, 0, 0x00010000);
+    writeU16Test(&invalid_range, 4, 16);
+    writeU16Test(&invalid_range, 8, 1);
+    writeU16Test(&invalid_range, 10, 20);
+    writeFvarAxisTest(&invalid_range, 16, "wght", 900.0, 400.0, 100.0, 256);
+
+    const invalid_range_font = fvarOnlyFont(&invalid_range);
+    try std.testing.expectError(error.BadSfnt, invalid_range_font.variationAxes(allocator));
+
+    var duplicate_tags: [56]u8 = .{0} ** 56;
+    writeU32Test(&duplicate_tags, 0, 0x00010000);
+    writeU16Test(&duplicate_tags, 4, 16);
+    writeU16Test(&duplicate_tags, 8, 2);
+    writeU16Test(&duplicate_tags, 10, 20);
+    writeFvarAxisTest(&duplicate_tags, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeFvarAxisTest(&duplicate_tags, 36, "wght", 50.0, 100.0, 200.0, 257);
+
+    const duplicate_font = fvarOnlyFont(&duplicate_tags);
+    try std.testing.expectError(error.BadSfnt, duplicate_font.variationAxes(allocator));
+}
+
 test "avar validates every declared segment map before returning a coordinate" {
     var bytes: [20]u8 = .{0} ** 20;
     writeU16Test(&bytes, 0, 1); // major
@@ -3540,6 +3661,22 @@ test "avar validates every declared segment map before returning a coordinate" {
     const font = avarOnlyFont(&bytes);
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 0.0));
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(99, 0.5));
+}
+
+test "avar axis count must match fvar axis count when both tables exist" {
+    var bytes: [46]u8 = .{0} ** 46;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeU16Test(&bytes, 36, 1); // avar major.
+    writeU16Test(&bytes, 38, 0); // avar minor.
+    writeU16Test(&bytes, 42, 2); // Mismatches the single fvar axis.
+    writeU16Test(&bytes, 44, 0); // Empty first segment map would be OK if counts matched.
+
+    const font = fvarAvarOnlyFont(&bytes, 36);
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 0.0));
 }
 
 test "OS/2 style attributes respect versioned table lengths" {
@@ -3693,6 +3830,13 @@ fn colrOnlyFont(data: []const u8) Font {
     };
 }
 
+fn colrCpalOnlyFont(data: []const u8, colr_length: usize) Font {
+    var font = colrOnlyFont(data);
+    font.colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_length };
+    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = colr_length, .length = data.len - colr_length };
+    return font;
+}
+
 fn cpalOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -3826,6 +3970,13 @@ fn avarOnlyFont(data: []const u8) Font {
     return font;
 }
 
+fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
+    var font = fvarOnlyFont(data);
+    font.fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = fvar_length };
+    font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = fvar_length, .length = data.len - fvar_length };
+    return font;
+}
+
 fn kernOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -3955,6 +4106,19 @@ fn writeKernFormat0Body(bytes: []u8, offset: usize, left: glyph_mod.GlyphId, rig
     writeU16Test(bytes, offset + 8, left);
     writeU16Test(bytes, offset + 10, right);
     writeI16Test(bytes, offset + 12, value);
+}
+
+fn writeSingleEntryCpalTest(bytes: []u8, offset: usize) void {
+    writeU16Test(bytes, offset + 0, 0); // version.
+    writeU16Test(bytes, offset + 2, 1); // numPaletteEntries.
+    writeU16Test(bytes, offset + 4, 1); // numPalettes.
+    writeU16Test(bytes, offset + 6, 1); // numColorRecords.
+    writeU32Test(bytes, offset + 8, 14);
+    writeU16Test(bytes, offset + 12, 0);
+    bytes[offset + 14] = 0;
+    bytes[offset + 15] = 0;
+    bytes[offset + 16] = 255;
+    bytes[offset + 17] = 255;
 }
 
 fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32, default: f32, max: f32, name_id: u16) void {

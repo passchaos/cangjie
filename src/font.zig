@@ -1564,10 +1564,63 @@ fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, fo
 
 fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: u16) FontError!void {
     switch (format) {
+        4 => try validateCmapFormat4(data, offset, length),
         12, 13 => try validateSegmentedCmapGroups(data, offset, length),
         14 => try validateCmapFormat14(data, offset, length),
         else => {},
     }
+}
+
+fn validateCmapFormat4(data: []const u8, offset: usize, length: usize) FontError!void {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (length < 16) return error.BadSfnt;
+    const seg_count_x2 = try bin.readU16At(data, offset + 6);
+    if (seg_count_x2 == 0 or (seg_count_x2 & 1) != 0) return error.BadSfnt;
+    const seg_count = @as(usize, seg_count_x2 / 2);
+    const minimum_length = 16 + seg_count * 8;
+    if (length < minimum_length) return error.BadSfnt;
+
+    const table_end = offset + length;
+    const end_codes = offset + 14;
+    const reserved_pad = end_codes + seg_count * 2;
+    const start_codes = reserved_pad + 2;
+    const id_deltas = start_codes + seg_count * 2;
+    const id_range_offsets = id_deltas + seg_count * 2;
+    const glyph_array_start = id_range_offsets + seg_count * 2;
+    if (try bin.readU16At(data, reserved_pad) != 0) return error.BadSfnt;
+
+    var previous_end: ?u16 = null;
+    for (0..seg_count) |index| {
+        const start = try bin.readU16At(data, start_codes + index * 2);
+        const end = try bin.readU16At(data, end_codes + index * 2);
+        if (end < start) return error.BadSfnt;
+        if (previous_end) |last_end| {
+            // Format 4 is searched as an ordered segment array. Reject
+            // overlapping or out-of-order records at cmap parse time so glyph
+            // lookup cannot become dependent on malformed directory order.
+            if (start <= last_end) return error.BadSfnt;
+        }
+        previous_end = end;
+
+        const range_offset = try bin.readU16At(data, id_range_offsets + index * 2);
+        if (range_offset != 0) {
+            if ((range_offset & 1) != 0) return error.BadSfnt;
+            const first_glyph = id_range_offsets + index * 2 + @as(usize, range_offset);
+            const last_delta = @as(usize, end) - @as(usize, start);
+            const last_glyph = first_glyph + last_delta * 2;
+            // Validate the full declared segment, not just the character a
+            // future lookup happens to ask for. Otherwise a malformed cmap can
+            // look fine for early codepoints while later codepoints read past
+            // the subtable into the next SFNT table.
+            if (first_glyph < glyph_array_start or last_glyph > table_end or table_end - last_glyph < 2) return error.BadSfnt;
+        }
+    }
+
+    // OpenType format 4 requires a terminal 0xffff segment. The lookup loop
+    // uses the first segment whose endCode is >= the requested scalar; without
+    // the sentinel, malformed BMP subtables can stop early and hide later
+    // invalid segment data.
+    if (previous_end != 0xffff) return error.BadSfnt;
 }
 
 fn validateSegmentedCmapGroups(data: []const u8, offset: usize, length: usize) FontError!void {
@@ -2822,6 +2875,58 @@ test "cmap parser rejects subtable length past cmap table boundary" {
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &data, cmap));
 }
 
+test "cmap format 4 parser rejects malformed segment metadata" {
+    const allocator = std.testing.allocator;
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 44,
+    };
+
+    var valid: [44]u8 = .{0} ** 44;
+    writeCmapFormat4TwoSegmentHeaderTest(&valid, valid.len - 12);
+    writeCmapFormat4SegmentTest(&valid, 0, 'A', 'A', @as(i16, 1) - @as(i16, @bitCast(@as(u16, 'A'))), 0);
+    writeCmapFormat4SegmentTest(&valid, 1, 0xffff, 0xffff, 1, 0);
+    const subtables = try parseCmapSubtables(allocator, &valid, cmap);
+    allocator.free(subtables);
+
+    var nonzero_reserved_pad = valid;
+    writeU16Test(&nonzero_reserved_pad, 30, 1);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &nonzero_reserved_pad, cmap));
+
+    var odd_range_offset = valid;
+    writeCmapFormat4SegmentTest(&odd_range_offset, 0, 'A', 'A', 0, 1);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &odd_range_offset, cmap));
+
+    var unsorted = valid;
+    writeCmapFormat4SegmentTest(&unsorted, 1, 0x0040, 0xffff, 1, 0);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &unsorted, cmap));
+
+    var missing_sentinel = valid;
+    writeCmapFormat4SegmentTest(&missing_sentinel, 1, 'Z', 'Z', 1, 0);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &missing_sentinel, cmap));
+}
+
+test "cmap format 4 parser validates full idRangeOffset segment span" {
+    const allocator = std.testing.allocator;
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 48,
+    };
+
+    var bytes: [48]u8 = .{0} ** 48;
+    writeCmapFormat4TwoSegmentHeaderTest(&bytes, 36); // Declared subtable ends before the glyph array for 'C'.
+    writeCmapFormat4SegmentTest(&bytes, 0, 'A', 'C', 0, 4);
+    writeCmapFormat4SegmentTest(&bytes, 1, 0xffff, 0xffff, 1, 0);
+    writeU16Test(&bytes, 44, 7); // Glyph for 'A' would fit.
+    writeU16Test(&bytes, 46, 9); // Glyph for 'B' would fit; 'C' would not.
+
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bytes, cmap));
+}
+
 test "cmap segmented groups must be sorted and disjoint" {
     const allocator = std.testing.allocator;
     const cmap: TableRecord = .{
@@ -3652,6 +3757,28 @@ fn writeCmapFormat14HeaderTest(bytes: []u8, length: u32, records: u32) void {
     writeU16Test(bytes, 12, 14);
     writeU32Test(bytes, 14, length);
     writeU32Test(bytes, 18, records);
+}
+
+fn writeCmapFormat4TwoSegmentHeaderTest(bytes: []u8, length: u16) void {
+    writeU16Test(bytes, 0, 0);
+    writeU16Test(bytes, 2, 1);
+    writeU16Test(bytes, 4, 3);
+    writeU16Test(bytes, 6, 1);
+    writeU32Test(bytes, 8, 12);
+    writeU16Test(bytes, 12, 4);
+    writeU16Test(bytes, 14, length);
+    writeU16Test(bytes, 18, 4); // segCountX2: two segments including the required sentinel.
+    writeU16Test(bytes, 20, 4);
+    writeU16Test(bytes, 22, 1);
+    writeU16Test(bytes, 24, 0);
+}
+
+fn writeCmapFormat4SegmentTest(bytes: []u8, segment_index: usize, start: u16, end: u16, delta: i16, range_offset: u16) void {
+    const subtable = 12;
+    writeU16Test(bytes, subtable + 14 + segment_index * 2, end);
+    writeU16Test(bytes, subtable + 20 + segment_index * 2, start);
+    writeI16Test(bytes, subtable + 24 + segment_index * 2, delta);
+    writeU16Test(bytes, subtable + 28 + segment_index * 2, range_offset);
 }
 
 fn writeCmapGroupTest(bytes: []u8, offset: usize, start: u32, end: u32, glyph_id: u32) void {

@@ -220,6 +220,8 @@ pub const Font = struct {
         };
         const num_tables = try r.readU16();
         try r.skip(6);
+        const directory_end = try sfntDirectoryEnd(data, start, num_tables);
+        const reserved_prefix_end = if (try parseTtcHeader(data)) |header| header.header_length else 0;
 
         // Table records are kept after parsing because nearly every public
         // method lazily consults optional tables such as GSUB, GPOS, COLR, or
@@ -238,6 +240,7 @@ pub const Font = struct {
             }
         }
         try validateUniqueTableTags(records);
+        try validateSfntTableRanges(records, reserved_prefix_end, start, directory_end);
 
         const head = findTable(records, "head") orelse return error.MissingTable;
         const hhea = findTable(records, "hhea") orelse return error.MissingTable;
@@ -1401,6 +1404,36 @@ fn validateUniqueTableTags(records: []const TableRecord) FontError!void {
             if (std.mem.eql(u8, &record.tag, &other.tag)) return error.BadSfnt;
         }
     }
+}
+
+fn sfntDirectoryEnd(data: []const u8, start: usize, num_tables: u16) FontError!usize {
+    const record_bytes = @as(usize, num_tables) * 16;
+    if (start > data.len or data.len - start < 12) return error.BadSfnt;
+    if (record_bytes > data.len - start - 12) return error.BadSfnt;
+    return start + 12 + record_bytes;
+}
+
+fn validateSfntTableRanges(records: []const TableRecord, reserved_prefix_end: usize, directory_start: usize, directory_end: usize) FontError!void {
+    for (records, 0..) |record, index| {
+        // OpenType table payloads are independent ranges that must not alias
+        // reserved SFNT/TTC metadata or another table in the same face. TTCs
+        // can share table payloads across faces, and shared payloads may sit
+        // before this face's directory, so validate interval
+        // overlap rather than requiring every offset to be after `directory_end`.
+        if (record.length == 0) continue;
+        const record_end = record.offset + record.length;
+        if (record.offset < reserved_prefix_end) return error.BadSfnt;
+        if (rangesOverlap(record.offset, record_end, directory_start, directory_end)) return error.BadSfnt;
+        for (records[index + 1 ..]) |other| {
+            if (other.length == 0) continue;
+            const other_end = other.offset + other.length;
+            if (rangesOverlap(record.offset, record_end, other.offset, other_end)) return error.BadSfnt;
+        }
+    }
+}
+
+fn rangesOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) bool {
+    return a_start < b_end and b_start < a_end;
 }
 
 fn requireTableLength(record: TableRecord, minimum_length: usize) FontError!void {
@@ -2647,6 +2680,26 @@ test "TTC face offsets cannot overlap collection metadata" {
     try std.testing.expectError(error.BadSfnt, Font.faceCount(truncated_offsets));
 }
 
+test "SFNT table payload ranges cannot overlap metadata or each other" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        try setSfntTableOffset(bytes, "kern", 12); // Points into the SFNT table-record array.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const head_offset = try sfntTableOffset(bytes, "head");
+        try setSfntTableOffset(bytes, "kern", head_offset);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
 test "SFNT table directory rejects duplicate tags" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -3208,6 +3261,32 @@ fn setSfntTableLength(bytes: []u8, comptime table_tag: []const u8, length: u32) 
         if (record_offset + 16 > bytes.len) return error.BadSfnt;
         if (!std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) continue;
         writeU32Test(bytes, record_offset + 12, length);
+        return;
+    }
+    return error.MissingTable;
+}
+
+fn sfntTableOffset(bytes: []const u8, comptime table_tag: []const u8) FontError!u32 {
+    if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
+    const table_count = try bin.readU16At(bytes, 4);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (record_offset + 16 > bytes.len) return error.BadSfnt;
+        if (std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) {
+            return @intCast(try bin.readU32At(bytes, record_offset + 8));
+        }
+    }
+    return error.MissingTable;
+}
+
+fn setSfntTableOffset(bytes: []u8, comptime table_tag: []const u8, offset: u32) FontError!void {
+    if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
+    const table_count = try bin.readU16At(bytes, 4);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (record_offset + 16 > bytes.len) return error.BadSfnt;
+        if (!std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) continue;
+        writeU32Test(bytes, record_offset + 8, offset);
         return;
     }
     return error.MissingTable;

@@ -292,6 +292,7 @@ pub const Font = struct {
         if (post) |post_table| try validatePostTable(data, post_table, glyph_count);
         const number_of_h_metrics = try validateHorizontalMetricsTables(data, hhea, hmtx, glyph_count);
         try validateVerticalMetricsTables(data, glyph_count, vhea, vmtx);
+        if (os2) |os2_table| try validateOs2Table(data, os2_table);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
         const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
@@ -670,7 +671,7 @@ pub const Font = struct {
         const os2 = self.os2 orelse return .{};
         if (os2.length < 2) return error.BadSfnt;
         const version = try bin.readU16At(self.data, os2.offset);
-        const minimum_length = minimumOs2TableLength(version);
+        const minimum_length = try minimumOs2TableLength(version);
         if (os2.length < minimum_length) return error.BadSfnt;
         const weight = try bin.readU16At(self.data, os2.offset + 4);
         const width = try bin.readU16At(self.data, os2.offset + 6);
@@ -1597,7 +1598,7 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
     }
 }
 
-fn minimumOs2TableLength(version: u16) usize {
+fn minimumOs2TableLength(version: u16) FontError!usize {
     // usWeightClass/usWidthClass/fsSelection all live in the original OS/2
     // payload, but the SFNT directory length is still the table's versioned
     // contract. Enforcing the full minimum keeps a truncated v4/v5 OS/2 table
@@ -1606,8 +1607,32 @@ fn minimumOs2TableLength(version: u16) usize {
         0 => 78,
         1 => 86,
         2...4 => 96,
-        else => 100,
+        5 => 100,
+        else => error.BadSfnt,
     };
+}
+
+fn validateOs2Table(data: []const u8, os2: TableRecord) FontError!void {
+    try requireTableLength(os2, 2);
+    const version = try bin.readU16At(data, os2.offset);
+    try requireTableLength(os2, try minimumOs2TableLength(version));
+
+    const weight = try bin.readU16At(data, os2.offset + 4);
+    const width = try bin.readU16At(data, os2.offset + 6);
+    const fs_selection = try bin.readU16At(data, os2.offset + 62);
+
+    // These fields are used by font databases and style matching, so validate
+    // their OS/2-defined ranges when the face is parsed rather than accepting a
+    // font whose advertised style cannot be represented consistently later.
+    if (weight < 1 or weight > 1000) return error.BadSfnt;
+    if (width < 1 or width > 9) return error.BadSfnt;
+
+    const reserved_selection_bits: u16 = 0xfc00;
+    if ((fs_selection & reserved_selection_bits) != 0) return error.BadSfnt;
+
+    const regular = (fs_selection & 0x0040) != 0;
+    const named_style_bits = fs_selection & (0x0001 | 0x0020 | 0x0200);
+    if (regular and named_style_bits != 0) return error.BadSfnt;
 }
 
 fn validateHorizontalMetricsTables(data: []const u8, hhea: TableRecord, hmtx: TableRecord, glyph_count: u16) FontError!u16 {
@@ -5636,6 +5661,63 @@ test "OS/2 style attributes respect versioned table lengths" {
     writeU16Test(&truncated_v5, 6, 5);
     const short_v5 = os2OnlyFont(&truncated_v5, 96);
     try std.testing.expectError(error.BadSfnt, short_v5.styleAttributes());
+}
+
+test "OS/2 table is validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Regular", "Metric Sans Regular", 400, 5, false, false);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Wide", "Metric Sans Wide", 400, 10, false, false);
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Broken", "Metric Sans Broken", 0, 5, false, false);
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Broken", "Metric Sans Broken", 400, 5, false, false);
+        defer allocator.free(bytes);
+        try setSfntTableLength(bytes, "OS/2", 64);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Broken", "Metric Sans Broken", 400, 5, false, false);
+        defer allocator.free(bytes);
+        const os2_offset = try sfntTableOffset(bytes, "OS/2");
+        writeU16Test(bytes, os2_offset + 62, 0x0400);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Bold", "Metric Sans Bold", 700, 5, false, true);
+        defer allocator.free(bytes);
+        const os2_offset = try sfntTableOffset(bytes, "OS/2");
+        // REGULAR contradicts named style bits such as BOLD/ITALIC/OBLIQUE and
+        // should not be accepted simply because styleAttributes can read it.
+        writeU16Test(bytes, os2_offset + 62, 0x0060);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Regular", "Metric Sans Regular", 400, 5, false, false);
+        defer allocator.free(bytes);
+        const os2_offset = try sfntTableOffset(bytes, "OS/2");
+        writeU16Test(bytes, os2_offset, 6);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 fn gdefOnlyFont(data: []const u8) Font {

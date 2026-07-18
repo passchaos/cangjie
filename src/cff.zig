@@ -77,7 +77,7 @@ const Index = struct {
         if (start == 0 or end < start) return error.BadCff;
         const abs_start = self.object_base + start - 1;
         const abs_end = self.object_base + end - 1;
-        if (abs_end > data.len) return error.BadCff;
+        if (abs_start > self.end or abs_end > self.end or abs_end > data.len) return error.BadCff;
         return data[abs_start..abs_end];
     }
 };
@@ -92,12 +92,31 @@ fn readIndex(data: []const u8, offset: usize) CffError!Index {
     const off_size = data[offset + 2];
     if (off_size == 0 or off_size > 4) return error.BadCff;
     const offsets_pos = offset + 3;
-    const object_base = offsets_pos + (@as(usize, count) + 1) * off_size;
-    const last = try readOffset(data, offsets_pos + @as(usize, count) * off_size, off_size);
-    if (last == 0) return error.BadCff;
+    const offset_bytes = (@as(usize, count) + 1) * @as(usize, off_size);
+    if (offset_bytes > data.len - offsets_pos) return error.EndOfStream;
+
+    const object_base = offsets_pos + offset_bytes;
+    const last = try validateIndexOffsets(data, offsets_pos, count, off_size);
+    if (last - 1 > data.len - object_base) return error.BadCff;
     const end = object_base + last - 1;
-    if (end > data.len) return error.BadCff;
     return .{ .count = count, .off_size = off_size, .offsets_pos = offsets_pos, .object_base = object_base, .end = end };
+}
+
+fn validateIndexOffsets(data: []const u8, offsets_pos: usize, count: u16, off_size: u8) CffError!usize {
+    // INDEX offsets are 1-based and scoped to the INDEX object's declared data
+    // block. Validate the complete array when the INDEX is parsed; otherwise a
+    // later lookup of only object 0 could follow a non-monotonic offset into the
+    // next CFF structure without ever consulting the final, smaller offset.
+    const first = try readOffset(data, offsets_pos, off_size);
+    if (first != 1) return error.BadCff;
+
+    var previous = first;
+    for (1..@as(usize, count) + 1) |index| {
+        const current = try readOffset(data, offsets_pos + index * @as(usize, off_size), off_size);
+        if (current < previous) return error.BadCff;
+        previous = current;
+    }
+    return previous;
 }
 
 fn readOffset(data: []const u8, offset: usize, size: u8) CffError!usize {
@@ -313,6 +332,35 @@ test "CFF Type2 16.16 fixed-point operands decode byte 255 form" {
         try readNumber(&.{ 255, 0xff, 0xff, 0x80, 0x00 }, &offset, 255),
         0.0001,
     );
+}
+
+test "CFF INDEX offsets stay inside declared object data" {
+    const valid = [_]u8{
+        0x00, 0x02, // count
+        0x01, // offSize
+        0x01, 0x01, 0x03, // empty object, then "OK"
+        'O',  'K',
+    };
+    const index = try readIndex(&valid, 0);
+    try std.testing.expectEqualSlices(u8, &.{}, try index.object(&valid, 0));
+    try std.testing.expectEqualStrings("OK", try index.object(&valid, 1));
+
+    const first_offset_gap = [_]u8{
+        0x00, 0x01, // count
+        0x01, // offSize
+        0x02, 0x03, // first offset must be 1, not a gap into object data
+        0xaa, 0xbb,
+    };
+    try std.testing.expectError(error.BadCff, readIndex(&first_offset_gap, 0));
+
+    const borrows_next_structure = [_]u8{
+        0x00, 0x02, // count
+        0x01, // offSize
+        0x01, 0x06, 0x03, // object 0 would borrow bytes past the final offset
+        'n',  'a',  'm',
+        'e',  's',
+    };
+    try std.testing.expectError(error.BadCff, readIndex(&borrows_next_structure, 0));
 }
 
 test "CFF Type2 hvcurveto and vhcurveto keep their implicit last axis" {

@@ -1892,7 +1892,10 @@ fn glyphIndexFormat14NonDefault(data: []const u8, offset: usize, table_end: usiz
 }
 
 fn kernFormat0(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!?i16 {
-    if (data.len < 14) return null;
+    // A format-0 subtable is not valid until the full binary-search header is
+    // present. Treating a short declared length as "no pair" lets the parent
+    // kern table hide a malformed subtable by truncating exactly before nPairs.
+    if (data.len < 14) return error.BadSfnt;
     const pair_count = try bin.readU16At(data, 6);
     if (@as(usize, pair_count) * 6 > data.len - 14) return error.BadSfnt;
     const needle = (@as(u32, left) << 16) | right;
@@ -2183,6 +2186,18 @@ test "legacy kern ignores minimum and cross-stream subtables" {
 
     const font = kernOnlyFont(&data);
     try std.testing.expectEqual(@as(i16, -30), try font.kerning(1, 1));
+}
+
+test "legacy kern format 0 rejects truncated binary-search header" {
+    var data: [16]u8 = .{0} ** 16;
+    writeU16Test(&data, 0, 0); // legacy kern table version
+    writeU16Test(&data, 2, 1); // one subtable
+    writeU16Test(&data, 4, 0); // subtable version
+    writeU16Test(&data, 6, 12); // Stops before the required rangeShift field.
+    writeU16Test(&data, 8, 0x0001); // format 0, horizontal
+
+    const font = kernOnlyFont(&data);
+    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
 }
 
 test "sbix offsets cannot overlap table or strike metadata" {

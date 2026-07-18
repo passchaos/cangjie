@@ -1131,6 +1131,20 @@ const CblcGlyphLocation = struct {
     length: usize,
 };
 
+fn cblcImageLocation(image_format: u16, image_base: usize, start: usize, end: usize) FontError!?CblcGlyphLocation {
+    if (end < start) return error.BadSfnt;
+    if (end == start) return null;
+    if (start > std.math.maxInt(usize) - image_base) return error.BadSfnt;
+    const offset = image_base + start;
+    const length = end - start;
+    // Validate the addition that cbdtGlyphPng will later use for the declared
+    // image slice. Very large CBLC imageDataOffset values are legal u32s but
+    // cannot describe an in-memory CBDT range if adding the glyph payload span
+    // wraps usize.
+    if (length > std.math.maxInt(usize) - offset) return error.BadSfnt;
+    return .{ .image_format = image_format, .offset = offset, .length = length };
+}
+
 const BitmapMetrics = struct {
     height: u8,
     width: u8,
@@ -1331,9 +1345,7 @@ fn cblcGlyphLocationFormat1Or3(data: []const u8, strike: CblcStrike, offsets_off
     // Equal adjacent offsets are the CBLC encoding for "no bitmap for this
     // glyph". A decreasing range is different: it means the index subtable is
     // corrupt and must not be silently treated as a missing glyph.
-    if (end < start) return error.BadSfnt;
-    if (end == start) return null;
-    return .{ .image_format = image_format, .offset = image_base + start, .length = end - start };
+    return try cblcImageLocation(image_format, image_base, start, end);
 }
 
 fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: usize, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
@@ -1348,9 +1360,7 @@ fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: u
         if (current_glyph != glyph_id) continue;
         const start = try bin.readU16At(data, pair + 2);
         const end = try bin.readU16At(data, pair + 6);
-        if (end < start) return error.BadSfnt;
-        if (end == start) return null;
-        return .{ .image_format = image_format, .offset = image_base + start, .length = end - start };
+        return try cblcImageLocation(image_format, image_base, start, end);
     }
     return null;
 }
@@ -1365,10 +1375,23 @@ fn cblcGlyphLocationFormat5(data: []const u8, strike: CblcStrike, body_offset: u
     for (0..glyph_count) |index| {
         const current_glyph = try bin.readU16At(data, glyphs_offset + @as(usize, index) * 2);
         if (current_glyph != glyph_id) continue;
-        const offset = image_base + @as(usize, index) * image_size;
-        return .{ .image_format = image_format, .offset = offset, .length = image_size };
+        const start = try checkedCblcImageStart(@as(usize, index), image_size);
+        const end = try checkedCblcImageEnd(start, image_size);
+        return try cblcImageLocation(image_format, image_base, start, end);
     }
     return null;
+}
+
+fn checkedCblcImageStart(index: usize, image_size: u32) FontError!usize {
+    const size: usize = @intCast(image_size);
+    if (index != 0 and size > std.math.maxInt(usize) / index) return error.BadSfnt;
+    return index * size;
+}
+
+fn checkedCblcImageEnd(start: usize, image_size: u32) FontError!usize {
+    const size: usize = @intCast(image_size);
+    if (size > std.math.maxInt(usize) - start) return error.BadSfnt;
+    return start + size;
 }
 
 fn readCblcOffset(data: []const u8, offset: usize, size: usize) FontError!usize {
@@ -4003,6 +4026,22 @@ test "CBLC index subtable array validates ordering before returning a location" 
     writeU16Test(&subtable_overlap, 10, 4);
     writeU32Test(&subtable_overlap, 12, 4); // Points into IndexSubTableArray records.
     try std.testing.expectError(error.BadSfnt, cblcGlyphLocation(&subtable_overlap, strike, 1));
+}
+
+test "CBLC image locations reject arithmetic overflow before CBDT slicing" {
+    const max = std.math.maxInt(usize);
+
+    try std.testing.expectError(error.BadSfnt, cblcImageLocation(17, max - 4, 8, 12));
+    try std.testing.expectError(error.BadSfnt, cblcImageLocation(17, max - 4, 2, 8));
+    try std.testing.expectError(error.BadSfnt, checkedCblcImageStart(max / 2 + 1, 2));
+    try std.testing.expectError(error.BadSfnt, checkedCblcImageEnd(max - 1, 2));
+
+    const missing = try cblcImageLocation(17, 10, 4, 4);
+    try std.testing.expectEqual(@as(?CblcGlyphLocation, null), missing);
+
+    const location = (try cblcImageLocation(17, 10, 4, 8)).?;
+    try std.testing.expectEqual(@as(usize, 14), location.offset);
+    try std.testing.expectEqual(@as(usize, 4), location.length);
 }
 
 test "CBDT non-PNG image formats are skipped by PNG lookup" {

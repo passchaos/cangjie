@@ -197,10 +197,8 @@ pub const Font = struct {
     }
 
     pub fn faceCount(data: []const u8) FontError!usize {
-        const tag_value = try bin.readU32At(data, 0);
-        if (tag_value != 0x74746366) return 1; // "ttcf"
-        if (try bin.readU32At(data, 4) >> 16 != 1 and try bin.readU32At(data, 4) >> 16 != 2) return error.BadSfnt;
-        return try bin.readU32At(data, 8);
+        const header = (try parseTtcHeader(data)) orelse return 1;
+        return header.face_count;
     }
 
     /// Parse a single face from either a plain SFNT file or a TTC.
@@ -1423,14 +1421,45 @@ fn locaEntryRequiredLength(glyph_id: u32, index_to_loc_format: i16) FontError!us
     };
 }
 
-fn sfntOffset(data: []const u8, face_index: usize) FontError!usize {
+const TtcHeader = struct {
+    face_count: usize,
+    header_length: usize,
+};
+
+fn parseTtcHeader(data: []const u8) FontError!?TtcHeader {
     const tag = try bin.readU32At(data, 0);
-    if (tag != 0x74746366) return 0; // "ttcf"
-    if (try bin.readU32At(data, 4) >> 16 != 1 and try bin.readU32At(data, 4) >> 16 != 2) return error.BadSfnt;
-    const face_count = try bin.readU32At(data, 8);
-    if (face_index >= face_count) return error.BadSfnt;
+    if (tag != 0x74746366) return null; // "ttcf"
+
+    const version = try bin.readU32At(data, 4);
+    const major = version >> 16;
+    if (major != 1 and major != 2) return error.BadSfnt;
+
+    const face_count: usize = @intCast(try bin.readU32At(data, 8));
+    if (face_count == 0) return error.BadSfnt;
+    if (face_count > (data.len - 12) / 4) return error.BadSfnt;
+
+    // TTC face offsets are an array immediately following the fixed 12-byte
+    // header. Version 2 collections add three DSIG fields after that array.
+    // Treat the complete header as reserved so a malformed offset cannot make
+    // the SFNT parser reinterpret collection metadata as an embedded font.
+    var header_length = 12 + face_count * 4;
+    if (major == 2) {
+        if (header_length > data.len - 12) return error.BadSfnt;
+        header_length += 12;
+    }
+
+    return .{
+        .face_count = face_count,
+        .header_length = header_length,
+    };
+}
+
+fn sfntOffset(data: []const u8, face_index: usize) FontError!usize {
+    const header = (try parseTtcHeader(data)) orelse return 0;
+    if (face_index >= header.face_count) return error.BadSfnt;
     const offset = try bin.readU32At(data, 12 + face_index * 4);
-    if (offset >= data.len) return error.BadSfnt;
+    if (offset < header.header_length) return error.BadSfnt;
+    if (offset > data.len - 12) return error.BadSfnt;
     return offset;
 }
 
@@ -2583,6 +2612,26 @@ test "core metrics and loca stay inside declared table lengths" {
         defer font.deinit();
         try std.testing.expectError(error.InvalidLoca, font.glyphOutline(allocator, 1));
     }
+}
+
+test "TTC face offsets cannot overlap collection metadata" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const valid = try test_font.buildMinimalTtc(allocator);
+    defer allocator.free(valid);
+    try std.testing.expectEqual(@as(usize, 1), try Font.faceCount(valid));
+
+    var font = try Font.parse(allocator, valid);
+    font.deinit();
+
+    const overlapping = try test_font.buildMinimalTtc(allocator);
+    defer allocator.free(overlapping);
+    writeU32Test(overlapping, 12, 12); // Points into the face-offset array.
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, overlapping));
+
+    const truncated_offsets = overlapping[0..15];
+    try std.testing.expectError(error.BadSfnt, Font.faceCount(truncated_offsets));
 }
 
 test "name table storage offset cannot overlap metadata records" {

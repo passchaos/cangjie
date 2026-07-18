@@ -326,7 +326,10 @@ pub const Font = struct {
         if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBounds(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
-        if (cpal) |cpal_table| _ = try validateCpalPaletteEntries(data, cpal_table);
+        if (cpal) |cpal_table| {
+            _ = try validateCpalPaletteEntries(data, cpal_table);
+            try validateCpalNameReferences(data, cpal_table, name);
+        }
         if (colr) |colr_table| {
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
@@ -5172,6 +5175,46 @@ fn validateCpalOptionalArray(cpal: TableRecord, header_len: usize, offset: usize
     if (count > (cpal.length - offset) / item_size) return error.BadSfnt;
 }
 
+fn validateCpalNameReferences(data: []const u8, cpal: TableRecord, name: ?TableRecord) FontError!void {
+    if (cpal.length < 12) return error.BadSfnt;
+    const version = try bin.readU16At(data, cpal.offset);
+    if (version == 0) return;
+    if (version > 1) return error.BadSfnt;
+
+    const palette_entries: usize = @intCast(try bin.readU16At(data, cpal.offset + 2));
+    const palette_count: usize = @intCast(try bin.readU16At(data, cpal.offset + 4));
+    const palette_indices_len = palette_count * 2;
+    if (palette_indices_len > cpal.length - 12) return error.BadSfnt;
+    const version_0_header_len = 12 + palette_indices_len;
+    if (12 > cpal.length - version_0_header_len) return error.BadSfnt;
+
+    const palette_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 4));
+    const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 8));
+    if (palette_labels_offset == 0 and palette_entry_labels_offset == 0) return;
+
+    var name_index_storage: NameIdIndex = undefined;
+    const name_index: ?*const NameIdIndex = if (name) |name_table| blk: {
+        name_index_storage = try readNameIdIndex(data, name_table);
+        break :blk &name_index_storage;
+    } else null;
+
+    // CPAL v1 label arrays contain optional name IDs, not raw strings.  Check
+    // them while parsing so palette UIs never expose a dangling or undecodable
+    // localized label after the font has otherwise been accepted.
+    const extended_header_len = version_0_header_len + 12;
+    try validateCpalNameIdArray(data, cpal, extended_header_len, palette_labels_offset, palette_count, name_index);
+    try validateCpalNameIdArray(data, cpal, extended_header_len, palette_entry_labels_offset, palette_entries, name_index);
+}
+
+fn validateCpalNameIdArray(data: []const u8, cpal: TableRecord, header_len: usize, offset: usize, count: usize, name_index: ?*const NameIdIndex) FontError!void {
+    if (offset == 0) return;
+    try validateCpalOptionalArray(cpal, header_len, offset, count, 2);
+    for (0..count) |index| {
+        const name_id = try bin.readU16At(data, cpal.offset + offset + index * 2);
+        try validateOptionalNameIdReference(name_index, name_id);
+    }
+}
+
 fn validateColrPaletteBounds(data: []const u8, colr: TableRecord, cpal: ?TableRecord) FontError!void {
     if (colr.length < 2) return error.BadSfnt;
     const cpal_palette_entries = if (cpal) |cpal_table| try validateCpalPaletteEntries(data, cpal_table) else null;
@@ -7504,6 +7547,46 @@ test "CPAL palette entries stay inside declared color records" {
 
     const font = cpalOnlyFont(&bytes);
     try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
+}
+
+test "CPAL v1 labels must resolve through the name table" {
+    var bytes: [54]u8 = .{0} ** 54;
+    writeU16Test(&bytes, 0, 1); // CPAL version 1 includes optional label arrays.
+    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
+    writeU16Test(&bytes, 4, 1); // numPalettes.
+    writeU16Test(&bytes, 6, 1); // numColorRecords.
+    writeU32Test(&bytes, 8, 30); // ColorRecordsArray follows both label arrays.
+    writeU16Test(&bytes, 12, 0); // First color index for palette 0.
+    writeU32Test(&bytes, 14, 0); // no palette type array.
+    writeU32Test(&bytes, 18, 26); // one palette label NameID.
+    writeU32Test(&bytes, 22, 28); // one palette-entry label NameID.
+    writeU16Test(&bytes, 26, 256);
+    writeU16Test(&bytes, 28, 0xffff); // Explicitly unlabeled palette entry.
+    bytes[30] = 10;
+    bytes[31] = 20;
+    bytes[32] = 30;
+    bytes[33] = 40;
+
+    const name_offset = 34;
+    writeU16Test(&bytes, name_offset + 0, 0);
+    writeU16Test(&bytes, name_offset + 2, 1);
+    writeU16Test(&bytes, name_offset + 4, 18);
+    writeUtf16NameRecordTest(&bytes, name_offset + 6, 256, 2, 0);
+    bytes[name_offset + 19] = 'P';
+
+    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = name_offset };
+    const name = TableRecord{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = name_offset, .length = bytes.len - name_offset };
+    try validateCpalNameReferences(&bytes, cpal, name);
+
+    var missing_palette_label = bytes;
+    writeU16Test(&missing_palette_label, 26, 257);
+    try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&missing_palette_label, cpal, name));
+
+    var missing_entry_label = bytes;
+    writeU16Test(&missing_entry_label, 28, 257);
+    try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&missing_entry_label, cpal, name));
+
+    try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&bytes, cpal, null));
 }
 
 test "COLR glyph references stay within maxp glyph count" {

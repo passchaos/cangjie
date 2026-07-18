@@ -297,7 +297,7 @@ pub const Font = struct {
         if (hmtx.length < required_hmtx_length) return error.InvalidMetrics;
         if (format == .truetype) {
             try validateLocaTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
-            try validateGlyfTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
+            try validateGlyfTable(allocator, data, loca.?, glyf.?, glyph_count, index_to_loc_format);
         }
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
@@ -1586,11 +1586,18 @@ fn glyfOffsetFromLoca(data: []const u8, loca: TableRecord, index_to_loc_format: 
     };
 }
 
-fn validateGlyfTable(data: []const u8, loca: TableRecord, glyf: TableRecord, glyph_count: u16, index_to_loc_format: i16) FontError!void {
+fn validateGlyfTable(allocator: std.mem.Allocator, data: []const u8, loca: TableRecord, glyf: TableRecord, glyph_count: u16, index_to_loc_format: i16) FontError!void {
     // `loca` proves where each glyph byte range lives; `glyf` still owns the
     // structure inside those ranges. Validate the cheap cross-table contracts
     // at parse time so a malformed compound glyph cannot be accepted and then
     // fail only when the specific glyph is outlined during layout or fallback.
+    const compound_adjacency = try allocator.alloc(CompoundGlyphLinks, glyph_count);
+    @memset(compound_adjacency, .{});
+    defer {
+        for (compound_adjacency) |links| allocator.free(links.glyphs);
+        allocator.free(compound_adjacency);
+    }
+
     for (0..glyph_count) |glyph_index| {
         const start = try glyfOffsetFromLoca(data, loca, index_to_loc_format, glyph_index);
         const end = try glyfOffsetFromLoca(data, loca, index_to_loc_format, glyph_index + 1);
@@ -1603,10 +1610,16 @@ fn validateGlyfTable(data: []const u8, loca: TableRecord, glyf: TableRecord, gly
         if (contour_count >= 0) {
             try validateSimpleGlyphDescription(glyph_data, @intCast(contour_count));
         } else {
-            try validateCompoundGlyphDescription(glyph_data, glyph_count);
+            compound_adjacency[glyph_index] = try validateCompoundGlyphDescription(allocator, glyph_data, glyph_count);
         }
     }
+
+    try validateCompoundGlyphGraph(allocator, compound_adjacency);
 }
+
+const CompoundGlyphLinks = struct {
+    glyphs: []glyph_mod.GlyphId = &.{},
+};
 
 fn validateSimpleGlyphDescription(glyph_data: []const u8, contour_count: u16) FontError!void {
     if (contour_count == 0) return;
@@ -1669,13 +1682,17 @@ fn simpleGlyphCoordinateByteCount(flag: u8, x_axis: bool) usize {
     return 2;
 }
 
-fn validateCompoundGlyphDescription(glyph_data: []const u8, glyph_count: u16) FontError!void {
+fn validateCompoundGlyphDescription(allocator: std.mem.Allocator, glyph_data: []const u8, glyph_count: u16) FontError!CompoundGlyphLinks {
+    var components = std.ArrayList(glyph_mod.GlyphId).empty;
+    errdefer components.deinit(allocator);
+
     var offset: usize = 10; // numberOfContours + x/y bounds.
     while (true) {
         if (offset + 4 > glyph_data.len) return error.InvalidGlyph;
         const flags = try bin.readU16At(glyph_data, offset);
         const component_glyph = try bin.readU16At(glyph_data, offset + 2);
         if (component_glyph >= glyph_count) return error.InvalidGlyph;
+        try components.append(allocator, component_glyph);
         offset += 4;
 
         const argument_bytes: usize = if ((flags & 0x0001) != 0) 4 else 2;
@@ -1700,9 +1717,47 @@ fn validateCompoundGlyphDescription(glyph_data: []const u8, glyph_count: u16) Fo
                 offset += 2;
                 if (@as(usize, instruction_length) > glyph_data.len - offset) return error.InvalidGlyph;
             }
-            return;
+            return .{ .glyphs = try components.toOwnedSlice(allocator) };
         }
     }
+}
+
+fn validateCompoundGlyphGraph(allocator: std.mem.Allocator, adjacency: []const CompoundGlyphLinks) FontError!void {
+    // Compound glyphs form a directed component graph. The maxp component-depth
+    // limit and append-time recursion guard only bound valid DAGs; cycles would
+    // otherwise parse successfully and then fail or recurse when a specific
+    // glyph is requested. Reject every cycle now so a parsed TrueType face has a
+    // finite, expandable component graph.
+    const states = try allocator.alloc(CompoundVisitState, adjacency.len);
+    defer allocator.free(states);
+    @memset(states, .unvisited);
+
+    for (adjacency, 0..) |_, glyph_index| {
+        if (states[glyph_index] == .unvisited) {
+            try visitCompoundGlyph(adjacency, states, @intCast(glyph_index));
+        }
+    }
+}
+
+const CompoundVisitState = enum {
+    unvisited,
+    visiting,
+    visited,
+};
+
+fn visitCompoundGlyph(adjacency: []const CompoundGlyphLinks, states: []CompoundVisitState, glyph_id: glyph_mod.GlyphId) FontError!void {
+    const index: usize = glyph_id;
+    switch (states[index]) {
+        .visited => return,
+        .visiting => return error.InvalidGlyph,
+        .unvisited => {},
+    }
+
+    states[index] = .visiting;
+    for (adjacency[index].glyphs) |component| {
+        try visitCompoundGlyph(adjacency, states, component);
+    }
+    states[index] = .visited;
 }
 
 const TtcHeader = struct {
@@ -4367,6 +4422,26 @@ test "compound glyf component flags reject conflicting transforms" {
     // component stream and hide malformed glyph data until outline expansion.
     writeU16Test(bytes, glyph_one + 10, 0x0002 | 0x0008 | 0x0040);
     writeU16Test(bytes, glyph_one + 12, 0);
+    bytes[glyph_one + 14] = 0;
+    bytes[glyph_one + 15] = 0;
+
+    try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+}
+
+test "compound glyf component graph rejects cycles at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    const glyf_offset = try sfntTableOffset(bytes, "glyf");
+    const glyph_one = glyf_offset + 12;
+    writeI16Test(bytes, glyph_one, -1); // Compound glyph.
+    // A direct self-reference is structurally well-formed at the component
+    // record level, but the component graph has no finite expansion.
+    writeU16Test(bytes, glyph_one + 10, 0x0002); // ARGS_ARE_XY_VALUES, byte args.
+    writeU16Test(bytes, glyph_one + 12, 1);
     bytes[glyph_one + 14] = 0;
     bytes[glyph_one + 15] = 0;
 

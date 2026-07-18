@@ -2090,13 +2090,15 @@ fn parseCmapSubtables(allocator: std.mem.Allocator, data: []const u8, cmap: Tabl
         const sub_offset = try bin.readU32At(data, rec + 4);
         if (sub_offset > cmap.length - 2) return error.BadSfnt;
         const absolute = cmap.offset + sub_offset;
+        const platform_id = try bin.readU16At(data, rec);
+        const encoding_id = try bin.readU16At(data, rec + 2);
         const format = try bin.readU16At(data, absolute);
         const length = try cmapSubtableLength(data, cmap, @intCast(sub_offset), format);
-        try validateCmapSubtable(data, absolute, length, format);
+        try validateCmapSubtable(data, absolute, length, format, platform_id, encoding_id);
         try validateCmapGlyphIds(data, absolute, length, format, glyph_count);
         try subtables.append(allocator, .{
-            .platform_id = try bin.readU16At(data, rec),
-            .encoding_id = try bin.readU16At(data, rec + 2),
+            .platform_id = platform_id,
+            .encoding_id = encoding_id,
             .offset = absolute,
             .length = length,
             .format = format,
@@ -2132,16 +2134,42 @@ fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, fo
     return length;
 }
 
-fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: u16) FontError!void {
+fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: u16, platform_id: u16, encoding_id: u16) FontError!void {
+    const validate_bmp_scalars = cmapSubtableUsesUnicodeScalars(platform_id, encoding_id);
     switch (format) {
         2 => try validateCmapFormat2(data, offset, length),
-        6 => try validateCmapFormat6(data, offset, length),
+        6 => try validateCmapFormat6(data, offset, length, validate_bmp_scalars),
         10 => try validateCmapFormat10(data, offset, length),
-        4 => try validateCmapFormat4(data, offset, length),
+        4 => try validateCmapFormat4(data, offset, length, validate_bmp_scalars),
         12, 13 => try validateSegmentedCmapGroups(data, offset, length),
         14 => try validateCmapFormat14(data, offset, length),
         else => {},
     }
+}
+
+fn cmapSubtableUsesUnicodeScalars(platform_id: u16, encoding_id: u16) bool {
+    return switch (platform_id) {
+        // The Unicode platform and the Windows Unicode BMP/full-repertoire
+        // encodings describe Unicode scalar values. Legacy symbol/code-page
+        // cmaps can use the same binary formats for non-Unicode character
+        // codes, so surrogate filtering below is only applied to true Unicode
+        // encoding records.
+        0 => true,
+        3 => encoding_id == 1 or encoding_id == 10,
+        else => false,
+    };
+}
+
+fn isUnicodeScalarValue(value: u32) bool {
+    return value <= 0x10ffff and !isUnicodeSurrogate(value);
+}
+
+fn isUnicodeSurrogate(value: u32) bool {
+    return value >= 0xd800 and value <= 0xdfff;
+}
+
+fn isUnicodeVariationSelector(value: u32) bool {
+    return (value >= 0xfe00 and value <= 0xfe0f) or (value >= 0xe0100 and value <= 0xe01ef);
 }
 
 fn validateCmapGlyphIds(data: []const u8, offset: usize, length: usize, format: u16, glyph_count: u16) FontError!void {
@@ -2321,26 +2349,38 @@ fn validateCmapFormat2(data: []const u8, offset: usize, length: usize) FontError
     }
 }
 
-fn validateCmapFormat6(data: []const u8, offset: usize, length: usize) FontError!void {
+fn validateCmapFormat6(data: []const u8, offset: usize, length: usize, validate_unicode_scalars: bool) FontError!void {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < 10) return error.BadSfnt;
+    const first_code = try bin.readU16At(data, offset + 6);
     const entry_count = try bin.readU16At(data, offset + 8);
     if (@as(usize, entry_count) * 2 != length - 10) return error.BadSfnt;
+    if (entry_count != 0) {
+        const last_code = @as(u32, first_code) + @as(u32, entry_count) - 1;
+        if (last_code > std.math.maxInt(u16)) return error.BadSfnt;
+        if (validate_unicode_scalars) {
+            if (!isUnicodeScalarValue(first_code) or !isUnicodeScalarValue(last_code)) return error.BadSfnt;
+            if (first_code < 0xe000 and last_code > 0xd7ff) return error.BadSfnt;
+        }
+    }
 }
 
 fn validateCmapFormat10(data: []const u8, offset: usize, length: usize) FontError!void {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < 20) return error.BadSfnt;
     const start_code = try bin.readU32At(data, offset + 12);
-    if (start_code > 0x10ffff) return error.BadSfnt;
+    if (!isUnicodeScalarValue(start_code)) return error.BadSfnt;
     const num_chars = try bin.readU32At(data, offset + 16);
     if (@as(u64, num_chars) * 2 != @as(u64, length - 20)) return error.BadSfnt;
     if (num_chars == 0) return;
     const last_code = @as(u64, start_code) + @as(u64, num_chars) - 1;
-    if (last_code > 0x10ffff) return error.BadSfnt;
+    if (last_code > std.math.maxInt(u32)) return error.BadSfnt;
+    const last_scalar: u32 = @intCast(last_code);
+    if (!isUnicodeScalarValue(last_scalar)) return error.BadSfnt;
+    if (start_code < 0xe000 and last_scalar > 0xd7ff) return error.BadSfnt;
 }
 
-fn validateCmapFormat4(data: []const u8, offset: usize, length: usize) FontError!void {
+fn validateCmapFormat4(data: []const u8, offset: usize, length: usize, validate_unicode_scalars: bool) FontError!void {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < 16) return error.BadSfnt;
     const seg_count_x2 = try bin.readU16At(data, offset + 6);
@@ -2363,6 +2403,7 @@ fn validateCmapFormat4(data: []const u8, offset: usize, length: usize) FontError
         const start = try bin.readU16At(data, start_codes + index * 2);
         const end = try bin.readU16At(data, end_codes + index * 2);
         if (end < start) return error.BadSfnt;
+        if (validate_unicode_scalars and (isUnicodeSurrogate(start) or isUnicodeSurrogate(end) or (start < 0xe000 and end > 0xd7ff))) return error.BadSfnt;
         if (previous_end) |last_end| {
             // Format 4 is searched as an ordered segment array. Reject
             // overlapping or out-of-order records at cmap parse time so glyph
@@ -2404,6 +2445,8 @@ fn validateSegmentedCmapGroups(data: []const u8, offset: usize, length: usize) F
         const start = try bin.readU32At(data, group_offset);
         const end = try bin.readU32At(data, group_offset + 4);
         if (end < start) return error.BadSfnt;
+        if (!isUnicodeScalarValue(start) or !isUnicodeScalarValue(end)) return error.BadSfnt;
+        if (start < 0xe000 and end > 0xd7ff) return error.BadSfnt;
         if (previous_end) |last_end| {
             // Format 12/13 group arrays are searched as sorted, disjoint
             // intervals. Rejecting overlap and out-of-order starts at parse
@@ -2427,6 +2470,7 @@ fn validateCmapFormat14(data: []const u8, offset: usize, length: usize) FontErro
     for (0..record_count) |index| {
         const record = offset + 10 + index * 11;
         const selector = try readU24At(data, record);
+        if (!isUnicodeVariationSelector(selector)) return error.BadSfnt;
         if (previous_selector) |last_selector| {
             // Variation selector records are consumed with an early-exit search
             // in glyphIndexFormat14. Reject unsorted/duplicate selectors here
@@ -2457,9 +2501,12 @@ fn validateCmapFormat14DefaultUvs(data: []const u8, offset: usize, table_end: us
     for (0..range_count) |index| {
         const range = offset + 4 + index * 4;
         const start = try readU24At(data, range);
+        if (!isUnicodeScalarValue(start)) return error.BadSfnt;
         const end_u64 = @as(u64, start) + data[range + 3];
-        if (end_u64 > 0x00ff_ffff) return error.BadSfnt;
+        if (end_u64 > 0x10ffff) return error.BadSfnt;
         const end: u32 = @intCast(end_u64);
+        if (!isUnicodeScalarValue(end)) return error.BadSfnt;
+        if (start < 0xe000 and end > 0xd7ff) return error.BadSfnt;
         if (previous_end) |last_end| {
             if (start <= last_end) return error.BadSfnt;
         }
@@ -2476,6 +2523,7 @@ fn validateCmapFormat14NonDefaultUvs(data: []const u8, offset: usize, table_end:
     for (0..mapping_count) |index| {
         const mapping = offset + 4 + index * 5;
         const unicode_value = try readU24At(data, mapping);
+        if (!isUnicodeScalarValue(unicode_value)) return error.BadSfnt;
         if (previous_unicode) |last_unicode| {
             if (unicode_value <= last_unicode) return error.BadSfnt;
         }
@@ -3141,7 +3189,7 @@ fn glyphIndexFormat4(data: []const u8, offset: usize, codepoint: u21) FontError!
 fn glyphIndexFormat6(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
     if (codepoint > 0xffff) return 0;
     const length = try bin.readU16At(data, offset + 2);
-    try validateCmapFormat6(data, offset, length);
+    try validateCmapFormat6(data, offset, length, false);
     const first_code = try bin.readU16At(data, offset + 6);
     const entry_count = try bin.readU16At(data, offset + 8);
     const cp: u16 = @intCast(codepoint);
@@ -4908,12 +4956,21 @@ test "cmap format 6 and 10 validate declared array size and Unicode range" {
     writeU16Test(&format6, 6, 'A');
     writeU16Test(&format6, 8, 1);
     writeU16Test(&format6, 10, 5);
-    try validateCmapFormat6(&format6, 0, format6.len);
+    try validateCmapFormat6(&format6, 0, format6.len, true);
     try std.testing.expectEqual(@as(glyph_mod.GlyphId, 5), try glyphIndexFormat6(&format6, 0, 'A'));
 
     var truncated_format6 = format6;
     writeU16Test(&truncated_format6, 2, 10);
-    try std.testing.expectError(error.BadSfnt, validateCmapFormat6(&truncated_format6, 0, 10));
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat6(&truncated_format6, 0, 10, true));
+
+    var overflowing_format6: [14]u8 = .{0} ** 14;
+    writeU16Test(&overflowing_format6, 0, 6);
+    writeU16Test(&overflowing_format6, 2, overflowing_format6.len);
+    writeU16Test(&overflowing_format6, 6, 0xffff);
+    writeU16Test(&overflowing_format6, 8, 2);
+    writeU16Test(&overflowing_format6, 10, 1);
+    writeU16Test(&overflowing_format6, 12, 2);
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat6(&overflowing_format6, 0, overflowing_format6.len, true));
 
     var format10: [22]u8 = .{0} ** 22;
     writeU16Test(&format10, 0, 10);
@@ -4927,6 +4984,18 @@ test "cmap format 6 and 10 validate declared array size and Unicode range" {
     var overflowing_format10 = format10;
     writeU32Test(&overflowing_format10, 12, 0x110000);
     try std.testing.expectError(error.BadSfnt, validateCmapFormat10(&overflowing_format10, 0, overflowing_format10.len));
+
+    var surrogate_format10 = format10;
+    writeU32Test(&surrogate_format10, 12, 0xd800);
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat10(&surrogate_format10, 0, surrogate_format10.len));
+
+    var surrogate_spanning_format10: [24]u8 = .{0} ** 24;
+    writeU16Test(&surrogate_spanning_format10, 0, 10);
+    writeU32Test(&surrogate_spanning_format10, 4, surrogate_spanning_format10.len);
+    writeU32Test(&surrogate_spanning_format10, 12, 0xd7ff);
+    writeU32Test(&surrogate_spanning_format10, 16, 2);
+    writeU16Test(&surrogate_spanning_format10, 20, 9);
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat10(&surrogate_spanning_format10, 0, surrogate_spanning_format10.len));
 
     var extra_bytes_format10: [24]u8 = .{0} ** 24;
     writeU16Test(&extra_bytes_format10, 0, 10);
@@ -5012,6 +5081,67 @@ test "cmap format 4 parser validates full idRangeOffset segment span" {
     writeU16Test(&bytes, 46, 9); // Glyph for 'B' would fit; 'C' would not.
 
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bytes, cmap, 512));
+}
+
+test "Unicode cmap subtables reject surrogate and non-scalar character ranges" {
+    const allocator = std.testing.allocator;
+
+    {
+        const cmap: TableRecord = .{
+            .tag = .{ 'c', 'm', 'a', 'p' },
+            .checksum = 0,
+            .offset = 0,
+            .length = 44,
+        };
+        var surrogate_format4: [44]u8 = .{0} ** 44;
+        writeCmapFormat4TwoSegmentHeaderTest(&surrogate_format4, surrogate_format4.len - 12);
+        writeCmapFormat4SegmentTest(&surrogate_format4, 0, 0xd7ff, 0xd800, 0x2802, 0);
+        writeCmapFormat4SegmentTest(&surrogate_format4, 1, 0xffff, 0xffff, 1, 0);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &surrogate_format4, cmap, 512));
+
+        var symbol_format4 = surrogate_format4;
+        writeU16Test(&symbol_format4, 6, 0); // Windows symbol encoding is not a Unicode-scalar cmap.
+        const subtables = try parseCmapSubtables(allocator, &symbol_format4, cmap, 512);
+        allocator.free(subtables);
+    }
+
+    {
+        const cmap: TableRecord = .{
+            .tag = .{ 'c', 'm', 'a', 'p' },
+            .checksum = 0,
+            .offset = 0,
+            .length = 24,
+        };
+        var surrogate_format6: [24]u8 = .{0} ** 24;
+        writeU16Test(&surrogate_format6, 0, 0);
+        writeU16Test(&surrogate_format6, 2, 1);
+        writeU16Test(&surrogate_format6, 4, 3);
+        writeU16Test(&surrogate_format6, 6, 1);
+        writeU32Test(&surrogate_format6, 8, 12);
+        writeU16Test(&surrogate_format6, 12, 6);
+        writeU16Test(&surrogate_format6, 14, 12);
+        writeU16Test(&surrogate_format6, 18, 0xd800);
+        writeU16Test(&surrogate_format6, 20, 1);
+        writeU16Test(&surrogate_format6, 22, 1);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &surrogate_format6, cmap, 512));
+    }
+
+    {
+        const cmap: TableRecord = .{
+            .tag = .{ 'c', 'm', 'a', 'p' },
+            .checksum = 0,
+            .offset = 0,
+            .length = 40,
+        };
+        var surrogate_format12: [40]u8 = .{0} ** 40;
+        writeCmapFormat12HeaderTest(&surrogate_format12, surrogate_format12.len - 12, 1);
+        writeCmapGroupTest(&surrogate_format12, 28, 0xd7ff, 0xe000, 1);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &surrogate_format12, cmap, 512));
+
+        var nonscalar_format12 = surrogate_format12;
+        writeCmapGroupTest(&nonscalar_format12, 28, 0x110000, 0x110000, 1);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &nonscalar_format12, cmap, 512));
+    }
 }
 
 test "GPOS glyph ids are validated against maxp glyph count" {
@@ -5148,6 +5278,47 @@ test "cmap format 14 UVS offsets cannot overlap selector records" {
     writeU32Test(&non_default_overlap, 25, 0);
     writeU32Test(&non_default_overlap, 29, 17); // Same metadata-overlap issue for NonDefaultUVS.
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &non_default_overlap, cmap, 512));
+}
+
+test "cmap format 14 validates selectors and UVS Unicode scalar values" {
+    const allocator = std.testing.allocator;
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 50,
+    };
+
+    var valid: [50]u8 = .{0} ** 50;
+    writeCmapFormat14HeaderTest(&valid, 38, 1);
+    writeU24Test(&valid, 22, 0x0e0100); // Supplemental variation selector.
+    writeU32Test(&valid, 25, 21);
+    writeU32Test(&valid, 29, 29);
+    writeU32Test(&valid, 33, 1);
+    writeU24Test(&valid, 37, 'A');
+    valid[40] = 0;
+    writeU32Test(&valid, 41, 1);
+    writeU24Test(&valid, 45, 'B');
+    writeU16Test(&valid, 48, 1);
+    const subtables = try parseCmapSubtables(allocator, &valid, cmap, 512);
+    allocator.free(subtables);
+
+    var bad_selector = valid;
+    writeU24Test(&bad_selector, 22, 'A');
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bad_selector, cmap, 512));
+
+    var surrogate_default = valid;
+    writeU24Test(&surrogate_default, 37, 0xd800);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &surrogate_default, cmap, 512));
+
+    var spanning_default = valid;
+    writeU24Test(&spanning_default, 37, 0xd7ff);
+    spanning_default[40] = 1;
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &spanning_default, cmap, 512));
+
+    var surrogate_non_default = valid;
+    writeU24Test(&surrogate_non_default, 45, 0xd800);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &surrogate_non_default, cmap, 512));
 }
 
 test "simple glyf contours reject non-increasing end points" {

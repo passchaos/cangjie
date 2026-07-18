@@ -1040,7 +1040,13 @@ fn namedCjkTtfTables(allocator: std.mem.Allocator) ![]Table {
 fn lastResortCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 8);
     errdefer allocator.free(tables);
-    tables[0] = .{ .tag = "cmap", .data = try cmapFormat13RangeTable(allocator, 0, 0x10ffff, 1) };
+    // Format 13 covers large fallback spans, but the ranges are still Unicode
+    // scalar ranges. Split around the UTF-16 surrogate block so the fixture
+    // remains a valid last-resort Unicode cmap while covering every scalar.
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat13RangesTable(allocator, &.{
+        .{ .start = 0, .end = 0xd7ff, .glyph_id = 1 },
+        .{ .start = 0xe000, .end = 0x10ffff, .glyph_id = 1 },
+    }) };
     tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
@@ -1765,7 +1771,12 @@ fn cmapFormat6Table(allocator: std.mem.Allocator, first_code: u16, glyph_ids: []
 }
 
 fn cmapFormat13RangeTable(allocator: std.mem.Allocator, start: u32, end: u32, glyph_id: u32) ![]u8 {
-    const bytes = try allocator.alloc(u8, 40);
+    return cmapFormat13RangesTable(allocator, &.{.{ .start = start, .end = end, .glyph_id = glyph_id }});
+}
+
+fn cmapFormat13RangesTable(allocator: std.mem.Allocator, ranges: []const struct { start: u32, end: u32, glyph_id: u32 }) ![]u8 {
+    const subtable_length = 16 + ranges.len * 12;
+    const bytes = try allocator.alloc(u8, 12 + subtable_length);
     @memset(bytes, 0);
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, 1);
@@ -1775,12 +1786,15 @@ fn cmapFormat13RangeTable(allocator: std.mem.Allocator, start: u32, end: u32, gl
     const off = 12;
     writeU16(bytes, off + 0, 13);
     writeU16(bytes, off + 2, 0);
-    writeU32(bytes, off + 4, 28);
+    writeU32(bytes, off + 4, @intCast(subtable_length));
     writeU32(bytes, off + 8, 0);
-    writeU32(bytes, off + 12, 1);
-    writeU32(bytes, off + 16, start);
-    writeU32(bytes, off + 20, end);
-    writeU32(bytes, off + 24, glyph_id);
+    writeU32(bytes, off + 12, @intCast(ranges.len));
+    for (ranges, 0..) |range, index| {
+        const group = off + 16 + index * 12;
+        writeU32(bytes, group + 0, range.start);
+        writeU32(bytes, group + 4, range.end);
+        writeU32(bytes, group + 8, range.glyph_id);
+    }
     return bytes;
 }
 

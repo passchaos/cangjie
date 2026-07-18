@@ -1600,10 +1600,73 @@ fn validateGlyfTable(data: []const u8, loca: TableRecord, glyf: TableRecord, gly
         const glyph_data = data[glyf.offset + start .. glyf.offset + end];
         if (glyph_data.len < 10) return error.InvalidGlyph;
         const contour_count = try bin.readI16At(glyph_data, 0);
-        if (contour_count < 0) {
+        if (contour_count >= 0) {
+            try validateSimpleGlyphDescription(glyph_data, @intCast(contour_count));
+        } else {
             try validateCompoundGlyphDescription(glyph_data, glyph_count);
         }
     }
+}
+
+fn validateSimpleGlyphDescription(glyph_data: []const u8, contour_count: u16) FontError!void {
+    if (contour_count == 0) return;
+
+    var offset: usize = 10; // numberOfContours + x/y bounds.
+    var total_points: usize = 0;
+    var previous_end: ?u16 = null;
+    for (0..contour_count) |_| {
+        if (offset + 2 > glyph_data.len) return error.InvalidGlyph;
+        const end = try bin.readU16At(glyph_data, offset);
+        offset += 2;
+        if (previous_end) |prev| {
+            if (end <= prev) return error.InvalidGlyph;
+        }
+        previous_end = end;
+        total_points = @as(usize, end) + 1;
+    }
+
+    if (offset + 2 > glyph_data.len) return error.InvalidGlyph;
+    const instruction_len = try bin.readU16At(glyph_data, offset);
+    offset += 2;
+    if (@as(usize, instruction_len) > glyph_data.len - offset) return error.InvalidGlyph;
+    offset += instruction_len;
+
+    // Simple glyph coordinates are split into an RLE flag stream followed by
+    // separate X and Y delta streams. Validate those byte counts while parsing
+    // the flags so malformed outlines are rejected during font parsing rather
+    // than only when a caller later expands this specific glyph.
+    var expanded_flags: usize = 0;
+    var x_bytes: usize = 0;
+    var y_bytes: usize = 0;
+    while (expanded_flags < total_points) {
+        if (offset >= glyph_data.len) return error.InvalidGlyph;
+        const flag = glyph_data[offset];
+        offset += 1;
+        expanded_flags += 1;
+        x_bytes += simpleGlyphCoordinateByteCount(flag, true);
+        y_bytes += simpleGlyphCoordinateByteCount(flag, false);
+        if ((flag & 0x08) != 0) {
+            if (offset >= glyph_data.len) return error.InvalidGlyph;
+            const repeat = glyph_data[offset];
+            offset += 1;
+            if (@as(usize, repeat) > total_points - expanded_flags) return error.InvalidGlyph;
+            expanded_flags += repeat;
+            x_bytes += @as(usize, repeat) * simpleGlyphCoordinateByteCount(flag, true);
+            y_bytes += @as(usize, repeat) * simpleGlyphCoordinateByteCount(flag, false);
+        }
+    }
+
+    if (x_bytes > glyph_data.len - offset) return error.InvalidGlyph;
+    offset += x_bytes;
+    if (y_bytes > glyph_data.len - offset) return error.InvalidGlyph;
+}
+
+fn simpleGlyphCoordinateByteCount(flag: u8, x_axis: bool) usize {
+    const short_vector_bit: u8 = if (x_axis) 0x02 else 0x04;
+    const same_or_positive_bit: u8 = if (x_axis) 0x10 else 0x20;
+    if ((flag & short_vector_bit) != 0) return 1;
+    if ((flag & same_or_positive_bit) != 0) return 0;
+    return 2;
 }
 
 fn validateCompoundGlyphDescription(glyph_data: []const u8, glyph_count: u16) FontError!void {
@@ -4181,6 +4244,47 @@ test "simple glyf contours reject non-increasing end points" {
     defer outline.deinit();
 
     try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, &glyph_data, 2, Transform.identity()));
+}
+
+test "simple glyf programs and coordinate streams validate at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const glyph_one = glyf_offset + 12;
+        writeU16Test(bytes, glyph_one + 12, 15); // instructionLength exceeds the remaining glyph byte range.
+
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const glyph_one = glyf_offset + 12;
+        bytes[glyph_one + 14] = 0x39; // REPEAT_FLAG on a normal on-curve point.
+        bytes[glyph_one + 15] = 3; // Expands past endPtsOfContours[0] == 2.
+
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const glyph_one = glyf_offset + 12;
+        // Three flags with neither SHORT_VECTOR nor SAME_OR_POSITIVE set require
+        // three 16-bit X deltas and three 16-bit Y deltas, more than this
+        // declared glyph range contains after the flag stream.
+        bytes[glyph_one + 14] = 0x01;
+        bytes[glyph_one + 15] = 0x01;
+        bytes[glyph_one + 16] = 0x01;
+
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
 }
 
 test "core metrics and loca stay inside declared table lengths" {

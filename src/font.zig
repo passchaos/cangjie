@@ -237,6 +237,7 @@ pub const Font = struct {
                 return error.BadSfnt;
             }
         }
+        try validateUniqueTableTags(records);
 
         const head = findTable(records, "head") orelse return error.MissingTable;
         const hhea = findTable(records, "hhea") orelse return error.MissingTable;
@@ -1388,6 +1389,18 @@ fn findTable(records: []const TableRecord, comptime table_tag: []const u8) ?Tabl
         if (bin.tagEq(record.tag, table_tag)) return record;
     }
     return null;
+}
+
+fn validateUniqueTableTags(records: []const TableRecord) FontError!void {
+    for (records, 0..) |record, index| {
+        for (records[index + 1 ..]) |other| {
+            // SFNT directories are maps keyed by four-byte table tag. Accepting
+            // duplicates makes required-table selection depend on directory
+            // order and can hide a malicious second record with different
+            // bounds, so reject the whole font before any table-specific parse.
+            if (std.mem.eql(u8, &record.tag, &other.tag)) return error.BadSfnt;
+        }
+    }
 }
 
 fn requireTableLength(record: TableRecord, minimum_length: usize) FontError!void {
@@ -2634,6 +2647,17 @@ test "TTC face offsets cannot overlap collection metadata" {
     try std.testing.expectError(error.BadSfnt, Font.faceCount(truncated_offsets));
 }
 
+test "SFNT table directory rejects duplicate tags" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    try setSfntTableTag(bytes, "kern", "head");
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
 test "name table storage offset cannot overlap metadata records" {
     var out: [16]u8 = undefined;
 
@@ -3184,6 +3208,19 @@ fn setSfntTableLength(bytes: []u8, comptime table_tag: []const u8, length: u32) 
         if (record_offset + 16 > bytes.len) return error.BadSfnt;
         if (!std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) continue;
         writeU32Test(bytes, record_offset + 12, length);
+        return;
+    }
+    return error.MissingTable;
+}
+
+fn setSfntTableTag(bytes: []u8, comptime old_tag: []const u8, comptime new_tag: []const u8) FontError!void {
+    if (old_tag.len != 4 or new_tag.len != 4) @compileError("SFNT table tags must be four bytes");
+    const table_count = try bin.readU16At(bytes, 4);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (record_offset + 16 > bytes.len) return error.BadSfnt;
+        if (!std.mem.eql(u8, bytes[record_offset .. record_offset + 4], old_tag)) continue;
+        @memcpy(bytes[record_offset .. record_offset + 4], new_tag);
         return;
     }
     return error.MissingTable;

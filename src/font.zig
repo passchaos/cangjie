@@ -1985,8 +1985,17 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
     const end_pts = try outline.allocator.alloc(u16, contour_count);
     defer outline.allocator.free(end_pts);
     var total_points: usize = 0;
+    var previous_end: ?u16 = null;
     for (end_pts) |*end| {
         end.* = try r.readU16();
+        if (previous_end) |prev| {
+            // endPtsOfContours must be strictly increasing. Accepting a
+            // repeated/decreasing end point lets malformed glyf data define an
+            // empty or overlapping contour, which later underflows when the
+            // contour slice is built from `start .. end + 1`.
+            if (end.* <= prev) return error.InvalidGlyph;
+        }
+        previous_end = end.*;
         total_points = @as(usize, end.*) + 1;
     }
     const instruction_len = try r.readU16();
@@ -2522,6 +2531,30 @@ test "cmap parser rejects subtable length past cmap table boundary" {
     writeU32Test(&data, 36, 9);
 
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &data, cmap));
+}
+
+test "simple glyf contours reject non-increasing end points" {
+    var glyph_data: [24]u8 = .{0} ** 24;
+    writeI16Test(&glyph_data, 0, 2); // contourCount
+    writeI16Test(&glyph_data, 2, 0);
+    writeI16Test(&glyph_data, 4, 0);
+    writeI16Test(&glyph_data, 6, 100);
+    writeI16Test(&glyph_data, 8, 100);
+    writeU16Test(&glyph_data, 10, 0);
+    writeU16Test(&glyph_data, 12, 0); // Repeats the first contour end.
+    writeU16Test(&glyph_data, 14, 0); // instructionLength
+    glyph_data[16] = 0x31;
+
+    var outline = glyph_mod.GlyphOutline.init(
+        std.testing.allocator,
+        1,
+        .{ .x_min = 0, .y_min = 0, .x_max = 100, .y_max = 100 },
+        500,
+        0,
+    );
+    defer outline.deinit();
+
+    try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, &glyph_data, 2, Transform.identity()));
 }
 
 test "core metrics and loca stay inside declared table lengths" {

@@ -295,6 +295,7 @@ pub const Font = struct {
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (name) |name_table| try validateNameTable(data, name_table);
         if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
+        if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
         const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
@@ -4131,6 +4132,82 @@ fn validateVariationDataTables(data: []const u8, glyph_count: u16, fvar: ?TableR
     if (mvar) |table| try validateMvarTable(data, table, fvar_info.axis_count);
 }
 
+fn validateAvarTable(data: []const u8, avar: TableRecord, fvar: ?TableRecord) FontError!void {
+    if (avar.length < 8) return error.BadSfnt;
+    const major = try bin.readU16At(data, avar.offset);
+    const minor = try bin.readU16At(data, avar.offset + 2);
+    if (major != 1 or minor != 0) return error.BadSfnt;
+    const reserved = try bin.readU16At(data, avar.offset + 4);
+    if (reserved != 0) return error.BadSfnt;
+
+    const axis_count: usize = @intCast(try bin.readU16At(data, avar.offset + 6));
+    if (fvar) |fvar_table| {
+        const fvar_info = try readFvarInfo(data, fvar_table);
+        if (axis_count != fvar_info.axis_count) return error.BadSfnt;
+    } else if (axis_count != 0) {
+        // avar segment maps are indexed only by the fvar axis order. Without
+        // fvar, non-empty maps have no authoritative axis contract and should
+        // not be accepted as parse-time variation metadata.
+        return error.BadSfnt;
+    }
+
+    var offset: usize = 8;
+    for (0..axis_count) |_| {
+        if (offset + 2 > avar.length) return error.BadSfnt;
+        const pair_count: usize = @intCast(try bin.readU16At(data, avar.offset + offset));
+        offset += 2;
+        const segment_bytes = pair_count * 4;
+        if (segment_bytes > avar.length - offset) return error.BadSfnt;
+        try validateAvarSegmentMap(data[avar.offset + offset .. avar.offset + offset + segment_bytes]);
+        offset += segment_bytes;
+    }
+    if (offset != avar.length) return error.BadSfnt;
+}
+
+fn validateAvarSegmentMap(segment_data: []const u8) FontError!void {
+    const pair_count = segment_data.len / 4;
+    if (pair_count < 3) return error.BadSfnt;
+
+    var has_minus_one = false;
+    var has_zero = false;
+    var has_plus_one = false;
+    var previous_from: ?i16 = null;
+    var previous_to: ?i16 = null;
+    for (0..pair_count) |index| {
+        const offset = index * 4;
+        const from = try readI16FromSlice(segment_data, offset);
+        const to = try readI16FromSlice(segment_data, offset + 2);
+        if (!isAvarNormalizedValue(from) or !isAvarNormalizedValue(to)) return error.BadSfnt;
+        if (previous_from) |last_from| {
+            // Segment maps are piecewise-linear functions over normalized
+            // coordinates. Requiring strict monotonicity for both axes catches
+            // ambiguous duplicate breakpoints and reversed mappings at parse
+            // time instead of allowing interpolation to depend on record order.
+            if (from <= last_from) return error.BadSfnt;
+        }
+        if (previous_to) |last_to| {
+            if (to < last_to) return error.BadSfnt;
+        }
+        if (from == avar_minus_one and to == avar_minus_one) has_minus_one = true;
+        if (from == 0 and to == 0) has_zero = true;
+        if (from == avar_plus_one and to == avar_plus_one) has_plus_one = true;
+        previous_from = from;
+        previous_to = to;
+    }
+
+    // OpenType requires every axis map to preserve the normalized endpoints and
+    // default coordinate. Enforcing those anchors keeps malformed avar data from
+    // shifting default instances or extrapolating beyond the design-space edge.
+    if (!has_minus_one or !has_zero or !has_plus_one) return error.BadSfnt;
+}
+
+const avar_minus_one: i16 = -0x4000;
+const avar_plus_one: i16 = 0x4000;
+
+fn isAvarNormalizedValue(value: i16) bool {
+    return value >= avar_minus_one and value <= avar_plus_one;
+}
+
 fn validateGvarTable(data: []const u8, gvar: TableRecord, glyph_count: u16, fvar_axis_count: usize, target_context: ?GvarGlyphTargetContext) FontError!void {
     if (gvar.length < 20) return error.BadSfnt;
     const major = try bin.readU16At(data, gvar.offset);
@@ -7498,10 +7575,69 @@ test "avar axis count must match fvar axis count when both tables exist" {
     writeU16Test(&bytes, 36, 1); // avar major.
     writeU16Test(&bytes, 38, 0); // avar minor.
     writeU16Test(&bytes, 42, 2); // Mismatches the single fvar axis.
-    writeU16Test(&bytes, 44, 0); // Empty first segment map would be OK if counts matched.
+    writeU16Test(&bytes, 44, 3); // Would be the first segment-map count if counts matched.
 
     const font = fvarAvarOnlyFont(&bytes, 36);
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 0.0));
+}
+
+test "avar segment maps are fully validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        const avar_offset: usize = @intCast(try sfntTableOffset(bytes, "avar"));
+        writeU16Test(bytes, avar_offset + 4, 1); // Reserved in avar version 1.0.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        const avar_offset: usize = @intCast(try sfntTableOffset(bytes, "avar"));
+        writeU16Test(bytes, avar_offset + 8, 2); // Segment maps must include -1, 0, and +1 anchors.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        const avar_offset: usize = @intCast(try sfntTableOffset(bytes, "avar"));
+        writeF2Dot14Test(bytes, avar_offset + 18, -0.25); // Breaks fromCoordinate sort order.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        const avar_offset: usize = @intCast(try sfntTableOffset(bytes, "avar"));
+        writeF2Dot14Test(bytes, avar_offset + 16, 0.25); // The default coordinate must map to itself.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        const avar_offset: usize = @intCast(try sfntTableOffset(bytes, "avar"));
+        writeF2Dot14Test(bytes, avar_offset + 20, -0.25); // toCoordinate would move backwards.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        try setSfntTableLength(bytes, "avar", @intCast(try sfntTableLength(bytes, "avar") - 2));
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "gvar table matches fvar axes and maxp glyph count" {

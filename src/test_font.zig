@@ -1963,7 +1963,7 @@ fn statTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn avarTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 42);
+    const bytes = try allocator.alloc(u8, 40);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);

@@ -1514,7 +1514,25 @@ fn parseTtcHeader(data: []const u8) FontError!?TtcHeader {
     var header_length = 12 + face_count * 4;
     if (major == 2) {
         if (header_length > data.len - 12) return error.BadSfnt;
+        const dsig_tag = try bin.readU32At(data, header_length);
+        const dsig_length = try bin.readU32At(data, header_length + 4);
+        const dsig_offset = try bin.readU32At(data, header_length + 8);
         header_length += 12;
+
+        // The optional DSIG table is described by absolute collection offsets.
+        // Empty descriptors are encoded as all zero; any partially-populated
+        // descriptor must identify an in-file range after the complete TTC
+        // header. Otherwise a v2 collection can advertise signatures that alias
+        // face offsets or point beyond the borrowed byte slice.
+        if (dsig_tag == 0 and dsig_length == 0 and dsig_offset == 0) {
+            // No digital-signature table is present.
+        } else {
+            if (dsig_tag != 0x44534947 or dsig_length == 0) return error.BadSfnt;
+            const dsig_start: usize = @intCast(dsig_offset);
+            const length: usize = @intCast(dsig_length);
+            if (dsig_start < header_length) return error.BadSfnt;
+            if (dsig_start > data.len or length > data.len - dsig_start) return error.BadSfnt;
+        }
     }
 
     return .{
@@ -3415,6 +3433,51 @@ test "COLR v1 paint graph rejects cyclic layer references" {
     const font = colrOnlyFont(&bytes);
     try std.testing.expectError(error.BadSfnt, font.colorPaint(1));
     try std.testing.expectError(error.BadSfnt, font.colorPaintLayer(0));
+}
+
+test "TTC v2 DSIG descriptor validates range and null consistency" {
+    var valid_empty: [28]u8 = .{0} ** 28;
+    writeTagTest(&valid_empty, 0, "ttcf");
+    writeU32Test(&valid_empty, 4, 0x00020000);
+    writeU32Test(&valid_empty, 8, 1);
+    writeU32Test(&valid_empty, 12, 28);
+    try std.testing.expectEqual(@as(usize, 1), try Font.faceCount(&valid_empty));
+
+    var partial_descriptor = valid_empty;
+    writeTagTest(&partial_descriptor, 16, "DSIG");
+    try std.testing.expectError(error.BadSfnt, Font.faceCount(&partial_descriptor));
+
+    var wrong_tag = valid_empty;
+    writeTagTest(&wrong_tag, 16, "BAD!");
+    writeU32Test(&wrong_tag, 20, 4);
+    writeU32Test(&wrong_tag, 24, 28);
+    try std.testing.expectError(error.BadSfnt, Font.faceCount(&wrong_tag));
+
+    var header_overlap = valid_empty;
+    writeTagTest(&header_overlap, 16, "DSIG");
+    writeU32Test(&header_overlap, 20, 4);
+    writeU32Test(&header_overlap, 24, 24);
+    try std.testing.expectError(error.BadSfnt, Font.faceCount(&header_overlap));
+
+    var out_of_bounds: [32]u8 = .{0} ** 32;
+    writeTagTest(&out_of_bounds, 0, "ttcf");
+    writeU32Test(&out_of_bounds, 4, 0x00020000);
+    writeU32Test(&out_of_bounds, 8, 1);
+    writeU32Test(&out_of_bounds, 12, 28);
+    writeTagTest(&out_of_bounds, 16, "DSIG");
+    writeU32Test(&out_of_bounds, 20, 8);
+    writeU32Test(&out_of_bounds, 24, 28);
+    try std.testing.expectError(error.BadSfnt, Font.faceCount(&out_of_bounds));
+
+    var valid_dsig: [32]u8 = .{0} ** 32;
+    writeTagTest(&valid_dsig, 0, "ttcf");
+    writeU32Test(&valid_dsig, 4, 0x00020000);
+    writeU32Test(&valid_dsig, 8, 1);
+    writeU32Test(&valid_dsig, 12, 28);
+    writeTagTest(&valid_dsig, 16, "DSIG");
+    writeU32Test(&valid_dsig, 20, 4);
+    writeU32Test(&valid_dsig, 24, 28);
+    try std.testing.expectEqual(@as(usize, 1), try Font.faceCount(&valid_dsig));
 }
 
 test "fvar axes and instance arrays stay inside declared table regions" {

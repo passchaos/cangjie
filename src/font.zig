@@ -293,6 +293,7 @@ pub const Font = struct {
         const number_of_h_metrics = try validateHorizontalMetricsTables(data, hhea, hmtx, glyph_count);
         try validateVerticalMetricsTables(data, glyph_count, vhea, vmtx);
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
+        if (name) |name_table| try validateNameTable(data, name_table);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
         const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
@@ -2768,65 +2769,175 @@ const NameRecord = struct {
     length: usize,
 };
 
-fn readNameString(data: []const u8, name: TableRecord, name_id: u16, out: []u8) FontError!?[]const u8 {
-    if (name.length < 6) return error.BadSfnt;
-    const format = try bin.readU16At(data, name.offset);
-    if (format > 1) return error.InvalidName;
-    const count = try bin.readU16At(data, name.offset + 2);
-    const storage_offset = try bin.readU16At(data, name.offset + 4);
+const NameTableLayout = struct {
+    format: u16,
+    count: u16,
+    storage_offset: usize,
+    storage_length: usize,
+    lang_tag_records_start: usize = 0,
+    lang_tag_count: usize = 0,
+};
 
-    const records_start: usize = 6;
-    const name_record_size: usize = 12;
-    const records_len = @as(usize, count) * name_record_size;
-    if (records_len > name.length - records_start) return error.BadSfnt;
+const name_records_start: usize = 6;
+const name_record_size: usize = 12;
+const lang_tag_record_size: usize = 4;
 
-    // `stringOffset` is relative to the start of the name table but must point
-    // after all table metadata. Otherwise a malformed table can make a valid
-    // NameRecord read bytes from the record array (or from format-1 language
-    // tag records) as if they were string storage.
-    const records_end = records_start + records_len;
-    var minimum_storage_offset = records_end;
-    var lang_tag_records_start: usize = 0;
-    var lang_tag_count: usize = 0;
-    if (format == 1) {
-        if (records_end + 2 > name.length) return error.BadSfnt;
-        lang_tag_count = try bin.readU16At(data, name.offset + records_end);
-        lang_tag_records_start = records_end + 2;
-        const lang_tag_records_len = lang_tag_count * 4;
-        if (lang_tag_records_len > name.length - lang_tag_records_start) return error.BadSfnt;
-        minimum_storage_offset = lang_tag_records_start + lang_tag_records_len;
+fn validateNameTable(data: []const u8, name: TableRecord) FontError!void {
+    const table = try nameTableSlice(data, name);
+    const layout = try readNameTableLayout(table);
+    try validateNameLanguageTags(table, layout);
+
+    for (0..layout.count) |index| {
+        const record = try readNameRecord(table, index);
+        try validateNameRecordMetadata(layout, record);
+        const string_data = try nameRecordString(table, layout, record);
+        try validateNameRecordEncoding(record, string_data);
     }
-    if (storage_offset < minimum_storage_offset or storage_offset > name.length) return error.BadSfnt;
+}
 
+fn nameTableSlice(data: []const u8, name: TableRecord) FontError![]const u8 {
+    if (name.offset > data.len or name.length > data.len - name.offset) return error.BadSfnt;
+    return data[name.offset .. name.offset + name.length];
+}
+
+fn readNameTableLayout(table: []const u8) FontError!NameTableLayout {
+    if (table.len < 6) return error.BadSfnt;
+    const format = try bin.readU16At(table, 0);
+    if (format > 1) return error.InvalidName;
+    const count = try bin.readU16At(table, 2);
+    const storage_offset: usize = @intCast(try bin.readU16At(table, 4));
+
+    if (@as(usize, count) > (table.len - name_records_start) / name_record_size) return error.BadSfnt;
+    const records_len = @as(usize, count) * name_record_size;
+    const records_end = name_records_start + records_len;
+
+    // name.stringOffset is relative to the name table and denotes the first
+    // byte of shared string storage. It must sit after every versioned metadata
+    // record, otherwise a malicious NameRecord or LangTagRecord can reinterpret
+    // table headers as a plausible UTF-16 string.
+    var minimum_storage_offset = records_end;
+    var layout = NameTableLayout{
+        .format = format,
+        .count = count,
+        .storage_offset = storage_offset,
+        .storage_length = 0,
+    };
     if (format == 1) {
-        for (0..lang_tag_count) |i| {
-            const rec = name.offset + lang_tag_records_start + i * 4;
-            const length = try bin.readU16At(data, rec);
-            const offset = try bin.readU16At(data, rec + 2);
-            if (offset > name.length - storage_offset or length > name.length - storage_offset - offset) return error.BadSfnt;
+        if (records_end + 2 > table.len) return error.BadSfnt;
+        const lang_tag_count: usize = @intCast(try bin.readU16At(table, records_end));
+        const lang_tag_records_start = records_end + 2;
+        if (lang_tag_count > (table.len - lang_tag_records_start) / lang_tag_record_size) return error.BadSfnt;
+        minimum_storage_offset = lang_tag_records_start + lang_tag_count * lang_tag_record_size;
+        layout.lang_tag_records_start = lang_tag_records_start;
+        layout.lang_tag_count = lang_tag_count;
+    }
+    if (storage_offset < minimum_storage_offset or storage_offset > table.len) return error.BadSfnt;
+    layout.storage_length = table.len - storage_offset;
+    return layout;
+}
+
+fn validateNameLanguageTags(table: []const u8, layout: NameTableLayout) FontError!void {
+    if (layout.format != 1) return;
+    for (0..layout.lang_tag_count) |index| {
+        const record_offset = layout.lang_tag_records_start + index * lang_tag_record_size;
+        const length: usize = @intCast(try bin.readU16At(table, record_offset));
+        const offset: usize = @intCast(try bin.readU16At(table, record_offset + 2));
+        const tag_data = try nameStorageString(table, layout, offset, length);
+        try validateUtf16BeNameData(tag_data);
+    }
+}
+
+fn readNameRecord(table: []const u8, index: usize) FontError!NameRecord {
+    const rec = name_records_start + index * name_record_size;
+    if (rec + name_record_size > table.len) return error.BadSfnt;
+    return .{
+        .platform_id = try bin.readU16At(table, rec),
+        .encoding_id = try bin.readU16At(table, rec + 2),
+        .language_id = try bin.readU16At(table, rec + 4),
+        .name_id = try bin.readU16At(table, rec + 6),
+        .length = try bin.readU16At(table, rec + 8),
+        .offset = try bin.readU16At(table, rec + 10),
+    };
+}
+
+fn validateNameRecordMetadata(layout: NameTableLayout, record: NameRecord) FontError!void {
+    try validateNameRecordPlatformEncoding(record);
+
+    // In name table format 1, language IDs from 0x8000 upward are indexes into
+    // the LangTagRecord array. Validate the reference for every record at parse
+    // time so later family/style lookups cannot trip over an unrelated broken
+    // localized name entry. Older format-0 language IDs remain platform-owned.
+    if (layout.format == 1 and (record.language_id & 0x8000) != 0) {
+        const lang_tag_index = @as(usize, record.language_id & 0x7fff);
+        if (lang_tag_index >= layout.lang_tag_count) return error.BadSfnt;
+    }
+}
+
+fn validateNameRecordPlatformEncoding(record: NameRecord) FontError!void {
+    switch (record.platform_id) {
+        0 => if (record.encoding_id > 6) return error.InvalidName,
+        // Macintosh encoding IDs are legacy Script Manager codes. Keep them
+        // range-agnostic here: the important structural guarantee is that the
+        // platform itself is registered, while many old production fonts use
+        // obscure Mac encodings that Cangjie treats as opaque single-byte data.
+        1 => {},
+        2 => if (record.encoding_id > 2) return error.InvalidName,
+        3 => switch (record.encoding_id) {
+            0, 1, 2, 3, 4, 5, 6, 10 => {},
+            else => return error.InvalidName,
+        },
+        4 => {},
+        else => return error.InvalidName,
+    }
+}
+
+fn nameRecordString(table: []const u8, layout: NameTableLayout, record: NameRecord) FontError![]const u8 {
+    return try nameStorageString(table, layout, record.offset, record.length);
+}
+
+fn nameStorageString(table: []const u8, layout: NameTableLayout, offset: usize, length: usize) FontError![]const u8 {
+    if (offset > layout.storage_length or length > layout.storage_length - offset) return error.BadSfnt;
+    const start = layout.storage_offset + offset;
+    return table[start .. start + length];
+}
+
+fn validateNameRecordEncoding(record: NameRecord, string_data: []const u8) FontError!void {
+    if (isUtf16Name(record)) try validateUtf16BeNameData(string_data);
+}
+
+fn validateUtf16BeNameData(data: []const u8) FontError!void {
+    if (data.len % 2 != 0) return error.InvalidName;
+    var index: usize = 0;
+    while (index < data.len) : (index += 2) {
+        const unit = std.mem.readInt(u16, data[index..][0..2], .big);
+        if (unit >= 0xd800 and unit <= 0xdbff) {
+            if (index + 4 > data.len) return error.InvalidName;
+            const low = std.mem.readInt(u16, data[index + 2 ..][0..2], .big);
+            if (low < 0xdc00 or low > 0xdfff) return error.InvalidName;
+            index += 2;
+        } else if (unit >= 0xdc00 and unit <= 0xdfff) {
+            return error.InvalidName;
         }
     }
+}
+
+fn readNameString(data: []const u8, name: TableRecord, name_id: u16, out: []u8) FontError!?[]const u8 {
+    const table = try nameTableSlice(data, name);
+    const layout = try readNameTableLayout(table);
+    try validateNameLanguageTags(table, layout);
 
     var best: ?NameRecord = null;
-    for (0..count) |i| {
-        const rec = name.offset + records_start + i * name_record_size;
-        if (rec + 12 > name.offset + name.length) return error.BadSfnt;
-        const record = NameRecord{
-            .platform_id = try bin.readU16At(data, rec),
-            .encoding_id = try bin.readU16At(data, rec + 2),
-            .language_id = try bin.readU16At(data, rec + 4),
-            .name_id = try bin.readU16At(data, rec + 6),
-            .length = try bin.readU16At(data, rec + 8),
-            .offset = try bin.readU16At(data, rec + 10),
-        };
+    for (0..layout.count) |i| {
+        const record = try readNameRecord(table, i);
+        try validateNameRecordMetadata(layout, record);
+        const string_data = try nameRecordString(table, layout, record);
+        try validateNameRecordEncoding(record, string_data);
         if (record.name_id != name_id) continue;
-        if (record.offset > name.length - storage_offset or record.length > name.length - storage_offset - record.offset) return error.BadSfnt;
         if (best == null or scoreNameRecord(record) > scoreNameRecord(best.?)) best = record;
     }
 
     const chosen = best orelse return null;
-    const string_start = name.offset + storage_offset + chosen.offset;
-    const string_data = data[string_start .. string_start + chosen.length];
+    const string_data = try nameRecordString(table, layout, chosen);
     if (isUtf16Name(chosen)) return try decodeUtf16BeName(string_data, out);
     return try decodeSingleByteName(string_data, out);
 }
@@ -2841,7 +2952,15 @@ fn scoreNameRecord(record: NameRecord) u8 {
 }
 
 fn isUtf16Name(record: NameRecord) bool {
-    return record.platform_id == 0 or record.platform_id == 3;
+    return switch (record.platform_id) {
+        0 => true,
+        2 => record.encoding_id == 1,
+        // Windows name strings are UTF-16BE only for the Unicode encodings.
+        // Legacy Shift-JIS/GBK/Big5/Wansung/Johab records are structurally
+        // valid but are not Unicode strings, so do not apply surrogate rules.
+        3 => record.encoding_id == 0 or record.encoding_id == 1 or record.encoding_id == 10,
+        else => false,
+    };
 }
 
 fn decodeUtf16BeName(data: []const u8, out: []u8) FontError![]const u8 {
@@ -5186,6 +5305,73 @@ test "name table format 1 validates language tag storage ranges" {
     try std.testing.expectError(error.BadSfnt, readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out));
 }
 
+test "name table validates every record string at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtf(allocator);
+    defer allocator.free(bytes);
+    const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+    const record = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.typographic_subfamily));
+    writeU16Test(bytes, record + 8, 1); // UTF-16 name strings must have an even byte length.
+
+    try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+}
+
+test "name table validates every record storage range at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtf(allocator);
+    defer allocator.free(bytes);
+    const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+    const name_length: usize = @intCast(try sfntTableLength(bytes, "name"));
+    const storage_offset: usize = @intCast(try bin.readU16At(bytes, name_offset + 4));
+    const storage_length = name_length - storage_offset;
+    const record = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.postscript_name));
+    writeU16Test(bytes, record + 10, @intCast(storage_length)); // Non-empty record starts just past storage.
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "name table rejects invalid platform encodings at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtf(allocator);
+    defer allocator.free(bytes);
+    const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+    const record = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.family));
+    writeU16Test(bytes, record, 5); // OpenType name tables only define platform IDs 0 through 4.
+
+    try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+}
+
+test "name table format 1 language ids reference valid UTF-16 language tags" {
+    var bytes: [32]u8 = .{0} ** 32;
+    writeU16Test(&bytes, 0, 1); // format 1 name table.
+    writeU16Test(&bytes, 2, 1);
+    writeU16Test(&bytes, 4, 24);
+    writeNameRecordTest(&bytes, 6, 3, 1, 0x8000, 1, 4, 0);
+    writeU16Test(&bytes, 18, 1); // one LangTagRecord.
+    writeU16Test(&bytes, 20, 4);
+    writeU16Test(&bytes, 22, 4);
+    bytes[25] = 'O';
+    bytes[27] = 'K';
+    bytes[29] = 'e';
+    bytes[31] = 'n';
+
+    try validateNameTable(&bytes, nameTableRecord(bytes.len));
+
+    var bad_language_id = bytes;
+    writeU16Test(&bad_language_id, 10, 0x8001);
+    try std.testing.expectError(error.BadSfnt, validateNameTable(&bad_language_id, nameTableRecord(bad_language_id.len)));
+
+    var bad_language_tag = bytes;
+    writeU16Test(&bad_language_tag, 20, 3);
+    try std.testing.expectError(error.InvalidName, validateNameTable(&bad_language_tag, nameTableRecord(bad_language_tag.len)));
+}
+
 test "SVG document glyph ranges stay within maxp glyph count" {
     var bytes: [28]u8 = .{0} ** 28;
     writeU16Test(&bytes, 0, 0); // SVG table version.
@@ -6068,6 +6254,19 @@ fn sfntTableOffset(bytes: []const u8, comptime table_tag: []const u8) FontError!
     return error.MissingTable;
 }
 
+fn sfntTableLength(bytes: []const u8, comptime table_tag: []const u8) FontError!u32 {
+    if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
+    const table_count = try bin.readU16At(bytes, 4);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (record_offset + 16 > bytes.len) return error.BadSfnt;
+        if (std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) {
+            return try bin.readU32At(bytes, record_offset + 12);
+        }
+    }
+    return error.MissingTable;
+}
+
 fn setSfntTableOffset(bytes: []u8, comptime table_tag: []const u8, offset: u32) FontError!void {
     if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
     const table_count = try bin.readU16At(bytes, 4);
@@ -6094,17 +6293,32 @@ fn setSfntTableTag(bytes: []u8, comptime old_tag: []const u8, comptime new_tag: 
     return error.MissingTable;
 }
 
+fn nameRecordOffsetForId(bytes: []const u8, name_offset: usize, name_id: u16) FontError!usize {
+    if (name_offset + 6 > bytes.len) return error.BadSfnt;
+    const count = try bin.readU16At(bytes, name_offset + 2);
+    for (0..count) |index| {
+        const record_offset = name_offset + name_records_start + index * name_record_size;
+        if (record_offset + name_record_size > bytes.len) return error.BadSfnt;
+        if (try bin.readU16At(bytes, record_offset + 6) == name_id) return record_offset;
+    }
+    return error.InvalidName;
+}
+
 fn nameTableRecord(length: usize) TableRecord {
     return .{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = 0, .length = length };
 }
 
-fn writeUtf16NameRecordTest(bytes: []u8, offset: usize, name_id: u16, length: u16, storage_offset: u16) void {
-    writeU16Test(bytes, offset + 0, 3);
-    writeU16Test(bytes, offset + 2, 1);
-    writeU16Test(bytes, offset + 4, 0x0409);
+fn writeNameRecordTest(bytes: []u8, offset: usize, platform_id: u16, encoding_id: u16, language_id: u16, name_id: u16, length: u16, storage_offset: u16) void {
+    writeU16Test(bytes, offset + 0, platform_id);
+    writeU16Test(bytes, offset + 2, encoding_id);
+    writeU16Test(bytes, offset + 4, language_id);
     writeU16Test(bytes, offset + 6, name_id);
     writeU16Test(bytes, offset + 8, length);
     writeU16Test(bytes, offset + 10, storage_offset);
+}
+
+fn writeUtf16NameRecordTest(bytes: []u8, offset: usize, name_id: u16, length: u16, storage_offset: u16) void {
+    writeNameRecordTest(bytes, offset, 3, 1, 0x0409, name_id, length, storage_offset);
 }
 
 fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {

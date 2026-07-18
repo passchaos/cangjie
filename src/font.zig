@@ -325,7 +325,7 @@ pub const Font = struct {
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBounds(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
         if (colr) |colr_table| try validateColrGlyphBounds(data, colr_table, glyph_count);
-        if (svg) |svg_table| try validateSvgGlyphBounds(data, svg_table, glyph_count);
+        if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
         if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
@@ -4564,6 +4564,11 @@ const SvgDocumentRecord = struct {
     document_length: usize,
 };
 
+const SvgDocumentByteRange = struct {
+    start: usize,
+    end: usize,
+};
+
 fn svgDocumentList(data: []const u8, svg: TableRecord) FontError!SvgDocumentList {
     if (svg.length < 10) return error.BadSfnt;
     const version = try bin.readU16At(data, svg.offset);
@@ -4621,14 +4626,44 @@ fn validateSvgDocumentRecord(record: SvgDocumentRecord, document_list: SvgDocume
     if (record.document_offset > document_list.length or record.document_length > document_list.length - record.document_offset) return error.BadSfnt;
 }
 
-fn validateSvgGlyphBounds(data: []const u8, svg: TableRecord, glyph_count: u16) FontError!void {
+fn validateSvgDocumentByteRanges(ranges: []SvgDocumentByteRange) FontError!void {
+    if (ranges.len < 2) return;
+
+    std.mem.sort(SvgDocumentByteRange, ranges, {}, struct {
+        fn lessThan(_: void, lhs: SvgDocumentByteRange, rhs: SvgDocumentByteRange) bool {
+            if (lhs.start == rhs.start) return lhs.end < rhs.end;
+            return lhs.start < rhs.start;
+        }
+    }.lessThan);
+
+    for (ranges[1..], 1..) |range, index| {
+        const previous = ranges[index - 1];
+        if (range.start < previous.end) {
+            // Multiple glyph ranges may intentionally reference the exact same
+            // SVG document bytes.  Partial overlaps, however, make one XML
+            // document borrow bytes from another and leave later renderers with
+            // no deterministic document boundary, so reject them at parse time.
+            if (range.start != previous.start or range.end != previous.end) return error.BadSfnt;
+        }
+    }
+}
+
+fn validateSvgGlyphBounds(allocator: std.mem.Allocator, data: []const u8, svg: TableRecord, glyph_count: u16) FontError!void {
     const document_list = try svgDocumentList(data, svg);
+
+    const byte_ranges = try allocator.alloc(SvgDocumentByteRange, document_list.entry_count);
+    defer allocator.free(byte_ranges);
 
     var previous_end_glyph_id: ?glyph_mod.GlyphId = null;
     for (0..document_list.entry_count) |index| {
         const record = try readSvgDocumentRecord(data, document_list.records_start + index * 12);
         try validateSvgDocumentRecord(record, document_list, glyph_count, &previous_end_glyph_id);
+        byte_ranges[index] = .{
+            .start = record.document_offset,
+            .end = record.document_offset + record.document_length,
+        };
     }
+    try validateSvgDocumentByteRanges(byte_ranges);
 }
 
 fn validateColrGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
@@ -6560,10 +6595,10 @@ test "SVG document glyph ranges stay within maxp glyph count" {
     @memcpy(bytes[24..28], "<svg");
 
     const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(&bytes, svg, 2));
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2));
 
     writeU16Test(&bytes, 14, 1);
-    try validateSvgGlyphBounds(&bytes, svg, 2);
+    try validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2);
 }
 
 test "SVG document glyph ranges must be sorted and disjoint" {
@@ -6583,19 +6618,51 @@ test "SVG document glyph ranges must be sorted and disjoint" {
     @memcpy(bytes[40..44], "<svg");
 
     const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateSvgGlyphBounds(&bytes, svg, 4);
+    try validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 4);
 
     var overlapping = bytes;
     writeU16Test(&overlapping, 24, 1); // Overlaps glyph 1 from the first range.
     writeU16Test(&overlapping, 26, 2);
-    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(&overlapping, svg, 4));
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &overlapping, svg, 4));
 
     var unsorted = bytes;
     writeU16Test(&unsorted, 12, 2);
     writeU16Test(&unsorted, 14, 2);
     writeU16Test(&unsorted, 24, 1); // Disjoint, but out of ascending glyph order.
     writeU16Test(&unsorted, 26, 1);
-    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(&unsorted, svg, 4));
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &unsorted, svg, 4));
+}
+
+test "SVG document byte ranges reject partial overlaps" {
+    var bytes: [48]u8 = .{0} ** 48;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU16Test(&bytes, 10, 2); // two SVGDocumentRecords.
+    writeU16Test(&bytes, 12, 0); // first record covers glyph 0.
+    writeU16Test(&bytes, 14, 0);
+    writeU32Test(&bytes, 16, 30); // Byte ranges need not follow glyph order.
+    writeU32Test(&bytes, 20, 8);
+    writeU16Test(&bytes, 24, 1); // second record covers glyph 1.
+    writeU16Test(&bytes, 26, 1);
+    writeU32Test(&bytes, 28, 26);
+    writeU32Test(&bytes, 32, 4);
+
+    const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2);
+
+    var shared_document = bytes;
+    writeU32Test(&shared_document, 16, 26);
+    writeU32Test(&shared_document, 20, 8);
+    writeU32Test(&shared_document, 28, 26);
+    writeU32Test(&shared_document, 32, 8);
+    try validateSvgGlyphBounds(std.testing.allocator, &shared_document, svg, 2);
+
+    var partial_overlap = bytes;
+    writeU32Test(&partial_overlap, 16, 26);
+    writeU32Test(&partial_overlap, 20, 8);
+    writeU32Test(&partial_overlap, 28, 30); // Borrows the tail of the first document.
+    writeU32Test(&partial_overlap, 32, 8);
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &partial_overlap, svg, 2));
 }
 
 test "SVG document glyph range ordering is enforced at parse time" {
@@ -6617,6 +6684,29 @@ test "SVG document glyph range ordering is enforced at parse time" {
     writeU16Test(bytes, svg_offset + 26, 1);
     writeU32Test(bytes, svg_offset + 28, 30);
     writeU32Test(bytes, svg_offset + 32, 4);
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "SVG document byte range overlap is rejected at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildSvgTtf(allocator);
+    defer allocator.free(bytes);
+    const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
+
+    writeU16Test(bytes, svg_offset + 0, 0); // SVG table version.
+    writeU32Test(bytes, svg_offset + 2, 10); // SVGDocumentListOffset.
+    writeU16Test(bytes, svg_offset + 10, 2); // two SVGDocumentRecords.
+    writeU16Test(bytes, svg_offset + 12, 0);
+    writeU16Test(bytes, svg_offset + 14, 0);
+    writeU32Test(bytes, svg_offset + 16, 26); // First document: [26, 34).
+    writeU32Test(bytes, svg_offset + 20, 8);
+    writeU16Test(bytes, svg_offset + 24, 1);
+    writeU16Test(bytes, svg_offset + 26, 1);
+    writeU32Test(bytes, svg_offset + 28, 30); // Overlaps only the first document tail.
+    writeU32Test(bytes, svg_offset + 32, 8);
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }

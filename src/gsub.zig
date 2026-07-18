@@ -1276,7 +1276,7 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
 
 fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GsubError!void {
     switch (lookup_type) {
-        1, 2, 3, 4 => {},
+        1, 2, 3, 4, 5, 6, 8 => {},
         else => return,
     }
     for (0..subtable_count) |subtable_i| {
@@ -1331,6 +1331,9 @@ fn ensureSubstitutionSubtableVariableDataWithin(table: Table, subtable_offset: u
         2 => try ensureMultipleSubstitutionSubtableWithin(table, subtable_offset),
         3 => try ensureAlternateSubstitutionSubtableWithin(table, subtable_offset),
         4 => try ensureLigatureSubstitutionSubtableWithin(table, subtable_offset),
+        5 => try ensureContextSubstitutionSubtableWithin(table, subtable_offset),
+        6 => try ensureChainingContextSubstitutionSubtableWithin(table, subtable_offset),
+        8 => try ensureReverseChainingSingleSubstitutionSubtableWithin(table, subtable_offset),
         else => {},
     }
 }
@@ -1398,6 +1401,243 @@ fn ensureLigatureSubstitutionSubtableWithin(table: Table, subtable_offset: usize
             if (component_count == 0) return error.BadGsub;
             try ensureBytesWithin(table, ligature_offset + 4, (@as(usize, component_count) - 1) * 2);
         }
+    }
+}
+
+fn ensureContextSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
+    // Contextual substitutions defer their real work to nested lookups after a
+    // variable-length match structure. Validate every rule/set/coverage/record
+    // array before matching so a malformed later subtable in the same lookup
+    // cannot leak substitutions made by an earlier context subtable.
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    switch (subst_format) {
+        1 => {
+            const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+            try ensureCoverageTableWithin(table, coverage_offset);
+            const rule_set_count = try readU16BadGsub(table, subtable_offset + 4);
+            const rule_set_offsets_pos = subtable_offset + 6;
+            try ensureBytesWithin(table, rule_set_offsets_pos, @as(usize, rule_set_count) * 2);
+            for (0..rule_set_count) |set_i| {
+                const set_relative = try readU16BadGsub(table, rule_set_offsets_pos + set_i * 2);
+                if (set_relative == 0) continue;
+                try ensureContextRuleSetWithin(table, try checkedSubtableOffset(table, subtable_offset, set_relative));
+            }
+        },
+        2 => {
+            const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+            const class_def_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 4));
+            try ensureCoverageTableWithin(table, coverage_offset);
+            try ensureClassDefTableWithin(table, class_def_offset);
+            const class_set_count = try readU16BadGsub(table, subtable_offset + 6);
+            const class_set_offsets_pos = subtable_offset + 8;
+            try ensureBytesWithin(table, class_set_offsets_pos, @as(usize, class_set_count) * 2);
+            for (0..class_set_count) |set_i| {
+                const set_relative = try readU16BadGsub(table, class_set_offsets_pos + set_i * 2);
+                if (set_relative == 0) continue;
+                try ensureContextRuleSetWithin(table, try checkedSubtableOffset(table, subtable_offset, set_relative));
+            }
+        },
+        3 => {
+            const glyph_count = try readU16BadGsub(table, subtable_offset + 2);
+            if (glyph_count == 0) return error.BadGsub;
+            const subst_count = try readU16BadGsub(table, subtable_offset + 4);
+            const coverage_offsets_pos = subtable_offset + 6;
+            try ensureCoverageOffsetArrayWithin(table, subtable_offset, coverage_offsets_pos, glyph_count);
+            const records_offset = coverage_offsets_pos + @as(usize, glyph_count) * 2;
+            try ensureSubstitutionRecordListWithin(table, records_offset, subst_count);
+            try ensureSubstitutionRecordLookupsWithin(table, records_offset, subst_count);
+        },
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn ensureContextRuleSetWithin(table: Table, rule_set_offset: usize) GsubError!void {
+    const rule_count = try readU16BadGsub(table, rule_set_offset);
+    const rule_offsets_pos = rule_set_offset + 2;
+    try ensureBytesWithin(table, rule_offsets_pos, @as(usize, rule_count) * 2);
+    for (0..rule_count) |rule_i| {
+        const rule_offset = try checkedSubtableOffset(table, rule_set_offset, try readU16BadGsub(table, rule_offsets_pos + rule_i * 2));
+        try ensureContextRuleWithin(table, rule_offset);
+    }
+}
+
+fn ensureContextRuleWithin(table: Table, rule_offset: usize) GsubError!void {
+    const glyph_count = try readU16BadGsub(table, rule_offset);
+    if (glyph_count == 0) return error.BadGsub;
+    const subst_count = try readU16BadGsub(table, rule_offset + 2);
+    const input_pos = rule_offset + 4;
+    try ensureBytesWithin(table, input_pos, (@as(usize, glyph_count) - 1) * 2);
+    const records_offset = input_pos + (@as(usize, glyph_count) - 1) * 2;
+    try ensureSubstitutionRecordListWithin(table, records_offset, subst_count);
+    try ensureSubstitutionRecordLookupsWithin(table, records_offset, subst_count);
+}
+
+fn ensureChainingContextSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
+    // Chaining contextual subtables have three independent variable regions
+    // (backtrack, input, lookahead) before their substitution records. Bounds
+    // checking them up front preserves lookup-level atomicity for malformed
+    // fonts and keeps the runtime matcher focused on glyph semantics.
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    switch (subst_format) {
+        1 => {
+            const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+            try ensureCoverageTableWithin(table, coverage_offset);
+            const chain_set_count = try readU16BadGsub(table, subtable_offset + 4);
+            const chain_set_offsets_pos = subtable_offset + 6;
+            try ensureBytesWithin(table, chain_set_offsets_pos, @as(usize, chain_set_count) * 2);
+            for (0..chain_set_count) |set_i| {
+                const set_relative = try readU16BadGsub(table, chain_set_offsets_pos + set_i * 2);
+                if (set_relative == 0) continue;
+                try ensureChainingRuleSetWithin(table, try checkedSubtableOffset(table, subtable_offset, set_relative));
+            }
+        },
+        2 => {
+            const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+            const backtrack_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 4));
+            const input_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 6));
+            const lookahead_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 8));
+            try ensureCoverageTableWithin(table, coverage_offset);
+            try ensureClassDefTableWithin(table, backtrack_class_def);
+            try ensureClassDefTableWithin(table, input_class_def);
+            try ensureClassDefTableWithin(table, lookahead_class_def);
+            const set_count = try readU16BadGsub(table, subtable_offset + 10);
+            const set_offsets_pos = subtable_offset + 12;
+            try ensureBytesWithin(table, set_offsets_pos, @as(usize, set_count) * 2);
+            for (0..set_count) |set_i| {
+                const set_relative = try readU16BadGsub(table, set_offsets_pos + set_i * 2);
+                if (set_relative == 0) continue;
+                try ensureChainingRuleSetWithin(table, try checkedSubtableOffset(table, subtable_offset, set_relative));
+            }
+        },
+        3 => try ensureChainingCoverageSubstitutionSubtableWithin(table, subtable_offset),
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn ensureChainingRuleSetWithin(table: Table, rule_set_offset: usize) GsubError!void {
+    const rule_count = try readU16BadGsub(table, rule_set_offset);
+    const rule_offsets_pos = rule_set_offset + 2;
+    try ensureBytesWithin(table, rule_offsets_pos, @as(usize, rule_count) * 2);
+    for (0..rule_count) |rule_i| {
+        const rule_offset = try checkedSubtableOffset(table, rule_set_offset, try readU16BadGsub(table, rule_offsets_pos + rule_i * 2));
+        try ensureChainingRuleWithin(table, rule_offset);
+    }
+}
+
+fn ensureChainingRuleWithin(table: Table, rule_offset: usize) GsubError!void {
+    var cursor = rule_offset;
+    const backtrack_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureBytesWithin(table, cursor, @as(usize, backtrack_count) * 2);
+    cursor += @as(usize, backtrack_count) * 2;
+
+    const input_count = try readU16BadGsub(table, cursor);
+    if (input_count == 0) return error.BadGsub;
+    cursor += 2;
+    try ensureBytesWithin(table, cursor, (@as(usize, input_count) - 1) * 2);
+    cursor += (@as(usize, input_count) - 1) * 2;
+
+    const lookahead_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureBytesWithin(table, cursor, @as(usize, lookahead_count) * 2);
+    cursor += @as(usize, lookahead_count) * 2;
+
+    const subst_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureSubstitutionRecordListWithin(table, cursor, subst_count);
+    try ensureSubstitutionRecordLookupsWithin(table, cursor, subst_count);
+}
+
+fn ensureChainingCoverageSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
+    var cursor = subtable_offset + 2;
+    const backtrack_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, backtrack_count);
+    cursor += @as(usize, backtrack_count) * 2;
+
+    const input_count = try readU16BadGsub(table, cursor);
+    if (input_count == 0) return error.BadGsub;
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, input_count);
+    cursor += @as(usize, input_count) * 2;
+
+    const lookahead_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, lookahead_count);
+    cursor += @as(usize, lookahead_count) * 2;
+
+    const subst_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureSubstitutionRecordListWithin(table, cursor, subst_count);
+    try ensureSubstitutionRecordLookupsWithin(table, cursor, subst_count);
+}
+
+fn ensureReverseChainingSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    if (subst_format != 1) return error.UnsupportedGsub;
+    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    try ensureCoverageTableWithin(table, coverage_offset);
+
+    var cursor = subtable_offset + 4;
+    const backtrack_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, backtrack_count);
+    cursor += @as(usize, backtrack_count) * 2;
+
+    const lookahead_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, lookahead_count);
+    cursor += @as(usize, lookahead_count) * 2;
+
+    const glyph_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureCoverageIndicesWithin(table, coverage_offset, glyph_count);
+    try ensureBytesWithin(table, cursor, @as(usize, glyph_count) * 2);
+}
+
+fn ensureCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GsubError!void {
+    try ensureBytesWithin(table, offsets_pos, @as(usize, count) * 2);
+    for (0..count) |i| {
+        const coverage_offset = try checkedSubtableOffset(table, base_offset, try readU16BadGsub(table, offsets_pos + i * 2));
+        try ensureCoverageTableWithin(table, coverage_offset);
+    }
+}
+
+fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_count: usize) GsubError!void {
+    const format = try readU16BadGsub(table, coverage_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
+            if (@as(usize, glyph_count) > target_count) return error.BadGsub;
+        },
+        2 => {
+            const range_count = try readU16BadGsub(table, coverage_offset + 2);
+            for (0..range_count) |range_i| {
+                const range = coverage_offset + 4 + range_i * 6;
+                const start = try readU16BadGsub(table, range);
+                const end = try readU16BadGsub(table, range + 2);
+                const start_index = try readU16BadGsub(table, range + 4);
+                const span = @as(usize, end) - @as(usize, start) + 1;
+                if (@as(usize, start_index) > target_count or span > target_count - @as(usize, start_index)) return error.BadGsub;
+            }
+        },
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GsubError!void {
+    const format = try readU16BadGsub(table, class_def_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16BadGsub(table, class_def_offset + 4);
+            try ensureBytesWithin(table, class_def_offset + 6, @as(usize, glyph_count) * 2);
+        },
+        2 => {
+            const range_count = try readU16BadGsub(table, class_def_offset + 2);
+            try ensureBytesWithin(table, class_def_offset + 4, @as(usize, range_count) * 6);
+            try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
+        },
+        else => return error.UnsupportedGsub,
     }
 }
 
@@ -2014,6 +2254,104 @@ test "GSUB context substitution skips lookup-flag ignored glyphs" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 12 }, glyphs.items);
+}
+
+test "GSUB direct context substitution preflights payload arrays atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 110;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 60);
+
+    writeU16Test(&bytes, 16, 5);
+    writeU16Test(&bytes, 20, 2);
+    writeU16Test(&bytes, 22, 10);
+    writeU16Test(&bytes, 24, 34);
+
+    const first_context = 26;
+    writeU16Test(&bytes, first_context + 0, 3);
+    writeU16Test(&bytes, first_context + 2, 1);
+    writeU16Test(&bytes, first_context + 4, 1);
+    writeU16Test(&bytes, first_context + 6, 12);
+    writeU16Test(&bytes, first_context + 8, 0);
+    writeU16Test(&bytes, first_context + 10, 1);
+    writeCoverage1(&bytes, first_context + 12, 10);
+
+    const malformed_context = 50;
+    writeU16Test(&bytes, malformed_context + 0, 3);
+    writeU16Test(&bytes, malformed_context + 2, 1);
+    writeU16Test(&bytes, malformed_context + 4, 0);
+    writeU16Test(&bytes, malformed_context + 6, 10);
+    const truncated_coverage = malformed_context + 10;
+    writeU16Test(&bytes, truncated_coverage + 0, 1);
+    writeU16Test(&bytes, truncated_coverage + 2, 54);
+    writeU16Test(&bytes, truncated_coverage + 4, 30);
+    // The second ContextSubst subtable declares a Coverage array that reaches
+    // beyond table.length. Lookup preflight must reject the whole lookup before
+    // the first subtable applies its nested SingleSubst.
+
+    writeSingleDeltaLookup(&bytes, 70, 10, 5);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 10, 30 });
+
+    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 30 }, glyphs.items);
+}
+
+test "GSUB direct chaining substitution preflights payload arrays atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 112;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6);
+    writeU16Test(&bytes, 14, 62);
+
+    writeU16Test(&bytes, 16, 6);
+    writeU16Test(&bytes, 20, 2);
+    writeU16Test(&bytes, 22, 10);
+    writeU16Test(&bytes, 24, 36);
+
+    const first_chain = 26;
+    writeU16Test(&bytes, first_chain + 0, 3);
+    writeU16Test(&bytes, first_chain + 2, 0);
+    writeU16Test(&bytes, first_chain + 4, 1);
+    writeU16Test(&bytes, first_chain + 6, 16);
+    writeU16Test(&bytes, first_chain + 8, 0);
+    writeU16Test(&bytes, first_chain + 10, 1);
+    writeU16Test(&bytes, first_chain + 12, 0);
+    writeU16Test(&bytes, first_chain + 14, 1);
+    writeCoverage1(&bytes, first_chain + 16, 10);
+
+    const malformed_chain = 52;
+    writeU16Test(&bytes, malformed_chain + 0, 3);
+    writeU16Test(&bytes, malformed_chain + 2, 0);
+    writeU16Test(&bytes, malformed_chain + 4, 1);
+    writeU16Test(&bytes, malformed_chain + 6, 16);
+    writeU16Test(&bytes, malformed_chain + 8, 0);
+    writeU16Test(&bytes, malformed_chain + 10, 0);
+    const truncated_coverage = malformed_chain + 16;
+    writeU16Test(&bytes, truncated_coverage + 0, 1);
+    writeU16Test(&bytes, truncated_coverage + 2, 54);
+    writeU16Test(&bytes, truncated_coverage + 4, 30);
+    // ChainingSubst format 3 has three independent offset arrays. A malformed
+    // later input coverage must be detected before an earlier subtable can run
+    // the nested lookup and leave the caller with partial substitutions.
+
+    writeSingleDeltaLookup(&bytes, 72, 10, 5);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 10, 30 });
+
+    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 30 }, glyphs.items);
 }
 
 test "GSUB contextual record truncation is atomic" {

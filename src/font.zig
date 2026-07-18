@@ -641,25 +641,31 @@ pub const Font = struct {
 
     pub fn mapVariationCoordinate(self: *const Font, axis_index: usize, normalized: f32) FontError!f32 {
         const avar = self.avar orelse return normalized;
+        if (avar.offset > self.data.len or avar.length > self.data.len - avar.offset) return error.BadSfnt;
+        const table = self.data[avar.offset .. avar.offset + avar.length];
         if (avar.length < 8) return error.BadSfnt;
-        const major = try bin.readU16At(self.data, avar.offset);
+        const major = try bin.readU16At(table, 0);
         if (major != 1) return error.BadSfnt;
-        const axis_count = try bin.readU16At(self.data, avar.offset + 6);
-        if (axis_index >= axis_count) return normalized;
+        const axis_count = try bin.readU16At(table, 6);
 
-        var offset = avar.offset + 8;
+        var offset: usize = 8;
+        var mapped = normalized;
         for (0..axis_count) |index| {
-            if (offset + 2 > avar.offset + avar.length) return error.BadSfnt;
-            const pair_count = try bin.readU16At(self.data, offset);
+            if (offset + 2 > table.len) return error.BadSfnt;
+            const pair_count = try bin.readU16At(table, offset);
             offset += 2;
             const pair_bytes = @as(usize, pair_count) * 4;
-            if (pair_bytes > avar.offset + avar.length - offset) return error.BadSfnt;
+            if (pair_bytes > table.len - offset) return error.BadSfnt;
             if (index == axis_index) {
-                return try mapAvarSegment(self.data[offset .. offset + pair_bytes], normalized);
+                mapped = try mapAvarSegment(table[offset .. offset + pair_bytes], normalized);
             }
             offset += pair_bytes;
         }
-        return normalized;
+        // Do not return as soon as the requested axis is mapped. The avar table
+        // declares a complete SegmentMaps array, and accepting coordinates from
+        // an early axis while a later declared map extends past the table would
+        // let malformed fonts hide truncated variation data behind axis order.
+        return mapped;
     }
 
     pub fn normalizedVariationCoordinates(self: *const Font, allocator: std.mem.Allocator, coordinates: []const VariationCoordinate) FontError![]f32 {
@@ -2469,6 +2475,24 @@ test "fvar axes and instance arrays stay inside declared table regions" {
     try std.testing.expectEqualStrings("wght", &axes[0].tag);
 }
 
+test "avar validates every declared segment map before returning a coordinate" {
+    var bytes: [20]u8 = .{0} ** 20;
+    writeU16Test(&bytes, 0, 1); // major
+    writeU16Test(&bytes, 2, 0); // minor
+    writeU16Test(&bytes, 4, 0); // reserved
+    writeU16Test(&bytes, 6, 2); // two axis maps follow the header
+    writeU16Test(&bytes, 8, 2);
+    writeF2Dot14Test(&bytes, 10, -1.0);
+    writeF2Dot14Test(&bytes, 12, -1.0);
+    writeF2Dot14Test(&bytes, 14, 1.0);
+    writeF2Dot14Test(&bytes, 16, 1.0);
+    writeU16Test(&bytes, 18, 1); // Declares a second map, but no pair bytes remain.
+
+    const font = avarOnlyFont(&bytes);
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 0.0));
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(99, 0.5));
+}
+
 fn gdefOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2637,6 +2661,13 @@ fn fvarOnlyFont(data: []const u8) Font {
     };
 }
 
+fn avarOnlyFont(data: []const u8) Font {
+    var font = fvarOnlyFont(data);
+    font.fvar = null;
+    font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len };
+    return font;
+}
+
 fn kernOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2734,6 +2765,10 @@ fn writeTagTest(bytes: []u8, offset: usize, tag_text: []const u8) void {
 
 fn writeF16Dot16Test(bytes: []u8, offset: usize, value: f32) void {
     writeI32Test(bytes, offset, @intFromFloat(value * 65536.0));
+}
+
+fn writeF2Dot14Test(bytes: []u8, offset: usize, value: f32) void {
+    writeI16Test(bytes, offset, @intFromFloat(value * 16384.0));
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

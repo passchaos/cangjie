@@ -296,8 +296,19 @@ pub const Font = struct {
         const required_hmtx_length = try hmtxRequiredLength(glyph_count, number_of_h_metrics);
         if (hmtx.length < required_hmtx_length) return error.InvalidMetrics;
         if (format == .truetype) {
+            const max_component_elements = try bin.readU16At(data, maxp.offset + 28);
+            const max_component_depth = try bin.readU16At(data, maxp.offset + 30);
             try validateLocaTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
-            try validateGlyfTable(allocator, data, loca.?, glyf.?, glyph_count, index_to_loc_format);
+            try validateGlyfTable(
+                allocator,
+                data,
+                loca.?,
+                glyf.?,
+                glyph_count,
+                index_to_loc_format,
+                max_component_elements,
+                max_component_depth,
+            );
         }
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
@@ -1586,7 +1597,16 @@ fn glyfOffsetFromLoca(data: []const u8, loca: TableRecord, index_to_loc_format: 
     };
 }
 
-fn validateGlyfTable(allocator: std.mem.Allocator, data: []const u8, loca: TableRecord, glyf: TableRecord, glyph_count: u16, index_to_loc_format: i16) FontError!void {
+fn validateGlyfTable(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    loca: TableRecord,
+    glyf: TableRecord,
+    glyph_count: u16,
+    index_to_loc_format: i16,
+    max_component_elements: u16,
+    max_component_depth: u16,
+) FontError!void {
     // `loca` proves where each glyph byte range lives; `glyf` still owns the
     // structure inside those ranges. Validate the cheap cross-table contracts
     // at parse time so a malformed compound glyph cannot be accepted and then
@@ -1614,7 +1634,8 @@ fn validateGlyfTable(allocator: std.mem.Allocator, data: []const u8, loca: Table
         }
     }
 
-    try validateCompoundGlyphGraph(allocator, compound_adjacency);
+    try validateCompoundGlyphGraph(allocator, compound_adjacency, max_component_depth);
+    try validateMaxComponentElements(compound_adjacency, max_component_elements);
 }
 
 const CompoundGlyphLinks = struct {
@@ -1722,20 +1743,24 @@ fn validateCompoundGlyphDescription(allocator: std.mem.Allocator, glyph_data: []
     }
 }
 
-fn validateCompoundGlyphGraph(allocator: std.mem.Allocator, adjacency: []const CompoundGlyphLinks) FontError!void {
-    // Compound glyphs form a directed component graph. The maxp component-depth
-    // limit and append-time recursion guard only bound valid DAGs; cycles would
-    // otherwise parse successfully and then fail or recurse when a specific
-    // glyph is requested. Reject every cycle now so a parsed TrueType face has a
-    // finite, expandable component graph.
+fn validateCompoundGlyphGraph(allocator: std.mem.Allocator, adjacency: []const CompoundGlyphLinks, max_component_depth: u16) FontError!void {
+    // Compound glyphs form a directed component graph. maxp.maxComponentDepth is
+    // the font-wide bound on nested composite expansion; enforcing it here keeps
+    // parsed fonts inside the same recursion budget used later by outline
+    // materialization, and turns under-reported limits into a parse-time
+    // correctness error instead of a glyph-specific surprise.
     const states = try allocator.alloc(CompoundVisitState, adjacency.len);
     defer allocator.free(states);
     @memset(states, .unvisited);
+    const depths = try allocator.alloc(u16, adjacency.len);
+    defer allocator.free(depths);
+    @memset(depths, 0);
 
     for (adjacency, 0..) |_, glyph_index| {
         if (states[glyph_index] == .unvisited) {
-            try visitCompoundGlyph(adjacency, states, @intCast(glyph_index));
+            _ = try visitCompoundGlyph(adjacency, states, depths, @intCast(glyph_index));
         }
+        if (depths[glyph_index] > max_component_depth) return error.InvalidGlyph;
     }
 }
 
@@ -1745,19 +1770,39 @@ const CompoundVisitState = enum {
     visited,
 };
 
-fn visitCompoundGlyph(adjacency: []const CompoundGlyphLinks, states: []CompoundVisitState, glyph_id: glyph_mod.GlyphId) FontError!void {
+fn visitCompoundGlyph(
+    adjacency: []const CompoundGlyphLinks,
+    states: []CompoundVisitState,
+    depths: []u16,
+    glyph_id: glyph_mod.GlyphId,
+) FontError!u16 {
     const index: usize = glyph_id;
     switch (states[index]) {
-        .visited => return,
+        .visited => return depths[index],
         .visiting => return error.InvalidGlyph,
         .unvisited => {},
     }
 
     states[index] = .visiting;
+    var max_depth: u16 = 0;
     for (adjacency[index].glyphs) |component| {
-        try visitCompoundGlyph(adjacency, states, component);
+        const component_depth = try visitCompoundGlyph(adjacency, states, depths, component);
+        if (component_depth == std.math.maxInt(u16)) return error.InvalidGlyph;
+        max_depth = @max(max_depth, component_depth + 1);
     }
+    depths[index] = max_depth;
     states[index] = .visited;
+    return max_depth;
+}
+
+fn validateMaxComponentElements(adjacency: []const CompoundGlyphLinks, max_component_elements: u16) FontError!void {
+    // maxp.maxComponentElements describes the largest direct component count in
+    // any compound glyph. It is easy for a malformed table to keep every
+    // component record structurally valid while under-reporting this aggregate;
+    // validating the aggregate makes maxp useful as a trusted summary table.
+    for (adjacency) |links| {
+        if (links.glyphs.len > max_component_elements) return error.InvalidGlyph;
+    }
 }
 
 const TtcHeader = struct {
@@ -4446,6 +4491,51 @@ test "compound glyf component graph rejects cycles at parse time" {
     bytes[glyph_one + 15] = 0;
 
     try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+}
+
+test "compound glyf aggregates must not exceed maxp composite limits" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const maxp_offset = try sfntTableOffset(bytes, "maxp");
+        const glyph_one = glyf_offset + 12;
+        writeI16Test(bytes, glyph_one, -1); // Compound glyph.
+        writeU16Test(bytes, glyph_one + 10, 0x0002); // ARGS_ARE_XY_VALUES, byte args.
+        writeU16Test(bytes, glyph_one + 12, 0);
+        bytes[glyph_one + 14] = 0;
+        bytes[glyph_one + 15] = 0;
+
+        writeU16Test(bytes, maxp_offset + 28, 1); // maxComponentElements
+        writeU16Test(bytes, maxp_offset + 30, 0); // maxComponentDepth under-reports the direct component.
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const maxp_offset = try sfntTableOffset(bytes, "maxp");
+        const glyph_one = glyf_offset + 12;
+        writeI16Test(bytes, glyph_one, -1); // Compound glyph.
+        writeU16Test(bytes, glyph_one + 10, 0x0020 | 0x0002); // MORE_COMPONENTS + ARGS_ARE_XY_VALUES.
+        writeU16Test(bytes, glyph_one + 12, 0);
+        bytes[glyph_one + 14] = 0;
+        bytes[glyph_one + 15] = 0;
+        writeU16Test(bytes, glyph_one + 16, 0x0002); // Second direct component.
+        writeU16Test(bytes, glyph_one + 18, 0);
+        bytes[glyph_one + 20] = 0;
+        bytes[glyph_one + 21] = 0;
+
+        writeU16Test(bytes, maxp_offset + 28, 1); // maxComponentElements under-reports the two direct components.
+        writeU16Test(bytes, maxp_offset + 30, 1);
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
 }
 
 test "maxp table version and length must match the outline format" {

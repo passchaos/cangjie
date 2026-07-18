@@ -1387,9 +1387,10 @@ fn cblcGlyphLocation(data: []const u8, strike: CblcStrike, glyph_id: glyph_mod.G
     const local_index: usize = glyph_id - entry.first;
     return switch (index_format) {
         1 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, entry.first, entry.last, local_index, image_format, image_base, 4),
+        2 => try cblcGlyphLocationFormat2(data, strike, subtable + 8, entry.first, entry.last, local_index, image_format, image_base),
         3 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, entry.first, entry.last, local_index, image_format, image_base, 2),
         4 => try cblcGlyphLocationFormat4(data, strike, subtable + 8, glyph_id, image_format, image_base),
-        5 => try cblcGlyphLocationFormat5(data, strike, subtable + 8, glyph_id, image_format, image_base),
+        5 => try cblcGlyphLocationFormat5(data, strike, subtable + 8, entry.first, entry.last, glyph_id, image_format, image_base),
         else => null,
     };
 }
@@ -1403,6 +1404,25 @@ fn cblcGlyphLocationFormat1Or3(data: []const u8, strike: CblcStrike, offsets_off
     // Equal adjacent offsets are the CBLC encoding for "no bitmap for this
     // glyph". A decreasing range is different: it means the index subtable is
     // corrupt and must not be silently treated as a missing glyph.
+    return try cblcImageLocation(image_format, image_base, start, end);
+}
+
+fn cblcGlyphLocationFormat2(data: []const u8, strike: CblcStrike, body_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, local_index: usize, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
+    if (body_offset + 12 > data.len or body_offset + 12 > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    const image_size = try bin.readU32At(data, body_offset);
+    if (image_size == 0) return error.BadSfnt;
+    _ = try readBigBitmapMetrics(data, body_offset + 4);
+
+    // Index format 2 is a fixed-size dense range: every glyph covered by the
+    // IndexSubTableArray entry consumes exactly imageSize bytes in CBDT.  Check
+    // the terminal offset, not just the requested glyph, so an oversized range
+    // or multiplication overflow is caught while parsing CBLC/CBDT metadata.
+    const glyphs = @as(usize, last - first) + 1;
+    const last_start = try checkedCblcImageStart(glyphs - 1, image_size);
+    _ = try checkedCblcImageEnd(last_start, image_size);
+
+    const start = try checkedCblcImageStart(local_index, image_size);
+    const end = try checkedCblcImageEnd(start, image_size);
     return try cblcImageLocation(image_format, image_base, start, end);
 }
 
@@ -1423,21 +1443,39 @@ fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: u
     return null;
 }
 
-fn cblcGlyphLocationFormat5(data: []const u8, strike: CblcStrike, body_offset: usize, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
+fn cblcGlyphLocationFormat5(data: []const u8, strike: CblcStrike, body_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
     if (body_offset + 16 > data.len or body_offset + 16 > strike.offset + strike.index_tables_size) return error.BadSfnt;
     const image_size = try bin.readU32At(data, body_offset);
     _ = try readBigBitmapMetrics(data, body_offset + 4);
     const glyph_count = try bin.readU32At(data, body_offset + 12);
+    if (glyph_count == 0) return error.BadSfnt;
+    if (image_size == 0) return error.BadSfnt;
+
+    const range_glyphs = @as(usize, last - first) + 1;
+    if (@as(usize, glyph_count) > range_glyphs) return error.BadSfnt;
     const glyphs_offset = body_offset + 16;
     if (glyphs_offset + @as(usize, glyph_count) * 2 > data.len or glyphs_offset + @as(usize, glyph_count) * 2 > strike.offset + strike.index_tables_size) return error.BadSfnt;
+
+    var previous: ?glyph_mod.GlyphId = null;
+    var match_index: ?usize = null;
     for (0..glyph_count) |index| {
         const current_glyph = try bin.readU16At(data, glyphs_offset + @as(usize, index) * 2);
-        if (current_glyph != glyph_id) continue;
-        const start = try checkedCblcImageStart(@as(usize, index), image_size);
-        const end = try checkedCblcImageEnd(start, image_size);
-        return try cblcImageLocation(image_format, image_base, start, end);
+        // Format 5 is sparse, but the glyphCodeArray is still ordered and
+        // scoped by the IndexSubTableArray range. Enforcing that contract here
+        // prevents duplicate/out-of-range codes from making bitmap lookup
+        // depend on which valid glyph happens to trigger subtable parsing.
+        if (current_glyph < first or current_glyph > last) return error.BadSfnt;
+        if (previous) |prev| {
+            if (current_glyph <= prev) return error.BadSfnt;
+        }
+        previous = current_glyph;
+        if (current_glyph == glyph_id) match_index = @intCast(index);
     }
-    return null;
+
+    const index = match_index orelse return null;
+    const start = try checkedCblcImageStart(index, image_size);
+    const end = try checkedCblcImageEnd(start, image_size);
+    return try cblcImageLocation(image_format, image_base, start, end);
 }
 
 fn checkedCblcImageStart(index: usize, image_size: u32) FontError!usize {
@@ -5652,6 +5690,61 @@ test "CBLC bitmap index subtables reject decreasing image offsets" {
     var format4_strike = strike;
     format4_strike.index_tables_size = format4_pairs.len;
     try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat4(&format4_pairs, format4_strike, 0, 1, 17, 0));
+}
+
+test "CBLC fixed-size index formats validate dense and sparse invariants" {
+    const strike = CblcStrike{
+        .ppem = 16,
+        .ppi = 0,
+        .offset = 0,
+        .index_tables_size = 32,
+        .table_count = 1,
+        .start_glyph = 1,
+        .end_glyph = 3,
+    };
+
+    var format2: [12]u8 = .{0} ** 12;
+    writeU32Test(&format2, 0, 9); // One fixed-size image-format-17 CBDT payload.
+    const dense_location = (try cblcGlyphLocationFormat2(&format2, strike, 0, 1, 3, 2, 17, 0)).?;
+    try std.testing.expectEqual(@as(usize, 18), dense_location.offset);
+    try std.testing.expectEqual(@as(usize, 9), dense_location.length);
+
+    writeU32Test(&format2, 0, 0);
+    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat2(&format2, strike, 0, 1, 3, 0, 17, 0));
+
+    var data: [121]u8 = .{0} ** 121;
+    writeU16Test(&data, 0, 2); // CBLC major version.
+    writeU16Test(&data, 2, 0); // CBLC minor version.
+    writeU32Test(&data, 4, 1); // One bitmapSizeTable.
+    writeU32Test(&data, 8, 56); // IndexSubTableArray immediately after the strike directory.
+    writeU32Test(&data, 12, 38); // One array record plus one format-5 subtable.
+    writeU32Test(&data, 16, 1); // One IndexSubTableArray record.
+    writeU16Test(&data, 48, 1); // startGlyphIndex.
+    writeU16Test(&data, 50, 3); // endGlyphIndex.
+    data[52] = 16; // ppem.
+
+    writeU16Test(&data, 56, 1); // firstGlyphIndex.
+    writeU16Test(&data, 58, 3); // lastGlyphIndex.
+    writeU32Test(&data, 60, 8); // Subtable starts after the array record.
+    writeU16Test(&data, 64, 5); // indexFormat 5: sparse fixed-size images.
+    writeU16Test(&data, 66, 17); // imageFormat 17: small metrics + dataLen.
+    writeU32Test(&data, 68, 0); // imageDataOffset.
+    writeU32Test(&data, 72, 9); // imageSize.
+    writeU32Test(&data, 84, 3); // Three glyph codes follow.
+    writeU16Test(&data, 88, 1);
+    writeU16Test(&data, 90, 3);
+    writeU16Test(&data, 92, 2); // Out of order; must be caught before lookup succeeds.
+
+    const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = 94 };
+    const cbdt = TableRecord{ .tag = .{ 'C', 'B', 'D', 'T' }, .checksum = 0, .offset = 94, .length = 27 };
+    try std.testing.expectError(error.BadSfnt, validateCblcCbdtTables(&data, cblc, cbdt, 4));
+
+    writeU16Test(&data, 90, 2);
+    writeU16Test(&data, 92, 3);
+    try validateCblcCbdtTables(&data, cblc, cbdt, 4);
+
+    writeU16Test(&data, 92, 4); // Outside the subtable's declared 1...3 range.
+    try std.testing.expectError(error.BadSfnt, validateCblcCbdtTables(&data, cblc, cbdt, 4));
 }
 
 test "CBLC strike glyph ranges stay within maxp glyph count" {

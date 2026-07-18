@@ -2632,6 +2632,14 @@ fn validateCmapFormat14(data: []const u8, offset: usize, length: usize) FontErro
             if (non_default_offset < records_end or non_default_offset >= length) return error.BadSfnt;
             try validateCmapFormat14NonDefaultUvs(data, offset + @as(usize, non_default_offset), table_end);
         }
+        if (default_offset != 0 and non_default_offset != 0) {
+            try validateCmapFormat14UvsSetsDisjoint(
+                data,
+                offset + @as(usize, default_offset),
+                offset + @as(usize, non_default_offset),
+                table_end,
+            );
+        }
     }
 }
 
@@ -2671,6 +2679,38 @@ fn validateCmapFormat14NonDefaultUvs(data: []const u8, offset: usize, table_end:
             if (unicode_value <= last_unicode) return error.BadSfnt;
         }
         previous_unicode = unicode_value;
+    }
+}
+
+fn validateCmapFormat14UvsSetsDisjoint(data: []const u8, default_offset: usize, non_default_offset: usize, table_end: usize) FontError!void {
+    const default_count: usize = @intCast(try bin.readU32At(data, default_offset));
+    const non_default_count: usize = @intCast(try bin.readU32At(data, non_default_offset));
+    if (default_count > (table_end - (default_offset + 4)) / 4) return error.BadSfnt;
+    if (non_default_count > (table_end - (non_default_offset + 4)) / 5) return error.BadSfnt;
+
+    // A Unicode variation sequence is either default (use the base cmap glyph)
+    // or non-default (use the explicit UVS glyph), never both for the same
+    // selector. The two arrays are already validated as sorted, so a linear
+    // merge detects contradictory records without allocating per-selector side
+    // tables even for large CJK variation maps.
+    var default_index: usize = 0;
+    for (0..non_default_count) |mapping_index| {
+        const mapping = non_default_offset + 4 + mapping_index * 5;
+        const unicode_value = try readU24At(data, mapping);
+
+        while (default_index < default_count) {
+            const range = default_offset + 4 + default_index * 4;
+            const start = try readU24At(data, range);
+            const end = start + data[range + 3];
+            if (end >= unicode_value) break;
+            default_index += 1;
+        }
+        if (default_index < default_count) {
+            const range = default_offset + 4 + default_index * 4;
+            const start = try readU24At(data, range);
+            const end = start + data[range + 3];
+            if (unicode_value >= start and unicode_value <= end) return error.BadSfnt;
+        }
     }
 }
 
@@ -6309,6 +6349,14 @@ test "cmap format 14 validates selectors and UVS Unicode scalar values" {
     var surrogate_non_default = valid;
     writeU24Test(&surrogate_non_default, 45, 0xd800);
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &surrogate_non_default, cmap, 512));
+
+    var duplicate_sequence = valid;
+    writeU24Test(&duplicate_sequence, 45, 'A'); // 'A' is already covered by the DefaultUVS range.
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &duplicate_sequence, cmap, 512));
+
+    var overlapping_sets = valid;
+    overlapping_sets[40] = 1; // DefaultUVS covers 'A' and 'B'; NonDefaultUVS maps 'B'.
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &overlapping_sets, cmap, 512));
 }
 
 test "simple glyf contours reject non-increasing end points" {

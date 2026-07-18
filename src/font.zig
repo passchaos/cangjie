@@ -313,6 +313,7 @@ pub const Font = struct {
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
         if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
         if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
+        if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
         if (colr) |colr_table| try validateColrGlyphBounds(data, colr_table, glyph_count);
         if (svg) |svg_table| try validateSvgGlyphBounds(data, svg_table, glyph_count);
         if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
@@ -4326,6 +4327,30 @@ test "cmap format 4 parser validates full idRangeOffset segment span" {
     writeU16Test(&bytes, 46, 9); // Glyph for 'B' would fit; 'C' would not.
 
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bytes, cmap, 512));
+}
+
+test "GPOS glyph ids are validated against maxp glyph count" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalGposTtf(allocator);
+        defer allocator.free(bytes);
+        const gpos_offset = try sfntTableOffset(bytes, "GPOS");
+        // The fixture declares maxp.numGlyphs == 2, so the PairValueRecord's
+        // secondGlyph must be 0 or 1. Runtime shaping might never see this
+        // pair, but parse-time validation should reject the dangling glyph id.
+        writeU16Test(bytes, gpos_offset + 56, 2);
+        try std.testing.expectError(error.BadGpos, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalGposSingleTtf(allocator);
+        defer allocator.free(bytes);
+        const gpos_offset = try sfntTableOffset(bytes, "GPOS");
+        writeU16Test(bytes, gpos_offset + 42, 2); // SinglePos Coverage glyph.
+        try std.testing.expectError(error.BadGpos, Font.parse(allocator, bytes));
+    }
 }
 
 test "cmap glyph ids are validated against maxp glyph count" {

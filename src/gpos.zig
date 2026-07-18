@@ -35,6 +35,10 @@ const Table = struct {
     data: []const u8,
     offset: usize,
     length: usize,
+    /// Optional maxp.numGlyphs bound supplied by Font.parse. Runtime shaping
+    /// callers do not know the SFNT maxp table, so their Table values leave
+    /// this null and keep the historical structural-only validation.
+    glyph_count: ?u16 = null,
 };
 
 const FeatureSelection = struct {
@@ -62,6 +66,33 @@ pub const LookupOptions = struct {
 };
 
 const max_context_preflight_depth = 16;
+
+/// Validate GPOS glyph references that are meaningful at font-load time.
+///
+/// Shaping only visits records whose coverage matches a supplied glyph run, so
+/// an out-of-range glyph id in an otherwise well-formed GPOS table could remain
+/// latent until later code assumes every advertised glyph has metrics and
+/// outline/bitmap contracts. This pass reuses the supported-subtable preflight
+/// walker with maxp.numGlyphs attached to the table. Unsupported lookup types
+/// remain ignorable, matching the shaping path, while malformed supported
+/// lookups and glyph ids outside maxp are rejected.
+pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph_count: u16) GposError!void {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
+    const table = Table{ .data = data, .offset = offset, .length = length, .glyph_count = glyph_count };
+    const major = try readU16BadGpos(table, 0);
+    if (major != 1) return error.UnsupportedGpos;
+
+    const lookup_list_offset = try checkedPositionOffset(table, 0, try readU16BadGpos(table, 8));
+    const lookup_count = try readU16BadGpos(table, lookup_list_offset);
+    try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
+    for (0..lookup_count) |lookup_i| {
+        const lookup_offset = try checkedPositionOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_list_offset + 2 + lookup_i * 2));
+        try ensurePositionLookupHeaderWithin(table, lookup_offset);
+        const lookup_type = try readU16BadGpos(table, lookup_offset);
+        const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
+        try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
+    }
+}
 
 /// Collect positioning adjustments for a post-GSUB glyph stream.
 pub fn collectAdjustments(data: []const u8, offset: usize, length: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
@@ -1416,6 +1447,10 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
                 const pair_set_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, pair_set_offsets_pos + pair_set_i * 2));
                 const pair_value_count = try readU16BadGpos(table, pair_set_offset);
                 try ensureBytesWithin(table, pair_set_offset + 2, @as(usize, pair_value_count) * pair_record_size);
+                for (0..pair_value_count) |pair_i| {
+                    const second_glyph = try readU16BadGpos(table, pair_set_offset + 2 + pair_i * pair_record_size);
+                    try ensureGlyphIdWithinMaxp(table, second_glyph);
+                }
             }
         },
         2 => {
@@ -1560,6 +1595,9 @@ fn ensurePositionRuleWithin(table: Table, rule_offset: usize, depth: usize) Gpos
     const pos_count = try readU16BadGpos(table, rule_offset + 2);
     const input_pos = rule_offset + 4;
     try ensureBytesWithin(table, input_pos, (@as(usize, glyph_count) - 1) * 2);
+    for (1..glyph_count) |input_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGpos(table, input_pos + (input_i - 1) * 2));
+    }
     const records_pos = input_pos + (@as(usize, glyph_count) - 1) * 2;
     try ensurePositionRecordListWithin(table, records_pos, pos_count);
     try ensurePositionRecordLookupsWithinDepth(table, records_pos, pos_count, depth);
@@ -1622,17 +1660,26 @@ fn ensureChainingPositionRuleWithin(table: Table, rule_offset: usize, depth: usi
     const backtrack_count = try readU16BadGpos(table, cursor);
     cursor += 2;
     try ensureBytesWithin(table, cursor, @as(usize, backtrack_count) * 2);
+    for (0..backtrack_count) |backtrack_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGpos(table, cursor + backtrack_i * 2));
+    }
     cursor += @as(usize, backtrack_count) * 2;
 
     const input_count = try readU16BadGpos(table, cursor);
     if (input_count == 0) return error.BadGpos;
     cursor += 2;
     try ensureBytesWithin(table, cursor, (@as(usize, input_count) - 1) * 2);
+    for (1..input_count) |input_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGpos(table, cursor + (input_i - 1) * 2));
+    }
     cursor += (@as(usize, input_count) - 1) * 2;
 
     const lookahead_count = try readU16BadGpos(table, cursor);
     cursor += 2;
     try ensureBytesWithin(table, cursor, @as(usize, lookahead_count) * 2);
+    for (0..lookahead_count) |lookahead_i| {
+        try ensureGlyphIdWithinMaxp(table, try readU16BadGpos(table, cursor + lookahead_i * 2));
+    }
     cursor += @as(usize, lookahead_count) * 2;
 
     const pos_count = try readU16BadGpos(table, cursor);
@@ -1731,6 +1778,17 @@ fn ensureAnchorTableWithin(table: Table, anchor_offset: usize) GposError!void {
     try ensureBytesWithin(table, anchor_offset, min_len);
 }
 
+fn ensureGlyphIdWithinMaxp(table: Table, glyph_id: usize) GposError!void {
+    if (table.glyph_count) |glyph_count| {
+        if (glyph_id >= glyph_count) return error.BadGpos;
+    }
+}
+
+fn ensureGlyphRangeWithinMaxp(table: Table, start_glyph: u16, end_glyph: u16) GposError!void {
+    try ensureGlyphIdWithinMaxp(table, start_glyph);
+    try ensureGlyphIdWithinMaxp(table, end_glyph);
+}
+
 fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_count: usize) GposError!void {
     const format = try readU16BadGpos(table, coverage_offset);
     switch (format) {
@@ -1777,11 +1835,22 @@ fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!voi
             const glyph_count = try readU16BadGpos(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
             try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            for (0..glyph_count) |glyph_i| {
+                try ensureGlyphIdWithinMaxp(table, try readU16BadGpos(table, coverage_offset + 4 + glyph_i * 2));
+            }
         },
         2 => {
             const range_count = try readU16BadGpos(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, range_count) * 6);
             try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                try ensureGlyphRangeWithinMaxp(
+                    table,
+                    try readU16BadGpos(table, range_offset),
+                    try readU16BadGpos(table, range_offset + 2),
+                );
+            }
         },
         else => return error.UnsupportedGpos,
     }
@@ -1791,12 +1860,26 @@ fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GposError!vo
     const format = try readU16BadGpos(table, class_def_offset);
     switch (format) {
         1 => {
+            const start_glyph = try readU16BadGpos(table, class_def_offset + 2);
             const glyph_count = try readU16BadGpos(table, class_def_offset + 4);
             try ensureBytesWithin(table, class_def_offset + 6, @as(usize, glyph_count) * 2);
+            if (glyph_count != 0) {
+                const end_glyph = @as(usize, start_glyph) + @as(usize, glyph_count) - 1;
+                try ensureGlyphIdWithinMaxp(table, end_glyph);
+            }
         },
         2 => {
             const range_count = try readU16BadGpos(table, class_def_offset + 2);
             try ensureBytesWithin(table, class_def_offset + 4, @as(usize, range_count) * 6);
+            try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
+            for (0..range_count) |range_i| {
+                const range_offset = class_def_offset + 4 + range_i * 6;
+                try ensureGlyphRangeWithinMaxp(
+                    table,
+                    try readU16BadGpos(table, range_offset),
+                    try readU16BadGpos(table, range_offset + 2),
+                );
+            }
         },
         else => return error.UnsupportedGpos,
     }

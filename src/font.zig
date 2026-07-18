@@ -847,23 +847,30 @@ pub const Font = struct {
         if (svg.length < 10) return error.BadSfnt;
         const version = try bin.readU16At(self.data, svg.offset);
         if (version != 0) return error.BadSfnt;
-        const document_list_offset = try bin.readU32At(self.data, svg.offset + 2);
-        if (document_list_offset > svg.length or document_list_offset + 2 > svg.length) return error.BadSfnt;
+        const document_list_offset: usize = @intCast(try bin.readU32At(self.data, svg.offset + 2));
+        // Offsets in the SVG table are relative to the SVG table or the
+        // SVGDocumentList. Keep both child regions past their fixed metadata so
+        // malformed fonts cannot reinterpret the header or records as XML.
+        if (document_list_offset < 10) return error.BadSfnt;
+        if (document_list_offset > svg.length or 2 > svg.length - document_list_offset) return error.BadSfnt;
 
         const list_start = svg.offset + document_list_offset;
         const list_end = svg.offset + svg.length;
         const entry_count = try bin.readU16At(self.data, list_start);
         const records_start = list_start + 2;
-        if (@as(usize, entry_count) * 12 > list_end - records_start) return error.BadSfnt;
+        const record_bytes = @as(usize, entry_count) * 12;
+        if (record_bytes > list_end - records_start) return error.BadSfnt;
+        const document_data_start = 2 + record_bytes;
 
         for (0..entry_count) |index| {
             const record = records_start + index * 12;
             const start_glyph_id = try bin.readU16At(self.data, record);
             const end_glyph_id = try bin.readU16At(self.data, record + 2);
-            const document_offset = try bin.readU32At(self.data, record + 4);
-            const document_length = try bin.readU32At(self.data, record + 8);
+            const document_offset: usize = @intCast(try bin.readU32At(self.data, record + 4));
+            const document_length: usize = @intCast(try bin.readU32At(self.data, record + 8));
             if (end_glyph_id < start_glyph_id) return error.BadSfnt;
             if (glyph_id < start_glyph_id or glyph_id > end_glyph_id) continue;
+            if (document_offset < document_data_start) return error.BadSfnt;
             if (document_offset > svg.length - document_list_offset or document_length > svg.length - document_list_offset - document_offset) return error.BadSfnt;
             const document_start = list_start + document_offset;
             return .{
@@ -2571,6 +2578,27 @@ test "name table format 1 validates language tag storage ranges" {
     try std.testing.expectError(error.BadSfnt, readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out));
 }
 
+test "SVG document offsets cannot overlap table metadata" {
+    var header_overlap: [18]u8 = .{0} ** 18;
+    writeU16Test(&header_overlap, 0, 0);
+    writeU32Test(&header_overlap, 2, 6); // Points into the SVG table header's reserved field.
+    const header_font = svgOnlyFont(&header_overlap);
+    try std.testing.expectError(error.BadSfnt, header_font.svgGlyphDocument(1));
+
+    var record_overlap: [28]u8 = .{0} ** 28;
+    writeU16Test(&record_overlap, 0, 0);
+    writeU32Test(&record_overlap, 2, 10);
+    writeU16Test(&record_overlap, 10, 1);
+    writeU16Test(&record_overlap, 12, 1);
+    writeU16Test(&record_overlap, 14, 1);
+    writeU32Test(&record_overlap, 16, 2); // Points at the SVGDocumentRecord array.
+    writeU32Test(&record_overlap, 20, 4);
+    @memcpy(record_overlap[24..28], "<svg");
+
+    const record_font = svgOnlyFont(&record_overlap);
+    try std.testing.expectError(error.BadSfnt, record_font.svgGlyphDocument(1));
+}
+
 test "CPAL color records cannot overlap palette index array" {
     var bytes: [20]u8 = .{0} ** 20;
     writeU16Test(&bytes, 0, 0); // version
@@ -2839,6 +2867,48 @@ fn cpalOnlyFont(data: []const u8) Font {
         .colr = null,
         .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = data.len },
         .svg = null,
+        .sbix = null,
+        .cblc = null,
+        .cbdt = null,
+        .glyf = null,
+        .cff = null,
+        .cmap_subtables = empty_cmaps,
+        .owned_tables = empty_tables,
+        .allocator = std.testing.allocator,
+    };
+}
+
+fn svgOnlyFont(data: []const u8) Font {
+    const empty_tables: []TableRecord = &.{};
+    const empty_cmaps: []CmapSubtable = &.{};
+    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    return .{
+        .data = data,
+        .format = .truetype,
+        .units_per_em = 1000,
+        .index_to_loc_format = 0,
+        .glyph_count = 4,
+        .ascender = 0,
+        .descender = 0,
+        .line_gap = 0,
+        .number_of_h_metrics = 2,
+        .head = dummy_table,
+        .hhea = dummy_table,
+        .maxp = dummy_table,
+        .hmtx = dummy_table,
+        .loca = null,
+        .cmap = dummy_table,
+        .kern = null,
+        .os2 = null,
+        .gdef = null,
+        .gpos = null,
+        .gsub = null,
+        .name = null,
+        .fvar = null,
+        .avar = null,
+        .colr = null,
+        .cpal = null,
+        .svg = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = data.len },
         .sbix = null,
         .cblc = null,
         .cbdt = null,

@@ -1270,6 +1270,9 @@ fn ensurePositionRecordLookupsWithin(table: Table, records_pos: usize, record_co
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
         const lookup_offset = lookup_list_offset + try readU16BadGpos(table, lookup_offset_pos);
         try ensurePositionLookupHeaderWithin(table, lookup_offset);
+        const lookup_type = try readU16BadGpos(table, lookup_offset);
+        const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
+        try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
     }
 }
 
@@ -1292,7 +1295,7 @@ fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposErro
 
 fn ensurePositionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GposError!void {
     switch (lookup_type) {
-        1, 2 => {},
+        1, 2, 3, 4, 5, 6 => {},
         else => return,
     }
     for (0..subtable_count) |subtable_i| {
@@ -1351,6 +1354,10 @@ fn ensurePositionSubtableVariableDataWithin(table: Table, subtable_offset: usize
     switch (lookup_type) {
         1 => try ensureSinglePositionSubtableWithin(table, subtable_offset),
         2 => try ensurePairPositionSubtableWithin(table, subtable_offset),
+        3 => try ensureCursivePositionSubtableWithin(table, subtable_offset),
+        4 => try ensureMarkToBasePositionSubtableWithin(table, subtable_offset),
+        5 => try ensureMarkToLigaturePositionSubtableWithin(table, subtable_offset),
+        6 => try ensureMarkToMarkPositionSubtableWithin(table, subtable_offset),
         else => {},
     }
 }
@@ -1403,6 +1410,164 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+fn ensureCursivePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    const coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+    const entry_exit_count = try readU16BadGpos(table, subtable_offset + 4);
+    try ensureCoverageTableWithin(table, coverage_offset);
+    try ensureCoverageIndicesWithin(table, coverage_offset, entry_exit_count);
+    try ensureBytesWithin(table, subtable_offset + 6, @as(usize, entry_exit_count) * 4);
+    for (0..entry_exit_count) |entry_i| {
+        const record = subtable_offset + 6 + entry_i * 4;
+        const entry_anchor = try readU16BadGpos(table, record);
+        const exit_anchor = try readU16BadGpos(table, record + 2);
+        if (entry_anchor != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, subtable_offset, entry_anchor));
+        if (exit_anchor != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, subtable_offset, exit_anchor));
+    }
+}
+
+fn ensureMarkToBasePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    const mark_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+    const base_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
+    const class_count = try readU16BadGpos(table, subtable_offset + 6);
+    const mark_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+    const base_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
+    try ensureCoverageTableWithin(table, mark_coverage_offset);
+    try ensureCoverageTableWithin(table, base_coverage_offset);
+    const mark_count = try ensureMarkArrayWithin(table, mark_array_offset, class_count);
+    const base_count = try ensureBaseArrayWithin(table, base_array_offset, class_count);
+    try ensureCoverageIndicesWithin(table, mark_coverage_offset, mark_count);
+    try ensureCoverageIndicesWithin(table, base_coverage_offset, base_count);
+}
+
+fn ensureMarkToLigaturePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    const mark_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+    const ligature_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
+    const class_count = try readU16BadGpos(table, subtable_offset + 6);
+    const mark_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+    const ligature_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
+    try ensureCoverageTableWithin(table, mark_coverage_offset);
+    try ensureCoverageTableWithin(table, ligature_coverage_offset);
+    const mark_count = try ensureMarkArrayWithin(table, mark_array_offset, class_count);
+    const ligature_count = try ensureLigatureArrayWithin(table, ligature_array_offset, class_count);
+    try ensureCoverageIndicesWithin(table, mark_coverage_offset, mark_count);
+    try ensureCoverageIndicesWithin(table, ligature_coverage_offset, ligature_count);
+}
+
+fn ensureMarkToMarkPositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
+    const pos_format = try readU16BadGpos(table, subtable_offset);
+    if (pos_format != 1) return error.UnsupportedGpos;
+    const mark_1_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
+    const mark_2_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
+    const class_count = try readU16BadGpos(table, subtable_offset + 6);
+    const mark_1_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+    const mark_2_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
+    try ensureCoverageTableWithin(table, mark_1_coverage_offset);
+    try ensureCoverageTableWithin(table, mark_2_coverage_offset);
+    const mark_1_count = try ensureMarkArrayWithin(table, mark_1_array_offset, class_count);
+    const mark_2_count = try ensureMark2ArrayWithin(table, mark_2_array_offset, class_count);
+    try ensureCoverageIndicesWithin(table, mark_1_coverage_offset, mark_1_count);
+    try ensureCoverageIndicesWithin(table, mark_2_coverage_offset, mark_2_count);
+}
+
+fn ensureMarkArrayWithin(table: Table, mark_array_offset: usize, class_count: u16) GposError!usize {
+    const mark_count = try readU16BadGpos(table, mark_array_offset);
+    try ensureBytesWithin(table, mark_array_offset + 2, @as(usize, mark_count) * 4);
+    for (0..mark_count) |mark_i| {
+        const record = mark_array_offset + 2 + mark_i * 4;
+        const mark_class = try readU16BadGpos(table, record);
+        if (mark_class >= class_count) return error.BadGpos;
+        const anchor_offset = try readU16BadGpos(table, record + 2);
+        // MarkRecords require a real anchor. Treating zero as relative to the
+        // MarkArray header would reinterpret markCount/markClass metadata as a
+        // Paint-style child table and make malformed mark positioning stateful.
+        if (anchor_offset == 0) return error.BadGpos;
+        try ensureAnchorTableWithin(table, try checkedPositionOffset(table, mark_array_offset, anchor_offset));
+    }
+    return mark_count;
+}
+
+fn ensureBaseArrayWithin(table: Table, base_array_offset: usize, class_count: u16) GposError!usize {
+    const base_count = try readU16BadGpos(table, base_array_offset);
+    const anchor_count = try checkedMul(@as(usize, base_count), class_count);
+    try ensureBytesWithin(table, base_array_offset + 2, anchor_count * 2);
+    for (0..anchor_count) |anchor_i| {
+        const anchor_offset = try readU16BadGpos(table, base_array_offset + 2 + anchor_i * 2);
+        if (anchor_offset != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, base_array_offset, anchor_offset));
+    }
+    return base_count;
+}
+
+fn ensureLigatureArrayWithin(table: Table, ligature_array_offset: usize, class_count: u16) GposError!usize {
+    const ligature_count = try readU16BadGpos(table, ligature_array_offset);
+    try ensureBytesWithin(table, ligature_array_offset + 2, @as(usize, ligature_count) * 2);
+    for (0..ligature_count) |ligature_i| {
+        const attach_offset = try checkedPositionOffset(table, ligature_array_offset, try readU16BadGpos(table, ligature_array_offset + 2 + ligature_i * 2));
+        const component_count = try readU16BadGpos(table, attach_offset);
+        const anchor_count = try checkedMul(@as(usize, component_count), class_count);
+        try ensureBytesWithin(table, attach_offset + 2, anchor_count * 2);
+        for (0..anchor_count) |anchor_i| {
+            const anchor_offset = try readU16BadGpos(table, attach_offset + 2 + anchor_i * 2);
+            if (anchor_offset != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, attach_offset, anchor_offset));
+        }
+    }
+    return ligature_count;
+}
+
+fn ensureMark2ArrayWithin(table: Table, mark_2_array_offset: usize, class_count: u16) GposError!usize {
+    const mark_2_count = try readU16BadGpos(table, mark_2_array_offset);
+    const anchor_count = try checkedMul(@as(usize, mark_2_count), class_count);
+    try ensureBytesWithin(table, mark_2_array_offset + 2, anchor_count * 2);
+    for (0..anchor_count) |anchor_i| {
+        const anchor_offset = try readU16BadGpos(table, mark_2_array_offset + 2 + anchor_i * 2);
+        if (anchor_offset != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, mark_2_array_offset, anchor_offset));
+    }
+    return mark_2_count;
+}
+
+fn ensureAnchorTableWithin(table: Table, anchor_offset: usize) GposError!void {
+    const format = try readU16BadGpos(table, anchor_offset);
+    const min_len: usize = switch (format) {
+        1 => 6,
+        2 => 8,
+        3 => 10,
+        else => return error.UnsupportedGpos,
+    };
+    try ensureBytesWithin(table, anchor_offset, min_len);
+}
+
+fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_count: usize) GposError!void {
+    const format = try readU16BadGpos(table, coverage_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16BadGpos(table, coverage_offset + 2);
+            if (@as(usize, glyph_count) > target_count) return error.BadGpos;
+        },
+        2 => {
+            const range_count = try readU16BadGpos(table, coverage_offset + 2);
+            for (0..range_count) |range_i| {
+                const range = coverage_offset + 4 + range_i * 6;
+                const start = try readU16BadGpos(table, range);
+                const end = try readU16BadGpos(table, range + 2);
+                const start_index = try readU16BadGpos(table, range + 4);
+                const span = @as(usize, end) - @as(usize, start) + 1;
+                if (@as(usize, start_index) > target_count or span > target_count - @as(usize, start_index)) return error.BadGpos;
+            }
+        },
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn checkedMul(a: usize, b: usize) GposError!usize {
+    if (a != 0 and b > std.math.maxInt(usize) / a) return error.BadGpos;
+    return a * b;
 }
 
 fn ensureValueRecordWithin(table: Table, offset: usize, format: u16) GposError!void {
@@ -2502,6 +2667,94 @@ test "GPOS direct single positioning preflights all subtables atomically" {
     // otherwise valid xAdvance adjustment.
 
     const glyphs = [_]GlyphId{ 10, 30 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS direct cursive positioning preflights all subtables atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 58;
+
+    writeU16Test(&bytes, 0, 3); // CursivePos lookup.
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 46);
+
+    const first_cursive = 10;
+    writeU16Test(&bytes, first_cursive + 0, 1);
+    writeU16Test(&bytes, first_cursive + 2, 14);
+    writeU16Test(&bytes, first_cursive + 4, 2);
+    writeU16Test(&bytes, first_cursive + 6, 0);
+    writeU16Test(&bytes, first_cursive + 8, 22);
+    writeU16Test(&bytes, first_cursive + 10, 28);
+    writeU16Test(&bytes, first_cursive + 12, 0);
+    writeCoverage1ListTest(&bytes, first_cursive + 14, &.{ 10, 11 });
+    writeAnchor1Test(&bytes, first_cursive + 22, 100, 50);
+    writeAnchor1Test(&bytes, first_cursive + 28, 20, 10);
+
+    const second_cursive = 46;
+    writeU16Test(&bytes, second_cursive + 0, 1);
+    writeU16Test(&bytes, second_cursive + 2, 6);
+    writeU16Test(&bytes, second_cursive + 4, 1);
+    writeU16Test(&bytes, second_cursive + 6, 1); // Truncated Coverage format 1.
+    writeU16Test(&bytes, second_cursive + 8, 2);
+
+    const glyphs = [_]GlyphId{ 10, 11 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS direct mark-to-base positioning preflights anchor arrays atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 90;
+
+    writeU16Test(&bytes, 0, 4); // MarkBasePos lookup.
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 58);
+
+    const first_mark_base = 10;
+    writeU16Test(&bytes, first_mark_base + 0, 1);
+    writeU16Test(&bytes, first_mark_base + 2, 12);
+    writeU16Test(&bytes, first_mark_base + 4, 18);
+    writeU16Test(&bytes, first_mark_base + 6, 1);
+    writeU16Test(&bytes, first_mark_base + 8, 24);
+    writeU16Test(&bytes, first_mark_base + 10, 36);
+    writeCoverage1Test(&bytes, first_mark_base + 12, 2);
+    writeCoverage1Test(&bytes, first_mark_base + 18, 1);
+    const first_mark_array = first_mark_base + 24;
+    writeU16Test(&bytes, first_mark_array + 0, 1);
+    writeU16Test(&bytes, first_mark_array + 2, 0);
+    writeU16Test(&bytes, first_mark_array + 4, 6);
+    writeAnchor1Test(&bytes, first_mark_array + 6, 20, 30);
+    const first_base_array = first_mark_base + 36;
+    writeU16Test(&bytes, first_base_array + 0, 1);
+    writeU16Test(&bytes, first_base_array + 2, 4);
+    writeAnchor1Test(&bytes, first_base_array + 4, 100, 100);
+
+    const second_mark_base = 58;
+    writeU16Test(&bytes, second_mark_base + 0, 1);
+    writeU16Test(&bytes, second_mark_base + 2, 12);
+    writeU16Test(&bytes, second_mark_base + 4, 18);
+    writeU16Test(&bytes, second_mark_base + 6, 1);
+    writeU16Test(&bytes, second_mark_base + 8, 24);
+    writeU16Test(&bytes, second_mark_base + 10, 30);
+    writeCoverage1Test(&bytes, second_mark_base + 12, 2);
+    writeCoverage1Test(&bytes, second_mark_base + 18, 1);
+    const second_mark_array = second_mark_base + 24;
+    writeU16Test(&bytes, second_mark_array + 0, 1);
+    writeU16Test(&bytes, second_mark_array + 2, 0);
+    writeU16Test(&bytes, second_mark_array + 4, 8); // Anchor starts exactly at table.length.
+
+    const glyphs = [_]GlyphId{ 1, 2 };
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
 

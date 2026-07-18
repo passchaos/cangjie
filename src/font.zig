@@ -219,7 +219,10 @@ pub const Font = struct {
             else => return error.BadSfnt,
         };
         const num_tables = try r.readU16();
-        try r.skip(6);
+        const search_range = try r.readU16();
+        const entry_selector = try r.readU16();
+        const range_shift = try r.readU16();
+        try validateSfntSearchParameters(num_tables, search_range, entry_selector, range_shift);
         const directory_end = try sfntDirectoryEnd(data, start, num_tables);
         const reserved_prefix_end = if (try parseTtcHeader(data)) |header| header.header_length else 0;
 
@@ -239,7 +242,7 @@ pub const Font = struct {
                 return error.BadSfnt;
             }
         }
-        try validateUniqueTableTags(records);
+        try validateSfntTableDirectory(records);
         try validateSfntTableRanges(records, reserved_prefix_end, start, directory_end);
 
         const head = findTable(records, "head") orelse return error.MissingTable;
@@ -1394,15 +1397,35 @@ fn findTable(records: []const TableRecord, comptime table_tag: []const u8) ?Tabl
     return null;
 }
 
-fn validateUniqueTableTags(records: []const TableRecord) FontError!void {
-    for (records, 0..) |record, index| {
-        for (records[index + 1 ..]) |other| {
-            // SFNT directories are maps keyed by four-byte table tag. Accepting
-            // duplicates makes required-table selection depend on directory
-            // order and can hide a malicious second record with different
-            // bounds, so reject the whole font before any table-specific parse.
-            if (std.mem.eql(u8, &record.tag, &other.tag)) return error.BadSfnt;
+fn validateSfntSearchParameters(num_tables: u16, search_range: u16, entry_selector: u16, range_shift: u16) FontError!void {
+    if (num_tables == 0) return error.BadSfnt;
+
+    var max_power_of_two: usize = 1;
+    var expected_entry_selector: u16 = 0;
+    while (max_power_of_two * 2 <= num_tables) {
+        max_power_of_two *= 2;
+        expected_entry_selector += 1;
+    }
+
+    const expected_search_range = max_power_of_two * 16;
+    const table_record_bytes = @as(usize, num_tables) * 16;
+    if (expected_search_range > std.math.maxInt(u16) or table_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
+    const expected_range_shift = table_record_bytes - expected_search_range;
+    if (search_range != expected_search_range or entry_selector != expected_entry_selector or range_shift != expected_range_shift) {
+        return error.BadSfnt;
+    }
+}
+
+fn validateSfntTableDirectory(records: []const TableRecord) FontError!void {
+    var previous_tag: ?[4]u8 = null;
+    for (records) |record| {
+        if (previous_tag) |previous| {
+            // The SFNT directory is specified as a lexicographically sorted map
+            // keyed by tag. Requiring strict order rejects duplicates and keeps
+            // required-table lookup from depending on malformed record order.
+            if (std.mem.order(u8, &previous, &record.tag) != .lt) return error.BadSfnt;
         }
+        previous_tag = record.tag;
     }
 }
 
@@ -3206,6 +3229,36 @@ test "SFNT table directory rejects duplicate tags" {
     const bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(bytes);
     try setSfntTableTag(bytes, "kern", "head");
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "SFNT offset table search parameters must match table count" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    inline for (.{ 6, 8, 10 }) |field_offset| {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        writeU16Test(bytes, field_offset, try bin.readU16At(bytes, field_offset) + 1);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
+test "SFNT table directory tags must be strictly sorted" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    const first_record = 12;
+    const second_record = 28;
+    var first_tag: [4]u8 = undefined;
+    var second_tag: [4]u8 = undefined;
+    @memcpy(&first_tag, bytes[first_record .. first_record + 4]);
+    @memcpy(&second_tag, bytes[second_record .. second_record + 4]);
+    @memcpy(bytes[first_record .. first_record + 4], &second_tag);
+    @memcpy(bytes[second_record .. second_record + 4], &first_tag);
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }

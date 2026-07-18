@@ -1953,7 +1953,7 @@ fn statTable(allocator: std.mem.Allocator) ![]u8 {
     writeTag(bytes, 28, "wdth");
     writeU16(bytes, 32, 257);
     writeU16(bytes, 34, 1);
-    writeU16(bytes, 36, 38);
+    writeU16(bytes, 36, 2);
     writeU16(bytes, 38, 1);
     writeU16(bytes, 40, 0);
     writeU16(bytes, 42, 2);

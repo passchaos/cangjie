@@ -326,7 +326,11 @@ pub const Font = struct {
         if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBounds(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
-        if (colr) |colr_table| try validateColrGlyphBounds(data, colr_table, glyph_count);
+        if (cpal) |cpal_table| _ = try validateCpalPaletteEntries(data, cpal_table);
+        if (colr) |colr_table| {
+            try validateColrGlyphBounds(data, colr_table, glyph_count);
+            try validateColrPaletteBounds(data, colr_table, cpal);
+        }
         if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
         if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
         if (cblc != null and cbdt != null) try validateCblcCbdtTables(data, cblc.?, cbdt.?, glyph_count);
@@ -804,28 +808,13 @@ pub const Font = struct {
     pub fn paletteColor(self: *const Font, palette_index: u16, color_index: u16) FontError!?PaletteColor {
         const cpal = self.cpal orelse return null;
         if (cpal.length < 12) return error.BadSfnt;
-        const version = try bin.readU16At(self.data, cpal.offset);
-        if (version != 0) return error.BadSfnt;
-        const palette_entries = try bin.readU16At(self.data, cpal.offset + 2);
+        const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
         const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
-        const color_count = try bin.readU16At(self.data, cpal.offset + 6);
-        const color_records_offset = try bin.readU32At(self.data, cpal.offset + 8);
-
-        // The first-color-index array is part of the CPAL header payload and
-        // has one u16 entry per declared palette. Validate the whole declared
-        // array before consulting an individual palette, otherwise a malformed
-        // table can point ColorRecordsArray into the still-declared palette
-        // index area and make palette 0 borrow palette 1 metadata as BGRA data.
-        const palette_indices_len = @as(usize, palette_count) * 2;
-        if (palette_indices_len > cpal.length - 12) return error.BadSfnt;
-        if (color_records_offset > cpal.length) return error.BadSfnt;
-        if (color_records_offset < 12 + palette_indices_len) return error.BadSfnt;
-        if (@as(usize, color_count) > (cpal.length - color_records_offset) / 4) return error.BadSfnt;
+        const color_records_offset: usize = @intCast(try bin.readU32At(self.data, cpal.offset + 8));
 
         if (palette_index >= palette_count or color_index >= palette_entries) return null;
         const palette_start_offset = cpal.offset + 12 + @as(usize, palette_index) * 2;
         const first_color_index = try bin.readU16At(self.data, palette_start_offset);
-        if (@as(usize, first_color_index) > @as(usize, color_count) or @as(usize, palette_entries) > @as(usize, color_count) - first_color_index) return error.BadSfnt;
         const record_index = @as(usize, first_color_index) + color_index;
         const record = cpal.offset + color_records_offset + record_index * 4;
         return .{
@@ -5137,6 +5126,144 @@ fn validateSvgGlyphBounds(allocator: std.mem.Allocator, data: []const u8, svg: T
     try validateSvgDocumentByteRanges(byte_ranges);
 }
 
+fn validateCpalPaletteEntries(data: []const u8, cpal: TableRecord) FontError!u16 {
+    if (cpal.length < 12) return error.BadSfnt;
+    const version = try bin.readU16At(data, cpal.offset);
+    if (version > 1) return error.BadSfnt;
+    const palette_entries = try bin.readU16At(data, cpal.offset + 2);
+    const palette_count = try bin.readU16At(data, cpal.offset + 4);
+    const color_count = try bin.readU16At(data, cpal.offset + 6);
+    const color_records_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + 8));
+
+    const palette_indices_len = @as(usize, palette_count) * 2;
+    if (palette_indices_len > cpal.length - 12) return error.BadSfnt;
+    const version_0_header_len = 12 + palette_indices_len;
+    const header_len = if (version == 1) blk: {
+        if (12 > cpal.length - version_0_header_len) return error.BadSfnt;
+        const palette_types_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len));
+        const palette_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 4));
+        const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 8));
+        const extended_header_len = version_0_header_len + 12;
+        try validateCpalOptionalArray(cpal, extended_header_len, palette_types_offset, palette_count, 4);
+        try validateCpalOptionalArray(cpal, extended_header_len, palette_labels_offset, palette_count, 2);
+        try validateCpalOptionalArray(cpal, extended_header_len, palette_entry_labels_offset, palette_entries, 2);
+        break :blk extended_header_len;
+    } else version_0_header_len;
+
+    // The palette-start indices and v1 extension offsets are declared metadata,
+    // not color payload. Keeping ColorRecordsArray after that header prevents a
+    // malformed CPAL table from reinterpreting palette indices or optional name
+    // arrays as BGRA color records during parse-time COLR validation.
+    if (color_records_offset < header_len or color_records_offset > cpal.length) return error.BadSfnt;
+    if (@as(usize, color_count) > (cpal.length - color_records_offset) / 4) return error.BadSfnt;
+
+    for (0..palette_count) |palette_index| {
+        const first_color_index = try bin.readU16At(data, cpal.offset + 12 + palette_index * 2);
+        if (@as(usize, first_color_index) > color_count or @as(usize, palette_entries) > @as(usize, color_count) - first_color_index) {
+            return error.BadSfnt;
+        }
+    }
+    return palette_entries;
+}
+
+fn validateCpalOptionalArray(cpal: TableRecord, header_len: usize, offset: usize, count: usize, item_size: usize) FontError!void {
+    if (offset == 0) return;
+    if (offset < header_len or offset > cpal.length) return error.BadSfnt;
+    if (count > (cpal.length - offset) / item_size) return error.BadSfnt;
+}
+
+fn validateColrPaletteBounds(data: []const u8, colr: TableRecord, cpal: ?TableRecord) FontError!void {
+    if (colr.length < 2) return error.BadSfnt;
+    const cpal_palette_entries = if (cpal) |cpal_table| try validateCpalPaletteEntries(data, cpal_table) else null;
+    const version = try bin.readU16At(data, colr.offset);
+    switch (version) {
+        0 => try validateColrV0PaletteBounds(data, colr, cpal_palette_entries),
+        1 => try validateColrV1PaletteBounds(data, colr, cpal_palette_entries),
+        else => {},
+    }
+}
+
+fn validateColrPaletteIndexBounds(palette_index: u16, cpal_palette_entries: ?u16) FontError!void {
+    const palette_entries = cpal_palette_entries orelse return error.BadSfnt;
+    if (palette_index >= palette_entries) return error.BadSfnt;
+}
+
+fn validateColrV0PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16) FontError!void {
+    if (colr.length < 14) return error.BadSfnt;
+    const layer_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 8));
+    const layer_count = try bin.readU16At(data, colr.offset + 12);
+    if (layer_offset > colr.length) return error.BadSfnt;
+    if (@as(usize, layer_count) * 4 > colr.length - layer_offset) return error.BadSfnt;
+    for (0..layer_count) |index| {
+        const palette_index = try bin.readU16At(data, colr.offset + layer_offset + index * 4 + 2);
+        try validateColrPaletteIndexBounds(palette_index, cpal_palette_entries);
+    }
+}
+
+fn validateColrV1PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16) FontError!void {
+    if (colr.length < 34) return error.BadSfnt;
+    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
+    if (base_glyph_list_offset != 0) {
+        if (base_glyph_list_offset > colr.length or 4 > colr.length - base_glyph_list_offset) return error.BadSfnt;
+        const list_start = colr.offset + base_glyph_list_offset;
+        const record_count: usize = @intCast(try bin.readU32At(data, list_start));
+        const records_start = list_start + 4;
+        if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
+        const paint_data_start = 4 + record_count * 6;
+        for (0..record_count) |index| {
+            const record = records_start + index * 6;
+            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
+            if (paint_offset < paint_data_start) return error.BadSfnt;
+            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
+            var guard = ColorPaintGraphGuard{};
+            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, list_start + paint_offset, &guard);
+        }
+    }
+
+    if (try colrLayerList(data, colr)) |layer_list| {
+        for (0..layer_list.layer_count) |layer_index| {
+            const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
+            var guard = ColorPaintGraphGuard{};
+            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, &guard);
+        }
+    }
+}
+
+fn validateColorPaintPaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
+    if (offset >= colr.offset + colr.length) return error.BadSfnt;
+    try guard.enter(offset);
+    defer guard.leave();
+
+    const format = data[offset];
+    switch (format) {
+        1 => {
+            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
+            const layer_count = data[offset + 1];
+            const first_layer_index = try bin.readU32At(data, offset + 2);
+            if (layer_count == 0) return;
+            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const first: usize = @intCast(first_layer_index);
+            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
+            for (0..layer_count) |layer_offset| {
+                const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
+                try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, guard);
+            }
+        },
+        2 => {
+            if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
+            try validateColrPaletteIndexBounds(try bin.readU16At(data, offset + 1), cpal_palette_entries);
+        },
+        10 => {
+            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
+            const child_offset: usize = @intCast(try readU24At(data, offset + 1));
+            if (child_offset < 6) return error.BadSfnt;
+            if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
+            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, offset + child_offset, guard);
+        },
+        else => return,
+    }
+}
+
 fn validateColrGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
     if (colr.length < 2) return error.BadSfnt;
     const version = try bin.readU16At(data, colr.offset);
@@ -7415,6 +7542,43 @@ test "COLR glyph references stay within maxp glyph count" {
 
     writeU16Test(&colr_v1, 48, 1);
     try validateColrGlyphBounds(&colr_v1, colr_v1_record, 2);
+}
+
+test "COLR palette indices are validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildColorTtf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        writeU16Test(bytes, colr_offset + 22, 2); // CPAL declares palette entries 0 and 1 only.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildColorV1Ttf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        writeU16Test(bytes, colr_offset + 45, 2); // PaintSolid palette index.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildColorV1GlyphTtf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        writeU16Test(bytes, colr_offset + 51, 2); // Nested PaintGlyph child PaintSolid palette index.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildColorV1LayersTtf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        writeU16Test(bytes, colr_offset + 80, 2); // PaintColrLayers-reachable layer paint.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "COLR palette indices must be declared by CPAL" {

@@ -36,6 +36,10 @@ pub fn buildVariableTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try variableTtfTables(allocator));
 }
 
+pub fn buildVariableStatTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try variableStatTtfTables(allocator));
+}
+
 pub fn buildColorTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorTtfTables(allocator));
 }
@@ -480,6 +484,24 @@ fn variableTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[9] = .{ .tag = "name", .data = try variableNameTable(allocator) };
     tables[10] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn variableStatTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 12);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "avar", .data = try avarTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "fvar", .data = try fvarTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "name", .data = try variableNameTable(allocator) };
+    tables[10] = .{ .tag = "STAT", .data = try statTable(allocator) };
+    tables[11] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -1897,6 +1919,32 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 48, 200.0);
     writeU16(bytes, 52, 0);
     writeU16(bytes, 54, 257);
+    return bytes;
+}
+
+fn statTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 50);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 1);
+    writeU16(bytes, 4, 8);
+    writeU16(bytes, 6, 2);
+    writeU32(bytes, 8, 20);
+    writeU16(bytes, 12, 1);
+    writeU32(bytes, 14, 36);
+    writeU16(bytes, 18, 2);
+    writeTag(bytes, 20, "wght");
+    writeU16(bytes, 24, 256);
+    writeU16(bytes, 26, 0);
+    writeTag(bytes, 28, "wdth");
+    writeU16(bytes, 32, 257);
+    writeU16(bytes, 34, 1);
+    writeU16(bytes, 36, 38);
+    writeU16(bytes, 38, 1);
+    writeU16(bytes, 40, 0);
+    writeU16(bytes, 42, 2);
+    writeU16(bytes, 44, 2);
+    writeF16Dot16(bytes, 46, 400.0);
     return bytes;
 }
 

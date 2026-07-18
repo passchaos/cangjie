@@ -316,7 +316,7 @@ pub const Font = struct {
             );
         }
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar);
-        if (stat) |stat_table| try validateStatTable(data, stat_table, fvar);
+        try validateVariationNameReferences(data, fvar, stat, name);
         if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBounds(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
@@ -2795,6 +2795,56 @@ fn validateNameTable(data: []const u8, name: TableRecord) FontError!void {
     }
 }
 
+/// Compact index of name IDs that have at least one structurally valid string.
+/// fvar and STAT do not identify a platform/language-specific record; they
+/// reference a name ID and let normal name-table fallback choose the localized
+/// string later. Tracking only IDs mirrors that contract while still forcing
+/// all referenced user-facing metadata to be present and decodable.
+const NameIdIndex = struct {
+    words: [1024]u64 = .{0} ** 1024,
+
+    fn add(self: *NameIdIndex, name_id: u16) void {
+        const word_index = @as(usize, name_id) / 64;
+        const bit_index: u6 = @intCast(name_id & 63);
+        self.words[word_index] |= @as(u64, 1) << bit_index;
+    }
+
+    fn contains(self: *const NameIdIndex, name_id: u16) bool {
+        const word_index = @as(usize, name_id) / 64;
+        const bit_index: u6 = @intCast(name_id & 63);
+        return (self.words[word_index] & (@as(u64, 1) << bit_index)) != 0;
+    }
+};
+
+fn readNameIdIndex(data: []const u8, name: TableRecord) FontError!NameIdIndex {
+    const table = try nameTableSlice(data, name);
+    const layout = try readNameTableLayout(table);
+    try validateNameLanguageTags(table, layout);
+
+    // Variation metadata may reference many name IDs across fvar instances and
+    // STAT AxisValue records. Index the already-validated records once so
+    // cross-table checks are deterministic without repeatedly reparsing `name`.
+    var index = NameIdIndex{};
+    for (0..layout.count) |record_index| {
+        const record = try readNameRecord(table, record_index);
+        try validateNameRecordMetadata(layout, record);
+        const string_data = try nameRecordString(table, layout, record);
+        try validateNameRecordEncoding(record, string_data);
+        index.add(record.name_id);
+    }
+    return index;
+}
+
+fn validateNameIdReference(name_index: ?*const NameIdIndex, name_id: u16) FontError!void {
+    const index = name_index orelse return error.InvalidName;
+    if (!index.contains(name_id)) return error.InvalidName;
+}
+
+fn validateOptionalNameIdReference(name_index: ?*const NameIdIndex, name_id: u16) FontError!void {
+    if (name_id == 0xffff) return;
+    try validateNameIdReference(name_index, name_id);
+}
+
 fn nameTableSlice(data: []const u8, name: TableRecord) FontError![]const u8 {
     if (name.offset > data.len or name.length > data.len - name.offset) return error.BadSfnt;
     return data[name.offset .. name.offset + name.length];
@@ -3398,9 +3448,49 @@ const FvarInfo = struct {
     axes_array_offset: usize,
     axis_count: usize,
     axis_size: usize,
+    instance_count: usize,
+    instance_size: usize,
+    instances_array_offset: usize,
 };
 
-fn validateStatTable(data: []const u8, stat: TableRecord, fvar: ?TableRecord) FontError!void {
+fn validateVariationNameReferences(data: []const u8, fvar: ?TableRecord, stat: ?TableRecord, name: ?TableRecord) FontError!void {
+    if (fvar == null and stat == null) return;
+
+    var name_index_storage: NameIdIndex = undefined;
+    const name_index: ?*const NameIdIndex = if (name) |name_table| blk: {
+        name_index_storage = try readNameIdIndex(data, name_table);
+        break :blk &name_index_storage;
+    } else null;
+
+    // fvar and STAT carry user-visible IDs rather than inline strings. Missing
+    // or undecodable references make style/axis selection ambiguous, so reject
+    // them at parse time instead of surfacing null names much later.
+    if (fvar) |fvar_table| try validateFvarNameReferences(data, fvar_table, name_index);
+    if (stat) |stat_table| try validateStatTable(data, stat_table, fvar, name_index);
+}
+
+fn validateFvarNameReferences(data: []const u8, fvar: TableRecord, name_index: ?*const NameIdIndex) FontError!void {
+    const info = try readFvarInfo(data, fvar);
+    for (0..info.axis_count) |index| {
+        const axis_offset = fvar.offset + info.axes_array_offset + index * info.axis_size;
+        try validateNameIdReference(name_index, try bin.readU16At(data, axis_offset + 18));
+    }
+
+    const instance_min_size = 4 + info.axis_count * 4;
+    for (0..info.instance_count) |index| {
+        const instance_offset = fvar.offset + info.instances_array_offset + index * info.instance_size;
+        try validateNameIdReference(name_index, try bin.readU16At(data, instance_offset));
+
+        // Instance PostScript names are optional in fvar 1.0 and use 0xffff as
+        // the explicit "not supplied" sentinel.  Any real ID is user-visible
+        // metadata and must resolve through a structurally valid name record.
+        if (info.instance_size >= instance_min_size + 2) {
+            try validateOptionalNameIdReference(name_index, try bin.readU16At(data, instance_offset + instance_min_size));
+        }
+    }
+}
+
+fn validateStatTable(data: []const u8, stat: TableRecord, fvar: ?TableRecord, name_index: ?*const NameIdIndex) FontError!void {
     if (stat.length < 20) return error.BadSfnt;
     const major = try bin.readU16At(data, stat.offset);
     const minor = try bin.readU16At(data, stat.offset + 2);
@@ -3427,12 +3517,18 @@ fn validateStatTable(data: []const u8, stat: TableRecord, fvar: ?TableRecord) Fo
         return error.BadSfnt;
     }
 
-    if (fvar) |fvar_table| {
-        const fvar_info = try readFvarInfo(data, fvar_table);
-        if (design_axis_count != fvar_info.axis_count) return error.BadSfnt;
-        for (0..design_axis_count) |index| {
-            const stat_axis = stat.offset + design_axes_offset + index * design_axis_size;
-            const fvar_axis = fvar_table.offset + fvar_info.axes_array_offset + index * fvar_info.axis_size;
+    if (minor >= 1) try validateNameIdReference(name_index, try bin.readU16At(data, stat.offset + 18));
+
+    const fvar_info = if (fvar) |fvar_table| try readFvarInfo(data, fvar_table) else null;
+    if (fvar_info) |info| {
+        if (design_axis_count != info.axis_count) return error.BadSfnt;
+    }
+    for (0..design_axis_count) |index| {
+        const stat_axis = stat.offset + design_axes_offset + index * design_axis_size;
+        try validateNameIdReference(name_index, try bin.readU16At(data, stat_axis + 4));
+        if (fvar_info) |info| {
+            const fvar_table = fvar.?;
+            const fvar_axis = fvar_table.offset + info.axes_array_offset + index * info.axis_size;
             const stat_tag = try bin.readTagAt(data, stat_axis);
             const fvar_tag = try bin.readTagAt(data, fvar_axis);
             // STAT axis records provide user-facing names and ordering for the
@@ -3446,11 +3542,11 @@ fn validateStatTable(data: []const u8, stat: TableRecord, fvar: ?TableRecord) Fo
         const entry_offset = stat.offset + axis_value_offsets_offset + index * 2;
         const axis_value_offset: usize = @intCast(try bin.readU16At(data, entry_offset));
         if (axis_value_offset < 20 or axis_value_offset > stat.length - 4) return error.BadSfnt;
-        try validateStatAxisValue(data, stat, axis_value_offset, design_axis_count, design_axes_offset, design_axis_size, axis_value_offsets_offset, axis_value_count);
+        try validateStatAxisValue(data, stat, axis_value_offset, design_axis_count, design_axes_offset, design_axis_size, axis_value_offsets_offset, axis_value_count, name_index);
     }
 }
 
-fn validateStatAxisValue(data: []const u8, stat: TableRecord, axis_value_offset: usize, design_axis_count: usize, design_axes_offset: usize, design_axis_size: usize, axis_value_offsets_offset: usize, axis_value_count: usize) FontError!void {
+fn validateStatAxisValue(data: []const u8, stat: TableRecord, axis_value_offset: usize, design_axis_count: usize, design_axes_offset: usize, design_axis_size: usize, axis_value_offsets_offset: usize, axis_value_count: usize, name_index: ?*const NameIdIndex) FontError!void {
     const absolute = stat.offset + axis_value_offset;
     if (absolute + 4 > stat.offset + stat.length) return error.BadSfnt;
     const format = try bin.readU16At(data, absolute);
@@ -3469,21 +3565,25 @@ fn validateStatAxisValue(data: []const u8, stat: TableRecord, axis_value_offset:
             if (axis_value_offset + 12 > stat.length) return error.BadSfnt;
             const axis_index = try bin.readU16At(data, absolute + 2);
             if (axis_index >= design_axis_count) return error.BadSfnt;
+            try validateNameIdReference(name_index, try bin.readU16At(data, absolute + 6));
         },
         2 => {
             if (axis_value_offset + 20 > stat.length) return error.BadSfnt;
             const axis_index = try bin.readU16At(data, absolute + 2);
             if (axis_index >= design_axis_count) return error.BadSfnt;
+            try validateNameIdReference(name_index, try bin.readU16At(data, absolute + 6));
         },
         3 => {
             if (axis_value_offset + 16 > stat.length) return error.BadSfnt;
             const axis_index = try bin.readU16At(data, absolute + 2);
             if (axis_index >= design_axis_count) return error.BadSfnt;
+            try validateNameIdReference(name_index, try bin.readU16At(data, absolute + 6));
         },
         4 => {
             if (axis_value_offset + 8 > stat.length) return error.BadSfnt;
             const axis_count: usize = @intCast(try bin.readU16At(data, absolute + 2));
             if (axis_count == 0) return error.BadSfnt;
+            try validateNameIdReference(name_index, try bin.readU16At(data, absolute + 6));
             if (axis_count > (stat.length - axis_value_offset - 8) / 6) return error.BadSfnt;
             for (0..axis_count) |axis_record_index| {
                 const axis_record = absolute + 8 + axis_record_index * 6;
@@ -3526,6 +3626,9 @@ fn readFvarInfo(data: []const u8, fvar: TableRecord) FontError!FvarInfo {
         .axes_array_offset = axes_array_offset,
         .axis_count = axis_count,
         .axis_size = axis_size,
+        .instance_count = instance_count,
+        .instance_size = instance_size,
+        .instances_array_offset = instances_offset,
     };
 }
 
@@ -5688,6 +5791,72 @@ test "fvar axis records require ordered ranges and unique tags" {
     try std.testing.expectError(error.BadSfnt, duplicate_font.variationAxes(allocator));
 }
 
+test "fvar and STAT user-facing name IDs resolve through name table" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildVariableStatTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
+        writeU16Test(bytes, fvar_offset + 34, 400); // No name table record names the weight axis with this ID.
+        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVariableStatTtf(allocator);
+        defer allocator.free(bytes);
+        const stat_offset: usize = @intCast(try sfntTableOffset(bytes, "STAT"));
+        writeU16Test(bytes, stat_offset + 44, 400); // AxisValue nameID.
+        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        try setSfntTableTag(bytes, "name", "namx");
+        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+    }
+}
+
+test "fvar instance name IDs resolve through name table" {
+    var bytes: [46]u8 = .{0} ** 46;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 10);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeU16Test(&bytes, 36, 300); // instance subfamilyNameID
+    writeU16Test(&bytes, 38, 0);
+    writeF16Dot16Test(&bytes, 40, 400.0);
+    writeU16Test(&bytes, 44, 301); // optional postScriptNameID
+
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    const names = nameIndexForTest(&.{ 256, 300, 301 });
+    try validateFvarNameReferences(&bytes, fvar, &names);
+
+    var missing_subfamily = bytes;
+    writeU16Test(&missing_subfamily, 36, 400);
+    try std.testing.expectError(error.InvalidName, validateFvarNameReferences(&missing_subfamily, fvar, &names));
+
+    var missing_postscript = bytes;
+    writeU16Test(&missing_postscript, 44, 400);
+    try std.testing.expectError(error.InvalidName, validateFvarNameReferences(&missing_postscript, fvar, &names));
+
+    var omitted_postscript = bytes;
+    writeU16Test(&omitted_postscript, 44, 0xffff);
+    try validateFvarNameReferences(&omitted_postscript, fvar, &names);
+}
+
 test "avar validates every declared segment map before returning a coordinate" {
     var bytes: [20]u8 = .{0} ** 20;
     writeU16Test(&bytes, 0, 1); // major
@@ -5801,11 +5970,12 @@ test "STAT design axes must match fvar axis ordering" {
 
     const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
     const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = stat_offset, .length = bytes.len - stat_offset };
-    try validateStatTable(&bytes, stat, fvar);
+    const names = nameIndexForTest(&.{ 0, 2, 256, 258 });
+    try validateStatTable(&bytes, stat, fvar, &names);
 
     var mismatched = bytes;
     writeTagTest(&mismatched, stat_offset + 20, "wdth");
-    try std.testing.expectError(error.BadSfnt, validateStatTable(&mismatched, stat, fvar));
+    try std.testing.expectError(error.BadSfnt, validateStatTable(&mismatched, stat, fvar, &names));
 }
 
 test "STAT AxisValue offsets and axis indexes stay inside declared records" {
@@ -5816,12 +5986,13 @@ test "STAT AxisValue offsets and axis indexes stay inside declared records" {
     writeStatAxisValueFormat1Test(&metadata_overlap, 30, 0);
 
     const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = metadata_overlap.len };
-    try std.testing.expectError(error.BadSfnt, validateStatTable(&metadata_overlap, stat, null));
+    const names = nameIndexForTest(&.{ 0, 2, 256, 258 });
+    try std.testing.expectError(error.BadSfnt, validateStatTable(&metadata_overlap, stat, null, &names));
 
     var bad_axis_index = metadata_overlap;
     writeU16Test(&bad_axis_index, 28, 30);
     writeStatAxisValueFormat1Test(&bad_axis_index, 30, 1); // Only axis 0 is declared.
-    try std.testing.expectError(error.BadSfnt, validateStatTable(&bad_axis_index, stat, null));
+    try std.testing.expectError(error.BadSfnt, validateStatTable(&bad_axis_index, stat, null, &names));
 }
 
 test "OS/2 style attributes respect versioned table lengths" {
@@ -6321,6 +6492,12 @@ fn writeUtf16NameRecordTest(bytes: []u8, offset: usize, name_id: u16, length: u1
     writeNameRecordTest(bytes, offset, 3, 1, 0x0409, name_id, length, storage_offset);
 }
 
+fn nameIndexForTest(name_ids: []const u16) NameIdIndex {
+    var index = NameIdIndex{};
+    for (name_ids) |name_id| index.add(name_id);
+    return index;
+}
+
 fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {
     writeU16Test(bytes, offset + 0, 0);
     writeU16Test(bytes, offset + 2, 20);
@@ -6399,8 +6576,8 @@ fn writeStatAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, name_id: 
 fn writeStatAxisValueFormat1Test(bytes: []u8, offset: usize, axis_index: u16) void {
     writeU16Test(bytes, offset + 0, 1);
     writeU16Test(bytes, offset + 2, axis_index);
-    writeU16Test(bytes, offset + 4, 258);
-    writeU16Test(bytes, offset + 6, 0);
+    writeU16Test(bytes, offset + 4, 0);
+    writeU16Test(bytes, offset + 6, 258);
     writeF16Dot16Test(bytes, offset + 8, 400.0);
 }
 

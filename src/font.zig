@@ -820,7 +820,10 @@ pub const Font = struct {
             // glyph ids or offset bytes as PaintSolid/PaintGlyph payloads.
             if (paint_offset < paint_data_start) return error.BadSfnt;
             if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
-            return try readColorPaint(self.data, colr, list_start + paint_offset);
+            const paint_start = list_start + paint_offset;
+            var graph_guard = ColorPaintGraphGuard{};
+            try validateColorPaintGraph(self.data, colr, paint_start, &graph_guard);
+            return try readColorPaint(self.data, colr, paint_start);
         }
         return null;
     }
@@ -830,22 +833,12 @@ pub const Font = struct {
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 1) return null;
-        const layer_list_offset = try bin.readU32At(self.data, colr.offset + 18);
-        if (layer_list_offset == 0 or layer_list_offset > colr.length) return null;
-        const list_start = colr.offset + layer_list_offset;
-        if (list_start + 4 > colr.offset + colr.length) return error.BadSfnt;
-        const layer_count = try bin.readU32At(self.data, list_start);
-        if (layer_index >= layer_count) return null;
-        const offsets_start = list_start + 4;
-        if (@as(usize, layer_count) * 4 > colr.offset + colr.length - offsets_start) return error.BadSfnt;
-        const paint_data_start = 4 + @as(usize, layer_count) * 4;
-        const paint_offset: usize = @intCast(try bin.readU32At(self.data, offsets_start + @as(usize, layer_index) * 4));
-        // LayerList Paint offsets have the same ownership rule as
-        // BaseGlyphList paint offsets: the target must be outside the declared
-        // offset array rather than borrowing bytes from list metadata.
-        if (paint_offset < paint_data_start) return error.BadSfnt;
-        if (paint_offset > colr.length - layer_list_offset) return error.BadSfnt;
-        return try readColorPaint(self.data, colr, list_start + paint_offset);
+        const layer_list = (try colrLayerList(self.data, colr)) orelse return null;
+        if (layer_index >= layer_list.layer_count) return null;
+        const paint_start = try colrLayerPaintOffset(self.data, colr, layer_list, layer_index);
+        var graph_guard = ColorPaintGraphGuard{};
+        try validateColorPaintLayer(self.data, colr, layer_list, layer_index, &graph_guard);
+        return try readColorPaint(self.data, colr, paint_start);
     }
 
     pub fn svgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
@@ -2111,6 +2104,107 @@ fn mapAvarSegment(segment_data: []const u8, normalized: f32) FontError!f32 {
     return previous_to;
 }
 
+const max_colr_paint_graph_depth = 64;
+
+const ColorPaintGraphGuard = struct {
+    stack: [max_colr_paint_graph_depth]usize = undefined,
+    depth: usize = 0,
+
+    fn enter(self: *ColorPaintGraphGuard, offset: usize) FontError!void {
+        for (self.stack[0..self.depth]) |active_offset| {
+            if (active_offset == offset) return error.BadSfnt;
+        }
+        if (self.depth == self.stack.len) return error.BadSfnt;
+        self.stack[self.depth] = offset;
+        self.depth += 1;
+    }
+
+    fn leave(self: *ColorPaintGraphGuard) void {
+        std.debug.assert(self.depth > 0);
+        self.depth -= 1;
+    }
+};
+
+const ColrLayerList = struct {
+    start: usize,
+    layer_count: usize,
+    offsets_start: usize,
+    paint_data_start: usize,
+};
+
+fn colrLayerList(data: []const u8, colr: TableRecord) FontError!?ColrLayerList {
+    if (colr.length < 22) return error.BadSfnt;
+    const layer_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 18));
+    if (layer_list_offset == 0) return null;
+    if (layer_list_offset > colr.length or 4 > colr.length - layer_list_offset) return error.BadSfnt;
+
+    const list_start = colr.offset + layer_list_offset;
+    const layer_count: usize = @intCast(try bin.readU32At(data, list_start));
+    const offsets_start = list_start + 4;
+    if (layer_count > (colr.offset + colr.length - offsets_start) / 4) return error.BadSfnt;
+    return .{
+        .start = list_start,
+        .layer_count = layer_count,
+        .offsets_start = offsets_start,
+        .paint_data_start = 4 + layer_count * 4,
+    };
+}
+
+fn colrLayerPaintOffset(data: []const u8, colr: TableRecord, layer_list: ColrLayerList, layer_index: u32) FontError!usize {
+    const index: usize = @intCast(layer_index);
+    if (index >= layer_list.layer_count) return error.BadSfnt;
+    const paint_offset: usize = @intCast(try bin.readU32At(data, layer_list.offsets_start + index * 4));
+    // LayerList Paint offsets are relative to the LayerList table. They must
+    // point past the declared offset array so a malformed font cannot treat
+    // list metadata as a Paint table, and they must remain inside COLR.
+    if (paint_offset < layer_list.paint_data_start) return error.BadSfnt;
+    const layer_list_offset = layer_list.start - colr.offset;
+    if (paint_offset > colr.length - layer_list_offset) return error.BadSfnt;
+    return layer_list.start + paint_offset;
+}
+
+fn validateColorPaintLayer(data: []const u8, colr: TableRecord, layer_list: ColrLayerList, layer_index: u32, guard: *ColorPaintGraphGuard) FontError!void {
+    const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, layer_index);
+    try validateColorPaintGraph(data, colr, paint_offset, guard);
+}
+
+fn validateColorPaintGraph(data: []const u8, colr: TableRecord, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
+    if (offset >= colr.offset + colr.length) return error.BadSfnt;
+    try guard.enter(offset);
+    defer guard.leave();
+
+    const format = data[offset];
+    switch (format) {
+        1 => {
+            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
+            const layer_count = data[offset + 1];
+            const first_layer_index = try bin.readU32At(data, offset + 2);
+            if (layer_count == 0) return;
+            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const first: usize = @intCast(first_layer_index);
+            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
+            for (0..layer_count) |layer_offset| {
+                try validateColorPaintLayer(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)), guard);
+            }
+        },
+        2 => {
+            if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
+        },
+        10 => {
+            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
+            const child_offset: usize = @intCast(try readU24At(data, offset + 1));
+            if (child_offset < 6) return error.BadSfnt;
+            if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
+            try validateColorPaintGraph(data, colr, offset + child_offset, guard);
+        },
+        // Unsupported paint formats are left for `readColorPaint` to report
+        // when callers ask for that specific paint.  Graph validation only
+        // follows the recursive formats this parser can otherwise traverse
+        // indefinitely.
+        else => return,
+    }
+}
+
 fn readColorPaint(data: []const u8, colr: TableRecord, offset: usize) FontError!ColorPaint {
     if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
     const format = data[offset];
@@ -2544,6 +2638,28 @@ test "COLR v1 paint offsets cannot overlap parent metadata" {
 
     const paint_glyph_font = colrOnlyFont(&paint_glyph_overlap);
     try std.testing.expectError(error.BadSfnt, paint_glyph_font.colorPaint(1));
+}
+
+test "COLR v1 paint graph rejects cyclic layer references" {
+    var bytes: [66]u8 = .{0} ** 66;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, 18, 44); // LayerListOffset.
+
+    writeU32Test(&bytes, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, 38, 1); // glyph id.
+    writeU32Test(&bytes, 40, 26); // BaseGlyphList-relative paint offset -> byte 60.
+
+    writeU32Test(&bytes, 44, 1); // one layer paint offset.
+    writeU32Test(&bytes, 48, 16); // LayerList-relative paint offset -> byte 60.
+
+    bytes[60] = 1; // PaintColrLayers.
+    bytes[61] = 1; // Reuses layer 0, which points back to this paint.
+    writeU32Test(&bytes, 62, 0);
+
+    const font = colrOnlyFont(&bytes);
+    try std.testing.expectError(error.BadSfnt, font.colorPaint(1));
+    try std.testing.expectError(error.BadSfnt, font.colorPaintLayer(0));
 }
 
 test "fvar axes and instance arrays stay inside declared table regions" {

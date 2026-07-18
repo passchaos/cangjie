@@ -599,13 +599,29 @@ pub const Font = struct {
     pub fn variationAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationAxis {
         const fvar = self.fvar orelse return try allocator.alloc(VariationAxis, 0);
         if (fvar.length < 16) return error.BadSfnt;
+        const major = try bin.readU16At(self.data, fvar.offset);
+        const minor = try bin.readU16At(self.data, fvar.offset + 2);
+        if (major != 1 or minor != 0) return error.BadSfnt;
         const axes_array_offset = try bin.readU16At(self.data, fvar.offset + 4);
         const axis_count = try bin.readU16At(self.data, fvar.offset + 8);
         const axis_size = try bin.readU16At(self.data, fvar.offset + 10);
+        const instance_count = try bin.readU16At(self.data, fvar.offset + 12);
+        const instance_size = try bin.readU16At(self.data, fvar.offset + 14);
         if (axis_size < 20) return error.BadSfnt;
-        if (axes_array_offset > fvar.length) return error.BadSfnt;
+        // fvar offsets are relative to the start of the fvar table. The axis
+        // array must begin after the fixed 16-byte header, and the optional
+        // instance array follows the whole declared axis array. Validate both
+        // regions up front so malformed offsets cannot reinterpret header or
+        // neighbouring table bytes as variation metadata.
+        if (axes_array_offset < 16 or axes_array_offset > fvar.length) return error.BadSfnt;
+        if (@as(usize, axis_count) > (fvar.length - axes_array_offset) / axis_size) return error.BadSfnt;
         const axes_bytes = @as(usize, axis_count) * axis_size;
-        if (axes_bytes > fvar.length - axes_array_offset) return error.BadSfnt;
+        const instances_offset = axes_array_offset + axes_bytes;
+        if (instance_count != 0) {
+            const minimum_instance_size = 4 + @as(usize, axis_count) * 4;
+            if (instance_size < minimum_instance_size) return error.BadSfnt;
+        }
+        if (instance_size != 0 and @as(usize, instance_count) > (fvar.length - instances_offset) / instance_size) return error.BadSfnt;
 
         const axes = try allocator.alloc(VariationAxis, axis_count);
         errdefer allocator.free(axes);
@@ -2409,6 +2425,50 @@ test "COLR v1 paint offsets cannot overlap parent metadata" {
     try std.testing.expectError(error.BadSfnt, paint_glyph_font.colorPaint(1));
 }
 
+test "fvar axes and instance arrays stay inside declared table regions" {
+    const allocator = std.testing.allocator;
+
+    var overlapping_axes: [36]u8 = .{0} ** 36;
+    writeU32Test(&overlapping_axes, 0, 0x00010000);
+    writeU16Test(&overlapping_axes, 4, 12); // Points into the fvar header.
+    writeU16Test(&overlapping_axes, 8, 1);
+    writeU16Test(&overlapping_axes, 10, 20);
+    writeTagTest(&overlapping_axes, 12, "wght"); // Would look like an axis tag to the old parser.
+
+    const overlapping_font = fvarOnlyFont(&overlapping_axes);
+    try std.testing.expectError(error.BadSfnt, overlapping_font.variationAxes(allocator));
+
+    var truncated_instances: [36]u8 = .{0} ** 36;
+    writeU32Test(&truncated_instances, 0, 0x00010000);
+    writeU16Test(&truncated_instances, 4, 16);
+    writeU16Test(&truncated_instances, 8, 1);
+    writeU16Test(&truncated_instances, 10, 20);
+    writeU16Test(&truncated_instances, 12, 1); // One declared instance follows the axes.
+    writeU16Test(&truncated_instances, 14, 8);
+    writeFvarAxisTest(&truncated_instances, 16, "wght", 100.0, 400.0, 900.0, 256);
+
+    const truncated_font = fvarOnlyFont(&truncated_instances);
+    try std.testing.expectError(error.BadSfnt, truncated_font.variationAxes(allocator));
+
+    var valid_with_instance: [44]u8 = .{0} ** 44;
+    writeU32Test(&valid_with_instance, 0, 0x00010000);
+    writeU16Test(&valid_with_instance, 4, 16);
+    writeU16Test(&valid_with_instance, 8, 1);
+    writeU16Test(&valid_with_instance, 10, 20);
+    writeU16Test(&valid_with_instance, 12, 1);
+    writeU16Test(&valid_with_instance, 14, 8);
+    writeFvarAxisTest(&valid_with_instance, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeU16Test(&valid_with_instance, 36, 300); // subfamilyNameID
+    writeU16Test(&valid_with_instance, 38, 0); // flags
+    writeU32Test(&valid_with_instance, 40, 0x00010000); // one coordinate
+
+    const valid_font = fvarOnlyFont(&valid_with_instance);
+    const axes = try valid_font.variationAxes(allocator);
+    defer allocator.free(axes);
+    try std.testing.expectEqual(@as(usize, 1), axes.len);
+    try std.testing.expectEqualStrings("wght", &axes[0].tag);
+}
+
 fn gdefOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2535,6 +2595,48 @@ fn cpalOnlyFont(data: []const u8) Font {
     };
 }
 
+fn fvarOnlyFont(data: []const u8) Font {
+    const empty_tables: []TableRecord = &.{};
+    const empty_cmaps: []CmapSubtable = &.{};
+    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    return .{
+        .data = data,
+        .format = .truetype,
+        .units_per_em = 1000,
+        .index_to_loc_format = 0,
+        .glyph_count = 2,
+        .ascender = 0,
+        .descender = 0,
+        .line_gap = 0,
+        .number_of_h_metrics = 2,
+        .head = dummy_table,
+        .hhea = dummy_table,
+        .maxp = dummy_table,
+        .hmtx = dummy_table,
+        .loca = null,
+        .cmap = dummy_table,
+        .kern = null,
+        .os2 = null,
+        .gdef = null,
+        .gpos = null,
+        .gsub = null,
+        .name = null,
+        .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len },
+        .avar = null,
+        .colr = null,
+        .cpal = null,
+        .svg = null,
+        .sbix = null,
+        .cblc = null,
+        .cbdt = null,
+        .glyf = null,
+        .cff = null,
+        .cmap_subtables = empty_cmaps,
+        .owned_tables = empty_tables,
+        .allocator = std.testing.allocator,
+    };
+}
+
 fn kernOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
@@ -2616,12 +2718,34 @@ fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: gly
     writeI16Test(bytes, offset + 18, value);
 }
 
+fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32, default: f32, max: f32, name_id: u16) void {
+    writeTagTest(bytes, offset, tag_text);
+    writeF16Dot16Test(bytes, offset + 4, min);
+    writeF16Dot16Test(bytes, offset + 8, default);
+    writeF16Dot16Test(bytes, offset + 12, max);
+    writeU16Test(bytes, offset + 16, 0);
+    writeU16Test(bytes, offset + 18, name_id);
+}
+
+fn writeTagTest(bytes: []u8, offset: usize, tag_text: []const u8) void {
+    std.debug.assert(tag_text.len == 4);
+    @memcpy(bytes[offset..][0..4], tag_text);
+}
+
+fn writeF16Dot16Test(bytes: []u8, offset: usize, value: f32) void {
+    writeI32Test(bytes, offset, @intFromFloat(value * 65536.0));
+}
+
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
 }
 
 fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
     std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
+}
+
+fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
+    std.mem.writeInt(i32, bytes[offset..][0..4], value, .big);
 }
 
 fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {

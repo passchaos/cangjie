@@ -1687,6 +1687,7 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u
         },
         2 => {
             const range_count = try readU16(table, class_def_offset + 2);
+            try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
             for (0..range_count) |i| {
                 const range_offset = class_def_offset + 4 + i * 6;
                 const start = try readU16(table, range_offset);
@@ -1697,6 +1698,24 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u
             return 0;
         },
         else => return error.UnsupportedGsub,
+    }
+}
+
+fn validateClassDefFormat2Ranges(table: Table, class_def_offset: usize, range_count: u16) GsubError!void {
+    // ClassDef format 2 uses the same sorted, non-overlapping range-record
+    // contract as Coverage format 2. Contextual class matching depends on the
+    // first class answer being authoritative; reject malformed order instead of
+    // letting an overlapping earlier range shadow a later, more specific one.
+    var previous_end: ?GlyphId = null;
+    for (0..range_count) |index| {
+        const range_offset = class_def_offset + 4 + index * 6;
+        const start = try readU16BadGsub(table, range_offset);
+        const end = try readU16BadGsub(table, range_offset + 2);
+        if (end < start) return error.BadGsub;
+        if (previous_end) |last_end| {
+            if (start <= last_end) return error.BadGsub;
+        }
+        previous_end = end;
     }
 }
 
@@ -1766,6 +1785,27 @@ test "GSUB class format 1 handles upper glyph boundary" {
     try std.testing.expectEqual(@as(u16, 7), try classValue(table, 0, 0xfffe));
     try std.testing.expectEqual(@as(u16, 9), try classValue(table, 0, 0xffff));
     try std.testing.expectEqual(@as(u16, 0), try classValue(table, 0, 0xfffd));
+}
+
+test "GSUB rejects malformed ClassDef format 2 ranges" {
+    var bytes = [_]u8{0} ** 22;
+    writeU16Test(&bytes, 0, 2); // ClassDef format 2.
+    writeU16Test(&bytes, 2, 3); // Three ClassRangeRecords.
+    writeU16Test(&bytes, 4, 10);
+    writeU16Test(&bytes, 6, 12);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 12); // Overlaps the previous inclusive range.
+    writeU16Test(&bytes, 12, 14);
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 20);
+    writeU16Test(&bytes, 18, 18); // Reversed range must also be rejected.
+    writeU16Test(&bytes, 20, 3);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, classValue(table, 0, 12));
+
+    writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
+    try std.testing.expectError(error.BadGsub, classValue(table, 0, 18));
 }
 
 test "GSUB lookup selection honors script and language tags" {

@@ -1687,6 +1687,7 @@ fn classDefValue(data: []const u8, offset: usize, glyph_id: glyph_mod.GlyphId) F
             if (offset + 4 > data.len) return error.BadSfnt;
             const range_count = try bin.readU16At(data, offset + 2);
             if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
+            try validateClassDefFormat2Ranges(data, offset, range_count);
             for (0..range_count) |index| {
                 const range_offset = offset + 4 + index * 6;
                 const start = try bin.readU16At(data, range_offset);
@@ -1697,6 +1698,24 @@ fn classDefValue(data: []const u8, offset: usize, glyph_id: glyph_mod.GlyphId) F
             return 0;
         },
         else => return error.BadSfnt,
+    }
+}
+
+fn validateClassDefFormat2Ranges(data: []const u8, offset: usize, range_count: u16) FontError!void {
+    // OpenType ClassDef format 2 records are sorted by StartGlyphID and must not
+    // overlap. GDEF class data feeds lookup-flag filtering, so accepting
+    // overlapping/reversed ranges can misclassify glyphs before GSUB/GPOS even
+    // see the run.
+    var previous_end: ?glyph_mod.GlyphId = null;
+    for (0..range_count) |index| {
+        const range_offset = offset + 4 + index * 6;
+        const start = try bin.readU16At(data, range_offset);
+        const end = try bin.readU16At(data, range_offset + 2);
+        if (end < start) return error.BadSfnt;
+        if (previous_end) |last_end| {
+            if (start <= last_end) return error.BadSfnt;
+        }
+        previous_end = end;
     }
 }
 
@@ -2535,6 +2554,27 @@ test "GDEF ClassDef format 1 validates upper glyph boundary without overflow" {
     writeU16Test(&bytes, 4, 5);
     try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 0xffff));
 }
+
+test "GDEF ClassDef format 2 rejects overlapping and reversed ranges" {
+    var bytes: [22]u8 = .{0} ** 22;
+    writeU16Test(&bytes, 0, 2); // ClassDef format 2.
+    writeU16Test(&bytes, 2, 3); // Three ClassRangeRecords.
+    writeU16Test(&bytes, 4, 10);
+    writeU16Test(&bytes, 6, 12);
+    writeU16Test(&bytes, 8, @intFromEnum(GlyphClass.base));
+    writeU16Test(&bytes, 10, 12); // Overlaps the previous inclusive range.
+    writeU16Test(&bytes, 12, 14);
+    writeU16Test(&bytes, 14, @intFromEnum(GlyphClass.mark));
+    writeU16Test(&bytes, 16, 20);
+    writeU16Test(&bytes, 18, 18); // Reversed range.
+    writeU16Test(&bytes, 20, @intFromEnum(GlyphClass.component));
+
+    try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 12));
+
+    writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
+    try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 18));
+}
+
 test "legacy kern format 0 accumulates multiple horizontal subtables" {
     var data: [44]u8 = .{0} ** 44;
     writeU16Test(&data, 0, 0);

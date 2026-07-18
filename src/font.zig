@@ -1209,6 +1209,12 @@ fn cblcStrike(data: []const u8, cblc: TableRecord, glyph_count: u16, strike_inde
     const index_array_offset = try bin.readU32At(data, offset);
     const index_tables_size = try bin.readU32At(data, offset + 4);
     const table_count = try bin.readU32At(data, offset + 8);
+    const minimum_index_array_offset = 8 + strike_count * 48;
+    // IndexSubTableArray is payload for a strike, not part of the CBLC header
+    // or bitmapSizeTable directory.  Requiring it to start after the full
+    // strike directory prevents malformed fonts from reinterpreting strike
+    // metadata as glyph-range records.
+    if (index_array_offset < minimum_index_array_offset) return error.BadSfnt;
     if (index_array_offset > cblc.length) return error.BadSfnt;
     if (index_tables_size > cblc.length - index_array_offset) return error.BadSfnt;
     if (@as(usize, table_count) * 8 > index_tables_size) return error.BadSfnt;
@@ -1235,7 +1241,7 @@ fn cblcGlyphPng(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_co
         const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
         if (glyph_id < strike.start_glyph or glyph_id > strike.end_glyph) continue;
         const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
-        const glyph = try cbdtGlyphPng(data, cbdt, strike, location);
+        const glyph = (try cbdtGlyphPng(data, cbdt, strike, location)) orelse continue;
         const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
         if (best == null or distance < best_distance) {
             best = glyph;
@@ -1246,31 +1252,51 @@ fn cblcGlyphPng(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_co
 }
 
 fn cblcGlyphLocation(data: []const u8, strike: CblcStrike, glyph_id: glyph_mod.GlyphId) FontError!?CblcGlyphLocation {
+    const SelectedIndexSubtable = struct {
+        first: glyph_mod.GlyphId,
+        last: glyph_mod.GlyphId,
+        offset: usize,
+    };
+    var selected: ?SelectedIndexSubtable = null;
+    var previous_last: ?glyph_mod.GlyphId = null;
     for (0..strike.table_count) |table_index| {
         const record = strike.offset + table_index * 8;
         if (record + 8 > data.len or record + 8 > strike.offset + strike.index_tables_size) return error.BadSfnt;
         const first = try bin.readU16At(data, record);
         const last = try bin.readU16At(data, record + 2);
-        if (glyph_id < first or glyph_id > last) continue;
         const subtable_offset = try bin.readU32At(data, record + 4);
-        if (subtable_offset >= strike.index_tables_size) return error.BadSfnt;
-        const subtable = strike.offset + subtable_offset;
-        if (subtable + 8 > data.len or subtable + 8 > strike.offset + strike.index_tables_size) return error.BadSfnt;
-        const index_format = try bin.readU16At(data, subtable);
-        const image_format = try bin.readU16At(data, subtable + 2);
-        const image_data_offset = try bin.readU32At(data, subtable + 4);
-        if (image_data_offset > std.math.maxInt(usize)) return error.BadSfnt;
-        const image_base: usize = @intCast(image_data_offset);
-        const local_index: usize = glyph_id - first;
-        return switch (index_format) {
-            1 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, first, last, local_index, image_format, image_base, 4),
-            3 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, first, last, local_index, image_format, image_base, 2),
-            4 => try cblcGlyphLocationFormat4(data, strike, subtable + 8, glyph_id, image_format, image_base),
-            5 => try cblcGlyphLocationFormat5(data, strike, subtable + 8, glyph_id, image_format, image_base),
-            else => null,
-        };
+        if (first > last) return error.BadSfnt;
+        if (first < strike.start_glyph or last > strike.end_glyph) return error.BadSfnt;
+        if (previous_last) |previous| {
+            // The IndexSubTableArray is sorted by glyph range.  Overlapping or
+            // decreasing ranges make glyph lookup order-dependent, and can hide
+            // malformed records behind an earlier match.
+            if (first <= previous) return error.BadSfnt;
+        }
+        previous_last = last;
+        // Subtable offsets are relative to the IndexSubTableArray and should
+        // point past the array records themselves.  Offsets into the record
+        // array would reinterpret glyph range metadata as an index subtable.
+        const subtable_data_start = @as(usize, strike.table_count) * 8;
+        if (subtable_offset < subtable_data_start or subtable_offset >= strike.index_tables_size) return error.BadSfnt;
+        if (glyph_id >= first and glyph_id <= last) selected = .{ .first = first, .last = last, .offset = subtable_offset };
     }
-    return null;
+    const entry = selected orelse return null;
+    const subtable = strike.offset + entry.offset;
+    if (subtable + 8 > data.len or subtable + 8 > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    const index_format = try bin.readU16At(data, subtable);
+    const image_format = try bin.readU16At(data, subtable + 2);
+    const image_data_offset = try bin.readU32At(data, subtable + 4);
+    if (image_data_offset > std.math.maxInt(usize)) return error.BadSfnt;
+    const image_base: usize = @intCast(image_data_offset);
+    const local_index: usize = glyph_id - entry.first;
+    return switch (index_format) {
+        1 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, entry.first, entry.last, local_index, image_format, image_base, 4),
+        3 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, entry.first, entry.last, local_index, image_format, image_base, 2),
+        4 => try cblcGlyphLocationFormat4(data, strike, subtable + 8, glyph_id, image_format, image_base),
+        5 => try cblcGlyphLocationFormat5(data, strike, subtable + 8, glyph_id, image_format, image_base),
+        else => null,
+    };
 }
 
 fn cblcGlyphLocationFormat1Or3(data: []const u8, strike: CblcStrike, offsets_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, local_index: usize, image_format: u16, image_base: usize, offset_size: usize) FontError!?CblcGlyphLocation {
@@ -1330,8 +1356,15 @@ fn readCblcOffset(data: []const u8, offset: usize, size: usize) FontError!usize 
     };
 }
 
-fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation) FontError!BitmapGlyphPng {
+fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation) FontError!?BitmapGlyphPng {
     if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
+    switch (location.image_format) {
+        17, 18, 19 => {},
+        // `bitmapGlyphPng` is intentionally a PNG-only API.  Non-PNG CBDT
+        // image formats may still be valid font data, so treat them as no PNG
+        // candidate after validating their declared CBDT byte range above.
+        else => return null,
+    }
     const start = cbdt.offset + location.offset;
     const end = start + location.length;
     const slice = data[start..end];
@@ -1339,7 +1372,7 @@ fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locatio
         17 => 5,
         18 => 8,
         19 => 0,
-        else => return error.UnsupportedGlyph,
+        else => unreachable,
     };
     if (slice.len < metrics_len + 4) return error.BadSfnt;
     const metrics = switch (location.image_format) {
@@ -1351,7 +1384,7 @@ fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locatio
     const data_len = try bin.readU32At(slice, metrics_len);
     if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
     const png = slice[metrics_len + 4 .. metrics_len + 4 + data_len];
-    return bitmapGlyphPngFromData(png, strike.ppem, strike.ppi, metrics.bearing_x, metrics.bearing_y);
+    return try bitmapGlyphPngFromData(png, strike.ppem, strike.ppi, metrics.bearing_x, metrics.bearing_y);
 }
 
 fn bitmapGlyphPngFromData(png: []const u8, ppem: u16, ppi: u16, origin_offset_x: i16, origin_offset_y: i16) FontError!BitmapGlyphPng {
@@ -3051,6 +3084,77 @@ test "CBLC strike glyph ranges stay within maxp glyph count" {
     try std.testing.expectError(error.BadSfnt, cblcStrike(&bytes, cblc, 2, 0));
 }
 
+test "CBLC index arrays cannot overlap the strike directory" {
+    var bytes: [56]u8 = .{0} ** 56;
+    writeU16Test(&bytes, 0, 2); // major version.
+    writeU16Test(&bytes, 2, 0); // minor version.
+    writeU32Test(&bytes, 4, 1); // one bitmapSizeTable.
+    writeU32Test(&bytes, 8, 8); // Points back into the bitmapSizeTable.
+    writeU32Test(&bytes, 12, 48);
+    writeU32Test(&bytes, 16, 1);
+    writeU16Test(&bytes, 48, 1);
+    writeU16Test(&bytes, 50, 1);
+    bytes[52] = 16;
+
+    const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, cblcStrike(&bytes, cblc, 2, 0));
+}
+
+test "CBLC index subtable array validates ordering before returning a location" {
+    const strike = CblcStrike{
+        .ppem = 16,
+        .ppi = 0,
+        .offset = 0,
+        .index_tables_size = 40,
+        .table_count = 2,
+        .start_glyph = 1,
+        .end_glyph = 4,
+    };
+
+    var overlapping: [40]u8 = .{0} ** 40;
+    writeU16Test(&overlapping, 0, 1);
+    writeU16Test(&overlapping, 2, 2);
+    writeU32Test(&overlapping, 4, 16);
+    writeU16Test(&overlapping, 8, 2); // Overlaps the previous inclusive range.
+    writeU16Test(&overlapping, 10, 3);
+    writeU32Test(&overlapping, 12, 28);
+    try std.testing.expectError(error.BadSfnt, cblcGlyphLocation(&overlapping, strike, 1));
+
+    var subtable_overlap = overlapping;
+    writeU16Test(&subtable_overlap, 8, 3); // Repair ordering.
+    writeU16Test(&subtable_overlap, 10, 4);
+    writeU32Test(&subtable_overlap, 12, 4); // Points into IndexSubTableArray records.
+    try std.testing.expectError(error.BadSfnt, cblcGlyphLocation(&subtable_overlap, strike, 1));
+}
+
+test "CBDT non-PNG image formats are skipped by PNG lookup" {
+    var bytes: [80]u8 = .{0} ** 80;
+    writeU16Test(&bytes, 0, 2); // CBLC major version.
+    writeU16Test(&bytes, 2, 0);
+    writeU32Test(&bytes, 4, 1); // one bitmapSizeTable.
+
+    writeU32Test(&bytes, 8, 56); // IndexSubTableArray follows the strike directory.
+    writeU32Test(&bytes, 12, 20);
+    writeU32Test(&bytes, 16, 1);
+    writeU16Test(&bytes, 48, 1);
+    writeU16Test(&bytes, 50, 1);
+    bytes[52] = 16;
+
+    writeU16Test(&bytes, 56, 1);
+    writeU16Test(&bytes, 58, 1);
+    writeU32Test(&bytes, 60, 8);
+
+    writeU16Test(&bytes, 64, 3); // IndexSubTable format 3.
+    writeU16Test(&bytes, 66, 1); // CBDT image format 1 is not PNG data.
+    writeU32Test(&bytes, 68, 0);
+    writeU16Test(&bytes, 72, 0);
+    writeU16Test(&bytes, 74, 4);
+
+    const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = 76 };
+    const cbdt = TableRecord{ .tag = .{ 'C', 'B', 'D', 'T' }, .checksum = 0, .offset = 76, .length = 4 };
+    try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try cblcGlyphPng(&bytes, cblc, cbdt, 2, 1, 16));
+}
+
 test "cmap format 4 idRangeOffset stays inside declared subtable length" {
     var valid: [26]u8 = .{0} ** 26;
     writeU16Test(&valid, 0, 4);
@@ -3776,6 +3880,69 @@ test "avar axis count must match fvar axis count when both tables exist" {
 
     const font = fvarAvarOnlyFont(&bytes, 36);
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 0.0));
+}
+
+test "gvar table matches fvar axes and maxp glyph count" {
+    var bytes: [62]u8 = .{0} ** 62;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+
+    const gvar_offset = 36;
+    writeU16Test(&bytes, gvar_offset + 0, 1);
+    writeU16Test(&bytes, gvar_offset + 2, 0);
+    writeU16Test(&bytes, gvar_offset + 4, 1); // axisCount matches fvar.
+    writeU16Test(&bytes, gvar_offset + 12, 2); // glyphCount matches maxp.
+    writeU32Test(&bytes, gvar_offset + 16, 26); // Glyph data begins after three short offsets.
+
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = gvar_offset };
+    const gvar = TableRecord{ .tag = .{ 'g', 'v', 'a', 'r' }, .checksum = 0, .offset = gvar_offset, .length = bytes.len - gvar_offset };
+    try validateVariationDataTables(&bytes, 2, fvar, gvar, null, null, null);
+
+    var axis_mismatch = bytes;
+    writeU16Test(&axis_mismatch, gvar_offset + 4, 2);
+    try std.testing.expectError(error.BadSfnt, validateVariationDataTables(&axis_mismatch, 2, fvar, gvar, null, null, null));
+
+    var glyph_mismatch = bytes;
+    writeU16Test(&glyph_mismatch, gvar_offset + 12, 3);
+    try std.testing.expectError(error.BadSfnt, validateVariationDataTables(&glyph_mismatch, 2, fvar, gvar, null, null, null));
+}
+
+test "VariationStore data validates axis and region indexes" {
+    var bytes: [54]u8 = .{0} ** 54;
+    writeHvarTableWithOneItemVariationData(&bytes);
+    const hvar = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try validateMetricVariationTable(&bytes, hvar, 1, 20);
+
+    var axis_mismatch = bytes;
+    writeU16Test(&axis_mismatch, 32, 2); // VariationRegionList axisCount.
+    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&axis_mismatch, hvar, 1, 20));
+
+    var bad_region_index = bytes;
+    writeU16Test(&bad_region_index, 50, 1); // Only region index 0 is declared.
+    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&bad_region_index, hvar, 1, 20));
+}
+
+test "MVAR value records reference existing ItemVariationData items" {
+    var bytes: [54]u8 = .{0} ** 54;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 6, 8); // valueRecordSize.
+    writeU16Test(&bytes, 8, 1); // one value record.
+    writeU16Test(&bytes, 10, 20); // ItemVariationStore offset.
+    writeTagTest(&bytes, 12, "hasc");
+    writeU16Test(&bytes, 16, 0); // outerIndex.
+    writeU16Test(&bytes, 18, 0); // innerIndex.
+    writeItemVariationStoreWithOneItem(&bytes, 20);
+
+    const mvar = TableRecord{ .tag = .{ 'M', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try validateMvarTable(&bytes, mvar, 1);
+
+    var bad_inner_index = bytes;
+    writeU16Test(&bad_inner_index, 18, 1);
+    try std.testing.expectError(error.BadSfnt, validateMvarTable(&bad_inner_index, mvar, 1));
 }
 
 test "STAT design axes must match fvar axis ordering" {

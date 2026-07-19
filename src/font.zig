@@ -5236,7 +5236,7 @@ fn validateCpalPaletteEntries(data: []const u8, cpal: TableRecord) FontError!u16
         const palette_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 4));
         const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 8));
         const extended_header_len = version_0_header_len + 12;
-        try validateCpalOptionalArray(cpal, extended_header_len, palette_types_offset, palette_count, 4);
+        try validateCpalPaletteTypeValues(data, cpal, extended_header_len, palette_types_offset, palette_count);
         try validateCpalOptionalArray(cpal, extended_header_len, palette_labels_offset, palette_count, 2);
         try validateCpalOptionalArray(cpal, extended_header_len, palette_entry_labels_offset, palette_entries, 2);
         break :blk extended_header_len;
@@ -5262,6 +5262,22 @@ fn validateCpalOptionalArray(cpal: TableRecord, header_len: usize, offset: usize
     if (offset == 0) return;
     if (offset < header_len or offset > cpal.length) return error.BadSfnt;
     if (count > (cpal.length - offset) / item_size) return error.BadSfnt;
+}
+
+const cpal_known_palette_type_mask: u32 = 0x0000_0003;
+
+fn validateCpalPaletteTypeValues(data: []const u8, cpal: TableRecord, header_len: usize, offset: usize, palette_count: usize) FontError!void {
+    if (offset == 0) return;
+    try validateCpalOptionalArray(cpal, header_len, offset, palette_count, 4);
+
+    // CPAL v1 palette type values are bitsets whose currently assigned bits
+    // only describe light/dark-background suitability.  Rejecting reserved bits
+    // at parse time keeps future flags from being silently misinterpreted by
+    // palette selection code that only understands today's two-bit contract.
+    for (0..palette_count) |palette_index| {
+        const palette_type = try bin.readU32At(data, cpal.offset + offset + palette_index * 4);
+        if (palette_type & ~cpal_known_palette_type_mask != 0) return error.BadSfnt;
+    }
 }
 
 fn validateCpalNameReferences(data: []const u8, cpal: TableRecord, name: ?TableRecord) FontError!void {
@@ -7787,6 +7803,30 @@ test "CPAL v1 labels must resolve through the name table" {
     try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&missing_entry_label, cpal, name));
 
     try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&bytes, cpal, null));
+}
+
+test "CPAL v1 palette types reject reserved bits" {
+    var bytes: [34]u8 = .{0} ** 34;
+    writeU16Test(&bytes, 0, 1); // CPAL version 1 includes optional palette-type flags.
+    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
+    writeU16Test(&bytes, 4, 1); // numPalettes.
+    writeU16Test(&bytes, 6, 1); // numColorRecords.
+    writeU32Test(&bytes, 8, 30); // ColorRecordsArray follows the type array.
+    writeU16Test(&bytes, 12, 0); // First color index for palette 0.
+    writeU32Test(&bytes, 14, 26); // one palette type value.
+    writeU32Test(&bytes, 18, 0); // no palette label array.
+    writeU32Test(&bytes, 22, 0); // no palette-entry label array.
+    writeU32Test(&bytes, 26, 0x0000_0004); // Reserved CPAL palette-type bit.
+    bytes[30] = 10;
+    bytes[31] = 20;
+    bytes[32] = 30;
+    bytes[33] = 40;
+
+    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&bytes, cpal));
+
+    writeU32Test(&bytes, 26, 0x0000_0003); // Valid: light and dark background suitability bits.
+    try std.testing.expectEqual(@as(u16, 1), try validateCpalPaletteEntries(&bytes, cpal));
 }
 
 test "COLR glyph references stay within maxp glyph count" {

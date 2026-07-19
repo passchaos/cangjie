@@ -6032,7 +6032,46 @@ fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: 
             try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), context, guard);
             try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), context, guard);
         },
-        .colr_glyph, .color_line, .terminal => return,
+        .color_line => try validateColorPaintGradientVariationRefs(data, colr, offset, context),
+        .colr_glyph, .terminal => return,
+    }
+}
+
+fn validateColorPaintGradientVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext) FontError!void {
+    const format = data[offset];
+    const info = colorPaintFormatInfo(format).?;
+    const coordinate_item_count: usize = switch (format) {
+        5, 7 => 6,
+        9 => 4,
+        else => return,
+    };
+
+    // Variable gradient paints have two independent variation consumers: the
+    // paint's geometry varIndexBase and each VarColorStop's stop/alpha
+    // varIndexBase.  Validate both here so a syntactically valid gradient
+    // cannot later dereference missing delta-set rows only when variation
+    // coordinates are applied.
+    try validateColrVariationIndexSequence(
+        data,
+        colr,
+        context,
+        try bin.readU32At(data, offset + info.min_size - 4),
+        coordinate_item_count,
+    );
+
+    const color_line_offset = try colorPaintChildOffset(data, colr, offset, info.min_size, 1);
+    const stop_count: usize = @intCast(try bin.readU16At(data, color_line_offset + 1));
+    const stops_start = color_line_offset + 3;
+    for (0..stop_count) |index| {
+        // A VarColorStop varies StopOffset and Alpha; PaletteIndex remains a
+        // discrete CPAL reference and is checked by palette-bound validation.
+        try validateColrVariationIndexSequence(
+            data,
+            colr,
+            context,
+            try bin.readU32At(data, stops_start + index * colrColorStopSize(true) + 6),
+            2,
+        );
     }
 }
 
@@ -6149,7 +6188,7 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
         try validateColrAlpha(try bin.readI16At(data, offset + 3));
     }
     if (info.kind == .color_line) {
-        try validateColrColorLine(data, colr, offset, info.min_size);
+        try validateColrColorLine(data, colr, offset, info.min_size, colrPaintUsesVarColorLine(format));
     }
     if (format == 32) {
         // CompositeMode is an enum, not an open-ended flag field. Rejecting
@@ -6163,7 +6202,7 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
 
 const max_colr_extend_mode = 2;
 
-fn validateColrColorLine(data: []const u8, colr: TableRecord, offset: usize, paint_header_size: usize) FontError!void {
+fn validateColrColorLine(data: []const u8, colr: TableRecord, offset: usize, paint_header_size: usize, variable: bool) FontError!void {
     const color_line_offset = try colorPaintChildOffset(data, colr, offset, paint_header_size, 1);
     const colr_end = colr.offset + colr.length;
     if (color_line_offset + 3 > colr_end) return error.BadSfnt;
@@ -6178,12 +6217,13 @@ fn validateColrColorLine(data: []const u8, colr: TableRecord, offset: usize, pai
     if (stop_count < 2) return error.BadSfnt;
 
     const stops_start = color_line_offset + 3;
-    if (stop_count > (colr_end - stops_start) / 6) return error.BadSfnt;
+    const stop_size = colrColorStopSize(variable);
+    if (stop_count > (colr_end - stops_start) / stop_size) return error.BadSfnt;
 
     var previous_stop = try bin.readI16At(data, stops_start);
     try validateColrAlpha(try bin.readI16At(data, stops_start + 4));
     for (1..stop_count) |index| {
-        const stop_offset = stops_start + index * 6;
+        const stop_offset = stops_start + index * stop_size;
         const current_stop = try bin.readI16At(data, stop_offset);
         if (current_stop < previous_stop) return error.BadSfnt;
         try validateColrAlpha(try bin.readI16At(data, stop_offset + 4));
@@ -6196,10 +6236,19 @@ fn validateColrColorLinePaletteBounds(data: []const u8, colr: TableRecord, offse
     if (color_line_offset + 3 > colr.offset + colr.length) return error.BadSfnt;
     const stop_count: usize = @intCast(try bin.readU16At(data, color_line_offset + 1));
     const stops_start = color_line_offset + 3;
-    if (stop_count > (colr.offset + colr.length - stops_start) / 6) return error.BadSfnt;
+    const stop_size = colrColorStopSize(colrPaintUsesVarColorLine(data[offset]));
+    if (stop_count > (colr.offset + colr.length - stops_start) / stop_size) return error.BadSfnt;
     for (0..stop_count) |index| {
-        try validateColrPaletteIndexBounds(try bin.readU16At(data, stops_start + index * 6 + 2), cpal_palette_entries);
+        try validateColrPaletteIndexBounds(try bin.readU16At(data, stops_start + index * stop_size + 2), cpal_palette_entries);
     }
+}
+
+fn colrPaintUsesVarColorLine(format: u8) bool {
+    return format == 5 or format == 7 or format == 9;
+}
+
+fn colrColorStopSize(variable: bool) usize {
+    return if (variable) 10 else 6;
 }
 
 fn validateColrAlpha(raw_alpha: i16) FontError!void {
@@ -8753,6 +8802,63 @@ test "COLR v1 variable paints reference valid variation data" {
     try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bad_map, colr, fvar, 2));
 }
 
+test "COLR v1 variable gradients validate paint and stop variation indexes" {
+    var bytes: [180]u8 = .{0} ** 180;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
+
+    const colr_offset = fvar.length;
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = colr_offset, .length = 144 };
+    writeU16Test(&bytes, colr_offset + 0, 1); // COLR version 1.
+    writeU32Test(&bytes, colr_offset + 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, colr_offset + 30, 90); // ItemVariationStoreOffset.
+
+    writeU32Test(&bytes, colr_offset + 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, colr_offset + 38, 1);
+    writeU32Test(&bytes, colr_offset + 40, 10); // PaintVarLinearGradient at BaseGlyphList + 10.
+
+    bytes[colr_offset + 44] = 5; // PaintVarLinearGradient.
+    writeU24Test(&bytes, colr_offset + 45, 20); // VarColorLine starts immediately after the paint.
+    writeI16Test(&bytes, colr_offset + 48, 0); // x0.
+    writeI16Test(&bytes, colr_offset + 50, 0); // y0.
+    writeI16Test(&bytes, colr_offset + 52, 100); // x1.
+    writeI16Test(&bytes, colr_offset + 54, 0); // y1.
+    writeI16Test(&bytes, colr_offset + 56, 0); // x2.
+    writeI16Test(&bytes, colr_offset + 58, 100); // y2.
+    writeU32Test(&bytes, colr_offset + 60, 0); // geometry varIndexBase covers six coordinate deltas.
+
+    const color_line = colr_offset + 64;
+    bytes[color_line] = 0; // ExtendMode.pad.
+    writeU16Test(&bytes, color_line + 1, 2);
+    writeF2Dot14Test(&bytes, color_line + 3, 0.0);
+    writeU16Test(&bytes, color_line + 5, 0);
+    writeF2Dot14Test(&bytes, color_line + 7, 1.0);
+    writeU32Test(&bytes, color_line + 9, 0); // stop/alpha varIndexBase covers two deltas.
+    writeF2Dot14Test(&bytes, color_line + 13, 1.0);
+    writeU16Test(&bytes, color_line + 15, 0);
+    writeF2Dot14Test(&bytes, color_line + 17, 1.0);
+    writeU32Test(&bytes, color_line + 19, 0);
+
+    writeItemVariationStoreWithItems(&bytes, colr_offset + 90, 6);
+    try validateColrVariationData(&bytes, colr, fvar, 2);
+
+    var missing_store = bytes;
+    writeU32Test(&missing_store, colr_offset + 30, 0);
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&missing_store, colr, fvar, 2));
+
+    var bad_geometry_index = bytes;
+    writeU32Test(&bad_geometry_index, colr_offset + 60, 1); // Sequence 1..6 exceeds the six-row item data.
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bad_geometry_index, colr, fvar, 2));
+
+    var bad_stop_index = bytes;
+    writeU32Test(&bad_stop_index, color_line + 19, 5); // VarColorStop needs rows 5 and 6.
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bad_stop_index, colr, fvar, 2));
+}
+
 test "COLR v1 variation map and store subtables cannot overlap" {
     var bytes: [128]u8 = .{0} ** 128;
     writeU32Test(&bytes, 0, 0x00010000);
@@ -10375,6 +10481,10 @@ fn writeHvarTableWithOneItemVariationData(bytes: []u8) void {
 }
 
 fn writeItemVariationStoreWithOneItem(bytes: []u8, offset: usize) void {
+    writeItemVariationStoreWithItems(bytes, offset, 1);
+}
+
+fn writeItemVariationStoreWithItems(bytes: []u8, offset: usize, item_count: u16) void {
     writeU16Test(bytes, offset + 0, 1); // format.
     writeU32Test(bytes, offset + 2, 12); // VariationRegionList offset.
     writeU16Test(bytes, offset + 6, 1); // itemVariationDataCount.
@@ -10386,11 +10496,13 @@ fn writeItemVariationStoreWithOneItem(bytes: []u8, offset: usize) void {
     writeF2Dot14Test(bytes, offset + 18, 0.0);
     writeF2Dot14Test(bytes, offset + 20, 1.0);
 
-    writeU16Test(bytes, offset + 24, 1); // itemCount.
+    writeU16Test(bytes, offset + 24, item_count);
     writeU16Test(bytes, offset + 26, 1); // wordDeltaCount.
     writeU16Test(bytes, offset + 28, 1); // regionIndexCount.
     writeU16Test(bytes, offset + 30, 0); // regionIndexes[0].
-    writeI16Test(bytes, offset + 32, 7); // one delta row.
+    for (0..item_count) |index| {
+        writeI16Test(bytes, offset + 32 + index * 2, 7); // delta rows.
+    }
 }
 
 fn writeGvarOneGlyphPrivatePointTupleTest(bytes: []u8, offset: usize) void {

@@ -331,6 +331,7 @@ pub const Font = struct {
             try validateCpalNameReferences(data, cpal_table, name);
         }
         if (colr) |colr_table| {
+            try validateColrVariationData(data, colr_table, fvar, glyph_count);
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
         }
@@ -5592,6 +5593,223 @@ fn validateColrV1ClipBox(data: []const u8, colr: TableRecord, offset: usize) Fon
     if (x_min > x_max or y_min > y_max) return error.BadSfnt;
 }
 
+const DeltaSetIndexMapInfo = struct {
+    map_count: usize,
+    entry_format: u8,
+    entry_size: usize,
+    map_data_start: usize,
+};
+
+const ColrVariationContext = struct {
+    store_offset: usize,
+    item_data_count: usize,
+    map: ?DeltaSetIndexMapInfo,
+};
+
+fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRecord, glyph_count: u16) FontError!void {
+    if (colr.length < 2) return error.BadSfnt;
+    const version = try bin.readU16At(data, colr.offset);
+    if (version != 1) return;
+    if (colr.length < 34) return error.BadSfnt;
+
+    const var_index_map_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 26));
+    const store_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 30));
+    if (var_index_map_offset != 0 and store_offset == 0) return error.BadSfnt;
+
+    var context_storage: ColrVariationContext = undefined;
+    const context: ?*const ColrVariationContext = if (store_offset != 0) blk: {
+        const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
+        const item_data_count = try validateItemVariationStore(data, colr, store_offset, fvar_info.axis_count, 34);
+        const map = if (var_index_map_offset != 0)
+            try validateDeltaSetIndexMap(data, colr, store_offset, item_data_count, var_index_map_offset)
+        else
+            null;
+        context_storage = .{
+            .store_offset = store_offset,
+            .item_data_count = item_data_count,
+            .map = map,
+        };
+        break :blk &context_storage;
+    } else null;
+
+    try validateColrV1ClipListVariationRefs(data, colr, glyph_count, context);
+
+    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
+    if (base_glyph_list_offset != 0) {
+        if (base_glyph_list_offset > colr.length or 4 > colr.length - base_glyph_list_offset) return error.BadSfnt;
+        const list_start = colr.offset + base_glyph_list_offset;
+        const record_count: usize = @intCast(try bin.readU32At(data, list_start));
+        const records_start = list_start + 4;
+        if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
+        const paint_data_start = 4 + record_count * 6;
+        for (0..record_count) |index| {
+            const record = records_start + index * 6;
+            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
+            if (paint_offset < paint_data_start) return error.BadSfnt;
+            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
+            var guard = ColorPaintGraphGuard{};
+            try validateColorPaintVariationRefs(data, colr, list_start + paint_offset, context, &guard);
+        }
+    }
+
+    if (try colrLayerList(data, colr)) |layer_list| {
+        for (0..layer_list.layer_count) |layer_index| {
+            const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
+            var guard = ColorPaintGraphGuard{};
+            try validateColorPaintVariationRefs(data, colr, paint_offset, context, &guard);
+        }
+    }
+}
+
+fn validateDeltaSetIndexMap(data: []const u8, table: TableRecord, store_offset: usize, item_data_count: usize, map_offset: usize) FontError!DeltaSetIndexMapInfo {
+    if (map_offset < 34 or map_offset > table.length or table.length - map_offset < 4) return error.BadSfnt;
+    const map_start = table.offset + map_offset;
+    const format = data[map_start];
+    const entry_format = data[map_start + 1];
+    if ((entry_format & 0xc0) != 0) return error.BadSfnt;
+
+    const entry_size = @as(usize, ((entry_format & 0x30) >> 4)) + 1;
+    const inner_bit_count = @as(usize, entry_format & 0x0f) + 1;
+    if (inner_bit_count > entry_size * 8) return error.BadSfnt;
+
+    const map_count, const map_data_start = switch (format) {
+        0 => .{ @as(usize, @intCast(try bin.readU16At(data, map_start + 2))), map_start + 4 },
+        1 => blk: {
+            if (table.length - map_offset < 6) return error.BadSfnt;
+            break :blk .{ @as(usize, @intCast(try bin.readU32At(data, map_start + 2))), map_start + 6 };
+        },
+        else => return error.BadSfnt,
+    };
+    if (map_count != 0 and map_count > (table.offset + table.length - map_data_start) / entry_size) return error.BadSfnt;
+
+    const info = DeltaSetIndexMapInfo{
+        .map_count = map_count,
+        .entry_format = entry_format,
+        .entry_size = entry_size,
+        .map_data_start = map_data_start,
+    };
+    for (0..map_count) |index| {
+        const outer_index, const inner_index = try readDeltaSetIndexMapEntry(data, info, index);
+        try validateColrDeltaSetReference(data, table, store_offset, item_data_count, outer_index, inner_index);
+    }
+    return info;
+}
+
+fn readDeltaSetIndexMapEntry(data: []const u8, map: DeltaSetIndexMapInfo, index: usize) FontError!struct { usize, usize } {
+    const entry_offset = map.map_data_start + index * map.entry_size;
+    var entry: u32 = 0;
+    for (0..map.entry_size) |byte_index| {
+        entry = (entry << 8) | data[entry_offset + byte_index];
+    }
+
+    const inner_bit_count = @as(u5, @intCast((map.entry_format & 0x0f) + 1));
+    const inner_mask = (@as(u32, 1) << inner_bit_count) - 1;
+    return .{
+        @as(usize, @intCast(entry >> inner_bit_count)),
+        @as(usize, @intCast(entry & inner_mask)),
+    };
+}
+
+fn validateColrDeltaSetReference(data: []const u8, table: TableRecord, store_offset: usize, item_data_count: usize, outer_index: usize, inner_index: usize) FontError!void {
+    if (outer_index >= item_data_count) return error.BadSfnt;
+    const item_count = try itemVariationDataItemCount(data, table, store_offset, outer_index);
+    if (inner_index >= item_count) return error.BadSfnt;
+}
+
+fn validateColrVariationIndexSequence(data: []const u8, colr: TableRecord, context: ?*const ColrVariationContext, var_index_base: u32, item_count: usize) FontError!void {
+    const ctx = context orelse return error.BadSfnt;
+    if (item_count == 0) return;
+    if (@as(usize, var_index_base) > std.math.maxInt(u32) - (item_count - 1)) return error.BadSfnt;
+
+    if (ctx.map) |map| {
+        if (map.map_count == 0) return error.BadSfnt;
+        for (0..item_count) |sequence_index| {
+            const logical_index = @as(usize, var_index_base) + sequence_index;
+            const mapped_index = if (logical_index >= map.map_count) map.map_count - 1 else logical_index;
+            const outer_index, const inner_index = try readDeltaSetIndexMapEntry(data, map, mapped_index);
+            try validateColrDeltaSetReference(data, colr, ctx.store_offset, ctx.item_data_count, outer_index, inner_index);
+        }
+        return;
+    }
+
+    for (0..item_count) |sequence_index| {
+        const var_index = var_index_base + @as(u32, @intCast(sequence_index));
+        try validateColrDeltaSetReference(
+            data,
+            colr,
+            ctx.store_offset,
+            ctx.item_data_count,
+            @as(usize, @intCast(var_index >> 16)),
+            @as(usize, @intCast(var_index & 0xffff)),
+        );
+    }
+}
+
+fn validateColrV1ClipListVariationRefs(data: []const u8, colr: TableRecord, glyph_count: u16, context: ?*const ColrVariationContext) FontError!void {
+    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
+    if (clip_list_offset == 0) return;
+    if (clip_list_offset < 34 or clip_list_offset > colr.length or 5 > colr.length - clip_list_offset) return error.BadSfnt;
+
+    const clip_list_start = colr.offset + clip_list_offset;
+    if (data[clip_list_start] != 1) return error.BadSfnt;
+    const clip_count: usize = @intCast(try bin.readU32At(data, clip_list_start + 1));
+    const records_start = clip_list_start + 5;
+    if (clip_count > (colr.offset + colr.length - records_start) / 7) return error.BadSfnt;
+    const clip_data_start = 5 + clip_count * 7;
+
+    for (0..clip_count) |index| {
+        const record = records_start + index * 7;
+        try validateGlyphIdInMaxp(try bin.readU16At(data, record), glyph_count);
+        try validateGlyphIdInMaxp(try bin.readU16At(data, record + 2), glyph_count);
+        const clip_box_offset: usize = @intCast(try readU24At(data, record + 4));
+        if (clip_box_offset < clip_data_start) return error.BadSfnt;
+        if (clip_box_offset > colr.length - clip_list_offset) return error.BadSfnt;
+        try validateColrV1ClipBoxVariationRefs(data, colr, clip_list_start + clip_box_offset, context);
+    }
+}
+
+fn validateColrV1ClipBoxVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext) FontError!void {
+    try validateColrV1ClipBox(data, colr, offset);
+    if (data[offset] != 2) return;
+    try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, offset + 9), 4);
+}
+
+fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext, guard: *ColorPaintGraphGuard) FontError!void {
+    const info = try validateColorPaintRecordBounds(data, colr, offset);
+    try guard.enter(offset);
+    defer guard.leave();
+
+    switch (info.kind) {
+        .colr_layers => {
+            const layer_count = data[offset + 1];
+            const first_layer_index = try bin.readU32At(data, offset + 2);
+            if (layer_count == 0) return;
+            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const first: usize = @intCast(first_layer_index);
+            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
+            for (0..layer_count) |layer_offset| {
+                const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
+                try validateColorPaintVariationRefs(data, colr, paint_offset, context, guard);
+            }
+        },
+        .solid => {
+            if (data[offset] == 3) {
+                // PaintVarSolid varies only its alpha field, so varIndexBase
+                // must resolve exactly one delta-set reference. Validating it
+                // during parsing keeps malformed COLR graphs from reaching a
+                // renderer with a dangling ItemVariationStore reference.
+                try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, offset + 5), 1);
+            }
+        },
+        .glyph, .single_child => try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), context, guard),
+        .composite => {
+            try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), context, guard);
+            try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), context, guard);
+        },
+        .colr_glyph, .terminal => return,
+    }
+}
+
 fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
     const info = try validateColorPaintRecordBounds(data, colr, offset);
     try guard.enter(offset);
@@ -8123,6 +8341,49 @@ test "COLR v1 reachable paint formats are validated at parse time" {
         bytes[colr_offset + 73] = 33; // Reserved format reachable through PaintColrLayers.
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
+}
+
+test "COLR v1 variable paints reference valid variation data" {
+    var bytes: [128]u8 = .{0} ** 128;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
+
+    const colr_offset = fvar.length;
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = colr_offset, .length = 92 };
+    writeU16Test(&bytes, colr_offset + 0, 1); // COLR version 1.
+    writeU32Test(&bytes, colr_offset + 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, colr_offset + 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, colr_offset + 38, 1);
+    writeU32Test(&bytes, colr_offset + 40, 10); // PaintVarSolid at BaseGlyphList + 10.
+    bytes[colr_offset + 44] = 3;
+    writeU16Test(&bytes, colr_offset + 45, 0);
+    writeF2Dot14Test(&bytes, colr_offset + 47, 1.0);
+    writeU32Test(&bytes, colr_offset + 49, 0); // varIndexBase.
+
+    var missing_store = bytes;
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&missing_store, colr, fvar, 2));
+
+    writeU32Test(&bytes, colr_offset + 30, 53); // ItemVariationStoreOffset.
+    writeItemVariationStoreWithOneItem(&bytes, colr_offset + 53);
+    try validateColrVariationData(&bytes, colr, fvar, 2);
+
+    var bad_implicit_var_index = bytes;
+    writeU32Test(&bad_implicit_var_index, colr_offset + 49, 1); // outer 0, inner 1; item 0 has one row.
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bad_implicit_var_index, colr, fvar, 2));
+
+    var bad_map = bytes;
+    writeU32Test(&bad_map, colr_offset + 26, 53); // VarIndexMapOffset.
+    writeU32Test(&bad_map, colr_offset + 30, 58); // ItemVariationStoreOffset follows the map.
+    bad_map[colr_offset + 53] = 0; // DeltaSetIndexMap format 0.
+    bad_map[colr_offset + 54] = 0; // one-byte entries, one inner-index bit.
+    writeU16Test(&bad_map, colr_offset + 55, 1); // one mapping entry.
+    bad_map[colr_offset + 57] = 1; // outer 0, inner 1; outside the single item row.
+    writeItemVariationStoreWithOneItem(&bad_map, colr_offset + 58);
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bad_map, colr, fvar, 2));
 }
 
 test "COLR palette indices must be declared by CPAL" {

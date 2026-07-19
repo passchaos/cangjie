@@ -6661,12 +6661,38 @@ fn colrLayerList(data: []const u8, colr: TableRecord) FontError!?ColrLayerList {
     const layer_count: usize = @intCast(try bin.readU32At(data, list_start));
     const offsets_start = list_start + 4;
     if (layer_count > (colr.offset + colr.length - offsets_start) / 4) return error.BadSfnt;
-    return .{
+    const layer_list = ColrLayerList{
         .start = list_start,
         .layer_count = layer_count,
         .offsets_start = offsets_start,
         .paint_data_start = 4 + layer_count * 4,
     };
+    try validateColrLayerListPaintHeaderOwnership(data, colr, layer_list);
+    return layer_list;
+}
+
+fn validateColrLayerListPaintHeaderOwnership(data: []const u8, colr: TableRecord, layer_list: ColrLayerList) FontError!void {
+    // LayerList offsets are the canonical paint order for PaintColrLayers.
+    // Require each layer to own at least its fixed Paint header and keep those
+    // headers in the same byte order as the offset array. This rejects duplicate
+    // or partially-overlapping layer entries without trying to infer ownership
+    // of every recursively referenced child payload.
+    var previous_header_end: ?usize = null;
+    for (0..layer_list.layer_count) |index| {
+        const paint_offset: usize = @intCast(try bin.readU32At(data, layer_list.offsets_start + index * 4));
+        if (paint_offset < layer_list.paint_data_start) return error.BadSfnt;
+        const layer_list_offset = layer_list.start - colr.offset;
+        if (paint_offset > colr.length - layer_list_offset) return error.BadSfnt;
+        if (previous_header_end) |previous_end| {
+            if (paint_offset < previous_end) return error.BadSfnt;
+        }
+
+        const paint_start = layer_list.start + paint_offset;
+        if (paint_start >= colr.offset + colr.length) return error.BadSfnt;
+        const info = colorPaintFormatInfo(data[paint_start]) orelse return error.BadSfnt;
+        if (info.min_size > colr.offset + colr.length - paint_start) return error.BadSfnt;
+        previous_header_end = paint_offset + info.min_size;
+    }
 }
 
 fn colrLayerPaintOffset(data: []const u8, colr: TableRecord, layer_list: ColrLayerList, layer_index: u32) FontError!usize {
@@ -10049,6 +10075,39 @@ test "COLR v1 paint offsets cannot overlap parent metadata" {
 
     const paint_glyph_font = colrOnlyFont(&paint_glyph_overlap);
     try std.testing.expectError(error.BadSfnt, paint_glyph_font.colorPaint(1));
+}
+
+test "COLR v1 LayerList paint headers are ordered and non-overlapping" {
+    var bytes: [56]u8 = .{0} ** 56;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 18, 34); // LayerListOffset.
+
+    writeU32Test(&bytes, 34, 2); // two layer paint offsets.
+    writeU32Test(&bytes, 38, 12); // PaintSolid at LayerList + 12.
+    writeU32Test(&bytes, 42, 17); // Adjacent PaintSolid after the first header.
+    bytes[46] = 2;
+    writeU16Test(&bytes, 47, 0);
+    writeF2Dot14Test(&bytes, 49, 1.0);
+    bytes[51] = 2;
+    writeU16Test(&bytes, 52, 1);
+    writeF2Dot14Test(&bytes, 54, 1.0);
+
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try validateColrGlyphBounds(&bytes, colr, 2);
+
+    var duplicate_header = bytes;
+    writeU32Test(&duplicate_header, 42, 12); // Reuses the first layer's PaintSolid header.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&duplicate_header, colr, 2));
+
+    var partial_overlap = bytes;
+    writeU32Test(&partial_overlap, 42, 14); // Starts inside the first PaintSolid header.
+    partial_overlap[48] = 2; // Keep the aliased byte looking like a valid paint format.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&partial_overlap, colr, 2));
+
+    var decreasing_order = bytes;
+    writeU32Test(&decreasing_order, 38, 17);
+    writeU32Test(&decreasing_order, 42, 12); // Disjoint headers, but not in LayerList order.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&decreasing_order, colr, 2));
 }
 
 test "COLR v1 paint graph rejects cyclic layer references" {

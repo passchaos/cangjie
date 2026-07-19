@@ -4193,6 +4193,7 @@ fn maxpTableWithGlyphs(allocator: std.mem.Allocator, glyph_count: u16) ![]u8 {
     @memset(bytes, 0);
     writeU32(bytes, 0, 0x00010000);
     writeU16(bytes, 4, glyph_count);
+    writeU16(bytes, 14, 2);
     return bytes;
 }
 

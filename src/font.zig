@@ -1725,6 +1725,13 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
             // a usable TrueType face.
             if (version != 0x00010000) return error.BadSfnt;
             try requireTableLength(maxp, 32);
+            const max_zones = try bin.readU16At(data, maxp.offset + 14);
+            // maxZones is one of the few maxp v1 maxima with a fixed semantic
+            // range: TrueType programs may use either the glyph zone alone or
+            // the glyph plus twilight zone. Rejecting other values during face
+            // load keeps malformed hinting metadata from being mistaken for an
+            // unbounded interpreter resource count.
+            if (max_zones != 1 and max_zones != 2) return error.BadSfnt;
         },
         .opentype_cff => {
             // CFF-backed OpenType fonts use maxp version 0.5, whose contract is
@@ -8319,6 +8326,31 @@ test "maxp table version and length must match the outline format" {
         defer allocator.free(bytes);
         const maxp_offset = try sfntTableOffset(bytes, "maxp");
         writeU32Test(bytes, maxp_offset, 0x00010000);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
+test "TrueType maxp maxZones is validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const maxp_offset = try sfntTableOffset(bytes, "maxp");
+        writeU16Test(bytes, maxp_offset + 14, 1);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    inline for (.{ 0, 3 }) |bad_max_zones| {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const maxp_offset = try sfntTableOffset(bytes, "maxp");
+        // OpenType restricts maxZones to the glyph zone alone (1) or glyph
+        // plus twilight zone (2). Values outside that set are malformed, not
+        // larger production-font resource requests.
+        writeU16Test(bytes, maxp_offset + 14, bad_max_zones);
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 }

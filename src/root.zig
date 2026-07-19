@@ -1085,7 +1085,7 @@ test "reads variable font axis metadata from fvar" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.25), try font.mapVariationCoordinate(0, axes[0].normalize(650.0)), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.625), try font.mapVariationCoordinate(0, axes[0].normalize(775.0)), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), try font.mapVariationCoordinate(1, axes[1].normalize(200.0)), 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), try font.mapVariationCoordinate(99, 0.5), 0.001);
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(99, 0.5));
     const coords = [_]VariationCoordinate{
         .{ .tag = .{ 'w', 'd', 't', 'h' }, .value = 200.0 },
         .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 650.0 },

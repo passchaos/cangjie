@@ -897,6 +897,11 @@ pub const Font = struct {
         const cpal = self.cpal orelse return null;
         if (cpal.length < 12) return error.BadSfnt;
         const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
+        // CPAL v1 label arrays borrow name IDs from the same caller-owned SFNT
+        // bytes as the color records. Revalidate those cross-table references
+        // for lazy palette reads too, so a post-parse mutation cannot leave UI
+        // palette metadata dangling while color lookup still appears valid.
+        try validateCpalNameReferences(self.data, cpal, self.name);
         const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
         const color_records_offset: usize = @intCast(try bin.readU32At(self.data, cpal.offset + 8));
 
@@ -10378,6 +10383,48 @@ test "CPAL v1 labels must resolve through the name table" {
     try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&missing_entry_label, cpal, name));
 
     try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&bytes, cpal, null));
+}
+
+test "CPAL palette lookup revalidates borrowed label name IDs" {
+    var bytes: [54]u8 = .{0} ** 54;
+    writeU16Test(&bytes, 0, 1); // CPAL version 1 includes optional label arrays.
+    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
+    writeU16Test(&bytes, 4, 1); // numPalettes.
+    writeU16Test(&bytes, 6, 1); // numColorRecords.
+    writeU32Test(&bytes, 8, 30); // ColorRecordsArray follows both label arrays.
+    writeU16Test(&bytes, 12, 0); // First color index for palette 0.
+    writeU32Test(&bytes, 14, 0); // no palette type array.
+    writeU32Test(&bytes, 18, 26); // one palette label NameID.
+    writeU32Test(&bytes, 22, 28); // one palette-entry label NameID.
+    writeU16Test(&bytes, 26, 256);
+    writeU16Test(&bytes, 28, 0xffff);
+    bytes[30] = 10;
+    bytes[31] = 20;
+    bytes[32] = 30;
+    bytes[33] = 40;
+
+    const name_offset = 34;
+    writeU16Test(&bytes, name_offset + 0, 0);
+    writeU16Test(&bytes, name_offset + 2, 1);
+    writeU16Test(&bytes, name_offset + 4, 18);
+    writeUtf16NameRecordTest(&bytes, name_offset + 6, 256, 2, 0);
+    bytes[name_offset + 19] = 'P';
+
+    var font = cpalOnlyFont(&bytes);
+    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = name_offset };
+    font.name = .{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = name_offset, .length = bytes.len - name_offset };
+
+    const color = (try font.paletteColor(0, 0)).?;
+    try std.testing.expectEqual(@as(u8, 30), color.red);
+    try std.testing.expectEqual(@as(u8, 20), color.green);
+    try std.testing.expectEqual(@as(u8, 10), color.blue);
+    try std.testing.expectEqual(@as(u8, 40), color.alpha);
+
+    // Font deliberately borrows caller-owned SFNT bytes. A mutation that makes
+    // CPAL v1 labels reference a missing name ID must be observed by the lazy
+    // color API rather than allowing color reads to outlive invalid metadata.
+    writeU16Test(&bytes, 26, 257);
+    try std.testing.expectError(error.InvalidName, font.paletteColor(0, 0));
 }
 
 test "CPAL v1 palette types reject reserved bits" {

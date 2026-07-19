@@ -230,7 +230,8 @@ pub const Font = struct {
         const range_shift = try r.readU16();
         try validateSfntSearchParameters(num_tables, search_range, entry_selector, range_shift);
         const directory_end = try sfntDirectoryEnd(data, start, num_tables);
-        const reserved_prefix_end = if (try parseTtcHeader(data)) |header| header.header_length else 0;
+        const ttc_header = try parseTtcHeader(data);
+        const reserved_prefix_end = if (ttc_header) |header| header.header_length else 0;
 
         // Table records are kept after parsing because nearly every public
         // method lazily consults optional tables such as GSUB, GPOS, COLR, or
@@ -250,6 +251,7 @@ pub const Font = struct {
         }
         try validateSfntTableDirectory(records);
         try validateSfntTableRanges(records, reserved_prefix_end, start, directory_end);
+        if (ttc_header) |header| try validateSfntTablesDoNotOverlapTtcDsig(records, header);
 
         const head = findTable(records, "head") orelse return error.MissingTable;
         const hhea = findTable(records, "hhea") orelse return error.MissingTable;
@@ -1790,6 +1792,17 @@ fn validateSfntTableRanges(records: []const TableRecord, reserved_prefix_end: us
     }
 }
 
+fn validateSfntTablesDoNotOverlapTtcDsig(records: []const TableRecord, header: TtcHeader) FontError!void {
+    const dsig = header.dsig_range orelse return;
+    for (records) |record| {
+        if (record.length == 0) continue;
+        // The TTC DSIG payload is collection metadata outside every face's
+        // table map.  Allowing an SFNT table to borrow those bytes would make
+        // Cangjie's lazy table APIs observe signature data as font payload.
+        if (rangesOverlap(record.offset, record.offset + record.length, dsig.start, dsig.end)) return error.BadSfnt;
+    }
+}
+
 fn rangesOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) bool {
     return a_start < b_end and b_start < a_end;
 }
@@ -2478,6 +2491,12 @@ fn compoundGlyphPointCount(adjacency: []const CompoundGlyphLinks, point_counts: 
 const TtcHeader = struct {
     face_count: usize,
     header_length: usize,
+    dsig_range: ?TtcDsigRange = null,
+};
+
+const TtcDsigRange = struct {
+    start: usize,
+    end: usize,
 };
 
 fn parseTtcHeader(data: []const u8) FontError!?TtcHeader {
@@ -2497,6 +2516,7 @@ fn parseTtcHeader(data: []const u8) FontError!?TtcHeader {
     // Treat the complete header as reserved so a malformed offset cannot make
     // the SFNT parser reinterpret collection metadata as an embedded font.
     var header_length = 12 + face_count * 4;
+    var dsig_range: ?TtcDsigRange = null;
     if (major == 2) {
         if (header_length > data.len - 12) return error.BadSfnt;
         const dsig_tag = try bin.readU32At(data, header_length);
@@ -2517,12 +2537,14 @@ fn parseTtcHeader(data: []const u8) FontError!?TtcHeader {
             const length: usize = @intCast(dsig_length);
             if (dsig_start < header_length) return error.BadSfnt;
             if (dsig_start > data.len or length > data.len - dsig_start) return error.BadSfnt;
+            dsig_range = .{ .start = dsig_start, .end = dsig_start + length };
         }
     }
 
     return .{
         .face_count = face_count,
         .header_length = header_length,
+        .dsig_range = dsig_range,
     };
 }
 
@@ -2532,6 +2554,13 @@ fn sfntOffset(data: []const u8, face_index: usize) FontError!usize {
     const offset = try bin.readU32At(data, 12 + face_index * 4);
     if (offset < header.header_length) return error.BadSfnt;
     if (offset > data.len - 12) return error.BadSfnt;
+    if (header.dsig_range) |dsig| {
+        const sfnt_header_end = offset + 12;
+        // TTC v2 DSIG is a collection-level table, not an SFNT face.  Reject a
+        // face offset that lands inside the signature payload before the SFNT
+        // parser can reinterpret a signed blob as a plausible offset table.
+        if (rangesOverlap(offset, sfnt_header_end, dsig.start, dsig.end)) return error.BadSfnt;
+    }
     return offset;
 }
 
@@ -11475,6 +11504,37 @@ test "TTC v2 DSIG descriptor validates range and null consistency" {
     try std.testing.expectEqual(@as(usize, 1), try Font.faceCount(&valid_dsig));
 }
 
+test "TTC v2 DSIG payload cannot alias faces or SFNT tables" {
+    const allocator = std.testing.allocator;
+
+    {
+        const bytes = try buildMinimalTtcV2WithDsigTest(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        const bytes = try buildMinimalTtcV2WithDsigTest(allocator);
+        defer allocator.free(bytes);
+        const dsig_offset = try bin.readU32At(bytes, 24);
+        writeU32Test(bytes, 12, dsig_offset); // Face offset points into the collection DSIG payload.
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try buildMinimalTtcV2WithDsigTest(allocator);
+        defer allocator.free(bytes);
+        const dsig_offset = try bin.readU32At(bytes, 24);
+        try setSfntTableOffsetAtTest(bytes, 28, "head", dsig_offset);
+        try setSfntTableLengthAtTest(bytes, 28, "head", 4);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
 test "fvar axes and instance arrays stay inside declared table regions" {
     const allocator = std.testing.allocator;
 
@@ -12849,10 +12909,14 @@ fn kernOnlyFont(data: []const u8) Font {
 }
 
 fn setSfntTableLength(bytes: []u8, comptime table_tag: []const u8, length: u32) FontError!void {
+    return setSfntTableLengthAtTest(bytes, 0, table_tag, length);
+}
+
+fn setSfntTableLengthAtTest(bytes: []u8, sfnt_offset: usize, comptime table_tag: []const u8, length: u32) FontError!void {
     if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
-    const table_count = try bin.readU16At(bytes, 4);
+    const table_count = try bin.readU16At(bytes, sfnt_offset + 4);
     for (0..table_count) |index| {
-        const record_offset = 12 + index * 16;
+        const record_offset = sfnt_offset + 12 + index * 16;
         if (record_offset + 16 > bytes.len) return error.BadSfnt;
         if (!std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) continue;
         writeU32Test(bytes, record_offset + 12, length);
@@ -12888,10 +12952,14 @@ fn sfntTableLength(bytes: []const u8, comptime table_tag: []const u8) FontError!
 }
 
 fn setSfntTableOffset(bytes: []u8, comptime table_tag: []const u8, offset: u32) FontError!void {
+    return setSfntTableOffsetAtTest(bytes, 0, table_tag, offset);
+}
+
+fn setSfntTableOffsetAtTest(bytes: []u8, sfnt_offset: usize, comptime table_tag: []const u8, offset: u32) FontError!void {
     if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
-    const table_count = try bin.readU16At(bytes, 4);
+    const table_count = try bin.readU16At(bytes, sfnt_offset + 4);
     for (0..table_count) |index| {
-        const record_offset = 12 + index * 16;
+        const record_offset = sfnt_offset + 12 + index * 16;
         if (record_offset + 16 > bytes.len) return error.BadSfnt;
         if (!std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) continue;
         writeU32Test(bytes, record_offset + 8, offset);
@@ -12926,6 +12994,35 @@ fn nameRecordOffsetForId(bytes: []const u8, name_offset: usize, name_id: u16) Fo
 
 fn nameTableRecord(length: usize) TableRecord {
     return .{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = 0, .length = length };
+}
+
+fn buildMinimalTtcV2WithDsigTest(allocator: std.mem.Allocator) ![]u8 {
+    const test_font = @import("test_font.zig");
+
+    const ttf = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(ttf);
+
+    const face_offset: usize = 28;
+    const dsig_offset = face_offset + ttf.len;
+    var bytes = try allocator.alloc(u8, dsig_offset + 4);
+    @memset(bytes, 0);
+    writeTagTest(bytes, 0, "ttcf");
+    writeU32Test(bytes, 4, 0x00020000);
+    writeU32Test(bytes, 8, 1);
+    writeU32Test(bytes, 12, face_offset);
+    writeTagTest(bytes, 16, "DSIG");
+    writeU32Test(bytes, 20, 4);
+    writeU32Test(bytes, 24, @intCast(dsig_offset));
+    @memcpy(bytes[face_offset..][0..ttf.len], ttf);
+    writeTagTest(bytes, dsig_offset, "SIG!");
+
+    const table_count = try bin.readU16At(bytes, face_offset + 4);
+    for (0..table_count) |index| {
+        const record_offset = face_offset + 12 + index * 16 + 8;
+        const table_offset = try bin.readU32At(bytes, record_offset);
+        writeU32Test(bytes, record_offset, table_offset + @as(u32, @intCast(face_offset)));
+    }
+    return bytes;
 }
 
 fn writeNameRecordTest(bytes: []u8, offset: usize, platform_id: u16, encoding_id: u16, language_id: u16, name_id: u16, length: u16, storage_offset: u16) void {

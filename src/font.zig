@@ -5492,6 +5492,8 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
 
 fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
     if (colr.length < 34) return error.BadSfnt;
+    try validateColrV1ClipList(data, colr, glyph_count);
+
     const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
     if (base_glyph_list_offset != 0) {
         if (base_glyph_list_offset > colr.length or 4 > colr.length - base_glyph_list_offset) return error.BadSfnt;
@@ -5532,6 +5534,62 @@ fn validateColrBaseGlyphOrder(base_glyph: u16, previous_base_glyph: *?u16) FontE
         if (base_glyph <= previous) return error.BadSfnt;
     }
     previous_base_glyph.* = base_glyph;
+}
+
+fn validateColrV1ClipList(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
+    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
+    if (clip_list_offset == 0) return;
+
+    // ClipList is one of COLR v1's optional offset subtables. Its offsets are
+    // relative to the ClipList table, not to COLR, and must not alias the
+    // ClipRecord array. Validate it while parsing so later renderers can trust
+    // clip metadata rather than reinterpreting records as ClipBox payload.
+    if (clip_list_offset < 34 or clip_list_offset > colr.length or 5 > colr.length - clip_list_offset) return error.BadSfnt;
+    const clip_list_start = colr.offset + clip_list_offset;
+    const format = data[clip_list_start];
+    if (format != 1) return error.BadSfnt;
+
+    const clip_count: usize = @intCast(try bin.readU32At(data, clip_list_start + 1));
+    const records_start = clip_list_start + 5;
+    if (clip_count > (colr.offset + colr.length - records_start) / 7) return error.BadSfnt;
+    const clip_data_start = 5 + clip_count * 7;
+
+    var previous_end_glyph: ?u16 = null;
+    for (0..clip_count) |index| {
+        const record = records_start + index * 7;
+        const start_glyph = try bin.readU16At(data, record);
+        const end_glyph = try bin.readU16At(data, record + 2);
+        if (start_glyph > end_glyph) return error.BadSfnt;
+        try validateGlyphIdInMaxp(start_glyph, glyph_count);
+        try validateGlyphIdInMaxp(end_glyph, glyph_count);
+        if (previous_end_glyph) |previous| {
+            if (start_glyph <= previous) return error.BadSfnt;
+        }
+        previous_end_glyph = end_glyph;
+
+        const clip_box_offset: usize = @intCast(try readU24At(data, record + 4));
+        if (clip_box_offset < clip_data_start) return error.BadSfnt;
+        if (clip_box_offset > colr.length - clip_list_offset) return error.BadSfnt;
+        try validateColrV1ClipBox(data, colr, clip_list_start + clip_box_offset);
+    }
+}
+
+fn validateColrV1ClipBox(data: []const u8, colr: TableRecord, offset: usize) FontError!void {
+    const colr_end = colr.offset + colr.length;
+    if (offset >= colr_end) return error.BadSfnt;
+
+    const min_size: usize = switch (data[offset]) {
+        1 => 9,
+        2 => 13,
+        else => return error.BadSfnt,
+    };
+    if (min_size > colr_end - offset) return error.BadSfnt;
+
+    const x_min = try bin.readI16At(data, offset + 1);
+    const y_min = try bin.readI16At(data, offset + 3);
+    const x_max = try bin.readI16At(data, offset + 5);
+    const y_max = try bin.readI16At(data, offset + 7);
+    if (x_min > x_max or y_min > y_max) return error.BadSfnt;
 }
 
 fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {

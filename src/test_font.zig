@@ -56,6 +56,10 @@ pub fn buildColorV1LayersTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1LayersTtfTables(allocator));
 }
 
+pub fn buildColorV1InvalidClipListTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1InvalidClipListTtfTables(allocator));
+}
+
 pub fn buildCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cbdtPngTtfTables(allocator));
 }
@@ -557,6 +561,22 @@ fn colorV1LayersTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "COLR", .data = try colrV1LayersTable(allocator) };
+    tables[1] = .{ .tag = "CPAL", .data = try cpalTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn colorV1InvalidClipListTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "COLR", .data = try colrV1InvalidClipListTable(allocator) };
     tables[1] = .{ .tag = "CPAL", .data = try cpalTable(allocator) };
     tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
@@ -2102,6 +2122,30 @@ fn colrV1LayersTable(allocator: std.mem.Allocator) ![]u8 {
     bytes[79] = 2;
     writeU16(bytes, 80, 1);
     writeF2Dot14(bytes, 82, 1.0);
+    return bytes;
+}
+
+fn colrV1InvalidClipListTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 61);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34);
+    writeU32(bytes, 22, 49);
+    writeU32(bytes, 34, 1);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 10);
+    bytes[44] = 2;
+    writeU16(bytes, 45, 0);
+    writeF2Dot14(bytes, 47, 0.5);
+
+    const clip_list = 49;
+    bytes[clip_list] = 1;
+    writeU32(bytes, clip_list + 1, 1);
+    writeU16(bytes, clip_list + 5, 1);
+    writeU16(bytes, clip_list + 7, 1);
+    // Offset zero aliases the ClipList format/count header instead of pointing
+    // past the ClipRecord array to a ClipBox table.
+    writeU24(bytes, clip_list + 9, 0);
     return bytes;
 }
 

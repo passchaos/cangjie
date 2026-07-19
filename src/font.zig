@@ -927,6 +927,11 @@ pub const Font = struct {
         var best_distance: f32 = std.math.inf(f32);
 
         if (self.sbix) |sbix| {
+            // Bitmap tables are borrowed from the caller-owned font bytes.
+            // Re-run the full parse-time sbix contract at the public API
+            // boundary so post-parse byte mutations cannot hide a corrupt
+            // unselected glyph or strike behind a valid requested size.
+            try validateSbixTable(self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             for (0..strike_count) |strike_index| {
                 const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
@@ -936,6 +941,11 @@ pub const Font = struct {
 
         if (self.cblc != null and self.cbdt != null) {
             const cblc = self.cblc.?;
+            // CBLC strike metadata is meaningful only with the CBDT payloads it
+            // indexes. Revalidating both tables here keeps this metadata-only
+            // query from returning a ppem for a borrowed bitmap table whose
+            // referenced image bytes no longer satisfy the parser invariants.
+            try validateCblcCbdtTables(self.data, cblc, self.cbdt.?, self.glyph_count);
             const strike_count = try cblcStrikeCount(self.data, cblc);
             for (0..strike_count) |strike_index| {
                 const strike = try cblcStrike(self.data, cblc, self.glyph_count, strike_index);
@@ -950,6 +960,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
 
         if (self.sbix) |sbix| {
+            try validateSbixTable(self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             var best: ?BitmapGlyphPng = null;
             var best_distance: f32 = std.math.inf(f32);
@@ -968,6 +979,7 @@ pub const Font = struct {
         }
 
         if (self.cblc != null and self.cbdt != null) {
+            try validateCblcCbdtTables(self.data, self.cblc.?, self.cbdt.?, self.glyph_count);
             return try cblcGlyphPng(self.data, self.cblc.?, self.cbdt.?, self.glyph_count, glyph_id, size_px);
         }
         return null;
@@ -7626,6 +7638,29 @@ test "sbix parse validation checks every strike glyph offset" {
     try validateSbixTable(&bytes, sbix, 2);
 }
 
+test "sbix public bitmap APIs revalidate borrowed strike offsets" {
+    var bytes: [40]u8 = .{0} ** 40;
+    writeU16Test(&bytes, 0, 1); // sbix version
+    writeU32Test(&bytes, 4, 1); // one strike
+    writeU32Test(&bytes, 8, 12); // strike data starts after the strike-offset array
+    writeU16Test(&bytes, 12, 16); // ppem
+    writeU16Test(&bytes, 14, 72); // ppi
+    writeU32Test(&bytes, 16, 16); // glyph 0 start, relative to the strike
+    writeU32Test(&bytes, 20, 16); // glyph 1 start; both glyphs are empty
+    writeU32Test(&bytes, 24, 16); // terminal boundary
+
+    const font = sbixOnlyFont(&bytes);
+    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
+    try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try font.bitmapGlyphPng(0, 16));
+
+    // Mutate an unrequested glyph boundary after constructing the borrowed
+    // Font. Both public APIs must reject the whole sbix strike rather than
+    // returning metadata or glyph 0 results from a now-corrupt table.
+    writeU32Test(&bytes, 24, 12);
+    try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
+    try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(0, 16));
+}
+
 test "CBLC bitmap index subtables reject decreasing image offsets" {
     const strike = CblcStrike{
         .ppem = 16,
@@ -7819,6 +7854,24 @@ test "CBLC CBDT parse validation checks every referenced bitmap payload" {
     writeU32Test(bytes, cbdt_offset + 9, original_data_len);
     writeU32Test(bytes, cblc_offset + 68, 0xffff_ff00); // indexSubTable.imageDataOffset
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "CBLC public bitmap APIs revalidate borrowed CBDT payloads" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCbdtPngTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
+    try std.testing.expect((try font.bitmapGlyphPng(1, 16)) != null);
+
+    const cbdt_offset = try sfntTableOffset(bytes, "CBDT");
+    writeU32Test(bytes, cbdt_offset + 9, 0xffff_ffff);
+    try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
+    try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(1, 16));
 }
 
 test "CBDT non-PNG payloads validate metrics and compound glyph references" {
@@ -12358,6 +12411,49 @@ fn svgOnlyFont(data: []const u8) Font {
         .cpal = null,
         .svg = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = data.len },
         .sbix = null,
+        .cblc = null,
+        .cbdt = null,
+        .glyf = null,
+        .cff = null,
+        .cmap_subtables = empty_cmaps,
+        .owned_tables = empty_tables,
+        .allocator = std.testing.allocator,
+    };
+}
+
+fn sbixOnlyFont(data: []const u8) Font {
+    const empty_tables: []TableRecord = &.{};
+    const empty_cmaps: []CmapSubtable = &.{};
+    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    return .{
+        .data = data,
+        .format = .truetype,
+        .units_per_em = 1000,
+        .index_to_loc_format = 0,
+        .glyph_count = 2,
+        .ascender = 0,
+        .descender = 0,
+        .line_gap = 0,
+        .number_of_h_metrics = 2,
+        .head = dummy_table,
+        .hhea = dummy_table,
+        .maxp = dummy_table,
+        .hmtx = dummy_table,
+        .loca = null,
+        .cmap = dummy_table,
+        .kern = null,
+        .os2 = null,
+        .gdef = null,
+        .gpos = null,
+        .gsub = null,
+        .name = null,
+        .stat = null,
+        .fvar = null,
+        .avar = null,
+        .colr = null,
+        .cpal = null,
+        .svg = null,
+        .sbix = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = data.len },
         .cblc = null,
         .cbdt = null,
         .glyf = null,

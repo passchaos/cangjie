@@ -705,19 +705,7 @@ pub const Font = struct {
 
     pub fn styleAttributes(self: *const Font) FontError!StyleAttributes {
         const os2 = self.os2 orelse return .{};
-        if (os2.length < 2) return error.BadSfnt;
-        const version = try bin.readU16At(self.data, os2.offset);
-        const minimum_length = try minimumOs2TableLength(version);
-        if (os2.length < minimum_length) return error.BadSfnt;
-        const weight = try bin.readU16At(self.data, os2.offset + 4);
-        const width = try bin.readU16At(self.data, os2.offset + 6);
-        const fs_selection = try bin.readU16At(self.data, os2.offset + 62);
-        return .{
-            .weight = weight,
-            .width = width,
-            .italic = (fs_selection & 0x0001) != 0,
-            .bold = (fs_selection & 0x0020) != 0,
-        };
+        return try readOs2StyleAttributes(self.data, os2);
     }
 
     pub fn variationAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationAxis {
@@ -1784,6 +1772,10 @@ fn minimumOs2TableLength(version: u16) FontError!usize {
 }
 
 fn validateOs2Table(data: []const u8, os2: TableRecord) FontError!void {
+    _ = try readOs2StyleAttributes(data, os2);
+}
+
+fn readOs2StyleAttributes(data: []const u8, os2: TableRecord) FontError!StyleAttributes {
     try requireTableLength(os2, 2);
     const version = try bin.readU16At(data, os2.offset);
     try requireTableLength(os2, try minimumOs2TableLength(version));
@@ -1793,8 +1785,9 @@ fn validateOs2Table(data: []const u8, os2: TableRecord) FontError!void {
     const fs_selection = try bin.readU16At(data, os2.offset + 62);
 
     // These fields are used by font databases and style matching, so validate
-    // their OS/2-defined ranges when the face is parsed rather than accepting a
-    // font whose advertised style cannot be represented consistently later.
+    // their OS/2-defined ranges both at parse time and at lazy public API read
+    // time. Font objects borrow caller-owned bytes, so this shared helper keeps
+    // post-parse byte changes from surfacing impossible style metadata.
     if (weight < 1 or weight > 1000) return error.BadSfnt;
     if (width < 1 or width > 9) return error.BadSfnt;
 
@@ -1804,6 +1797,13 @@ fn validateOs2Table(data: []const u8, os2: TableRecord) FontError!void {
     const regular = (fs_selection & 0x0040) != 0;
     const named_style_bits = fs_selection & (0x0001 | 0x0020 | 0x0200);
     if (regular and named_style_bits != 0) return error.BadSfnt;
+
+    return .{
+        .weight = weight,
+        .width = width,
+        .italic = (fs_selection & 0x0001) != 0,
+        .bold = (fs_selection & 0x0020) != 0,
+    };
 }
 
 fn validateHorizontalMetricsTables(data: []const u8, hhea: TableRecord, hmtx: TableRecord, glyph_count: u16) FontError!u16 {
@@ -11978,6 +11978,29 @@ test "OS/2 style attributes respect versioned table lengths" {
     writeU16Test(&truncated_v5, 6, 5);
     const short_v5 = os2OnlyFont(&truncated_v5, 96);
     try std.testing.expectError(error.BadSfnt, short_v5.styleAttributes());
+}
+
+test "OS/2 style attributes revalidate borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Regular", "Metric Sans Regular", 400, 5, false, false);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const initial = try font.styleAttributes();
+    try std.testing.expectEqual(@as(u16, 400), initial.weight);
+    try std.testing.expectEqual(@as(u16, 5), initial.width);
+
+    const os2_offset = try sfntTableOffset(bytes, "OS/2");
+    writeU16Test(bytes, os2_offset + 6, 10);
+    try std.testing.expectError(error.BadSfnt, font.styleAttributes());
+
+    writeU16Test(bytes, os2_offset + 6, 5);
+    writeU16Test(bytes, os2_offset + 62, 0x0060);
+    try std.testing.expectError(error.BadSfnt, font.styleAttributes());
 }
 
 test "OS/2 table is validated at parse time" {

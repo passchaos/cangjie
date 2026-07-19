@@ -302,6 +302,9 @@ pub const Font = struct {
         const ascender = try bin.readI16At(data, hhea.offset + 4);
         const descender = try bin.readI16At(data, hhea.offset + 6);
         const line_gap = try bin.readI16At(data, hhea.offset + 8);
+        if (format == .opentype_cff) {
+            try validateCffGlyphCount(data, cff.?, glyph_count);
+        }
         if (format == .truetype) {
             const max_component_elements = try bin.readU16At(data, maxp.offset + 28);
             const max_component_depth = try bin.readU16At(data, maxp.offset + 30);
@@ -1730,6 +1733,15 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
             if (version != 0x00005000) return error.BadSfnt;
         },
     }
+}
+
+fn validateCffGlyphCount(data: []const u8, cff: TableRecord, glyph_count: u16) FontError!void {
+    // For CFF-backed OpenType faces, maxp.numGlyphs must describe the
+    // CharStrings INDEX exactly. Validate the relationship during parse so
+    // callers do not accept a face whose cmap or shaping tables can name
+    // glyph ids that the CFF outline data can never resolve.
+    const info = try cff_mod.parseInfo(data[cff.offset .. cff.offset + cff.length]);
+    if (info.charstrings_count != glyph_count) return error.BadSfnt;
 }
 
 fn minimumOs2TableLength(version: u16) FontError!usize {
@@ -8142,6 +8154,29 @@ test "maxp table version and length must match the outline format" {
         defer allocator.free(bytes);
         const maxp_offset = try sfntTableOffset(bytes, "maxp");
         writeU32Test(bytes, maxp_offset, 0x00010000);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
+test "CFF CharStrings INDEX count must match maxp glyph count" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    inline for (.{
+        @as(u16, 1),
+        @as(u16, 3),
+    }) |glyph_count| {
+        const bytes = try test_font.buildMinimalOtf(allocator);
+        defer allocator.free(bytes);
+
+        const hhea_offset = try sfntTableOffset(bytes, "hhea");
+        const maxp_offset = try sfntTableOffset(bytes, "maxp");
+        // Keep hmtx structurally valid for both altered glyph counts so this
+        // regression reaches the CFF/maxp cross-table check rather than failing
+        // earlier in generic horizontal-metrics validation.
+        writeU16Test(bytes, hhea_offset + 34, 1);
+        writeU16Test(bytes, maxp_offset + 4, glyph_count);
+
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 }

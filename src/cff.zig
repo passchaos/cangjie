@@ -16,6 +16,7 @@ pub const CffError = error{
 
 pub const Info = struct {
     charstrings_offset: usize,
+    charstrings_count: u16,
     global_subrs_offset: usize,
     private_offset: usize = 0,
     private_size: usize = 0,
@@ -39,6 +40,8 @@ pub fn parseInfo(data: []const u8) CffError!Info {
     info.global_subrs_offset = string_index.end;
     _ = try readIndex(data, info.global_subrs_offset);
     if (info.charstrings_offset >= data.len) return error.BadCff;
+    const charstrings = try readIndex(data, info.charstrings_offset);
+    info.charstrings_count = charstrings.count;
     if (info.private_size > 0) {
         if (info.private_offset > data.len or info.private_size > data.len - info.private_offset) return error.BadCff;
         try parsePrivateDict(data[info.private_offset .. info.private_offset + info.private_size], &info);
@@ -135,7 +138,7 @@ fn subrBias(count: u16) i32 {
 }
 
 fn parseTopDict(dict: []const u8) CffError!Info {
-    var info = Info{ .charstrings_offset = 0, .global_subrs_offset = 0 };
+    var info = Info{ .charstrings_offset = 0, .charstrings_count = 0, .global_subrs_offset = 0 };
     var parser = DictParser.init(dict);
     while (try parser.next()) |entry| {
         switch (entry.operator) {

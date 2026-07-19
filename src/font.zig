@@ -748,6 +748,8 @@ pub const Font = struct {
         if (self.fvar) |fvar| {
             const fvar_info = try readFvarInfo(self.data, fvar);
             if (axis_count != fvar_info.axis_count) return error.BadSfnt;
+        } else if (axis_count != 0) {
+            return error.BadSfnt;
         }
 
         var offset: usize = 8;
@@ -758,6 +760,7 @@ pub const Font = struct {
             offset += 2;
             const pair_bytes = @as(usize, pair_count) * 4;
             if (pair_bytes > table.len - offset) return error.BadSfnt;
+            try validateAvarSegmentMap(table[offset .. offset + pair_bytes]);
             if (index == axis_index) {
                 mapped = try mapAvarSegment(table[offset .. offset + pair_bytes], normalized);
             }
@@ -11251,6 +11254,52 @@ test "avar validates every declared segment map before returning a coordinate" {
     const font = avarOnlyFont(&bytes);
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 0.0));
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(99, 0.5));
+}
+
+test "avar public mapping revalidates axis indexes and segment anchors" {
+    var bytes: [64]u8 = .{0} ** 64;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
+    writeU16Test(&bytes, 8, 2);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeFvarAxisTest(&bytes, 36, "wdth", 50.0, 100.0, 200.0, 257);
+
+    const avar_offset = 56;
+    writeU16Test(&bytes, avar_offset + 0, 1);
+    writeU16Test(&bytes, avar_offset + 2, 0);
+    writeU16Test(&bytes, avar_offset + 4, 0);
+    writeU16Test(&bytes, avar_offset + 6, 0);
+
+    var no_fvar_axis_maps = bytes;
+    writeU16Test(&no_fvar_axis_maps, avar_offset + 6, 1);
+    const no_fvar = avarOnlyFont(no_fvar_axis_maps[avar_offset..]);
+    try std.testing.expectError(error.BadSfnt, no_fvar.mapVariationCoordinate(0, 0.25));
+
+    var malformed_map: [92]u8 = .{0} ** 92;
+    @memcpy(malformed_map[0..bytes.len], &bytes);
+    writeU16Test(&malformed_map, avar_offset + 6, 2);
+    writeU16Test(&malformed_map, avar_offset + 8, 3);
+    writeF2Dot14Test(&malformed_map, avar_offset + 10, -1.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 12, -1.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 14, 0.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 16, 0.25); // Default coordinate must map to itself.
+    writeF2Dot14Test(&malformed_map, avar_offset + 18, 1.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 20, 1.0);
+    writeU16Test(&malformed_map, avar_offset + 22, 3);
+    writeF2Dot14Test(&malformed_map, avar_offset + 24, -1.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 26, -1.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 28, 0.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 30, 0.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 32, 1.0);
+    writeF2Dot14Test(&malformed_map, avar_offset + 34, 1.0);
+
+    const font = fvarAvarOnlyFont(&malformed_map, avar_offset);
+    // `mapVariationCoordinate` reparses borrowed avar bytes on every call so
+    // mutations after Font.parse cannot bypass the parse-time segment-map
+    // contract, even when asking for a different axis.
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(1, 0.25));
 }
 
 test "avar axis count must match fvar axis count when both tables exist" {

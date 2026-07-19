@@ -6143,6 +6143,9 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
     // COLR v1 graphs from being accepted merely because the current renderer
     // would later report the same record as unsupported.
     if (info.min_size > colr_end - offset) return error.BadSfnt;
+    if (format == 2 or format == 3) {
+        try validateColrAlpha(try bin.readI16At(data, offset + 3));
+    }
     if (format == 32) {
         // CompositeMode is an enum, not an open-ended flag field. Rejecting
         // reserved values while walking PaintComposite keeps later renderers
@@ -6151,6 +6154,14 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
         if (composite_mode > max_colr_composite_mode) return error.BadSfnt;
     }
     return info;
+}
+
+fn validateColrAlpha(raw_alpha: i16) FontError!void {
+    // PaintSolid/PaintVarSolid alpha is encoded as F2DOT14 but semantically is
+    // opacity, whose valid range is closed [0, 1]. Reject the extra numeric
+    // range that F2DOT14 can represent so malformed fonts cannot smuggle
+    // negative or over-opaque colors into later blending code.
+    if (raw_alpha < 0 or raw_alpha > 0x4000) return error.BadSfnt;
 }
 
 const max_colr_composite_mode = 27;
@@ -8839,6 +8850,27 @@ test "COLR v1 PaintComposite rejects reserved composite modes" {
 
     bytes[48] = 27; // Valid: plus-lighter is the highest assigned CompositeMode.
     try validateColrGlyphBounds(&bytes, colr, 2);
+}
+
+test "COLR v1 PaintSolid alpha is validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildColorV1Ttf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        writeI16Test(bytes, colr_offset + 47, -1); // Negative opacity is outside PaintSolid's semantic range.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildColorV1Ttf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        writeI16Test(bytes, colr_offset + 47, 0x4001); // Alpha may not exceed 1.0.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "COLR v1 paint offsets cannot overlap parent metadata" {

@@ -925,6 +925,11 @@ pub const Font = struct {
         if (colr.length < 14) return error.BadSfnt;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 0) return try allocator.alloc(ColorLayer, 0);
+        // COLR data is borrowed from the caller. Re-run the parse-time glyph
+        // reference walk for lazy v0 layer reads so a post-parse byte mutation
+        // cannot turn a valid LayerRecord into an out-of-range glyph id that
+        // rendering code would then trust.
+        try validateColrGlyphBounds(self.data, colr, self.glyph_count);
         const base_count = try bin.readU16At(self.data, colr.offset + 2);
         const base_offset = try bin.readU32At(self.data, colr.offset + 4);
         const layer_offset = try bin.readU32At(self.data, colr.offset + 8);
@@ -986,6 +991,11 @@ pub const Font = struct {
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 1) return null;
+        // Public COLR v1 reads expose glyph IDs from BaseGlyphPaintRecord,
+        // PaintGlyph, PaintColrGlyph, and LayerList graphs. Validate the whole
+        // graph against maxp again because the Font only caches a borrowed
+        // table record, not an immutable copy of the validated COLR bytes.
+        try validateColrGlyphBounds(self.data, colr, self.glyph_count);
         const base_glyph_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 14));
         if (base_glyph_list_offset == 0) return null;
         try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
@@ -1027,6 +1037,10 @@ pub const Font = struct {
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 1) return null;
+        // LayerList entries are another lazy entry point into the same borrowed
+        // COLR v1 paint graph. Keep its glyph-id contract in sync with
+        // Font.parse instead of validating only the layer index being read.
+        try validateColrGlyphBounds(self.data, colr, self.glyph_count);
         const layer_list = (try colrLayerList(self.data, colr)) orelse return null;
         if (layer_index >= layer_list.layer_count) return null;
         const paint_start = try colrLayerPaintOffset(self.data, colr, layer_list, layer_index);
@@ -12042,6 +12056,77 @@ test "COLR public APIs reject glyph ids outside maxp count" {
     no_colr_font.colr = null;
     try std.testing.expectError(error.InvalidGlyph, no_colr_font.colorLayers(allocator, 16));
     try std.testing.expectError(error.InvalidGlyph, no_colr_font.colorPaint(16));
+}
+
+test "COLR public APIs revalidate borrowed glyph references" {
+    const allocator = std.testing.allocator;
+
+    var colr_v0_with_cpal: [42]u8 = .{0} ** 42;
+    writeU16Test(&colr_v0_with_cpal, 0, 0); // COLR version 0.
+    writeU16Test(&colr_v0_with_cpal, 2, 1); // one BaseGlyphRecord.
+    writeU32Test(&colr_v0_with_cpal, 4, 14);
+    writeU32Test(&colr_v0_with_cpal, 8, 20);
+    writeU16Test(&colr_v0_with_cpal, 12, 1);
+    writeU16Test(&colr_v0_with_cpal, 14, 1); // base glyph.
+    writeU16Test(&colr_v0_with_cpal, 16, 0);
+    writeU16Test(&colr_v0_with_cpal, 18, 1);
+    writeU16Test(&colr_v0_with_cpal, 20, 1); // layer glyph.
+    writeU16Test(&colr_v0_with_cpal, 22, 0);
+    writeSingleEntryCpalTest(&colr_v0_with_cpal, 24);
+
+    const colr_v0_font = colrCpalOnlyFont(&colr_v0_with_cpal, 24);
+    const layers = try colr_v0_font.colorLayers(allocator, 1);
+    defer allocator.free(layers);
+    try std.testing.expectEqual(@as(usize, 1), layers.len);
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 1), layers[0].glyph_id);
+
+    // The Font caches only the COLR TableRecord; a caller can still mutate the
+    // borrowed layer glyph bytes after construction. The lazy API must reject
+    // that cross-table violation before returning a ColorLayer.
+    writeU16Test(&colr_v0_with_cpal, 20, 16);
+    try std.testing.expectError(error.BadSfnt, colr_v0_font.colorLayers(allocator, 1));
+
+    var colr_v1_with_cpal: [92]u8 = .{0} ** 92;
+    writeU16Test(&colr_v1_with_cpal, 0, 1); // COLR version 1.
+    writeU32Test(&colr_v1_with_cpal, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&colr_v1_with_cpal, 18, 55); // LayerListOffset.
+    writeU32Test(&colr_v1_with_cpal, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&colr_v1_with_cpal, 38, 1); // base glyph.
+    writeU32Test(&colr_v1_with_cpal, 40, 10); // PaintGlyph at byte 44.
+    colr_v1_with_cpal[44] = 10; // PaintGlyph.
+    writeU24Test(&colr_v1_with_cpal, 45, 6); // Child PaintSolid follows PaintGlyph.
+    writeU16Test(&colr_v1_with_cpal, 48, 1); // PaintGlyph glyph id.
+    colr_v1_with_cpal[50] = 2; // PaintSolid.
+    writeU16Test(&colr_v1_with_cpal, 51, 0);
+    writeF2Dot14Test(&colr_v1_with_cpal, 53, 1.0);
+    writeU32Test(&colr_v1_with_cpal, 55, 1); // one LayerList paint.
+    writeU32Test(&colr_v1_with_cpal, 59, 8); // LayerList-relative PaintSolid at byte 63.
+    colr_v1_with_cpal[63] = 2;
+    writeU16Test(&colr_v1_with_cpal, 64, 0);
+    writeF2Dot14Test(&colr_v1_with_cpal, 66, 1.0);
+    writeSingleEntryCpalTest(&colr_v1_with_cpal, 74);
+
+    const colr_v1_font = colrCpalOnlyFont(&colr_v1_with_cpal, 74);
+    const paint = try colr_v1_font.colorPaint(1);
+    try std.testing.expect(paint != null);
+    try std.testing.expect((try colr_v1_font.colorPaintLayer(0)) != null);
+
+    // PaintGlyph carries a glyph ID independently of the selected base glyph.
+    // Mutating it past maxp.numGlyphs must be caught by colorPaint().
+    writeU16Test(&colr_v1_with_cpal, 48, 16);
+    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaint(1));
+    writeU16Test(&colr_v1_with_cpal, 48, 1);
+
+    // LayerList is a separate lazy public entry point into the COLR v1 graph.
+    // Mutating a layer paint to name an invalid glyph must be rejected there
+    // even though the requested layer index itself is in range.
+    colr_v1_with_cpal[63] = 10; // PaintGlyph inside the layer graph.
+    writeU24Test(&colr_v1_with_cpal, 64, 6);
+    writeU16Test(&colr_v1_with_cpal, 67, 16);
+    colr_v1_with_cpal[69] = 2;
+    writeU16Test(&colr_v1_with_cpal, 70, 0);
+    writeF2Dot14Test(&colr_v1_with_cpal, 72, 1.0);
+    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaintLayer(0));
 }
 
 test "COLR v1 gradient ColorLine stops are validated" {

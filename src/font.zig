@@ -8181,6 +8181,35 @@ test "CFF CharStrings INDEX count must match maxp glyph count" {
     }
 }
 
+test "OpenType CFF table rejects malformed CFF header fields at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalOtf(allocator);
+        defer allocator.free(bytes);
+        const cff_offset = try sfntTableOffset(bytes, "CFF ");
+        bytes[cff_offset] = 2;
+        try std.testing.expectError(error.BadCff, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalOtf(allocator);
+        defer allocator.free(bytes);
+        const cff_offset = try sfntTableOffset(bytes, "CFF ");
+        bytes[cff_offset + 2] = 3;
+        try std.testing.expectError(error.BadCff, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalOtf(allocator);
+        defer allocator.free(bytes);
+        const cff_offset = try sfntTableOffset(bytes, "CFF ");
+        bytes[cff_offset + 3] = 0;
+        try std.testing.expectError(error.BadCff, Font.parse(allocator, bytes));
+    }
+}
+
 test "head table invariants are validated at parse time" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

@@ -29,11 +29,17 @@ pub const Info = struct {
 /// to locate CharStrings and subroutine indexes.
 pub fn parseInfo(data: []const u8) CffError!Info {
     if (data.len < 4) return error.BadCff;
+    const major = data[0];
+    const minor = data[1];
     const header_size = data[2];
+    const header_off_size = data[3];
+    if (major != 1 or minor != 0) return error.BadCff;
+    if (header_size < 4) return error.BadCff;
+    if (header_off_size == 0 or header_off_size > 4) return error.BadCff;
     if (header_size > data.len) return error.BadCff;
     const name_index = try readIndex(data, header_size);
     const top_index = try readIndex(data, name_index.end);
-    if (top_index.count == 0) return error.BadCff;
+    if (top_index.count != 1) return error.BadCff;
     const top_dict = try top_index.object(data, 0);
     var info = try parseTopDict(top_dict);
     const string_index = try readIndex(data, top_index.end);
@@ -364,6 +370,42 @@ test "CFF INDEX offsets stay inside declared object data" {
         'e',  's',
     };
     try std.testing.expectError(error.BadCff, readIndex(&borrows_next_structure, 0));
+}
+
+test "CFF header and Top DICT INDEX describe a CFF 1.0 single-font set" {
+    const valid_single_font = [_]u8{
+        0x01, 0x00, 0x04, 0x01, // CFF 1.0 header, hdrSize=4, offSize=1.
+        0x00, 0x01, 0x01, 0x01, 0x01, // Name INDEX: one empty test name.
+        0x00, 0x01, 0x01, 0x01, 0x03, 159, 17, // Top DICT: CharStrings at byte 20.
+        0x00, 0x00, // String INDEX.
+        0x00, 0x00, // Global Subrs INDEX.
+        0x00, 0x01, 0x01, 0x01, 0x02, 0x0e, // CharStrings INDEX: one endchar.
+    };
+    const info = try parseInfo(&valid_single_font);
+    try std.testing.expectEqual(@as(usize, 20), info.charstrings_offset);
+    try std.testing.expectEqual(@as(u16, 1), info.charstrings_count);
+
+    var bad_major = valid_single_font;
+    bad_major[0] = 2;
+    try std.testing.expectError(error.BadCff, parseInfo(&bad_major));
+
+    var short_header = valid_single_font;
+    short_header[2] = 3;
+    try std.testing.expectError(error.BadCff, parseInfo(&short_header));
+
+    var bad_header_off_size = valid_single_font;
+    bad_header_off_size[3] = 0;
+    try std.testing.expectError(error.BadCff, parseInfo(&bad_header_off_size));
+
+    const multi_font_set = [_]u8{
+        0x01, 0x00, 0x04, 0x01,
+        0x00, 0x01, 0x01, 0x01, 0x01,
+        // OpenType embeds only single-font CFF data. A multi-entry Top DICT
+        // INDEX is a valid CFF FontSet shape in isolation, but it cannot be
+        // mapped to one SFNT face without choosing an arbitrary dictionary.
+        0x00, 0x02, 0x01, 0x01, 0x03, 0x05, 159, 17, 159, 17,
+    };
+    try std.testing.expectError(error.BadCff, parseInfo(&multi_font_set));
 }
 
 test "CFF Type2 hvcurveto and vhcurveto keep their implicit last axis" {

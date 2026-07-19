@@ -5474,9 +5474,12 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
     if (@as(usize, base_count) * 6 > colr.length - base_offset) return error.BadSfnt;
     if (@as(usize, layer_count) * 4 > colr.length - layer_offset) return error.BadSfnt;
 
+    var previous_base_glyph: ?u16 = null;
     for (0..base_count) |index| {
         const record = colr.offset + base_offset + index * 6;
-        try validateGlyphIdInMaxp(try bin.readU16At(data, record), glyph_count);
+        const base_glyph = try bin.readU16At(data, record);
+        try validateColrBaseGlyphOrder(base_glyph, &previous_base_glyph);
+        try validateGlyphIdInMaxp(base_glyph, glyph_count);
         const first_layer = try bin.readU16At(data, record + 2);
         const num_layers = try bin.readU16At(data, record + 4);
         if (first_layer > layer_count or num_layers > layer_count - first_layer) return error.BadSfnt;
@@ -5497,9 +5500,12 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
         const records_start = list_start + 4;
         if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
         const paint_data_start = 4 + record_count * 6;
+        var previous_base_glyph: ?u16 = null;
         for (0..record_count) |index| {
             const record = records_start + index * 6;
-            try validateGlyphIdInMaxp(try bin.readU16At(data, record), glyph_count);
+            const base_glyph = try bin.readU16At(data, record);
+            try validateColrBaseGlyphOrder(base_glyph, &previous_base_glyph);
+            try validateGlyphIdInMaxp(base_glyph, glyph_count);
             const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
             if (paint_offset < paint_data_start) return error.BadSfnt;
             if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
@@ -5515,6 +5521,17 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
             try validateColorPaintGlyphBounds(data, colr, glyph_count, paint_offset, &guard);
         }
     }
+}
+
+fn validateColrBaseGlyphOrder(base_glyph: u16, previous_base_glyph: *?u16) FontError!void {
+    if (previous_base_glyph.*) |previous| {
+        // COLR base glyph arrays are binary-search records keyed by glyph ID.
+        // Enforce the spec's strict ordering during parse validation so
+        // duplicate or decreasing records cannot make color glyph selection
+        // depend on a renderer's search strategy.
+        if (base_glyph <= previous) return error.BadSfnt;
+    }
+    previous_base_glyph.* = base_glyph;
 }
 
 fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
@@ -7946,6 +7963,50 @@ test "COLR glyph references stay within maxp glyph count" {
 
     writeU16Test(&colr_v1, 48, 1);
     try validateColrGlyphBounds(&colr_v1, colr_v1_record, 2);
+}
+
+test "COLR base glyph records are strictly ordered" {
+    var colr_v0: [34]u8 = .{0} ** 34;
+    writeU16Test(&colr_v0, 0, 0); // COLR version 0.
+    writeU16Test(&colr_v0, 2, 2); // two BaseGlyphRecords.
+    writeU32Test(&colr_v0, 4, 14);
+    writeU32Test(&colr_v0, 8, 26);
+    writeU16Test(&colr_v0, 12, 2); // two LayerRecords.
+    writeU16Test(&colr_v0, 14, 2); // First base glyph.
+    writeU16Test(&colr_v0, 16, 0);
+    writeU16Test(&colr_v0, 18, 1);
+    writeU16Test(&colr_v0, 20, 1); // Invalid: BaseGlyphRecords must increase by glyph ID.
+    writeU16Test(&colr_v0, 22, 1);
+    writeU16Test(&colr_v0, 24, 1);
+    writeU16Test(&colr_v0, 26, 1);
+    writeU16Test(&colr_v0, 30, 1);
+
+    const colr_v0_record = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_v0.len };
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&colr_v0, colr_v0_record, 4));
+
+    writeU16Test(&colr_v0, 20, 3);
+    try validateColrGlyphBounds(&colr_v0, colr_v0_record, 4);
+
+    var colr_v1: [60]u8 = .{0} ** 60;
+    writeU16Test(&colr_v1, 0, 1); // COLR version 1.
+    writeU32Test(&colr_v1, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&colr_v1, 34, 2); // two BaseGlyphPaintRecords.
+    writeU16Test(&colr_v1, 38, 2); // First base glyph.
+    writeU32Test(&colr_v1, 40, 16); // PaintSolid at byte 50.
+    writeU16Test(&colr_v1, 44, 1); // Invalid: duplicate/decreasing key order.
+    writeU32Test(&colr_v1, 46, 21); // PaintSolid at byte 55.
+    colr_v1[50] = 2;
+    writeU16Test(&colr_v1, 51, 0);
+    writeF2Dot14Test(&colr_v1, 53, 1.0);
+    colr_v1[55] = 2;
+    writeU16Test(&colr_v1, 56, 0);
+    writeF2Dot14Test(&colr_v1, 58, 1.0);
+
+    const colr_v1_record = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_v1.len };
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&colr_v1, colr_v1_record, 4));
+
+    writeU16Test(&colr_v1, 44, 3);
+    try validateColrGlyphBounds(&colr_v1, colr_v1_record, 4);
 }
 
 test "COLR palette indices are validated at parse time" {

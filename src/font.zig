@@ -3769,7 +3769,51 @@ fn validateNameLanguageTags(table: []const u8, layout: NameTableLayout) FontErro
         const offset: usize = @intCast(try bin.readU16At(table, record_offset + 2));
         const tag_data = try nameStorageString(table, layout, offset, length);
         try validateUtf16BeNameData(tag_data);
+        try validateNameLanguageTagSyntax(tag_data);
     }
+}
+
+fn validateNameLanguageTagSyntax(data: []const u8) FontError!void {
+    if (data.len == 0) return error.InvalidName;
+
+    var subtag_len: usize = 0;
+    var subtag_index: usize = 0;
+    var first_subtag_alpha = true;
+    var first_subtag_first: u8 = 0;
+    var index: usize = 0;
+    while (index < data.len) : (index += 2) {
+        const unit = std.mem.readInt(u16, data[index..][0..2], .big);
+        // BCP 47 language tags are ASCII protocol identifiers stored here as
+        // UTF-16BE. Rejecting non-ASCII and separator variants prevents a
+        // format-1 LangTagRecord from looking valid to Cangjie while downstream
+        // locale matching treats it as an unrelated or malformed language tag.
+        if (unit > 0x7f) return error.InvalidName;
+        const byte: u8 = @intCast(unit);
+        if (byte == '-') {
+            if (subtag_len == 0 or subtag_len > 8) return error.InvalidName;
+            if (subtag_index == 0) {
+                if (!isValidPrimaryLanguageSubtag(first_subtag_first, subtag_len, first_subtag_alpha, true)) return error.InvalidName;
+            }
+            subtag_index += 1;
+            subtag_len = 0;
+            continue;
+        }
+        if (!std.ascii.isAlphanumeric(byte)) return error.InvalidName;
+        if (subtag_index == 0) {
+            if (subtag_len == 0) first_subtag_first = std.ascii.toLower(byte);
+            first_subtag_alpha = first_subtag_alpha and std.ascii.isAlphabetic(byte);
+        }
+        subtag_len += 1;
+    }
+
+    if (subtag_len == 0 or subtag_len > 8) return error.InvalidName;
+    if (subtag_index == 0 and !isValidPrimaryLanguageSubtag(first_subtag_first, subtag_len, first_subtag_alpha, false)) return error.InvalidName;
+}
+
+fn isValidPrimaryLanguageSubtag(first: u8, len: usize, all_alpha: bool, has_following_subtag: bool) bool {
+    if (!all_alpha) return false;
+    if (len == 1) return has_following_subtag and (first == 'i' or first == 'x');
+    return len >= 2 and len <= 8;
 }
 
 fn readNameRecord(table: []const u8, index: usize) FontError!NameRecord {
@@ -9998,6 +10042,44 @@ test "name table format 1 language ids reference valid UTF-16 language tags" {
     var bad_language_tag = bytes;
     writeU16Test(&bad_language_tag, 20, 3);
     try std.testing.expectError(error.InvalidName, validateNameTable(&bad_language_tag, nameTableRecord(bad_language_tag.len)));
+}
+
+test "name table format 1 validates language tag syntax" {
+    var bytes: [36]u8 = .{0} ** 36;
+    writeU16Test(&bytes, 0, 1); // format 1 name table.
+    writeU16Test(&bytes, 2, 1);
+    writeU16Test(&bytes, 4, 24);
+    writeNameRecordTest(&bytes, 6, 3, 1, 0x8000, @intFromEnum(NameId.family), 2, 0);
+    writeU16Test(&bytes, 18, 1); // one LangTagRecord.
+    writeU16Test(&bytes, 20, 10);
+    writeU16Test(&bytes, 22, 2);
+    bytes[25] = 'A';
+    bytes[27] = 'e';
+    bytes[29] = 'n';
+    bytes[31] = '-';
+    bytes[33] = 'U';
+    bytes[35] = 'S';
+
+    var out: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("A", (try readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out)).?);
+
+    var underscore = bytes;
+    underscore[31] = '_';
+    try std.testing.expectError(error.InvalidName, validateNameTable(&underscore, nameTableRecord(underscore.len)));
+
+    var trailing_separator = bytes;
+    trailing_separator[33] = 0;
+    trailing_separator[35] = '-';
+    try std.testing.expectError(error.InvalidName, validateNameTable(&trailing_separator, nameTableRecord(trailing_separator.len)));
+
+    var single_primary = bytes;
+    writeU16Test(&single_primary, 20, 2);
+    single_primary[25] = 'x';
+    try std.testing.expectError(error.InvalidName, validateNameTable(&single_primary, nameTableRecord(single_primary.len)));
+
+    var numeric_primary = bytes;
+    numeric_primary[27] = '1';
+    try std.testing.expectError(error.InvalidName, validateNameTable(&numeric_primary, nameTableRecord(numeric_primary.len)));
 }
 
 test "SVG document glyph ranges stay within maxp glyph count" {

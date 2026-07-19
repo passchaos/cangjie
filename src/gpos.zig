@@ -1350,6 +1350,7 @@ fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposErro
     const lookup_type = try readU16BadGpos(table, lookup_offset);
     const lookup_flag = try readU16BadGpos(table, lookup_offset + 2);
     const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
+    try validateLookupFlag(lookup_flag);
     const subtable_offsets_pos = lookup_offset + 6;
     const subtable_offsets_len = @as(usize, subtable_count) * 2;
     if (subtable_offsets_pos > table.length or subtable_offsets_len > table.length - subtable_offsets_pos) return error.BadGpos;
@@ -1360,6 +1361,13 @@ fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposErro
     if (lookup_type == 9) {
         try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
     }
+}
+
+fn validateLookupFlag(lookup_flag: u16) GposError!void {
+    // OpenType currently defines only low bits 0..4 and the high-byte
+    // MarkAttachmentType. Rejecting reserved middle bits at lookup preflight
+    // keeps positioning behavior deterministic if future/private flags appear.
+    if ((lookup_flag & 0x00e0) != 0) return error.BadGpos;
 }
 
 fn ensurePositionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GposError!void {
@@ -2445,6 +2453,35 @@ test "GPOS class format 1 handles upper glyph boundary" {
     try std.testing.expectEqual(@as(u16, 7), try classValue(table, 0, 0xfffe));
     try std.testing.expectEqual(@as(u16, 9), try classValue(table, 0, 0xffff));
     try std.testing.expectEqual(@as(u16, 0), try classValue(table, 0, 0xfffd));
+}
+
+test "GPOS rejects reserved LookupFlag bits" {
+    var bytes = [_]u8{0} ** 38;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10); // LookupList offset.
+    writeU16Test(&bytes, 10, 1);
+    writeU16Test(&bytes, 12, 4);
+    writeU16Test(&bytes, 14, 1); // SinglePos lookup.
+    writeU16Test(&bytes, 16, 0x0020); // Reserved middle-bit range in LookupFlag.
+    writeU16Test(&bytes, 18, 1);
+    writeU16Test(&bytes, 20, 10); // Leave room for MarkFilteringSet when bit 4 is set.
+    const subtable: usize = 24;
+    writeU16Test(&bytes, subtable + 0, 1); // SinglePos format 1.
+    writeU16Test(&bytes, subtable + 2, 8);
+    writeU16Test(&bytes, subtable + 4, 0x0004); // xAdvance.
+    writeI16Test(&bytes, subtable + 6, 20);
+    writeU16Test(&bytes, subtable + 8, 1); // Coverage format 1.
+    writeU16Test(&bytes, subtable + 10, 1);
+    writeU16Test(&bytes, subtable + 12, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePositionLookupHeaderWithin(table, 14));
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    writeU16Test(&bytes, 16, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
+    writeU16Test(&bytes, 22, 0); // MarkFilteringSet index follows the subtable-offset array.
+    try ensurePositionLookupHeaderWithin(table, 14);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
 test "GPOS rejects malformed ClassDef format 2 ranges" {

@@ -1322,6 +1322,7 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
     const lookup_type = try readU16BadGsub(table, lookup_offset);
     const lookup_flag = try readU16BadGsub(table, lookup_offset + 2);
     const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
+    try validateLookupFlag(lookup_flag);
     const subtable_offsets_pos = lookup_offset + 6;
     const subtable_offsets_len = @as(usize, subtable_count) * 2;
     if (subtable_offsets_pos > table.length or subtable_offsets_len > table.length - subtable_offsets_pos) return error.BadGsub;
@@ -1332,6 +1333,14 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
     if (lookup_type == 7) {
         try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
     }
+}
+
+fn validateLookupFlag(lookup_flag: u16) GsubError!void {
+    // OpenType currently defines only low bits 0..4 and the high-byte
+    // MarkAttachmentType. Rejecting the reserved middle bits keeps a malformed
+    // private lookup from being accepted and later interpreted with semantics
+    // this shaper does not implement.
+    if ((lookup_flag & 0x00e0) != 0) return error.BadGsub;
 }
 
 fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GsubError!void {
@@ -2211,6 +2220,27 @@ test "GSUB class format 1 handles upper glyph boundary" {
     try std.testing.expectEqual(@as(u16, 7), try classValue(table, 0, 0xfffe));
     try std.testing.expectEqual(@as(u16, 9), try classValue(table, 0, 0xffff));
     try std.testing.expectEqual(@as(u16, 0), try classValue(table, 0, 0xfffd));
+}
+
+test "GSUB rejects reserved LookupFlag bits" {
+    var bytes = [_]u8{0} ** 40;
+    _ = writeSingleLookupGsubTest(&bytes, 1);
+    writeU16Test(&bytes, 24, 10); // Leave room for MarkFilteringSet when bit 4 is set.
+    const subtable: usize = 28;
+    writeU16Test(&bytes, 20, 0x0020); // Reserved middle-bit range in LookupFlag.
+    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
+    writeU16Test(&bytes, subtable + 2, 6);
+    writeI16Test(&bytes, subtable + 4, 0);
+    writeCoverage1(&bytes, subtable + 6, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureLookupHeaderWithin(table, 18));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    writeU16Test(&bytes, 20, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
+    writeU16Test(&bytes, 26, 0); // MarkFilteringSet index follows the subtable-offset array.
+    try ensureLookupHeaderWithin(table, 18);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
 test "GSUB rejects malformed ClassDef format 2 ranges" {

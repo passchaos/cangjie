@@ -1975,11 +1975,15 @@ fn validateSfntTableDirectory(records: []const TableRecord) FontError!void {
 }
 
 fn validateSfntTableTag(table_tag: [4]u8) FontError!void {
-    for (table_tag) |byte| {
-        // OpenType table tags are printable ASCII identifiers. Rejecting
-        // controls/non-ASCII bytes at the directory boundary prevents malformed
-        // private tags from surviving parse as opaque records that later table
-        // lookups, diagnostics, or manifest code cannot represent safely.
+    try validateOpenTypeTag(table_tag);
+}
+
+fn validateOpenTypeTag(tag: [4]u8) FontError!void {
+    for (tag) |byte| {
+        // OpenType tags are printable ASCII identifiers. Rejecting
+        // controls/non-ASCII bytes at every tag-bearing table boundary keeps
+        // directory, variation-axis, and style-axis metadata representable by
+        // diagnostics and higher-level font matching code.
         if (byte < 0x20 or byte > 0x7e) return error.BadSfnt;
     }
 }
@@ -5219,6 +5223,7 @@ fn validateFvarTable(data: []const u8, fvar: TableRecord) FontError!void {
         if ((flags & ~@as(u16, 0x0001)) != 0) return error.BadSfnt;
 
         const tag = try bin.readTagAt(data, axis_offset);
+        try validateOpenTypeTag(tag);
         for (0..axis_index) |previous_index| {
             const previous_offset = fvarAxisOffset(fvar, info, previous_index);
             const previous_tag = try bin.readTagAt(data, previous_offset);
@@ -5252,6 +5257,7 @@ fn validateStatTable(allocator: std.mem.Allocator, data: []const u8, stat: Table
     for (0..info.design_axis_count) |index| {
         const stat_axis = stat.offset + info.design_axes_offset + index * info.design_axis_size;
         const stat_tag = try bin.readTagAt(data, stat_axis);
+        try validateOpenTypeTag(stat_tag);
         try validateStatDesignAxisOrder(data, stat, info.design_axes_offset, info.design_axis_size, index, &stat_tag);
         try validateNameIdReference(name_index, try bin.readU16At(data, stat_axis + 4));
         if (maybe_fvar_info) |fvar_info| {
@@ -13221,6 +13227,10 @@ test "fvar public axes API revalidates all table metadata" {
     writeU16Test(&reserved_axis_flags, 32, 0x0002); // Only HIDDEN_AXIS is defined.
     try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&reserved_axis_flags).variationAxes(allocator));
 
+    var invalid_axis_tag = bytes;
+    invalid_axis_tag[16] = 0x1f; // Axis tags share OpenType's printable ASCII tag contract.
+    try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&invalid_axis_tag).variationAxes(allocator));
+
     var reserved_instance_flags = bytes;
     writeU16Test(&reserved_instance_flags, 38, 1); // fvar instance flags are reserved.
     try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&reserved_instance_flags).variationAxes(allocator));
@@ -13955,6 +13965,10 @@ test "STAT design axes have unique tags and ordering values" {
     var duplicate_order = bytes;
     writeStatAxisTest(&duplicate_order, 28, "wdth", 257, 0);
     try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_order, stat, null, &names));
+
+    var invalid_axis_tag = bytes;
+    invalid_axis_tag[28] = 0x7f; // STAT design-axis tags must also be printable OpenType tags.
+    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &invalid_axis_tag, stat, null, &names));
 }
 
 test "STAT AxisValue offsets and axis indexes stay inside declared records" {

@@ -6137,13 +6137,23 @@ fn colorPaintFormatInfo(format: u8) ?ColorPaintFormatInfo {
 fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: usize) FontError!ColorPaintFormatInfo {
     const colr_end = colr.offset + colr.length;
     if (offset >= colr_end) return error.BadSfnt;
-    const info = colorPaintFormatInfo(data[offset]) orelse return error.BadSfnt;
+    const format = data[offset];
+    const info = colorPaintFormatInfo(format) orelse return error.BadSfnt;
     // Rejecting reserved paint format bytes at parse time prevents malformed
     // COLR v1 graphs from being accepted merely because the current renderer
     // would later report the same record as unsupported.
     if (info.min_size > colr_end - offset) return error.BadSfnt;
+    if (format == 32) {
+        // CompositeMode is an enum, not an open-ended flag field. Rejecting
+        // reserved values while walking PaintComposite keeps later renderers
+        // from accidentally selecting an implementation-defined blend mode.
+        const composite_mode = data[offset + 4];
+        if (composite_mode > max_colr_composite_mode) return error.BadSfnt;
+    }
     return info;
 }
+
+const max_colr_composite_mode = 27;
 
 fn colorPaintChildOffset(data: []const u8, colr: TableRecord, offset: usize, parent_size: usize, field_offset: usize) FontError!usize {
     const child_offset: usize = @intCast(try readU24At(data, offset + field_offset));
@@ -8803,6 +8813,32 @@ test "COLR palette indices must be declared by CPAL" {
 
     const colr_v1_font = colrCpalOnlyFont(&colr_v1_with_cpal, 49);
     try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaint(1));
+}
+
+test "COLR v1 PaintComposite rejects reserved composite modes" {
+    var bytes: [62]u8 = .{0} ** 62;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, 38, 1);
+    writeU32Test(&bytes, 40, 10); // PaintComposite at byte 44.
+
+    bytes[44] = 32; // PaintComposite.
+    writeU24Test(&bytes, 45, 8); // Source paint starts immediately after the composite record.
+    bytes[48] = 28; // Invalid: CompositeMode currently defines values 0 through 27.
+    writeU24Test(&bytes, 49, 13); // Backdrop paint starts after the source PaintSolid.
+    bytes[52] = 2;
+    writeU16Test(&bytes, 53, 0);
+    writeF2Dot14Test(&bytes, 55, 1.0);
+    bytes[57] = 2;
+    writeU16Test(&bytes, 58, 0);
+    writeF2Dot14Test(&bytes, 60, 1.0);
+
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bytes, colr, 2));
+
+    bytes[48] = 27; // Valid: plus-lighter is the highest assigned CompositeMode.
+    try validateColrGlyphBounds(&bytes, colr, 2);
 }
 
 test "COLR v1 paint offsets cannot overlap parent metadata" {

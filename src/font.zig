@@ -18,6 +18,7 @@ pub const FontError = error{
     InvalidGlyph,
     InvalidLoca,
     InvalidMetrics,
+    InvalidBitmapSize,
     CompoundDepthExceeded,
     InvalidName,
 } || cff_mod.CffError || gpos_mod.GposError || gsub_mod.GsubError || std.mem.Allocator.Error || error{EndOfStream};
@@ -1110,6 +1111,7 @@ pub const Font = struct {
     }
 
     pub fn bestBitmapStrikePpem(self: *const Font, size_px: f32) FontError!?u16 {
+        try validateBitmapRequestSize(size_px);
         var best_ppem: ?u16 = null;
         var best_distance: f32 = std.math.inf(f32);
 
@@ -1145,6 +1147,7 @@ pub const Font = struct {
 
     pub fn bitmapGlyphPng(self: *const Font, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphPng {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateBitmapRequestSize(size_px);
 
         if (self.sbix) |sbix| {
             try validateSbixTable(self.data, sbix, self.glyph_count);
@@ -1388,6 +1391,14 @@ fn recordBestBitmapPpem(ppem: u16, size_px: f32, best_ppem: *?u16, best_distance
         best_ppem.* = ppem;
         best_distance.* = distance;
     }
+}
+
+fn validateBitmapRequestSize(size_px: f32) FontError!void {
+    // Public bitmap selection compares the requested CSS/device pixel size
+    // against strike ppem values. NaN/Inf and non-positive sizes do not name a
+    // meaningful target strike and can otherwise poison the "best distance"
+    // comparison, causing APIs to return arbitrary metadata or null.
+    if (!std.math.isFinite(size_px) or size_px <= 0) return error.InvalidBitmapSize;
 }
 
 fn sbixStrikeCount(data: []const u8, sbix: TableRecord) FontError!usize {
@@ -8683,6 +8694,33 @@ test "sbix public bitmap APIs revalidate borrowed strike offsets" {
     writeU32Test(&bytes, 24, 12);
     try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
     try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(0, 16));
+}
+
+test "public bitmap APIs reject non-finite and non-positive request sizes" {
+    var bytes: [40]u8 = .{0} ** 40;
+    writeU16Test(&bytes, 0, 1); // sbix version
+    writeU32Test(&bytes, 4, 1); // one strike
+    writeU32Test(&bytes, 8, 12); // strike data starts after the strike-offset array
+    writeU16Test(&bytes, 12, 16); // ppem
+    writeU16Test(&bytes, 14, 72); // ppi
+    writeU32Test(&bytes, 16, 16); // glyph 0 start, relative to the strike
+    writeU32Test(&bytes, 20, 16); // glyph 1 start; both glyphs are empty
+    writeU32Test(&bytes, 24, 16); // terminal boundary
+
+    const font = sbixOnlyFont(&bytes);
+    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
+    try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try font.bitmapGlyphPng(0, 16));
+
+    // Bitmap strike selection is a public API input contract, independent of
+    // whether the font ultimately returns a PNG payload. Validate it before
+    // parsing borrowed bitmap tables so nonsensical sizes cannot masquerade as
+    // a cache miss or pick a strike through NaN distance comparisons.
+    try std.testing.expectError(error.InvalidBitmapSize, font.bestBitmapStrikePpem(0));
+    try std.testing.expectError(error.InvalidBitmapSize, font.bestBitmapStrikePpem(-1));
+    try std.testing.expectError(error.InvalidBitmapSize, font.bestBitmapStrikePpem(std.math.inf(f32)));
+    try std.testing.expectError(error.InvalidBitmapSize, font.bestBitmapStrikePpem(std.math.nan(f32)));
+    try std.testing.expectError(error.InvalidBitmapSize, font.bitmapGlyphPng(0, 0));
+    try std.testing.expectError(error.InvalidBitmapSize, font.bitmapGlyphPng(0, std.math.nan(f32)));
 }
 
 test "CBLC bitmap index subtables reject decreasing image offsets" {

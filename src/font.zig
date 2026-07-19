@@ -2036,19 +2036,16 @@ fn validateCompoundGlyphDescription(allocator: std.mem.Allocator, glyph_data: []
     errdefer components.deinit(allocator);
 
     var offset: usize = 10; // numberOfContours + x/y bounds.
-    var saw_use_my_metrics = false;
     while (true) {
         if (offset + 4 > glyph_data.len) return error.InvalidGlyph;
         const flags = try bin.readU16At(glyph_data, offset);
         try validateCompoundGlyphFlags(flags);
-        if ((flags & 0x0200) != 0) {
-            // USE_MY_METRICS selects a single component as the source of the
-            // compound glyph's advance and side bearing. Multiple selected
-            // components leave metrics dependent on parser traversal order, so
-            // reject that ambiguity while the component stream is parsed.
-            if (saw_use_my_metrics) return error.InvalidGlyph;
-            saw_use_my_metrics = true;
-        }
+        // Do not enforce uniqueness for USE_MY_METRICS. The TrueType rasterizer
+        // contract treats the first flagged component as the metrics source, and
+        // real production fonts may set the bit on later components as well.
+        // Reject only flag combinations that make the component stream itself
+        // ambiguous; preserving this leniency keeps parse-time validation from
+        // excluding fonts accepted by platform engines.
         const component_glyph = try bin.readU16At(glyph_data, offset + 2);
         if (component_glyph >= glyph_count) return error.InvalidGlyph;
         offset += 4;
@@ -7951,7 +7948,7 @@ test "compound glyf component flags reject reserved and conflicting offset seman
     }
 }
 
-test "compound glyf metrics source must be unique" {
+test "compound glyf permits repeated USE_MY_METRICS flags" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
@@ -7966,17 +7963,18 @@ test "compound glyf metrics source must be unique" {
     writeU16Test(bytes, glyph_one + 12, 0);
     bytes[glyph_one + 14] = 0;
     bytes[glyph_one + 15] = 0;
-    writeU16Test(bytes, glyph_one + 16, 0x0200 | 0x0002); // A second metrics source is ambiguous.
+    writeU16Test(bytes, glyph_one + 16, 0x0200 | 0x0002); // Later USE_MY_METRICS bits do not invalidate the glyph.
     writeU16Test(bytes, glyph_one + 18, 0);
     bytes[glyph_one + 20] = 0;
     bytes[glyph_one + 21] = 0;
 
-    // Keep maxp's aggregate summaries high enough that the failure below is
-    // specifically about duplicate USE_MY_METRICS flags, not component counts.
+    // Keep maxp's aggregate summaries high enough that this exercises duplicate
+    // USE_MY_METRICS flags rather than component-count validation.
     writeU16Test(bytes, maxp_offset + 28, 2);
     writeU16Test(bytes, maxp_offset + 30, 1);
 
-    try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    var font = try Font.parse(allocator, bytes);
+    font.deinit();
 }
 
 test "compound glyf point-matching arguments reject out-of-range point numbers" {

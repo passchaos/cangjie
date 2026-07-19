@@ -2485,6 +2485,7 @@ fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: 
     try validateCmapEncodingCompatibility(platform_id, encoding_id, format);
     const validate_bmp_scalars = cmapSubtableUsesUnicodeScalars(platform_id, encoding_id);
     switch (format) {
+        0 => try validateCmapFormat0(length),
         2 => try validateCmapFormat2(data, offset, length),
         6 => try validateCmapFormat6(data, offset, length, validate_bmp_scalars),
         8 => try validateCmapFormat8(data, offset, length),
@@ -2587,7 +2588,7 @@ fn isUnicodeVariationSelector(value: u32) bool {
 fn validateCmapGlyphIds(data: []const u8, offset: usize, length: usize, format: u16, glyph_count: u16) FontError!void {
     switch (format) {
         0 => {
-            if (length < 262) return error.BadSfnt;
+            try validateCmapFormat0(length);
             for (data[offset + 6 .. offset + 262]) |glyph_id| {
                 try validateCmapGlyphId(glyph_id, glyph_count);
             }
@@ -2734,6 +2735,14 @@ fn validateCmapFormat14GlyphIds(data: []const u8, offset: usize, length: usize, 
             try validateCmapGlyphId(try bin.readU16At(data, mappings_offset + 4 + mapping_index * 5 + 3), glyph_count);
         }
     }
+}
+
+fn validateCmapFormat0(length: usize) FontError!void {
+    // Format 0 has exactly 256 one-byte glyph entries after its six-byte
+    // header. Treat the length as a fixed structural contract rather than a
+    // minimum so trailing bytes cannot be hidden inside a subtable that later
+    // EncodingRecords may also try to interpret.
+    if (length != 262) return error.BadSfnt;
 }
 
 fn validateCmapFormat2(data: []const u8, offset: usize, length: usize) FontError!void {
@@ -3722,7 +3731,7 @@ fn scoreCmap(subtable: CmapSubtable) u8 {
 fn glyphIndexFormat0(data: []const u8, offset: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
     if (codepoint > 0xff) return 0;
     const length = try bin.readU16At(data, offset + 2);
-    if (length < 262) return error.BadSfnt;
+    try validateCmapFormat0(length);
     return data[offset + 6 + @as(usize, codepoint)];
 }
 
@@ -7423,6 +7432,28 @@ test "cmap parser rejects subtable length past cmap table boundary" {
     writeU32Test(&data, 36, 9);
 
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &data, cmap, 128));
+}
+
+test "cmap format 0 length is fixed at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildByteEncodingCmapTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    inline for (.{ @as(u16, 261), @as(u16, 263) }) |length| {
+        const bytes = try test_font.buildByteEncodingCmapTtf(allocator);
+        defer allocator.free(bytes);
+        const cmap_offset = try sfntTableOffset(bytes, "cmap");
+        // Format 0 has no variable payload: padding belongs to the enclosing
+        // SFNT table, not to the cmap subtable's declared length.
+        writeU16Test(bytes, cmap_offset + 14, length);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "cmap header version and encoding records are canonical" {

@@ -100,6 +100,7 @@ pub const ColorPaint = @import("font.zig").ColorPaint;
 pub const ColorGlyphPaint = @import("render_bridge.zig").ColorGlyphPaint;
 pub const PaletteColor = @import("font.zig").PaletteColor;
 pub const SvgGlyphDocument = @import("font.zig").SvgGlyphDocument;
+pub const StatDesignAxis = @import("font.zig").StatDesignAxis;
 pub const VariationAxis = @import("font.zig").VariationAxis;
 pub const VariationCoordinate = @import("font.zig").VariationCoordinate;
 pub const VerticalMetrics = @import("font.zig").VerticalMetrics;

@@ -84,6 +84,12 @@ pub const VariationCoordinate = struct {
     value: f32,
 };
 
+pub const StatDesignAxis = struct {
+    tag: [4]u8,
+    name_id: u16,
+    ordering: u16,
+};
+
 pub const ColorLayer = struct {
     glyph_id: glyph_mod.GlyphId,
     palette_index: u16,
@@ -878,6 +884,33 @@ pub const Font = struct {
             normalized[index] = try self.mapVariationCoordinate(index, axis.normalize(user_value));
         }
         return normalized;
+    }
+
+    pub fn statDesignAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]StatDesignAxis {
+        const stat = self.stat orelse return try allocator.alloc(StatDesignAxis, 0);
+        var name_index_storage: NameIdIndex = undefined;
+        const name_index: ?*const NameIdIndex = if (self.name) |name| blk: {
+            name_index_storage = try readNameIdIndex(self.data, name);
+            break :blk &name_index_storage;
+        } else null;
+        // STAT is kept as borrowed SFNT bytes. Re-run the full parse-time STAT
+        // and name-reference validation before exposing axis metadata so
+        // post-parse mutations cannot leave UI axis labels dangling or reorder
+        // axes away from fvar while the cached table record still looks valid.
+        try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
+        const info = try readStatInfo(self.data, stat);
+
+        const axes = try allocator.alloc(StatDesignAxis, info.design_axis_count);
+        errdefer allocator.free(axes);
+        for (axes, 0..) |*axis, index| {
+            const axis_offset = stat.offset + info.design_axes_offset + index * info.design_axis_size;
+            axis.* = .{
+                .tag = try bin.readTagAt(self.data, axis_offset),
+                .name_id = try bin.readU16At(self.data, axis_offset + 4),
+                .ordering = try bin.readU16At(self.data, axis_offset + 6),
+            };
+        }
+        return axes;
     }
 
     pub fn colorLayers(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError![]ColorLayer {
@@ -4805,6 +4838,15 @@ const FvarInfo = struct {
     has_postscript_name_id: bool,
 };
 
+const StatInfo = struct {
+    minor: u16,
+    design_axis_size: usize,
+    design_axis_count: usize,
+    design_axes_offset: usize,
+    axis_value_count: usize,
+    axis_value_offsets_offset: usize,
+};
+
 fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u8, fvar: ?TableRecord, stat: ?TableRecord, name: ?TableRecord) FontError!void {
     if (fvar == null and stat == null) return;
 
@@ -4881,6 +4923,52 @@ fn validateFvarTable(data: []const u8, fvar: TableRecord) FontError!void {
 }
 
 fn validateStatTable(allocator: std.mem.Allocator, data: []const u8, stat: TableRecord, fvar: ?TableRecord, name_index: ?*const NameIdIndex) FontError!void {
+    const info = try readStatInfo(data, stat);
+    if (info.minor >= 1) try validateNameIdReference(name_index, try bin.readU16At(data, stat.offset + 18));
+
+    const maybe_fvar_info = if (fvar) |fvar_table| try readFvarInfo(data, fvar_table) else null;
+    if (maybe_fvar_info) |fvar_info| {
+        if (info.design_axis_count != fvar_info.axis_count) return error.BadSfnt;
+    }
+    for (0..info.design_axis_count) |index| {
+        const stat_axis = stat.offset + info.design_axes_offset + index * info.design_axis_size;
+        const stat_tag = try bin.readTagAt(data, stat_axis);
+        try validateStatDesignAxisOrder(data, stat, info.design_axes_offset, info.design_axis_size, index, &stat_tag);
+        try validateNameIdReference(name_index, try bin.readU16At(data, stat_axis + 4));
+        if (maybe_fvar_info) |fvar_info| {
+            const fvar_table = fvar.?;
+            const fvar_axis = fvar_table.offset + fvar_info.axes_array_offset + index * fvar_info.axis_size;
+            const fvar_tag = try bin.readTagAt(data, fvar_axis);
+            // STAT axis records provide user-facing names and ordering for the
+            // variation axes. Keeping them in fvar order prevents later style
+            // selection from binding a STAT AxisValue to the wrong coordinate.
+            if (!std.mem.eql(u8, &stat_tag, &fvar_tag)) return error.BadSfnt;
+        }
+    }
+
+    const axis_values = try allocator.alloc(StatAxisValueSummary, info.axis_value_count);
+    defer allocator.free(axis_values);
+    var previous_axis_value_offset: ?usize = null;
+    for (axis_values, 0..) |*axis_value, index| {
+        const entry_offset = stat.offset + info.axis_value_offsets_offset + index * 2;
+        const axis_value_offset = try resolveStatAxisValueOffset(data, stat, info.axis_value_offsets_offset, entry_offset);
+        try validateStatAxisValueOffsetOrder(axis_value_offset, &previous_axis_value_offset);
+        axis_value.* = try validateStatAxisValue(
+            data,
+            stat,
+            axis_value_offset,
+            info.design_axis_count,
+            info.design_axes_offset,
+            info.design_axis_size,
+            info.axis_value_offsets_offset,
+            info.axis_value_count,
+            name_index,
+        );
+    }
+    try validateStatAxisValueSet(data, stat, axis_values);
+}
+
+fn readStatInfo(data: []const u8, stat: TableRecord) FontError!StatInfo {
     if (stat.length < 20) return error.BadSfnt;
     const major = try bin.readU16At(data, stat.offset);
     const minor = try bin.readU16At(data, stat.offset + 2);
@@ -4907,38 +4995,14 @@ fn validateStatTable(allocator: std.mem.Allocator, data: []const u8, stat: Table
         return error.BadSfnt;
     }
 
-    if (minor >= 1) try validateNameIdReference(name_index, try bin.readU16At(data, stat.offset + 18));
-
-    const fvar_info = if (fvar) |fvar_table| try readFvarInfo(data, fvar_table) else null;
-    if (fvar_info) |info| {
-        if (design_axis_count != info.axis_count) return error.BadSfnt;
-    }
-    for (0..design_axis_count) |index| {
-        const stat_axis = stat.offset + design_axes_offset + index * design_axis_size;
-        const stat_tag = try bin.readTagAt(data, stat_axis);
-        try validateStatDesignAxisOrder(data, stat, design_axes_offset, design_axis_size, index, &stat_tag);
-        try validateNameIdReference(name_index, try bin.readU16At(data, stat_axis + 4));
-        if (fvar_info) |info| {
-            const fvar_table = fvar.?;
-            const fvar_axis = fvar_table.offset + info.axes_array_offset + index * info.axis_size;
-            const fvar_tag = try bin.readTagAt(data, fvar_axis);
-            // STAT axis records provide user-facing names and ordering for the
-            // variation axes. Keeping them in fvar order prevents later style
-            // selection from binding a STAT AxisValue to the wrong coordinate.
-            if (!std.mem.eql(u8, &stat_tag, &fvar_tag)) return error.BadSfnt;
-        }
-    }
-
-    const axis_values = try allocator.alloc(StatAxisValueSummary, axis_value_count);
-    defer allocator.free(axis_values);
-    var previous_axis_value_offset: ?usize = null;
-    for (axis_values, 0..) |*axis_value, index| {
-        const entry_offset = stat.offset + axis_value_offsets_offset + index * 2;
-        const axis_value_offset = try resolveStatAxisValueOffset(data, stat, axis_value_offsets_offset, entry_offset);
-        try validateStatAxisValueOffsetOrder(axis_value_offset, &previous_axis_value_offset);
-        axis_value.* = try validateStatAxisValue(data, stat, axis_value_offset, design_axis_count, design_axes_offset, design_axis_size, axis_value_offsets_offset, axis_value_count, name_index);
-    }
-    try validateStatAxisValueSet(data, stat, axis_values);
+    return .{
+        .minor = minor,
+        .design_axis_size = design_axis_size,
+        .design_axis_count = design_axis_count,
+        .design_axes_offset = design_axes_offset,
+        .axis_value_count = axis_value_count,
+        .axis_value_offsets_offset = axis_value_offsets_offset,
+    };
 }
 
 fn validateStatDesignAxisOrder(data: []const u8, stat: TableRecord, design_axes_offset: usize, design_axis_size: usize, axis_index: usize, axis_tag: *const [4]u8) FontError!void {
@@ -12421,6 +12485,65 @@ test "fvar and STAT user-facing name IDs resolve through name table" {
         defer allocator.free(bytes);
         try setSfntTableTag(bytes, "name", "namx");
         try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+    }
+}
+
+test "STAT design axes public API revalidates borrowed metadata" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const axes = try font.statDesignAxes(allocator);
+        defer allocator.free(axes);
+        try std.testing.expectEqual(@as(usize, 0), axes.len);
+    }
+
+    {
+        const bytes = try test_font.buildVariableStatTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const axes = try font.statDesignAxes(allocator);
+        defer allocator.free(axes);
+        try std.testing.expectEqual(@as(usize, 2), axes.len);
+        try std.testing.expectEqualStrings("wght", &axes[0].tag);
+        try std.testing.expectEqual(@as(u16, 256), axes[0].name_id);
+        try std.testing.expectEqual(@as(u16, 0), axes[0].ordering);
+        try std.testing.expectEqualStrings("wdth", &axes[1].tag);
+        try std.testing.expectEqual(@as(u16, 257), axes[1].name_id);
+        try std.testing.expectEqual(@as(u16, 1), axes[1].ordering);
+    }
+
+    {
+        const bytes = try test_font.buildVariableStatTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const stat_offset: usize = @intCast(try sfntTableOffset(bytes, "STAT"));
+        writeU16Test(bytes, stat_offset + 24, 400); // First axis nameID no longer resolves through name.
+        try std.testing.expectError(error.InvalidName, font.statDesignAxes(allocator));
+    }
+
+    {
+        const bytes = try test_font.buildVariableStatTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const stat_offset: usize = @intCast(try sfntTableOffset(bytes, "STAT"));
+        writeTagTest(bytes, stat_offset + 28, "opsz"); // STAT axis order no longer matches fvar.
+        try std.testing.expectError(error.BadSfnt, font.statDesignAxes(allocator));
     }
 }
 

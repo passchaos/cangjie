@@ -1823,6 +1823,7 @@ fn validateSfntSearchParameters(num_tables: u16, search_range: u16, entry_select
 fn validateSfntTableDirectory(records: []const TableRecord) FontError!void {
     var previous_tag: ?[4]u8 = null;
     for (records) |record| {
+        try validateSfntTableTag(record.tag);
         if (previous_tag) |previous| {
             // The SFNT directory is specified as a lexicographically sorted map
             // keyed by tag. Requiring strict order rejects duplicates and keeps
@@ -1830,6 +1831,16 @@ fn validateSfntTableDirectory(records: []const TableRecord) FontError!void {
             if (std.mem.order(u8, &previous, &record.tag) != .lt) return error.BadSfnt;
         }
         previous_tag = record.tag;
+    }
+}
+
+fn validateSfntTableTag(table_tag: [4]u8) FontError!void {
+    for (table_tag) |byte| {
+        // OpenType table tags are printable ASCII identifiers. Rejecting
+        // controls/non-ASCII bytes at the directory boundary prevents malformed
+        // private tags from surviving parse as opaque records that later table
+        // lookups, diagnostics, or manifest code cannot represent safely.
+        if (byte < 0x20 or byte > 0x7e) return error.BadSfnt;
     }
 }
 
@@ -10569,6 +10580,32 @@ test "SFNT table directory tags must be strictly sorted" {
     @memcpy(bytes[second_record .. second_record + 4], &first_tag);
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "SFNT table directory rejects non-printable tags" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        bytes[12] = 0x1f; // Control bytes are not legal OpenType tag data.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        bytes[12] = 0x7f; // DEL/non-printable tag byte.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        bytes[12] = 0x80; // Non-ASCII private tags are not portable SFNT tags.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "SFNT table directory offsets must be long aligned" {

@@ -784,6 +784,7 @@ pub const Font = struct {
     }
 
     pub fn colorLayers(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError![]ColorLayer {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const colr = self.colr orelse return try allocator.alloc(ColorLayer, 0);
         if (colr.length < 14) return error.BadSfnt;
         const version = try bin.readU16At(self.data, colr.offset);
@@ -839,6 +840,7 @@ pub const Font = struct {
     }
 
     pub fn colorPaint(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorPaint {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const colr = self.colr orelse return null;
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
@@ -10672,6 +10674,41 @@ test "COLR palette indices must be declared by CPAL" {
 
     const colr_v1_font = colrCpalOnlyFont(&colr_v1_with_cpal, 49);
     try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaint(1));
+}
+
+test "COLR public APIs reject glyph ids outside maxp count" {
+    const allocator = std.testing.allocator;
+
+    var colr_v0: [24]u8 = .{0} ** 24;
+    writeU16Test(&colr_v0, 0, 0); // COLR version 0.
+    writeU16Test(&colr_v0, 2, 1); // one BaseGlyphRecord.
+    writeU32Test(&colr_v0, 4, 14);
+    writeU32Test(&colr_v0, 8, 20);
+    writeU16Test(&colr_v0, 12, 1);
+    writeU16Test(&colr_v0, 14, 1); // base glyph.
+    writeU16Test(&colr_v0, 18, 1);
+    writeU16Test(&colr_v0, 20, 1); // layer glyph.
+    const colr_v0_font = colrOnlyFont(&colr_v0);
+    try std.testing.expectError(error.InvalidGlyph, colr_v0_font.colorLayers(allocator, 16));
+
+    var colr_v1: [49]u8 = .{0} ** 49;
+    writeU16Test(&colr_v1, 0, 1); // COLR version 1.
+    writeU32Test(&colr_v1, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&colr_v1, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&colr_v1, 38, 1); // base glyph.
+    writeU32Test(&colr_v1, 40, 10); // PaintSolid at byte 44.
+    colr_v1[44] = 2;
+    writeF2Dot14Test(&colr_v1, 47, 1.0);
+    const colr_v1_font = colrOnlyFont(&colr_v1);
+    try std.testing.expectError(error.InvalidGlyph, colr_v1_font.colorPaint(16));
+
+    // Optional COLR tables do not weaken the public glyph-id contract: callers
+    // should learn about an invalid glyph argument rather than receiving an
+    // empty color result simply because the font lacks color data.
+    var no_colr_font = colrOnlyFont(&.{});
+    no_colr_font.colr = null;
+    try std.testing.expectError(error.InvalidGlyph, no_colr_font.colorLayers(allocator, 16));
+    try std.testing.expectError(error.InvalidGlyph, no_colr_font.colorPaint(16));
 }
 
 test "COLR v1 gradient ColorLine stops are validated" {

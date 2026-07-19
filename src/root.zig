@@ -1220,7 +1220,7 @@ test "reads COLR v1 PaintSolid metadata" {
         },
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(try font.colorPaint(2) == null);
+    try std.testing.expect(try font.colorPaint(0) == null);
 }
 
 test "renders COLR v1 PaintSolid glyph into an RGBA target" {

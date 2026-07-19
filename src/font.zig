@@ -4589,6 +4589,13 @@ fn decodeUtf16BeName(data: []const u8, out: []u8) FontError![]const u8 {
 
 fn decodeSingleByteName(data: []const u8, out: []u8) FontError![]const u8 {
     if (data.len > out.len) return error.InvalidName;
+    // Public name APIs return UTF-8 byte strings. For legacy non-Unicode name
+    // records Cangjie currently supports only the ASCII-compatible subset of
+    // Mac/ISO/vendor encodings; bytes above 0x7f are encoding-specific and
+    // would otherwise be surfaced as malformed UTF-8 to callers.
+    for (data) |byte| {
+        if (byte > 0x7f) return error.InvalidName;
+    }
     @memcpy(out[0..data.len], data);
     return out[0..data.len];
 }
@@ -10931,6 +10938,25 @@ test "name table format 1 validates language tag storage ranges" {
 
     writeU16Test(&bytes, 22, 6);
     try std.testing.expectError(error.BadSfnt, readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out));
+}
+
+test "single-byte name strings must decode to UTF-8 ASCII" {
+    var bytes: [21]u8 = .{0} ** 21;
+    writeU16Test(&bytes, 0, 0);
+    writeU16Test(&bytes, 2, 1);
+    writeU16Test(&bytes, 4, 18);
+    writeNameRecordTest(&bytes, 6, 1, 0, 0, @intFromEnum(NameId.family), 3, 0);
+    bytes[18] = 'M';
+    bytes[19] = 'a';
+    bytes[20] = 'c';
+
+    var out: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("Mac", (try readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out)).?);
+
+    // Platform 1 strings are not intrinsically UTF-8; bytes above ASCII depend
+    // on a legacy Macintosh encoding table this API does not implement.
+    bytes[19] = 0x8e;
+    try std.testing.expectError(error.InvalidName, readNameString(&bytes, nameTableRecord(bytes.len), @intFromEnum(NameId.family), &out));
 }
 
 test "name table validates every record string at parse time" {

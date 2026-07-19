@@ -903,6 +903,7 @@ pub const Font = struct {
         for (0..document_list.entry_count) |index| {
             const record = try readSvgDocumentRecord(self.data, document_list.records_start + index * 12);
             try validateSvgDocumentRecord(record, document_list, self.glyph_count, &previous_end_glyph_id);
+            try validateSvgDocumentByteRangeAgainstPreviousRecords(self.data, document_list, record, index);
             if (glyph_id >= record.start_glyph_id and glyph_id <= record.end_glyph_id) {
                 const document_start = document_list.start + record.document_offset;
                 match = .{
@@ -5453,6 +5454,28 @@ fn validateSvgDocumentByteRanges(ranges: []SvgDocumentByteRange) FontError!void 
     }
 }
 
+fn validateSvgDocumentByteRangeAgainstPreviousRecords(data: []const u8, document_list: SvgDocumentList, record: SvgDocumentRecord, record_index: usize) FontError!void {
+    const current = SvgDocumentByteRange{
+        .start = record.document_offset,
+        .end = record.document_offset + record.document_length,
+    };
+    for (0..record_index) |previous_index| {
+        const previous_record = try readSvgDocumentRecord(data, document_list.records_start + previous_index * 12);
+        const previous = SvgDocumentByteRange{
+            .start = previous_record.document_offset,
+            .end = previous_record.document_offset + previous_record.document_length,
+        };
+        // Public SVG lookup borrows the original SFNT bytes, so re-check the
+        // same document ownership rule enforced at parse time. Exact byte
+        // sharing is intentional in the SVG table, but partial overlap means
+        // the returned slice would borrow the tail or prefix of a different XML
+        // document after caller-owned bytes mutate post-parse.
+        if (current.start < previous.end and previous.start < current.end) {
+            if (current.start != previous.start or current.end != previous.end) return error.BadSfnt;
+        }
+    }
+}
+
 fn validateSvgDocumentPayload(allocator: std.mem.Allocator, document: []const u8) FontError!void {
     const payload = stripUtf8Bom(document);
     if (payload.len == 0) return error.BadSfnt;
@@ -9783,6 +9806,33 @@ test "SVG document byte range overlap is rejected at parse time" {
     writeU32Test(bytes, svg_offset + 32, 8);
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "SVG public document lookup revalidates byte-range ownership" {
+    var bytes: [48]u8 = .{0} ** 48;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU16Test(&bytes, 10, 2); // two SVGDocumentRecords.
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 1);
+    writeU32Test(&bytes, 16, 26); // First document: [26, 32) relative to the list.
+    writeU32Test(&bytes, 20, 6);
+    writeU16Test(&bytes, 24, 2);
+    writeU16Test(&bytes, 26, 2);
+    writeU32Test(&bytes, 28, 32); // Second document is initially disjoint: [32, 38).
+    writeU32Test(&bytes, 32, 6);
+    @memcpy(bytes[36..42], "<svg/>");
+    @memcpy(bytes[42..48], "<svg/>");
+
+    const font = svgOnlyFont(&bytes);
+    const original = (try font.svgGlyphDocument(2)).?;
+    try std.testing.expectEqualSlices(u8, "<svg/>", original.data);
+
+    // Font instances borrow caller-owned SFNT bytes. Mutating a later
+    // SVGDocumentRecord into a partial byte overlap must be caught by the
+    // public lookup path, not just by parse-time validation.
+    writeU32Test(&bytes, 28, 30);
+    try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(2));
 }
 
 test "SVG document offsets cannot overlap table metadata" {

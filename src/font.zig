@@ -775,6 +775,7 @@ pub const Font = struct {
         // make GDEF public APIs reinterpret header fields as ClassDef payloads.
         try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
         const class = try classDefValue(self.data[gdef.offset .. gdef.offset + gdef.length], glyph_class_def_offset, glyph_id);
+        try validateGlyphClassValue(class);
         return @enumFromInt(class);
     }
 
@@ -4005,6 +4006,7 @@ fn validateGdefTable(data: []const u8, gdef: TableRecord, glyph_count: u16) Font
     if (glyph_class_def_offset != 0) {
         try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
         try validateClassDefGlyphBounds(table, glyph_class_def_offset, glyph_count);
+        try validateGlyphClassDefValues(table, glyph_class_def_offset);
     }
     if (attach_list_offset != 0) try validateGdefChildOffset(attach_list_offset, gdef.length, header_len);
     if (lig_caret_list_offset != 0) try validateGdefChildOffset(lig_caret_list_offset, gdef.length, header_len);
@@ -4074,6 +4076,41 @@ fn validateClassDefGlyphBounds(data: []const u8, offset: usize, glyph_count: u16
         },
         else => return error.BadSfnt,
     }
+}
+
+fn validateGlyphClassDefValues(data: []const u8, offset: usize) FontError!void {
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    switch (format) {
+        1 => {
+            if (offset + 6 > data.len) return error.BadSfnt;
+            const count = try bin.readU16At(data, offset + 4);
+            if (@as(usize, count) * 2 > data.len - (offset + 6)) return error.BadSfnt;
+            for (0..count) |index| {
+                const class = try bin.readU16At(data, offset + 6 + index * 2);
+                try validateGlyphClassValue(class);
+            }
+        },
+        2 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const range_count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
+            try validateClassDefFormat2Ranges(data, offset, range_count);
+            for (0..range_count) |index| {
+                const class = try bin.readU16At(data, offset + 4 + index * 6 + 4);
+                try validateGlyphClassValue(class);
+            }
+        },
+        else => return error.BadSfnt,
+    }
+}
+
+fn validateGlyphClassValue(class: u16) FontError!void {
+    // GDEF's GlyphClassDef has a closed public vocabulary: 0 means
+    // "unclassified" and 1..4 map to base, ligature, mark, and component.
+    // MarkAttachClassDef deliberately does not use this helper because its
+    // class numbers are font-defined attachment groups rather than glyph kinds.
+    if (class > @intFromEnum(GlyphClass.component)) return error.BadSfnt;
 }
 
 fn validateMarkGlyphSetsDefGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
@@ -8291,6 +8328,21 @@ test "GDEF parse validation rejects class and mark-set glyph ids past maxp" {
     writeU16Test(&child_offset_overlap, 4, 4); // Reinterprets GDEF header bytes as ClassDef data.
     try std.testing.expectError(error.BadSfnt, validateGdefTable(&child_offset_overlap, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = child_offset_overlap.len }, 4));
 
+    var class_value_past_enum = valid_classdef;
+    writeU16Test(&class_value_past_enum, 18, 5); // GlyphClassDef has only classes 0..4.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&class_value_past_enum, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = class_value_past_enum.len }, 4));
+
+    var format2_class_value_past_enum: [22]u8 = .{0} ** 22;
+    writeU16Test(&format2_class_value_past_enum, 0, 1); // GDEF major.
+    writeU16Test(&format2_class_value_past_enum, 2, 0);
+    writeU16Test(&format2_class_value_past_enum, 4, 12);
+    writeU16Test(&format2_class_value_past_enum, 12, 2); // ClassDef format 2.
+    writeU16Test(&format2_class_value_past_enum, 14, 1);
+    writeU16Test(&format2_class_value_past_enum, 16, 2);
+    writeU16Test(&format2_class_value_past_enum, 18, 3);
+    writeU16Test(&format2_class_value_past_enum, 20, 5);
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&format2_class_value_past_enum, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = format2_class_value_past_enum.len }, 4));
+
     var mark_set_past_maxp: [30]u8 = .{0} ** 30;
     writeU16Test(&mark_set_past_maxp, 0, 1); // GDEF major.
     writeU16Test(&mark_set_past_maxp, 2, 2); // GDEF 1.2 includes MarkGlyphSetsDef.
@@ -8303,6 +8355,29 @@ test "GDEF parse validation rejects class and mark-set glyph ids past maxp" {
     writeU16Test(&mark_set_past_maxp, 26, 1);
     writeU16Test(&mark_set_past_maxp, 28, 4); // Invalid for maxp.numGlyphs == 4.
     try std.testing.expectError(error.BadSfnt, validateGdefTable(&mark_set_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mark_set_past_maxp.len }, 4));
+}
+
+test "GDEF lazy glyph class rejects mutated class values outside enum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGdefClassTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
+    try std.testing.expectEqual(GlyphClass.base, try font.glyphClass(1));
+
+    // The parsed Font keeps a borrowed GDEF table. Rechecking the class value
+    // before enum conversion prevents post-parse mutations from manufacturing
+    // undeclared glyph classes while preserving arbitrary MarkAttachClassDef
+    // group numbers.
+    writeU16Test(bytes, gdef_offset + 20, 5);
+    try std.testing.expectError(error.BadSfnt, font.glyphClass(1));
+
+    writeU16Test(bytes, gdef_offset + 20, @intFromEnum(GlyphClass.base));
+    try std.testing.expectEqual(@as(u16, 7), try font.markAttachClass(3));
 }
 
 test "GDEF lazy class APIs revalidate child offsets after borrowed bytes mutate" {

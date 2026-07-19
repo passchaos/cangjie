@@ -853,6 +853,11 @@ pub const Font = struct {
     }
 
     pub fn mapVariationCoordinate(self: *const Font, axis_index: usize, normalized: f32) FontError!f32 {
+        // This low-level API accepts an already-normalized design coordinate,
+        // not a user-space axis value. Keep the caller contract explicit so
+        // NaN/Inf values or extrapolated coordinates cannot flow into avar's
+        // piecewise interpolation and come back as a plausible endpoint.
+        try validateNormalizedVariationCoordinate(normalized);
         const avar = self.avar orelse return normalized;
         if (avar.offset > self.data.len or avar.length > self.data.len - avar.offset) return error.BadSfnt;
         const table = self.data[avar.offset .. avar.offset + avar.length];
@@ -8126,6 +8131,11 @@ fn validateVariationCoordinates(axes: []const VariationAxis, coordinates: []cons
     }
 }
 
+fn validateNormalizedVariationCoordinate(value: f32) FontError!void {
+    if (!std.math.isFinite(value)) return error.BadSfnt;
+    if (value < -1.0 or value > 1.0) return error.BadSfnt;
+}
+
 fn variationAxisIndex(axes: []const VariationAxis, tag: [4]u8) ?usize {
     for (axes, 0..) |axis, index| {
         if (std.mem.eql(u8, &axis.tag, &tag)) return index;
@@ -13193,6 +13203,24 @@ test "avar public mapping rejects out-of-range axis indexes" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.25), try font.mapVariationCoordinate(0, 0.5), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), try font.mapVariationCoordinate(1, 0.5), 0.0001);
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(2, 0.5));
+}
+
+test "avar public mapping validates normalized coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariableTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f32, -1.0), try font.mapVariationCoordinate(0, -1.0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), try font.mapVariationCoordinate(0, 1.0), 0.0001);
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 1.0001));
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, -1.0001));
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, std.math.inf(f32)));
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, std.math.nan(f32)));
 }
 
 test "avar public mapping revalidates axis indexes and segment anchors" {

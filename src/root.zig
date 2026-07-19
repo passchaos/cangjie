@@ -398,6 +398,61 @@ test "shapes cmap format 14 variation selectors as base glyph variants" {
     try std.testing.expectEqual(@as(usize, 4), run.glyphs[1].cluster);
 }
 
+test "shaping rejects malformed UTF-8 without clearing existing glyphs" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const valid = try TextShaper.shapeUtf8(&font, &layout_buffer, "A", 20);
+    try std.testing.expectEqual(@as(usize, 1), valid.glyphs.len);
+    try std.testing.expectError(error.InvalidUtf8, TextShaper.shapeUtf8(&font, &layout_buffer, "\xf0\x28\x8c\x28", 20));
+    try std.testing.expectEqual(@as(usize, 1), layout_buffer.glyphs.items.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), layout_buffer.glyphs.items[0].glyph_id);
+}
+
+test "cascade and paragraph shaping reject malformed UTF-8 before cache mutation" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+    var fallback_cache = FontFallbackCache.init(allocator);
+    defer fallback_cache.deinit();
+    var shaped_cache = ShapedRunCache.init(allocator);
+    defer shaped_cache.deinit();
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const shaped = try TextShaper.shapeUtf8CascadeWithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "A", 20, .{});
+    try std.testing.expectEqual(@as(usize, 1), shaped.glyphs.len);
+    const fallback_hits = fallback_cache.hits;
+    const fallback_misses = fallback_cache.misses;
+    const shaped_hits = shaped_cache.hits;
+    const shaped_misses = shaped_cache.misses;
+
+    // Public UTF-8 APIs must reject malformed bytes before std.unicode.Utf8Iterator
+    // can hit its unreachable path, and before malformed text enters caches.
+    try std.testing.expectError(error.InvalidUtf8, TextShaper.shapeUtf8CascadeWithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "\xc3\x28", 20, .{}));
+    try std.testing.expectEqual(fallback_hits, fallback_cache.hits);
+    try std.testing.expectEqual(fallback_misses, fallback_cache.misses);
+    try std.testing.expectEqual(shaped_hits, shaped_cache.hits);
+    try std.testing.expectEqual(shaped_misses, shaped_cache.misses);
+    try std.testing.expectError(error.InvalidUtf8, TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "\xe2\x82", 20, .{ .max_width = 100 }));
+    try std.testing.expectError(error.InvalidUtf8, TextShaper.measureParagraphUtf8(cascade, &layout_buffer, "\x80", 20, .{ .max_width = 100 }));
+}
+
 test "cascade shaping keeps variation selectors with fallback base font" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

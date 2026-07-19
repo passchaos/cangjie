@@ -805,6 +805,7 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8WithOptions(font: *const Font, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
+        try validateShapingUtf8(text);
         buffer.clear();
         try shapeSegmentInto(font, null, null, buffer, text, font_size, 0, lookupOptionsForText(text, options));
         applyDirection(buffer, options.direction);
@@ -836,6 +837,7 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8CascadeWithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
+        try validateShapingUtf8(text);
         const cache_key = if (shaped_cache != null) ShapedRunCache.key(cascade, text, font_size, options) else undefined;
         if (shaped_cache) |cache| {
             if (try cache.load(cache_key, buffer)) |cached| return cached;
@@ -889,6 +891,7 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
+        try validateShapingUtf8(text);
         try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
         applyDirection(buffer, options.direction);
         try buildScriptRuns(buffer, text, options.direction, options.language_tag);
@@ -960,6 +963,14 @@ fn textMetricsFromParagraph(paragraph: ParagraphLayout) TextMetrics {
         .descent = first.descent,
         .leading = first.leading,
     };
+}
+
+fn validateShapingUtf8(text: []const u8) !void {
+    // The shaping pipeline uses std.unicode.Utf8Iterator, whose decode helpers
+    // assume a validated byte stream and mark malformed input as unreachable.
+    // Keep every public `*Utf8` entry point total by rejecting bad source bytes
+    // before cache keys are built or layout buffers are mutated.
+    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
 }
 
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {

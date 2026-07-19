@@ -6551,6 +6551,7 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
         try validateColrColorLine(data, colr, offset, info.min_size, colrPaintUsesVarColorLine(format));
     }
     try validateColrPaintTransformPayloadBounds(data, colr, offset, info);
+    try validateColrPaintChildPayloadOwnership(data, colr, offset, info);
     if (format == 32) {
         // CompositeMode is an enum, not an open-ended flag field. Rejecting
         // reserved values while walking PaintComposite keeps later renderers
@@ -6563,17 +6564,61 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
 
 fn validateColrPaintTransformPayloadBounds(data: []const u8, colr: TableRecord, offset: usize, info: ColorPaintFormatInfo) FontError!void {
     switch (data[offset]) {
-        12, 13 => try validateColrTransformMatrixPayloadBounds(data, colr, offset, info.min_size),
+        12, 13 => _ = try colrTransformMatrixPayloadRange(data, colr, offset, info.min_size),
         else => return,
     }
 }
 
-fn validateColrTransformMatrixPayloadBounds(data: []const u8, colr: TableRecord, offset: usize, min_size: usize) FontError!void {
+const ColrPaintByteRange = struct {
+    start: usize,
+    end: usize,
+};
+
+fn colrPaintRangesOverlap(a: ColrPaintByteRange, b: ColrPaintByteRange) bool {
+    return a.start < b.end and b.start < a.end;
+}
+
+fn colrPaintHeaderRange(data: []const u8, colr: TableRecord, paint_offset: usize) FontError!ColrPaintByteRange {
+    const colr_end = colr.offset + colr.length;
+    if (paint_offset >= colr_end) return error.BadSfnt;
+    const info = colorPaintFormatInfo(data[paint_offset]) orelse return error.BadSfnt;
+    if (info.min_size > colr_end - paint_offset) return error.BadSfnt;
+    return .{ .start = paint_offset, .end = paint_offset + info.min_size };
+}
+
+fn colrTransformMatrixPayloadRange(data: []const u8, colr: TableRecord, offset: usize, min_size: usize) FontError!ColrPaintByteRange {
     const transform_offset: usize = @intCast(try readU24At(data, offset + 4));
     if (transform_offset < min_size) return error.BadSfnt;
     if (transform_offset > colr.offset + colr.length - offset) return error.BadSfnt;
     const matrix_offset = offset + transform_offset;
     if (24 > colr.offset + colr.length - matrix_offset) return error.BadSfnt;
+    return .{ .start = matrix_offset, .end = matrix_offset + 24 };
+}
+
+fn validateColrPaintChildPayloadOwnership(data: []const u8, colr: TableRecord, offset: usize, info: ColorPaintFormatInfo) FontError!void {
+    switch (data[offset]) {
+        12, 13 => {
+            const child = try colorPaintChildOffset(data, colr, offset, info.min_size, 1);
+            const child_header = try colrPaintHeaderRange(data, colr, child);
+            const matrix = try colrTransformMatrixPayloadRange(data, colr, offset, info.min_size);
+            // The transform matrix is a sibling payload of the child Paint, not
+            // padding that the child may reuse.  Keeping the byte ranges
+            // disjoint prevents a crafted matrix coefficient from doubling as a
+            // PaintSolid/PaintGlyph header during recursive graph validation.
+            if (colrPaintRangesOverlap(child_header, matrix)) return error.BadSfnt;
+        },
+        32 => {
+            const source = try colorPaintChildOffset(data, colr, offset, info.min_size, 1);
+            const backdrop = try colorPaintChildOffset(data, colr, offset, info.min_size, 5);
+            const source_header = try colrPaintHeaderRange(data, colr, source);
+            const backdrop_header = try colrPaintHeaderRange(data, colr, backdrop);
+            // PaintComposite owns two independent child Paint headers.  Sharing
+            // or partially overlapping those headers would make source/backdrop
+            // interpretation depend on which traversal reaches the bytes first.
+            if (colrPaintRangesOverlap(source_header, backdrop_header)) return error.BadSfnt;
+        },
+        else => return,
+    }
 }
 
 const max_colr_extend_mode = 2;
@@ -9989,6 +10034,27 @@ test "COLR v1 PaintComposite rejects reserved composite modes" {
     try validateColrGlyphBounds(&bytes, colr, 2);
 }
 
+test "COLR v1 PaintComposite child headers cannot overlap" {
+    var bytes: [62]u8 = .{0} ** 62;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, 38, 1);
+    writeU32Test(&bytes, 40, 10); // PaintComposite at byte 44.
+
+    bytes[44] = 32; // PaintComposite.
+    writeU24Test(&bytes, 45, 8); // Source PaintSolid at byte 52.
+    bytes[48] = 0; // CompositeMode.clear.
+    writeU24Test(&bytes, 49, 10); // Backdrop PaintSolid starts inside the source header.
+    bytes[52] = 2; // Source PaintSolid.
+    bytes[54] = 2; // Also looks like a backdrop PaintSolid format byte.
+    writeF2Dot14Test(&bytes, 55, 1.0); // Valid source alpha.
+    writeF2Dot14Test(&bytes, 57, 1.0); // Valid backdrop alpha.
+
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bytes, colr, 2));
+}
+
 test "COLR v1 PaintTransform requires a complete Affine2x3 matrix" {
     var bytes: [79]u8 = .{0} ** 79;
     writeU16Test(&bytes, 0, 1); // COLR version 1.
@@ -10020,6 +10086,25 @@ test "COLR v1 PaintTransform requires a complete Affine2x3 matrix" {
 
     const valid_colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = valid.len };
     try validateColrGlyphBounds(&valid, valid_colr, 2);
+}
+
+test "COLR v1 PaintTransform child header cannot overlap matrix payload" {
+    var bytes: [75]u8 = .{0} ** 75;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, 38, 1);
+    writeU32Test(&bytes, 40, 10); // PaintTransform at byte 44.
+
+    bytes[44] = 12; // PaintTransform.
+    writeU24Test(&bytes, 45, 20); // Child PaintSolid starts at byte 64, inside the matrix.
+    writeU24Test(&bytes, 48, 7); // Affine2x3 matrix owns bytes 51..75.
+    bytes[64] = 2; // Child header is individually plausible.
+    writeU16Test(&bytes, 65, 0);
+    writeF2Dot14Test(&bytes, 67, 1.0);
+
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bytes, colr, 2));
 }
 
 test "COLR v1 PaintSolid alpha is validated at parse time" {

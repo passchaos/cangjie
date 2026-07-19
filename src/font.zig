@@ -5807,9 +5807,16 @@ fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRe
     const context: ?*const ColrVariationContext = if (store_offset != 0) blk: {
         const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
         const store_info = try validateItemVariationStore(data, colr, store_offset, fvar_info.axis_count, 34);
+        const store_range = ColrV1StructuralRange{ .start = store_offset, .end = store_info.end_offset };
+        try validateColrVariationRangeDisjointFromStructural(data, colr, store_range);
         const map = if (var_index_map_offset != 0) blk_map: {
             const map = try validateDeltaSetIndexMap(data, colr, store_offset, store_info.item_data_count, var_index_map_offset);
             try validateColrVariationTopLevelRanges(store_offset, store_info.end_offset, map.offset, map.end_offset);
+            // Variation subtables share the same COLR-relative offset space as
+            // BaseGlyphList, LayerList, and ClipList. Keep their structural
+            // payloads disjoint so a valid paint list cannot also be decoded as
+            // a VarIndexMap or ItemVariationStore header.
+            try validateColrVariationRangeDisjointFromStructural(data, colr, .{ .start = map.offset, .end = map.end_offset });
             break :blk_map map;
         } else null;
         context_storage = .{
@@ -5891,6 +5898,26 @@ fn validateColrVariationTopLevelRanges(store_offset: usize, store_end_offset: us
     // overlapping ranges would let one subtable reinterpret the other's count,
     // offset array, or delta payload as a different variation structure.
     if (map_offset < store_end_offset and store_offset < map_end_offset) return error.BadSfnt;
+}
+
+fn validateColrVariationRangeDisjointFromStructural(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
+    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
+    if (base_glyph_list_offset != 0) {
+        const structural_range = try colrV1BaseGlyphListStructuralRange(data, colr, base_glyph_list_offset);
+        if (colrRangesOverlap(variation_range, structural_range)) return error.BadSfnt;
+    }
+
+    const layer_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 18));
+    if (layer_list_offset != 0) {
+        const structural_range = try colrV1LayerListStructuralRange(data, colr, layer_list_offset);
+        if (colrRangesOverlap(variation_range, structural_range)) return error.BadSfnt;
+    }
+
+    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
+    if (clip_list_offset != 0) {
+        const structural_range = try colrV1ClipListStructuralRange(data, colr, clip_list_offset);
+        if (colrRangesOverlap(variation_range, structural_range)) return error.BadSfnt;
+    }
 }
 
 fn readDeltaSetIndexMapEntry(data: []const u8, map: DeltaSetIndexMapInfo, index: usize) FontError!struct { usize, usize } {
@@ -8693,6 +8720,55 @@ test "COLR v1 variation map and store subtables cannot overlap" {
     bytes[colr_offset + 88] = 0; // Map entry: outer 0, inner 0.
 
     try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bytes, colr, fvar, 2));
+}
+
+test "COLR v1 variation subtables cannot alias optional structural tables" {
+    var bytes: [160]u8 = .{0} ** 160;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
+
+    const colr_offset = fvar.length;
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = colr_offset, .length = 124 };
+    writeU16Test(&bytes, colr_offset + 0, 1); // COLR version 1.
+    writeU32Test(&bytes, colr_offset + 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, colr_offset + 18, 53); // LayerListOffset aliases VarIndexMapOffset below.
+    writeU32Test(&bytes, colr_offset + 26, 53); // VarIndexMapOffset.
+    writeU32Test(&bytes, colr_offset + 30, 70); // ItemVariationStoreOffset.
+
+    writeU32Test(&bytes, colr_offset + 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, colr_offset + 38, 1);
+    writeU32Test(&bytes, colr_offset + 40, 10); // PaintVarSolid at BaseGlyphList + 10.
+    bytes[colr_offset + 44] = 3;
+    writeU16Test(&bytes, colr_offset + 45, 0);
+    writeF2Dot14Test(&bytes, colr_offset + 47, 1.0);
+    writeU32Test(&bytes, colr_offset + 49, 0); // varIndexBase resolves through the aliased map.
+
+    // These bytes describe a one-entry LayerList (paint offset 12) but also
+    // decode as a valid format-0 DeltaSetIndexMap with one one-byte entry.
+    // The table must be rejected for aliasing before both interpretations can
+    // reach downstream paint and variation validators.
+    bytes[colr_offset + 53] = 0; // DeltaSetIndexMap format 0; LayerList count high byte.
+    bytes[colr_offset + 54] = 0; // one-byte entries, one inner-index bit.
+    writeU16Test(&bytes, colr_offset + 55, 1); // mapCount; LayerList count low bytes.
+    writeU32Test(&bytes, colr_offset + 57, 12); // first layer paint offset; map entry byte is zero.
+    bytes[colr_offset + 65] = 2; // PaintSolid reachable through the LayerList interpretation.
+    writeU16Test(&bytes, colr_offset + 66, 0);
+    writeF2Dot14Test(&bytes, colr_offset + 68, 1.0);
+    writeItemVariationStoreWithOneItem(&bytes, colr_offset + 70);
+
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bytes, colr, fvar, 2));
+
+    writeU32Test(&bytes, colr_offset + 26, 0); // Removing the map makes the remaining structure valid.
+    try validateColrVariationData(&bytes, colr, fvar, 2);
+
+    var store_alias = bytes;
+    writeU32Test(&store_alias, colr_offset + 18, 70); // LayerListOffset aliases the ItemVariationStore.
+    writeU32Test(&store_alias, colr_offset + 26, 0);
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&store_alias, colr, fvar, 2));
 }
 
 test "COLR palette indices must be declared by CPAL" {

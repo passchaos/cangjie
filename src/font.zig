@@ -888,6 +888,7 @@ pub const Font = struct {
     pub fn normalizedVariationCoordinates(self: *const Font, allocator: std.mem.Allocator, coordinates: []const VariationCoordinate) FontError![]f32 {
         const axes = try self.variationAxes(allocator);
         defer allocator.free(axes);
+        try validateVariationCoordinates(axes, coordinates);
 
         const normalized = try allocator.alloc(f32, axes.len);
         errdefer allocator.free(normalized);
@@ -8043,6 +8044,27 @@ fn readU24At(data: []const u8, offset: usize) FontError!u32 {
     return (@as(u32, data[offset]) << 16) | (@as(u32, data[offset + 1]) << 8) | data[offset + 2];
 }
 
+fn validateVariationCoordinates(axes: []const VariationAxis, coordinates: []const VariationCoordinate) FontError!void {
+    for (coordinates, 0..) |coordinate, coordinate_index| {
+        // Variation coordinate tags are a public caller contract rather than an
+        // OpenType table field. Reject duplicates and unknown tags up front so
+        // shaping callers cannot accidentally depend on first-match ordering or
+        // silently drop a misspelled axis such as `WGHT` instead of `wght`.
+        if (!std.math.isFinite(coordinate.value)) return error.BadSfnt;
+        if (variationAxisIndex(axes, coordinate.tag) == null) return error.BadSfnt;
+        for (coordinates[0..coordinate_index]) |previous| {
+            if (std.mem.eql(u8, &previous.tag, &coordinate.tag)) return error.BadSfnt;
+        }
+    }
+}
+
+fn variationAxisIndex(axes: []const VariationAxis, tag: [4]u8) ?usize {
+    for (axes, 0..) |axis, index| {
+        if (std.mem.eql(u8, &axis.tag, &tag)) return index;
+    }
+    return null;
+}
+
 fn variationValueForAxis(axis: VariationAxis, coordinates: []const VariationCoordinate) ?f32 {
     for (coordinates) |coordinate| {
         if (std.mem.eql(u8, &axis.tag, &coordinate.tag)) return coordinate.value;
@@ -12751,6 +12773,40 @@ test "fvar public axes API revalidates all table metadata" {
     var coordinate_past_axis_range = bytes;
     writeF16Dot16Test(&coordinate_past_axis_range, 40, 950.0);
     try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&coordinate_past_axis_range).variationAxes(allocator));
+}
+
+test "normalized variation coordinates reject duplicate and unknown public tags" {
+    const allocator = std.testing.allocator;
+
+    var bytes: [56]u8 = .{0} ** 56;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
+    writeU16Test(&bytes, 8, 2);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeFvarAxisTest(&bytes, 36, "wdth", 50.0, 100.0, 200.0, 257);
+
+    const font = fvarOnlyFont(&bytes);
+    const normalized = try font.normalizedVariationCoordinates(allocator, &.{
+        .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 700.0 },
+        .{ .tag = .{ 'w', 'd', 't', 'h' }, .value = 125.0 },
+    });
+    defer allocator.free(normalized);
+    try std.testing.expectEqual(@as(usize, 2), normalized.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6), normalized[0], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), normalized[1], 0.0001);
+
+    try std.testing.expectError(error.BadSfnt, font.normalizedVariationCoordinates(allocator, &.{
+        .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 650.0 },
+        .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 700.0 },
+    }));
+    try std.testing.expectError(error.BadSfnt, font.normalizedVariationCoordinates(allocator, &.{
+        .{ .tag = .{ 'W', 'G', 'H', 'T' }, .value = 700.0 },
+    }));
+    try std.testing.expectError(error.BadSfnt, font.normalizedVariationCoordinates(allocator, &.{
+        .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = std.math.nan(f32) },
+    }));
 }
 
 test "fvar axis metadata is validated at parse time" {

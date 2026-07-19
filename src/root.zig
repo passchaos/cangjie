@@ -1089,13 +1089,15 @@ test "reads variable font axis metadata from fvar" {
     const coords = [_]VariationCoordinate{
         .{ .tag = .{ 'w', 'd', 't', 'h' }, .value = 200.0 },
         .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 650.0 },
-        .{ .tag = .{ 'X', 'X', 'X', 'X' }, .value = 1.0 },
     };
     const normalized = try font.normalizedVariationCoordinates(allocator, &coords);
     defer allocator.free(normalized);
     try std.testing.expectEqual(@as(usize, 2), normalized.len);
     try std.testing.expectApproxEqAbs(@as(f32, 0.25), normalized[0], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), normalized[1], 0.001);
+    try std.testing.expectError(error.BadSfnt, font.normalizedVariationCoordinates(allocator, &.{
+        .{ .tag = .{ 'X', 'X', 'X', 'X' }, .value = 1.0 },
+    }));
     const default_normalized = try font.normalizedVariationCoordinates(allocator, &.{});
     defer allocator.free(default_normalized);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), default_normalized[0], 0.001);

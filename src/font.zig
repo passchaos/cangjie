@@ -1028,6 +1028,11 @@ pub const Font = struct {
             try self.appendGlyphOutline(&outline, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
         } else {
             const cff = self.cff orelse return error.MissingTable;
+            // CFF outlines are addressed lazily from borrowed SFNT bytes.
+            // Re-check the maxp/CharStrings contract before serving even a
+            // single glyph so a post-parse mutation cannot hide a truncated
+            // CharStrings INDEX behind requests for still-present glyph ids.
+            try validateCffGlyphCount(self.data, cff, self.glyph_count);
             const info = try cff_mod.parseInfo(self.data[cff.offset .. cff.offset + cff.length]);
             try cff_mod.appendGlyphOutline(allocator, self.data[cff.offset .. cff.offset + cff.length], info, &outline, glyph_id);
         }
@@ -9405,6 +9410,28 @@ test "OpenType CFF table rejects malformed CFF header fields at parse time" {
         bytes[cff_offset + 3] = 0;
         try std.testing.expectError(error.BadCff, Font.parse(allocator, bytes));
     }
+}
+
+test "CFF glyph outlines revalidate borrowed CharStrings count" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalOtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const cff_offset = try sfntTableOffset(bytes, "CFF ");
+    const cff_length = try sfntTableLength(bytes, "CFF ");
+    const info = try cff_mod.parseInfo(bytes[cff_offset .. cff_offset + cff_length]);
+
+    // Mutate only the borrowed CFF payload after Font.parse. Glyph 0 still has
+    // a valid charstring, so this regression exercises full-table revalidation
+    // rather than per-request bounds checking in cff.appendGlyphOutline.
+    writeU16Test(bytes, cff_offset + info.charstrings_offset, 1);
+
+    try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 0));
 }
 
 test "head table invariants are validated at parse time" {

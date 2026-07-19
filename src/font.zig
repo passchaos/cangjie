@@ -825,6 +825,15 @@ pub const Font = struct {
         // records whose reserved flags, duplicate tags, or instance payloads
         // would have been rejected during Font.parse.
         try validateFvarTable(self.data, fvar);
+        if (self.name) |name| {
+            // Axis and instance name IDs are user-facing metadata, not opaque
+            // numbers. Parsed fonts require them to resolve through `name`;
+            // repeat that cross-table check before exposing axis records so a
+            // borrowed-buffer mutation cannot leave callers with dangling UI
+            // labels while the structural fvar bytes still look well-formed.
+            const name_index = try readNameIdIndex(self.data, name);
+            try validateFvarNameReferences(self.data, fvar, &name_index);
+        }
         const info = try readFvarInfo(self.data, fvar);
 
         const axes = try allocator.alloc(VariationAxis, info.axis_count);
@@ -12738,6 +12747,26 @@ test "fvar axis records require ordered ranges and unique tags" {
 
     const duplicate_font = fvarOnlyFont(&duplicate_tags);
     try std.testing.expectError(error.BadSfnt, duplicate_font.variationAxes(allocator));
+}
+
+test "fvar public axes API revalidates borrowed axis name references" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariableTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const axes = try font.variationAxes(allocator);
+    defer allocator.free(axes);
+    try std.testing.expectEqual(@as(usize, 2), axes.len);
+    try std.testing.expectEqual(@as(u16, 256), axes[0].name_id);
+
+    const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
+    writeU16Test(bytes, fvar_offset + 34, 400);
+    try std.testing.expectError(error.InvalidName, font.variationAxes(allocator));
 }
 
 test "fvar public axes API revalidates all table metadata" {

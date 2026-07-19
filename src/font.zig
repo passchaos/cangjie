@@ -5547,6 +5547,7 @@ fn validateColorPaintPaletteBounds(data: []const u8, colr: TableRecord, cpal_pal
         .glyph, .single_child => {
             try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
         },
+        .color_line => try validateColrColorLinePaletteBounds(data, colr, offset, info.min_size, cpal_palette_entries),
         .composite => {
             try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
             try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), guard);
@@ -6031,7 +6032,7 @@ fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: 
             try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), context, guard);
             try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), context, guard);
         },
-        .colr_glyph, .terminal => return,
+        .colr_glyph, .color_line, .terminal => return,
     }
 }
 
@@ -6063,7 +6064,7 @@ fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_coun
             try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
             try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), guard);
         },
-        .solid, .terminal => return,
+        .solid, .color_line, .terminal => return,
     }
 }
 
@@ -6098,6 +6099,7 @@ const ColorPaintKind = enum {
     solid,
     glyph,
     colr_glyph,
+    color_line,
     single_child,
     composite,
 };
@@ -6111,10 +6113,10 @@ fn colorPaintFormatInfo(format: u8) ?ColorPaintFormatInfo {
     return switch (format) {
         1 => .{ .min_size = 6, .kind = .colr_layers },
         2, 3 => .{ .min_size = if (format == 2) 5 else 9, .kind = .solid },
-        4, 6 => .{ .min_size = 16, .kind = .terminal },
-        5, 7 => .{ .min_size = 20, .kind = .terminal },
-        8 => .{ .min_size = 12, .kind = .terminal },
-        9 => .{ .min_size = 16, .kind = .terminal },
+        4, 6 => .{ .min_size = 16, .kind = .color_line },
+        5, 7 => .{ .min_size = 20, .kind = .color_line },
+        8 => .{ .min_size = 12, .kind = .color_line },
+        9 => .{ .min_size = 16, .kind = .color_line },
         10 => .{ .min_size = 6, .kind = .glyph },
         11 => .{ .min_size = 3, .kind = .colr_glyph },
         12 => .{ .min_size = 7, .kind = .single_child },
@@ -6146,6 +6148,9 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
     if (format == 2 or format == 3) {
         try validateColrAlpha(try bin.readI16At(data, offset + 3));
     }
+    if (info.kind == .color_line) {
+        try validateColrColorLine(data, colr, offset, info.min_size);
+    }
     if (format == 32) {
         // CompositeMode is an enum, not an open-ended flag field. Rejecting
         // reserved values while walking PaintComposite keeps later renderers
@@ -6154,6 +6159,47 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
         if (composite_mode > max_colr_composite_mode) return error.BadSfnt;
     }
     return info;
+}
+
+const max_colr_extend_mode = 2;
+
+fn validateColrColorLine(data: []const u8, colr: TableRecord, offset: usize, paint_header_size: usize) FontError!void {
+    const color_line_offset = try colorPaintChildOffset(data, colr, offset, paint_header_size, 1);
+    const colr_end = colr.offset + colr.length;
+    if (color_line_offset + 3 > colr_end) return error.BadSfnt;
+
+    const extend = data[color_line_offset];
+    if (extend > max_colr_extend_mode) return error.BadSfnt;
+
+    const stop_count: usize = @intCast(try bin.readU16At(data, color_line_offset + 1));
+    // Gradients need at least two ordered stops to define a non-degenerate
+    // interpolation interval.  Enforcing this at parse time keeps renderers
+    // from inventing fallback colors for malformed ColorLine payloads.
+    if (stop_count < 2) return error.BadSfnt;
+
+    const stops_start = color_line_offset + 3;
+    if (stop_count > (colr_end - stops_start) / 6) return error.BadSfnt;
+
+    var previous_stop = try bin.readI16At(data, stops_start);
+    try validateColrAlpha(try bin.readI16At(data, stops_start + 4));
+    for (1..stop_count) |index| {
+        const stop_offset = stops_start + index * 6;
+        const current_stop = try bin.readI16At(data, stop_offset);
+        if (current_stop < previous_stop) return error.BadSfnt;
+        try validateColrAlpha(try bin.readI16At(data, stop_offset + 4));
+        previous_stop = current_stop;
+    }
+}
+
+fn validateColrColorLinePaletteBounds(data: []const u8, colr: TableRecord, offset: usize, paint_header_size: usize, cpal_palette_entries: ?u16) FontError!void {
+    const color_line_offset = try colorPaintChildOffset(data, colr, offset, paint_header_size, 1);
+    if (color_line_offset + 3 > colr.offset + colr.length) return error.BadSfnt;
+    const stop_count: usize = @intCast(try bin.readU16At(data, color_line_offset + 1));
+    const stops_start = color_line_offset + 3;
+    if (stop_count > (colr.offset + colr.length - stops_start) / 6) return error.BadSfnt;
+    for (0..stop_count) |index| {
+        try validateColrPaletteIndexBounds(try bin.readU16At(data, stops_start + index * 6 + 2), cpal_palette_entries);
+    }
 }
 
 fn validateColrAlpha(raw_alpha: i16) FontError!void {
@@ -8826,6 +8872,60 @@ test "COLR palette indices must be declared by CPAL" {
     try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaint(1));
 }
 
+test "COLR v1 gradient ColorLine stops are validated" {
+    var bytes: [99]u8 = .{0} ** 99;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, 38, 1);
+    writeU32Test(&bytes, 40, 10); // PaintLinearGradient at byte 44.
+
+    bytes[44] = 4; // PaintLinearGradient.
+    writeU24Test(&bytes, 45, 16); // ColorLine starts immediately after the paint header.
+    writeI16Test(&bytes, 48, 0);
+    writeI16Test(&bytes, 50, 0);
+    writeI16Test(&bytes, 52, 100);
+    writeI16Test(&bytes, 54, 0);
+    writeI16Test(&bytes, 56, 0);
+    writeI16Test(&bytes, 58, 100);
+
+    const color_line = 60;
+    bytes[color_line] = 0; // ExtendMode.pad.
+    writeU16Test(&bytes, color_line + 1, 2);
+    writeF2Dot14Test(&bytes, color_line + 3, 0.0);
+    writeU16Test(&bytes, color_line + 5, 0);
+    writeF2Dot14Test(&bytes, color_line + 7, 1.0);
+    writeF2Dot14Test(&bytes, color_line + 9, 1.0);
+    writeU16Test(&bytes, color_line + 11, 1);
+    writeF2Dot14Test(&bytes, color_line + 13, 1.0);
+
+    const colr_len = color_line + 15;
+    writeTwoEntryCpalTest(&bytes, colr_len);
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_len };
+    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = colr_len, .length = bytes.len - colr_len };
+    try validateColrPaletteBounds(&bytes, colr, cpal);
+
+    var bad_extend = bytes;
+    bad_extend[color_line] = 3; // ExtendMode only defines pad, repeat, and reflect.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bad_extend, colr, 2));
+
+    var too_few_stops = bytes;
+    writeU16Test(&too_few_stops, color_line + 1, 1);
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&too_few_stops, colr, 2));
+
+    var descending_stops = bytes;
+    writeF2Dot14Test(&descending_stops, color_line + 9, -0.25);
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&descending_stops, colr, 2));
+
+    var bad_stop_alpha = bytes;
+    writeI16Test(&bad_stop_alpha, color_line + 13, 0x4001);
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bad_stop_alpha, colr, 2));
+
+    var bad_stop_palette = bytes;
+    writeU16Test(&bad_stop_palette, color_line + 11, 2); // CPAL below declares palette entries 0 and 1 only.
+    try std.testing.expectError(error.BadSfnt, validateColrPaletteBounds(&bad_stop_palette, colr, cpal));
+}
+
 test "COLR v1 PaintComposite rejects reserved composite modes" {
     var bytes: [62]u8 = .{0} ** 62;
     writeU16Test(&bytes, 0, 1); // COLR version 1.
@@ -10174,6 +10274,23 @@ fn writeSingleEntryCpalTest(bytes: []u8, offset: usize) void {
     bytes[offset + 15] = 0;
     bytes[offset + 16] = 255;
     bytes[offset + 17] = 255;
+}
+
+fn writeTwoEntryCpalTest(bytes: []u8, offset: usize) void {
+    writeU16Test(bytes, offset + 0, 0); // version.
+    writeU16Test(bytes, offset + 2, 2); // numPaletteEntries.
+    writeU16Test(bytes, offset + 4, 1); // numPalettes.
+    writeU16Test(bytes, offset + 6, 2); // numColorRecords.
+    writeU32Test(bytes, offset + 8, 16);
+    writeU16Test(bytes, offset + 12, 0);
+    bytes[offset + 16] = 0;
+    bytes[offset + 17] = 0;
+    bytes[offset + 18] = 255;
+    bytes[offset + 19] = 255;
+    bytes[offset + 20] = 255;
+    bytes[offset + 21] = 0;
+    bytes[offset + 22] = 0;
+    bytes[offset + 23] = 255;
 }
 
 fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32, default: f32, max: f32, name_id: u16) void {

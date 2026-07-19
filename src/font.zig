@@ -2984,6 +2984,20 @@ fn parseTtcHeader(data: []const u8) FontError!?TtcHeader {
         }
     }
 
+    for (0..face_count) |face_offset_index| {
+        const face_offset: usize = @intCast(try bin.readU32At(data, 12 + face_offset_index * 4));
+        // A TTC face offset is an absolute SFNT offset-table address. Validate
+        // every advertised face while parsing the collection header so metadata
+        // queries such as faceCount cannot report a usable collection whose
+        // unselected face later aliases header bytes or lands mid-word.
+        if ((face_offset & 3) != 0) return error.BadSfnt;
+        if (face_offset < header_length) return error.BadSfnt;
+        if (face_offset > data.len - 12) return error.BadSfnt;
+        if (dsig_range) |dsig| {
+            if (rangesOverlap(face_offset, face_offset + 12, dsig.start, dsig.end)) return error.BadSfnt;
+        }
+    }
+
     return .{
         .face_count = face_count,
         .header_length = header_length,
@@ -10428,6 +10442,17 @@ test "TTC face offsets cannot overlap collection metadata" {
     defer allocator.free(overlapping);
     writeU32Test(overlapping, 12, 12); // Points into the face-offset array.
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, overlapping));
+    try std.testing.expectError(error.BadSfnt, Font.faceCount(overlapping));
+
+    const unaligned = try test_font.buildMinimalTtc(allocator);
+    defer allocator.free(unaligned);
+    writeU32Test(unaligned, 12, 18);
+    try std.testing.expectError(error.BadSfnt, Font.faceCount(unaligned));
+
+    const unselected_bad_face = try test_font.buildNamedTtc(allocator);
+    defer allocator.free(unselected_bad_face);
+    writeU32Test(unselected_bad_face, 16, 16); // Second face aliases TTC offset metadata.
+    try std.testing.expectError(error.BadSfnt, Font.faceCount(unselected_bad_face));
 
     const truncated_offsets = overlapping[0..15];
     try std.testing.expectError(error.BadSfnt, Font.faceCount(truncated_offsets));
@@ -12194,7 +12219,7 @@ test "COLR v1 paint graph rejects cyclic layer references" {
 }
 
 test "TTC v2 DSIG descriptor validates range and null consistency" {
-    var valid_empty: [28]u8 = .{0} ** 28;
+    var valid_empty: [40]u8 = .{0} ** 40;
     writeTagTest(&valid_empty, 0, "ttcf");
     writeU32Test(&valid_empty, 4, 0x00020000);
     writeU32Test(&valid_empty, 8, 1);
@@ -12217,24 +12242,24 @@ test "TTC v2 DSIG descriptor validates range and null consistency" {
     writeU32Test(&header_overlap, 24, 24);
     try std.testing.expectError(error.BadSfnt, Font.faceCount(&header_overlap));
 
-    var out_of_bounds: [32]u8 = .{0} ** 32;
+    var out_of_bounds: [40]u8 = .{0} ** 40;
     writeTagTest(&out_of_bounds, 0, "ttcf");
     writeU32Test(&out_of_bounds, 4, 0x00020000);
     writeU32Test(&out_of_bounds, 8, 1);
     writeU32Test(&out_of_bounds, 12, 28);
     writeTagTest(&out_of_bounds, 16, "DSIG");
     writeU32Test(&out_of_bounds, 20, 8);
-    writeU32Test(&out_of_bounds, 24, 28);
+    writeU32Test(&out_of_bounds, 24, 36);
     try std.testing.expectError(error.BadSfnt, Font.faceCount(&out_of_bounds));
 
-    var valid_dsig: [32]u8 = .{0} ** 32;
+    var valid_dsig: [44]u8 = .{0} ** 44;
     writeTagTest(&valid_dsig, 0, "ttcf");
     writeU32Test(&valid_dsig, 4, 0x00020000);
     writeU32Test(&valid_dsig, 8, 1);
     writeU32Test(&valid_dsig, 12, 28);
     writeTagTest(&valid_dsig, 16, "DSIG");
     writeU32Test(&valid_dsig, 20, 4);
-    writeU32Test(&valid_dsig, 24, 28);
+    writeU32Test(&valid_dsig, 24, 40);
     try std.testing.expectEqual(@as(usize, 1), try Font.faceCount(&valid_dsig));
 }
 

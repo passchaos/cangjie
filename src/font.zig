@@ -2808,9 +2808,7 @@ const cmap_format8_groups_offset = cmap_format8_is32_offset + cmap_format8_is32_
 fn validateCmapFormat8(data: []const u8, offset: usize, length: usize) FontError!void {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < cmap_format8_groups_offset) return error.BadSfnt;
-
-    const reserved = try bin.readU16At(data, offset + 2);
-    if (reserved != 0) return error.BadSfnt;
+    try validateExtendedCmapReservedField(data, offset);
     const group_bytes = length - cmap_format8_groups_offset;
     if (group_bytes % 12 != 0) return error.BadSfnt;
     const group_count: usize = @intCast(try bin.readU32At(data, offset + cmap_format8_groups_offset - 4));
@@ -2835,6 +2833,13 @@ fn validateCmapFormat8(data: []const u8, offset: usize, length: usize) FontError
 
         try validateCmapFormat8RangeWidth(data, offset, start, end);
     }
+}
+
+fn validateExtendedCmapReservedField(data: []const u8, offset: usize) FontError!void {
+    // Extended cmap formats 8/10/12/13 all reserve the UInt16 field after the
+    // format word. Keep it zero so a malformed table cannot advertise a
+    // private variant while being interpreted by the standard parser.
+    if (try bin.readU16At(data, offset + 2) != 0) return error.BadSfnt;
 }
 
 fn validateCmapFormat8RangeWidth(data: []const u8, offset: usize, start: u32, end: u32) FontError!void {
@@ -2867,6 +2872,7 @@ fn cmapFormat8Is32(data: []const u8, offset: usize, word: u16) bool {
 fn validateCmapFormat10(data: []const u8, offset: usize, length: usize) FontError!void {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < 20) return error.BadSfnt;
+    try validateExtendedCmapReservedField(data, offset);
     const start_code = try bin.readU32At(data, offset + 12);
     if (!isUnicodeScalarValue(start_code)) return error.BadSfnt;
     const num_chars = try bin.readU32At(data, offset + 16);
@@ -2935,6 +2941,7 @@ fn validateCmapFormat4(data: []const u8, offset: usize, length: usize, validate_
 fn validateSegmentedCmapGroups(data: []const u8, offset: usize, length: usize) FontError!void {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < 16) return error.BadSfnt;
+    try validateExtendedCmapReservedField(data, offset);
     const group_count: usize = @intCast(try bin.readU32At(data, offset + 12));
     if (group_count > (length - 16) / 12) return error.BadSfnt;
 
@@ -7847,6 +7854,55 @@ test "cmap segmented groups must be sorted and disjoint" {
     var overlapping = valid;
     writeCmapGroupTest(&overlapping, 40, 0x1ff, 0x200, 0x104);
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &overlapping, cmap, 512));
+}
+
+test "cmap extended subtables require a zero reserved field" {
+    const allocator = std.testing.allocator;
+
+    {
+        var format10: [34]u8 = .{0} ** 34;
+        writeU16Test(&format10, 0, 0); // cmap version.
+        writeU16Test(&format10, 2, 1);
+        writeU16Test(&format10, 4, 0); // Unicode full repertoire.
+        writeU16Test(&format10, 6, 4);
+        writeU32Test(&format10, 8, 12);
+        writeU16Test(&format10, 12, 10);
+        writeU16Test(&format10, 14, 1); // Reserved UInt16 must remain zero.
+        writeU32Test(&format10, 16, 22);
+        writeU32Test(&format10, 24, 0x10000);
+        writeU32Test(&format10, 28, 1);
+        writeU16Test(&format10, 32, 1);
+
+        const cmap: TableRecord = .{ .tag = .{ 'c', 'm', 'a', 'p' }, .checksum = 0, .offset = 0, .length = format10.len };
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &format10, cmap, 4));
+    }
+
+    {
+        var format12: [40]u8 = .{0} ** 40;
+        writeCmapFormat12HeaderTest(&format12, format12.len - 12, 1);
+        writeU16Test(&format12, 14, 1); // Reserved UInt16 must remain zero.
+        writeCmapGroupTest(&format12, 28, 0x100, 0x100, 1);
+
+        const cmap: TableRecord = .{ .tag = .{ 'c', 'm', 'a', 'p' }, .checksum = 0, .offset = 0, .length = format12.len };
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &format12, cmap, 4));
+    }
+
+    {
+        var format13: [40]u8 = .{0} ** 40;
+        writeU16Test(&format13, 0, 0); // cmap version.
+        writeU16Test(&format13, 2, 1);
+        writeU16Test(&format13, 4, 0); // Unicode last-resort cmap.
+        writeU16Test(&format13, 6, 6);
+        writeU32Test(&format13, 8, 12);
+        writeU16Test(&format13, 12, 13);
+        writeU16Test(&format13, 14, 1); // Reserved UInt16 must remain zero.
+        writeU32Test(&format13, 16, 28);
+        writeU32Test(&format13, 24, 1);
+        writeCmapGroupTest(&format13, 28, 0x100, 0x1ff, 1);
+
+        const cmap: TableRecord = .{ .tag = .{ 'c', 'm', 'a', 'p' }, .checksum = 0, .offset = 0, .length = format13.len };
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &format13, cmap, 4));
+    }
 }
 
 test "cmap format 14 UVS offsets cannot overlap selector records" {

@@ -444,8 +444,12 @@ pub const Font = struct {
     /// per-glyph left side bearing.
     pub fn horizontalMetrics(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!struct { advance_width: u16, left_side_bearing: i16 } {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        const required_length = try hmtxRequiredLength(self.glyph_count, self.number_of_h_metrics);
-        if (self.hmtx.length < required_length) return error.InvalidMetrics;
+        // Horizontal metric tables are borrowed from caller-owned font bytes.
+        // Revalidate the hhea/hmtx contract at this lazy API boundary so a
+        // post-parse mutation cannot make the cached metric count reinterpret
+        // malformed header bytes or read through a now-shortened hmtx record.
+        const current_metric_count = try validateHorizontalMetricsTables(self.data, self.hhea, self.hmtx, self.glyph_count);
+        if (current_metric_count != self.number_of_h_metrics) return error.InvalidMetrics;
         if (glyph_id < self.number_of_h_metrics) {
             const offset = self.hmtx.offset + @as(usize, glyph_id) * 4;
             return .{
@@ -9077,6 +9081,28 @@ test "core metrics and loca stay inside declared table lengths" {
         try setSfntTableLength(bytes, "loca", 4);
         try std.testing.expectError(error.InvalidLoca, Font.parse(allocator, bytes));
     }
+}
+
+test "horizontal metrics revalidate borrowed hhea bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const initial = try font.horizontalMetrics(1);
+    try std.testing.expectEqual(@as(u16, 800), initial.advance_width);
+
+    const hhea_offset: usize = @intCast(try sfntTableOffset(bytes, "hhea"));
+    writeU16Test(bytes, hhea_offset + 24, 1); // Reserved hhea fields must remain zero.
+    try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
+
+    writeU16Test(bytes, hhea_offset + 24, 0);
+    writeU16Test(bytes, hhea_offset + 34, 1);
+    try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
 }
 
 test "vertical metric tables validate paired count and vmtx length at parse time" {

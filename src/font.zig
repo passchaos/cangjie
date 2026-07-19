@@ -1311,12 +1311,12 @@ fn validateCblcCbdtTables(data: []const u8, cblc: TableRecord, cbdt: TableRecord
         const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
         for (strike.start_glyph..@as(usize, strike.end_glyph) + 1) |glyph_index| {
             const location = (try cblcGlyphLocation(data, strike, @intCast(glyph_index))) orelse continue;
-            try validateCbdtGlyphData(data, cbdt, location);
+            try validateCbdtGlyphData(data, cbdt, location, glyph_count);
         }
     }
 }
 
-fn validateCbdtGlyphData(data: []const u8, cbdt: TableRecord, location: CblcGlyphLocation) FontError!void {
+fn validateCbdtGlyphData(data: []const u8, cbdt: TableRecord, location: CblcGlyphLocation, glyph_count: u16) FontError!void {
     if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
 
     // CBLC is an index over CBDT payloads, so all non-empty locations must be
@@ -1327,12 +1327,57 @@ fn validateCbdtGlyphData(data: []const u8, cbdt: TableRecord, location: CblcGlyp
     const start = cbdt.offset + location.offset;
     const end = start + location.length;
     const slice = data[start..end];
-    const metrics_len: usize = switch (location.image_format) {
-        17 => 5,
-        18 => 8,
-        19 => 0,
+    switch (location.image_format) {
+        1 => return try validateCbdtBitmapPayload(slice, 5, true),
+        2 => return try validateCbdtBitmapPayload(slice, 5, false),
+        6 => return try validateCbdtBitmapPayload(slice, 8, true),
+        7 => return try validateCbdtBitmapPayload(slice, 8, false),
+        8 => return try validateCbdtCompoundPayload(slice, 5, glyph_count),
+        9 => return try validateCbdtCompoundPayload(slice, 8, glyph_count),
+        17 => return try validateCbdtEmbeddedDataPayload(slice, 5),
+        18 => return try validateCbdtEmbeddedDataPayload(slice, 8),
+        19 => return try validateCbdtEmbeddedDataPayload(slice, 0),
         else => return,
+    }
+}
+
+fn validateCbdtBitmapPayload(slice: []const u8, metrics_len: usize, byte_aligned_rows: bool) FontError!void {
+    if (slice.len < metrics_len) return error.BadSfnt;
+
+    const metrics = switch (metrics_len) {
+        5 => try readSmallBitmapMetrics(slice, 0),
+        8 => try readBigBitmapMetrics(slice, 0),
+        else => unreachable,
     };
+    const bitmap_len = if (byte_aligned_rows)
+        @as(usize, metrics.height) * ((@as(usize, metrics.width) + 7) / 8)
+    else
+        (@as(usize, metrics.height) * @as(usize, metrics.width) + 7) / 8;
+    if (bitmap_len > slice.len - metrics_len) return error.BadSfnt;
+}
+
+fn validateCbdtCompoundPayload(slice: []const u8, metrics_len: usize, glyph_count: u16) FontError!void {
+    const components_start = metrics_len + 3;
+    if (slice.len < components_start) return error.BadSfnt;
+    switch (metrics_len) {
+        5 => _ = try readSmallBitmapMetrics(slice, 0),
+        8 => _ = try readBigBitmapMetrics(slice, 0),
+        else => unreachable,
+    }
+
+    // CBDT compound bitmap payloads recursively reference glyph IDs through a
+    // compact component array. Validate the array count and target glyphs here
+    // so an otherwise-unused bitmap strike cannot contain dangling references
+    // that would only be discovered by a future non-PNG renderer.
+    const component_count = try bin.readU16At(slice, metrics_len + 1);
+    if (@as(usize, component_count) > (slice.len - components_start) / 4) return error.BadSfnt;
+    for (0..component_count) |component_index| {
+        const component = components_start + component_index * 4;
+        try validateGlyphIdInMaxp(try bin.readU16At(slice, component), glyph_count);
+    }
+}
+
+fn validateCbdtEmbeddedDataPayload(slice: []const u8, metrics_len: usize) FontError!void {
     if (slice.len < metrics_len + 4) return error.BadSfnt;
     const data_len = try bin.readU32At(slice, metrics_len);
     if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
@@ -6178,6 +6223,42 @@ test "CBLC CBDT parse validation checks every referenced bitmap payload" {
     writeU32Test(bytes, cbdt_offset + 9, original_data_len);
     writeU32Test(bytes, cblc_offset + 68, 0xffff_ff00); // indexSubTable.imageDataOffset
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "CBDT non-PNG payloads validate metrics and compound glyph references" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildCbdtPngTtf(allocator);
+        defer allocator.free(bytes);
+
+        const cblc_offset = try sfntTableOffset(bytes, "CBLC");
+        const cbdt_offset = try sfntTableOffset(bytes, "CBDT");
+        writeU16Test(bytes, cblc_offset + 66, 1); // image format 1: byte-aligned bitmap data.
+        writeU16Test(bytes, cblc_offset + 74, 6); // CBLC now declares only six CBDT bytes.
+        bytes[cbdt_offset + 4] = 2; // height
+        bytes[cbdt_offset + 5] = 9; // width: two bytes per row when byte-aligned.
+        // Only one byte follows the five-byte small metrics block, but the
+        // bitmap metrics require four bytes of image data.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildCbdtPngTtf(allocator);
+        defer allocator.free(bytes);
+
+        const cblc_offset = try sfntTableOffset(bytes, "CBLC");
+        const cbdt_offset = try sfntTableOffset(bytes, "CBDT");
+        writeU16Test(bytes, cblc_offset + 66, 8); // image format 8: small metrics + component array.
+        writeU16Test(bytes, cblc_offset + 74, 12);
+        bytes[cbdt_offset + 4] = 1; // height
+        bytes[cbdt_offset + 5] = 1; // width
+        bytes[cbdt_offset + 9] = 0; // pad
+        writeU16Test(bytes, cbdt_offset + 10, 1); // one component.
+        writeU16Test(bytes, cbdt_offset + 12, 2); // maxp declares glyph IDs 0 and 1 only.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "CBDT non-PNG image formats are skipped by PNG lookup" {

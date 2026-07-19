@@ -1424,18 +1424,13 @@ fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphI
     const glyph_end = strike.offset + end;
     const graphic_type = try bin.readTagAt(data, glyph_start + 4);
     if (!bin.tagEq(graphic_type, "png ")) return null;
-    const png = data[glyph_start + 8 .. glyph_end];
-    if (png.len < 24) return error.BadSfnt;
-    if (!std.mem.eql(u8, png[1..4], "PNG")) return error.BadSfnt;
-    return .{
-        .ppem = strike.ppem,
-        .ppi = strike.ppi,
-        .origin_offset_x = try bin.readI16At(data, glyph_start),
-        .origin_offset_y = try bin.readI16At(data, glyph_start + 2),
-        .width = try bin.readU32At(png, 16),
-        .height = try bin.readU32At(png, 20),
-        .data = png,
-    };
+    return try bitmapGlyphPngFromData(
+        data[glyph_start + 8 .. glyph_end],
+        strike.ppem,
+        strike.ppi,
+        try bin.readI16At(data, glyph_start),
+        try bin.readI16At(data, glyph_start + 2),
+    );
 }
 
 fn validateSbixTable(data: []const u8, sbix: TableRecord, glyph_count: u16) FontError!void {
@@ -1443,6 +1438,7 @@ fn validateSbixTable(data: []const u8, sbix: TableRecord, glyph_count: u16) Font
     for (0..strike_count) |strike_index| {
         const strike = try sbixStrike(data, sbix, glyph_count, strike_index);
         try validateSbixStrikeGlyphOffsets(data, strike, glyph_count);
+        try validateSbixStrikeBitmapPayloads(data, strike, glyph_count);
     }
 }
 
@@ -1461,6 +1457,22 @@ fn validateSbixStrikeGlyphOffsets(data: []const u8, strike: SbixStrike, glyph_co
         if (current < strike.bitmap_data_offset or current > strike.length) return error.BadSfnt;
         if (current != previous and current - previous < 8) return error.BadSfnt;
         previous = current;
+    }
+}
+
+fn validateSbixStrikeBitmapPayloads(data: []const u8, strike: SbixStrike, glyph_count: u16) FontError!void {
+    for (0..glyph_count) |glyph_index| {
+        const glyph_offset_pos = strike.offset + 4 + glyph_index * 4;
+        const start = try bin.readU32At(data, glyph_offset_pos);
+        const end = try bin.readU32At(data, glyph_offset_pos + 4);
+        if (end == start) continue;
+
+        const glyph_start = strike.offset + start;
+        const glyph_end = strike.offset + end;
+        const graphic_type = try bin.readTagAt(data, glyph_start + 4);
+        if (bin.tagEq(graphic_type, "png ")) {
+            _ = try validatePngBitmapPayload(data[glyph_start + 8 .. glyph_end]);
+        }
     }
 }
 
@@ -1599,6 +1611,7 @@ fn validateCbdtEmbeddedDataPayload(slice: []const u8, metrics_len: usize) FontEr
     if (slice.len < metrics_len + 4) return error.BadSfnt;
     const data_len = try bin.readU32At(slice, metrics_len);
     if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
+    _ = try validatePngBitmapPayload(slice[metrics_len + 4 .. metrics_len + 4 + data_len]);
 }
 
 fn cblcGlyphLocation(data: []const u8, strike: CblcStrike, glyph_id: glyph_mod.GlyphId) FontError!?CblcGlyphLocation {
@@ -1785,18 +1798,70 @@ fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locatio
 }
 
 fn bitmapGlyphPngFromData(png: []const u8, ppem: u16, ppi: u16, origin_offset_x: i16, origin_offset_y: i16) FontError!BitmapGlyphPng {
-    if (png.len < 24) return error.BadSfnt;
-    if (!std.mem.eql(u8, png[1..4], "PNG")) return error.BadSfnt;
+    const dimensions = try validatePngBitmapPayload(png);
     return .{
         .ppem = ppem,
         .ppi = ppi,
         .origin_offset_x = origin_offset_x,
         .origin_offset_y = origin_offset_y,
-        .width = try bin.readU32At(png, 16),
-        .height = try bin.readU32At(png, 20),
+        .width = dimensions.width,
+        .height = dimensions.height,
         .data = png,
     };
 }
+
+const PngDimensions = struct {
+    width: u32,
+    height: u32,
+};
+
+fn validatePngBitmapPayload(png: []const u8) FontError!PngDimensions {
+    if (png.len < png_signature.len + 12) return error.BadSfnt;
+    if (!std.mem.eql(u8, png[0..png_signature.len], &png_signature)) return error.BadSfnt;
+
+    // OpenType bitmap tables embed a full PNG datastream. Validate enough of
+    // the container grammar to ensure callers do not accept arbitrary bytes
+    // that merely contain "PNG" at offsets 1..3, and to catch truncated or
+    // checksum-corrupt bitmap payloads before exposing dimensions to renderers.
+    var offset: usize = png_signature.len;
+    var saw_ihdr = false;
+    var saw_idat = false;
+    var dimensions = PngDimensions{ .width = 0, .height = 0 };
+    while (true) {
+        if (png.len - offset < 12) return error.BadSfnt;
+        const chunk_start = offset;
+        const data_len = try bin.readU32At(png, offset);
+        offset += 4;
+        const chunk_type = try bin.readTagAt(png, offset);
+        offset += 4;
+        if (data_len > png.len - offset - 4) return error.BadSfnt;
+        const chunk_data = png[offset .. offset + data_len];
+        offset += data_len;
+        const declared_crc = try bin.readU32At(png, offset);
+        offset += 4;
+        const computed_crc = std.hash.Crc32.hash(png[chunk_start + 4 .. offset - 4]);
+        if (computed_crc != declared_crc) return error.BadSfnt;
+
+        if (bin.tagEq(chunk_type, "IHDR")) {
+            if (saw_ihdr or data_len != 13) return error.BadSfnt;
+            dimensions = .{
+                .width = try bin.readU32At(chunk_data, 0),
+                .height = try bin.readU32At(chunk_data, 4),
+            };
+            if (dimensions.width == 0 or dimensions.height == 0) return error.BadSfnt;
+            saw_ihdr = true;
+        } else {
+            if (!saw_ihdr) return error.BadSfnt;
+            if (bin.tagEq(chunk_type, "IDAT")) saw_idat = true;
+            if (bin.tagEq(chunk_type, "IEND")) {
+                if (data_len != 0 or !saw_idat or offset != png.len) return error.BadSfnt;
+                return dimensions;
+            }
+        }
+    }
+}
+
+const png_signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
 
 fn readSmallBitmapMetrics(data: []const u8, offset: usize) FontError!BitmapMetrics {
     if (offset + 5 > data.len) return error.BadSfnt;
@@ -8499,7 +8564,7 @@ test "CBLC fixed-size index formats validate dense and sparse invariants" {
     writeU16Test(&data, 58, 3); // lastGlyphIndex.
     writeU32Test(&data, 60, 8); // Subtable starts after the array record.
     writeU16Test(&data, 64, 5); // indexFormat 5: sparse fixed-size images.
-    writeU16Test(&data, 66, 17); // imageFormat 17: small metrics + dataLen.
+    writeU16Test(&data, 66, 1); // imageFormat 1: byte-aligned bitmap payloads.
     writeU32Test(&data, 68, 0); // imageDataOffset.
     writeU32Test(&data, 72, 9); // imageSize.
     writeU32Test(&data, 84, 3); // Three glyph codes follow.
@@ -8636,6 +8701,45 @@ test "CBLC public bitmap APIs revalidate borrowed CBDT payloads" {
     writeU32Test(bytes, cbdt_offset + 9, 0xffff_ffff);
     try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
     try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(1, 16));
+}
+
+test "CBDT embedded PNG payloads require a valid PNG datastream" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCbdtPngTtf(allocator);
+    defer allocator.free(bytes);
+
+    const cbdt_offset = try sfntTableOffset(bytes, "CBDT");
+    const png_offset = cbdt_offset + 4 + 5 + 4;
+    bytes[png_offset] = 0; // The previous loose check of bytes 1..3 would still see "PNG".
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "PNG bitmap payload validation checks signature chunks and CRCs" {
+    const valid_png = [_]u8{
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+        0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xd0,
+        0x00, 0x00, 0x04, 0x81, 0x01, 0x80, 0x2c, 0x55, 0xce, 0xb0, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    };
+
+    const dimensions = try validatePngBitmapPayload(&valid_png);
+    try std.testing.expectEqual(@as(u32, 1), dimensions.width);
+    try std.testing.expectEqual(@as(u32, 1), dimensions.height);
+
+    var bad_signature = valid_png;
+    bad_signature[0] = 0;
+    try std.testing.expectError(error.BadSfnt, validatePngBitmapPayload(&bad_signature));
+
+    var bad_crc = valid_png;
+    bad_crc[19] = 2; // Width byte changes but IHDR CRC remains the original value.
+    try std.testing.expectError(error.BadSfnt, validatePngBitmapPayload(&bad_crc));
+
+    var trailing = valid_png ++ [_]u8{0};
+    try std.testing.expectError(error.BadSfnt, validatePngBitmapPayload(&trailing));
 }
 
 test "CBDT non-PNG payloads validate metrics and compound glyph references" {

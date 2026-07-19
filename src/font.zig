@@ -3806,7 +3806,11 @@ fn validateSegmentedCmapGroups(data: []const u8, offset: usize, length: usize) F
     if (length < 16) return error.BadSfnt;
     try validateExtendedCmapReservedField(data, offset);
     const group_count: usize = @intCast(try bin.readU32At(data, offset + 12));
-    if (group_count > (length - 16) / 12) return error.BadSfnt;
+    // Formats 12 and 13 have no trailing language or padding fields after the
+    // group array. Require the UInt32 length to match the declared group count
+    // exactly so an EncodingRecord cannot hide an extra partial/complete group
+    // that another parser or a mutated cached subtable might later observe.
+    if (@as(u64, group_count) * 12 != @as(u64, length - 16)) return error.BadSfnt;
 
     var previous_end: ?u32 = null;
     for (0..group_count) |index| {
@@ -4881,7 +4885,7 @@ fn glyphIndexFormat13(data: []const u8, offset: usize, length: usize, codepoint:
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < 16) return error.BadSfnt;
     const groups = try bin.readU32At(data, offset + 12);
-    if (@as(usize, groups) > (length - 16) / 12) return error.BadSfnt;
+    if (@as(u64, groups) * 12 != @as(u64, length - 16)) return error.BadSfnt;
 
     var lo: usize = 0;
     var hi: usize = @intCast(groups);
@@ -4911,7 +4915,7 @@ fn glyphIndexSequentialMapGroups(data: []const u8, offset: usize, groups_offset:
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (groups_offset < 4 or groups_offset > length) return error.BadSfnt;
     const groups = try bin.readU32At(data, offset + groups_offset - 4);
-    if (@as(usize, groups) > (length - groups_offset) / 12) return error.BadSfnt;
+    if (@as(u64, groups) * 12 != @as(u64, length - groups_offset)) return error.BadSfnt;
 
     var lo: usize = 0;
     var hi: usize = @intCast(groups);
@@ -9210,6 +9214,15 @@ test "cmap 32-bit subtables stay inside declared lengths" {
     try std.testing.expectError(error.BadSfnt, glyphIndexFormat12(&format12, 0, 16, 'A'));
     try std.testing.expectEqual(@as(glyph_mod.GlyphId, 9), try glyphIndexFormat12(&format12, 0, 28, 'A'));
 
+    var format12_trailing: [30]u8 = .{0} ** 30;
+    writeU16Test(&format12_trailing, 0, 12);
+    writeU32Test(&format12_trailing, 4, format12_trailing.len);
+    writeU32Test(&format12_trailing, 12, 1);
+    writeU32Test(&format12_trailing, 16, 'A');
+    writeU32Test(&format12_trailing, 20, 'A');
+    writeU32Test(&format12_trailing, 24, 9);
+    try std.testing.expectError(error.BadSfnt, glyphIndexFormat12(&format12_trailing, 0, format12_trailing.len, 'A'));
+
     var format13: [28]u8 = .{0} ** 28;
     writeU16Test(&format13, 0, 13);
     writeU32Test(&format13, 4, 16); // Declared length excludes the group below.
@@ -9219,6 +9232,15 @@ test "cmap 32-bit subtables stay inside declared lengths" {
     writeU32Test(&format13, 24, 3);
     try std.testing.expectError(error.BadSfnt, glyphIndexFormat13(&format13, 0, 16, 'A'));
     try std.testing.expectEqual(@as(glyph_mod.GlyphId, 3), try glyphIndexFormat13(&format13, 0, 28, 0x1f600));
+
+    var format13_trailing: [30]u8 = .{0} ** 30;
+    writeU16Test(&format13_trailing, 0, 13);
+    writeU32Test(&format13_trailing, 4, format13_trailing.len);
+    writeU32Test(&format13_trailing, 12, 1);
+    writeU32Test(&format13_trailing, 16, 0);
+    writeU32Test(&format13_trailing, 20, 0x10ffff);
+    writeU32Test(&format13_trailing, 24, 3);
+    try std.testing.expectError(error.BadSfnt, glyphIndexFormat13(&format13_trailing, 0, format13_trailing.len, 0x1f600));
 }
 
 test "cmap format 14 lookup mirrors parse-time selector and payload validation" {
@@ -10014,6 +10036,18 @@ test "cmap segmented groups must be sorted and disjoint" {
     var overlapping = valid;
     writeCmapGroupTest(&overlapping, 40, 0x1ff, 0x200, 0x104);
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &overlapping, cmap, 512));
+
+    var extra_bytes: [56]u8 = .{0} ** 56;
+    writeCmapFormat12HeaderTest(&extra_bytes, extra_bytes.len - 12, 2);
+    writeCmapGroupTest(&extra_bytes, 28, 0x100, 0x1ff, 4);
+    writeCmapGroupTest(&extra_bytes, 40, 0x200, 0x200, 0x104);
+    const extra_cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = extra_bytes.len,
+    };
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &extra_bytes, extra_cmap, 512));
 }
 
 test "cmap extended subtables require a zero reserved field" {

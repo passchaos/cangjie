@@ -182,6 +182,7 @@ pub const Font = struct {
     gpos: ?TableRecord,
     gsub: ?TableRecord,
     name: ?TableRecord,
+    post: ?TableRecord,
     stat: ?TableRecord,
     fvar: ?TableRecord,
     avar: ?TableRecord,
@@ -378,6 +379,7 @@ pub const Font = struct {
             .gpos = gpos,
             .gsub = gsub,
             .name = name,
+            .post = post,
             .stat = stat,
             .fvar = fvar,
             .avar = avar,
@@ -727,6 +729,20 @@ pub const Font = struct {
 
     pub fn fullName(self: *const Font, out: []u8) FontError!?[]const u8 {
         return try self.nameString(.full_name, out);
+    }
+
+    /// Return the PostScript glyph name advertised by the optional `post` table.
+    ///
+    /// The returned slice is borrowed either from static Macintosh standard-name
+    /// storage or from the caller-owned SFNT bytes backing this Font. Because the
+    /// SFNT bytes are borrowed, this revalidates the complete `post` table before
+    /// every lookup so post-parse mutations cannot reinterpret malformed Pascal
+    /// strings or glyph-name indexes as a valid public name.
+    pub fn glyphName(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const post = self.post orelse return null;
+        try validatePostTable(self.data, post, self.glyph_count);
+        return try readPostGlyphName(self.data, post, glyph_id);
     }
 
     pub fn hasStyleAttributes(self: *const Font) bool {
@@ -2051,6 +2067,326 @@ fn validatePostFormat25(data: []const u8, post: TableRecord, glyph_count: u16) F
 fn validatePostFormat4(post: TableRecord, glyph_count: u16) FontError!void {
     if (@as(usize, glyph_count) * 2 > post.length - 32) return error.BadSfnt;
 }
+
+fn readPostGlyphName(data: []const u8, post: TableRecord, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
+    const table = data[post.offset .. post.offset + post.length];
+    const version = try bin.readU32At(table, 0);
+    return switch (version) {
+        0x00010000 => try postStandardGlyphName(glyph_id),
+        0x00020000 => try readPostFormat2GlyphName(table, glyph_id),
+        0x00025000 => try readPostFormat25GlyphName(table, glyph_id),
+        // Format 3.0 deliberately omits glyph names. Format 4.0 maps glyphs
+        // to character codes for old composite-font workflows rather than to
+        // PostScript names, so this API reports no glyph name for it.
+        0x00030000, 0x00040000 => null,
+        else => error.BadSfnt,
+    };
+}
+
+fn readPostFormat2GlyphName(table: []const u8, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
+    const number_of_glyphs = try bin.readU16At(table, 32);
+    if (glyph_id >= number_of_glyphs) return error.InvalidGlyph;
+    const glyph_name_indices_offset: usize = 34;
+    const name_index = try bin.readU16At(table, glyph_name_indices_offset + @as(usize, glyph_id) * 2);
+    if (name_index < post_standard_glyph_names.len) return try postStandardGlyphName(name_index);
+
+    // Custom names are Pascal strings stored in ordinal order immediately after
+    // the glyphNameIndex array. The index value 258 names the first custom
+    // string, 259 the second, and so on; validation has already guaranteed that
+    // all ordinals up to the largest referenced index are structurally present.
+    return try readPostCustomGlyphName(table, name_index - post_standard_glyph_names.len);
+}
+
+fn readPostCustomGlyphName(table: []const u8, ordinal: usize) FontError![]const u8 {
+    const number_of_glyphs = try bin.readU16At(table, 32);
+    var cursor: usize = 34 + @as(usize, number_of_glyphs) * 2;
+    for (0..ordinal) |_| {
+        if (cursor >= table.len) return error.BadSfnt;
+        const name_len = table[cursor];
+        cursor += 1 + @as(usize, name_len);
+        if (cursor > table.len) return error.BadSfnt;
+    }
+    if (cursor >= table.len) return error.BadSfnt;
+    const name_len = table[cursor];
+    cursor += 1;
+    if (@as(usize, name_len) > table.len - cursor) return error.BadSfnt;
+    return table[cursor .. cursor + name_len];
+}
+
+fn readPostFormat25GlyphName(table: []const u8, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
+    const number_of_glyphs = try bin.readU16At(table, 32);
+    if (glyph_id >= number_of_glyphs) return error.InvalidGlyph;
+    const signed_delta: i8 = @bitCast(table[34 + @as(usize, glyph_id)]);
+    const standard_index = @as(i32, @intCast(glyph_id)) + @as(i32, signed_delta);
+    if (standard_index < 0 or standard_index >= post_standard_glyph_names.len) return error.BadSfnt;
+    return try postStandardGlyphName(@intCast(standard_index));
+}
+
+fn postStandardGlyphName(index: usize) FontError![]const u8 {
+    if (index >= post_standard_glyph_names.len) return error.BadSfnt;
+    return post_standard_glyph_names[index];
+}
+
+const post_standard_glyph_names = [_][]const u8{
+    ".notdef",
+    ".null",
+    "nonmarkingreturn",
+    "space",
+    "exclam",
+    "quotedbl",
+    "numbersign",
+    "dollar",
+    "percent",
+    "ampersand",
+    "quotesingle",
+    "parenleft",
+    "parenright",
+    "asterisk",
+    "plus",
+    "comma",
+    "hyphen",
+    "period",
+    "slash",
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "colon",
+    "semicolon",
+    "less",
+    "equal",
+    "greater",
+    "question",
+    "at",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "bracketleft",
+    "backslash",
+    "bracketright",
+    "asciicircum",
+    "underscore",
+    "grave",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z",
+    "braceleft",
+    "bar",
+    "braceright",
+    "asciitilde",
+    "Adieresis",
+    "Aring",
+    "Ccedilla",
+    "Eacute",
+    "Ntilde",
+    "Odieresis",
+    "Udieresis",
+    "aacute",
+    "agrave",
+    "acircumflex",
+    "adieresis",
+    "atilde",
+    "aring",
+    "ccedilla",
+    "eacute",
+    "egrave",
+    "ecircumflex",
+    "edieresis",
+    "iacute",
+    "igrave",
+    "icircumflex",
+    "idieresis",
+    "ntilde",
+    "oacute",
+    "ograve",
+    "ocircumflex",
+    "odieresis",
+    "otilde",
+    "uacute",
+    "ugrave",
+    "ucircumflex",
+    "udieresis",
+    "dagger",
+    "degree",
+    "cent",
+    "sterling",
+    "section",
+    "bullet",
+    "paragraph",
+    "germandbls",
+    "registered",
+    "copyright",
+    "trademark",
+    "acute",
+    "dieresis",
+    "notequal",
+    "AE",
+    "Oslash",
+    "infinity",
+    "plusminus",
+    "lessequal",
+    "greaterequal",
+    "yen",
+    "mu",
+    "partialdiff",
+    "summation",
+    "product",
+    "pi",
+    "integral",
+    "ordfeminine",
+    "ordmasculine",
+    "Omega",
+    "ae",
+    "oslash",
+    "questiondown",
+    "exclamdown",
+    "logicalnot",
+    "radical",
+    "florin",
+    "approxequal",
+    "Delta",
+    "guillemotleft",
+    "guillemotright",
+    "ellipsis",
+    "nonbreakingspace",
+    "Agrave",
+    "Atilde",
+    "Otilde",
+    "OE",
+    "oe",
+    "endash",
+    "emdash",
+    "quotedblleft",
+    "quotedblright",
+    "quoteleft",
+    "quoteright",
+    "divide",
+    "lozenge",
+    "ydieresis",
+    "Ydieresis",
+    "fraction",
+    "currency",
+    "guilsinglleft",
+    "guilsinglright",
+    "fi",
+    "fl",
+    "daggerdbl",
+    "periodcentered",
+    "quotesinglbase",
+    "quotedblbase",
+    "perthousand",
+    "Acircumflex",
+    "Ecircumflex",
+    "Aacute",
+    "Edieresis",
+    "Egrave",
+    "Iacute",
+    "Icircumflex",
+    "Idieresis",
+    "Igrave",
+    "Oacute",
+    "Ocircumflex",
+    "apple",
+    "Ograve",
+    "Uacute",
+    "Ucircumflex",
+    "Ugrave",
+    "dotlessi",
+    "circumflex",
+    "tilde",
+    "macron",
+    "breve",
+    "dotaccent",
+    "ring",
+    "cedilla",
+    "hungarumlaut",
+    "ogonek",
+    "caron",
+    "Lslash",
+    "lslash",
+    "Scaron",
+    "scaron",
+    "Zcaron",
+    "zcaron",
+    "brokenbar",
+    "Eth",
+    "eth",
+    "Yacute",
+    "yacute",
+    "Thorn",
+    "thorn",
+    "minus",
+    "multiply",
+    "onesuperior",
+    "twosuperior",
+    "threesuperior",
+    "onehalf",
+    "onequarter",
+    "threequarters",
+    "franc",
+    "Gbreve",
+    "gbreve",
+    "Idotaccent",
+    "Scedilla",
+    "scedilla",
+    "Cacute",
+    "cacute",
+    "Ccaron",
+    "ccaron",
+    "dcroat",
+};
 
 fn validateKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
     try requireTableLength(kern, 4);
@@ -9854,6 +10190,71 @@ test "post table structural contracts are validated at parse time" {
     }
 }
 
+test "post glyph names are exposed and revalidated from borrowed bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var post: [44]u8 = .{0} ** 44;
+    writePostHeaderTest(&post, 0x00020000);
+    writeU16Test(&post, 32, 2);
+    writeU16Test(&post, 34, 0); // glyph 0 uses the standard .notdef name.
+    writeU16Test(&post, 36, 258); // glyph 1 uses the first custom Pascal string.
+    post[38] = 5;
+    @memcpy(post[39..44], "A.alt");
+
+    const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqualStrings(".notdef", (try font.glyphName(0)).?);
+    try std.testing.expectEqualStrings("A.alt", (try font.glyphName(1)).?);
+    try std.testing.expectError(error.InvalidGlyph, font.glyphName(2));
+
+    const post_offset = try sfntTableOffset(bytes, "post");
+    bytes[post_offset + 43] = '-';
+    // `post` custom names are borrowed from the original SFNT buffer. A caller
+    // mutating that buffer after Font.parse must not make the public API return
+    // a name that the parser would reject if it saw the bytes now.
+    try std.testing.expectError(error.BadSfnt, font.glyphName(1));
+}
+
+test "post glyph names support standard aliases and absent-name formats" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        var post: [36]u8 = .{0} ** 36;
+        writePostHeaderTest(&post, 0x00025000);
+        writeU16Test(&post, 32, 2);
+        post[34] = 0; // glyph 0 -> standard name 0.
+        post[35] = 35; // glyph 1 + 35 -> standard name 36 ("A").
+
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expectEqualStrings(".notdef", (try font.glyphName(0)).?);
+        try std.testing.expectEqualStrings("A", (try font.glyphName(1)).?);
+    }
+
+    {
+        var post: [32]u8 = .{0} ** 32;
+        writePostHeaderTest(&post, 0x00030000);
+
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expectEqual(@as(?[]const u8, null), try font.glyphName(1));
+    }
+}
+
 test "TTC face offsets cannot overlap collection metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -12698,6 +13099,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .post = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -12741,6 +13143,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .post = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -12784,6 +13187,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .post = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -12834,6 +13238,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .post = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -12877,6 +13282,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .post = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -12920,6 +13326,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .post = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -12963,6 +13370,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .post = null,
         .stat = null,
         .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len },
         .avar = null,
@@ -13020,6 +13428,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .post = null,
         .stat = null,
         .fvar = null,
         .avar = null,

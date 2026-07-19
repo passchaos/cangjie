@@ -538,6 +538,12 @@ pub const Font = struct {
         // glyph-id contract violation, even for fonts without a kern table.
         if (left >= self.glyph_count or right >= self.glyph_count) return error.InvalidGlyph;
         const kern = self.kern orelse return 0;
+        // `kern` table records cache only offsets into caller-owned SFNT bytes.
+        // Re-run the parse-time pair-array validation before each lazy kerning
+        // read so post-parse mutations cannot introduce dangling glyph IDs or
+        // unsorted format-0 records that binary search would otherwise observe
+        // as an innocuous "no pair" result.
+        try validateKernTable(self.data, kern, self.glyph_count);
         if (kern.length < 4) return 0;
         const version = try bin.readU32At(self.data, kern.offset);
         if (version == 0x00010000) {
@@ -8015,6 +8021,28 @@ test "kern public API rejects glyph ids outside maxp count" {
     const font = kernOnlyFont(&data);
     try std.testing.expectError(error.InvalidGlyph, font.kerning(2, 1));
     try std.testing.expectError(error.InvalidGlyph, font.kerning(1, 2));
+}
+
+test "kern public API revalidates borrowed pair arrays" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var kern: [24]u8 = .{0} ** 24;
+    writeU16Test(&kern, 0, 0);
+    writeU16Test(&kern, 2, 1);
+    writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+
+    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(i16, -40), try font.kerning(1, 1));
+
+    const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
+    writeU16Test(bytes, kern_offset + 4 + 6 + 8 + 2, 2); // Mutate right glyph outside maxp.numGlyphs.
+    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
 }
 
 test "legacy kern format 0 rejects truncated binary-search header" {

@@ -14,7 +14,9 @@ pub const Reader = struct {
     }
 
     pub fn skip(self: *Reader, amount: usize) !void {
-        try self.seek(self.offset + amount);
+        if (self.offset > self.data.len) return error.EndOfStream;
+        if (amount > self.data.len - self.offset) return error.EndOfStream;
+        self.offset += amount;
     }
 
     pub fn readU8(self: *Reader) !u8 {
@@ -50,6 +52,7 @@ pub const Reader = struct {
     }
 
     pub fn readBytes(self: *Reader, len: usize) ![]const u8 {
+        if (self.offset > self.data.len) return error.EndOfStream;
         if (len > self.data.len - self.offset) return error.EndOfStream;
         const start = self.offset;
         self.offset += len;
@@ -57,9 +60,17 @@ pub const Reader = struct {
     }
 };
 
+fn boundedSlice(data: []const u8, offset: usize, len: usize) ![]const u8 {
+    // Absolute offsets often originate from font table directories. Check the
+    // subtraction form first so hostile offsets near maxInt(usize) report a
+    // normal parser error instead of overflowing during `offset + len`.
+    if (offset > data.len or len > data.len - offset) return error.EndOfStream;
+    return data[offset .. offset + len];
+}
+
 pub fn readU16At(data: []const u8, offset: usize) !u16 {
-    if (offset + 2 > data.len) return error.EndOfStream;
-    return std.mem.readInt(u16, data[offset..][0..2], .big);
+    const bytes = try boundedSlice(data, offset, 2);
+    return std.mem.readInt(u16, bytes[0..2], .big);
 }
 
 pub fn readI16At(data: []const u8, offset: usize) !i16 {
@@ -67,8 +78,8 @@ pub fn readI16At(data: []const u8, offset: usize) !i16 {
 }
 
 pub fn readU32At(data: []const u8, offset: usize) !u32 {
-    if (offset + 4 > data.len) return error.EndOfStream;
-    return std.mem.readInt(u32, data[offset..][0..4], .big);
+    const bytes = try boundedSlice(data, offset, 4);
+    return std.mem.readInt(u32, bytes[0..4], .big);
 }
 
 pub fn readI32At(data: []const u8, offset: usize) !i32 {
@@ -76,8 +87,8 @@ pub fn readI32At(data: []const u8, offset: usize) !i32 {
 }
 
 pub fn readTagAt(data: []const u8, offset: usize) ![4]u8 {
-    if (offset + 4 > data.len) return error.EndOfStream;
-    return .{ data[offset], data[offset + 1], data[offset + 2], data[offset + 3] };
+    const bytes = try boundedSlice(data, offset, 4);
+    return .{ bytes[0], bytes[1], bytes[2], bytes[3] };
 }
 
 pub fn tag(comptime text: []const u8) [4]u8 {
@@ -87,4 +98,26 @@ pub fn tag(comptime text: []const u8) [4]u8 {
 
 pub fn tagEq(a: [4]u8, comptime text: []const u8) bool {
     return std.mem.eql(u8, &a, text);
+}
+
+test "absolute reads reject overflowing offsets without trapping" {
+    const empty: []const u8 = &.{};
+    const huge = std.math.maxInt(usize);
+
+    try std.testing.expectError(error.EndOfStream, readU16At(empty, huge));
+    try std.testing.expectError(error.EndOfStream, readU32At(empty, huge));
+    try std.testing.expectError(error.EndOfStream, readTagAt(empty, huge));
+}
+
+test "reader skip rejects overflowing forward movement without trapping" {
+    var reader = Reader.init(&.{});
+
+    try std.testing.expectError(error.EndOfStream, reader.skip(std.math.maxInt(usize)));
+    try std.testing.expectEqual(@as(usize, 0), reader.offset);
+
+    // Reader exposes its cursor for lightweight parser code, so defend against
+    // an already-invalid cursor before doing subtraction-based bounds checks.
+    reader.offset = std.math.maxInt(usize);
+    try std.testing.expectError(error.EndOfStream, reader.skip(1));
+    try std.testing.expectError(error.EndOfStream, reader.readBytes(1));
 }

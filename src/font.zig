@@ -5544,9 +5544,7 @@ fn validateColorPaintPaletteBounds(data: []const u8, colr: TableRecord, cpal_pal
         .solid => {
             try validateColrPaletteIndexBounds(try bin.readU16At(data, offset + 1), cpal_palette_entries);
         },
-        .glyph, .single_child => {
-            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
-        },
+        .glyph, .single_child => try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard),
         .color_line => try validateColrColorLinePaletteBounds(data, colr, offset, info.min_size, cpal_palette_entries),
         .composite => {
             try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
@@ -6159,7 +6157,7 @@ fn colorPaintFormatInfo(format: u8) ?ColorPaintFormatInfo {
         10 => .{ .min_size = 6, .kind = .glyph },
         11 => .{ .min_size = 3, .kind = .colr_glyph },
         12 => .{ .min_size = 7, .kind = .single_child },
-        13 => .{ .min_size = 7, .kind = .single_child },
+        13 => .{ .min_size = 11, .kind = .single_child },
         14, 16, 28 => .{ .min_size = 8, .kind = .single_child },
         15, 17, 29 => .{ .min_size = 12, .kind = .single_child },
         18 => .{ .min_size = 12, .kind = .single_child },
@@ -6190,6 +6188,7 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
     if (info.kind == .color_line) {
         try validateColrColorLine(data, colr, offset, info.min_size, colrPaintUsesVarColorLine(format));
     }
+    try validateColrPaintTransformPayloadBounds(data, colr, offset, info);
     if (format == 32) {
         // CompositeMode is an enum, not an open-ended flag field. Rejecting
         // reserved values while walking PaintComposite keeps later renderers
@@ -6198,6 +6197,21 @@ fn validateColorPaintRecordBounds(data: []const u8, colr: TableRecord, offset: u
         if (composite_mode > max_colr_composite_mode) return error.BadSfnt;
     }
     return info;
+}
+
+fn validateColrPaintTransformPayloadBounds(data: []const u8, colr: TableRecord, offset: usize, info: ColorPaintFormatInfo) FontError!void {
+    switch (data[offset]) {
+        12, 13 => try validateColrTransformMatrixPayloadBounds(data, colr, offset, info.min_size),
+        else => return,
+    }
+}
+
+fn validateColrTransformMatrixPayloadBounds(data: []const u8, colr: TableRecord, offset: usize, min_size: usize) FontError!void {
+    const transform_offset: usize = @intCast(try readU24At(data, offset + 4));
+    if (transform_offset < min_size) return error.BadSfnt;
+    if (transform_offset > colr.offset + colr.length - offset) return error.BadSfnt;
+    const matrix_offset = offset + transform_offset;
+    if (24 > colr.offset + colr.length - matrix_offset) return error.BadSfnt;
 }
 
 const max_colr_extend_mode = 2;
@@ -9056,6 +9070,39 @@ test "COLR v1 PaintComposite rejects reserved composite modes" {
 
     bytes[48] = 27; // Valid: plus-lighter is the highest assigned CompositeMode.
     try validateColrGlyphBounds(&bytes, colr, 2);
+}
+
+test "COLR v1 PaintTransform requires a complete Affine2x3 matrix" {
+    var bytes: [79]u8 = .{0} ** 79;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, 38, 1);
+    writeU32Test(&bytes, 40, 10); // PaintTransform at byte 44.
+
+    bytes[44] = 12; // PaintTransform.
+    writeU24Test(&bytes, 45, 31); // child PaintSolid follows the Affine2x3 matrix.
+    writeU24Test(&bytes, 48, 7); // matrix starts immediately after PaintTransform.
+    writeF16Dot16Test(&bytes, 51, 1.0); // xx.
+    writeF16Dot16Test(&bytes, 55, 0.0); // yx.
+    writeF16Dot16Test(&bytes, 59, 1.0); // xy.
+    writeF16Dot16Test(&bytes, 63, 0.0); // yy.
+    writeF16Dot16Test(&bytes, 67, 0.0); // dx.
+    // dy is intentionally truncated to three bytes. The child paint offset is
+    // outside this declared COLR length, so the matrix-specific check must
+    // reject the record before graph traversal can reach the child.
+
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bytes, colr, 2));
+
+    var valid = bytes ++ [_]u8{0};
+    writeF16Dot16Test(&valid, 71, 0.0); // dy completes the Affine2x3.
+    valid[75] = 2; // PaintSolid child.
+    writeU16Test(&valid, 76, 0);
+    writeF2Dot14Test(&valid, 78, 1.0);
+
+    const valid_colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = valid.len };
+    try validateColrGlyphBounds(&valid, valid_colr, 2);
 }
 
 test "COLR v1 PaintSolid alpha is validated at parse time" {

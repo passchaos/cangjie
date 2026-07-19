@@ -3679,6 +3679,7 @@ fn validateCmapFormat4(data: []const u8, offset: usize, length: usize, validate_
     const seg_count_x2 = try bin.readU16At(data, offset + 6);
     if (seg_count_x2 == 0 or (seg_count_x2 & 1) != 0) return error.BadSfnt;
     const seg_count = @as(usize, seg_count_x2 / 2);
+    try validateCmapFormat4SearchParameters(data, offset, seg_count);
     const minimum_length = 16 + seg_count * 8;
     if (length < minimum_length) return error.BadSfnt;
 
@@ -3724,6 +3725,32 @@ fn validateCmapFormat4(data: []const u8, offset: usize, length: usize, validate_
     // the sentinel, malformed BMP subtables can stop early and hide later
     // invalid segment data.
     if (previous_end != 0xffff) return error.BadSfnt;
+}
+
+fn validateCmapFormat4SearchParameters(data: []const u8, offset: usize, seg_count: usize) FontError!void {
+    var max_power_of_two: usize = 1;
+    var expected_entry_selector: u16 = 0;
+    while (max_power_of_two * 2 <= seg_count) {
+        max_power_of_two *= 2;
+        expected_entry_selector += 1;
+    }
+
+    const expected_search_range = max_power_of_two * 2;
+    const segment_selector_bytes = seg_count * 2;
+    if (expected_search_range > std.math.maxInt(u16) or segment_selector_bytes > std.math.maxInt(u16)) return error.BadSfnt;
+    const expected_range_shift = segment_selector_bytes - expected_search_range;
+
+    // Format 4 carries a small binary-search descriptor beside segCountX2.
+    // Cangjie's lookup currently scans linearly, but the fields are still part
+    // of the OpenType table contract. Requiring their canonical values keeps a
+    // malformed private variant from being accepted just because its segment
+    // arrays happen to be readable.
+    if (try bin.readU16At(data, offset + 8) != expected_search_range or
+        try bin.readU16At(data, offset + 10) != expected_entry_selector or
+        try bin.readU16At(data, offset + 12) != expected_range_shift)
+    {
+        return error.BadSfnt;
+    }
 }
 
 fn validateSegmentedCmapGroups(data: []const u8, offset: usize, length: usize) FontError!void {
@@ -9463,6 +9490,18 @@ test "cmap format 4 parser rejects malformed segment metadata" {
     var missing_sentinel = valid;
     writeCmapFormat4SegmentTest(&missing_sentinel, 1, 'Z', 'Z', 1, 0);
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &missing_sentinel, cmap, 512));
+
+    var bad_search_range = valid;
+    writeU16Test(&bad_search_range, 20, 2);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bad_search_range, cmap, 512));
+
+    var bad_entry_selector = valid;
+    writeU16Test(&bad_entry_selector, 22, 0);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bad_entry_selector, cmap, 512));
+
+    var bad_range_shift = valid;
+    writeU16Test(&bad_range_shift, 24, 2);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &bad_range_shift, cmap, 512));
 }
 
 test "cmap format 4 parser validates full idRangeOffset segment span" {

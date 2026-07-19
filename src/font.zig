@@ -5599,13 +5599,33 @@ fn validateCpalPaletteEntries(data: []const u8, cpal: TableRecord) FontError!u16
         );
     }
 
-    for (0..palette_count) |palette_index| {
-        const first_color_index = try bin.readU16At(data, cpal.offset + 12 + palette_index * 2);
-        if (@as(usize, first_color_index) > color_count or @as(usize, palette_entries) > @as(usize, color_count) - first_color_index) {
-            return error.BadSfnt;
-        }
-    }
+    try validateCpalPaletteSlices(data, cpal, palette_count, palette_entries, color_count);
     return palette_entries;
+}
+
+fn validateCpalPaletteSlices(data: []const u8, cpal: TableRecord, palette_count: u16, palette_entries: u16, color_count: u16) FontError!void {
+    var previous_first_color_index: ?usize = null;
+    var previous_palette_end: ?usize = null;
+
+    for (0..palette_count) |palette_index| {
+        const first_color_index: usize = @intCast(try bin.readU16At(data, cpal.offset + 12 + palette_index * 2));
+        const entries: usize = @intCast(palette_entries);
+        const colors: usize = @intCast(color_count);
+        if (first_color_index > colors or entries > colors - first_color_index) return error.BadSfnt;
+
+        if (previous_first_color_index) |previous_first| {
+            // CPAL palettes are fixed-size slices into ColorRecordsArray. Keep
+            // the declared firstColorIndex array canonical and non-overlapping
+            // so palette lookup cannot depend on duplicated or reordered
+            // slices that reinterpret the same BGRA records as distinct
+            // palettes.
+            if (first_color_index <= previous_first) return error.BadSfnt;
+            if (first_color_index < previous_palette_end.?) return error.BadSfnt;
+        }
+
+        previous_first_color_index = first_color_index;
+        previous_palette_end = first_color_index + entries;
+    }
 }
 
 fn validateCpalOptionalArray(cpal: TableRecord, header_len: usize, offset: usize, count: usize, item_size: usize) FontError!void {
@@ -9209,6 +9229,33 @@ test "CPAL palette entries stay inside declared color records" {
 
     const font = cpalOnlyFont(&bytes);
     try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
+}
+
+test "CPAL palette slices must be ordered and non-overlapping" {
+    var bytes: [32]u8 = .{0} ** 32;
+    writeU16Test(&bytes, 0, 0); // CPAL version 0.
+    writeU16Test(&bytes, 2, 2); // each palette has two entries.
+    writeU16Test(&bytes, 4, 2); // two firstColorIndex entries.
+    writeU16Test(&bytes, 6, 4); // four BGRA records are declared.
+    writeU32Test(&bytes, 8, 16);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 2);
+
+    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectEqual(@as(u16, 2), try validateCpalPaletteEntries(&bytes, cpal));
+
+    var duplicate_start = bytes;
+    writeU16Test(&duplicate_start, 14, 0);
+    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&duplicate_start, cpal));
+
+    var overlapping_slice = bytes;
+    writeU16Test(&overlapping_slice, 14, 1);
+    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&overlapping_slice, cpal));
+
+    var out_of_order = bytes;
+    writeU16Test(&out_of_order, 12, 2);
+    writeU16Test(&out_of_order, 14, 0);
+    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&out_of_order, cpal));
 }
 
 test "CPAL v1 labels must resolve through the name table" {

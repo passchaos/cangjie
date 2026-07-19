@@ -558,6 +558,7 @@ pub const Font = struct {
     /// into a dense temporary array so lookup flags can skip bases, ligatures,
     /// or marks consistently across all lookup formats.
     pub fn applyGsubWithOptions(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
+        try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
         var gsub_options = options;
         var glyph_classes: ?[]u16 = null;
@@ -597,6 +598,7 @@ pub const Font = struct {
     /// returned adjustments use glyph indices in the post-GSUB stream, which is
     /// the same coordinate space used by `layout.shapeSegmentInto`.
     pub fn collectGposAdjustmentsWithOptions(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions) FontError!void {
+        try self.validateGlyphRun(glyphs);
         const gpos = self.gpos orelse return;
         var gpos_options = options;
         var glyph_classes: ?[]u16 = null;
@@ -626,6 +628,12 @@ pub const Font = struct {
         defer if (mark_attach_classes) |classes| allocator.free(classes);
         defer if (mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
+    }
+
+    fn validateGlyphRun(self: *const Font, glyphs: []const glyph_mod.GlyphId) FontError!void {
+        for (glyphs) |glyph_id| {
+            if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        }
     }
 
     pub fn nameString(self: *const Font, name_id: NameId, out: []u8) FontError!?[]const u8 {
@@ -8420,6 +8428,63 @@ test "GSUB glyph ids are validated against maxp glyph count at parse time" {
         // latent out-of-range replacement before shaping exposes it.
         writeU16Test(bytes, gsub_offset + 72, 4);
         try std.testing.expectError(error.BadGsub, Font.parse(allocator, bytes));
+    }
+}
+
+test "GSUB and GPOS public APIs reject out-of-range glyph runs" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalGsubTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var glyphs = std.ArrayList(glyph_mod.GlyphId).empty;
+        defer glyphs.deinit(allocator);
+        try glyphs.append(allocator, 3); // maxp.numGlyphs is 3; valid ids are 0, 1, and 2.
+
+        try std.testing.expectError(error.InvalidGlyph, font.applyGsub(&glyphs, allocator));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var glyphs = std.ArrayList(glyph_mod.GlyphId).empty;
+        defer glyphs.deinit(allocator);
+        try glyphs.append(allocator, 2); // No GSUB table is present, but the caller contract still applies.
+
+        try std.testing.expectError(error.InvalidGlyph, font.applyGsub(&glyphs, allocator));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalGposTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var adjustments = std.ArrayList(gpos_mod.Adjustment).empty;
+        defer adjustments.deinit(allocator);
+        const glyphs = [_]glyph_mod.GlyphId{2}; // maxp.numGlyphs is 2; valid ids are 0 and 1.
+
+        try std.testing.expectError(error.InvalidGlyph, font.collectGposAdjustments(&glyphs, &adjustments, allocator));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var adjustments = std.ArrayList(gpos_mod.Adjustment).empty;
+        defer adjustments.deinit(allocator);
+        const glyphs = [_]glyph_mod.GlyphId{2}; // No GPOS table is present, but invalid run data is not "no positioning".
+
+        try std.testing.expectError(error.InvalidGlyph, font.collectGposAdjustments(&glyphs, &adjustments, allocator));
     }
 }
 

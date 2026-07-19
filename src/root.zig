@@ -102,6 +102,7 @@ pub const PaletteColor = @import("font.zig").PaletteColor;
 pub const SvgGlyphDocument = @import("font.zig").SvgGlyphDocument;
 pub const VariationAxis = @import("font.zig").VariationAxis;
 pub const VariationCoordinate = @import("font.zig").VariationCoordinate;
+pub const VerticalMetrics = @import("font.zig").VerticalMetrics;
 pub const GlyphId = @import("glyph.zig").GlyphId;
 pub const GlyphOutline = @import("glyph.zig").GlyphOutline;
 pub const OutlineBuilder = @import("glyph.zig").OutlineBuilder;

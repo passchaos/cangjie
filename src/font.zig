@@ -48,6 +48,11 @@ pub const StyleAttributes = struct {
     bold: bool = false,
 };
 
+pub const VerticalMetrics = struct {
+    advance_height: u16,
+    top_side_bearing: i16,
+};
+
 pub const VariationAxis = struct {
     tag: [4]u8,
     min_value: f32,
@@ -291,7 +296,7 @@ pub const Font = struct {
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
         if (post) |post_table| try validatePostTable(data, post_table, glyph_count);
         const number_of_h_metrics = try validateHorizontalMetricsTables(data, hhea, hmtx, glyph_count);
-        try validateVerticalMetricsTables(data, glyph_count, vhea, vmtx);
+        _ = try validateVerticalMetricsTables(data, glyph_count, vhea, vmtx);
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (name) |name_table| try validateNameTable(data, name_table);
         if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
@@ -462,6 +467,43 @@ pub const Font = struct {
         return .{
             .advance_width = try bin.readU16At(self.data, last_offset),
             .left_side_bearing = try bin.readI16At(self.data, lsb_offset),
+        };
+    }
+
+    pub fn hasVerticalMetrics(self: *const Font) bool {
+        return findTable(self.owned_tables, "vhea") != null and findTable(self.owned_tables, "vmtx") != null;
+    }
+
+    /// Return vertical metrics following the vmtx compression rule. Fonts
+    /// without a paired vhea/vmtx table return null; malformed or post-parse
+    /// mutated vertical metrics report InvalidMetrics instead of falling back
+    /// to horizontal advances.
+    pub fn verticalMetrics(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?VerticalMetrics {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const vhea = findTable(self.owned_tables, "vhea") orelse {
+            if (findTable(self.owned_tables, "vmtx") != null) return error.InvalidMetrics;
+            return null;
+        };
+        const vmtx = findTable(self.owned_tables, "vmtx") orelse return error.InvalidMetrics;
+
+        // vhea/vmtx records are cached in the SFNT directory, but their bytes
+        // remain borrowed. Revalidate the pair before every lazy metrics read
+        // so a caller mutating the original font buffer cannot turn a safe
+        // parsed Font into an out-of-bounds or aliasing vmtx interpretation.
+        const metric_count = (try validateVerticalMetricsTables(self.data, self.glyph_count, vhea, vmtx)) orelse return null;
+        if (glyph_id < metric_count) {
+            const offset = vmtx.offset + @as(usize, glyph_id) * 4;
+            return .{
+                .advance_height = try bin.readU16At(self.data, offset),
+                .top_side_bearing = try bin.readI16At(self.data, offset + 2),
+            };
+        }
+
+        const last_offset = vmtx.offset + (@as(usize, metric_count) - 1) * 4;
+        const tsb_offset = vmtx.offset + @as(usize, metric_count) * 4 + (@as(usize, glyph_id) - metric_count) * 2;
+        return .{
+            .advance_height = try bin.readU16At(self.data, last_offset),
+            .top_side_bearing = try bin.readI16At(self.data, tsb_offset),
         };
     }
 
@@ -1884,21 +1926,21 @@ fn validateHorizontalMetricsTables(data: []const u8, hhea: TableRecord, hmtx: Ta
     return metric_count;
 }
 
-fn validateVerticalMetricsTables(data: []const u8, glyph_count: u16, maybe_vhea: ?TableRecord, maybe_vmtx: ?TableRecord) FontError!void {
-    if (maybe_vhea == null and maybe_vmtx == null) return;
+fn validateVerticalMetricsTables(data: []const u8, glyph_count: u16, maybe_vhea: ?TableRecord, maybe_vmtx: ?TableRecord) FontError!?u16 {
+    if (maybe_vhea == null and maybe_vmtx == null) return null;
     const vhea = maybe_vhea orelse return error.InvalidMetrics;
     const vmtx = maybe_vmtx orelse return error.InvalidMetrics;
 
     // vhea/vmtx mirror the hhea/hmtx compression contract for vertical layout:
     // the header declares how many full advance/bearing records exist, and the
     // remaining glyphs borrow the final advance while supplying only a top side
-    // bearing. Validate the pair while the font is parsed even though Cangjie
-    // does not yet expose vertical metrics, so a malformed production font
-    // cannot be accepted with a latent out-of-bounds vmtx table.
+    // bearing. Use one helper for parse-time acceptance and lazy public reads
+    // so malformed production fonts cannot hide latent vmtx bounds issues.
     try validateVerticalMetricHeader(data, vhea);
     const metric_count = try bin.readU16At(data, vhea.offset + 34);
     const required_vmtx_length = try metricTableRequiredLength(glyph_count, metric_count);
     if (vmtx.length < required_vmtx_length) return error.InvalidMetrics;
+    return metric_count;
 }
 
 fn validateVerticalMetricHeader(data: []const u8, vhea: TableRecord) FontError!void {
@@ -9155,6 +9197,48 @@ test "vertical metric tables validate paired count and vmtx length at parse time
         writeU16Test(bytes, vhea_offset + 24, 1); // Reserved fields must be zero.
         try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
     }
+}
+test "vertical metrics API revalidates borrowed vhea and vmtx bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expect(font.hasVerticalMetrics());
+    const first = (try font.verticalMetrics(0)).?;
+    try std.testing.expectEqual(@as(u16, 1000), first.advance_height);
+    try std.testing.expectEqual(@as(i16, 0), first.top_side_bearing);
+
+    const second = (try font.verticalMetrics(1)).?;
+    try std.testing.expectEqual(@as(u16, 1000), second.advance_height);
+    try std.testing.expectEqual(@as(i16, 0), second.top_side_bearing);
+    try std.testing.expectError(error.InvalidGlyph, font.verticalMetrics(2));
+
+    const vhea_offset: usize = @intCast(try sfntTableOffset(bytes, "vhea"));
+    writeU16Test(bytes, vhea_offset + 24, 1); // Reserved vhea fields must remain zero.
+    try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
+
+    writeU16Test(bytes, vhea_offset + 24, 0);
+    writeU16Test(bytes, vhea_offset + 34, 2); // The borrowed vmtx table has only one full metric.
+    try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
+}
+
+test "vertical metrics API reports absence without requiring vertical tables" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expect(!font.hasVerticalMetrics());
+    try std.testing.expectEqual(@as(?VerticalMetrics, null), try font.verticalMetrics(0));
 }
 
 test "loca offsets are validated against glyf at parse time" {

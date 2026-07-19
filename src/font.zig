@@ -5906,6 +5906,7 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
     try validateColrV1ClipList(data, colr, glyph_count);
 
     const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
+    var base_glyph_set: ?ColrV1BaseGlyphSet = null;
     if (base_glyph_list_offset != 0) {
         try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
         const list_start = colr.offset + base_glyph_list_offset;
@@ -5914,6 +5915,7 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
         if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
         const paint_data_start = 4 + record_count * 6;
         var previous_base_glyph: ?u16 = null;
+        base_glyph_set = .{ .list_start = list_start, .record_count = record_count };
         for (0..record_count) |index| {
             const record = records_start + index * 6;
             const base_glyph = try bin.readU16At(data, record);
@@ -5923,7 +5925,7 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
             if (paint_offset < paint_data_start) return error.BadSfnt;
             if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
             var guard = ColorPaintGraphGuard{};
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, list_start + paint_offset, &guard);
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, base_glyph, list_start + paint_offset, &guard);
         }
     }
 
@@ -5931,7 +5933,7 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
         for (0..layer_list.layer_count) |layer_index| {
             const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
             var guard = ColorPaintGraphGuard{};
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, paint_offset, &guard);
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, null, paint_offset, &guard);
         }
     }
 }
@@ -6169,6 +6171,23 @@ const ColrVariationContext = struct {
     store_offset: usize,
     item_data_count: usize,
     map: ?DeltaSetIndexMapInfo,
+};
+
+const ColrV1BaseGlyphSet = struct {
+    list_start: usize,
+    record_count: usize,
+
+    fn containsGlyph(self: ColrV1BaseGlyphSet, data: []const u8, glyph_id: glyph_mod.GlyphId) FontError!bool {
+        var previous_base_glyph: ?u16 = null;
+        for (0..self.record_count) |index| {
+            const record = self.list_start + 4 + index * 6;
+            const base_glyph = try bin.readU16At(data, record);
+            try validateColrBaseGlyphOrder(base_glyph, &previous_base_glyph);
+            if (base_glyph == glyph_id) return true;
+            if (base_glyph > glyph_id) return false;
+        }
+        return false;
+    }
 };
 
 fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRecord, glyph_count: u16) FontError!void {
@@ -6482,7 +6501,15 @@ fn validateColorPaintGradientVariationRefs(data: []const u8, colr: TableRecord, 
     }
 }
 
-fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
+fn validateColorPaintGlyphBounds(
+    data: []const u8,
+    colr: TableRecord,
+    glyph_count: u16,
+    base_glyph_set: ?ColrV1BaseGlyphSet,
+    root_base_glyph: ?glyph_mod.GlyphId,
+    offset: usize,
+    guard: *ColorPaintGraphGuard,
+) FontError!void {
     const info = try validateColorPaintRecordBounds(data, colr, offset);
     try guard.enter(offset);
     defer guard.leave();
@@ -6498,18 +6525,30 @@ fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_coun
             if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
             for (0..layer_count) |layer_offset| {
                 const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
-                try validateColorPaintGlyphBounds(data, colr, glyph_count, paint_offset, guard);
+                try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, root_base_glyph, paint_offset, guard);
             }
         },
         .glyph => {
             try validateGlyphIdInMaxp(try bin.readU16At(data, offset + 4), glyph_count);
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, root_base_glyph, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
         },
-        .colr_glyph => try validateGlyphIdInMaxp(try bin.readU16At(data, offset + 1), glyph_count),
-        .single_child => try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard),
+        .colr_glyph => {
+            const referenced_glyph = try bin.readU16At(data, offset + 1);
+            try validateGlyphIdInMaxp(referenced_glyph, glyph_count);
+            if (root_base_glyph != null and referenced_glyph == root_base_glyph.?) return error.BadSfnt;
+            const set = base_glyph_set orelse return error.BadSfnt;
+            // PaintColrGlyph is a graph edge to another BaseGlyphPaintRecord,
+            // not just an arbitrary maxp glyph id. Requiring the referenced
+            // glyph to be declared in the BaseGlyphList prevents renderers from
+            // chasing missing color-glyph roots, while rejecting a direct
+            // self-edge catches the simplest cross-record cycle before it can
+            // re-enter the same base paint through a separate lookup path.
+            if (!try set.containsGlyph(data, referenced_glyph)) return error.BadSfnt;
+        },
+        .single_child => try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, root_base_glyph, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard),
         .composite => {
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), guard);
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, root_base_glyph, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
+            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, root_base_glyph, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), guard);
         },
         .solid, .color_line, .terminal => return,
     }
@@ -9675,6 +9714,33 @@ test "COLR v0 layer slices are ordered and non-overlapping" {
     writeU16Test(&decreasing_slice, 18, 1);
     writeU16Test(&decreasing_slice, 22, 0); // Disjoint but not in BaseGlyphRecord order.
     try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&decreasing_slice, colr, 4));
+}
+
+test "COLR v1 PaintColrGlyph references declared base glyphs" {
+    var bytes: [58]u8 = .{0} ** 58;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, 34, 2); // two BaseGlyphPaintRecords.
+    writeU16Test(&bytes, 38, 1); // base glyph 1.
+    writeU32Test(&bytes, 40, 16); // PaintColrGlyph at byte 50.
+    writeU16Test(&bytes, 44, 2); // base glyph 2.
+    writeU32Test(&bytes, 46, 19); // PaintSolid at byte 53.
+    bytes[50] = 11; // PaintColrGlyph.
+    writeU16Test(&bytes, 51, 2); // Reuse the declared color glyph for glyph 2.
+    bytes[53] = 2; // PaintSolid.
+    writeU16Test(&bytes, 54, 0);
+    writeF2Dot14Test(&bytes, 56, 1.0);
+
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try validateColrGlyphBounds(&bytes, colr, 4);
+
+    var undeclared_target = bytes;
+    writeU16Test(&undeclared_target, 51, 3); // In maxp but absent from BaseGlyphList.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&undeclared_target, colr, 4));
+
+    var direct_self_edge = bytes;
+    writeU16Test(&direct_self_edge, 51, 1); // Re-enters the currently validated base glyph.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&direct_self_edge, colr, 4));
 }
 
 test "COLR base glyph records are strictly ordered" {

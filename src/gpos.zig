@@ -16,6 +16,7 @@ pub const LigatureComponentInfo = struct {
 /// applies these deltas while constructing final glyph positions.
 pub const GposError = error{
     BadGpos,
+    InvalidShapingInput,
     UnsupportedGpos,
     EndOfStream,
 };
@@ -101,6 +102,7 @@ pub fn collectAdjustments(data: []const u8, offset: usize, length: usize, glyphs
 
 pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
+    try validateShapingMetadata(options, glyphs.len);
     const table = Table{ .data = data, .offset = offset, .length = length };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGpos;
@@ -552,6 +554,32 @@ fn glyphInMarkFilteringSet(glyphs: []const GlyphId, glyph: GlyphId) bool {
         if (candidate == glyph) return true;
     }
     return false;
+}
+
+fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GposError!void {
+    if (options.glyph_source_indices) |sources| {
+        if (sources.len != glyph_count) return error.InvalidShapingInput;
+    }
+    if (options.ligature_components) |components| {
+        if (components.len != glyph_count) return error.InvalidShapingInput;
+        for (components) |component_info| {
+            try validateLigatureComponentInfo(component_info);
+        }
+    }
+}
+
+fn validateLigatureComponentInfo(info: LigatureComponentInfo) GposError!void {
+    // GPOS MarkLigPos treats component_sources as ordered original-text
+    // positions. Reject non-parallel or non-monotonic metadata at the public
+    // API boundary instead of silently attaching marks to the wrong ligature
+    // component.
+    if (info.component_count > max_ligature_components) return error.InvalidShapingInput;
+    if (info.component_count <= 1) return;
+    var previous = info.component_sources[0];
+    for (info.component_sources[1..info.component_count]) |source| {
+        if (source < previous) return error.InvalidShapingInput;
+        previous = source;
+    }
 }
 
 fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -4276,6 +4304,39 @@ fn writeFeatureTest(bytes: []u8, offset: usize, lookup_index: u16) void {
     writeU16Test(bytes, offset, 0);
     writeU16Test(bytes, offset + 2, 1);
     writeU16Test(bytes, offset + 4, lookup_index);
+}
+
+test "GPOS public adjustment collection validates source metadata cardinality" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 10;
+    writeU16Test(&bytes, 0, 1);
+
+    const glyphs = [_]GlyphId{ 1, 2 };
+    const sources = [_]usize{0};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &glyphs, &adjustments, allocator, .{
+        .glyph_source_indices = &sources,
+    }));
+}
+
+test "GPOS public adjustment collection validates ligature component source order" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 10;
+    writeU16Test(&bytes, 0, 1);
+
+    const glyphs = [_]GlyphId{10};
+    var bad_info = LigatureComponentInfo{ .component_count = 2 };
+    bad_info.component_sources[0] = 3;
+    bad_info.component_sources[1] = 2;
+    const ligature_components = [_]LigatureComponentInfo{bad_info};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &glyphs, &adjustments, allocator, .{
+        .ligature_components = &ligature_components,
+    }));
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

@@ -9,6 +9,7 @@ const unicode = @import("unicode.zig");
 /// data reports BadGsub/UnsupportedGsub.
 pub const GsubError = error{
     BadGsub,
+    InvalidShapingInput,
     UnsupportedGsub,
     EndOfStream,
 };
@@ -55,6 +56,7 @@ pub fn apply(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayL
 
 pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    try validateShapingMetadata(options, glyphs.items.len);
     const table = Table{ .data = data, .offset = offset, .length = length };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
@@ -553,6 +555,32 @@ fn glyphInMarkFilteringSet(glyphs: []const GlyphId, glyph: GlyphId) bool {
         if (candidate == glyph) return true;
     }
     return false;
+}
+
+fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError!void {
+    if (options.glyph_source_indices) |sources| {
+        if (sources.items.len != glyph_count) return error.InvalidShapingInput;
+    }
+    if (options.ligature_components) |components| {
+        if (components.items.len != glyph_count) return error.InvalidShapingInput;
+        for (components.items) |component_info| {
+            try validateLigatureComponentInfo(component_info);
+        }
+    }
+}
+
+fn validateLigatureComponentInfo(info: gpos.LigatureComponentInfo) GsubError!void {
+    // Source metadata is optional, but when a caller supplies it the arrays
+    // must already be parallel to the glyph run. GSUB mutates those arrays in
+    // lockstep after this point; accepting a non-parallel input would silently
+    // desynchronize later GPOS MarkLigPos component selection.
+    if (info.component_count > gpos.max_ligature_components) return error.InvalidShapingInput;
+    if (info.component_count <= 1) return;
+    var previous = info.component_sources[0];
+    for (info.component_sources[1..info.component_count]) |source| {
+        if (source < previous) return error.InvalidShapingInput;
+        previous = source;
+    }
 }
 
 fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {
@@ -3995,6 +4023,46 @@ fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_t
     writeU16Test(bytes, 60, 2);
     writeU16Test(bytes, 62, 0);
     writeU16Test(bytes, 64, 0);
+}
+
+test "GSUB public apply validates source metadata cardinality" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 10;
+    writeU16Test(&bytes, 0, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.append(allocator, 0);
+
+    try std.testing.expectError(error.InvalidShapingInput, applyWithOptions(&bytes, 0, bytes.len, &glyphs, allocator, .{
+        .glyph_source_indices = &sources,
+    }));
+}
+
+test "GSUB public apply validates ligature component source order" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 10;
+    writeU16Test(&bytes, 0, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 10);
+
+    var bad_info = gpos.LigatureComponentInfo{ .component_count = 2 };
+    bad_info.component_sources[0] = 3;
+    bad_info.component_sources[1] = 2;
+
+    var ligature_components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    defer ligature_components.deinit(allocator);
+    try ligature_components.append(allocator, bad_info);
+
+    try std.testing.expectError(error.InvalidShapingInput, applyWithOptions(&bytes, 0, bytes.len, &glyphs, allocator, .{
+        .ligature_components = &ligature_components,
+    }));
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

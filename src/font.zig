@@ -650,12 +650,13 @@ pub const Font = struct {
     pub fn glyphClass(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!GlyphClass {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return .unclassified;
-        if (gdef.length < 6) return error.BadSfnt;
-        const major = try bin.readU16At(self.data, gdef.offset);
-        if (major != 1) return error.BadSfnt;
+        const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
         const glyph_class_def_offset = try bin.readU16At(self.data, gdef.offset + 4);
         if (glyph_class_def_offset == 0) return .unclassified;
-        if (glyph_class_def_offset >= gdef.length) return error.BadSfnt;
+        // Font owns only borrowed bytes. Re-check the same top-level child
+        // offset contract enforced at parse time so post-parse mutations cannot
+        // make GDEF public APIs reinterpret header fields as ClassDef payloads.
+        try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
         const class = try classDefValue(self.data[gdef.offset .. gdef.offset + gdef.length], glyph_class_def_offset, glyph_id);
         return @enumFromInt(class);
     }
@@ -663,12 +664,10 @@ pub const Font = struct {
     pub fn markAttachClass(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!u16 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return 0;
-        if (gdef.length < 12) return 0;
-        const major = try bin.readU16At(self.data, gdef.offset);
-        if (major != 1) return error.BadSfnt;
+        const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
         const mark_attach_class_def_offset = try bin.readU16At(self.data, gdef.offset + 10);
         if (mark_attach_class_def_offset == 0) return 0;
-        if (mark_attach_class_def_offset >= gdef.length) return error.BadSfnt;
+        try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
         return try classDefValue(self.data[gdef.offset .. gdef.offset + gdef.length], mark_attach_class_def_offset, glyph_id);
     }
 
@@ -687,7 +686,7 @@ pub const Font = struct {
         if (gdef.length < 14) return null;
         const mark_glyph_sets_def_offset = try bin.readU16At(self.data, gdef.offset + 12);
         if (mark_glyph_sets_def_offset == 0) return null;
-        if (mark_glyph_sets_def_offset >= gdef.length) return error.BadSfnt;
+        try validateGdefChildOffset(mark_glyph_sets_def_offset, gdef.length, minimumGdefHeaderLength(minor));
         return try readMarkGlyphSetsDef(allocator, self.data[gdef.offset .. gdef.offset + gdef.length], mark_glyph_sets_def_offset);
     }
 
@@ -3268,6 +3267,16 @@ fn validateGdefTable(data: []const u8, gdef: TableRecord, glyph_count: u16) Font
         const item_var_store_offset: usize = @intCast(try bin.readU32At(table, 14));
         if (item_var_store_offset != 0) try validateGdefChildOffset(item_var_store_offset, gdef.length, header_len);
     }
+}
+
+fn validateGdefHeaderForLazyApi(data: []const u8, gdef: TableRecord) FontError!usize {
+    if (gdef.length < 12) return error.BadSfnt;
+    const major = try bin.readU16At(data, gdef.offset);
+    const minor = try bin.readU16At(data, gdef.offset + 2);
+    if (major != 1) return error.BadSfnt;
+    const header_len = minimumGdefHeaderLength(minor);
+    if (gdef.length < header_len) return error.BadSfnt;
+    return header_len;
 }
 
 fn minimumGdefHeaderLength(minor: u16) usize {
@@ -7356,6 +7365,42 @@ test "GDEF parse validation rejects class and mark-set glyph ids past maxp" {
     writeU16Test(&mark_set_past_maxp, 26, 1);
     writeU16Test(&mark_set_past_maxp, 28, 4); // Invalid for maxp.numGlyphs == 4.
     try std.testing.expectError(error.BadSfnt, validateGdefTable(&mark_set_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mark_set_past_maxp.len }, 4));
+}
+
+test "GDEF lazy class APIs revalidate child offsets after borrowed bytes mutate" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildGdefClassTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
+        writeU16Test(bytes, gdef_offset + 4, 6); // GlyphClassDef now points into the GDEF header.
+        writeU16Test(bytes, gdef_offset + 6, 1); // Malicious header bytes decode as ClassDef format 1.
+        writeU16Test(bytes, gdef_offset + 8, 0); // startGlyphID.
+        writeU16Test(bytes, gdef_offset + 10, 1); // glyphCount.
+        writeU16Test(bytes, gdef_offset + 12, @intFromEnum(GlyphClass.mark));
+
+        try std.testing.expectError(error.BadSfnt, font.glyphClass(0));
+    }
+
+    {
+        const bytes = try test_font.buildGdefClassTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
+        writeU16Test(bytes, gdef_offset + 10, 4); // MarkAttachClassDef now aliases the GDEF header.
+        writeU16Test(bytes, gdef_offset + 4, 1); // Header bytes at offset 4 form ClassDef format 1.
+        writeU16Test(bytes, gdef_offset + 6, 3); // startGlyphID.
+        writeU16Test(bytes, gdef_offset + 8, 1); // glyphCount.
+
+        try std.testing.expectError(error.BadSfnt, font.markAttachClass(3));
+    }
 }
 
 test "legacy kern format 0 accumulates multiple horizontal subtables" {

@@ -409,6 +409,7 @@ pub const Font = struct {
             if (best == null or scoreCmap(subtable) > scoreCmap(best.?)) best = subtable;
         }
         const chosen = best orelse return error.UnsupportedCmap;
+        try self.validateCmapLookupSubtable(chosen);
         return switch (chosen.format) {
             0 => try glyphIndexFormat0(self.data, chosen.offset, codepoint),
             2 => try glyphIndexFormat2(self.data, chosen.offset, chosen.length, codepoint),
@@ -420,6 +421,22 @@ pub const Font = struct {
             13 => try glyphIndexFormat13(self.data, chosen.offset, chosen.length, codepoint),
             else => error.UnsupportedCmap,
         };
+    }
+
+    fn validateCmapLookupSubtable(self: *const Font, subtable: CmapSubtable) FontError!void {
+        const relative_offset = try tableRelativeOffset(self.cmap, subtable.offset);
+        if (subtable.length > self.cmap.length - relative_offset) return error.BadSfnt;
+        const format = try bin.readU16At(self.data, subtable.offset);
+        if (format != subtable.format) return error.BadSfnt;
+        const length = try cmapSubtableLength(self.data, self.cmap, relative_offset, format);
+        if (length != subtable.length) return error.BadSfnt;
+
+        // Font keeps borrowed SFNT bytes and cached cmap directory entries.
+        // Re-running the structural and maxp glyph-id checks before lookup
+        // prevents post-parse byte mutations from returning a glyph id that the
+        // originally validated cmap could not have produced.
+        try validateCmapSubtable(self.data, subtable.offset, subtable.length, subtable.format, subtable.platform_id, subtable.encoding_id);
+        try validateCmapGlyphIds(self.data, subtable.offset, subtable.length, subtable.format, self.glyph_count);
     }
 
     /// Return horizontal metrics following the hmtx compression rule: glyphs
@@ -2518,6 +2535,13 @@ fn parseCmapSubtables(allocator: std.mem.Allocator, data: []const u8, cmap: Tabl
         });
     }
     return try subtables.toOwnedSlice(allocator);
+}
+
+fn tableRelativeOffset(table: TableRecord, absolute_offset: usize) FontError!usize {
+    if (absolute_offset < table.offset) return error.BadSfnt;
+    const relative_offset = absolute_offset - table.offset;
+    if (relative_offset > table.length) return error.BadSfnt;
+    return relative_offset;
 }
 
 fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, format: u16) FontError!usize {
@@ -8110,6 +8134,28 @@ test "cmap format 14 public lookup revalidates borrowed SFNT bytes" {
     writeU16Test(bytes, cmap_offset + variation_offset + 36, 4);
     try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
     try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
+}
+
+test "cmap public glyph lookup revalidates borrowed glyph ids" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildSingleCodepointTtf(allocator, 'A');
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 1), try font.glyphIndex('A'));
+
+    const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
+    const format4_offset: usize = @intCast(try bin.readU32At(bytes, cmap_offset + 8));
+    // The cached CmapSubtable still points at the same bytes, but this delta
+    // now maps U+0041 to glyph id 2 while maxp.numGlyphs declares only ids 0
+    // and 1. Public lookup must re-check the cmap/maxp contract before
+    // returning the stale borrow's mutated glyph id.
+    writeI16Test(bytes, cmap_offset + format4_offset + 24, @as(i16, 2) - @as(i16, @bitCast(@as(u16, 'A'))));
+    try std.testing.expectError(error.BadSfnt, font.glyphIndex('A'));
 }
 
 test "cmap format 2 validates subheader and glyph-array bounds" {

@@ -996,6 +996,27 @@ pub const Font = struct {
 
     pub fn glyphOutline(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        if (self.format == .truetype) {
+            const loca = self.loca orelse return error.MissingTable;
+            const glyf = self.glyf orelse return error.MissingTable;
+            try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
+            // The SFNT bytes are borrowed from the caller. Re-run the same glyf
+            // grammar and component-graph validation enforced by Font.parse so
+            // a post-parse mutation cannot be observed only by the particular
+            // glyph whose outline is requested.
+            const max_component_elements = try bin.readU16At(self.data, self.maxp.offset + 28);
+            const max_component_depth = try bin.readU16At(self.data, self.maxp.offset + 30);
+            try validateGlyfTable(
+                allocator,
+                self.data,
+                loca,
+                glyf,
+                self.glyph_count,
+                self.index_to_loc_format,
+                max_component_elements,
+                max_component_depth,
+            );
+        }
         const metrics = try self.horizontalMetrics(glyph_id);
         const bounds = if (self.format == .truetype)
             try self.glyphBounds(glyph_id)
@@ -8908,6 +8929,36 @@ test "simple glyf contours reject non-increasing end points" {
     defer outline.deinit();
 
     try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, &glyph_data, 2, Transform.identity()));
+}
+
+test "glyph outline API revalidates borrowed loca and glyf bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const loca_offset: usize = @intCast(try sfntTableOffset(bytes, "loca"));
+        writeU16Test(bytes, loca_offset, 7); // Makes glyph 0's loca entry decrease before glyph 1.
+        try std.testing.expectError(error.InvalidLoca, font.glyphOutline(allocator, 1));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const glyf_offset: usize = @intCast(try sfntTableOffset(bytes, "glyf"));
+        // Glyph 0 is not requested below. Mutating its borrowed bytes after
+        // parsing must still be rejected before returning any glyph outline,
+        // because the Font object no longer owns an immutable glyf snapshot.
+        writeI16Test(bytes, glyf_offset, 1);
+        try std.testing.expectError(error.InvalidGlyph, font.glyphOutline(allocator, 1));
+    }
 }
 
 test "simple glyf programs and coordinate streams validate at parse time" {

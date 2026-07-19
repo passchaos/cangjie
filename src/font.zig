@@ -331,6 +331,7 @@ pub const Font = struct {
             try validateCpalNameReferences(data, cpal_table, name);
         }
         if (colr) |colr_table| {
+            try validateColrV1TopLevelStructuralRanges(data, colr_table);
             try validateColrVariationData(data, colr_table, fvar, glyph_count);
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
@@ -5563,6 +5564,82 @@ fn validateColrV1OptionalOffset(offset: usize, colr: TableRecord, min_size: usiz
     if (offset < 34 or offset > colr.length or min_size > colr.length - offset) return error.BadSfnt;
 }
 
+const ColrV1StructuralRange = struct {
+    start: usize,
+    end: usize,
+};
+
+fn validateColrV1TopLevelStructuralRanges(data: []const u8, colr: TableRecord) FontError!void {
+    if (colr.length < 2) return error.BadSfnt;
+    const version = try bin.readU16At(data, colr.offset);
+    if (version != 1) return;
+    if (colr.length < 34) return error.BadSfnt;
+
+    var ranges: [3]ColrV1StructuralRange = undefined;
+    var count: usize = 0;
+
+    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
+    if (base_glyph_list_offset != 0) {
+        ranges[count] = try colrV1BaseGlyphListStructuralRange(data, colr, base_glyph_list_offset);
+        count += 1;
+    }
+
+    const layer_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 18));
+    if (layer_list_offset != 0) {
+        ranges[count] = try colrV1LayerListStructuralRange(data, colr, layer_list_offset);
+        count += 1;
+    }
+
+    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
+    if (clip_list_offset != 0) {
+        ranges[count] = try colrV1ClipListStructuralRange(data, colr, clip_list_offset);
+        count += 1;
+    }
+
+    for (ranges[0..count], 0..) |lhs, lhs_index| {
+        for (ranges[lhs_index + 1 .. count]) |rhs| {
+            // These offsets name distinct top-level COLR v1 child tables. Their
+            // count/record arrays define how later relative offsets are
+            // interpreted, so even a zero-count alias must be rejected instead
+            // of letting one optional table borrow another table's header bytes.
+            if (colrRangesOverlap(lhs, rhs)) return error.BadSfnt;
+        }
+    }
+}
+
+fn colrV1BaseGlyphListStructuralRange(data: []const u8, colr: TableRecord, offset: usize) FontError!ColrV1StructuralRange {
+    try validateColrV1OptionalOffset(offset, colr, 4);
+    const start = colr.offset + offset;
+    const record_count: usize = @intCast(try bin.readU32At(data, start));
+    const records_start = start + 4;
+    if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
+    return .{ .start = offset, .end = offset + 4 + record_count * 6 };
+}
+
+fn colrV1LayerListStructuralRange(data: []const u8, colr: TableRecord, offset: usize) FontError!ColrV1StructuralRange {
+    try validateColrV1OptionalOffset(offset, colr, 4);
+    const start = colr.offset + offset;
+    const layer_count: usize = @intCast(try bin.readU32At(data, start));
+    const offsets_start = start + 4;
+    if (layer_count > (colr.offset + colr.length - offsets_start) / 4) return error.BadSfnt;
+    return .{ .start = offset, .end = offset + 4 + layer_count * 4 };
+}
+
+fn colrV1ClipListStructuralRange(data: []const u8, colr: TableRecord, offset: usize) FontError!ColrV1StructuralRange {
+    try validateColrV1OptionalOffset(offset, colr, 5);
+    const start = colr.offset + offset;
+    const format = data[start];
+    if (format != 1) return error.BadSfnt;
+    const clip_count: usize = @intCast(try bin.readU32At(data, start + 1));
+    const records_start = start + 5;
+    if (clip_count > (colr.offset + colr.length - records_start) / 7) return error.BadSfnt;
+    return .{ .start = offset, .end = offset + 5 + clip_count * 7 };
+}
+
+fn colrRangesOverlap(lhs: ColrV1StructuralRange, rhs: ColrV1StructuralRange) bool {
+    return lhs.start < rhs.end and rhs.start < lhs.end;
+}
+
 fn validateColrV1ClipList(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
     const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
     if (clip_list_offset == 0) return;
@@ -8401,6 +8478,19 @@ test "COLR v1 top-level offsets cannot alias the header" {
         writeU32Test(bytes, colr_offset + 18, 26); // LayerListOffset points into VarIndexMapOffset.
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
+}
+
+test "COLR v1 optional top-level tables cannot alias one another" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildColorV1Ttf(allocator);
+    defer allocator.free(bytes);
+    const colr_offset = try sfntTableOffset(bytes, "COLR");
+    writeU32Test(bytes, colr_offset + 18, 34); // LayerListOffset aliases BaseGlyphListOffset.
+    writeU32Test(bytes, colr_offset + 34, 0); // Both zero-count headers would otherwise parse.
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
 test "COLR v1 variable paints reference valid variation data" {

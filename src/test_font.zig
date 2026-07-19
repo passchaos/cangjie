@@ -252,7 +252,10 @@ pub fn buildNamedTtc(allocator: std.mem.Allocator) ![]u8 {
     defer allocator.free(second);
 
     const first_offset = 20;
-    const second_offset = first_offset + first.len;
+    // TTC face offsets are absolute SFNT starts. Keep each embedded face on the
+    // same long boundary required for individual table payload offsets so
+    // stricter SFNT directory validation does not reject the generated fixture.
+    const second_offset = align4(first_offset + first.len);
     var bytes = try allocator.alloc(u8, second_offset + second.len);
     @memset(bytes, 0);
     writeTag(bytes, 0, "ttcf");

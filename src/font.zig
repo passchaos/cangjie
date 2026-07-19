@@ -1802,6 +1802,12 @@ fn validateSfntTableRanges(records: []const TableRecord, reserved_prefix_end: us
         // before this face's directory, so validate interval
         // overlap rather than requiring every offset to be after `directory_end`.
         if (record.length == 0) continue;
+        // SFNT table payloads begin on four-byte boundaries; only their
+        // unpadded lengths are recorded in the directory. Enforce the start
+        // alignment here so malformed fonts cannot make table parsers consume
+        // bytes from the padding tail of a preceding table as if it were a new
+        // table header.
+        if ((record.offset & 3) != 0) return error.BadSfnt;
         const record_end = record.offset + record.length;
         if (record.offset < reserved_prefix_end) return error.BadSfnt;
         if (rangesOverlap(record.offset, record_end, directory_start, directory_end)) return error.BadSfnt;
@@ -10332,6 +10338,18 @@ test "SFNT table directory tags must be strictly sorted" {
     @memcpy(&second_tag, bytes[second_record .. second_record + 4]);
     @memcpy(bytes[first_record .. first_record + 4], &second_tag);
     @memcpy(bytes[second_record .. second_record + 4], &first_tag);
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "SFNT table directory offsets must be long aligned" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    const cmap_offset = try sfntTableOffset(bytes, "cmap");
+    try setSfntTableOffset(bytes, "cmap", cmap_offset + 1);
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }

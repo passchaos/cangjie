@@ -2826,19 +2826,101 @@ fn validateCmapFormat14(data: []const u8, offset: usize, length: usize) FontErro
         const non_default_offset = try bin.readU32At(data, record + 7);
         if (default_offset != 0) {
             if (default_offset < records_end or default_offset >= length) return error.BadSfnt;
-            try validateCmapFormat14DefaultUvs(data, offset + @as(usize, default_offset), table_end);
+            const default_absolute = offset + @as(usize, default_offset);
+            const default_range = try cmapFormat14DefaultUvsRange(data, default_absolute, table_end);
+            try validateCmapFormat14DefaultUvs(data, default_absolute, table_end);
+            try validateCmapFormat14UvsRangeDoesNotAliasRecords(
+                data,
+                offset,
+                table_end,
+                index,
+                default_range,
+            );
         }
         if (non_default_offset != 0) {
             if (non_default_offset < records_end or non_default_offset >= length) return error.BadSfnt;
-            try validateCmapFormat14NonDefaultUvs(data, offset + @as(usize, non_default_offset), table_end);
+            const non_default_absolute = offset + @as(usize, non_default_offset);
+            const non_default_range = try cmapFormat14NonDefaultUvsRange(data, non_default_absolute, table_end);
+            try validateCmapFormat14NonDefaultUvs(data, non_default_absolute, table_end);
+            try validateCmapFormat14UvsRangeDoesNotAliasRecords(
+                data,
+                offset,
+                table_end,
+                index,
+                non_default_range,
+            );
         }
         if (default_offset != 0 and non_default_offset != 0) {
+            const default_absolute = offset + @as(usize, default_offset);
+            const non_default_absolute = offset + @as(usize, non_default_offset);
+            const default_range = try cmapFormat14DefaultUvsRange(data, default_absolute, table_end);
+            const non_default_range = try cmapFormat14NonDefaultUvsRange(data, non_default_absolute, table_end);
+            if (payloadRangesOverlap(default_range, non_default_range)) return error.BadSfnt;
             try validateCmapFormat14UvsSetsDisjoint(
                 data,
-                offset + @as(usize, default_offset),
-                offset + @as(usize, non_default_offset),
+                default_absolute,
+                non_default_absolute,
                 table_end,
             );
+        }
+    }
+}
+
+const CmapFormat14PayloadRange = struct {
+    start: usize,
+    end: usize,
+};
+
+fn cmapFormat14DefaultUvsRange(data: []const u8, offset: usize, table_end: usize) FontError!CmapFormat14PayloadRange {
+    if (offset + 4 > table_end) return error.BadSfnt;
+    const range_count: usize = @intCast(try bin.readU32At(data, offset));
+    if (range_count > (table_end - (offset + 4)) / 4) return error.BadSfnt;
+    return .{ .start = offset, .end = offset + 4 + range_count * 4 };
+}
+
+fn cmapFormat14NonDefaultUvsRange(data: []const u8, offset: usize, table_end: usize) FontError!CmapFormat14PayloadRange {
+    if (offset + 4 > table_end) return error.BadSfnt;
+    const mapping_count: usize = @intCast(try bin.readU32At(data, offset));
+    if (mapping_count > (table_end - (offset + 4)) / 5) return error.BadSfnt;
+    return .{ .start = offset, .end = offset + 4 + mapping_count * 5 };
+}
+
+fn payloadRangesOverlap(a: CmapFormat14PayloadRange, b: CmapFormat14PayloadRange) bool {
+    return a.start < b.end and b.start < a.end;
+}
+
+fn validateCmapFormat14UvsRangeDoesNotAliasRecords(
+    data: []const u8,
+    cmap_offset: usize,
+    table_end: usize,
+    current_record_index: usize,
+    candidate: CmapFormat14PayloadRange,
+) FontError!void {
+    // Each format-14 UVS array is a variable-length child table. Offsets that
+    // point into another selector's child payload make two records share bytes
+    // with incompatible ownership, so a later edit to one selector can silently
+    // reinterpret the other's Unicode ranges or glyph IDs. Reject aliasing at
+    // parse time, while still permitting adjacent payloads.
+    for (0..current_record_index) |previous_index| {
+        const previous_record = cmap_offset + 10 + previous_index * 11;
+        const previous_default_offset = try bin.readU32At(data, previous_record + 3);
+        if (previous_default_offset != 0) {
+            const previous_range = try cmapFormat14DefaultUvsRange(
+                data,
+                cmap_offset + @as(usize, previous_default_offset),
+                table_end,
+            );
+            if (payloadRangesOverlap(candidate, previous_range)) return error.BadSfnt;
+        }
+
+        const previous_non_default_offset = try bin.readU32At(data, previous_record + 7);
+        if (previous_non_default_offset != 0) {
+            const previous_range = try cmapFormat14NonDefaultUvsRange(
+                data,
+                cmap_offset + @as(usize, previous_non_default_offset),
+                table_end,
+            );
+            if (payloadRangesOverlap(candidate, previous_range)) return error.BadSfnt;
         }
     }
 }
@@ -7332,6 +7414,47 @@ test "cmap format 14 validates selectors and UVS Unicode scalar values" {
     var overlapping_sets = valid;
     overlapping_sets[40] = 1; // DefaultUVS covers 'A' and 'B'; NonDefaultUVS maps 'B'.
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &overlapping_sets, cmap, 512));
+}
+
+test "cmap format 14 UVS payloads cannot overlap or alias" {
+    const allocator = std.testing.allocator;
+    const cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 70,
+    };
+
+    var valid: [70]u8 = .{0} ** 70;
+    writeCmapFormat14HeaderTest(&valid, 58, 2);
+    writeU24Test(&valid, 22, 0x00fe0e);
+    writeU32Test(&valid, 25, 32); // Selector 1 DefaultUVS: absolute 44..52.
+    writeU24Test(&valid, 33, 0x00fe0f);
+    writeU32Test(&valid, 40, 40); // Selector 2 NonDefaultUVS: absolute 52..61.
+    writeU32Test(&valid, 44, 1);
+    writeU24Test(&valid, 48, 'A');
+    valid[51] = 0;
+    writeU32Test(&valid, 52, 1);
+    writeU24Test(&valid, 56, 'B');
+    writeU16Test(&valid, 59, 1);
+    const subtables = try parseCmapSubtables(allocator, &valid, cmap, 512);
+    allocator.free(subtables);
+
+    var cross_selector_alias = valid;
+    writeU32Test(&cross_selector_alias, 40, 32); // Reuses selector 1's DefaultUVS bytes as selector 2 NonDefaultUVS.
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &cross_selector_alias, cmap, 512));
+
+    var same_selector_overlap = valid;
+    writeU32Test(&same_selector_overlap, 29, 36); // Starts inside selector 1's DefaultUVS payload.
+    writeU32Test(&same_selector_overlap, 48, 1);
+    writeU24Test(&same_selector_overlap, 52, 'B');
+    writeU16Test(&same_selector_overlap, 55, 1);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &same_selector_overlap, cmap, 512));
+
+    var cross_selector_partial_overlap = same_selector_overlap;
+    writeU32Test(&cross_selector_partial_overlap, 29, 0);
+    writeU32Test(&cross_selector_partial_overlap, 36, 36); // Selector 2 DefaultUVS starts inside selector 1's payload.
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &cross_selector_partial_overlap, cmap, 512));
 }
 
 test "simple glyf contours reject non-increasing end points" {

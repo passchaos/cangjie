@@ -6005,6 +6005,23 @@ const ColrV1StructuralRange = struct {
     end: usize,
 };
 
+const max_colr_clip_box_owned_ranges = 2048;
+
+const ColrClipBoxOwnership = struct {
+    ranges: [max_colr_clip_box_owned_ranges]ColrV1StructuralRange = undefined,
+    count: usize = 0,
+
+    fn claim(self: *ColrClipBoxOwnership, range: ColrV1StructuralRange) FontError!void {
+        if (range.start >= range.end) return error.BadSfnt;
+        for (self.ranges[0..self.count]) |owned| {
+            if (colrRangesOverlap(range, owned)) return error.BadSfnt;
+        }
+        if (self.count == self.ranges.len) return error.BadSfnt;
+        self.ranges[self.count] = range;
+        self.count += 1;
+    }
+};
+
 fn validateColrV1TopLevelStructuralRanges(data: []const u8, colr: TableRecord) FontError!void {
     if (colr.length < 2) return error.BadSfnt;
     const version = try bin.readU16At(data, colr.offset);
@@ -6095,6 +6112,7 @@ fn validateColrV1ClipList(data: []const u8, colr: TableRecord, glyph_count: u16)
     const clip_data_start = 5 + clip_count * 7;
 
     var previous_end_glyph: ?u16 = null;
+    var clip_box_ownership = ColrClipBoxOwnership{};
     for (0..clip_count) |index| {
         const record = records_start + index * 7;
         const start_glyph = try bin.readU16At(data, record);
@@ -6110,11 +6128,12 @@ fn validateColrV1ClipList(data: []const u8, colr: TableRecord, glyph_count: u16)
         const clip_box_offset: usize = @intCast(try readU24At(data, record + 4));
         if (clip_box_offset < clip_data_start) return error.BadSfnt;
         if (clip_box_offset > colr.length - clip_list_offset) return error.BadSfnt;
-        try validateColrV1ClipBox(data, colr, clip_list_start + clip_box_offset);
+        const clip_box_range = try validateColrV1ClipBox(data, colr, clip_list_start + clip_box_offset);
+        try clip_box_ownership.claim(clip_box_range);
     }
 }
 
-fn validateColrV1ClipBox(data: []const u8, colr: TableRecord, offset: usize) FontError!void {
+fn validateColrV1ClipBox(data: []const u8, colr: TableRecord, offset: usize) FontError!ColrV1StructuralRange {
     const colr_end = colr.offset + colr.length;
     if (offset >= colr_end) return error.BadSfnt;
 
@@ -6130,6 +6149,11 @@ fn validateColrV1ClipBox(data: []const u8, colr: TableRecord, offset: usize) Fon
     const x_max = try bin.readI16At(data, offset + 5);
     const y_max = try bin.readI16At(data, offset + 7);
     if (x_min > x_max or y_min > y_max) return error.BadSfnt;
+
+    // ClipRecords are an index over independently-owned ClipBox payloads.
+    // Reject duplicate or partially-overlapping ClipBoxes so one glyph range
+    // cannot reinterpret another range's bounds or varIndexBase bytes.
+    return .{ .start = offset - colr.offset, .end = offset - colr.offset + min_size };
 }
 
 const DeltaSetIndexMapInfo = struct {
@@ -6348,7 +6372,7 @@ fn validateColrV1ClipListVariationRefs(data: []const u8, colr: TableRecord, glyp
 }
 
 fn validateColrV1ClipBoxVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext) FontError!void {
-    try validateColrV1ClipBox(data, colr, offset);
+    _ = try validateColrV1ClipBox(data, colr, offset);
     if (data[offset] != 2) return;
     try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, offset + 9), 4);
 }
@@ -9787,6 +9811,111 @@ test "COLR v1 optional top-level tables cannot alias one another" {
     writeU32Test(bytes, colr_offset + 34, 0); // Both zero-count headers would otherwise parse.
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "COLR v1 ClipList ClipBoxes own disjoint payloads" {
+    var bytes: [92]u8 = .{0} ** 92;
+    writeU16Test(&bytes, 0, 1); // COLR version 1.
+    writeU32Test(&bytes, 22, 34); // ClipListOffset.
+
+    const clip_list = 34;
+    bytes[clip_list] = 1; // ClipList format 1.
+    writeU32Test(&bytes, clip_list + 1, 2);
+    writeU16Test(&bytes, clip_list + 5, 0);
+    writeU16Test(&bytes, clip_list + 7, 0);
+    writeU24Test(&bytes, clip_list + 9, 19); // First ClipBox at byte 53.
+    writeU16Test(&bytes, clip_list + 12, 1);
+    writeU16Test(&bytes, clip_list + 14, 1);
+    writeU24Test(&bytes, clip_list + 16, 28); // Second ClipBox starts exactly after the first.
+
+    const first_box = clip_list + 19;
+    bytes[first_box] = 1; // ClipBox format 1.
+    writeI16Test(&bytes, first_box + 1, 0);
+    writeI16Test(&bytes, first_box + 3, 0);
+    writeI16Test(&bytes, first_box + 5, 10);
+    writeI16Test(&bytes, first_box + 7, 10);
+
+    const second_box = clip_list + 28;
+    bytes[second_box] = 1;
+    writeI16Test(&bytes, second_box + 1, 20);
+    writeI16Test(&bytes, second_box + 3, 20);
+    writeI16Test(&bytes, second_box + 5, 30);
+    writeI16Test(&bytes, second_box + 7, 30);
+
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = second_box + 9 };
+    try validateColrGlyphBounds(&bytes, colr, 2);
+
+    var duplicate_box = bytes;
+    writeU24Test(&duplicate_box, clip_list + 16, 19); // Two ClipRecords reuse the same ClipBox payload.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&duplicate_box, colr, 2));
+
+    var partial_overlap = bytes;
+    writeU24Test(&partial_overlap, clip_list + 16, 23); // Starts inside the first ClipBox payload.
+    const overlapping_box = clip_list + 23;
+    partial_overlap[overlapping_box] = 1; // Keep the aliased byte looking like a plausible ClipBox header.
+    writeI16Test(&partial_overlap, overlapping_box + 1, 0);
+    writeI16Test(&partial_overlap, overlapping_box + 3, 1);
+    writeI16Test(&partial_overlap, overlapping_box + 5, 10);
+    writeI16Test(&partial_overlap, overlapping_box + 7, 10);
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&partial_overlap, colr, 2));
+}
+
+test "COLR v1 variable ClipBoxes own varIndexBase bytes" {
+    var bytes: [176]u8 = .{0} ** 176;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
+
+    const colr_offset = fvar.length;
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = colr_offset, .length = 140 };
+    writeU16Test(&bytes, colr_offset + 0, 1); // COLR version 1.
+    writeU32Test(&bytes, colr_offset + 22, 34); // ClipListOffset.
+    writeU32Test(&bytes, colr_offset + 30, 82); // ItemVariationStoreOffset.
+
+    const clip_list = colr_offset + 34;
+    bytes[clip_list] = 1; // ClipList format 1.
+    writeU32Test(&bytes, clip_list + 1, 2);
+    writeU16Test(&bytes, clip_list + 5, 0);
+    writeU16Test(&bytes, clip_list + 7, 0);
+    writeU24Test(&bytes, clip_list + 9, 19); // First ClipBoxFormat2 at byte 89.
+    writeU16Test(&bytes, clip_list + 12, 1);
+    writeU16Test(&bytes, clip_list + 14, 1);
+    writeU24Test(&bytes, clip_list + 16, 32); // Second ClipBoxFormat2 starts exactly after the first.
+
+    const first_box = clip_list + 19;
+    bytes[first_box] = 2; // ClipBoxFormat2 includes a trailing varIndexBase.
+    writeI16Test(&bytes, first_box + 1, 0);
+    writeI16Test(&bytes, first_box + 3, 0);
+    writeI16Test(&bytes, first_box + 5, 10);
+    writeI16Test(&bytes, first_box + 7, 10);
+    writeU32Test(&bytes, first_box + 9, 0);
+
+    const second_box = clip_list + 32;
+    bytes[second_box] = 2;
+    writeI16Test(&bytes, second_box + 1, 20);
+    writeI16Test(&bytes, second_box + 3, 20);
+    writeI16Test(&bytes, second_box + 5, 30);
+    writeI16Test(&bytes, second_box + 7, 30);
+    writeU32Test(&bytes, second_box + 9, 0);
+
+    writeItemVariationStoreWithItems(&bytes, colr_offset + 82, 4);
+    try validateColrVariationData(&bytes, colr, fvar, 2);
+    try validateColrGlyphBounds(&bytes, colr, 2);
+
+    var var_payload_overlap = bytes;
+    writeU24Test(&var_payload_overlap, clip_list + 16, 28); // Header starts inside the first ClipBox varIndexBase.
+    const overlapping_box = clip_list + 28;
+    var_payload_overlap[overlapping_box] = 2;
+    writeI16Test(&var_payload_overlap, overlapping_box + 1, 0);
+    writeI16Test(&var_payload_overlap, overlapping_box + 3, 0);
+    writeI16Test(&var_payload_overlap, overlapping_box + 5, 10);
+    writeI16Test(&var_payload_overlap, overlapping_box + 7, 10);
+    writeU32Test(&var_payload_overlap, overlapping_box + 9, 0);
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&var_payload_overlap, colr, 2));
 }
 
 test "COLR v1 variable paints reference valid variation data" {

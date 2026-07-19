@@ -533,7 +533,8 @@ pub const Font = struct {
     pub fn variationGlyphIndex(self: *const Font, codepoint: u21, variation_selector: u21) FontError!?glyph_mod.GlyphId {
         for (self.cmap_subtables) |subtable| {
             if (subtable.format != 14) continue;
-            if (try glyphIndexFormat14(self, subtable.offset, codepoint, variation_selector)) |glyph_id| return glyph_id;
+            try self.validateCmapLookupSubtable(subtable);
+            if (try glyphIndexFormat14(self, subtable.offset, subtable.length, codepoint, variation_selector)) |glyph_id| return glyph_id;
         }
         return null;
     }
@@ -4648,18 +4649,17 @@ fn glyphIndexSequentialMapGroups(data: []const u8, offset: usize, groups_offset:
     return 0;
 }
 
-fn glyphIndexFormat14(self: *const Font, offset: usize, codepoint: u21, variation_selector: u21) FontError!?glyph_mod.GlyphId {
+fn glyphIndexFormat14(self: *const Font, offset: usize, length: usize, codepoint: u21, variation_selector: u21) FontError!?glyph_mod.GlyphId {
     if (variation_selector > 0xffffff or codepoint > 0xffffff) return null;
     const data = self.data;
-    if (offset > data.len or data.len - offset < 6) return error.BadSfnt;
-    const length: usize = @intCast(try bin.readU32At(data, offset + 2));
-    if (length > data.len - offset) return error.BadSfnt;
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
 
     // Font keeps a borrowed byte slice, so callers can still mutate the backing
     // buffer after parse when it originated from []u8 test or application
-    // storage. Re-check the format-14 ownership and glyph-id contracts before
-    // serving the public variation lookup API instead of trusting stale parse
-    // results and returning a dangling glyph id from mutated cmap bytes.
+    // storage. `variationGlyphIndex` has already revalidated the cached cmap
+    // EncodingRecord and declared subtable length; keep this helper focused on
+    // the format-14 ownership and glyph-id contracts before returning a UVS
+    // glyph from mutable bytes.
     try validateCmapFormat14(data, offset, length);
     try validateCmapFormat14GlyphIds(data, offset, length, self.glyph_count);
 
@@ -8831,6 +8831,31 @@ test "cmap format 14 public lookup revalidates borrowed SFNT bytes" {
     // glyph id that is outside maxp.numGlyphs just because the original parse
     // saw a valid format-14 table.
     writeU16Test(bytes, cmap_offset + variation_offset + 36, 4);
+    try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
+    try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
+}
+
+// Format-14 UVS lookup uses cached cmap directory entries because it is reached
+// through a separate public API from ordinary glyphIndex(). Keep that lazy path
+// under the same cmap ownership contract as scalar lookup: the cached subtable
+// length must still match the current bytes and still fit inside the cmap table.
+test "cmap format 14 public lookup revalidates cached subtable length" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(?glyph_mod.GlyphId, 3), try font.variationGlyphIndex('A', 0xfe0f));
+
+    const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
+    const cmap_length: usize = @intCast(try sfntTableLength(bytes, "cmap"));
+    const variation_offset: usize = @intCast(try bin.readU32At(bytes, cmap_offset + 16));
+
+    writeU32Test(bytes, cmap_offset + variation_offset + 2, @intCast(cmap_length - variation_offset + 1));
     try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
     try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
 }

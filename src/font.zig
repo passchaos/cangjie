@@ -465,6 +465,11 @@ pub const Font = struct {
     }
 
     pub fn kerning(self: *const Font, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
+        // `kern` data is validated against maxp at parse time, but callers can
+        // still pass arbitrary glyph IDs into this public API. Reject invalid
+        // inputs before table dispatch so "no matching pair" cannot mask a
+        // glyph-id contract violation, even for fonts without a kern table.
+        if (left >= self.glyph_count or right >= self.glyph_count) return error.InvalidGlyph;
         const kern = self.kern orelse return 0;
         if (kern.length < 4) return 0;
         const version = try bin.readU32At(self.data, kern.offset);
@@ -7425,6 +7430,17 @@ test "legacy kern ignores minimum and cross-stream subtables" {
 
     const font = kernOnlyFont(&data);
     try std.testing.expectEqual(@as(i16, -30), try font.kerning(1, 1));
+}
+
+test "kern public API rejects glyph ids outside maxp count" {
+    var data: [24]u8 = .{0} ** 24;
+    writeU16Test(&data, 0, 0);
+    writeU16Test(&data, 2, 1);
+    writeKernFormat0Subtable(&data, 4, 0x0001, 1, 1, -40);
+
+    const font = kernOnlyFont(&data);
+    try std.testing.expectError(error.InvalidGlyph, font.kerning(2, 1));
+    try std.testing.expectError(error.InvalidGlyph, font.kerning(1, 2));
 }
 
 test "legacy kern format 0 rejects truncated binary-search header" {

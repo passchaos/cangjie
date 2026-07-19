@@ -436,6 +436,8 @@ pub const FontDatabase = struct {
     }
 
     pub fn buildCascadeForText(self: *const FontDatabase, allocator: std.mem.Allocator, query: FontQuery, text: []const u8) ![]*const Font {
+        try validateCascadeTextInput(text);
+
         var fonts = std.ArrayList(*const Font).empty;
         errdefer fonts.deinit(allocator);
 
@@ -618,6 +620,14 @@ fn fontListCovers(fonts: []const *const Font, codepoint: u21) bool {
 
 fn fontCovers(font: *const Font, codepoint: u21) bool {
     return (font.glyphIndex(codepoint) catch 0) != 0;
+}
+
+fn validateCascadeTextInput(text: []const u8) !void {
+    // FontDatabase fallback construction also walks public UTF-8 text with
+    // Utf8Iterator. Validate before allocating the cascade list or probing
+    // fonts so malformed input cannot be silently truncated at the first bad
+    // byte while still returning a plausible fallback stack.
+    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
 }
 
 fn isSupportedFontPath(path: []const u8) bool {

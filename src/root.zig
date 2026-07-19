@@ -2552,6 +2552,27 @@ test "font database owns parsed font bytes and builds fallback cascades" {
     try std.testing.expectEqual(@as(usize, 0), shaped.runs[2].font_index);
 }
 
+test "font database cascade construction rejects malformed UTF-8" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtfWithNames(allocator, "UTF8 Sans", "Regular", "UTF8 Sans Regular");
+    defer allocator.free(bytes);
+
+    var database = FontDatabase.init(allocator);
+    defer database.deinit();
+    _ = try database.addFontBytes(bytes);
+
+    const face_count = database.faces.items.len;
+    // buildCascadeForText feeds text into Utf8Iterator for fallback discovery.
+    // Reject malformed bytes rather than returning a truncated primary-only
+    // cascade for the prefix before the invalid sequence.
+    try std.testing.expectError(error.InvalidUtf8, database.buildCascadeForText(allocator, .{ .family = "UTF8 Sans" }, "A\xc3("));
+    try std.testing.expectEqual(face_count, database.faces.items.len);
+
+    try std.testing.expectError(error.InvalidUtf8, database.cascadeForText(allocator, .{ .family = "UTF8 Sans" }, "\xf0\x28\x8c\x28"));
+}
+
 test "font database deduplicates equivalent faces" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

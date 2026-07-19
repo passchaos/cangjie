@@ -2405,6 +2405,7 @@ fn parseCmapSubtables(allocator: std.mem.Allocator, data: []const u8, cmap: Tabl
     if (version != 0) return error.BadSfnt;
     const count = try bin.readU16At(data, cmap.offset + 2);
     if (@as(usize, count) * 8 > cmap.length - 4) return error.BadSfnt;
+    const records_end = 4 + @as(usize, count) * 8;
 
     var subtables = std.ArrayList(CmapSubtable).empty;
     errdefer subtables.deinit(allocator);
@@ -2425,7 +2426,11 @@ fn parseCmapSubtables(allocator: std.mem.Allocator, data: []const u8, cmap: Tabl
         previous_encoding = .{ .platform_id = platform_id, .encoding_id = encoding_id };
 
         const sub_offset = try bin.readU32At(data, rec + 4);
-        if (sub_offset > cmap.length - 2) return error.BadSfnt;
+        // EncodingRecord offsets name complete cmap subtables, not arbitrary
+        // byte positions. Requiring child subtables to start after the record
+        // directory prevents an offset field or a later EncodingRecord from
+        // being reinterpreted as a plausible format-0 header.
+        if (sub_offset < records_end or sub_offset > cmap.length - 2) return error.BadSfnt;
         const absolute = cmap.offset + sub_offset;
         const format = try bin.readU16At(data, absolute);
         const length = try cmapSubtableLength(data, cmap, @intCast(sub_offset), format);
@@ -7448,6 +7453,14 @@ test "cmap header version and encoding records are canonical" {
     writeU16Test(&unsorted_encoding, 6, 1);
     writeU16Test(&unsorted_encoding, 14, 0);
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &unsorted_encoding, cmap, 1));
+
+    var header_alias = valid;
+    writeU32Test(&header_alias, 8, 0); // Reinterprets the cmap version/count fields as a subtable header.
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &header_alias, cmap, 1));
+
+    var record_alias = valid;
+    writeU32Test(&record_alias, 8, 12); // Points into the second EncodingRecord rather than a child subtable.
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &record_alias, cmap, 1));
 }
 
 test "cmap format 4 parser rejects malformed segment metadata" {

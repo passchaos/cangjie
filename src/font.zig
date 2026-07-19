@@ -5395,6 +5395,23 @@ fn validateCpalPaletteEntries(data: []const u8, cpal: TableRecord) FontError!u16
     if (color_records_offset < header_len or color_records_offset > cpal.length) return error.BadSfnt;
     if (@as(usize, color_count) > (cpal.length - color_records_offset) / 4) return error.BadSfnt;
 
+    if (version == 1) {
+        const palette_types_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len));
+        const palette_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 4));
+        const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 8));
+        try validateCpalV1PayloadRanges(
+            cpal,
+            header_len,
+            palette_types_offset,
+            palette_labels_offset,
+            palette_entry_labels_offset,
+            palette_count,
+            palette_entries,
+            color_records_offset,
+            color_count,
+        );
+    }
+
     for (0..palette_count) |palette_index| {
         const first_color_index = try bin.readU16At(data, cpal.offset + 12 + palette_index * 2);
         if (@as(usize, first_color_index) > color_count or @as(usize, palette_entries) > @as(usize, color_count) - first_color_index) {
@@ -5408,6 +5425,61 @@ fn validateCpalOptionalArray(cpal: TableRecord, header_len: usize, offset: usize
     if (offset == 0) return;
     if (offset < header_len or offset > cpal.length) return error.BadSfnt;
     if (count > (cpal.length - offset) / item_size) return error.BadSfnt;
+}
+
+const CpalPayloadRange = struct {
+    start: usize,
+    end: usize,
+};
+
+fn validateCpalV1PayloadRanges(
+    cpal: TableRecord,
+    header_len: usize,
+    palette_types_offset: usize,
+    palette_labels_offset: usize,
+    palette_entry_labels_offset: usize,
+    palette_count: usize,
+    palette_entries: usize,
+    color_records_offset: usize,
+    color_count: usize,
+) FontError!void {
+    var ranges: [4]CpalPayloadRange = undefined;
+    var range_count: usize = 0;
+
+    try appendCpalPayloadRange(&ranges, &range_count, cpal, header_len, palette_types_offset, palette_count, 4);
+    try appendCpalPayloadRange(&ranges, &range_count, cpal, header_len, palette_labels_offset, palette_count, 2);
+    try appendCpalPayloadRange(&ranges, &range_count, cpal, header_len, palette_entry_labels_offset, palette_entries, 2);
+    try appendCpalPayloadRange(&ranges, &range_count, cpal, header_len, color_records_offset, color_count, 4);
+
+    for (ranges[0..range_count], 0..) |lhs, lhs_index| {
+        for (ranges[lhs_index + 1 .. range_count]) |rhs| {
+            // CPAL v1 offsets name independently typed arrays. Even when two
+            // arrays have compatible element widths, sharing bytes would let a
+            // palette label, palette-type flag, or BGRA color record be
+            // reinterpreted as a different payload later in the pipeline.
+            if (cpalPayloadRangesOverlap(lhs, rhs)) return error.BadSfnt;
+        }
+    }
+}
+
+fn appendCpalPayloadRange(
+    ranges: *[4]CpalPayloadRange,
+    range_count: *usize,
+    cpal: TableRecord,
+    header_len: usize,
+    offset: usize,
+    count: usize,
+    item_size: usize,
+) FontError!void {
+    if (offset == 0) return;
+    try validateCpalOptionalArray(cpal, header_len, offset, count, item_size);
+    const byte_len = count * item_size;
+    ranges[range_count.*] = .{ .start = offset, .end = offset + byte_len };
+    range_count.* += 1;
+}
+
+fn cpalPayloadRangesOverlap(lhs: CpalPayloadRange, rhs: CpalPayloadRange) bool {
+    return lhs.start < rhs.end and rhs.start < lhs.end;
 }
 
 const cpal_known_palette_type_mask: u32 = 0x0000_0003;
@@ -8626,6 +8698,38 @@ test "CPAL v1 palette types reject reserved bits" {
 
     writeU32Test(&bytes, 26, 0x0000_0003); // Valid: light and dark background suitability bits.
     try std.testing.expectEqual(@as(u16, 1), try validateCpalPaletteEntries(&bytes, cpal));
+}
+
+test "CPAL v1 payload arrays cannot alias each other" {
+    var bytes: [38]u8 = .{0} ** 38;
+    writeU16Test(&bytes, 0, 1); // CPAL version 1.
+    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
+    writeU16Test(&bytes, 4, 1); // numPalettes.
+    writeU16Test(&bytes, 6, 1); // numColorRecords.
+    writeU32Test(&bytes, 8, 34); // ColorRecordsArray follows all optional arrays.
+    writeU16Test(&bytes, 12, 0);
+    writeU32Test(&bytes, 14, 26); // paletteTypesArray: bytes 26..30.
+    writeU32Test(&bytes, 18, 30); // paletteLabelsArray: bytes 30..32.
+    writeU32Test(&bytes, 22, 32); // paletteEntryLabelsArray: bytes 32..34.
+    writeU32Test(&bytes, 26, 0x0000_0003);
+    writeU16Test(&bytes, 30, 0xffff);
+    writeU16Test(&bytes, 32, 0xffff);
+    bytes[34] = 10;
+    bytes[35] = 20;
+    bytes[36] = 30;
+    bytes[37] = 40;
+
+    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectEqual(@as(u16, 1), try validateCpalPaletteEntries(&bytes, cpal));
+
+    var label_alias = bytes;
+    writeU32Test(&label_alias, 22, 30); // Entry labels reuse the palette-label payload.
+    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&label_alias, cpal));
+
+    var color_alias = bytes;
+    writeU32Test(&color_alias, 8, 28); // BGRA color records start inside the palette-type array.
+    writeU32Test(&color_alias, 26, 0); // Keep reserved type bits clear while testing ownership.
+    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&color_alias, cpal));
 }
 
 test "COLR glyph references stay within maxp glyph count" {

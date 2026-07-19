@@ -323,6 +323,8 @@ pub const Font = struct {
             try validateCffGlyphCount(data, cff.?, glyph_count);
         }
         if (format == .truetype) {
+            const max_points = try bin.readU16At(data, maxp.offset + 6);
+            const max_contours = try bin.readU16At(data, maxp.offset + 8);
             const max_component_elements = try bin.readU16At(data, maxp.offset + 28);
             const max_component_depth = try bin.readU16At(data, maxp.offset + 30);
             try validateLocaTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
@@ -333,6 +335,8 @@ pub const Font = struct {
                 glyf.?,
                 glyph_count,
                 index_to_loc_format,
+                max_points,
+                max_contours,
                 max_component_elements,
                 max_component_depth,
             );
@@ -1203,6 +1207,8 @@ pub const Font = struct {
             // grammar and component-graph validation enforced by Font.parse so
             // a post-parse mutation cannot be observed only by the particular
             // glyph whose outline is requested.
+            const max_points = try bin.readU16At(self.data, self.maxp.offset + 6);
+            const max_contours = try bin.readU16At(self.data, self.maxp.offset + 8);
             const max_component_elements = try bin.readU16At(self.data, self.maxp.offset + 28);
             const max_component_depth = try bin.readU16At(self.data, self.maxp.offset + 30);
             try validateGlyfTable(
@@ -1212,6 +1218,8 @@ pub const Font = struct {
                 glyf,
                 self.glyph_count,
                 self.index_to_loc_format,
+                max_points,
+                max_contours,
                 max_component_elements,
                 max_component_depth,
             );
@@ -2833,6 +2841,8 @@ fn validateGlyfTable(
     glyf: TableRecord,
     glyph_count: u16,
     index_to_loc_format: i16,
+    max_points: u16,
+    max_contours: u16,
     max_component_elements: u16,
     max_component_depth: u16,
 ) FontError!void {
@@ -2863,7 +2873,10 @@ fn validateGlyfTable(
         if (glyph_data.len < 10) return error.InvalidGlyph;
         const contour_count = try bin.readI16At(glyph_data, 0);
         if (contour_count >= 0) {
-            point_counts[glyph_index] = try validateSimpleGlyphDescription(glyph_data, @intCast(contour_count));
+            const simple_contours: u16 = @intCast(contour_count);
+            const simple_points = try validateSimpleGlyphDescription(glyph_data, simple_contours);
+            try validateMaxpSimpleGlyphSummary(simple_points, simple_contours, max_points, max_contours);
+            point_counts[glyph_index] = simple_points;
         } else {
             compound_adjacency[glyph_index] = try validateCompoundGlyphDescription(allocator, glyph_data, glyph_count);
         }
@@ -2940,6 +2953,15 @@ fn validateSimpleGlyphDescription(glyph_data: []const u8, contour_count: u16) Fo
     offset += x_bytes;
     if (y_bytes > glyph_data.len - offset) return error.InvalidGlyph;
     return total_points;
+}
+
+fn validateMaxpSimpleGlyphSummary(point_count: usize, contour_count: u16, max_points: u16, max_contours: u16) FontError!void {
+    // maxp.maxPoints and maxp.maxContours are font-wide summaries for simple
+    // glyphs. They bound stack/storage needs for clients that size glyph work
+    // buffers before reading an outline, so reject tables that under-report a
+    // structurally valid glyph instead of letting the inconsistency surface only
+    // in a later rasterization path.
+    if (point_count > max_points or contour_count > max_contours) return error.InvalidGlyph;
 }
 
 fn simpleGlyphCoordinateByteCount(flag: u8, x_axis: bool) usize {
@@ -10473,6 +10495,25 @@ test "loca offsets are validated against glyf at parse time" {
         const loca_offset = try sfntTableOffset(bytes, "loca");
         writeU16Test(bytes, loca_offset + 4, 22); // Short format stores offsets divided by two; 44 > glyf.len.
         try std.testing.expectError(error.InvalidLoca, Font.parse(allocator, bytes));
+    }
+}
+
+test "simple glyf summaries must not exceed maxp maxima" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    inline for (.{
+        .{ .maxp_field_offset = @as(usize, 6), .underreported_value = @as(u16, 2) }, // maxPoints < glyph 1's three points.
+        .{ .maxp_field_offset = @as(usize, 8), .underreported_value = @as(u16, 0) }, // maxContours < glyph 1's one contour.
+    }) |case| {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+
+        const maxp_offset = try sfntTableOffset(bytes, "maxp");
+        writeU16Test(bytes, maxp_offset + case.maxp_field_offset, case.underreported_value);
+        try updateSfntTableChecksum(bytes, "maxp");
+
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
     }
 }
 

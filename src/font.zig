@@ -4453,6 +4453,58 @@ fn nameStorageString(table: []const u8, layout: NameTableLayout, offset: usize, 
 
 fn validateNameRecordEncoding(record: NameRecord, string_data: []const u8) FontError!void {
     if (isUtf16Name(record)) try validateUtf16BeNameData(string_data);
+    if (record.name_id == @intFromEnum(NameId.postscript_name)) {
+        // The PostScript font name is consumed as a stable ASCII identifier by
+        // font databases and document formats, unlike localized family names.
+        // Validate its restricted syntax at every name-table read so a borrowed
+        // font buffer mutation cannot surface spaces, delimiters, or non-ASCII
+        // code points through Font.nameString(.postscript_name).
+        try validatePostScriptNameString(record, string_data);
+    }
+}
+
+fn validatePostScriptNameString(record: NameRecord, data: []const u8) FontError!void {
+    var decoded_len: usize = 0;
+    if (isUtf16Name(record)) {
+        var index: usize = 0;
+        while (index < data.len) : (index += 2) {
+            const unit = std.mem.readInt(u16, data[index..][0..2], .big);
+            if (unit >= 0xd800 and unit <= 0xdbff) {
+                if (index + 4 > data.len) return error.InvalidName;
+                const low = std.mem.readInt(u16, data[index + 2 ..][0..2], .big);
+                if (low < 0xdc00 or low > 0xdfff) return error.InvalidName;
+                return error.InvalidName;
+            } else if (unit >= 0xdc00 and unit <= 0xdfff) {
+                return error.InvalidName;
+            }
+            if (unit > std.math.maxInt(u8) or !isPostScriptFontNameByte(@intCast(unit))) return error.InvalidName;
+            decoded_len += 1;
+        }
+    } else {
+        for (data) |byte| {
+            if (!isPostScriptFontNameByte(byte)) return error.InvalidName;
+        }
+        decoded_len = data.len;
+    }
+
+    // PostScript FontName identifiers are limited to 63 ASCII bytes. Empty
+    // records are also invalid: if name ID 6 is present it must identify the
+    // face rather than behaving like a missing optional record.
+    if (decoded_len == 0 or decoded_len > 63) return error.InvalidName;
+}
+
+fn isPostScriptFontNameByte(byte: u8) bool {
+    return switch (byte) {
+        // PostScript delimiters and whitespace are not legal inside FontName
+        // tokens. Keep hyphen and period available because they are common in
+        // production PostScript names such as "Family-BoldItalic".
+        0x21...0x7e => byte != '(' and byte != ')' and
+            byte != '<' and byte != '>' and
+            byte != '[' and byte != ']' and
+            byte != '{' and byte != '}' and
+            byte != '/' and byte != '%',
+        else => false,
+    };
 }
 
 fn validateUtf16BeNameData(data: []const u8) FontError!void {
@@ -10921,6 +10973,56 @@ test "name table rejects invalid platform encodings at parse time" {
     writeU16Test(bytes, record, 5); // OpenType name tables only define platform IDs 0 through 4.
 
     try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+}
+
+test "PostScript name strings validate FontName syntax" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "CangjieSans-Regular");
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var out: [64]u8 = undefined;
+        try std.testing.expectEqualStrings("CangjieSans-Regular", (try font.nameString(.postscript_name, &out)).?);
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "Bad Name");
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "Bad/Name");
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+    }
+}
+
+test "lazy PostScript name lookup revalidates borrowed bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "CangjieSans-Regular");
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var out: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("CangjieSans-Regular", (try font.nameString(.postscript_name, &out)).?);
+
+    const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+    const record = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.postscript_name));
+    const storage_offset: usize = @intCast(try bin.readU16At(bytes, name_offset + 4));
+    const string_offset: usize = @intCast(try bin.readU16At(bytes, record + 10));
+    bytes[name_offset + storage_offset + string_offset + 1] = ' ';
+
+    try std.testing.expectError(error.InvalidName, font.nameString(.postscript_name, &out));
 }
 
 test "name table format 1 language ids reference valid UTF-16 language tags" {

@@ -484,7 +484,18 @@ fn singleCodepointTtfTables(allocator: std.mem.Allocator, codepoint: u16) ![]Tab
 }
 
 fn namedTtfTables(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8) ![]Table {
-    return try namedPostScriptTtfTables(allocator, family, subfamily, full_name, full_name);
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "name", .data = try nameTable(allocator, family, subfamily, full_name) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
 }
 
 fn namedPostScriptTtfTables(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8, postscript_name: []const u8) ![]Table {
@@ -1918,7 +1929,47 @@ fn cmapFormat12GlyphArrayTable(allocator: std.mem.Allocator, codepoints: []const
 }
 
 fn nameTable(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8) ![]u8 {
-    return try nameTableWithPostScript(allocator, family, subfamily, full_name, full_name);
+    const postscript_name = try synthesizePostScriptName(allocator, family, subfamily);
+    defer allocator.free(postscript_name);
+    return try nameTableWithPostScript(allocator, family, subfamily, full_name, postscript_name);
+}
+
+fn synthesizePostScriptName(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8) ![]u8 {
+    const fallback = "CangjieTest";
+    var scratch: [63]u8 = undefined;
+    var len: usize = 0;
+
+    _ = appendPostScriptNamePart(&scratch, &len, family);
+    const needs_separator = len != 0;
+    const before_subfamily = len;
+    if (needs_separator and len < scratch.len) {
+        scratch[len] = '-';
+        len += 1;
+    }
+    if (!appendPostScriptNamePart(&scratch, &len, subfamily) and needs_separator) {
+        len = before_subfamily;
+    }
+    if (len == 0) {
+        @memcpy(scratch[0..fallback.len], fallback);
+        len = fallback.len;
+    }
+    return try allocator.dupe(u8, scratch[0..len]);
+}
+
+fn appendPostScriptNamePart(out: []u8, len: *usize, text: []const u8) bool {
+    var wrote = false;
+    for (text) |byte| {
+        if (len.* == out.len) break;
+        if (!isPostScriptNameFixtureByte(byte)) continue;
+        out[len.*] = byte;
+        len.* += 1;
+        wrote = true;
+    }
+    return wrote;
+}
+
+fn isPostScriptNameFixtureByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '.' or byte == '_';
 }
 
 fn nameTableWithPostScript(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8, postscript_name: []const u8) ![]u8 {

@@ -1256,7 +1256,7 @@ test "reads font family style and full names from the name table" {
     try std.testing.expectEqualStrings("Regular", (try font.subfamilyName(&buffer)).?);
     try std.testing.expectEqualStrings("Cangjie Sans Regular", (try font.fullName(&buffer)).?);
     try std.testing.expectEqualStrings("Cangjie Sans", (try font.nameString(.typographic_family, &buffer)).?);
-    try std.testing.expectEqualStrings("Cangjie Sans Regular", (try font.nameString(.postscript_name, &buffer)).?);
+    try std.testing.expectEqualStrings("CangjieSans-Regular", (try font.nameString(.postscript_name, &buffer)).?);
 }
 
 test "reads variable font axis metadata from fvar" {
@@ -2551,7 +2551,7 @@ test "enumerates font database families and faces" {
     try std.testing.expectEqualStrings("Enum Sans", manifest[0].family);
     try std.testing.expectEqualStrings("Regular", manifest[0].subfamily);
     try std.testing.expectEqualStrings("Enum Sans Regular", manifest[0].full_name);
-    try std.testing.expectEqualStrings("Enum Sans Regular", manifest[0].postscript_name);
+    try std.testing.expectEqualStrings("EnumSans-Regular", manifest[0].postscript_name);
     try std.testing.expectEqual(@as(u16, 400), manifest[0].weight);
     try std.testing.expectEqual(@as(u16, 100), manifest[0].stretch);
     try std.testing.expectEqual(FontStyle.normal, manifest[0].style);

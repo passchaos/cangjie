@@ -296,6 +296,7 @@ pub const Font = struct {
         if (name) |name_table| try validateNameTable(data, name_table);
         if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
         if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
+        if (kern) |kern_table| try validateKernTable(data, kern_table, glyph_count);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
         const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
@@ -1895,6 +1896,90 @@ fn validatePostFormat25(data: []const u8, post: TableRecord, glyph_count: u16) F
 
 fn validatePostFormat4(post: TableRecord, glyph_count: u16) FontError!void {
     if (@as(usize, glyph_count) * 2 > post.length - 32) return error.BadSfnt;
+}
+
+fn validateKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
+    try requireTableLength(kern, 4);
+    const version = try bin.readU32At(data, kern.offset);
+    if (version == 0x00010000) {
+        try validateAppleKernTable(data, kern, glyph_count);
+        return;
+    }
+    if ((version >> 16) != 0) {
+        // Unknown non-legacy versions are ignored by `kerning`; keep that
+        // compatibility behavior instead of rejecting a table this renderer
+        // intentionally does not interpret.
+        return;
+    }
+    try validateLegacyKernTable(data, kern, glyph_count);
+}
+
+fn validateLegacyKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
+    const table_count = try bin.readU16At(data, kern.offset + 2);
+    const table_end = kern.offset + kern.length;
+    var subtable_offset = kern.offset + 4;
+    for (0..table_count) |_| {
+        if (subtable_offset > table_end or table_end - subtable_offset < 6) return error.BadSfnt;
+        const length = try bin.readU16At(data, subtable_offset + 2);
+        const coverage = try bin.readU16At(data, subtable_offset + 4);
+        if (length < 6 or length > table_end - subtable_offset) return error.BadSfnt;
+
+        const format = coverage >> 8;
+        const horizontal = (coverage & 0x0001) != 0;
+        const minimum = (coverage & 0x0002) != 0;
+        const cross_stream = (coverage & 0x0004) != 0;
+        if (format == 0 and horizontal and !minimum and !cross_stream) {
+            try validateKernFormat0Body(data[subtable_offset + 6 .. subtable_offset + length], glyph_count);
+        }
+        subtable_offset += length;
+    }
+}
+
+fn validateAppleKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
+    try requireTableLength(kern, 8);
+    const table_count = try bin.readU32At(data, kern.offset + 4);
+    const table_end = kern.offset + kern.length;
+    var subtable_offset = kern.offset + 8;
+    for (0..table_count) |_| {
+        if (subtable_offset > table_end or table_end - subtable_offset < 8) return error.BadSfnt;
+        const length = try bin.readU32At(data, subtable_offset);
+        const coverage = try bin.readU16At(data, subtable_offset + 4);
+        if (length < 8 or length > table_end - subtable_offset) return error.BadSfnt;
+
+        const format = coverage & 0x00ff;
+        const vertical = (coverage & 0x8000) != 0;
+        const cross_stream = (coverage & 0x4000) != 0;
+        const variation = (coverage & 0x2000) != 0;
+        if (format == 0 and !vertical and !cross_stream and !variation) {
+            try validateKernFormat0Body(data[subtable_offset + 8 .. subtable_offset + length], glyph_count);
+        }
+        subtable_offset += length;
+    }
+}
+
+fn validateKernFormat0Body(data: []const u8, glyph_count: u16) FontError!void {
+    // Format-0 kern subtables are searched with a binary search over packed
+    // left/right glyph pairs. Validate the complete pair array while parsing so
+    // malformed fonts cannot hide out-of-range glyph IDs or make kerning depend
+    // on unsorted record order.
+    if (data.len < 8) return error.BadSfnt;
+    const pair_count = try bin.readU16At(data, 0);
+    if (@as(usize, pair_count) * 6 > data.len - 8) return error.BadSfnt;
+
+    var previous_pair: ?u32 = null;
+    for (0..pair_count) |index| {
+        const offset = 8 + index * 6;
+        const left = try bin.readU16At(data, offset);
+        const right = try bin.readU16At(data, offset + 2);
+        try validateGlyphIdInMaxp(left, glyph_count);
+        try validateGlyphIdInMaxp(right, glyph_count);
+
+        const pair = (@as(u32, left) << 16) | right;
+        if (previous_pair) |previous| {
+            if (pair <= previous) return error.BadSfnt;
+        }
+        previous_pair = pair;
+    }
 }
 
 fn isPostGlyphName(name: []const u8) bool {
@@ -6781,6 +6866,71 @@ test "Apple kern v1 validates declared subtable lengths" {
 
     const font = kernOnlyFont(&data);
     try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
+}
+
+test "kern format 0 pair arrays are validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        var kern: [24]u8 = .{0} ** 24;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        var kern: [24]u8 = .{0} ** 24;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeKernFormat0Subtable(&kern, 4, 0x0001, 2, 1, -40);
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var kern: [30]u8 = .{0} ** 30;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeU16Test(&kern, 4, 0);
+        writeU16Test(&kern, 6, 26);
+        writeU16Test(&kern, 8, 0x0001);
+        writeU16Test(&kern, 10, 2); // nPairs.
+        writeU16Test(&kern, 12, 6);
+        writeU16Test(&kern, 14, 0);
+        writeU16Test(&kern, 16, 0);
+        writeU16Test(&kern, 18, 1);
+        writeU16Test(&kern, 20, 1);
+        writeI16Test(&kern, 22, -40);
+        writeU16Test(&kern, 24, 0); // Out of sort order after (1, 1).
+        writeU16Test(&kern, 26, 1);
+        writeI16Test(&kern, 28, -20);
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
+test "Apple kern v1 format 0 pair glyph ids are validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var kern: [31]u8 = .{0} ** 31;
+    writeU32Test(&kern, 0, 0x00010000);
+    writeU32Test(&kern, 4, 1);
+    writeAppleKernFormat0Subtable(&kern, 8, 0x0000, 1, 2, -35);
+
+    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+    defer allocator.free(bytes);
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
 test "sbix offsets cannot overlap table or strike metadata" {

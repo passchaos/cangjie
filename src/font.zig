@@ -834,10 +834,10 @@ pub const Font = struct {
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 1) return null;
-        const base_glyph_list_offset = try bin.readU32At(self.data, colr.offset + 14);
-        if (base_glyph_list_offset == 0 or base_glyph_list_offset > colr.length) return null;
+        const base_glyph_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 14));
+        if (base_glyph_list_offset == 0) return null;
+        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
         const list_start = colr.offset + base_glyph_list_offset;
-        if (list_start + 4 > colr.offset + colr.length) return error.BadSfnt;
         const record_count = try bin.readU32At(self.data, list_start);
         const records_start = list_start + 4;
         if (@as(usize, record_count) * 6 > colr.offset + colr.length - records_start) return error.BadSfnt;
@@ -5398,7 +5398,7 @@ fn validateColrV1PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette
     if (colr.length < 34) return error.BadSfnt;
     const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
     if (base_glyph_list_offset != 0) {
-        if (base_glyph_list_offset > colr.length or 4 > colr.length - base_glyph_list_offset) return error.BadSfnt;
+        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
         const list_start = colr.offset + base_glyph_list_offset;
         const record_count: usize = @intCast(try bin.readU32At(data, list_start));
         const records_start = list_start + 4;
@@ -5497,7 +5497,7 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
 
     const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
     if (base_glyph_list_offset != 0) {
-        if (base_glyph_list_offset > colr.length or 4 > colr.length - base_glyph_list_offset) return error.BadSfnt;
+        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
         const list_start = colr.offset + base_glyph_list_offset;
         const record_count: usize = @intCast(try bin.readU32At(data, list_start));
         const records_start = list_start + 4;
@@ -5537,6 +5537,15 @@ fn validateColrBaseGlyphOrder(base_glyph: u16, previous_base_glyph: *?u16) FontE
     previous_base_glyph.* = base_glyph;
 }
 
+fn validateColrV1OptionalOffset(offset: usize, colr: TableRecord, min_size: usize) FontError!void {
+    // COLR v1's optional top-level offsets are all relative to the start of
+    // the COLR table and must identify child tables, not bytes in the fixed
+    // version-1 header. Header aliasing can otherwise reinterpret offset fields
+    // as BaseGlyphList/LayerList counts or paint formats during parse-time
+    // validation and later color rendering.
+    if (offset < 34 or offset > colr.length or min_size > colr.length - offset) return error.BadSfnt;
+}
+
 fn validateColrV1ClipList(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
     const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
     if (clip_list_offset == 0) return;
@@ -5545,7 +5554,7 @@ fn validateColrV1ClipList(data: []const u8, colr: TableRecord, glyph_count: u16)
     // relative to the ClipList table, not to COLR, and must not alias the
     // ClipRecord array. Validate it while parsing so later renderers can trust
     // clip metadata rather than reinterpreting records as ClipBox payload.
-    if (clip_list_offset < 34 or clip_list_offset > colr.length or 5 > colr.length - clip_list_offset) return error.BadSfnt;
+    try validateColrV1OptionalOffset(clip_list_offset, colr, 5);
     const clip_list_start = colr.offset + clip_list_offset;
     const format = data[clip_list_start];
     if (format != 1) return error.BadSfnt;
@@ -5636,7 +5645,7 @@ fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRe
 
     const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
     if (base_glyph_list_offset != 0) {
-        if (base_glyph_list_offset > colr.length or 4 > colr.length - base_glyph_list_offset) return error.BadSfnt;
+        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
         const list_start = colr.offset + base_glyph_list_offset;
         const record_count: usize = @intCast(try bin.readU32At(data, list_start));
         const records_start = list_start + 4;
@@ -5748,7 +5757,7 @@ fn validateColrVariationIndexSequence(data: []const u8, colr: TableRecord, conte
 fn validateColrV1ClipListVariationRefs(data: []const u8, colr: TableRecord, glyph_count: u16, context: ?*const ColrVariationContext) FontError!void {
     const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
     if (clip_list_offset == 0) return;
-    if (clip_list_offset < 34 or clip_list_offset > colr.length or 5 > colr.length - clip_list_offset) return error.BadSfnt;
+    try validateColrV1OptionalOffset(clip_list_offset, colr, 5);
 
     const clip_list_start = colr.offset + clip_list_offset;
     if (data[clip_list_start] != 1) return error.BadSfnt;
@@ -5938,7 +5947,7 @@ fn colrLayerList(data: []const u8, colr: TableRecord) FontError!?ColrLayerList {
     if (colr.length < 22) return error.BadSfnt;
     const layer_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 18));
     if (layer_list_offset == 0) return null;
-    if (layer_list_offset > colr.length or 4 > colr.length - layer_list_offset) return error.BadSfnt;
+    try validateColrV1OptionalOffset(layer_list_offset, colr, 4);
 
     const list_start = colr.offset + layer_list_offset;
     const layer_count: usize = @intCast(try bin.readU32At(data, list_start));
@@ -8339,6 +8348,27 @@ test "COLR v1 reachable paint formats are validated at parse time" {
         defer allocator.free(bytes);
         const colr_offset = try sfntTableOffset(bytes, "COLR");
         bytes[colr_offset + 73] = 33; // Reserved format reachable through PaintColrLayers.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
+test "COLR v1 top-level offsets cannot alias the header" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildColorV1Ttf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        writeU32Test(bytes, colr_offset + 14, 30); // BaseGlyphListOffset points into ItemVariationStoreOffset.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildColorV1LayersTtf(allocator);
+        defer allocator.free(bytes);
+        const colr_offset = try sfntTableOffset(bytes, "COLR");
+        writeU32Test(bytes, colr_offset + 18, 26); // LayerListOffset points into VarIndexMapOffset.
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 }

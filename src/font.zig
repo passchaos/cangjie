@@ -710,6 +710,11 @@ pub const Font = struct {
 
     pub fn variationAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationAxis {
         const fvar = self.fvar orelse return try allocator.alloc(VariationAxis, 0);
+        // Font owns borrowed bytes. Re-apply the full fvar table contract at
+        // this public API boundary so post-parse mutations cannot expose axis
+        // records whose reserved flags, duplicate tags, or instance payloads
+        // would have been rejected during Font.parse.
+        try validateFvarTable(self.data, fvar);
         const info = try readFvarInfo(self.data, fvar);
 
         const axes = try allocator.alloc(VariationAxis, info.axis_count);
@@ -724,10 +729,6 @@ pub const Font = struct {
                 .flags = try bin.readU16At(self.data, axis_offset + 16),
                 .name_id = try bin.readU16At(self.data, axis_offset + 18),
             };
-            if (axis.min_value > axis.default_value or axis.default_value > axis.max_value) return error.BadSfnt;
-            for (axes[0..index]) |previous| {
-                if (std.mem.eql(u8, &previous.tag, &axis.tag)) return error.BadSfnt;
-            }
         }
         return axes;
     }
@@ -11175,7 +11176,7 @@ test "fvar axes and instance arrays stay inside declared table regions" {
     writeFvarAxisTest(&valid_with_instance, 16, "wght", 100.0, 400.0, 900.0, 256);
     writeU16Test(&valid_with_instance, 36, 300); // subfamilyNameID
     writeU16Test(&valid_with_instance, 38, 0); // flags
-    writeU32Test(&valid_with_instance, 40, 0x00010000); // one coordinate
+    writeF16Dot16Test(&valid_with_instance, 40, 400.0); // one coordinate
 
     const valid_font = fvarOnlyFont(&valid_with_instance);
     const axes = try valid_font.variationAxes(allocator);
@@ -11214,6 +11215,41 @@ test "fvar axis records require ordered ranges and unique tags" {
 
     const duplicate_font = fvarOnlyFont(&duplicate_tags);
     try std.testing.expectError(error.BadSfnt, duplicate_font.variationAxes(allocator));
+}
+
+test "fvar public axes API revalidates all table metadata" {
+    const allocator = std.testing.allocator;
+
+    var bytes: [44]u8 = .{0} ** 44;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 8);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    writeU16Test(&bytes, 36, 300); // subfamilyNameID.
+    writeU16Test(&bytes, 38, 0); // flags.
+    writeF16Dot16Test(&bytes, 40, 400.0); // instance coordinate.
+
+    const font = fvarOnlyFont(&bytes);
+    const axes = try font.variationAxes(allocator);
+    defer allocator.free(axes);
+    try std.testing.expectEqual(@as(usize, 1), axes.len);
+    try std.testing.expectEqual(@as(u16, 0), axes[0].flags);
+
+    var reserved_axis_flags = bytes;
+    writeU16Test(&reserved_axis_flags, 32, 0x0002); // Only HIDDEN_AXIS is defined.
+    try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&reserved_axis_flags).variationAxes(allocator));
+
+    var reserved_instance_flags = bytes;
+    writeU16Test(&reserved_instance_flags, 38, 1); // fvar instance flags are reserved.
+    try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&reserved_instance_flags).variationAxes(allocator));
+
+    var coordinate_past_axis_range = bytes;
+    writeF16Dot16Test(&coordinate_past_axis_range, 40, 950.0);
+    try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&coordinate_past_axis_range).variationAxes(allocator));
 }
 
 test "fvar axis metadata is validated at parse time" {

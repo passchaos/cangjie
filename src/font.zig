@@ -351,6 +351,7 @@ pub const Font = struct {
         if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
         if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
         if (cblc != null and cbdt != null) try validateCblcCbdtTables(data, cblc.?, cbdt.?, glyph_count);
+        try validateSfntTableChecksums(data, records);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
         // supported Unicode mapping per lookup without reparsing the directory.
@@ -1834,6 +1835,62 @@ fn validateSfntTablesDoNotOverlapTtcDsig(records: []const TableRecord, header: T
         // Cangjie's lazy table APIs observe signature data as font payload.
         if (rangesOverlap(record.offset, record.offset + record.length, dsig.start, dsig.end)) return error.BadSfnt;
     }
+}
+
+fn validateSfntTableChecksums(data: []const u8, records: []const TableRecord) FontError!void {
+    for (records) |record| {
+        // Table directory checksums are the SFNT table map's lightweight
+        // integrity contract. Validate every advertised payload after the
+        // structural passes have established table-local bounds, while treating
+        // head.checkSumAdjustment as zero as required by OpenType's checksum
+        // algorithm. This catches stale or tampered borrowed table bytes without
+        // needing whole-file checksum adjustment support from test-generated
+        // fonts.
+        const actual = if (bin.tagEq(record.tag, "head"))
+            try checksumHeadTable(data, record)
+        else
+            try checksumSfntTable(data, record);
+        if (actual != record.checksum) return error.BadSfnt;
+    }
+}
+
+fn checksumSfntTable(data: []const u8, record: TableRecord) FontError!u32 {
+    if (record.offset > data.len or record.length > data.len - record.offset) return error.BadSfnt;
+
+    var sum: u32 = 0;
+    var cursor: usize = 0;
+    while (cursor < record.length) : (cursor += 4) {
+        var word: u32 = 0;
+        for (0..4) |byte_index| {
+            word <<= 8;
+            const table_index = cursor + byte_index;
+            if (table_index < record.length) word |= data[record.offset + table_index];
+        }
+        sum +%= word;
+    }
+    return sum;
+}
+
+fn checksumHeadTable(data: []const u8, head: TableRecord) FontError!u32 {
+    if (head.offset > data.len or head.length > data.len - head.offset) return error.BadSfnt;
+
+    var sum: u32 = 0;
+    var cursor: usize = 0;
+    while (cursor < head.length) : (cursor += 4) {
+        var word: u32 = 0;
+        for (0..4) |byte_index| {
+            word <<= 8;
+            const table_index = cursor + byte_index;
+            if (table_index < head.length) {
+                // The head table's checkSumAdjustment field participates in
+                // whole-font validation, but its four bytes are defined as zero
+                // when computing the table directory checksum.
+                if (table_index < 8 or table_index >= 12) word |= data[head.offset + table_index];
+            }
+        }
+        sum +%= word;
+    }
+    return sum;
 }
 
 fn rangesOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) bool {
@@ -9797,6 +9854,8 @@ test "compound glyf permits repeated USE_MY_METRICS flags" {
     // USE_MY_METRICS flags rather than component-count validation.
     writeU16Test(bytes, maxp_offset + 28, 2);
     writeU16Test(bytes, maxp_offset + 30, 1);
+    try updateSfntTableChecksum(bytes, "glyf");
+    try updateSfntTableChecksum(bytes, "maxp");
 
     var font = try Font.parse(allocator, bytes);
     font.deinit();
@@ -9948,6 +10007,7 @@ test "TrueType maxp maxZones is validated at parse time" {
         defer allocator.free(bytes);
         const maxp_offset = try sfntTableOffset(bytes, "maxp");
         writeU16Test(bytes, maxp_offset + 14, 1);
+        try updateSfntTableChecksum(bytes, "maxp");
         var font = try Font.parse(allocator, bytes);
         font.deinit();
     }
@@ -10380,6 +10440,40 @@ test "SFNT table directory offsets must be long aligned" {
     try setSfntTableOffset(bytes, "cmap", cmap_offset + 1);
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "SFNT table directory checksums match borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const hhea_offset = try sfntTableOffset(bytes, "hhea");
+        bytes[hhea_offset + 4] +%= 1;
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const head_offset = try sfntTableOffset(bytes, "head");
+        // head.checkSumAdjustment is explicitly ignored for the per-table
+        // directory checksum; mutating any other head byte must still be caught.
+        writeU32Test(bytes, head_offset + 8, 0xffff_ffff);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+
+        bytes[head_offset + 18] +%= 1;
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "name table storage offset cannot overlap metadata records" {
@@ -13490,6 +13584,29 @@ fn kernOnlyFont(data: []const u8) Font {
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
     };
+}
+
+fn updateSfntTableChecksum(bytes: []u8, comptime table_tag: []const u8) FontError!void {
+    if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
+    const table_count = try bin.readU16At(bytes, 4);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (record_offset + 16 > bytes.len) return error.BadSfnt;
+        if (!std.mem.eql(u8, bytes[record_offset .. record_offset + 4], table_tag)) continue;
+        const record = TableRecord{
+            .tag = .{ bytes[record_offset], bytes[record_offset + 1], bytes[record_offset + 2], bytes[record_offset + 3] },
+            .checksum = 0,
+            .offset = try bin.readU32At(bytes, record_offset + 8),
+            .length = try bin.readU32At(bytes, record_offset + 12),
+        };
+        const value = if (bin.tagEq(record.tag, "head"))
+            try checksumHeadTable(bytes, record)
+        else
+            try checksumSfntTable(bytes, record);
+        writeU32Test(bytes, record_offset + 4, value);
+        return;
+    }
+    return error.MissingTable;
 }
 
 fn setSfntTableLength(bytes: []u8, comptime table_tag: []const u8, length: u32) FontError!void {

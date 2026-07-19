@@ -462,6 +462,49 @@ test "public shaping APIs reject invalid font sizes before mutation" {
     try std.testing.expectError(error.InvalidFontSize, TextShaper.measureParagraphUtf8(cascade, &layout_buffer, "A", std.math.inf(f32), .{ .max_width = 100 }));
 }
 
+test "public shaping APIs reject malformed feature overrides before mutation" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+    var fallback_cache = FontFallbackCache.init(allocator);
+    defer fallback_cache.deinit();
+    var shaped_cache = ShapedRunCache.init(allocator);
+    defer shaped_cache.deinit();
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const valid = try TextShaper.shapeUtf8(&font, &layout_buffer, "A", 20);
+    try std.testing.expectEqual(@as(usize, 1), valid.glyphs.len);
+
+    const invalid_feature = [_]FeatureOverride{.{ .tag = 0x6c696700, .enabled = true }};
+    try std.testing.expectError(error.InvalidFeatureTag, TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .features = &invalid_feature }));
+    try std.testing.expectEqual(@as(usize, 1), layout_buffer.glyphs.items.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), layout_buffer.glyphs.items[0].glyph_id);
+
+    const duplicate_features = [_]FeatureOverride{
+        .{ .tag = openTypeTag("liga"), .enabled = true },
+        .{ .tag = openTypeTag("liga"), .enabled = false },
+    };
+    const fallback_hits = fallback_cache.hits;
+    const fallback_misses = fallback_cache.misses;
+    const shaped_hits = shaped_cache.hits;
+    const shaped_misses = shaped_cache.misses;
+    try std.testing.expectError(error.DuplicateFeatureTag, TextShaper.shapeUtf8CascadeWithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "A", 20, .{ .features = &duplicate_features }));
+    try std.testing.expectEqual(fallback_hits, fallback_cache.hits);
+    try std.testing.expectEqual(fallback_misses, fallback_cache.misses);
+    try std.testing.expectEqual(shaped_hits, shaped_cache.hits);
+    try std.testing.expectEqual(shaped_misses, shaped_cache.misses);
+
+    try std.testing.expectError(error.InvalidFeatureTag, TextShaper.shapeUtf8ScriptRuns(cascade, &layout_buffer, "A", 20, .{ .features = &invalid_feature }));
+}
+
 test "paragraph layout rejects non-finite options before shaping mutation" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

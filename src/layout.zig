@@ -805,7 +805,7 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8WithOptions(font: *const Font, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
-        try validateShapingInput(text, font_size);
+        try validateShapingInput(text, font_size, options);
         buffer.clear();
         try shapeSegmentInto(font, null, null, buffer, text, font_size, 0, lookupOptionsForText(text, options));
         applyDirection(buffer, options.direction);
@@ -837,7 +837,7 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8CascadeWithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
-        try validateShapingInput(text, font_size);
+        try validateShapingInput(text, font_size, options);
         const cache_key = if (shaped_cache != null) ShapedRunCache.key(cascade, text, font_size, options) else undefined;
         if (shaped_cache) |cache| {
             if (try cache.load(cache_key, buffer)) |cached| return cached;
@@ -891,7 +891,7 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
-        try validateShapingInput(text, font_size);
+        try validateShapingInput(text, font_size, options);
         try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
         applyDirection(buffer, options.direction);
         try buildScriptRuns(buffer, text, options.direction, options.language_tag);
@@ -967,9 +967,10 @@ fn textMetricsFromParagraph(paragraph: ParagraphLayout) TextMetrics {
     };
 }
 
-fn validateShapingInput(text: []const u8, font_size: f32) !void {
+fn validateShapingInput(text: []const u8, font_size: f32, options: ShapeOptions) !void {
     try validateShapingUtf8(text);
     try validateShapingFontSize(font_size);
+    try validateFeatureOverrides(options.features);
 }
 
 fn validateShapingUtf8(text: []const u8) !void {
@@ -987,6 +988,28 @@ fn validateShapingFontSize(font_size: f32) !void {
     // runs) that are hard for layout, hit testing, and renderers to handle
     // consistently, so reject them before caches or buffers observe the call.
     if (!std.math.isFinite(font_size) or font_size <= 0) return error.InvalidFontSize;
+}
+
+fn validateFeatureOverrides(features: []const unicode.FeatureOverride) !void {
+    for (features, 0..) |feature, index| {
+        // Feature tags are public shaping controls, not font bytes. Require a
+        // real OpenType tag and one decision per tag before shape-plan keys or
+        // glyph buffers observe the request; otherwise duplicate entries would
+        // hash as distinct cache entries while GSUB/GPOS only honor the first.
+        if (!isOpenTypeFeatureTag(feature.tag)) return error.InvalidFeatureTag;
+        for (features[0..index]) |previous| {
+            if (previous.tag == feature.tag) return error.DuplicateFeatureTag;
+        }
+    }
+}
+
+fn isOpenTypeFeatureTag(tag_value: u32) bool {
+    inline for (0..4) |shift_index| {
+        const shift: u5 = @intCast((3 - shift_index) * 8);
+        const byte: u8 = @intCast((tag_value >> shift) & 0xff);
+        if (byte < 0x20 or byte > 0x7e) return false;
+    }
+    return true;
 }
 
 fn validateParagraphOptions(options: ParagraphOptions) !void {

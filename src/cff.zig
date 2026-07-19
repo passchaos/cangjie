@@ -51,6 +51,17 @@ pub fn parseInfo(data: []const u8) CffError!Info {
     if (info.private_size > 0) {
         if (info.private_offset > data.len or info.private_size > data.len - info.private_offset) return error.BadCff;
         try parsePrivateDict(data[info.private_offset .. info.private_offset + info.private_size], &info);
+        if (info.local_subrs_offset != 0) {
+            // The Private DICT's Subrs operand points to a complete Local
+            // Subrs INDEX relative to the beginning of the Private DICT, not
+            // to bytes inside the dictionary itself. Validate the child INDEX
+            // while parsing face metadata so a malformed font is rejected
+            // before an outline lookup tries to recurse through arbitrary CFF
+            // bytes as subroutines.
+            const private_end = info.private_offset + info.private_size;
+            if (info.local_subrs_offset < private_end or info.local_subrs_offset >= data.len) return error.BadCff;
+            _ = try readIndex(data, info.local_subrs_offset);
+        }
     }
     return info;
 }
@@ -435,6 +446,26 @@ test "CFF DICT offsets reject missing fractional and negative operands" {
 
     var info = Info{ .charstrings_offset = 20, .charstrings_count = 0, .global_subrs_offset = 0, .private_offset = 10 };
     try std.testing.expectError(error.BadCff, parsePrivateDict(&.{ 30, 0x1a, 0x5f, 19 }, &info));
+}
+
+test "CFF Private DICT Subrs offset resolves to a Local Subrs INDEX" {
+    const valid_local_subrs = [_]u8{
+        0x01, 0x00, 0x04, 0x01, // CFF 1.0 header.
+        0x00, 0x01, 0x01, 0x01, 0x01, // Name INDEX.
+        // Top DICT: CharStrings at 27, Private DICT size 2 at 23.
+        0x00, 0x01, 0x01, 0x01, 0x06, 166, 17, 141, 162, 18,
+        0x00, 0x00, // String INDEX.
+        0x00, 0x00, // Global Subrs INDEX.
+        141, 19, // Private DICT: Subrs offset 2, immediately after dict.
+        0x00, 0x00, // Local Subrs INDEX.
+        0x00, 0x01, 0x01, 0x01, 0x02, 0x0e, // CharStrings INDEX.
+    };
+    const info = try parseInfo(&valid_local_subrs);
+    try std.testing.expectEqual(@as(usize, 25), info.local_subrs_offset);
+
+    var subrs_points_into_private_dict = valid_local_subrs;
+    subrs_points_into_private_dict[23] = 139; // Subrs offset 0 aliases Private DICT bytes.
+    try std.testing.expectError(error.BadCff, parseInfo(&subrs_points_into_private_dict));
 }
 
 test "CFF Type2 hvcurveto and vhcurveto keep their implicit last axis" {

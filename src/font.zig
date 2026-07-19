@@ -4271,9 +4271,11 @@ fn validateStatTable(allocator: std.mem.Allocator, data: []const u8, stat: Table
 
     const axis_values = try allocator.alloc(StatAxisValueSummary, axis_value_count);
     defer allocator.free(axis_values);
+    var previous_axis_value_offset: ?usize = null;
     for (axis_values, 0..) |*axis_value, index| {
         const entry_offset = stat.offset + axis_value_offsets_offset + index * 2;
         const axis_value_offset = try resolveStatAxisValueOffset(data, stat, axis_value_offsets_offset, entry_offset);
+        try validateStatAxisValueOffsetOrder(axis_value_offset, &previous_axis_value_offset);
         axis_value.* = try validateStatAxisValue(data, stat, axis_value_offset, design_axis_count, design_axes_offset, design_axis_size, axis_value_offsets_offset, axis_value_count, name_index);
     }
     try validateStatAxisValueSet(data, stat, axis_values);
@@ -4300,6 +4302,17 @@ fn resolveStatAxisValueOffset(data: []const u8, stat: TableRecord, axis_value_of
     const axis_value_offset = axis_value_offsets_offset + relative_offset;
     if (axis_value_offset < 20 or axis_value_offset > stat.length - 4) return error.BadSfnt;
     return axis_value_offset;
+}
+
+fn validateStatAxisValueOffsetOrder(axis_value_offset: usize, previous_axis_value_offset: *?usize) FontError!void {
+    if (previous_axis_value_offset.*) |previous| {
+        // The AxisValue offset array is the canonical child-table directory for
+        // STAT style labels. Keep it in table order so equivalent records cannot
+        // be reordered to produce multiple normal forms, and so later
+        // cross-record checks never depend on offset-array presentation order.
+        if (axis_value_offset <= previous) return error.BadSfnt;
+    }
+    previous_axis_value_offset.* = axis_value_offset;
 }
 
 const StatAxisPoint = struct {
@@ -5849,6 +5862,7 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
     const layer_count = try bin.readU16At(data, colr.offset + 12);
 
     var previous_base_glyph: ?u16 = null;
+    var previous_layer_slice_end: ?u16 = null;
     for (0..base_count) |index| {
         const record = colr.offset + base_offset + index * 6;
         const base_glyph = try bin.readU16At(data, record);
@@ -5857,6 +5871,7 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
         const first_layer = try bin.readU16At(data, record + 2);
         const num_layers = try bin.readU16At(data, record + 4);
         if (first_layer > layer_count or num_layers > layer_count - first_layer) return error.BadSfnt;
+        try validateColrLayerSliceOrder(first_layer, num_layers, &previous_layer_slice_end);
     }
     for (0..layer_count) |index| {
         const layer_record = colr.offset + layer_offset + index * 4;
@@ -5941,6 +5956,17 @@ fn validateColrBaseGlyphOrder(base_glyph: u16, previous_base_glyph: *?u16) FontE
         if (base_glyph <= previous) return error.BadSfnt;
     }
     previous_base_glyph.* = base_glyph;
+}
+
+fn validateColrLayerSliceOrder(first_layer: u16, num_layers: u16, previous_layer_slice_end: *?u16) FontError!void {
+    if (previous_layer_slice_end.*) |previous_end| {
+        // Each COLR v0 BaseGlyphRecord owns a contiguous LayerRecord slice.
+        // Keeping those slices in BaseGlyphRecord order and non-overlapping
+        // prevents two glyphs from sharing mutable layer metadata or making
+        // layer ownership depend on how a renderer traverses the base array.
+        if (first_layer < previous_end) return error.BadSfnt;
+    }
+    previous_layer_slice_end.* = first_layer + num_layers;
 }
 
 fn validateColrV1OptionalOffset(offset: usize, colr: TableRecord, min_size: usize) FontError!void {
@@ -9421,6 +9447,37 @@ test "COLR v0 top-level arrays cannot alias header or each other" {
     try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&arrays_overlap, colr, 2));
 }
 
+test "COLR v0 layer slices are ordered and non-overlapping" {
+    var bytes: [38]u8 = .{0} ** 38;
+    writeU16Test(&bytes, 0, 0); // COLR version 0.
+    writeU16Test(&bytes, 2, 2); // two BaseGlyphRecords.
+    writeU32Test(&bytes, 4, 14);
+    writeU32Test(&bytes, 8, 26);
+    writeU16Test(&bytes, 12, 3); // three LayerRecords.
+    writeU16Test(&bytes, 14, 1);
+    writeU16Test(&bytes, 16, 0);
+    writeU16Test(&bytes, 18, 2); // base glyph 1 owns layers 0 and 1.
+    writeU16Test(&bytes, 20, 3);
+    writeU16Test(&bytes, 22, 2);
+    writeU16Test(&bytes, 24, 1); // base glyph 3 owns the adjacent layer 2.
+    writeU16Test(&bytes, 26, 1);
+    writeU16Test(&bytes, 30, 2);
+    writeU16Test(&bytes, 34, 3);
+
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try validateColrGlyphBounds(&bytes, colr, 4);
+
+    var overlapping_slice = bytes;
+    writeU16Test(&overlapping_slice, 22, 1); // Starts inside the first base glyph's layer slice.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&overlapping_slice, colr, 4));
+
+    var decreasing_slice = bytes;
+    writeU16Test(&decreasing_slice, 16, 2);
+    writeU16Test(&decreasing_slice, 18, 1);
+    writeU16Test(&decreasing_slice, 22, 0); // Disjoint but not in BaseGlyphRecord order.
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&decreasing_slice, colr, 4));
+}
+
 test "COLR base glyph records are strictly ordered" {
     var colr_v0: [34]u8 = .{0} ** 34;
     writeU16Test(&colr_v0, 0, 0); // COLR version 0.
@@ -10607,6 +10664,29 @@ test "STAT AxisValue offsets and axis indexes stay inside declared records" {
     writeU16Test(&bad_axis_index, 28, 2);
     writeStatAxisValueFormat1Test(&bad_axis_index, 30, 1); // Only axis 0 is declared.
     try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &bad_axis_index, stat, null, &names));
+}
+
+test "STAT AxisValue offset array is strictly increasing" {
+    var bytes: [64]u8 = .{0} ** 64;
+    writeStatHeaderTest(&bytes, 0, 1, 2, 28);
+    writeStatAxisTest(&bytes, 20, "wght", 256, 0);
+    writeU16Test(&bytes, 28, 4);
+    writeU16Test(&bytes, 30, 24);
+    writeStatAxisValueFormat2Test(&bytes, 32, 0, 258, 350.0, 300.0, 400.0);
+    writeStatAxisValueFormat1WithValueTest(&bytes, 52, 0, 259, 500.0);
+
+    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    const names = nameIndexForTest(&.{ 0, 2, 256, 258, 259 });
+    try validateStatTable(std.testing.allocator, &bytes, stat, null, &names);
+
+    var decreasing_offsets = bytes;
+    writeU16Test(&decreasing_offsets, 28, 24);
+    writeU16Test(&decreasing_offsets, 30, 4);
+    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &decreasing_offsets, stat, null, &names));
+
+    var duplicate_offsets = bytes;
+    writeU16Test(&duplicate_offsets, 30, 4);
+    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_offsets, stat, null, &names));
 }
 
 test "STAT AxisValue payloads do not overlap" {

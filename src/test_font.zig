@@ -64,6 +64,10 @@ pub fn buildColorV1InvalidClipListTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1InvalidClipListTtfTables(allocator));
 }
 
+pub fn buildColorV1RecursivePaintAliasTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1RecursivePaintAliasTtfTables(allocator));
+}
+
 pub fn buildCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cbdtPngTtfTables(allocator));
 }
@@ -610,6 +614,22 @@ fn colorV1InvalidClipListTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "COLR", .data = try colrV1InvalidClipListTable(allocator) };
+    tables[1] = .{ .tag = "CPAL", .data = try cpalTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn colorV1RecursivePaintAliasTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "COLR", .data = try colrV1RecursivePaintAliasTable(allocator) };
     tables[1] = .{ .tag = "CPAL", .data = try cpalTable(allocator) };
     tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
@@ -2179,6 +2199,40 @@ fn colrV1InvalidClipListTable(allocator: std.mem.Allocator) ![]u8 {
     // Offset zero aliases the ClipList format/count header instead of pointing
     // past the ClipRecord array to a ClipBox table.
     writeU24(bytes, clip_list + 9, 0);
+    return bytes;
+}
+
+fn colrV1RecursivePaintAliasTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 99);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34);
+    writeU32(bytes, 34, 1);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 10);
+
+    // PaintComposite points at two PaintLinearGradient children with disjoint
+    // headers, but both gradients name the same ColorLine payload at offset 84.
+    // The local child-header checks pass; recursive graph ownership must reject
+    // the shared typed payload so traversal order cannot change interpretation.
+    bytes[44] = 32;
+    writeU24(bytes, 45, 8);
+    bytes[48] = 0;
+    writeU24(bytes, 49, 24);
+
+    bytes[52] = 4;
+    writeU24(bytes, 53, 32);
+    bytes[68] = 4;
+    writeU24(bytes, 69, 16);
+
+    bytes[84] = 0;
+    writeU16(bytes, 85, 2);
+    writeF2Dot14(bytes, 87, 0.0);
+    writeU16(bytes, 89, 0);
+    writeF2Dot14(bytes, 91, 1.0);
+    writeF2Dot14(bytes, 93, 1.0);
+    writeU16(bytes, 95, 1);
+    writeF2Dot14(bytes, 97, 1.0);
     return bytes;
 }
 

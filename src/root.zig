@@ -1336,6 +1336,16 @@ test "rejects COLR v1 ClipList offsets that alias records" {
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
+test "rejects COLR v1 recursive paint payload aliasing" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildColorV1RecursivePaintAliasTtf(allocator);
+    defer allocator.free(bytes);
+
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
 test "reads OpenType SVG glyph document metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

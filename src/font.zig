@@ -5838,6 +5838,7 @@ fn validateColorPaintPaletteBounds(data: []const u8, colr: TableRecord, cpal_pal
     const info = try validateColorPaintRecordBounds(data, colr, offset);
     try guard.enter(offset);
     defer guard.leave();
+    try guard.claimPaintRecord(data, colr, offset, info);
 
     switch (info.kind) {
         .colr_layers => {
@@ -6356,6 +6357,7 @@ fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: 
     const info = try validateColorPaintRecordBounds(data, colr, offset);
     try guard.enter(offset);
     defer guard.leave();
+    try guard.claimPaintRecord(data, colr, offset, info);
 
     switch (info.kind) {
         .colr_layers => {
@@ -6460,6 +6462,7 @@ fn validateColorPaintGlyphBounds(data: []const u8, colr: TableRecord, glyph_coun
     const info = try validateColorPaintRecordBounds(data, colr, offset);
     try guard.enter(offset);
     defer guard.leave();
+    try guard.claimPaintRecord(data, colr, offset, info);
 
     switch (info.kind) {
         .colr_layers => {
@@ -6493,10 +6496,13 @@ fn validateGlyphIdInMaxp(glyph_id: u32, glyph_count: u16) FontError!void {
 }
 
 const max_colr_paint_graph_depth = 64;
+const max_colr_paint_owned_ranges = 2048;
 
 const ColorPaintGraphGuard = struct {
     stack: [max_colr_paint_graph_depth]usize = undefined,
+    owned_ranges: [max_colr_paint_owned_ranges]ColrPaintByteRange = undefined,
     depth: usize = 0,
+    owned_range_count: usize = 0,
 
     fn enter(self: *ColorPaintGraphGuard, offset: usize) FontError!void {
         for (self.stack[0..self.depth]) |active_offset| {
@@ -6510,6 +6516,26 @@ const ColorPaintGraphGuard = struct {
     fn leave(self: *ColorPaintGraphGuard) void {
         std.debug.assert(self.depth > 0);
         self.depth -= 1;
+    }
+
+    fn claimPaintRecord(self: *ColorPaintGraphGuard, data: []const u8, colr: TableRecord, offset: usize, info: ColorPaintFormatInfo) FontError!void {
+        try self.claimRange(.{ .start = offset, .end = offset + info.min_size });
+
+        switch (data[offset]) {
+            12, 13 => try self.claimRange(try colrTransformMatrixPayloadRange(data, colr, offset, info.min_size)),
+            4...9 => try self.claimRange(try colrColorLinePayloadRange(data, colr, offset, info.min_size, colrPaintUsesVarColorLine(data[offset]))),
+            else => {},
+        }
+    }
+
+    fn claimRange(self: *ColorPaintGraphGuard, range: ColrPaintByteRange) FontError!void {
+        if (range.start >= range.end) return error.BadSfnt;
+        for (self.owned_ranges[0..self.owned_range_count]) |owned| {
+            if (colrPaintRangesOverlap(range, owned)) return error.BadSfnt;
+        }
+        if (self.owned_range_count == self.owned_ranges.len) return error.BadSfnt;
+        self.owned_ranges[self.owned_range_count] = range;
+        self.owned_range_count += 1;
     }
 };
 
@@ -6645,9 +6671,8 @@ fn validateColrPaintChildPayloadOwnership(data: []const u8, colr: TableRecord, o
 const max_colr_extend_mode = 2;
 
 fn validateColrColorLine(data: []const u8, colr: TableRecord, offset: usize, paint_header_size: usize, variable: bool) FontError!void {
-    const color_line_offset = try colorPaintChildOffset(data, colr, offset, paint_header_size, 1);
-    const colr_end = colr.offset + colr.length;
-    if (color_line_offset + 3 > colr_end) return error.BadSfnt;
+    const color_line_range = try colrColorLinePayloadRange(data, colr, offset, paint_header_size, variable);
+    const color_line_offset = color_line_range.start;
 
     const extend = data[color_line_offset];
     if (extend > max_colr_extend_mode) return error.BadSfnt;
@@ -6660,7 +6685,6 @@ fn validateColrColorLine(data: []const u8, colr: TableRecord, offset: usize, pai
 
     const stops_start = color_line_offset + 3;
     const stop_size = colrColorStopSize(variable);
-    if (stop_count > (colr_end - stops_start) / stop_size) return error.BadSfnt;
 
     var previous_stop = try bin.readI16At(data, stops_start);
     try validateColrAlpha(try bin.readI16At(data, stops_start + 4));
@@ -6671,6 +6695,18 @@ fn validateColrColorLine(data: []const u8, colr: TableRecord, offset: usize, pai
         try validateColrAlpha(try bin.readI16At(data, stop_offset + 4));
         previous_stop = current_stop;
     }
+}
+
+fn colrColorLinePayloadRange(data: []const u8, colr: TableRecord, offset: usize, paint_header_size: usize, variable: bool) FontError!ColrPaintByteRange {
+    const color_line_offset = try colorPaintChildOffset(data, colr, offset, paint_header_size, 1);
+    const colr_end = colr.offset + colr.length;
+    if (color_line_offset + 3 > colr_end) return error.BadSfnt;
+
+    const stop_count: usize = @intCast(try bin.readU16At(data, color_line_offset + 1));
+    const stops_start = color_line_offset + 3;
+    const stop_size = colrColorStopSize(variable);
+    if (stop_count > (colr_end - stops_start) / stop_size) return error.BadSfnt;
+    return .{ .start = color_line_offset, .end = stops_start + stop_count * stop_size };
 }
 
 fn validateColrColorLinePaletteBounds(data: []const u8, colr: TableRecord, offset: usize, paint_header_size: usize, cpal_palette_entries: ?u16) FontError!void {
@@ -6784,8 +6820,10 @@ fn validateColorPaintGraph(font: *const Font, offset: usize, guard: *ColorPaintG
     const colr = font.colr orelse return error.BadSfnt;
     const data = font.data;
     if (offset >= colr.offset + colr.length) return error.BadSfnt;
+    const info = try validateColorPaintRecordBounds(data, colr, offset);
     try guard.enter(offset);
     defer guard.leave();
+    try guard.claimPaintRecord(data, colr, offset, info);
 
     const format = data[offset];
     switch (format) {

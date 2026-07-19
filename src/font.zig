@@ -1944,6 +1944,9 @@ fn validateHeadTable(data: []const u8, head: TableRecord, format: FontFormat) Fo
     const y_min = try bin.readI16At(data, head.offset + 38);
     const x_max = try bin.readI16At(data, head.offset + 40);
     const y_max = try bin.readI16At(data, head.offset + 42);
+    const mac_style = try bin.readU16At(data, head.offset + 44);
+    const lowest_rec_ppem = try bin.readU16At(data, head.offset + 46);
+    const font_direction_hint = try bin.readI16At(data, head.offset + 48);
     const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
     const glyph_data_format = try bin.readI16At(data, head.offset + 52);
 
@@ -1955,6 +1958,14 @@ fn validateHeadTable(data: []const u8, head: TableRecord, format: FontFormat) Fo
     if (magic_number != 0x5f0f3cf5) return error.BadSfnt;
     if (units_per_em < 16 or units_per_em > 16384) return error.BadSfnt;
     if (x_min > x_max or y_min > y_max) return error.BadSfnt;
+    // macStyle is a seven-bit legacy summary field in `head`; higher bits are
+    // reserved and must stay zero so style matching does not inherit unknown
+    // future semantics. lowestRecPPEM is a pixel size, so zero is not a
+    // meaningful recommendation. fontDirectionHint is deprecated, but OpenType
+    // still constrains accepted stored values to the historical -2..2 range.
+    if ((mac_style & 0xff80) != 0) return error.BadSfnt;
+    if (lowest_rec_ppem == 0) return error.BadSfnt;
+    if (font_direction_hint < -2 or font_direction_hint > 2) return error.BadSfnt;
 
     // indexToLocFormat only drives glyf/loca lookup.  CFF-backed OpenType
     // faces do not have a loca table, so avoid rejecting legacy production OTFs
@@ -10219,6 +10230,18 @@ test "head table invariants are validated at parse time" {
         defer allocator.free(bytes);
         const head_offset = try sfntTableOffset(bytes, "head");
         writeI16Test(bytes, head_offset + 36, 701); // xMin must not exceed xMax.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    inline for (.{
+        .{ .field_offset = @as(usize, 44), .write_value = @as(u16, 0x0080) }, // macStyle reserved bits.
+        .{ .field_offset = @as(usize, 46), .write_value = @as(u16, 0) }, // lowestRecPPEM is a positive pixel size.
+        .{ .field_offset = @as(usize, 48), .write_value = @as(u16, 3) }, // fontDirectionHint must remain in -2..2.
+    }) |case| {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const head_offset = try sfntTableOffset(bytes, "head");
+        writeU16Test(bytes, head_offset + case.field_offset, case.write_value);
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 

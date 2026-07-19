@@ -2760,6 +2760,7 @@ fn headTable(allocator: std.mem.Allocator) ![]u8 {
     writeI16(bytes, 38, 0);
     writeI16(bytes, 40, 700);
     writeI16(bytes, 42, 700);
+    writeU16(bytes, 46, 8);
     writeI16(bytes, 50, 0);
     return bytes;
 }

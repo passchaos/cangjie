@@ -3928,8 +3928,18 @@ fn glyphIndexSequentialMapGroups(data: []const u8, offset: usize, groups_offset:
 fn glyphIndexFormat14(self: *const Font, offset: usize, codepoint: u21, variation_selector: u21) FontError!?glyph_mod.GlyphId {
     if (variation_selector > 0xffffff or codepoint > 0xffffff) return null;
     const data = self.data;
+    if (offset > data.len or data.len - offset < 6) return error.BadSfnt;
     const length: usize = @intCast(try bin.readU32At(data, offset + 2));
-    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    if (length > data.len - offset) return error.BadSfnt;
+
+    // Font keeps a borrowed byte slice, so callers can still mutate the backing
+    // buffer after parse when it originated from []u8 test or application
+    // storage. Re-check the format-14 ownership and glyph-id contracts before
+    // serving the public variation lookup API instead of trusting stale parse
+    // results and returning a dangling glyph id from mutated cmap bytes.
+    try validateCmapFormat14(data, offset, length);
+    try validateCmapFormat14GlyphIds(data, offset, length, self.glyph_count);
+
     const table_end = offset + length;
     const record_count: usize = @intCast(try bin.readU32At(data, offset + 6));
     const records_end = try cmapFormat14RecordsEnd(length, record_count);
@@ -7874,6 +7884,46 @@ test "cmap format 14 lookup mirrors parse-time selector and payload validation" 
     writeU32Test(&unsorted_selector_records, 40, 1);
     writeU24Test(&unsorted_selector_records, 44, 'B');
     try std.testing.expectError(error.BadSfnt, validateCmapFormat14(&unsorted_selector_records, 0, unsorted_selector_records.len));
+}
+
+test "cmap format 14 SFNT fixture rejects aliased variation payloads" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
+    const variation_offset: usize = @intCast(try bin.readU32At(bytes, cmap_offset + 16));
+    // The non-default UVS array is independently owned variable-length data.
+    // Pointing it at the default UVS array would make two incompatible payload
+    // formats share bytes; full SFNT parsing must reject that alias, not just
+    // the isolated format-14 helper tests above.
+    writeU32Test(bytes, cmap_offset + variation_offset + 17, 21);
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "cmap format 14 public lookup revalidates borrowed SFNT bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(?glyph_mod.GlyphId, 3), try font.variationGlyphIndex('A', 0xfe0f));
+
+    const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
+    const variation_offset: usize = @intCast(try bin.readU32At(bytes, cmap_offset + 16));
+    // Font deliberately borrows caller-owned bytes. If the caller mutates that
+    // buffer after parse, the public variation lookup path must not return a
+    // glyph id that is outside maxp.numGlyphs just because the original parse
+    // saw a valid format-14 table.
+    writeU16Test(bytes, cmap_offset + variation_offset + 36, 4);
+    try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
+    try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
 }
 
 test "cmap format 2 validates subheader and glyph-array bounds" {

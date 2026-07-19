@@ -919,6 +919,7 @@ pub const TextShaper = struct {
     }
 
     pub fn layoutParagraphUtf8FullyCachedWithOptions(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        try validateParagraphOptions(options);
         // Paragraph layout is deliberately staged: shape first, then line-wrap
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
@@ -928,6 +929,7 @@ pub const TextShaper = struct {
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        try validateParagraphOptions(options);
         _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, .{ .direction = options.direction });
         try buildParagraphLines(buffer, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
         return buffer.paragraphLayout();
@@ -985,6 +987,26 @@ fn validateShapingFontSize(font_size: f32) !void {
     // runs) that are hard for layout, hit testing, and renderers to handle
     // consistently, so reject them before caches or buffers observe the call.
     if (!std.math.isFinite(font_size) or font_size <= 0) return error.InvalidFontSize;
+}
+
+fn validateParagraphOptions(options: ParagraphOptions) !void {
+    // Paragraph options are applied after shaping, but they still feed public
+    // layout geometry, hit testing, and measurements. Reject non-finite values
+    // before shaping or cache mutation so NaN/Inf cannot poison line widths,
+    // alignments, tab stops, or baseline metrics. Infinite max_width is a
+    // supported shorthand for unbounded layout; NaN is not a usable geometry
+    // input because every comparison against it fails.
+    if (std.math.isNan(options.max_width)) return error.InvalidParagraphOptions;
+    if (options.line_height) |line_height| {
+        if (!std.math.isFinite(line_height) or line_height <= 0) return error.InvalidParagraphOptions;
+    }
+    if (!std.math.isFinite(options.letter_spacing) or
+        !std.math.isFinite(options.word_spacing) or
+        !std.math.isFinite(options.first_line_indent) or
+        !std.math.isFinite(options.paragraph_spacing))
+    {
+        return error.InvalidParagraphOptions;
+    }
 }
 
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {

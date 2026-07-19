@@ -462,6 +462,72 @@ test "public shaping APIs reject invalid font sizes before mutation" {
     try std.testing.expectError(error.InvalidFontSize, TextShaper.measureParagraphUtf8(cascade, &layout_buffer, "A", std.math.inf(f32), .{ .max_width = 100 }));
 }
 
+test "paragraph layout rejects non-finite options before shaping mutation" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+    var fallback_cache = FontFallbackCache.init(allocator);
+    defer fallback_cache.deinit();
+    var shaped_cache = ShapedRunCache.init(allocator);
+    defer shaped_cache.deinit();
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const valid = try TextShaper.layoutParagraphUtf8WithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "A", 20, .{ .max_width = 100 });
+    try std.testing.expectEqual(@as(usize, 1), valid.glyphs.len);
+
+    const fallback_hits = fallback_cache.hits;
+    const fallback_misses = fallback_cache.misses;
+    const shaped_hits = shaped_cache.hits;
+    const shaped_misses = shaped_cache.misses;
+
+    // These geometry knobs are applied after shaping. Validate them first so a
+    // rejected paragraph call cannot clear the previous layout or populate
+    // caches with text that never produced valid line metrics.
+    try std.testing.expectError(error.InvalidParagraphOptions, TextShaper.layoutParagraphUtf8WithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "AA", 20, .{
+        .max_width = 100,
+        .line_height = std.math.nan(f32),
+    }));
+    try std.testing.expectError(error.InvalidParagraphOptions, TextShaper.layoutParagraphUtf8WithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "AA", 20, .{
+        .max_width = std.math.nan(f32),
+    }));
+    try std.testing.expectError(error.InvalidParagraphOptions, TextShaper.measureParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+        .max_width = 100,
+        .letter_spacing = std.math.inf(f32),
+    }));
+    try std.testing.expectError(error.InvalidParagraphOptions, TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+        .max_width = 100,
+        .word_spacing = -std.math.inf(f32),
+    }));
+    try std.testing.expectError(error.InvalidParagraphOptions, TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+        .max_width = 100,
+        .first_line_indent = std.math.nan(f32),
+    }));
+    try std.testing.expectError(error.InvalidParagraphOptions, TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A\nA", 20, .{
+        .max_width = 100,
+        .paragraph_spacing = std.math.inf(f32),
+    }));
+
+    try std.testing.expectEqual(@as(usize, 1), layout_buffer.glyphs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), layout_buffer.lines.items.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), layout_buffer.glyphs.items[0].glyph_id);
+    try std.testing.expectEqual(fallback_hits, fallback_cache.hits);
+    try std.testing.expectEqual(fallback_misses, fallback_cache.misses);
+    try std.testing.expectEqual(shaped_hits, shaped_cache.hits);
+    try std.testing.expectEqual(shaped_misses, shaped_cache.misses);
+
+    // Infinite max_width remains a valid way to request unbounded paragraph
+    // layout; only NaN/non-finite secondary geometry is rejected.
+    _ = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{ .max_width = std.math.inf(f32) });
+}
+
 test "cascade and paragraph shaping reject malformed UTF-8 before cache mutation" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

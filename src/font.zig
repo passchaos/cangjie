@@ -14,6 +14,7 @@ pub const FontError = error{
     UnsupportedCmap,
     UnsupportedGlyph,
     UnsupportedCff,
+    InvalidCodepoint,
     InvalidGlyph,
     InvalidLoca,
     InvalidMetrics,
@@ -419,6 +420,7 @@ pub const Font = struct {
     /// cmap used by last-resort fonts; it is less specific than format 12 but
     /// still materially better than reporting UnsupportedCmap.
     pub fn glyphIndex(self: *const Font, codepoint: u21) FontError!glyph_mod.GlyphId {
+        try validatePublicUnicodeScalar(codepoint);
         var best: ?CmapSubtable = null;
         for (self.cmap_subtables) |subtable| {
             if (subtable.format != 0 and subtable.format != 2 and subtable.format != 4 and subtable.format != 6 and subtable.format != 8 and subtable.format != 10 and subtable.format != 12 and subtable.format != 13) continue;
@@ -531,6 +533,8 @@ pub const Font = struct {
     /// range returns the base cmap glyph id; null means the font has no record
     /// for that variation sequence.
     pub fn variationGlyphIndex(self: *const Font, codepoint: u21, variation_selector: u21) FontError!?glyph_mod.GlyphId {
+        try validatePublicUnicodeScalar(codepoint);
+        try validatePublicVariationSelector(variation_selector);
         for (self.cmap_subtables) |subtable| {
             if (subtable.format != 14) continue;
             try self.validateCmapLookupSubtable(subtable);
@@ -3340,6 +3344,22 @@ fn isUnicodeSurrogate(value: u32) bool {
 
 fn isUnicodeVariationSelector(value: u32) bool {
     return (value >= 0xfe00 and value <= 0xfe0f) or (value >= 0xe0100 and value <= 0xe01ef);
+}
+
+fn validatePublicUnicodeScalar(codepoint: u21) FontError!void {
+    // Public cmap APIs accept Unicode scalar values, not arbitrary 21-bit
+    // integers. Validate the boundary before scanning font tables so surrogate
+    // code points cannot be reported as ordinary unmapped text or fed into a
+    // default-UVS fallback lookup.
+    if (!isUnicodeScalarValue(codepoint)) return error.InvalidCodepoint;
+}
+
+fn validatePublicVariationSelector(codepoint: u21) FontError!void {
+    // Format-14 cmap records are keyed only by standardized Unicode variation
+    // selectors. Treating an arbitrary scalar as "no UVS record" masks caller
+    // bugs and can accidentally fall back through glyphIndexWithVariation as if
+    // a malformed text stream were valid base text.
+    if (!isUnicodeVariationSelector(codepoint)) return error.InvalidCodepoint;
 }
 
 fn validateCmapGlyphIds(data: []const u8, offset: usize, length: usize, format: u16, glyph_count: u16) FontError!void {
@@ -9143,6 +9163,25 @@ test "cmap format 14 public lookup revalidates cached subtable length" {
     writeU32Test(bytes, cmap_offset + variation_offset + 2, @intCast(cmap_length - variation_offset + 1));
     try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
     try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
+}
+
+test "cmap public APIs reject invalid Unicode scalar inputs" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectError(error.InvalidCodepoint, font.glyphIndex(0xd800));
+    try std.testing.expectError(error.InvalidCodepoint, font.variationGlyphIndex(0xd800, 0xfe0f));
+    try std.testing.expectError(error.InvalidCodepoint, font.glyphIndexWithVariation(0xd800, 0xfe0f));
+    try std.testing.expectError(error.InvalidCodepoint, font.variationGlyphIndex('A', 'x'));
+    try std.testing.expectError(error.InvalidCodepoint, font.glyphIndexWithVariation('A', 'x'));
+
+    try std.testing.expectEqual(@as(?glyph_mod.GlyphId, 3), try font.variationGlyphIndex('A', 0xfe0f));
 }
 
 test "cmap public glyph lookup revalidates borrowed glyph ids" {

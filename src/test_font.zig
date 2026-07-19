@@ -2934,9 +2934,11 @@ fn kernTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 6, 20);
     writeU16(bytes, 8, 1);
     writeU16(bytes, 10, 1);
-    writeU16(bytes, 12, 0);
+    // kern format 0 uses a three-field binary-search descriptor after nPairs.
+    // The fixture has one six-byte pair, so the canonical header is 6, 0, 0.
+    writeU16(bytes, 12, 6);
     writeU16(bytes, 14, 0);
-    writeU16(bytes, 16, 1);
+    writeU16(bytes, 16, 0);
     writeU16(bytes, 18, 1);
     writeU16(bytes, 20, 1);
     writeI16(bytes, 22, -100);

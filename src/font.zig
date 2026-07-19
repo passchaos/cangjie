@@ -2723,11 +2723,12 @@ fn validateAppleKernTable(data: []const u8, kern: TableRecord, glyph_count: u16)
 
 fn validateKernFormat0Body(data: []const u8, glyph_count: u16) FontError!void {
     // Format-0 kern subtables are searched with a binary search over packed
-    // left/right glyph pairs. Validate the complete pair array while parsing so
-    // malformed fonts cannot hide out-of-range glyph IDs or make kerning depend
-    // on unsorted record order.
+    // left/right glyph pairs. Validate the search header and complete pair
+    // array while parsing so malformed fonts cannot hide out-of-range glyph IDs
+    // or depend on non-canonical binary-search metadata.
     if (data.len < 8) return error.BadSfnt;
     const pair_count = try bin.readU16At(data, 0);
+    try validateKernFormat0SearchParameters(data, pair_count);
     if (@as(usize, pair_count) * 6 > data.len - 8) return error.BadSfnt;
 
     var previous_pair: ?u32 = null;
@@ -2743,6 +2744,31 @@ fn validateKernFormat0Body(data: []const u8, glyph_count: u16) FontError!void {
             if (pair <= previous) return error.BadSfnt;
         }
         previous_pair = pair;
+    }
+}
+
+fn validateKernFormat0SearchParameters(data: []const u8, pair_count: u16) FontError!void {
+    var max_power_of_two: usize = 1;
+    var expected_entry_selector: u16 = 0;
+    while (max_power_of_two * 2 <= pair_count) {
+        max_power_of_two *= 2;
+        expected_entry_selector += 1;
+    }
+
+    const expected_search_range = max_power_of_two * 6;
+    const pair_record_bytes = @as(usize, pair_count) * 6;
+    if (expected_search_range > std.math.maxInt(u16) or pair_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
+    const expected_range_shift = pair_record_bytes - expected_search_range;
+
+    // The legacy and Apple kern format-0 bodies share this OpenType binary
+    // search descriptor. Cangjie validates it even though lookups recompute the
+    // search bounds from nPairs; accepting inconsistent values would mean the
+    // same font bytes describe different pair arrays to different consumers.
+    if (try bin.readU16At(data, 2) != expected_search_range or
+        try bin.readU16At(data, 4) != expected_entry_selector or
+        try bin.readU16At(data, 6) != expected_range_shift)
+    {
+        return error.BadSfnt;
     }
 }
 
@@ -8662,6 +8688,57 @@ test "kern format 0 pair arrays are validated at parse time" {
         defer allocator.free(bytes);
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
+}
+
+test "kern format 0 search headers are validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        var kern: [24]u8 = .{0} ** 24;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+        writeU16Test(&kern, 4 + 6 + 2, 12); // searchRange should be one 6-byte pair record.
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var kern: [31]u8 = .{0} ** 31;
+        writeU32Test(&kern, 0, 0x00010000);
+        writeU32Test(&kern, 4, 1);
+        writeAppleKernFormat0Subtable(&kern, 8, 0x0000, 1, 1, -35);
+        writeU16Test(&kern, 8 + 8 + 6, 2); // rangeShift should be zero for one pair.
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
+test "kern lazy API revalidates borrowed format 0 search headers" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var kern: [24]u8 = .{0} ** 24;
+    writeU16Test(&kern, 0, 0);
+    writeU16Test(&kern, 2, 1);
+    writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+
+    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(i16, -40), try font.kerning(1, 1));
+
+    const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
+    writeU16Test(bytes, kern_offset + 4 + 6 + 4, 1); // entrySelector should be zero for one pair.
+    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
 }
 
 test "Apple kern v1 format 0 pair glyph ids are validated at parse time" {

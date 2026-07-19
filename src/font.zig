@@ -957,6 +957,13 @@ pub const Font = struct {
         // cannot turn a valid LayerRecord into an out-of-range glyph id that
         // rendering code would then trust.
         try validateColrGlyphBounds(self.data, colr, self.glyph_count);
+        // Palette indices in COLR are part of the same borrowed color contract
+        // as glyph IDs: parse-time validation proved every layer references a
+        // CPAL entry, but callers can still mutate either table afterwards.
+        // Recheck the full COLR/CPAL relationship before returning public
+        // ColorLayers so malformed palette IDs do not surface as renderable
+        // colors or depend on which glyph happens to be queried first.
+        try validateColrPaletteBounds(self.data, colr, self.cpal);
         const base_count = try bin.readU16At(self.data, colr.offset + 2);
         const base_offset = try bin.readU32At(self.data, colr.offset + 4);
         const layer_offset = try bin.readU32At(self.data, colr.offset + 8);
@@ -1023,6 +1030,12 @@ pub const Font = struct {
         // graph against maxp again because the Font only caches a borrowed
         // table record, not an immutable copy of the validated COLR bytes.
         try validateColrGlyphBounds(self.data, colr, self.glyph_count);
+        // Keep palette validation equally lazy and whole-graph. A PaintSolid in
+        // an unrequested base glyph or shared LayerList entry can become
+        // malformed after Font.parse, and returning a selected paint while
+        // another reachable paint names a missing CPAL slot would diverge from
+        // the parser's accepted-font invariant.
+        try validateColrPaletteBounds(self.data, colr, self.cpal);
         const base_glyph_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 14));
         if (base_glyph_list_offset == 0) return null;
         try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
@@ -1068,6 +1081,11 @@ pub const Font = struct {
         // COLR v1 paint graph. Keep its glyph-id contract in sync with
         // Font.parse instead of validating only the layer index being read.
         try validateColrGlyphBounds(self.data, colr, self.glyph_count);
+        // `colorPaintLayer` bypasses BaseGlyphPaintRecord selection, but it
+        // still returns COLR paints whose palette indices must be backed by
+        // CPAL. Validate the complete graph so post-parse mutations in sibling
+        // layers cannot hide behind the requested layer index.
+        try validateColrPaletteBounds(self.data, colr, self.cpal);
         const layer_list = (try colrLayerList(self.data, colr)) orelse return null;
         if (layer_index >= layer_list.layer_count) return null;
         const paint_start = try colrLayerPaintOffset(self.data, colr, layer_list, layer_index);
@@ -12658,6 +12676,85 @@ test "COLR public APIs revalidate borrowed glyph references" {
     writeU16Test(&colr_v1_with_cpal, 70, 0);
     writeF2Dot14Test(&colr_v1_with_cpal, 72, 1.0);
     try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaintLayer(0));
+}
+
+test "COLR public APIs revalidate borrowed palette references" {
+    const allocator = std.testing.allocator;
+
+    var colr_v0_with_cpal: [52]u8 = .{0} ** 52;
+    writeU16Test(&colr_v0_with_cpal, 0, 0); // COLR version 0.
+    writeU16Test(&colr_v0_with_cpal, 2, 2); // two BaseGlyphRecords.
+    writeU32Test(&colr_v0_with_cpal, 4, 14);
+    writeU32Test(&colr_v0_with_cpal, 8, 26);
+    writeU16Test(&colr_v0_with_cpal, 12, 2);
+    writeU16Test(&colr_v0_with_cpal, 14, 1); // selected base glyph.
+    writeU16Test(&colr_v0_with_cpal, 16, 0);
+    writeU16Test(&colr_v0_with_cpal, 18, 1);
+    writeU16Test(&colr_v0_with_cpal, 20, 2); // unrequested base glyph.
+    writeU16Test(&colr_v0_with_cpal, 22, 1);
+    writeU16Test(&colr_v0_with_cpal, 24, 1);
+    writeU16Test(&colr_v0_with_cpal, 26, 1);
+    writeU16Test(&colr_v0_with_cpal, 28, 0);
+    writeU16Test(&colr_v0_with_cpal, 30, 2);
+    writeU16Test(&colr_v0_with_cpal, 32, 0);
+    writeSingleEntryCpalTest(&colr_v0_with_cpal, 34);
+
+    const colr_v0_font = colrCpalOnlyFont(&colr_v0_with_cpal, 34);
+    const layers = try colr_v0_font.colorLayers(allocator, 1);
+    defer allocator.free(layers);
+    try std.testing.expectEqual(@as(usize, 1), layers.len);
+
+    // The selected glyph's layer still uses palette index 0. Mutating only an
+    // unrequested layer past CPAL must still be rejected because COLR's layer
+    // array is global borrowed metadata accepted as a whole at parse time.
+    writeU16Test(&colr_v0_with_cpal, 32, 1);
+    try std.testing.expectError(error.BadSfnt, colr_v0_font.colorLayers(allocator, 1));
+
+    var colr_v1_base_with_cpal: [78]u8 = .{0} ** 78;
+    writeU16Test(&colr_v1_base_with_cpal, 0, 1); // COLR version 1.
+    writeU32Test(&colr_v1_base_with_cpal, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&colr_v1_base_with_cpal, 34, 2);
+    writeU16Test(&colr_v1_base_with_cpal, 38, 1);
+    writeU32Test(&colr_v1_base_with_cpal, 40, 16); // selected PaintSolid at byte 50.
+    writeU16Test(&colr_v1_base_with_cpal, 44, 2);
+    writeU32Test(&colr_v1_base_with_cpal, 46, 21); // unrequested PaintSolid at byte 55.
+    colr_v1_base_with_cpal[50] = 2;
+    writeU16Test(&colr_v1_base_with_cpal, 51, 0);
+    writeF2Dot14Test(&colr_v1_base_with_cpal, 53, 1.0);
+    colr_v1_base_with_cpal[55] = 2;
+    writeU16Test(&colr_v1_base_with_cpal, 56, 0);
+    writeF2Dot14Test(&colr_v1_base_with_cpal, 58, 1.0);
+    writeSingleEntryCpalTest(&colr_v1_base_with_cpal, 60);
+
+    const colr_v1_base_font = colrCpalOnlyFont(&colr_v1_base_with_cpal, 60);
+    try std.testing.expect((try colr_v1_base_font.colorPaint(1)) != null);
+
+    // `colorPaint(1)` reads only the first base glyph, but the borrowed COLR v1
+    // base paint list must remain globally consistent with CPAL.
+    writeU16Test(&colr_v1_base_with_cpal, 56, 1);
+    try std.testing.expectError(error.BadSfnt, colr_v1_base_font.colorPaint(1));
+
+    var colr_v1_layers_with_cpal: [74]u8 = .{0} ** 74;
+    writeU16Test(&colr_v1_layers_with_cpal, 0, 1); // COLR version 1.
+    writeU32Test(&colr_v1_layers_with_cpal, 18, 34); // LayerListOffset.
+    writeU32Test(&colr_v1_layers_with_cpal, 34, 2);
+    writeU32Test(&colr_v1_layers_with_cpal, 38, 12); // selected layer PaintSolid at byte 46.
+    writeU32Test(&colr_v1_layers_with_cpal, 42, 17); // sibling layer PaintSolid at byte 51.
+    colr_v1_layers_with_cpal[46] = 2;
+    writeU16Test(&colr_v1_layers_with_cpal, 47, 0);
+    writeF2Dot14Test(&colr_v1_layers_with_cpal, 49, 1.0);
+    colr_v1_layers_with_cpal[51] = 2;
+    writeU16Test(&colr_v1_layers_with_cpal, 52, 0);
+    writeF2Dot14Test(&colr_v1_layers_with_cpal, 54, 1.0);
+    writeSingleEntryCpalTest(&colr_v1_layers_with_cpal, 56);
+
+    const colr_v1_layers_font = colrCpalOnlyFont(&colr_v1_layers_with_cpal, 56);
+    try std.testing.expect((try colr_v1_layers_font.colorPaintLayer(0)) != null);
+
+    // LayerList is a global paint array; a malformed sibling layer should not
+    // be hidden merely because the requested layer still names a valid color.
+    writeU16Test(&colr_v1_layers_with_cpal, 52, 1);
+    try std.testing.expectError(error.BadSfnt, colr_v1_layers_font.colorPaintLayer(0));
 }
 
 test "COLR v1 gradient ColorLine stops are validated" {

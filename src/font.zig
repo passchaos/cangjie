@@ -6025,7 +6025,10 @@ fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: 
                 try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, offset + 5), 1);
             }
         },
-        .glyph, .single_child => try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), context, guard),
+        .glyph, .single_child => {
+            try validateColrVariableTransformVariationRefs(data, colr, offset, info, context);
+            try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), context, guard);
+        },
         .composite => {
             try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), context, guard);
             try validateColorPaintVariationRefs(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), context, guard);
@@ -6033,6 +6036,32 @@ fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: 
         .color_line => try validateColorPaintGradientVariationRefs(data, colr, offset, context),
         .colr_glyph, .terminal => return,
     }
+}
+
+fn validateColrVariableTransformVariationRefs(data: []const u8, colr: TableRecord, offset: usize, info: ColorPaintFormatInfo, context: ?*const ColrVariationContext) FontError!void {
+    const item_count = colrVariableTransformItemCount(data[offset]) orelse return;
+    // Variable transform paints append varIndexBase after their scalar transform
+    // arguments (or after the transform offset for PaintVarTransform). Check
+    // the whole consecutive delta sequence now so matrix/translate/scale/etc.
+    // paints cannot be parsed successfully with dangling variation rows that
+    // only fail later when variation coordinates are applied.
+    try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, offset + info.min_size - 4), item_count);
+}
+
+fn colrVariableTransformItemCount(format: u8) ?usize {
+    return switch (format) {
+        13 => 6, // PaintVarTransform: xx, yx, xy, yy, dx, dy.
+        15 => 2, // PaintVarTranslate: dx, dy.
+        17 => 2, // PaintVarScale: scaleX, scaleY.
+        19 => 4, // PaintVarScaleAroundCenter: scaleX, scaleY, centerX, centerY.
+        21 => 1, // PaintVarScaleUniform: scale.
+        23 => 3, // PaintVarScaleUniformAroundCenter: scale, centerX, centerY.
+        25 => 1, // PaintVarRotate: angle.
+        27 => 3, // PaintVarRotateAroundCenter: angle, centerX, centerY.
+        29 => 2, // PaintVarSkew: xSkewAngle, ySkewAngle.
+        31 => 4, // PaintVarSkewAroundCenter: xSkewAngle, ySkewAngle, centerX, centerY.
+        else => null,
+    };
 }
 
 fn validateColorPaintGradientVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext) FontError!void {
@@ -8871,6 +8900,51 @@ test "COLR v1 variable gradients validate paint and stop variation indexes" {
     var bad_stop_index = bytes;
     writeU32Test(&bad_stop_index, color_line + 19, 5); // VarColorStop needs rows 5 and 6.
     try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bad_stop_index, colr, fvar, 2));
+}
+
+test "COLR v1 variable transform paints validate variation indexes" {
+    var bytes: [180]u8 = .{0} ** 180;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
+
+    const colr_offset = fvar.length;
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = colr_offset, .length = 134 };
+    writeU16Test(&bytes, colr_offset + 0, 1); // COLR version 1.
+    writeU32Test(&bytes, colr_offset + 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, colr_offset + 30, 90); // ItemVariationStoreOffset.
+
+    writeU32Test(&bytes, colr_offset + 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, colr_offset + 38, 1);
+    writeU32Test(&bytes, colr_offset + 40, 10); // PaintVarTransform at BaseGlyphList + 10.
+
+    bytes[colr_offset + 44] = 13; // PaintVarTransform.
+    writeU24Test(&bytes, colr_offset + 45, 35); // Child PaintSolid after the matrix.
+    writeU24Test(&bytes, colr_offset + 48, 11); // VarAffine2x3 starts after PaintVarTransform.
+    writeU32Test(&bytes, colr_offset + 51, 0); // varIndexBase covers the six matrix scalars.
+    writeF16Dot16Test(&bytes, colr_offset + 55, 1.0); // xx.
+    writeF16Dot16Test(&bytes, colr_offset + 59, 0.0); // yx.
+    writeF16Dot16Test(&bytes, colr_offset + 63, 0.0); // xy.
+    writeF16Dot16Test(&bytes, colr_offset + 67, 1.0); // yy.
+    writeF16Dot16Test(&bytes, colr_offset + 71, 0.0); // dx.
+    writeF16Dot16Test(&bytes, colr_offset + 75, 0.0); // dy.
+    bytes[colr_offset + 79] = 2; // PaintSolid child.
+    writeU16Test(&bytes, colr_offset + 80, 0);
+    writeF2Dot14Test(&bytes, colr_offset + 82, 1.0);
+
+    writeItemVariationStoreWithItems(&bytes, colr_offset + 90, 6);
+    try validateColrVariationData(&bytes, colr, fvar, 2);
+
+    var missing_store = bytes;
+    writeU32Test(&missing_store, colr_offset + 30, 0);
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&missing_store, colr, fvar, 2));
+
+    var bad_matrix_index = bytes;
+    writeU32Test(&bad_matrix_index, colr_offset + 51, 1); // Matrix deltas need rows 1 through 6.
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bad_matrix_index, colr, fvar, 2));
 }
 
 test "COLR v1 variation map and store subtables cannot overlap" {

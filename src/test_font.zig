@@ -68,6 +68,10 @@ pub fn buildColorV1RecursivePaintAliasTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1RecursivePaintAliasTtfTables(allocator));
 }
 
+pub fn buildColorV1IndirectPaintColrGlyphCycleTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1IndirectPaintColrGlyphCycleTtfTables(allocator));
+}
+
 pub fn buildCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cbdtPngTtfTables(allocator));
 }
@@ -638,6 +642,22 @@ fn colorV1RecursivePaintAliasTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn colorV1IndirectPaintColrGlyphCycleTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "COLR", .data = try colrV1IndirectPaintColrGlyphCycleTable(allocator) };
+    tables[1] = .{ .tag = "CPAL", .data = try cpalTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTableWithColorGlyphs(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
     tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
@@ -2233,6 +2253,28 @@ fn colrV1RecursivePaintAliasTable(allocator: std.mem.Allocator) ![]u8 {
     writeF2Dot14(bytes, 93, 1.0);
     writeU16(bytes, 95, 1);
     writeF2Dot14(bytes, 97, 1.0);
+    return bytes;
+}
+
+fn colrV1IndirectPaintColrGlyphCycleTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 56);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34);
+
+    writeU32(bytes, 34, 2);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 16);
+    writeU16(bytes, 44, 2);
+    writeU32(bytes, 46, 19);
+
+    // Glyph 1 references glyph 2, whose base paint references glyph 1 again.
+    // The cycle crosses BaseGlyphPaintRecord boundaries, so byte-offset-only
+    // paint graph guards cannot see it.
+    bytes[50] = 11;
+    writeU16(bytes, 51, 2);
+    bytes[53] = 11;
+    writeU16(bytes, 54, 1);
     return bytes;
 }
 

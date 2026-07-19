@@ -285,7 +285,7 @@ pub const Font = struct {
         // *declared table records* before reading cross-table fields below, so
         // a truncated head/hhea/maxp table cannot borrow bytes from the next
         // physical table in the file.
-        try requireTableLength(head, 54);
+        try validateHeadTable(data, head, format);
         try validateMaxpTable(data, maxp, format);
 
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
@@ -1675,6 +1675,38 @@ fn rangesOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) boo
 
 fn requireTableLength(record: TableRecord, minimum_length: usize) FontError!void {
     if (record.length < minimum_length) return error.BadSfnt;
+}
+
+fn validateHeadTable(data: []const u8, head: TableRecord, format: FontFormat) FontError!void {
+    try requireTableLength(head, 54);
+
+    const version = try bin.readU32At(data, head.offset);
+    const magic_number = try bin.readU32At(data, head.offset + 12);
+    const units_per_em = try bin.readU16At(data, head.offset + 18);
+    const x_min = try bin.readI16At(data, head.offset + 36);
+    const y_min = try bin.readI16At(data, head.offset + 38);
+    const x_max = try bin.readI16At(data, head.offset + 40);
+    const y_max = try bin.readI16At(data, head.offset + 42);
+    const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
+    const glyph_data_format = try bin.readI16At(data, head.offset + 52);
+
+    // These fields are SFNT-wide invariants rather than Cangjie preferences:
+    // accepting an arbitrary version or magic number means the bytes may not be
+    // a `head` table at all, and accepting out-of-range design units makes
+    // later font-size-to-em math ambiguous for otherwise parseable faces.
+    if (version != 0x00010000) return error.BadSfnt;
+    if (magic_number != 0x5f0f3cf5) return error.BadSfnt;
+    if (units_per_em < 16 or units_per_em > 16384) return error.BadSfnt;
+    if (x_min > x_max or y_min > y_max) return error.BadSfnt;
+
+    // indexToLocFormat only drives glyf/loca lookup.  CFF-backed OpenType
+    // faces do not have a loca table, so avoid rejecting legacy production OTFs
+    // for an otherwise-unused field while still validating TrueType faces before
+    // their loca table is interpreted.
+    if (format == .truetype and index_to_loc_format != 0 and index_to_loc_format != 1) {
+        return error.InvalidLoca;
+    }
+    if (glyph_data_format != 0) return error.BadSfnt;
 }
 
 fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) FontError!void {
@@ -8110,6 +8142,61 @@ test "maxp table version and length must match the outline format" {
         defer allocator.free(bytes);
         const maxp_offset = try sfntTableOffset(bytes, "maxp");
         writeU32Test(bytes, maxp_offset, 0x00010000);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+}
+
+test "head table invariants are validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    inline for (.{
+        .{ .offset = 0, .value = @as(u32, 0x00020000), .err = error.BadSfnt },
+        .{ .offset = 12, .value = @as(u32, 0), .err = error.BadSfnt },
+    }) |case| {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const head_offset = try sfntTableOffset(bytes, "head");
+        writeU32Test(bytes, head_offset + case.offset, case.value);
+        try std.testing.expectError(case.err, Font.parse(allocator, bytes));
+    }
+
+    inline for (.{
+        .{ .value = @as(u16, 15), .err = error.BadSfnt },
+        .{ .value = @as(u16, 16385), .err = error.BadSfnt },
+        .{ .value = @as(u16, 2), .err = error.InvalidLoca },
+    }) |case| {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const head_offset = try sfntTableOffset(bytes, "head");
+        writeU16Test(bytes, head_offset + 18, case.value);
+        if (case.err == error.InvalidLoca) {
+            writeI16Test(bytes, head_offset + 50, @bitCast(case.value));
+            writeU16Test(bytes, head_offset + 18, 1000);
+        }
+        try std.testing.expectError(case.err, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const head_offset = try sfntTableOffset(bytes, "head");
+        writeI16Test(bytes, head_offset + 36, 701); // xMin must not exceed xMax.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const head_offset = try sfntTableOffset(bytes, "head");
+        writeI16Test(bytes, head_offset + 52, 1); // glyphDataFormat is specified as zero.
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 }

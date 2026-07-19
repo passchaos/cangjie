@@ -148,11 +148,11 @@ fn parseTopDict(dict: []const u8) CffError!Info {
     var parser = DictParser.init(dict);
     while (try parser.next()) |entry| {
         switch (entry.operator) {
-            17 => info.charstrings_offset = @intFromFloat(entry.operands[0]),
+            17 => info.charstrings_offset = try dictOffsetOperand(entry.operands, 0),
             18 => {
                 if (entry.operands.len < 2) return error.BadCff;
-                info.private_size = @intFromFloat(entry.operands[0]);
-                info.private_offset = @intFromFloat(entry.operands[1]);
+                info.private_size = try dictOffsetOperand(entry.operands, 0);
+                info.private_offset = try dictOffsetOperand(entry.operands, 1);
             },
             else => {},
         }
@@ -167,7 +167,9 @@ fn parsePrivateDict(dict: []const u8, info: *Info) CffError!void {
         switch (entry.operator) {
             19 => {
                 if (entry.operands.len < 1) return error.BadCff;
-                info.local_subrs_offset = info.private_offset + @as(usize, @intFromFloat(entry.operands[0]));
+                const relative_offset = try dictOffsetOperand(entry.operands, 0);
+                if (relative_offset > std.math.maxInt(usize) - info.private_offset) return error.BadCff;
+                info.local_subrs_offset = info.private_offset + relative_offset;
             },
             20 => {
                 if (entry.operands.len < 1) return error.BadCff;
@@ -180,6 +182,20 @@ fn parsePrivateDict(dict: []const u8, info: *Info) CffError!void {
             else => {},
         }
     }
+}
+
+fn dictOffsetOperand(operands: []const f32, index: usize) CffError!usize {
+    if (index >= operands.len) return error.BadCff;
+    const value = operands[index];
+    // CFF offsets and sizes are encoded as DICT numbers, but the fields that
+    // address other CFF structures have an integer, non-negative contract.
+    // Validate that contract before converting so malformed real/negative
+    // operands fail as BadCff instead of trapping in @intFromFloat or wrapping
+    // into an unrelated table location.
+    if (!std.math.isFinite(value) or value < 0 or value != @trunc(value)) return error.BadCff;
+    const widened: f64 = value;
+    if (widened > 4294967295.0) return error.BadCff;
+    return @intFromFloat(widened);
 }
 
 const DictEntry = struct {
@@ -399,13 +415,26 @@ test "CFF header and Top DICT INDEX describe a CFF 1.0 single-font set" {
 
     const multi_font_set = [_]u8{
         0x01, 0x00, 0x04, 0x01,
-        0x00, 0x01, 0x01, 0x01, 0x01,
+        0x00, 0x01, 0x01, 0x01,
+        0x01,
         // OpenType embeds only single-font CFF data. A multi-entry Top DICT
         // INDEX is a valid CFF FontSet shape in isolation, but it cannot be
         // mapped to one SFNT face without choosing an arbitrary dictionary.
-        0x00, 0x02, 0x01, 0x01, 0x03, 0x05, 159, 17, 159, 17,
+        0x00, 0x02, 0x01,
+        0x01, 0x03, 0x05, 159,
+        17,   159,  17,
     };
     try std.testing.expectError(error.BadCff, parseInfo(&multi_font_set));
+}
+
+test "CFF DICT offsets reject missing fractional and negative operands" {
+    try std.testing.expectError(error.BadCff, parseTopDict(&.{17}));
+    try std.testing.expectError(error.BadCff, parseTopDict(&.{ 30, 0x1a, 0x5f, 17 }));
+    try std.testing.expectError(error.BadCff, parseTopDict(&.{ 138, 17 }));
+    try std.testing.expectError(error.BadCff, parseTopDict(&.{ 159, 17, 138, 159, 18 }));
+
+    var info = Info{ .charstrings_offset = 20, .charstrings_count = 0, .global_subrs_offset = 0, .private_offset = 10 };
+    try std.testing.expectError(error.BadCff, parsePrivateDict(&.{ 30, 0x1a, 0x5f, 19 }, &info));
 }
 
 test "CFF Type2 hvcurveto and vhcurveto keep their implicit last axis" {

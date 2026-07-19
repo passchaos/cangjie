@@ -2968,9 +2968,8 @@ fn validateCmapFormat14(data: []const u8, offset: usize, length: usize) FontErro
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < 10) return error.BadSfnt;
     const record_count: usize = @intCast(try bin.readU32At(data, offset + 6));
-    if (record_count > (length - 10) / 11) return error.BadSfnt;
+    const records_end = try cmapFormat14RecordsEnd(length, record_count);
 
-    const records_end = 10 + record_count * 11;
     const table_end = offset + length;
     var previous_selector: ?u32 = null;
     for (0..record_count) |index| {
@@ -2988,8 +2987,8 @@ fn validateCmapFormat14(data: []const u8, offset: usize, length: usize) FontErro
         const default_offset = try bin.readU32At(data, record + 3);
         const non_default_offset = try bin.readU32At(data, record + 7);
         if (default_offset != 0) {
-            if (default_offset < records_end or default_offset >= length) return error.BadSfnt;
-            const default_absolute = offset + @as(usize, default_offset);
+            const default_payload_offset = try validateCmapFormat14PayloadOffset(default_offset, records_end, length);
+            const default_absolute = offset + default_payload_offset;
             const default_range = try cmapFormat14DefaultUvsRange(data, default_absolute, table_end);
             try validateCmapFormat14DefaultUvs(data, default_absolute, table_end);
             try validateCmapFormat14UvsRangeDoesNotAliasRecords(
@@ -3001,8 +3000,8 @@ fn validateCmapFormat14(data: []const u8, offset: usize, length: usize) FontErro
             );
         }
         if (non_default_offset != 0) {
-            if (non_default_offset < records_end or non_default_offset >= length) return error.BadSfnt;
-            const non_default_absolute = offset + @as(usize, non_default_offset);
+            const non_default_payload_offset = try validateCmapFormat14PayloadOffset(non_default_offset, records_end, length);
+            const non_default_absolute = offset + non_default_payload_offset;
             const non_default_range = try cmapFormat14NonDefaultUvsRange(data, non_default_absolute, table_end);
             try validateCmapFormat14NonDefaultUvs(data, non_default_absolute, table_end);
             try validateCmapFormat14UvsRangeDoesNotAliasRecords(
@@ -3014,8 +3013,8 @@ fn validateCmapFormat14(data: []const u8, offset: usize, length: usize) FontErro
             );
         }
         if (default_offset != 0 and non_default_offset != 0) {
-            const default_absolute = offset + @as(usize, default_offset);
-            const non_default_absolute = offset + @as(usize, non_default_offset);
+            const default_absolute = offset + try validateCmapFormat14PayloadOffset(default_offset, records_end, length);
+            const non_default_absolute = offset + try validateCmapFormat14PayloadOffset(non_default_offset, records_end, length);
             const default_range = try cmapFormat14DefaultUvsRange(data, default_absolute, table_end);
             const non_default_range = try cmapFormat14NonDefaultUvsRange(data, non_default_absolute, table_end);
             if (payloadRangesOverlap(default_range, non_default_range)) return error.BadSfnt;
@@ -3033,6 +3032,22 @@ const CmapFormat14PayloadRange = struct {
     start: usize,
     end: usize,
 };
+
+fn cmapFormat14RecordsEnd(length: usize, record_count: usize) FontError!usize {
+    if (length < 10) return error.BadSfnt;
+    if (record_count > (length - 10) / 11) return error.BadSfnt;
+    return 10 + record_count * 11;
+}
+
+fn validateCmapFormat14PayloadOffset(payload_offset: u32, records_end: usize, length: usize) FontError!usize {
+    const offset: usize = @intCast(payload_offset);
+    // A non-zero UVS payload offset must name a child array after the complete
+    // VariationSelectorRecord directory. Keeping this check in one helper lets
+    // both parse-time validation and lazy lookup reject record-directory aliases
+    // with the same boundary contract.
+    if (offset < records_end or offset >= length) return error.BadSfnt;
+    return offset;
+}
 
 fn cmapFormat14DefaultUvsRange(data: []const u8, offset: usize, table_end: usize) FontError!CmapFormat14PayloadRange {
     if (offset + 4 > table_end) return error.BadSfnt;
@@ -3913,28 +3928,34 @@ fn glyphIndexSequentialMapGroups(data: []const u8, offset: usize, groups_offset:
 fn glyphIndexFormat14(self: *const Font, offset: usize, codepoint: u21, variation_selector: u21) FontError!?glyph_mod.GlyphId {
     if (variation_selector > 0xffffff or codepoint > 0xffffff) return null;
     const data = self.data;
-    const length = try bin.readU32At(data, offset + 2);
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadSfnt;
-    const table_end = offset + @as(usize, length);
-    const record_count = try bin.readU32At(data, offset + 6);
-    if (@as(usize, record_count) * 11 > @as(usize, length) - 10) return error.BadSfnt;
+    const length: usize = @intCast(try bin.readU32At(data, offset + 2));
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table_end = offset + length;
+    const record_count: usize = @intCast(try bin.readU32At(data, offset + 6));
+    const records_end = try cmapFormat14RecordsEnd(length, record_count);
 
     const selector: u32 = @intCast(variation_selector);
+    var previous_selector: ?u32 = null;
     for (0..record_count) |index| {
         const record = offset + 10 + index * 11;
         const record_selector = try readU24At(data, record);
+        if (!isUnicodeVariationSelector(record_selector)) return error.BadSfnt;
+        if (previous_selector) |last_selector| {
+            if (record_selector <= last_selector) return error.BadSfnt;
+        }
+        previous_selector = record_selector;
         if (selector < record_selector) return null;
         if (selector > record_selector) continue;
 
         const default_offset = try bin.readU32At(data, record + 3);
         const non_default_offset = try bin.readU32At(data, record + 7);
         if (non_default_offset != 0) {
-            if (non_default_offset >= length) return error.BadSfnt;
-            if (try glyphIndexFormat14NonDefault(data, offset + @as(usize, non_default_offset), table_end, codepoint)) |glyph_id| return glyph_id;
+            const non_default_payload_offset = try validateCmapFormat14PayloadOffset(non_default_offset, records_end, length);
+            if (try glyphIndexFormat14NonDefault(data, offset + non_default_payload_offset, table_end, codepoint)) |glyph_id| return glyph_id;
         }
         if (default_offset != 0) {
-            if (default_offset >= length) return error.BadSfnt;
-            if (try glyphIndexFormat14DefaultContains(data, offset + @as(usize, default_offset), table_end, codepoint)) {
+            const default_payload_offset = try validateCmapFormat14PayloadOffset(default_offset, records_end, length);
+            if (try glyphIndexFormat14DefaultContains(data, offset + default_payload_offset, table_end, codepoint)) {
                 return try self.glyphIndex(codepoint);
             }
         }
@@ -7487,6 +7508,51 @@ test "cmap 32-bit subtables stay inside declared lengths" {
     writeU32Test(&format13, 24, 3);
     try std.testing.expectError(error.BadSfnt, glyphIndexFormat13(&format13, 0, 16, 'A'));
     try std.testing.expectEqual(@as(glyph_mod.GlyphId, 3), try glyphIndexFormat13(&format13, 0, 28, 0x1f600));
+}
+
+test "cmap format 14 lookup mirrors parse-time selector and payload validation" {
+    var valid: [38]u8 = .{0} ** 38;
+    writeU16Test(&valid, 0, 14);
+    writeU32Test(&valid, 2, valid.len);
+    writeU32Test(&valid, 6, 1);
+    writeU24Test(&valid, 10, 0xfe0f);
+    writeU32Test(&valid, 13, 21);
+    writeU32Test(&valid, 17, 29);
+    writeU32Test(&valid, 21, 1);
+    writeU24Test(&valid, 25, 'B');
+    valid[28] = 0;
+    writeU32Test(&valid, 29, 1);
+    writeU24Test(&valid, 33, 'A');
+    writeU16Test(&valid, 36, 3);
+
+    const records_end = try cmapFormat14RecordsEnd(valid.len, 1);
+    try validateCmapFormat14(&valid, 0, valid.len);
+    try std.testing.expectEqual(@as(usize, 21), try validateCmapFormat14PayloadOffset(21, records_end, valid.len));
+    try std.testing.expectEqual(@as(?glyph_mod.GlyphId, 3), try glyphIndexFormat14NonDefault(&valid, 29, valid.len, 'A'));
+    try std.testing.expect(try glyphIndexFormat14DefaultContains(&valid, 21, valid.len, 'B'));
+
+    var alias_record_directory = valid;
+    writeU32Test(&alias_record_directory, 17, 20);
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat14(&alias_record_directory, 0, alias_record_directory.len));
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat14PayloadOffset(20, records_end, alias_record_directory.len));
+
+    var invalid_selector = valid;
+    writeU24Test(&invalid_selector, 10, 'A');
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat14(&invalid_selector, 0, invalid_selector.len));
+
+    var unsorted_selector_records: [56]u8 = .{0} ** 56;
+    writeU16Test(&unsorted_selector_records, 0, 14);
+    writeU32Test(&unsorted_selector_records, 2, unsorted_selector_records.len);
+    writeU32Test(&unsorted_selector_records, 6, 2);
+    writeU24Test(&unsorted_selector_records, 10, 0xe0100);
+    writeU32Test(&unsorted_selector_records, 13, 32);
+    writeU24Test(&unsorted_selector_records, 21, 0xfe0f);
+    writeU32Test(&unsorted_selector_records, 24, 40);
+    writeU32Test(&unsorted_selector_records, 32, 1);
+    writeU24Test(&unsorted_selector_records, 36, 'A');
+    writeU32Test(&unsorted_selector_records, 40, 1);
+    writeU24Test(&unsorted_selector_records, 44, 'B');
+    try std.testing.expectError(error.BadSfnt, validateCmapFormat14(&unsorted_selector_records, 0, unsorted_selector_records.len));
 }
 
 test "cmap format 2 validates subheader and glyph-array bounds" {

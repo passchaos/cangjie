@@ -4540,17 +4540,19 @@ fn readFvarInfo(data: []const u8, fvar: TableRecord) FontError!FvarInfo {
     const minor = try bin.readU16At(data, fvar.offset + 2);
     if (major != 1 or minor != 0) return error.BadSfnt;
     const axes_array_offset: usize = @intCast(try bin.readU16At(data, fvar.offset + 4));
+    const count_size_pairs = try bin.readU16At(data, fvar.offset + 6);
     const axis_count: usize = @intCast(try bin.readU16At(data, fvar.offset + 8));
     const axis_size: usize = @intCast(try bin.readU16At(data, fvar.offset + 10));
     const instance_count: usize = @intCast(try bin.readU16At(data, fvar.offset + 12));
     const instance_size: usize = @intCast(try bin.readU16At(data, fvar.offset + 14));
+    if (count_size_pairs != 2) return error.BadSfnt;
     if (axis_size < 20) return error.BadSfnt;
 
-    // fvar offsets are relative to the start of the fvar table. The axis
-    // array must begin after the fixed 16-byte header, and the optional
-    // instance array follows the whole declared axis array. Validate both
-    // regions up front so malformed offsets cannot reinterpret header or
-    // neighbouring table bytes as variation metadata.
+    // countSizePairs is part of the fvar header layout contract: exactly two
+    // count/size pairs follow it, axisCount/axisSize and
+    // instanceCount/instanceSize. Validate that contract together with the
+    // table-local regions so malformed headers cannot reinterpret bytes from a
+    // hypothetical alternate layout as variation metadata.
     if (axes_array_offset < 16 or axes_array_offset > fvar.length) return error.BadSfnt;
     if (axis_count > (fvar.length - axes_array_offset) / axis_size) return error.BadSfnt;
     const axes_bytes = axis_count * axis_size;
@@ -9259,6 +9261,7 @@ test "COLR v1 variable paints reference valid variation data" {
     var bytes: [128]u8 = .{0} ** 128;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -9302,6 +9305,7 @@ test "COLR v1 variable gradients validate paint and stop variation indexes" {
     var bytes: [180]u8 = .{0} ** 180;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -9359,6 +9363,7 @@ test "COLR v1 variable transform paints validate variation indexes" {
     var bytes: [180]u8 = .{0} ** 180;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -9404,6 +9409,7 @@ test "COLR v1 variation map and store subtables cannot overlap" {
     var bytes: [128]u8 = .{0} ** 128;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -9440,6 +9446,7 @@ test "COLR v1 variation subtables cannot alias optional structural tables" {
     var bytes: [160]u8 = .{0} ** 160;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -9760,6 +9767,7 @@ test "fvar axes and instance arrays stay inside declared table regions" {
     var overlapping_axes: [36]u8 = .{0} ** 36;
     writeU32Test(&overlapping_axes, 0, 0x00010000);
     writeU16Test(&overlapping_axes, 4, 12); // Points into the fvar header.
+    writeU16Test(&overlapping_axes, 6, 2);
     writeU16Test(&overlapping_axes, 8, 1);
     writeU16Test(&overlapping_axes, 10, 20);
     writeTagTest(&overlapping_axes, 12, "wght"); // Would look like an axis tag to the old parser.
@@ -9770,6 +9778,7 @@ test "fvar axes and instance arrays stay inside declared table regions" {
     var truncated_instances: [36]u8 = .{0} ** 36;
     writeU32Test(&truncated_instances, 0, 0x00010000);
     writeU16Test(&truncated_instances, 4, 16);
+    writeU16Test(&truncated_instances, 6, 2);
     writeU16Test(&truncated_instances, 8, 1);
     writeU16Test(&truncated_instances, 10, 20);
     writeU16Test(&truncated_instances, 12, 1); // One declared instance follows the axes.
@@ -9782,6 +9791,7 @@ test "fvar axes and instance arrays stay inside declared table regions" {
     var valid_with_instance: [44]u8 = .{0} ** 44;
     writeU32Test(&valid_with_instance, 0, 0x00010000);
     writeU16Test(&valid_with_instance, 4, 16);
+    writeU16Test(&valid_with_instance, 6, 2);
     writeU16Test(&valid_with_instance, 8, 1);
     writeU16Test(&valid_with_instance, 10, 20);
     writeU16Test(&valid_with_instance, 12, 1);
@@ -9796,6 +9806,11 @@ test "fvar axes and instance arrays stay inside declared table regions" {
     defer allocator.free(axes);
     try std.testing.expectEqual(@as(usize, 1), axes.len);
     try std.testing.expectEqualStrings("wght", &axes[0].tag);
+
+    var bad_count_size_pairs = valid_with_instance;
+    writeU16Test(&bad_count_size_pairs, 6, 3);
+    const bad_count_size_pairs_font = fvarOnlyFont(&bad_count_size_pairs);
+    try std.testing.expectError(error.BadSfnt, bad_count_size_pairs_font.variationAxes(allocator));
 }
 
 test "fvar axis records require ordered ranges and unique tags" {
@@ -9804,6 +9819,7 @@ test "fvar axis records require ordered ranges and unique tags" {
     var invalid_range: [36]u8 = .{0} ** 36;
     writeU32Test(&invalid_range, 0, 0x00010000);
     writeU16Test(&invalid_range, 4, 16);
+    writeU16Test(&invalid_range, 6, 2);
     writeU16Test(&invalid_range, 8, 1);
     writeU16Test(&invalid_range, 10, 20);
     writeFvarAxisTest(&invalid_range, 16, "wght", 900.0, 400.0, 100.0, 256);
@@ -9814,6 +9830,7 @@ test "fvar axis records require ordered ranges and unique tags" {
     var duplicate_tags: [56]u8 = .{0} ** 56;
     writeU32Test(&duplicate_tags, 0, 0x00010000);
     writeU16Test(&duplicate_tags, 4, 16);
+    writeU16Test(&duplicate_tags, 6, 2);
     writeU16Test(&duplicate_tags, 8, 2);
     writeU16Test(&duplicate_tags, 10, 20);
     writeFvarAxisTest(&duplicate_tags, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -9832,6 +9849,14 @@ test "fvar axis metadata is validated at parse time" {
         defer allocator.free(bytes);
         var font = try Font.parse(allocator, bytes);
         font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildVariableTtf(allocator);
+        defer allocator.free(bytes);
+        const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
+        writeU16Test(bytes, fvar_offset + 6, 3); // fvar has exactly two count/size pairs.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 
     {
@@ -9863,6 +9888,7 @@ test "fvar instance coordinates stay inside axis ranges" {
     var bytes: [44]u8 = .{0} ** 44;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeU16Test(&bytes, 12, 1);
@@ -9923,6 +9949,7 @@ test "fvar instance name IDs resolve through name table" {
     var bytes: [46]u8 = .{0} ** 46;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeU16Test(&bytes, 12, 1);
@@ -9972,6 +9999,7 @@ test "avar axis count must match fvar axis count when both tables exist" {
     var bytes: [46]u8 = .{0} ** 46;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -10047,6 +10075,7 @@ test "gvar table matches fvar axes and maxp glyph count" {
     var bytes: [62]u8 = .{0} ** 62;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -10075,6 +10104,7 @@ test "gvar glyph variation data validates tuple payloads" {
     var bytes: [76]u8 = .{0} ** 76;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -10128,6 +10158,7 @@ test "gvar tuple coordinates validate normalized peaks and intermediate regions"
     var embedded_peak: [76]u8 = .{0} ** 76;
     writeU32Test(&embedded_peak, 0, 0x00010000);
     writeU16Test(&embedded_peak, 4, 16);
+    writeU16Test(&embedded_peak, 6, 2);
     writeU16Test(&embedded_peak, 8, 1);
     writeU16Test(&embedded_peak, 10, 20);
     writeFvarAxisTest(&embedded_peak, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -10144,6 +10175,7 @@ test "gvar tuple coordinates validate normalized peaks and intermediate regions"
     var shared_peak: [78]u8 = .{0} ** 78;
     writeU32Test(&shared_peak, 0, 0x00010000);
     writeU16Test(&shared_peak, 4, 16);
+    writeU16Test(&shared_peak, 6, 2);
     writeU16Test(&shared_peak, 8, 1);
     writeU16Test(&shared_peak, 10, 20);
     writeFvarAxisTest(&shared_peak, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -10159,6 +10191,7 @@ test "gvar tuple coordinates validate normalized peaks and intermediate regions"
     var intermediate: [80]u8 = .{0} ** 80;
     writeU32Test(&intermediate, 0, 0x00010000);
     writeU16Test(&intermediate, 4, 16);
+    writeU16Test(&intermediate, 6, 2);
     writeU16Test(&intermediate, 8, 1);
     writeU16Test(&intermediate, 10, 20);
     writeFvarAxisTest(&intermediate, 16, "wght", 100.0, 400.0, 900.0, 256);
@@ -10219,6 +10252,7 @@ test "STAT design axes must match fvar axis ordering" {
     var bytes: [78]u8 = .{0} ** 78;
     writeU32Test(&bytes, 0, 0x00010000);
     writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
     writeU16Test(&bytes, 8, 1);
     writeU16Test(&bytes, 10, 20);
     writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);

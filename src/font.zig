@@ -803,7 +803,13 @@ pub const Font = struct {
         const mark_glyph_sets_def_offset = try bin.readU16At(self.data, gdef.offset + 12);
         if (mark_glyph_sets_def_offset == 0) return null;
         try validateGdefChildOffset(mark_glyph_sets_def_offset, gdef.length, minimumGdefHeaderLength(minor));
-        return try readMarkGlyphSetsDef(allocator, self.data[gdef.offset .. gdef.offset + gdef.length], mark_glyph_sets_def_offset);
+        const table = self.data[gdef.offset .. gdef.offset + gdef.length];
+        // Mark-filtering sets are assembled lazily for GSUB/GPOS lookup flags
+        // from borrowed SFNT bytes. Recheck the parse-time maxp glyph bound
+        // contract here so post-parse mutations cannot inject an out-of-range
+        // mark set that shaping would later treat as a valid filter class.
+        try validateMarkGlyphSetsDefGlyphBounds(table, mark_glyph_sets_def_offset, self.glyph_count);
+        return try readMarkGlyphSetsDef(allocator, table, mark_glyph_sets_def_offset);
     }
 
     pub fn styleAttributes(self: *const Font) FontError!StyleAttributes {
@@ -8132,6 +8138,29 @@ test "GDEF lazy class APIs revalidate child offsets after borrowed bytes mutate"
 
         try std.testing.expectError(error.BadSfnt, font.markAttachClass(3));
     }
+}
+
+test "GDEF lazy mark filtering sets revalidate glyph ids after borrowed bytes mutate" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGdefClassTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
+    writeU16Test(bytes, gdef_offset + 2, 2); // Enable MarkGlyphSetsDef in the lazy GDEF reader.
+    writeU16Test(bytes, gdef_offset + 12, 14); // Reuse the original class payload as a mark-set table.
+    writeU16Test(bytes, gdef_offset + 14, 1); // MarkGlyphSetsDef format 1.
+    writeU16Test(bytes, gdef_offset + 16, 1);
+    writeU32Test(bytes, gdef_offset + 18, 10); // Coverage follows the one Offset32 entry.
+    writeU16Test(bytes, gdef_offset + 24, 1); // Coverage format 1.
+    writeU16Test(bytes, gdef_offset + 26, 1);
+    writeU16Test(bytes, gdef_offset + 28, 5); // maxp.numGlyphs is still 5, so glyph id 5 is invalid.
+
+    try std.testing.expectError(error.BadSfnt, font.markFilteringSets(allocator));
 }
 
 test "legacy kern format 0 accumulates multiple horizontal subtables" {

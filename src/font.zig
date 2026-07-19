@@ -1066,8 +1066,14 @@ pub const Font = struct {
             const record = try readSvgDocumentRecord(self.data, document_list.records_start + index * 12);
             try validateSvgDocumentRecord(record, document_list, self.glyph_count, &previous_end_glyph_id);
             try validateSvgDocumentByteRangeAgainstPreviousRecords(self.data, document_list, record, index);
+            const document_start = document_list.start + record.document_offset;
+            // SVG documents are returned as borrowed slices. Re-parse every
+            // advertised payload at this lazy boundary so a post-parse mutation
+            // cannot leave an unrequested malformed XML document hidden in the
+            // table, nor return a slice whose root no longer satisfies the
+            // parse-time SVG contract.
+            try validateSvgDocumentPayload(self.allocator, self.data[document_start .. document_start + record.document_length]);
             if (glyph_id >= record.start_glyph_id and glyph_id <= record.end_glyph_id) {
-                const document_start = document_list.start + record.document_offset;
                 match = .{
                     .start_glyph_id = record.start_glyph_id,
                     .end_glyph_id = record.end_glyph_id,
@@ -11050,6 +11056,37 @@ test "SVG public document lookup revalidates byte-range ownership" {
     // public lookup path, not just by parse-time validation.
     writeU32Test(&bytes, 28, 30);
     try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(2));
+}
+
+test "SVG public document lookup revalidates borrowed XML payloads" {
+    var bytes: [56]u8 = .{0} ** 56;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU16Test(&bytes, 10, 2); // two SVGDocumentRecords.
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 1);
+    writeU32Test(&bytes, 16, 26);
+    writeU32Test(&bytes, 20, 6);
+    writeU16Test(&bytes, 24, 2);
+    writeU16Test(&bytes, 26, 2);
+    writeU32Test(&bytes, 28, 32);
+    writeU32Test(&bytes, 32, 8);
+    @memcpy(bytes[36..42], "<svg/>");
+    @memcpy(bytes[42..50], "<svg/>  ");
+
+    const font = svgOnlyFont(&bytes);
+    const original = (try font.svgGlyphDocument(1)).?;
+    try std.testing.expectEqualSlices(u8, "<svg/>", original.data);
+
+    // Lazy lookup must validate every advertised payload, not just the record
+    // whose glyph range matched this call. Otherwise a mutated unrequested
+    // document can stay hidden until a later glyph happens to select it.
+    @memcpy(bytes[42..50], "<g></g> ");
+    try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(1));
+
+    @memcpy(bytes[42..50], "<svg/>  ");
+    @memcpy(bytes[36..42], "<g></>");
+    try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(1));
 }
 
 test "SVG document offsets cannot overlap table metadata" {

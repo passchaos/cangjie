@@ -6213,7 +6213,7 @@ fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRe
         const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
         const store_info = try validateItemVariationStore(data, colr, store_offset, fvar_info.axis_count, 34);
         const store_range = ColrV1StructuralRange{ .start = store_offset, .end = store_info.end_offset };
-        try validateColrVariationRangeDisjointFromStructural(data, colr, store_range);
+        try validateColrVariationRangeDisjointFromOwnedColrData(data, colr, store_range);
         const map = if (var_index_map_offset != 0) blk_map: {
             const map = try validateDeltaSetIndexMap(data, colr, store_offset, store_info.item_data_count, var_index_map_offset);
             try validateColrVariationTopLevelRanges(store_offset, store_info.end_offset, map.offset, map.end_offset);
@@ -6221,7 +6221,7 @@ fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRe
             // BaseGlyphList, LayerList, and ClipList. Keep their structural
             // payloads disjoint so a valid paint list cannot also be decoded as
             // a VarIndexMap or ItemVariationStore header.
-            try validateColrVariationRangeDisjointFromStructural(data, colr, .{ .start = map.offset, .end = map.end_offset });
+            try validateColrVariationRangeDisjointFromOwnedColrData(data, colr, .{ .start = map.offset, .end = map.end_offset });
             break :blk_map map;
         } else null;
         context_storage = .{
@@ -6305,7 +6305,7 @@ fn validateColrVariationTopLevelRanges(store_offset: usize, store_end_offset: us
     if (map_offset < store_end_offset and store_offset < map_end_offset) return error.BadSfnt;
 }
 
-fn validateColrVariationRangeDisjointFromStructural(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
+fn validateColrVariationRangeDisjointFromOwnedColrData(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
     const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
     if (base_glyph_list_offset != 0) {
         const structural_range = try colrV1BaseGlyphListStructuralRange(data, colr, base_glyph_list_offset);
@@ -6322,6 +6322,97 @@ fn validateColrVariationRangeDisjointFromStructural(data: []const u8, colr: Tabl
     if (clip_list_offset != 0) {
         const structural_range = try colrV1ClipListStructuralRange(data, colr, clip_list_offset);
         if (colrRangesOverlap(variation_range, structural_range)) return error.BadSfnt;
+    }
+
+    try validateColrVariationRangeDisjointFromClipBoxes(data, colr, variation_range);
+    try validateColrVariationRangeDisjointFromPaintPayloads(data, colr, variation_range);
+}
+
+fn validateColrVariationRangeDisjointFromClipBoxes(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
+    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
+    if (clip_list_offset == 0) return;
+    try validateColrV1OptionalOffset(clip_list_offset, colr, 5);
+
+    const clip_list_start = colr.offset + clip_list_offset;
+    if (data[clip_list_start] != 1) return error.BadSfnt;
+    const clip_count: usize = @intCast(try bin.readU32At(data, clip_list_start + 1));
+    const records_start = clip_list_start + 5;
+    if (clip_count > (colr.offset + colr.length - records_start) / 7) return error.BadSfnt;
+    const clip_data_start = 5 + clip_count * 7;
+
+    for (0..clip_count) |index| {
+        const record = records_start + index * 7;
+        const clip_box_offset: usize = @intCast(try readU24At(data, record + 4));
+        if (clip_box_offset < clip_data_start) return error.BadSfnt;
+        if (clip_box_offset > colr.length - clip_list_offset) return error.BadSfnt;
+        const clip_box_range = try validateColrV1ClipBox(data, colr, clip_list_start + clip_box_offset);
+        // ItemVariationStore and VarIndexMap are top-level COLR payloads, not
+        // scratch space inside ClipBox bounds or varIndexBase fields. Keeping
+        // these ranges disjoint preserves ClipRecord ownership even when the
+        // overlapping bytes can be decoded as both a valid ClipBox and a valid
+        // variation subtable.
+        if (colrRangesOverlap(variation_range, clip_box_range)) return error.BadSfnt;
+    }
+}
+
+fn validateColrVariationRangeDisjointFromPaintPayloads(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
+    const forbidden = ColrPaintByteRange{
+        .start = colr.offset + variation_range.start,
+        .end = colr.offset + variation_range.end,
+    };
+
+    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
+    if (base_glyph_list_offset != 0) {
+        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
+        const list_start = colr.offset + base_glyph_list_offset;
+        const record_count: usize = @intCast(try bin.readU32At(data, list_start));
+        const records_start = list_start + 4;
+        if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
+        const paint_data_start = 4 + record_count * 6;
+        for (0..record_count) |index| {
+            const record = records_start + index * 6;
+            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
+            if (paint_offset < paint_data_start) return error.BadSfnt;
+            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
+            var guard = ColorPaintGraphGuard{ .forbidden_range = forbidden };
+            try validateColorPaintPayloadsDisjointFromRange(data, colr, list_start + paint_offset, &guard);
+        }
+    }
+
+    if (try colrLayerList(data, colr)) |layer_list| {
+        for (0..layer_list.layer_count) |layer_index| {
+            const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
+            var guard = ColorPaintGraphGuard{ .forbidden_range = forbidden };
+            try validateColorPaintPayloadsDisjointFromRange(data, colr, paint_offset, &guard);
+        }
+    }
+}
+
+fn validateColorPaintPayloadsDisjointFromRange(data: []const u8, colr: TableRecord, offset: usize, guard: *ColorPaintGraphGuard) FontError!void {
+    const info = try validateColorPaintRecordBounds(data, colr, offset);
+    try guard.enter(offset);
+    defer guard.leave();
+    try guard.claimPaintRecord(data, colr, offset, info);
+
+    switch (info.kind) {
+        .colr_layers => {
+            const layer_count = data[offset + 1];
+            const first_layer_index = try bin.readU32At(data, offset + 2);
+            if (layer_count == 0) return;
+            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const first: usize = @intCast(first_layer_index);
+            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
+            for (0..layer_count) |layer_offset| {
+                const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
+                try validateColorPaintPayloadsDisjointFromRange(data, colr, paint_offset, guard);
+            }
+        },
+        .glyph, .single_child => try validateColorPaintPayloadsDisjointFromRange(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard),
+        .composite => {
+            try validateColorPaintPayloadsDisjointFromRange(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard);
+            try validateColorPaintPayloadsDisjointFromRange(data, colr, try colorPaintChildOffset(data, colr, offset, info.min_size, 5), guard);
+        },
+        .solid, .color_line, .colr_glyph, .terminal => return,
     }
 }
 
@@ -6610,6 +6701,7 @@ fn validateColrBaseGlyphPaintGraph(
 const ColorPaintGraphGuard = struct {
     stack: [max_colr_paint_graph_depth]usize = undefined,
     owned_ranges: [max_colr_paint_owned_ranges]ColrPaintByteRange = undefined,
+    forbidden_range: ?ColrPaintByteRange = null,
     depth: usize = 0,
     owned_range_count: usize = 0,
 
@@ -6639,6 +6731,9 @@ const ColorPaintGraphGuard = struct {
 
     fn claimRange(self: *ColorPaintGraphGuard, range: ColrPaintByteRange) FontError!void {
         if (range.start >= range.end) return error.BadSfnt;
+        if (self.forbidden_range) |forbidden| {
+            if (colrPaintRangesOverlap(range, forbidden)) return error.BadSfnt;
+        }
         for (self.owned_ranges[0..self.owned_range_count]) |owned| {
             if (colrPaintRangesOverlap(range, owned)) return error.BadSfnt;
         }
@@ -10268,6 +10363,91 @@ test "COLR v1 variation subtables cannot alias optional structural tables" {
     writeU32Test(&store_alias, colr_offset + 18, 70); // LayerListOffset aliases the ItemVariationStore.
     writeU32Test(&store_alias, colr_offset + 26, 0);
     try std.testing.expectError(error.BadSfnt, validateColrVariationData(&store_alias, colr, fvar, 2));
+}
+
+test "COLR v1 variation subtables cannot alias ClipBox payloads" {
+    var bytes: [140]u8 = .{0} ** 140;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
+
+    const colr_offset = fvar.length;
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = colr_offset, .length = 104 };
+    writeU16Test(&bytes, colr_offset + 0, 1); // COLR version 1.
+    writeU32Test(&bytes, colr_offset + 22, 34); // ClipListOffset.
+    writeU32Test(&bytes, colr_offset + 30, 55); // ItemVariationStoreOffset aliases the ClipBox varIndexBase.
+
+    const clip_list = colr_offset + 34;
+    bytes[clip_list] = 1; // ClipList format 1.
+    writeU32Test(&bytes, clip_list + 1, 1);
+    writeU16Test(&bytes, clip_list + 5, 0);
+    writeU16Test(&bytes, clip_list + 7, 0);
+    writeU24Test(&bytes, clip_list + 9, 12); // ClipBoxFormat2 starts immediately after the ClipRecord.
+
+    const clip_box = clip_list + 12;
+    bytes[clip_box] = 2;
+    writeI16Test(&bytes, clip_box + 1, 0);
+    writeI16Test(&bytes, clip_box + 3, 0);
+    writeI16Test(&bytes, clip_box + 5, 10);
+    writeI16Test(&bytes, clip_box + 7, 10);
+
+    // The ItemVariationStore starts where ClipBoxFormat2 stores varIndexBase.
+    // Both structures are individually decodable, but those four bytes still
+    // belong to the ClipBox payload and must not become a top-level COLR table.
+    writeItemVariationStoreWithOneItem(&bytes, colr_offset + 55);
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bytes, colr, fvar, 1));
+}
+
+test "COLR v1 variation subtables cannot alias paint payloads" {
+    var bytes: [180]u8 = .{0} ** 180;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16);
+    writeU16Test(&bytes, 6, 2);
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 20);
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
+
+    const colr_offset = fvar.length;
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = colr_offset, .length = 144 };
+    writeU16Test(&bytes, colr_offset + 0, 1); // COLR version 1.
+    writeU32Test(&bytes, colr_offset + 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&bytes, colr_offset + 30, 90); // Non-overlapping ItemVariationStoreOffset for the control case.
+
+    writeU32Test(&bytes, colr_offset + 34, 1); // one BaseGlyphPaintRecord.
+    writeU16Test(&bytes, colr_offset + 38, 1);
+    writeU32Test(&bytes, colr_offset + 40, 10); // PaintLinearGradient at BaseGlyphList + 10.
+
+    bytes[colr_offset + 44] = 4; // PaintLinearGradient.
+    writeU24Test(&bytes, colr_offset + 45, 20); // ColorLine starts immediately after the paint header.
+    writeI16Test(&bytes, colr_offset + 48, 0); // x0.
+    writeI16Test(&bytes, colr_offset + 50, 0); // y0.
+    writeI16Test(&bytes, colr_offset + 52, 100); // x1.
+    writeI16Test(&bytes, colr_offset + 54, 0); // y1.
+    writeI16Test(&bytes, colr_offset + 56, 0); // x2.
+    writeI16Test(&bytes, colr_offset + 58, 100); // y2.
+
+    const color_line = colr_offset + 64;
+    bytes[color_line] = 0; // ExtendMode.pad.
+    writeU16Test(&bytes, color_line + 1, 2);
+    writeF2Dot14Test(&bytes, color_line + 3, 0.0);
+    writeU16Test(&bytes, color_line + 5, 0);
+    writeF2Dot14Test(&bytes, color_line + 7, 1.0);
+    writeF2Dot14Test(&bytes, color_line + 9, 1.0);
+    writeU16Test(&bytes, color_line + 11, 1);
+    writeF2Dot14Test(&bytes, color_line + 13, 1.0);
+
+    writeItemVariationStoreWithOneItem(&bytes, colr_offset + 90);
+    try validateColrVariationData(&bytes, colr, fvar, 2);
+
+    var color_line_alias = bytes;
+    writeU32Test(&color_line_alias, colr_offset + 30, 69); // ItemVariationStoreOffset aliases first ColorStop bytes.
+    writeItemVariationStoreWithOneItem(&color_line_alias, colr_offset + 69);
+    try std.testing.expectError(error.BadSfnt, validateColrVariationData(&color_line_alias, colr, fvar, 2));
 }
 
 test "COLR palette indices must be declared by CPAL" {

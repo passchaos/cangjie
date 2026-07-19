@@ -5207,6 +5207,11 @@ fn svgDocumentList(data: []const u8, svg: TableRecord) FontError!SvgDocumentList
     const version = try bin.readU16At(data, svg.offset);
     if (version != 0) return error.BadSfnt;
     const document_list_offset: usize = @intCast(try bin.readU32At(data, svg.offset + 2));
+    const reserved = try bin.readU32At(data, svg.offset + 6);
+    // The final four bytes of the SVG table header are reserved and must be
+    // zero. Treating them as padding rather than validating them would make a
+    // malformed header indistinguishable from future incompatible semantics.
+    if (reserved != 0) return error.BadSfnt;
     // Offsets in the SVG table are relative to the SVG table or to the
     // SVGDocumentList. Keep both child regions past their fixed metadata so
     // malformed fonts cannot reinterpret the header or records as XML data.
@@ -5256,6 +5261,7 @@ fn validateSvgDocumentRecord(record: SvgDocumentRecord, document_list: SvgDocume
     previous_end_glyph_id.* = record.end_glyph_id;
 
     if (record.document_offset < document_list.document_data_start) return error.BadSfnt;
+    if (record.document_length == 0) return error.BadSfnt;
     if (record.document_offset > document_list.length or record.document_length > document_list.length - record.document_offset) return error.BadSfnt;
 }
 
@@ -9069,6 +9075,61 @@ test "SVG document offsets cannot overlap table metadata" {
 
     const record_font = svgOnlyFont(&record_overlap);
     try std.testing.expectError(error.BadSfnt, record_font.svgGlyphDocument(1));
+}
+
+test "SVG table header reserved field must be zero" {
+    var bytes: [30]u8 = .{0} ** 30;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU32Test(&bytes, 6, 1); // Reserved; OpenType requires zero.
+    writeU16Test(&bytes, 10, 1); // one SVGDocumentRecord.
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 1);
+    writeU32Test(&bytes, 16, 14);
+    writeU32Test(&bytes, 20, 6);
+    @memcpy(bytes[24..30], "<svg/>");
+
+    const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2));
+}
+
+test "SVG document length must be non-zero" {
+    var bytes: [30]u8 = .{0} ** 30;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU16Test(&bytes, 10, 1); // one SVGDocumentRecord.
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 1);
+    writeU32Test(&bytes, 16, 24);
+    writeU32Test(&bytes, 20, 0); // Empty documents cannot contain an SVG root.
+    @memcpy(bytes[24..30], "<svg/>");
+
+    const svg = TableRecord{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadSfnt, validateSvgGlyphBounds(std.testing.allocator, &bytes, svg, 2));
+}
+
+test "SVG header and document length are validated at parse time" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildSvgTtf(allocator);
+        defer allocator.free(bytes);
+        const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
+        writeU32Test(bytes, svg_offset + 6, 1); // Reserved header field.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildSvgTtf(allocator);
+        defer allocator.free(bytes);
+        const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
+        const document_list_offset: usize = @intCast(try bin.readU32At(bytes, svg_offset + 2));
+        const document_list_start = svg_offset + document_list_offset;
+        const record_start = document_list_start + 2;
+        writeU32Test(bytes, record_start + 8, 0); // svgDocLength.
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "CPAL color records cannot overlap palette index array" {

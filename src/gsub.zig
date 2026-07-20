@@ -646,7 +646,7 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[i])) continue;
         const coverage = try coverageIndex(table, coverage_offset, glyphs.items[i]) orelse continue;
         if (coverage >= sequence_count) continue;
-        const sequence_offset = subtable_offset + try readU16(table, subtable_offset + 6 + coverage * 2);
+        const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
         const glyph_count = try readU16(table, sequence_offset);
         if (glyph_count == 0) {
             // A zero-length sequence deletes the covered glyph.
@@ -752,7 +752,7 @@ fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     const sequence_count = try readU16(table, subtable_offset + 4);
     const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return null;
     if (coverage >= sequence_count) return null;
-    const sequence_offset = subtable_offset + try readU16(table, subtable_offset + 6 + coverage * 2);
+    const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
     const glyph_count = try readU16(table, sequence_offset);
 
     const replacement = try allocator.alloc(GlyphId, glyph_count);
@@ -1512,7 +1512,11 @@ fn ensureMultipleSubstitutionSubtableWithin(table: Table, subtable_offset: usize
     const sequence_offsets_pos = subtable_offset + 6;
     try ensureBytesWithin(table, sequence_offsets_pos, @as(usize, sequence_count) * 2);
     for (0..sequence_count) |sequence_i| {
-        const sequence_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, sequence_offsets_pos + sequence_i * 2));
+        const sequence_relative = try readU16BadGsub(table, sequence_offsets_pos + sequence_i * 2);
+        // SequenceOffset entries are required children keyed by Coverage
+        // index. Offset zero would reinterpret the MultipleSubst header as a
+        // Sequence table, deriving replacement glyphs from unrelated fields.
+        const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, sequence_relative);
         const glyph_count = try readU16BadGsub(table, sequence_offset);
         try ensureBytesWithin(table, sequence_offset + 2, @as(usize, glyph_count) * 2);
         for (0..glyph_count) |glyph_i| {
@@ -1925,6 +1929,11 @@ fn checkedSubtableOffset(table: Table, base_offset: usize, relative_offset: u32)
     const absolute = base_offset + @as(usize, @intCast(relative_offset));
     if (absolute > table.length) return error.BadGsub;
     return absolute;
+}
+
+fn checkedRequiredSubtableOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
+    if (relative_offset == 0) return error.BadGsub;
+    return checkedSubtableOffset(table, base_offset, @as(u32, relative_offset));
 }
 
 fn ensureBytesWithin(table: Table, offset: usize, len: usize) GsubError!void {
@@ -2478,6 +2487,33 @@ test "GSUB ChainingContextSubst rejects null required rule offsets" {
     writeU16Test(&bytes, rule + 4, 0); // LookaheadGlyphCount.
     writeU16Test(&bytes, rule + 6, 0); // SubstCount.
     try ensureChainingRuleSetWithin(table, rule_set);
+}
+
+test "GSUB MultipleSubst rejects null Sequence offsets" {
+    var bytes = [_]u8{0} ** 44;
+    const subtable = writeSingleLookupGsubTest(&bytes, 2);
+    writeU16Test(&bytes, subtable + 0, 1); // MultipleSubst format 1.
+    writeU16Test(&bytes, subtable + 2, 8); // Coverage after SequenceOffset array.
+    writeU16Test(&bytes, subtable + 4, 1); // One SequenceOffset.
+    writeU16Test(&bytes, subtable + 6, 0); // Invalid: Sequence offsets are not nullable.
+    writeCoverage1(&bytes, subtable + 8, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureMultipleSubstitutionSubtableWithin(table, subtable));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 1);
+    try std.testing.expectError(error.BadGsub, applyMultipleSubstitution(table, subtable, &glyphs, std.testing.allocator, 0, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    // An empty Sequence can still be represented explicitly; only the child
+    // pointer itself is required to name a real Sequence table.
+    writeU16Test(&bytes, subtable + 6, 14);
+    writeU16Test(&bytes, subtable + 14, 0); // Sequence.GlyphCount.
+    try ensureMultipleSubstitutionSubtableWithin(table, subtable);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
 test "GSUB glyph ids are validated against maxp glyph count" {

@@ -383,6 +383,16 @@ pub const ParagraphLayout = struct {
         return .{ .x = min_x, .y = min_y, .width = max_x - min_x, .height = max_y - min_y };
     }
 
+    pub fn selectionRectForBytes(self: ParagraphLayout, byte_start: usize, byte_end: usize) TextRect {
+        if (byte_start == byte_end) return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        const start = self.textPositionForCluster(@min(byte_start, byte_end));
+        const end = self.textPositionForCluster(@max(byte_start, byte_end));
+        return self.selectionRect(
+            start.glyph_index + @intFromBool(start.trailing),
+            end.glyph_index + @intFromBool(end.trailing),
+        );
+    }
+
     pub fn selectionRects(self: ParagraphLayout, allocator: std.mem.Allocator, start: usize, end: usize) ![]TextRect {
         if (self.lines.len == 0 or start == end) return try allocator.alloc(TextRect, 0);
         var rects = std.ArrayList(TextRect).empty;
@@ -395,6 +405,17 @@ pub const ParagraphLayout = struct {
             }
         }
         return try rects.toOwnedSlice(allocator);
+    }
+
+    pub fn selectionRectsForBytes(self: ParagraphLayout, allocator: std.mem.Allocator, byte_start: usize, byte_end: usize) ![]TextRect {
+        if (byte_start == byte_end) return try allocator.alloc(TextRect, 0);
+        const start = self.textPositionForCluster(@min(byte_start, byte_end));
+        const end = self.textPositionForCluster(@max(byte_start, byte_end));
+        return try self.selectionRects(
+            allocator,
+            start.glyph_index + @intFromBool(start.trailing),
+            end.glyph_index + @intFromBool(end.trailing),
+        );
     }
 
     pub fn selectionRectsInto(self: ParagraphLayout, buffer: []TextRect, start: usize, end: usize) []TextRect {

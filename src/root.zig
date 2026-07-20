@@ -3200,6 +3200,10 @@ test "maps logical carets onto visually reordered bidi glyphs" {
     try std.testing.expectEqual(@as(usize, 2), after_one.glyph_index);
     try std.testing.expectEqual(@as(usize, 3), after_one.cluster);
     try std.testing.expect(!after_one.trailing);
+
+    const digit_selection = paragraph.selectionRectForBytes(2, 4);
+    try std.testing.expect(digit_selection.width > 0);
+    try std.testing.expect(digit_selection.x >= 0);
 }
 
 test "defaults right-to-left paragraph alignment to the right edge" {
@@ -4061,6 +4065,12 @@ test "hit tests carets and selection geometry in paragraph layout" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), selection.y, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 26.0), selection.width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 24.0), selection.height, 0.001);
+
+    const byte_selection = paragraph.selectionRectForBytes(1, 4);
+    try std.testing.expectApproxEqAbs(selection.x, byte_selection.x, 0.001);
+    try std.testing.expectApproxEqAbs(selection.y, byte_selection.y, 0.001);
+    try std.testing.expectApproxEqAbs(selection.width, byte_selection.width, 0.001);
+    try std.testing.expectApproxEqAbs(selection.height, byte_selection.height, 0.001);
 
     const rects = try paragraph.selectionRects(allocator, 1, 5);
     defer allocator.free(rects);

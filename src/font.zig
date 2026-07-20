@@ -1235,6 +1235,9 @@ pub const Font = struct {
         if (self.format == .truetype) {
             const loca = self.loca orelse return error.MissingTable;
             const glyf = self.glyf orelse return error.MissingTable;
+            try validateSfntTableChecksum(self.data, self.maxp);
+            try validateSfntTableChecksum(self.data, loca);
+            try validateSfntTableChecksum(self.data, glyf);
             try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
             // The SFNT bytes are borrowed from the caller. Re-run the same glyf
             // grammar and component-graph validation enforced by Font.parse so
@@ -11226,7 +11229,7 @@ test "glyph outline API revalidates borrowed loca and glyf bytes" {
 
         const loca_offset: usize = @intCast(try sfntTableOffset(bytes, "loca"));
         writeU16Test(bytes, loca_offset, 7); // Makes glyph 0's loca entry decrease before glyph 1.
-        try std.testing.expectError(error.InvalidLoca, font.glyphOutline(allocator, 1));
+        try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
     }
 
     {
@@ -11240,8 +11243,29 @@ test "glyph outline API revalidates borrowed loca and glyf bytes" {
         // parsing must still be rejected before returning any glyph outline,
         // because the Font object no longer owns an immutable glyf snapshot.
         writeI16Test(bytes, glyf_offset, 1);
-        try std.testing.expectError(error.InvalidGlyph, font.glyphOutline(allocator, 1));
+        try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
     }
+}
+
+test "glyph outline API revalidates borrowed glyf checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var outline = try font.glyphOutline(allocator, 1);
+    outline.deinit();
+
+    const glyf_offset: usize = @intCast(try sfntTableOffset(bytes, "glyf"));
+    const glyph_one = glyf_offset + 12;
+    // Keep the simple glyph grammar valid while changing a borrowed bounding
+    // box after parse. Lazy outline loading must reject the glyf table because
+    // it no longer matches the SFNT checksum that Font.parse accepted.
+    writeI16Test(bytes, glyph_one + 6, 600);
+    try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
 }
 
 test "simple glyf programs and coordinate streams validate at parse time" {

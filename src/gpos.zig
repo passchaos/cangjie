@@ -83,7 +83,7 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const major = try readU16BadGpos(table, 0);
     if (major != 1) return error.UnsupportedGpos;
 
-    const lookup_list_offset = try checkedPositionOffset(table, 0, try readU16BadGpos(table, 8));
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGpos(table, lookup_list_offset);
     try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
     const feature_count = try ensureFeatureLookupReferencesWithin(table, lookup_count);
@@ -126,7 +126,7 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     if (selected_lookups.items.len == 0 and
         (options.features.len != 0 or (!options.apply_all_if_unselected and has_feature_topology))) return;
 
-    const lookup_list_offset = try readU16(table, 8);
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     for (0..lookup_count) |i| {
         if (selected_lookups.items.len != 0 and !containsLookup(selected_lookups.items, @intCast(i))) continue;
@@ -1331,7 +1331,7 @@ fn ensurePositionRecordLookupsWithinDepth(table: Table, records_pos: usize, reco
     // validation recursion so cyclic lookup graphs are reported as unsupported
     // instead of overflowing the validator stack.
     if (depth > max_context_preflight_depth) return error.UnsupportedGpos;
-    const lookup_list_offset = try readU16BadGpos(table, 8);
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGpos(table, lookup_list_offset);
     for (0..record_count) |record_i| {
         const record_offset = records_pos + record_i * 4;
@@ -2147,6 +2147,14 @@ fn checkedRequiredPositionOffset(table: Table, base_offset: usize, relative_offs
     return checkedPositionOffset(table, base_offset, @as(u32, relative_offset));
 }
 
+fn checkedRequiredLookupListOffset(table: Table) GposError!usize {
+    // The top-level LookupList offset is mandatory for GPOS. Treating zero as
+    // table-relative would reinterpret the GPOS header/version fields as a
+    // LookupList and lets malformed fonts pass validation with no real lookup
+    // topology or with lookup records derived from unrelated header bytes.
+    return checkedRequiredPositionOffset(table, 0, try readU16BadGpos(table, 8));
+}
+
 fn checkedRequiredCoverageOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
     // Coverage offsets are mandatory in GPOS subtables and contextual coverage
     // arrays. A null coverage pointer aliases the parent header as Coverage
@@ -2178,7 +2186,7 @@ fn readU32BadGpos(table: Table, relative: usize) GposError!u32 {
 }
 
 fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: usize, lookup_index: u16, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    const lookup_list_offset = try readU16(table, 8);
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (lookup_index >= lookup_count) return;
     const lookup_offset = lookup_list_offset + try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2);
@@ -2788,6 +2796,35 @@ test "GPOS rejects reserved LookupFlag bits" {
     writeU16Test(&bytes, 22, 0); // MarkFilteringSet index follows the subtable-offset array.
     try ensurePositionLookupHeaderWithin(table, 14);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GPOS rejects null top-level LookupList offsets" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 38;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10); // LookupList offset.
+    writeU16Test(&bytes, 10, 1);
+    writeU16Test(&bytes, 12, 4);
+    writeSinglePositionLookup(&bytes, 14, 1, 0, 20);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    writeU16Test(&bytes, 8, 0); // Invalid: LookupList is a required top-level table.
+    try std.testing.expectError(error.BadGpos, checkedRequiredLookupListOffset(table));
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    try std.testing.expectError(error.BadGpos, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    // With the LookupList restored, the same SinglePos lookup is valid and
+    // still applies normally; only the header-aliasing null offset is invalid.
+    writeU16Test(&bytes, 8, 10);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    try collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 20), adjustments.items[0].x_placement);
 }
 
 test "GPOS rejects null Lookup SubTable offsets" {

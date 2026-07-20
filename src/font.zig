@@ -450,7 +450,7 @@ pub const Font = struct {
     fn validateCmapLookupSubtable(self: *const Font, subtable: CmapSubtable) FontError!void {
         const relative_offset = try tableRelativeOffset(self.cmap, subtable.offset);
         if (subtable.length > self.cmap.length - relative_offset) return error.BadSfnt;
-        if (try checksumSfntTable(self.data, self.cmap) != self.cmap.checksum) return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, self.cmap);
         try validateCachedCmapEncodingRecord(self.data, self.cmap, subtable, relative_offset);
         const format = try bin.readU16At(self.data, subtable.offset);
         if (format != subtable.format) return error.BadSfnt;
@@ -477,6 +477,8 @@ pub const Font = struct {
         // malformed header bytes or read through a now-shortened hmtx record.
         const current_metric_count = try validateHorizontalMetricsTables(self.data, self.hhea, self.hmtx, self.glyph_count);
         if (current_metric_count != self.number_of_h_metrics) return error.InvalidMetrics;
+        try validateSfntTableChecksum(self.data, self.hhea);
+        try validateSfntTableChecksum(self.data, self.hmtx);
         if (glyph_id < self.number_of_h_metrics) {
             const offset = self.hmtx.offset + @as(usize, glyph_id) * 4;
             return .{
@@ -513,6 +515,8 @@ pub const Font = struct {
         // so a caller mutating the original font buffer cannot turn a safe
         // parsed Font into an out-of-bounds or aliasing vmtx interpretation.
         const metric_count = (try validateVerticalMetricsTables(self.data, self.glyph_count, vhea, vmtx)) orelse return null;
+        try validateSfntTableChecksum(self.data, vhea);
+        try validateSfntTableChecksum(self.data, vmtx);
         if (glyph_id < metric_count) {
             const offset = vmtx.offset + @as(usize, glyph_id) * 4;
             return .{
@@ -2090,19 +2094,22 @@ fn validateSfntTablesDoNotOverlapTtcDsig(records: []const TableRecord, header: T
 
 fn validateSfntTableChecksums(data: []const u8, records: []const TableRecord) FontError!void {
     for (records) |record| {
-        // Table directory checksums are the SFNT table map's lightweight
-        // integrity contract. Validate every advertised payload after the
-        // structural passes have established table-local bounds, while treating
-        // head.checkSumAdjustment as zero as required by OpenType's checksum
-        // algorithm. This catches stale or tampered borrowed table bytes without
-        // needing whole-file checksum adjustment support from test-generated
-        // fonts.
-        const actual = if (bin.tagEq(record.tag, "head"))
-            try checksumHeadTable(data, record)
-        else
-            try checksumSfntTable(data, record);
-        if (actual != record.checksum) return error.BadSfnt;
+        try validateSfntTableChecksum(data, record);
     }
+}
+
+fn validateSfntTableChecksum(data: []const u8, record: TableRecord) FontError!void {
+    // Table directory checksums are the SFNT table map's lightweight integrity
+    // contract. Validate every advertised payload after structural passes have
+    // established table-local bounds, while treating head.checkSumAdjustment as
+    // zero as required by OpenType's checksum algorithm. Public lazy APIs call
+    // the same helper because Font keeps borrowed bytes and must not surface
+    // post-parse table mutations as newly trusted metrics or glyph mappings.
+    const actual = if (bin.tagEq(record.tag, "head"))
+        try checksumHeadTable(data, record)
+    else
+        try checksumSfntTable(data, record);
+    if (actual != record.checksum) return error.BadSfnt;
 }
 
 fn checksumSfntTable(data: []const u8, record: TableRecord) FontError!u32 {
@@ -11305,6 +11312,27 @@ test "horizontal metrics revalidate borrowed hhea bytes" {
     try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
 }
 
+test "horizontal metrics revalidate borrowed hmtx checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const initial = try font.horizontalMetrics(1);
+    try std.testing.expectEqual(@as(u16, 800), initial.advance_width);
+
+    const hmtx_offset: usize = @intCast(try sfntTableOffset(bytes, "hmtx"));
+    // This mutation keeps the hmtx table length and metric count valid, and
+    // without checksum revalidation the lazy API would return a new advance
+    // width that Font.parse never authenticated.
+    writeU16Test(bytes, hmtx_offset + 4, 700);
+    try std.testing.expectError(error.BadSfnt, font.horizontalMetrics(1));
+}
+
 test "vertical metric tables validate paired count and vmtx length at parse time" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -11356,6 +11384,25 @@ test "vertical metric tables validate paired count and vmtx length at parse time
         try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
     }
 }
+
+test "vertical metrics revalidate borrowed vmtx checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const initial = (try font.verticalMetrics(0)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u16, 1000), initial.advance_height);
+
+    const vmtx_offset: usize = @intCast(try sfntTableOffset(bytes, "vmtx"));
+    writeU16Test(bytes, vmtx_offset, 900);
+    try std.testing.expectError(error.BadSfnt, font.verticalMetrics(0));
+}
+
 test "vertical metrics API revalidates borrowed vhea and vmtx bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

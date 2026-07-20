@@ -664,6 +664,7 @@ pub const Font = struct {
         // Font objects borrow caller-owned SFNT bytes. Re-run the parse-time
         // GSUB glyph-bound walk before shaping so a post-parse mutation cannot
         // smuggle an out-of-range substitution result into the glyph stream.
+        try validateSfntTableChecksum(self.data, gsub);
         try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
         var gsub_options = options;
         var glyph_classes: ?[]u16 = null;
@@ -709,6 +710,7 @@ pub const Font = struct {
         // glyph references on every public positioning pass instead of only at
         // Font.parse time, keeping malformed replacement bytes from hiding in
         // unvisited lookups until a specific feature or glyph run reaches them.
+        try validateSfntTableChecksum(self.data, gpos);
         try gpos_mod.validateGlyphBounds(self.data, gpos.offset, gpos.length, self.glyph_count);
         var gpos_options = options;
         var glyph_classes: ?[]u16 = null;
@@ -10888,7 +10890,7 @@ test "GSUB and GPOS public APIs revalidate borrowed table glyph references" {
         // ligature-result glyph after parse must not be deferred until the
         // substitution path writes a glyph ID that lacks metrics/outlines.
         writeU16Test(bytes, gsub_offset + 46, 3);
-        try std.testing.expectError(error.BadGsub, font.applyGsub(&glyphs, allocator));
+        try std.testing.expectError(error.BadSfnt, font.applyGsub(&glyphs, allocator));
     }
 
     {
@@ -10906,7 +10908,45 @@ test "GSUB and GPOS public APIs revalidate borrowed table glyph references" {
         // positioning API still revalidates all supported lookup payloads so an
         // unrelated feature cannot leave corrupted borrowed bytes latent.
         writeU16Test(bytes, gpos_offset + 42, 2);
-        try std.testing.expectError(error.BadGpos, font.collectGposAdjustments(&glyphs, &adjustments, allocator));
+        try std.testing.expectError(error.BadSfnt, font.collectGposAdjustments(&glyphs, &adjustments, allocator));
+    }
+}
+
+test "GSUB and GPOS public APIs revalidate borrowed table checksums" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalGsubTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var glyphs = std.ArrayList(glyph_mod.GlyphId).empty;
+        defer glyphs.deinit(allocator);
+        try glyphs.appendSlice(allocator, &.{ 1, 2 });
+
+        const gsub_offset = try sfntTableOffset(bytes, "GSUB");
+        // Keep the ligature result inside maxp while changing the borrowed
+        // shaping payload after Font.parse. The public API must reject it
+        // because GSUB's SFNT checksum no longer matches.
+        writeU16Test(bytes, gsub_offset + 46, 1);
+        try std.testing.expectError(error.BadSfnt, font.applyGsub(&glyphs, allocator));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalGposSingleTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var adjustments = std.ArrayList(gpos_mod.Adjustment).empty;
+        defer adjustments.deinit(allocator);
+        const glyphs = [_]glyph_mod.GlyphId{1};
+
+        const gpos_offset = try sfntTableOffset(bytes, "GPOS");
+        writeI16Test(bytes, gpos_offset + 32, 40);
+        try std.testing.expectError(error.BadSfnt, font.collectGposAdjustments(&glyphs, &adjustments, allocator));
     }
 }
 

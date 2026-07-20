@@ -873,8 +873,8 @@ fn collectMarkToBaseAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     const mark_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const base_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 4);
     const class_count = try readU16(table, subtable_offset + 6);
-    const mark_array_offset = subtable_offset + try readU16(table, subtable_offset + 8);
-    const base_array_offset = subtable_offset + try readU16(table, subtable_offset + 10);
+    const mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+    const base_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 10));
     if (class_count == 0 or glyphs.len < 2) return false;
 
     const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse return false;
@@ -1640,8 +1640,11 @@ fn ensureMarkToBasePositionSubtableWithin(table: Table, subtable_offset: usize) 
     const mark_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
     const base_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
     const class_count = try readU16BadGpos(table, subtable_offset + 6);
-    const mark_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
-    const base_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
+    // Mark attachment array offsets are mandatory OpenType child tables. A
+    // zero offset aliases the enclosing positioning subtable as an array and
+    // lets header fields masquerade as mark counts, classes, or anchor grids.
+    const mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+    const base_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
     try ensureCoverageTableWithin(table, mark_coverage_offset);
     try ensureCoverageTableWithin(table, base_coverage_offset);
     const mark_count = try ensureMarkArrayWithin(table, mark_array_offset, class_count);
@@ -1656,8 +1659,8 @@ fn ensureMarkToLigaturePositionSubtableWithin(table: Table, subtable_offset: usi
     const mark_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
     const ligature_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
     const class_count = try readU16BadGpos(table, subtable_offset + 6);
-    const mark_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
-    const ligature_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
+    const mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+    const ligature_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
     try ensureCoverageTableWithin(table, mark_coverage_offset);
     try ensureCoverageTableWithin(table, ligature_coverage_offset);
     const mark_count = try ensureMarkArrayWithin(table, mark_array_offset, class_count);
@@ -1672,8 +1675,8 @@ fn ensureMarkToMarkPositionSubtableWithin(table: Table, subtable_offset: usize) 
     const mark_1_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
     const mark_2_coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
     const class_count = try readU16BadGpos(table, subtable_offset + 6);
-    const mark_1_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
-    const mark_2_array_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
+    const mark_1_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+    const mark_2_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
     try ensureCoverageTableWithin(table, mark_1_coverage_offset);
     try ensureCoverageTableWithin(table, mark_2_coverage_offset);
     const mark_1_count = try ensureMarkArrayWithin(table, mark_1_array_offset, class_count);
@@ -2275,8 +2278,8 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
     const mark_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const ligature_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 4);
     const class_count = try readU16(table, subtable_offset + 6);
-    const mark_array_offset = subtable_offset + try readU16(table, subtable_offset + 8);
-    const ligature_array_offset = subtable_offset + try readU16(table, subtable_offset + 10);
+    const mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+    const ligature_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 10));
     if (class_count == 0 or glyphs.len < 2) return false;
 
     const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse return false;
@@ -2399,8 +2402,8 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     const mark_1_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const mark_2_coverage_offset = subtable_offset + try readU16(table, subtable_offset + 4);
     const class_count = try readU16(table, subtable_offset + 6);
-    const mark_1_array_offset = subtable_offset + try readU16(table, subtable_offset + 8);
-    const mark_2_array_offset = subtable_offset + try readU16(table, subtable_offset + 10);
+    const mark_1_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+    const mark_2_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 10));
     if (class_count == 0 or glyphs.len < 2) return false;
 
     const mark_1_index = try coverageIndex(table, mark_1_coverage_offset, glyph) orelse return false;
@@ -3106,7 +3109,53 @@ test "GPOS PairPos format 2 rejects class values outside matrix" {
     try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
 }
 
+test "GPOS MarkBasePos rejects null required array offsets" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 48;
+    writeU16Test(&bytes, 0, 1); // MarkBasePos format 1.
+    writeU16Test(&bytes, 2, 12); // MarkCoverage.
+    writeU16Test(&bytes, 4, 18); // BaseCoverage.
+    writeU16Test(&bytes, 6, 1); // ClassCount.
+    writeU16Test(&bytes, 8, 24); // MarkArray.
+    writeU16Test(&bytes, 10, 36); // BaseArray.
+    writeCoverage1Test(&bytes, 12, 22);
+    writeCoverage1Test(&bytes, 18, 20);
+
+    const mark_array = 24;
+    writeU16Test(&bytes, mark_array + 0, 1);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 6);
+    writeAnchor1Test(&bytes, mark_array + 6, 10, 15);
+
+    const base_array = 36;
+    writeU16Test(&bytes, base_array + 0, 1);
+    writeU16Test(&bytes, base_array + 2, 4);
+    writeAnchor1Test(&bytes, base_array + 4, 100, 120);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try ensureMarkToBasePositionSubtableWithin(table, 0);
+
+    writeU16Test(&bytes, 8, 0); // Invalid: MarkArray offsets are not nullable.
+    try std.testing.expectError(error.BadGpos, ensureMarkToBasePositionSubtableWithin(table, 0));
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try std.testing.expectError(error.BadGpos, collectMarkToBaseAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16Test(&bytes, 8, 24);
+    writeU16Test(&bytes, 10, 0); // Invalid: BaseArray offsets are not nullable.
+    try std.testing.expectError(error.BadGpos, ensureMarkToBasePositionSubtableWithin(table, 0));
+
+    writeU16Test(&bytes, 10, 36);
+    try collectMarkToBaseAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+}
+
 test "GPOS MarkLigPos rejects null LigatureAttach offsets" {
+    const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 52;
     writeU16Test(&bytes, 0, 1); // MarkLigPos format 1.
     writeU16Test(&bytes, 2, 12); // MarkCoverage.
@@ -3128,6 +3177,21 @@ test "GPOS MarkLigPos rejects null LigatureAttach offsets" {
     writeU16Test(&bytes, ligature_array + 2, 0); // Invalid: LigatureAttach offsets are not nullable.
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    writeU16Test(&bytes, 8, 0); // Invalid: MarkArray offsets are not nullable.
+    try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, collectMarkToLigatureAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+    writeU16Test(&bytes, 8, 24);
+
+    writeU16Test(&bytes, 10, 0); // Invalid: LigatureArray offsets are not nullable.
+    try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, collectMarkToLigatureAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+    writeU16Test(&bytes, 10, 36);
+
     try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
 
     // A real LigatureAttach may still omit individual class anchors with null
@@ -3141,6 +3205,56 @@ test "GPOS MarkLigPos rejects null LigatureAttach offsets" {
     writeU16Test(&bytes, ligature_attach + 2, 4);
     writeAnchor1Test(&bytes, ligature_attach + 4, 100, 120);
     try ensureMarkToLigaturePositionSubtableWithin(table, 0);
+    try collectMarkToLigatureAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+}
+
+test "GPOS MarkMarkPos rejects null required array offsets" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 48;
+    writeU16Test(&bytes, 0, 1); // MarkMarkPos format 1.
+    writeU16Test(&bytes, 2, 12); // Mark1Coverage.
+    writeU16Test(&bytes, 4, 18); // Mark2Coverage.
+    writeU16Test(&bytes, 6, 1); // ClassCount.
+    writeU16Test(&bytes, 8, 24); // Mark1Array.
+    writeU16Test(&bytes, 10, 36); // Mark2Array.
+    writeCoverage1Test(&bytes, 12, 22);
+    writeCoverage1Test(&bytes, 18, 20);
+
+    const mark_1_array = 24;
+    writeU16Test(&bytes, mark_1_array + 0, 1);
+    writeU16Test(&bytes, mark_1_array + 2, 0);
+    writeU16Test(&bytes, mark_1_array + 4, 6);
+    writeAnchor1Test(&bytes, mark_1_array + 6, 10, 15);
+
+    const mark_2_array = 36;
+    writeU16Test(&bytes, mark_2_array + 0, 1);
+    writeU16Test(&bytes, mark_2_array + 2, 4);
+    writeAnchor1Test(&bytes, mark_2_array + 4, 50, 70);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try ensureMarkToMarkPositionSubtableWithin(table, 0);
+
+    writeU16Test(&bytes, 8, 0); // Invalid: Mark1Array offsets are not nullable.
+    try std.testing.expectError(error.BadGpos, ensureMarkToMarkPositionSubtableWithin(table, 0));
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try std.testing.expectError(error.BadGpos, collectMarkToMarkAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16Test(&bytes, 8, 24);
+    writeU16Test(&bytes, 10, 0); // Invalid: Mark2Array offsets are not nullable.
+    try std.testing.expectError(error.BadGpos, ensureMarkToMarkPositionSubtableWithin(table, 0));
+
+    writeU16Test(&bytes, 10, 36);
+    try collectMarkToMarkAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 40), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 55), adjustments.items[0].y_placement);
 }
 
 test "GPOS LangSys required feature bypasses feature overrides" {

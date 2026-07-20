@@ -456,7 +456,7 @@ fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs:
         },
         2 => {
             const value_count = try readU16(table, subtable_offset + 6);
-            const value_size = valueRecordSize(value_format);
+            const value_size = try valueRecordSize(value_format);
             for (glyphs, 0..) |glyph, i| {
                 if (matched[i]) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
@@ -489,7 +489,7 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
         },
         2 => {
             const value_count = try readU16(table, subtable_offset + 6);
-            const value_size = valueRecordSize(value_format);
+            const value_size = try valueRecordSize(value_format);
             for (glyphs, 0..) |glyph, i| {
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph)) |coverage| {
@@ -625,8 +625,8 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
     const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
     const value_format_1 = try readU16(table, subtable_offset + 4);
     const value_format_2 = try readU16(table, subtable_offset + 6);
-    const value_size_1 = valueRecordSize(value_format_1);
-    const value_size_2 = valueRecordSize(value_format_2);
+    const value_size_1 = try valueRecordSize(value_format_1);
+    const value_size_2 = try valueRecordSize(value_format_2);
 
     switch (pos_format) {
         1 => {
@@ -1454,11 +1454,12 @@ fn ensureSinglePositionSubtableWithin(table: Table, subtable_offset: usize) Gpos
     const coverage_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     const value_format = try readU16BadGpos(table, subtable_offset + 4);
+    const value_size = try valueRecordSize(value_format);
     switch (pos_format) {
-        1 => try ensureValueRecordWithin(table, subtable_offset + 6, value_format),
+        1 => try ensureBytesWithin(table, subtable_offset + 6, value_size),
         2 => {
             const value_count = try readU16BadGpos(table, subtable_offset + 6);
-            try ensureBytesWithin(table, subtable_offset + 8, @as(usize, value_count) * valueRecordSize(value_format));
+            try ensureBytesWithin(table, subtable_offset + 8, @as(usize, value_count) * value_size);
         },
         else => return error.UnsupportedGpos,
     }
@@ -1470,8 +1471,8 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
     try ensureCoverageTableWithin(table, coverage_offset);
     const value_format_1 = try readU16BadGpos(table, subtable_offset + 4);
     const value_format_2 = try readU16BadGpos(table, subtable_offset + 6);
-    const value_size_1 = valueRecordSize(value_format_1);
-    const value_size_2 = valueRecordSize(value_format_2);
+    const value_size_1 = try valueRecordSize(value_format_1);
+    const value_size_2 = try valueRecordSize(value_format_2);
 
     switch (pos_format) {
         1 => {
@@ -1861,7 +1862,7 @@ fn checkedMul(a: usize, b: usize) GposError!usize {
 }
 
 fn ensureValueRecordWithin(table: Table, offset: usize, format: u16) GposError!void {
-    try ensureBytesWithin(table, offset, valueRecordSize(format));
+    try ensureBytesWithin(table, offset, try valueRecordSize(format));
 }
 
 fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!void {
@@ -2026,7 +2027,7 @@ fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphI
             const coverage = try coverageIndex(table, coverage_offset, glyph) orelse return false;
             const value_count = try readU16(table, subtable_offset + 6);
             if (coverage >= value_count) return false;
-            const value_size = valueRecordSize(value_format);
+            const value_size = try valueRecordSize(value_format);
             const value = try readValueRecord(table, subtable_offset + 8 + coverage * value_size, value_format);
             try appendAdjustment(adjustments, allocator, target_index, value, false);
             return true;
@@ -2242,7 +2243,12 @@ fn readAnchor(table: Table, anchor_offset: usize) GposError!Anchor {
     };
 }
 
-fn valueRecordSize(format: u16) usize {
+fn valueRecordSize(format: u16) GposError!usize {
+    // OpenType ValueFormat is a 16-bit bitset, but only the low byte is
+    // assigned for pair/single positioning value records. Accepting unknown
+    // high bits would make the parser compute too-small record strides and
+    // reinterpret trailing payload bytes as subsequent PairValue/Class records.
+    if ((format & 0xff00) != 0) return error.BadGpos;
     var size: usize = 0;
     if ((format & 0x0001) != 0) size += 2;
     if ((format & 0x0002) != 0) size += 2;
@@ -2439,6 +2445,17 @@ test "GPOS rejects malformed coverage ordering before positioning" {
 
     try std.testing.expectError(error.BadGpos, collectSingleAdjustment(table, 0, &.{10}, &adjustments, std.testing.allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS rejects reserved ValueFormat bits" {
+    var bytes = [_]u8{0} ** 18;
+    writeU16Test(&bytes, 0, 1); // SinglePos format 1.
+    writeU16Test(&bytes, 2, 8);
+    writeU16Test(&bytes, 4, 0x0100); // Reserved ValueFormat bit.
+    writeCoverage1Test(&bytes, 8, 5);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensureSinglePositionSubtableWithin(table, 0));
 }
 
 test "GPOS class format 1 handles upper glyph boundary" {

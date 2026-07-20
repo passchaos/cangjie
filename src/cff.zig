@@ -556,6 +556,54 @@ test "CFF Type2 flex operators expand to cubic outline segments" {
     }
 }
 
+test "CFF Type2 charstrings require explicit endchar" {
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+
+    var interpreter = testInterpreter(&outline);
+    try interpreter.run(&.{0x0e}); // A complete empty glyph is still valid.
+    try std.testing.expectError(error.BadCff, interpreter.run(&.{}));
+    try std.testing.expectError(error.BadCff, interpreter.run(&.{139})); // Operand stack without an endchar.
+}
+
+test "CFF Type2 subroutines require explicit return or endchar" {
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+
+    const valid_subrs_data = [_]u8{
+        0x00, 0x01, // count
+        0x01, // offSize
+        0x01, 0x02, // one-byte subroutine object
+        0x0b, // return
+    };
+    var valid_interpreter = testInterpreter(&outline);
+    valid_interpreter.cff_data = &valid_subrs_data;
+    valid_interpreter.local_subrs = try readIndex(&valid_subrs_data, 0);
+    try valid_interpreter.run(&.{ 32, 10, 14 }); // -107 selects subr 0 for a one-entry INDEX, then endchar.
+
+    const truncated_subrs_data = [_]u8{
+        0x00, 0x01, // count
+        0x01, // offSize
+        0x01,
+        0x02,
+        139, // pushes 0 and then falls off the end without return/endchar
+    };
+    var truncated_interpreter = testInterpreter(&outline);
+    truncated_interpreter.cff_data = &truncated_subrs_data;
+    truncated_interpreter.local_subrs = try readIndex(&truncated_subrs_data, 0);
+    try std.testing.expectError(error.BadCff, truncated_interpreter.run(&.{ 32, 10, 14 }));
+}
+
 fn testInterpreter(outline: *glyph_mod.GlyphOutline) Type2Interpreter {
     return .{
         .allocator = std.testing.allocator,
@@ -587,13 +635,20 @@ const Type2Interpreter = struct {
 
     fn run(self: *Type2Interpreter, bytes: []const u8) CffError!void {
         self.width = self.default_width_x;
-        try self.runCharString(bytes, 0);
+        if (try self.runCharString(bytes, 0) != .endchar) return error.BadCff;
     }
 
-    fn runCharString(self: *Type2Interpreter, bytes: []const u8, depth: u8) CffError!void {
+    const Type2Termination = enum {
+        endchar,
+        @"return",
+    };
+
+    fn runCharString(self: *Type2Interpreter, bytes: []const u8, depth: u8) CffError!Type2Termination {
         // Type2 charstrings are a compact stack machine. Operators consume the
         // current stack, update the current point, and append path commands.
-        // Subroutines recurse through the same interpreter state.
+        // Subroutines recurse through the same interpreter state. Reaching the
+        // byte stream end without `endchar` or `return` is malformed: otherwise
+        // a truncated charstring can be accepted as a valid empty/silent glyph.
         if (depth > 16) return error.UnsupportedCff;
         var offset: usize = 0;
         while (offset < bytes.len) {
@@ -616,8 +671,8 @@ const Type2Interpreter = struct {
                 6 => try self.hlineto(),
                 7 => try self.vlineto(),
                 8 => try self.rrcurveto(),
-                10 => try self.callSubr(self.local_subrs orelse return error.UnsupportedCff, depth + 1),
-                11 => return,
+                10 => if (try self.callSubr(self.local_subrs orelse return error.UnsupportedCff, depth + 1) == .endchar) return .endchar,
+                11 => return .@"return",
                 19, 20 => try self.readHintMask(bytes, &offset),
                 24 => try self.rcurveline(),
                 25 => try self.rlinecurve(),
@@ -626,16 +681,17 @@ const Type2Interpreter = struct {
                 14 => {
                     if (self.contour_open) try self.close();
                     self.stack_len = 0;
-                    return;
+                    return .endchar;
                 },
                 21 => try self.rmoveto(),
                 22 => try self.hmoveto(),
-                29 => try self.callSubr(self.global_subrs, depth + 1),
+                29 => if (try self.callSubr(self.global_subrs, depth + 1) == .endchar) return .endchar,
                 30 => try self.vhcurveto(),
                 31 => try self.hvcurveto(),
                 else => return error.UnsupportedCff,
             }
         }
+        return error.BadCff;
     }
 
     fn escapedOperator(self: *Type2Interpreter, op: u8) CffError!void {
@@ -668,13 +724,13 @@ const Type2Interpreter = struct {
         return @intFromFloat(self.stack[self.stack_len]);
     }
 
-    fn callSubr(self: *Type2Interpreter, index: Index, depth: u8) CffError!void {
+    fn callSubr(self: *Type2Interpreter, index: Index, depth: u8) CffError!Type2Termination {
         // The operand names a biased subroutine index, not a direct array index.
         const operand = try self.popInt();
         const biased = operand + subrBias(index.count);
         if (biased < 0) return error.InvalidGlyph;
         const subr = try index.object(self.cff_data, @intCast(biased));
-        try self.runCharString(subr, depth);
+        return try self.runCharString(subr, depth);
     }
 
     fn takeWidth(self: *Type2Interpreter, expected_without_width: usize) void {

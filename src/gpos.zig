@@ -332,7 +332,7 @@ fn extensionPositionSubtablePayload(table: Table, subtable_offset: usize, expect
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
     if (extension_lookup_type != expected_lookup_type) return error.UnsupportedGpos;
-    return subtable_offset + try readU32(table, subtable_offset + 4);
+    return checkedPositionOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 }
 
 fn collectExtensionSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -385,7 +385,7 @@ fn collectExtensionAdjustmentLookup(table: Table, lookup_offset: usize, subtable
         if (pos_format != 1) return error.UnsupportedGpos;
         const extension_lookup_type = try readU16(table, subtable_offset + 2);
         if (extension_lookup_type == 9) return error.UnsupportedGpos;
-        const extension_subtable = subtable_offset + try readU32(table, subtable_offset + 4);
+        const extension_subtable = try checkedPositionOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 
         switch (extension_lookup_type) {
             1 => try collectSingleAdjustmentSubtable(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, single_matched),
@@ -589,8 +589,7 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
     if (pos_format != 1) return error.UnsupportedGpos;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_offset = try readU32(table, subtable_offset + 4);
-    const extension_subtable = subtable_offset + extension_offset;
+    const extension_subtable = try checkedPositionOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
     // The extension wrapper extends addressing only; LookupFlag still belongs
     // to the outer lookup and must filter glyph classes in the delegated body.
     switch (extension_lookup_type) {
@@ -2167,8 +2166,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
     if (pos_format != 1) return error.UnsupportedGpos;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_offset = try readU32(table, subtable_offset + 4);
-    const extension_subtable = subtable_offset + extension_offset;
+    const extension_subtable = try checkedPositionOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 
     // PosLookupRecord names one glyph in an already-matched input sequence.
     // ExtensionPos only widens the subtable address, so keep using the
@@ -2597,6 +2595,24 @@ fn validateClassDefFormat2Ranges(table: Table, class_def_offset: usize, range_co
         }
         previous_end = end;
     }
+}
+
+test "GPOS rejects ExtensionPos payload offsets outside the table during shaping" {
+    var bytes = [_]u8{0} ** 8;
+    writeU16Test(&bytes, 0, 1); // ExtensionPos format 1.
+    writeU16Test(&bytes, 2, 1); // Wrapped SinglePos.
+    writeU32Test(&bytes, 4, 0xffff_fffe); // Far beyond this table.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+
+    // This calls the shaping collectors directly, bypassing load-time preflight,
+    // so malformed ExtensionPos addresses must be checked at the point where
+    // the wrapper is followed rather than leaking as EndOfStream/traps.
+    try std.testing.expectError(error.BadGpos, extensionPositionSubtablePayload(table, 0, 1));
+    try std.testing.expectError(error.BadGpos, collectExtensionAdjustment(table, 0, &.{5}, &adjustments, std.testing.allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 test "GPOS validates AnchorFormat3 device offsets" {

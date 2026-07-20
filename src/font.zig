@@ -2263,6 +2263,7 @@ fn validateVerticalMetricHeader(data: []const u8, vhea: TableRecord) FontError!v
     try requireTableLength(vhea, 36);
     const version = try bin.readU32At(data, vhea.offset);
     if (version != 0x00010000 and version != 0x00011000) return error.InvalidMetrics;
+    try validateMetricHeaderLineMetrics(data, vhea);
     try validateMetricHeaderReservedFields(data, vhea);
 }
 
@@ -2270,7 +2271,20 @@ fn validateMetricHeader(data: []const u8, header: TableRecord, expected_version:
     try requireTableLength(header, 36);
     const version = try bin.readU32At(data, header.offset);
     if (version != expected_version) return error.InvalidMetrics;
+    try validateMetricHeaderLineMetrics(data, header);
     try validateMetricHeaderReservedFields(data, header);
+}
+
+fn validateMetricHeaderLineMetrics(data: []const u8, header: TableRecord) FontError!void {
+    const ascender = try bin.readI16At(data, header.offset + 4);
+    const descender = try bin.readI16At(data, header.offset + 6);
+    const line_gap = try bin.readI16At(data, header.offset + 8);
+    // hhea/vhea line metrics form the public line advance used by layout:
+    // ascender - descender + lineGap. A negative value is nonsensical and an
+    // exactly zero value leaves text engines without a usable default advance.
+    // Validate the widened sum before exposing or caching table metrics so
+    // malformed headers cannot produce collapsed line boxes.
+    if (@as(i32, ascender) - @as(i32, descender) + @as(i32, line_gap) <= 0) return error.InvalidMetrics;
 }
 
 fn validateMetricHeaderReservedFields(data: []const u8, header: TableRecord) FontError!void {
@@ -10361,6 +10375,33 @@ test "core metrics and loca stay inside declared table lengths" {
     }
 }
 
+test "metric headers require positive line advance" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const hhea_offset: usize = @intCast(try sfntTableOffset(bytes, "hhea"));
+        writeI16Test(bytes, hhea_offset + 4, 100);
+        writeI16Test(bytes, hhea_offset + 6, 200);
+        writeI16Test(bytes, hhea_offset + 8, 100); // ascender - descender + lineGap == 0.
+
+        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+        defer allocator.free(bytes);
+        const vhea_offset: usize = @intCast(try sfntTableOffset(bytes, "vhea"));
+        writeI16Test(bytes, vhea_offset + 4, -50);
+        writeI16Test(bytes, vhea_offset + 6, 50);
+        writeI16Test(bytes, vhea_offset + 8, 0);
+
+        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+    }
+}
+
 test "horizontal metrics revalidate borrowed hhea bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -10379,6 +10420,14 @@ test "horizontal metrics revalidate borrowed hhea bytes" {
     try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
 
     writeU16Test(bytes, hhea_offset + 24, 0);
+    writeI16Test(bytes, hhea_offset + 4, 100);
+    writeI16Test(bytes, hhea_offset + 6, 200);
+    writeI16Test(bytes, hhea_offset + 8, 100);
+    try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
+
+    writeI16Test(bytes, hhea_offset + 4, 800);
+    writeI16Test(bytes, hhea_offset + 6, -200);
+    writeI16Test(bytes, hhea_offset + 8, 0);
     writeU16Test(bytes, hhea_offset + 34, 1);
     try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
 }
@@ -10459,6 +10508,14 @@ test "vertical metrics API revalidates borrowed vhea and vmtx bytes" {
     try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
 
     writeU16Test(bytes, vhea_offset + 24, 0);
+    writeI16Test(bytes, vhea_offset + 4, 100);
+    writeI16Test(bytes, vhea_offset + 6, 200);
+    writeI16Test(bytes, vhea_offset + 8, 100);
+    try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
+
+    writeI16Test(bytes, vhea_offset + 4, 800);
+    writeI16Test(bytes, vhea_offset + 6, -200);
+    writeI16Test(bytes, vhea_offset + 8, 0);
     writeU16Test(bytes, vhea_offset + 34, 2); // The borrowed vmtx table has only one full metric.
     try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
 }

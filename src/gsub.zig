@@ -1489,6 +1489,10 @@ fn ensureSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) 
         },
         2 => {
             const glyph_count = try readU16BadGsub(table, subtable_offset + 4);
+            // Format 2 Coverage indexes address the substitute glyph array
+            // directly. Reject uncovered array slots at validation time instead
+            // of letting shaping silently skip malformed covered glyphs.
+            try ensureCoverageIndicesWithin(table, coverage_offset, glyph_count);
             try ensureBytesWithin(table, subtable_offset + 6, @as(usize, glyph_count) * 2);
             for (0..glyph_count) |glyph_i| {
                 try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, subtable_offset + 6 + glyph_i * 2));
@@ -1504,6 +1508,10 @@ fn ensureMultipleSubstitutionSubtableWithin(table: Table, subtable_offset: usize
     const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     const sequence_count = try readU16BadGsub(table, subtable_offset + 4);
+    // Coverage indexes select Sequence offsets one-for-one. A dangling
+    // coverage entry would otherwise make a declared substitution disappear
+    // for only the affected glyph.
+    try ensureCoverageIndicesWithin(table, coverage_offset, sequence_count);
     const sequence_offsets_pos = subtable_offset + 6;
     try ensureBytesWithin(table, sequence_offsets_pos, @as(usize, sequence_count) * 2);
     for (0..sequence_count) |sequence_i| {
@@ -1522,6 +1530,9 @@ fn ensureAlternateSubstitutionSubtableWithin(table: Table, subtable_offset: usiz
     const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     const alternate_set_count = try readU16BadGsub(table, subtable_offset + 4);
+    // AlternateSet offsets share the same coverage-index topology as
+    // MultipleSubst sequences; every covered glyph needs an addressable set.
+    try ensureCoverageIndicesWithin(table, coverage_offset, alternate_set_count);
     const alternate_set_offsets_pos = subtable_offset + 6;
     try ensureBytesWithin(table, alternate_set_offsets_pos, @as(usize, alternate_set_count) * 2);
     for (0..alternate_set_count) |alternate_set_i| {
@@ -1540,6 +1551,9 @@ fn ensureLigatureSubstitutionSubtableWithin(table: Table, subtable_offset: usize
     const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     const lig_set_count = try readU16BadGsub(table, subtable_offset + 4);
+    // LigatureSet offsets are selected by coverage index. Reject dangling
+    // indexes up front so covered first components cannot be silently ignored.
+    try ensureCoverageIndicesWithin(table, coverage_offset, lig_set_count);
     const lig_set_offsets_pos = subtable_offset + 6;
     try ensureBytesWithin(table, lig_set_offsets_pos, @as(usize, lig_set_count) * 2);
     for (0..lig_set_count) |set_i| {
@@ -2493,6 +2507,68 @@ test "GSUB glyph ids are validated against maxp glyph count" {
         writeCoverage1(&bytes, subtable + 12, 1);
 
         try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
+}
+
+test "GSUB validates coverage indexes against substitution arrays" {
+    {
+        var bytes = [_]u8{0} ** 44;
+        const subtable = writeSingleLookupGsubTest(&bytes, 1);
+        writeU16Test(&bytes, subtable + 0, 2); // SingleSubst format 2.
+        writeU16Test(&bytes, subtable + 2, 10);
+        writeU16Test(&bytes, subtable + 4, 1); // One substitute for two covered glyphs.
+        writeU16Test(&bytes, subtable + 6, 2);
+        writeCoverage1List(&bytes, subtable + 10, &.{ 1, 2 });
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 46;
+        const subtable = writeSingleLookupGsubTest(&bytes, 2);
+        writeU16Test(&bytes, subtable + 0, 1);
+        writeU16Test(&bytes, subtable + 2, 12);
+        writeU16Test(&bytes, subtable + 4, 1); // One Sequence offset for two covered glyphs.
+        writeU16Test(&bytes, subtable + 6, 8);
+        const sequence = subtable + 8;
+        writeU16Test(&bytes, sequence + 0, 1);
+        writeU16Test(&bytes, sequence + 2, 2);
+        writeCoverage1List(&bytes, subtable + 12, &.{ 1, 2 });
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 46;
+        const subtable = writeSingleLookupGsubTest(&bytes, 3);
+        writeU16Test(&bytes, subtable + 0, 1);
+        writeU16Test(&bytes, subtable + 2, 12);
+        writeU16Test(&bytes, subtable + 4, 1); // One AlternateSet offset for two covered glyphs.
+        writeU16Test(&bytes, subtable + 6, 8);
+        const alternate_set = subtable + 8;
+        writeU16Test(&bytes, alternate_set + 0, 1);
+        writeU16Test(&bytes, alternate_set + 2, 2);
+        writeCoverage1List(&bytes, subtable + 12, &.{ 1, 2 });
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 50;
+        const subtable = writeSingleLookupGsubTest(&bytes, 4);
+        writeU16Test(&bytes, subtable + 0, 1);
+        writeU16Test(&bytes, subtable + 2, 16);
+        writeU16Test(&bytes, subtable + 4, 1); // One LigatureSet offset for two covered first glyphs.
+        writeU16Test(&bytes, subtable + 6, 8);
+        const lig_set = subtable + 8;
+        writeU16Test(&bytes, lig_set + 0, 1);
+        writeU16Test(&bytes, lig_set + 2, 4);
+        const ligature = lig_set + 4;
+        writeU16Test(&bytes, ligature + 0, 2);
+        writeU16Test(&bytes, ligature + 2, 1);
+        writeCoverage1List(&bytes, subtable + 16, &.{ 1, 2 });
+
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
     }
 }
 

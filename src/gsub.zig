@@ -2361,15 +2361,23 @@ fn validateCoverageFormat1Order(table: Table, coverage_offset: usize, glyph_coun
 
 fn validateCoverageFormat2Ranges(table: Table, coverage_offset: usize, range_count: u16) GsubError!void {
     var previous_end: ?GlyphId = null;
+    var expected_start_index: usize = 0;
     for (0..range_count) |index| {
         const range_offset = coverage_offset + 4 + index * 6;
         const start = try readU16BadGsub(table, range_offset);
         const end = try readU16BadGsub(table, range_offset + 2);
+        const start_index = try readU16BadGsub(table, range_offset + 4);
         if (end < start) return error.BadGsub;
         if (previous_end) |last_end| {
             if (start <= last_end) return error.BadGsub;
         }
+        // StartCoverageIndex is not advisory: it is the dense coverage index of
+        // StartGlyphID after all previous ranges. Validating it here prevents
+        // malformed coverage tables from indexing past per-coverage payload
+        // arrays while still satisfying sorted/disjoint glyph-range checks.
+        if (expected_start_index > std.math.maxInt(u16) or start_index != expected_start_index) return error.BadGsub;
         previous_end = end;
+        expected_start_index += @as(usize, end) - @as(usize, start) + 1;
     }
 }
 
@@ -2465,17 +2473,33 @@ test "GSUB rejects ExtensionSubst payload offsets outside the table during shapi
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 }
 
-test "GSUB coverage format 2 widens boundary coverage indexes" {
-    var bytes = [_]u8{0} ** 16;
+test "GSUB coverage format 2 handles full glyph-space index boundary" {
+    var bytes = [_]u8{0} ** 10;
     writeU16Test(&bytes, 0, 2);
     writeU16Test(&bytes, 2, 1);
-    writeU16Test(&bytes, 4, 0xfffe);
+    writeU16Test(&bytes, 4, 0);
     writeU16Test(&bytes, 6, 0xffff);
-    writeU16Test(&bytes, 8, 0xffff);
+    writeU16Test(&bytes, 8, 0);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(?usize, 0xffff), try coverageIndex(table, 0, 0xfffe));
-    try std.testing.expectEqual(@as(?usize, 0x10000), try coverageIndex(table, 0, 0xffff));
+    try std.testing.expectEqual(@as(?usize, 0xfffe), try coverageIndex(table, 0, 0xfffe));
+    try std.testing.expectEqual(@as(?usize, 0xffff), try coverageIndex(table, 0, 0xffff));
+}
+
+test "GSUB coverage format 2 rejects inconsistent start coverage indexes" {
+    var bytes = [_]u8{0} ** 16;
+    writeU16Test(&bytes, 0, 2);
+    writeU16Test(&bytes, 2, 2);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 1);
+    writeU16Test(&bytes, 8, 0);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 3);
+    writeU16Test(&bytes, 14, 2); // Must be 1: indexes are dense over preceding ranges.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureCoverageTableWithin(table, 0));
+    try std.testing.expectError(error.BadGsub, coverageIndex(table, 0, 3));
 }
 
 test "GSUB rejects malformed coverage ordering before substitution" {

@@ -947,6 +947,8 @@ pub const Font = struct {
         // and name-reference validation before exposing axis metadata so
         // post-parse mutations cannot leave UI axis labels dangling or reorder
         // axes away from fvar while the cached table record still looks valid.
+        try validateSfntTableChecksum(self.data, stat);
+        if (self.fvar) |fvar| try validateSfntTableChecksum(self.data, fvar);
         try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
         const info = try readStatInfo(self.data, stat);
 
@@ -14706,9 +14708,31 @@ test "STAT design axes public API revalidates borrowed metadata" {
         var font = try Font.parse(allocator, bytes);
         defer font.deinit();
 
-        const stat_offset: usize = @intCast(try sfntTableOffset(bytes, "STAT"));
-        writeU16Test(bytes, stat_offset + 24, 400); // First axis nameID no longer resolves through name.
+        const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+        // Leave STAT itself unchanged so this block isolates the cross-table
+        // name-reference contract. Axis name id 256 is the sixth synthetic
+        // name record shared with the variable-font fixture.
+        writeU16Test(bytes, name_offset + 6 + 5 * 12 + 6, 400);
         try std.testing.expectError(error.InvalidName, font.statDesignAxes(allocator));
+    }
+
+    {
+        const bytes = try test_font.buildVariableStatTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const axes = try font.statDesignAxes(allocator);
+        defer allocator.free(axes);
+        try std.testing.expectEqual(@as(u16, 0), axes[0].ordering);
+
+        const stat_offset: usize = @intCast(try sfntTableOffset(bytes, "STAT"));
+        // Keep STAT structurally valid while changing a user-facing ordering
+        // value after parse. The lazy API must reject it because the borrowed
+        // STAT table no longer matches the SFNT checksum.
+        writeU16Test(bytes, stat_offset + 26, 2);
+        try std.testing.expectError(error.BadSfnt, font.statDesignAxes(allocator));
     }
 
     {

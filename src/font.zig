@@ -1162,6 +1162,7 @@ pub const Font = struct {
         var best_distance: f32 = std.math.inf(f32);
 
         if (self.sbix) |sbix| {
+            try validateSfntTableChecksum(self.data, sbix);
             // Bitmap tables are borrowed from the caller-owned font bytes.
             // Re-run the full parse-time sbix contract at the public API
             // boundary so post-parse byte mutations cannot hide a corrupt
@@ -1176,11 +1177,14 @@ pub const Font = struct {
 
         if (self.cblc != null and self.cbdt != null) {
             const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try validateSfntTableChecksum(self.data, cblc);
+            try validateSfntTableChecksum(self.data, cbdt);
             // CBLC strike metadata is meaningful only with the CBDT payloads it
             // indexes. Revalidating both tables here keeps this metadata-only
             // query from returning a ppem for a borrowed bitmap table whose
             // referenced image bytes no longer satisfy the parser invariants.
-            try validateCblcCbdtTables(self.data, cblc, self.cbdt.?, self.glyph_count);
+            try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
             const strike_count = try cblcStrikeCount(self.data, cblc);
             for (0..strike_count) |strike_index| {
                 const strike = try cblcStrike(self.data, cblc, self.glyph_count, strike_index);
@@ -1196,6 +1200,7 @@ pub const Font = struct {
         try validateBitmapRequestSize(size_px);
 
         if (self.sbix) |sbix| {
+            try validateSfntTableChecksum(self.data, sbix);
             try validateSbixTable(self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             var best: ?BitmapGlyphPng = null;
@@ -1215,8 +1220,12 @@ pub const Font = struct {
         }
 
         if (self.cblc != null and self.cbdt != null) {
-            try validateCblcCbdtTables(self.data, self.cblc.?, self.cbdt.?, self.glyph_count);
-            return try cblcGlyphPng(self.data, self.cblc.?, self.cbdt.?, self.glyph_count, glyph_id, size_px);
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try validateSfntTableChecksum(self.data, cblc);
+            try validateSfntTableChecksum(self.data, cbdt);
+            try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
+            return try cblcGlyphPng(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px);
         }
         return null;
     }
@@ -9566,6 +9575,28 @@ test "sbix public bitmap APIs revalidate borrowed strike offsets" {
     try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(0, 16));
 }
 
+test "sbix public bitmap APIs revalidate borrowed table checksum" {
+    var bytes: [40]u8 = .{0} ** 40;
+    writeU16Test(&bytes, 0, 1); // sbix version.
+    writeU32Test(&bytes, 4, 1); // one strike.
+    writeU32Test(&bytes, 8, 12);
+    writeU16Test(&bytes, 12, 16); // ppem.
+    writeU16Test(&bytes, 14, 72); // ppi.
+    writeU32Test(&bytes, 16, 16);
+    writeU32Test(&bytes, 20, 16);
+    writeU32Test(&bytes, 24, 16);
+
+    const font = sbixOnlyFont(&bytes);
+    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
+
+    // Keep strike offsets and glyph payloads valid while changing strike
+    // metadata after construction. Lazy bitmap APIs must reject the borrowed
+    // sbix table because its SFNT checksum no longer matches.
+    writeU16Test(&bytes, 12, 17);
+    try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
+    try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(0, 16));
+}
+
 test "public bitmap APIs reject non-finite and non-positive request sizes" {
     var bytes: [40]u8 = .{0} ** 40;
     writeU16Test(&bytes, 0, 1); // sbix version
@@ -15990,6 +16021,8 @@ fn sbixOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    const sbix_record: TableRecord = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = data.len };
+    const sbix_checksum = checksumSfntTable(data, sbix_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -16019,7 +16052,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .colr = null,
         .cpal = null,
         .svg = null,
-        .sbix = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = data.len },
+        .sbix = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = sbix_checksum, .offset = 0, .length = data.len },
         .cblc = null,
         .cbdt = null,
         .glyf = null,

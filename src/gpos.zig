@@ -258,6 +258,7 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
         // SubTable offset array. The high byte remains reserved for the older
         // MarkAttachmentType mechanism when bit 4 is clear.
         lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
+        try validateMarkFilteringSetIndex(lookup_options);
     }
     if (lookup_type == 1) {
         try collectSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
@@ -558,6 +559,16 @@ fn glyphInMarkFilteringSet(glyphs: []const GlyphId, glyph: GlyphId) bool {
         if (candidate == glyph) return true;
     }
     return false;
+}
+
+fn validateMarkFilteringSetIndex(options: LookupOptions) GposError!void {
+    const mark_filtering_set_index = options.active_mark_filtering_set orelse return;
+    const mark_sets = options.mark_filtering_sets orelse return;
+    // A lookup that names a non-existent GDEF MarkGlyphSetsDef entry is
+    // malformed. Silently falling back to glyph-class metadata makes
+    // positioning depend on missing state instead of the font's declared lookup
+    // flag contract.
+    if (mark_filtering_set_index >= mark_sets.len) return error.BadGpos;
 }
 
 fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GposError!void {
@@ -1298,6 +1309,7 @@ fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset
 
 fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     try ensurePositionRecordsWithin(table, records_pos, record_count, input_indices.len);
+    try ensurePositionRecordMarkFilteringSetsValid(table, records_pos, record_count, options);
 
     // Context positioning records name a glyph in the matched input sequence
     // and a lookup-list index. Nested lookups own their own LookupFlag, so a
@@ -1354,6 +1366,23 @@ fn ensurePositionRecordReferencesWithinDepth(table: Table, records_pos: usize, r
         const lookup_type = try readU16BadGpos(table, lookup_offset);
         const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
         try ensurePositionLookupSubtablesWithinDepth(table, lookup_offset, lookup_type, subtable_count, depth + 1);
+    }
+}
+
+fn ensurePositionRecordMarkFilteringSetsValid(table: Table, records_pos: usize, record_count: usize, options: LookupOptions) GposError!void {
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    for (0..record_count) |record_i| {
+        const record_offset = records_pos + record_i * 4;
+        const lookup_index = try readU16BadGpos(table, record_offset + 2);
+        const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_offset_pos));
+        const lookup_flag = try readU16BadGpos(table, lookup_offset + 2);
+        if ((lookup_flag & 0x0010) == 0) continue;
+        const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
+        try validateMarkFilteringSetIndex(.{
+            .mark_filtering_sets = options.mark_filtering_sets,
+            .active_mark_filtering_set = try readU16BadGpos(table, lookup_offset + 6 + @as(usize, subtable_count) * 2),
+        });
     }
 }
 
@@ -2319,6 +2348,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
     var lookup_options = options;
     if ((lookup_flag & 0x0010) != 0) {
         lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
+        try validateMarkFilteringSetIndex(lookup_options);
     }
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
@@ -3972,6 +4002,37 @@ test "GPOS lookup flags honor GDEF mark filtering sets" {
     try std.testing.expectEqual(@as(i16, 33), adjustments.items[0].x_placement);
 }
 
+test "GPOS rejects missing GDEF mark filtering set indexes during shaping" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 24;
+
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0x0010); // UseMarkFilteringSet.
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 1); // Invalid: only set 0 is supplied below.
+
+    const single = 10;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 8);
+    writeU16Test(&bytes, single + 4, 0x0001);
+    writeI16Test(&bytes, single + 6, 33);
+    writeCoverage1Test(&bytes, single + 8, 5);
+
+    const glyphs = [_]GlyphId{5};
+    const mark_sets = [_][]const GlyphId{&.{5}};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    // The MarkFilteringSet field is a direct index into GDEF MarkGlyphSetsDef.
+    // Once those sets are available, accepting an out-of-range index would
+    // turn malformed positioning into a silent no-op or a glyph-class fallback.
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .mark_filtering_sets = &mark_sets,
+    }));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
 test "GPOS lookup flags combine mark filtering set and attachment type" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 28;
@@ -4146,6 +4207,65 @@ test "GPOS contextual lookup preflight rejects later truncated lookup atomically
     defer adjustments.deinit(allocator);
 
     try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS contextual lookup preflight rejects missing nested mark filtering sets atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 128;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 18); // Lookup 0: ContextPos.
+    writeU16Test(&bytes, 14, 60); // Lookup 1: valid SinglePos.
+    writeU16Test(&bytes, 16, 84); // Lookup 2: SinglePos with a bad MarkFilteringSet index.
+
+    const context_lookup = 28;
+    writeU16Test(&bytes, context_lookup + 0, 7);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 24);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 2);
+    writeCoverage1Test(&bytes, context + 24, 1);
+
+    writeSinglePositionLookup(&bytes, 70, 1, 0, 45);
+
+    const bad_lookup = 94;
+    writeU16Test(&bytes, bad_lookup + 0, 1);
+    writeU16Test(&bytes, bad_lookup + 2, 0x0010); // UseMarkFilteringSet.
+    writeU16Test(&bytes, bad_lookup + 4, 1);
+    writeU16Test(&bytes, bad_lookup + 6, 10);
+    writeU16Test(&bytes, bad_lookup + 8, 1); // Invalid: only set 0 is supplied below.
+    const single = bad_lookup + 10;
+    writeU16Test(&bytes, single + 0, 1);
+    writeU16Test(&bytes, single + 2, 8);
+    writeU16Test(&bytes, single + 4, 0x0001);
+    writeI16Test(&bytes, single + 6, 33);
+    writeCoverage1Test(&bytes, single + 8, 1);
+
+    const glyphs = [_]GlyphId{1};
+    const mark_sets = [_][]const GlyphId{&.{1}};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, &adjustments, allocator, .{
+        .mark_filtering_sets = &mark_sets,
+    }));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 

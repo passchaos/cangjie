@@ -775,6 +775,7 @@ pub const Font = struct {
     pub fn glyphName(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const post = self.post orelse return null;
+        try validateSfntTableChecksum(self.data, post);
         try validatePostTable(self.data, post, self.glyph_count);
         return try readPostGlyphName(self.data, post, glyph_id);
     }
@@ -12096,6 +12097,34 @@ test "post glyph names are exposed and revalidated from borrowed bytes" {
     // `post` custom names are borrowed from the original SFNT buffer. A caller
     // mutating that buffer after Font.parse must not make the public API return
     // a name that the parser would reject if it saw the bytes now.
+    try std.testing.expectError(error.BadSfnt, font.glyphName(1));
+}
+
+test "post glyph names revalidate borrowed table checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var post: [44]u8 = .{0} ** 44;
+    writePostHeaderTest(&post, 0x00020000);
+    writeU16Test(&post, 32, 2);
+    writeU16Test(&post, 34, 0);
+    writeU16Test(&post, 36, 258);
+    post[38] = 5;
+    @memcpy(post[39..44], "A.alt");
+
+    const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqualStrings("A.alt", (try font.glyphName(1)).?);
+
+    const post_offset = try sfntTableOffset(bytes, "post");
+    // Keep the Pascal string grammar valid while changing the borrowed custom
+    // name after parse. The lazy public API must reject the table because its
+    // SFNT checksum no longer matches the parsed font map.
+    bytes[post_offset + 39] = 'B';
     try std.testing.expectError(error.BadSfnt, font.glyphName(1));
 }
 

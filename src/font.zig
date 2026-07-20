@@ -846,6 +846,7 @@ pub const Font = struct {
         // this public API boundary so post-parse mutations cannot expose axis
         // records whose reserved flags, duplicate tags, or instance payloads
         // would have been rejected during Font.parse.
+        try validateSfntTableChecksum(self.data, fvar);
         try validateFvarTable(self.data, fvar);
         if (self.name) |name| {
             // Axis and instance name IDs are user-facing metadata, not opaque
@@ -14456,9 +14457,34 @@ test "fvar public axes API revalidates borrowed axis name references" {
     try std.testing.expectEqual(@as(usize, 2), axes.len);
     try std.testing.expectEqual(@as(u16, 256), axes[0].name_id);
 
-    const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
-    writeU16Test(bytes, fvar_offset + 34, 400);
+    const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+    // Leave fvar itself unchanged so this test isolates the cross-table name
+    // reference contract. Axis name id 256 is the sixth synthetic name record.
+    writeU16Test(bytes, name_offset + 6 + 5 * 12 + 6, 400);
     try std.testing.expectError(error.InvalidName, font.variationAxes(allocator));
+}
+
+test "fvar public axes API revalidates borrowed table checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariableTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const axes = try font.variationAxes(allocator);
+    defer allocator.free(axes);
+    try std.testing.expectEqual(@as(usize, 2), axes.len);
+    try std.testing.expectEqual(@as(f32, 100.0), axes[0].min_value);
+
+    const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
+    // Keep the axis range ordered and name references valid while changing
+    // user-visible variation metadata after parse. The lazy API must reject the
+    // borrowed fvar table because its SFNT checksum no longer matches.
+    writeF16Dot16Test(bytes, fvar_offset + 20, 200.0);
+    try std.testing.expectError(error.BadSfnt, font.variationAxes(allocator));
 }
 
 test "fvar public axes API revalidates all table metadata" {
@@ -15823,6 +15849,8 @@ fn fvarOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    const fvar_record: TableRecord = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len };
+    const fvar_checksum = checksumSfntTable(data, fvar_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -15847,7 +15875,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .name = null,
         .post = null,
         .stat = null,
-        .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len },
+        .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = data.len },
         .avar = null,
         .colr = null,
         .cpal = null,
@@ -15872,7 +15900,9 @@ fn avarOnlyFont(data: []const u8) Font {
 
 fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
     var font = fvarOnlyFont(data);
-    font.fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = fvar_length };
+    const fvar_record: TableRecord = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = fvar_length };
+    const fvar_checksum = checksumSfntTable(data, fvar_record) catch 0;
+    font.fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = fvar_length };
     font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = fvar_length, .length = data.len - fvar_length };
     return font;
 }

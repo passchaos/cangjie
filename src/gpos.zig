@@ -1730,7 +1730,13 @@ fn ensurePositionRuleSetWithin(table: Table, rule_set_offset: usize, depth: usiz
     const rule_offsets_pos = rule_set_offset + 2;
     try ensureBytesWithin(table, rule_offsets_pos, @as(usize, rule_count) * 2);
     for (0..rule_count) |rule_i| {
-        const rule_offset = try checkedPositionOffset(table, rule_set_offset, try readU16BadGpos(table, rule_offsets_pos + rule_i * 2));
+        const rule_relative = try readU16BadGpos(table, rule_offsets_pos + rule_i * 2);
+        // PosRule and PosClassRule offsets are mandatory child pointers once
+        // their parent RuleSet exists. A zero value aliases the RuleSet header
+        // as a rule, so record counts and nested lookup references would be
+        // derived from unrelated metadata instead of declared rule payload.
+        if (rule_relative == 0) return error.BadGpos;
+        const rule_offset = try checkedPositionOffset(table, rule_set_offset, rule_relative);
         try ensurePositionRuleWithin(table, rule_offset, depth);
     }
 }
@@ -1796,7 +1802,12 @@ fn ensureChainingPositionRuleSetWithin(table: Table, rule_set_offset: usize, dep
     const rule_offsets_pos = rule_set_offset + 2;
     try ensureBytesWithin(table, rule_offsets_pos, @as(usize, rule_count) * 2);
     for (0..rule_count) |rule_i| {
-        const rule_offset = try checkedPositionOffset(table, rule_set_offset, try readU16BadGpos(table, rule_offsets_pos + rule_i * 2));
+        const rule_relative = try readU16BadGpos(table, rule_offsets_pos + rule_i * 2);
+        // ChainPosRule and ChainPosClassRule offsets are required children of
+        // a non-null ChainPosRuleSet. Do not allow zero to reinterpret the
+        // set's ruleCount/offset array as backtrack/input/lookahead counts.
+        if (rule_relative == 0) return error.BadGpos;
+        const rule_offset = try checkedPositionOffset(table, rule_set_offset, rule_relative);
         try ensureChainingPositionRuleWithin(table, rule_offset, depth);
     }
 }
@@ -2829,6 +2840,50 @@ test "GPOS rejects malformed ClassDef format 2 ranges" {
 
     writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
     try std.testing.expectError(error.BadGpos, classValue(table, 0, 18));
+}
+
+test "GPOS ContextPos rejects null required rule offsets" {
+    var bytes = [_]u8{0} ** 36;
+    writeU16Test(&bytes, 8, 12); // LookupList offset for record preflight.
+    writeU16Test(&bytes, 12, 0); // Empty LookupList; the repaired rule has no records.
+
+    const rule_set = 20;
+    writeU16Test(&bytes, rule_set + 0, 1); // One PosRule offset follows.
+    writeU16Test(&bytes, rule_set + 2, 0); // Invalid: PosRule offsets are not nullable.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePositionRuleSetWithin(table, rule_set, 0));
+
+    // A real rule may still be empty of positioning records; only the child
+    // pointer itself must be non-null so the parser reads an actual PosRule.
+    const rule = rule_set + 4;
+    writeU16Test(&bytes, rule_set + 2, 4);
+    writeU16Test(&bytes, rule + 0, 1); // GlyphCount includes the first covered glyph.
+    writeU16Test(&bytes, rule + 2, 0); // PosCount.
+    try ensurePositionRuleSetWithin(table, rule_set, 0);
+}
+
+test "GPOS ChainingContextPos rejects null required rule offsets" {
+    var bytes = [_]u8{0} ** 40;
+    writeU16Test(&bytes, 8, 12); // LookupList offset for record preflight.
+    writeU16Test(&bytes, 12, 0); // Empty LookupList; the repaired rule has no records.
+
+    const rule_set = 20;
+    writeU16Test(&bytes, rule_set + 0, 1); // One ChainPosRule offset follows.
+    writeU16Test(&bytes, rule_set + 2, 0); // Invalid: ChainPosRule offsets are not nullable.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensureChainingPositionRuleSetWithin(table, rule_set, 0));
+
+    // Minimal valid ChainPosRule: no backtrack, one input glyph (the covered
+    // glyph), no lookahead, and no positioning records.
+    const rule = rule_set + 4;
+    writeU16Test(&bytes, rule_set + 2, 4);
+    writeU16Test(&bytes, rule + 0, 0); // BacktrackGlyphCount.
+    writeU16Test(&bytes, rule + 2, 1); // InputGlyphCount.
+    writeU16Test(&bytes, rule + 4, 0); // LookaheadGlyphCount.
+    writeU16Test(&bytes, rule + 6, 0); // PosCount.
+    try ensureChainingPositionRuleSetWithin(table, rule_set, 0);
 }
 
 test "GPOS anchors validate format-specific record sizes" {

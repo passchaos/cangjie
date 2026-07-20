@@ -972,6 +972,7 @@ pub const Font = struct {
     pub fn colorLayers(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError![]ColorLayer {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const colr = self.colr orelse return try allocator.alloc(ColorLayer, 0);
+        try validateSfntTableChecksum(self.data, colr);
         if (colr.length < 14) return error.BadSfnt;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 0) return try allocator.alloc(ColorLayer, 0);
@@ -1046,6 +1047,7 @@ pub const Font = struct {
     pub fn colorPaint(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorPaint {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const colr = self.colr orelse return null;
+        try validateSfntTableChecksum(self.data, colr);
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 1) return null;
@@ -1098,6 +1100,7 @@ pub const Font = struct {
 
     pub fn colorPaintLayer(self: *const Font, layer_index: u32) FontError!?ColorPaint {
         const colr = self.colr orelse return null;
+        try validateSfntTableChecksum(self.data, colr);
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 1) return null;
@@ -14006,6 +14009,50 @@ test "COLR public APIs revalidate borrowed glyph references" {
     try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaintLayer(0));
 }
 
+test "COLR public APIs revalidate borrowed table checksum" {
+    const allocator = std.testing.allocator;
+
+    var colr_v0_with_cpal: [42]u8 = .{0} ** 42;
+    writeU16Test(&colr_v0_with_cpal, 0, 0); // COLR version 0.
+    writeU16Test(&colr_v0_with_cpal, 2, 1);
+    writeU32Test(&colr_v0_with_cpal, 4, 14);
+    writeU32Test(&colr_v0_with_cpal, 8, 20);
+    writeU16Test(&colr_v0_with_cpal, 12, 1);
+    writeU16Test(&colr_v0_with_cpal, 14, 1);
+    writeU16Test(&colr_v0_with_cpal, 16, 0);
+    writeU16Test(&colr_v0_with_cpal, 18, 1);
+    writeU16Test(&colr_v0_with_cpal, 20, 1);
+    writeU16Test(&colr_v0_with_cpal, 22, 0);
+    writeSingleEntryCpalTest(&colr_v0_with_cpal, 24);
+
+    const colr_v0_font = colrCpalOnlyFont(&colr_v0_with_cpal, 24);
+    const layers = try colr_v0_font.colorLayers(allocator, 1);
+    defer allocator.free(layers);
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 1), layers[0].glyph_id);
+
+    // Keep the layer glyph ID inside maxp while changing COLR after
+    // construction. The lazy public API must reject the table because its SFNT
+    // checksum no longer matches the parsed color glyph graph.
+    writeU16Test(&colr_v0_with_cpal, 20, 2);
+    try std.testing.expectError(error.BadSfnt, colr_v0_font.colorLayers(allocator, 1));
+
+    var colr_v1_with_cpal: [67]u8 = .{0} ** 67;
+    writeU16Test(&colr_v1_with_cpal, 0, 1); // COLR version 1.
+    writeU32Test(&colr_v1_with_cpal, 14, 34); // BaseGlyphListOffset.
+    writeU32Test(&colr_v1_with_cpal, 34, 1);
+    writeU16Test(&colr_v1_with_cpal, 38, 1);
+    writeU32Test(&colr_v1_with_cpal, 40, 10); // PaintSolid at byte 44.
+    colr_v1_with_cpal[44] = 2;
+    writeU16Test(&colr_v1_with_cpal, 45, 0);
+    writeF2Dot14Test(&colr_v1_with_cpal, 47, 1.0);
+    writeSingleEntryCpalTest(&colr_v1_with_cpal, 49);
+
+    const colr_v1_font = colrCpalOnlyFont(&colr_v1_with_cpal, 49);
+    try std.testing.expect((try colr_v1_font.colorPaint(1)) != null);
+    writeF2Dot14Test(&colr_v1_with_cpal, 47, 0.5);
+    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaint(1));
+}
+
 test "COLR public APIs revalidate borrowed palette references" {
     const allocator = std.testing.allocator;
 
@@ -15771,6 +15818,8 @@ fn colrOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    const colr_record: TableRecord = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = data.len };
+    const colr_checksum = checksumSfntTable(data, colr_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -15797,7 +15846,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
-        .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = data.len },
+        .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
         .cpal = null,
         .svg = null,
         .sbix = null,
@@ -15813,7 +15862,9 @@ fn colrOnlyFont(data: []const u8) Font {
 
 fn colrCpalOnlyFont(data: []const u8, colr_length: usize) Font {
     var font = colrOnlyFont(data);
-    font.colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_length };
+    const colr_record: TableRecord = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_length };
+    const colr_checksum = checksumSfntTable(data, colr_record) catch 0;
+    font.colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = colr_length };
     const cpal_record: TableRecord = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = colr_length, .length = data.len - colr_length };
     const cpal_checksum = checksumSfntTable(data, cpal_record) catch 0;
     font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = colr_length, .length = data.len - colr_length };

@@ -1573,12 +1573,12 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
         2 => {
             const class_def_1 = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
             const class_def_2 = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
-            try ensureClassDefTableWithin(table, class_def_1);
-            try ensureClassDefTableWithin(table, class_def_2);
             const class_1_count = try readU16BadGpos(table, subtable_offset + 12);
             const class_2_count = try readU16BadGpos(table, subtable_offset + 14);
+            try ensureClassDefTableWithinLimit(table, class_def_1, class_1_count);
+            try ensureClassDefTableWithinLimit(table, class_def_2, class_2_count);
             const record_size = value_size_1 + value_size_2;
-            try ensureBytesWithin(table, subtable_offset + 16, @as(usize, class_1_count) * @as(usize, class_2_count) * record_size);
+            try ensureBytesWithin(table, subtable_offset + 16, try checkedMul(try checkedMul(@as(usize, class_1_count), class_2_count), record_size));
         },
         else => return error.UnsupportedGpos,
     }
@@ -2007,6 +2007,10 @@ fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!voi
 }
 
 fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GposError!void {
+    return ensureClassDefTableWithinLimit(table, class_def_offset, null);
+}
+
+fn ensureClassDefTableWithinLimit(table: Table, class_def_offset: usize, max_class_count: ?u16) GposError!void {
     const format = try readU16BadGpos(table, class_def_offset);
     switch (format) {
         1 => {
@@ -2016,6 +2020,11 @@ fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GposError!vo
             if (glyph_count != 0) {
                 const end_glyph = @as(usize, start_glyph) + @as(usize, glyph_count) - 1;
                 try ensureGlyphIdWithinMaxp(table, end_glyph);
+            }
+            if (max_class_count) |class_count| {
+                for (0..glyph_count) |class_i| {
+                    try ensureClassValueWithinLimit(try readU16BadGpos(table, class_def_offset + 6 + class_i * 2), class_count);
+                }
             }
         },
         2 => {
@@ -2029,10 +2038,21 @@ fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GposError!vo
                     try readU16BadGpos(table, range_offset),
                     try readU16BadGpos(table, range_offset + 2),
                 );
+                if (max_class_count) |class_count| {
+                    try ensureClassValueWithinLimit(try readU16BadGpos(table, range_offset + 4), class_count);
+                }
             }
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+fn ensureClassValueWithinLimit(class_value: u16, class_count: u16) GposError!void {
+    // PairPos format 2 uses ClassDef results as direct matrix indexes. Class 0
+    // is implicit/default, but any explicit class value must still fit the
+    // advertised Class1Count/Class2Count; otherwise covered pairs may be
+    // silently ignored by shaping after the table declared them classed.
+    if (class_value >= class_count) return error.BadGpos;
 }
 
 fn checkedPositionOffset(table: Table, base_offset: usize, relative_offset: u32) GposError!usize {
@@ -2800,6 +2820,39 @@ test "GPOS PairPos format 1 rejects dangling coverage indexes" {
     writeU16Test(&bytes, 22, 20);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+}
+
+test "GPOS PairPos format 2 rejects class values outside matrix" {
+    var bytes = [_]u8{0} ** 40;
+    writeU16Test(&bytes, 0, 2); // PairPos format 2.
+    writeU16Test(&bytes, 2, 28); // Coverage table.
+    writeU16Test(&bytes, 4, 0); // Empty ValueFormat1.
+    writeU16Test(&bytes, 6, 0); // Empty ValueFormat2.
+    writeU16Test(&bytes, 8, 16); // ClassDef1.
+    writeU16Test(&bytes, 10, 24); // ClassDef2.
+    writeU16Test(&bytes, 12, 2); // Class1Count: classes 0 and 1 only.
+    writeU16Test(&bytes, 14, 1); // Class2Count: class 0 only.
+
+    writeU16Test(&bytes, 16, 1); // ClassDef1 format 1.
+    writeU16Test(&bytes, 18, 10);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 2); // Explicit class equals Class1Count: invalid.
+
+    writeU16Test(&bytes, 24, 1); // ClassDef2 format 1, valid class 0.
+    writeU16Test(&bytes, 26, 20);
+    writeU16Test(&bytes, 28, 1);
+    writeU16Test(&bytes, 30, 0);
+
+    writeCoverage1Test(&bytes, 32, 10);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+
+    writeU16Test(&bytes, 22, 1);
+    try ensurePairPositionSubtableWithin(table, 0);
+
+    writeU16Test(&bytes, 30, 1); // Now ClassDef2 exceeds Class2Count.
     try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
 }
 

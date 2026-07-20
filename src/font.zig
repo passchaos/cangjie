@@ -2365,6 +2365,13 @@ fn validatePostFormat2(data: []const u8, post: TableRecord, glyph_count: u16) Fo
         if (!isPostGlyphName(table[cursor .. cursor + name_len])) return error.BadSfnt;
         cursor += name_len;
     }
+    // Format 2 has no explicit custom-name count; the glyphNameIndex array
+    // implies exactly the Pascal strings needed for custom indices 258 through
+    // the maximum referenced index. Treating any remaining bytes as table data
+    // would leave unreachable names that one consumer might preserve while
+    // another ignores, so require the declared post table to end at the last
+    // implied custom string.
+    if (cursor != post.length) return error.BadSfnt;
 }
 
 fn validatePostFormat25(data: []const u8, post: TableRecord, glyph_count: u16) FontError!void {
@@ -11491,6 +11498,22 @@ test "post table structural contracts are validated at parse time" {
         writeU16Test(&post, 36, 258);
         post[38] = 4; // Only three bytes of the Pascal string are present.
         @memcpy(post[39..42], "Alt");
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [46]u8 = .{0} ** 46;
+        writePostHeaderTest(&post, 0x00020000);
+        writeU16Test(&post, 32, 2);
+        writeU16Test(&post, 34, 0);
+        writeU16Test(&post, 36, 258);
+        post[38] = 5;
+        @memcpy(post[39..44], "A.alt");
+        post[44] = 1; // Unreferenced trailing custom Pascal string.
+        post[45] = 'B';
         const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
         defer allocator.free(bytes);
 

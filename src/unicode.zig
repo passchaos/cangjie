@@ -27,6 +27,7 @@ pub const ScriptRun = struct {
 pub const BidiClass = enum {
     ltr,
     rtl,
+    number,
     neutral,
 };
 
@@ -189,6 +190,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
 /// higher-level bidi functions use this coarse class to build visual runs.
 pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
+    if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew => .rtl,
@@ -235,6 +237,34 @@ pub fn itemizeBidiRuns(allocator: std.mem.Allocator, text: []const u8, base_dire
         }
 
         if (current_direction.? == bidi_class) {
+            run_end = next_index;
+            neutral_start = null;
+            continue;
+        }
+
+        if (current_direction.? == .rtl and bidi_class == .number) {
+            const split_at = neutral_start orelse cluster;
+            try runs.append(allocator, .{
+                .direction = current_direction.?,
+                .byte_start = run_start,
+                .byte_len = split_at - run_start,
+            });
+            current_direction = .number;
+            run_start = neutral_start orelse cluster;
+            run_end = next_index;
+            neutral_start = null;
+            continue;
+        }
+
+        if (current_direction.? == .number and bidi_class == .rtl) {
+            const split_at = neutral_start orelse cluster;
+            try runs.append(allocator, .{
+                .direction = current_direction.?,
+                .byte_start = run_start,
+                .byte_len = split_at - run_start,
+            });
+            current_direction = .rtl;
+            run_start = neutral_start orelse cluster;
             run_end = next_index;
             neutral_start = null;
             continue;
@@ -596,6 +626,17 @@ pub fn itemizeScriptRuns(allocator: std.mem.Allocator, text: []const u8) ![]Scri
 
 fn baseDirectionOrLtr(direction: BidiClass) BidiClass {
     return if (direction == .rtl) .rtl else .ltr;
+}
+
+fn isBidiNumberCodepoint(codepoint: u21) bool {
+    // Keep common European and Arabic-Indic decimal sequences in logical LTR
+    // order even when the surrounding paragraph/run order is RTL. This is a
+    // deliberately compact subset of UAX #9 weak-type handling, but it avoids
+    // the most visible failure mode of rendering "12" as "21" in Hebrew/Arabic
+    // text while preserving existing neutral punctuation behavior.
+    return (codepoint >= '0' and codepoint <= '9') or
+        (codepoint >= 0x0660 and codepoint <= 0x0669) or
+        (codepoint >= 0x06f0 and codepoint <= 0x06f9);
 }
 
 fn collectLogicalBidiItems(allocator: std.mem.Allocator, text: []const u8) ![]BidiMapItem {

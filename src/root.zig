@@ -721,6 +721,7 @@ test "detects bidi classes and itemizes bidi runs" {
 
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint('A'));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x0628));
+    try std.testing.expectEqual(BidiClass.number, bidiClassForCodepoint('1'));
     try std.testing.expectEqual(BidiClass.neutral, bidiClassForCodepoint(' '));
 
     const runs = try itemizeBidiRuns(allocator, "abc بجد xyz", .ltr);
@@ -761,6 +762,10 @@ test "detects bidi classes and itemizes bidi runs" {
     const variation_visual = try visualOrderCodepoints(allocator, "א\u{fe0f}ב", .rtl);
     defer allocator.free(variation_visual);
     try std.testing.expectEqualSlices(u21, &.{ 0x05d1, 0x05d0, 0xfe0f }, variation_visual);
+
+    const number_visual = try visualOrderCodepoints(allocator, "א12ב", .rtl);
+    defer allocator.free(number_visual);
+    try std.testing.expectEqualSlices(u21, &.{ 0x05d1, '1', '2', 0x05d0 }, number_visual);
 
     const neutral_prefix = try itemizeBidiRuns(allocator, "  ב", .rtl);
     defer allocator.free(neutral_prefix);
@@ -814,6 +819,14 @@ test "builds bidi logical visual maps" {
     defer mirrored.deinit();
     try std.testing.expectEqual(@as(u21, '('), mirrored.items[0].visual_codepoint);
     try std.testing.expectEqual(@as(u21, ')'), mirrored.items[3].visual_codepoint);
+
+    var number_map = try buildBidiMap(allocator, "א12ב", .rtl);
+    defer number_map.deinit();
+    try std.testing.expectEqual(@as(usize, 3), number_map.visualToLogical(0).?);
+    try std.testing.expectEqual(@as(usize, 1), number_map.visualToLogical(1).?);
+    try std.testing.expectEqual(@as(usize, 2), number_map.visualToLogical(2).?);
+    try std.testing.expectEqual(@as(usize, 0), number_map.visualToLogical(3).?);
+    try std.testing.expectEqual(BidiClass.number, number_map.items[1].direction);
 }
 
 test "itemizes basic grapheme clusters" {
@@ -3102,6 +3115,48 @@ test "shapes mirrored bidi punctuation with mirrored glyph ids" {
         run.glyphs[0].cluster,
         run.glyphs[1].cluster,
         run.glyphs[2].cluster,
+    });
+}
+
+test "shapes right-to-left text with numeric subruns left-to-right" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const alef_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 0x05d0, "Alef Sans", "Regular", "Alef Sans Regular");
+    defer allocator.free(alef_bytes);
+    const one_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, '1', "One Sans", "Regular", "One Sans Regular");
+    defer allocator.free(one_bytes);
+    const two_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, '2', "Two Sans", "Regular", "Two Sans Regular");
+    defer allocator.free(two_bytes);
+    const bet_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 0x05d1, "Bet Sans", "Regular", "Bet Sans Regular");
+    defer allocator.free(bet_bytes);
+
+    var alef = try Font.parse(allocator, alef_bytes);
+    defer alef.deinit();
+    var one = try Font.parse(allocator, one_bytes);
+    defer one.deinit();
+    var two = try Font.parse(allocator, two_bytes);
+    defer two.deinit();
+    var bet = try Font.parse(allocator, bet_bytes);
+    defer bet.deinit();
+
+    const fonts = [_]*const Font{ &alef, &one, &two, &bet };
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const shaped = try TextShaper.shapeUtf8CascadeWithOptions(cascade, &layout_buffer, "\u{05d0}12\u{05d1}", 20, .{ .direction = .rtl });
+
+    try std.testing.expectEqual(@as(usize, 4), shaped.glyphs.len);
+    try std.testing.expectEqual(@as(u21, 0x05d1), shaped.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, '1'), shaped.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(u21, '2'), shaped.glyphs[2].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x05d0), shaped.glyphs[3].codepoint);
+    try std.testing.expectEqualSlices(usize, &.{ 4, 2, 3, 0 }, &.{
+        shaped.glyphs[0].cluster,
+        shaped.glyphs[1].cluster,
+        shaped.glyphs[2].cluster,
+        shaped.glyphs[3].cluster,
     });
 }
 

@@ -450,6 +450,7 @@ pub const Font = struct {
     fn validateCmapLookupSubtable(self: *const Font, subtable: CmapSubtable) FontError!void {
         const relative_offset = try tableRelativeOffset(self.cmap, subtable.offset);
         if (subtable.length > self.cmap.length - relative_offset) return error.BadSfnt;
+        try validateCachedCmapEncodingRecord(self.data, self.cmap, subtable, relative_offset);
         const format = try bin.readU16At(self.data, subtable.offset);
         if (format != subtable.format) return error.BadSfnt;
         const length = try cmapSubtableLength(self.data, self.cmap, relative_offset, format);
@@ -3387,6 +3388,37 @@ fn tableRelativeOffset(table: TableRecord, absolute_offset: usize) FontError!usi
     const relative_offset = absolute_offset - table.offset;
     if (relative_offset > table.length) return error.BadSfnt;
     return relative_offset;
+}
+
+fn validateCachedCmapEncodingRecord(data: []const u8, cmap: TableRecord, subtable: CmapSubtable, relative_offset: usize) FontError!void {
+    if (cmap.length < 4) return error.BadSfnt;
+    if (try bin.readU16At(data, cmap.offset) != 0) return error.BadSfnt;
+    const count = try bin.readU16At(data, cmap.offset + 2);
+    if (@as(usize, count) * 8 > cmap.length - 4) return error.BadSfnt;
+
+    var previous_encoding: ?struct { platform_id: u16, encoding_id: u16 } = null;
+    for (0..count) |index| {
+        const record = cmap.offset + 4 + index * 8;
+        const platform_id = try bin.readU16At(data, record);
+        const encoding_id = try bin.readU16At(data, record + 2);
+        if (previous_encoding) |previous| {
+            if (platform_id < previous.platform_id or (platform_id == previous.platform_id and encoding_id <= previous.encoding_id)) {
+                return error.BadSfnt;
+            }
+        }
+        previous_encoding = .{ .platform_id = platform_id, .encoding_id = encoding_id };
+        if (platform_id != subtable.platform_id or encoding_id != subtable.encoding_id) continue;
+
+        // Font caches cmap EncodingRecords after parse, but the underlying SFNT
+        // bytes are borrowed from the caller. Re-check that the same directory
+        // key still points at the same child subtable before following cached
+        // offsets, so post-parse edits cannot silently redirect or erase the
+        // character map while public lookup keeps using the old address.
+        const current_offset: usize = @intCast(try bin.readU32At(data, record + 4));
+        if (current_offset != relative_offset) return error.BadSfnt;
+        return;
+    }
+    return error.BadSfnt;
 }
 
 fn cmapSubtableLength(data: []const u8, cmap: TableRecord, sub_offset: usize, format: u16) FontError!usize {
@@ -10020,6 +10052,45 @@ test "cmap format 14 public lookup revalidates cached subtable length" {
     writeU32Test(bytes, cmap_offset + variation_offset + 2, @intCast(cmap_length - variation_offset + 1));
     try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
     try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
+}
+
+test "cmap public lookup revalidates cached encoding record offsets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildSingleCodepointTtf(allocator, 'A');
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expectEqual(@as(glyph_mod.GlyphId, 1), try font.glyphIndex('A'));
+
+        const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
+        const format4_offset = try bin.readU32At(bytes, cmap_offset + 8);
+        // The cached CmapSubtable still points at the original format-4 bytes.
+        // Mutating only the EncodingRecord offset must invalidate the public
+        // lookup instead of letting it follow a stale child pointer.
+        writeU32Test(bytes, cmap_offset + 8, format4_offset + 2);
+        try std.testing.expectError(error.BadSfnt, font.glyphIndex('A'));
+    }
+
+    {
+        const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expectEqual(@as(?glyph_mod.GlyphId, 3), try font.variationGlyphIndex('A', 0xfe0f));
+
+        const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
+        const variation_offset = try bin.readU32At(bytes, cmap_offset + 16);
+        writeU32Test(bytes, cmap_offset + 16, variation_offset + 2);
+        try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
+        try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
+    }
 }
 
 test "cmap public APIs reject invalid Unicode scalar inputs" {

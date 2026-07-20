@@ -192,6 +192,10 @@ pub fn buildNamedSingleCodepointTtfWithNames(allocator: std.mem.Allocator, codep
     return buildSfnt(allocator, 0x00010000, try namedSingleCodepointTtfTables(allocator, codepoint, family, subfamily, full_name));
 }
 
+pub fn buildNamedBidiMirrorTtfWithNames(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try namedBidiMirrorTtfTables(allocator, family, subfamily, full_name));
+}
+
 pub fn buildNamedCjkTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try namedCjkTtfTables(allocator));
 }
@@ -1129,6 +1133,24 @@ fn namedSingleCodepointTtfTables(allocator: std.mem.Allocator, codepoint: u16, f
     return tables;
 }
 
+fn namedBidiMirrorTtfTables(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat12RangesTable(allocator, &.{
+        .{ .start = '(', .end = ')', .glyph_id = 1 },
+        .{ .start = 0x05d0, .end = 0x05d1, .glyph_id = 3 },
+    }) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 5) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithFiveGlyphs(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 5) };
+    tables[7] = .{ .tag = "name", .data = try nameTable(allocator, family, subfamily, full_name) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
 fn namedCjkTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 9);
     errdefer allocator.free(tables);
@@ -1924,6 +1946,35 @@ fn cmapFormat12GlyphArrayTable(allocator: std.mem.Allocator, codepoints: []const
         writeU32(bytes, group + 0, codepoint);
         writeU32(bytes, group + 4, codepoint);
         writeU32(bytes, group + 8, glyph_id);
+    }
+    return bytes;
+}
+
+const CmapFormat12Range = struct {
+    start: u32,
+    end: u32,
+    glyph_id: u32,
+};
+
+fn cmapFormat12RangesTable(allocator: std.mem.Allocator, ranges: []const CmapFormat12Range) ![]u8 {
+    const bytes = try allocator.alloc(u8, 28 + ranges.len * 12);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 1);
+    writeU16(bytes, 4, 3);
+    writeU16(bytes, 6, 10);
+    writeU32(bytes, 8, 12);
+    const off = 12;
+    writeU16(bytes, off + 0, 12);
+    writeU16(bytes, off + 2, 0);
+    writeU32(bytes, off + 4, @intCast(16 + ranges.len * 12));
+    writeU32(bytes, off + 8, 0);
+    writeU32(bytes, off + 12, @intCast(ranges.len));
+    for (ranges, 0..) |range, index| {
+        const group = off + 16 + index * 12;
+        writeU32(bytes, group + 0, range.start);
+        writeU32(bytes, group + 4, range.end);
+        writeU32(bytes, group + 8, range.glyph_id);
     }
     return bytes;
 }

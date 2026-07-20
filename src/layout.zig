@@ -811,7 +811,7 @@ pub const TextShaper = struct {
         try validateShapingInput(text, font_size, options);
         buffer.clear();
         try shapeSegmentInto(font, null, null, buffer, text, font_size, 0, lookupOptionsForText(text, options));
-        try applyBidiVisualOrder(buffer, text, options.direction);
+        try applyBidiVisualOrder(buffer, text, options.direction, font);
         return buffer.run(font, font_size);
     }
 
@@ -885,7 +885,7 @@ pub const TextShaper = struct {
             _ = try appendCascadeRun(cascade.fonts[font_index], metrics_cache, glyph_index_cache, font_index, buffer, text[segment_start..], font_size, segment_start, pen_x, lookupOptionsForText(text[segment_start..], options));
         }
 
-        try applyBidiVisualOrder(buffer, text, options.direction);
+        try applyBidiVisualOrder(buffer, text, options.direction, null);
         const shaped = buffer.shapedText();
         if (shaped_cache) |cache| {
             try cache.store(cache_key, shaped);
@@ -896,7 +896,7 @@ pub const TextShaper = struct {
     pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
         try validateShapingInput(text, font_size, options);
         try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
-        try applyBidiVisualOrder(buffer, text, options.direction);
+        try applyBidiVisualOrder(buffer, text, options.direction, null);
         try buildScriptRuns(buffer, text, options.direction, options.language_tag);
         return buffer.scriptedText();
     }
@@ -1166,7 +1166,7 @@ fn appendScriptedRunForByteRange(buffer: *LayoutBuffer, text: []const u8, script
     });
 }
 
-fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection) !void {
+fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection, single_font: ?*const Font) !void {
     if (buffer.glyphs.items.len == 0) return;
     const base_direction: unicode.BidiClass = if (direction == .rtl) .rtl else .ltr;
     var bidi_map = try unicode.buildBidiMap(buffer.allocator, text, base_direction);
@@ -1195,12 +1195,14 @@ fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: Text
     defer visual_run_indices.deinit(buffer.allocator);
 
     for (bidi_map.items) |item| {
-        try appendVisualGlyphsForCluster(
+        try appendVisualGlyphsForBidiItem(
             buffer.allocator,
             old_glyphs,
+            old_runs,
+            single_font,
             glyph_run_indices,
             seen,
-            item.byte_start,
+            item,
             &visual_glyphs,
             &visual_run_indices,
         );
@@ -1211,13 +1213,13 @@ fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: Text
     // visual item.
     for (old_glyphs, 0..) |_, glyph_index| {
         if (seen[glyph_index]) continue;
-        try appendVisualGlyph(buffer.allocator, old_glyphs, glyph_run_indices, seen, glyph_index, &visual_glyphs, &visual_run_indices);
+        try appendVisualGlyph(buffer.allocator, old_glyphs, old_runs, single_font, glyph_run_indices, seen, glyph_index, null, &visual_glyphs, &visual_run_indices);
     }
     if (visual_glyphs.items.len != old_glyphs.len) return error.InvalidBidiMap;
 
     var changed = false;
     for (old_glyphs, visual_glyphs.items) |old, visual| {
-        if (old.cluster != visual.cluster or old.glyph_id != visual.glyph_id) {
+        if (old.cluster != visual.cluster or old.glyph_id != visual.glyph_id or old.codepoint != visual.codepoint) {
             changed = true;
             break;
         }
@@ -1230,34 +1232,61 @@ fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: Text
     recomputeRunOffsets(buffer);
 }
 
-fn appendVisualGlyphsForCluster(
+fn appendVisualGlyphsForBidiItem(
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
+    old_runs: []const CascadeRun,
+    single_font: ?*const Font,
     glyph_run_indices: []const usize,
     seen: []bool,
-    cluster: usize,
+    item: unicode.BidiMapItem,
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
 ) !void {
     for (glyphs, 0..) |glyph, glyph_index| {
         if (seen[glyph_index]) continue;
-        if (glyph.cluster != cluster) continue;
-        try appendVisualGlyph(allocator, glyphs, glyph_run_indices, seen, glyph_index, out_glyphs, out_run_indices);
+        if (glyph.cluster != item.byte_start) continue;
+        const visual_codepoint = if (@max(glyph.source_byte_len, 1) == item.byte_len)
+            item.visual_codepoint
+        else
+            null;
+        try appendVisualGlyph(allocator, glyphs, old_runs, single_font, glyph_run_indices, seen, glyph_index, visual_codepoint, out_glyphs, out_run_indices);
     }
 }
 
 fn appendVisualGlyph(
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
+    old_runs: []const CascadeRun,
+    single_font: ?*const Font,
     glyph_run_indices: []const usize,
     seen: []bool,
     glyph_index: usize,
+    visual_codepoint: ?u21,
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
 ) !void {
     seen[glyph_index] = true;
-    try out_glyphs.append(allocator, glyphs[glyph_index]);
+    var glyph = glyphs[glyph_index];
+    if (visual_codepoint) |codepoint| mirror: {
+        if (codepoint == glyph.codepoint) break :mirror;
+        const font = visualGlyphFont(old_runs, single_font, glyph_run_indices[glyph_index]) orelse break :mirror;
+        const mirrored_glyph = font.glyphIndex(codepoint) catch break :mirror;
+        if (mirrored_glyph == 0) break :mirror;
+        // Unicode bidi mirroring is a visual substitution.  Keep the shaped
+        // positioning deltas from the logical glyph because this pass runs
+        // after GSUB/GPOS, but use the mirrored glyph when the same cascade font
+        // can render it so parentheses/brackets match Unicode visual order.
+        glyph.codepoint = codepoint;
+        glyph.glyph_id = mirrored_glyph;
+    }
+    try out_glyphs.append(allocator, glyph);
     try out_run_indices.append(allocator, glyph_run_indices[glyph_index]);
+}
+
+fn visualGlyphFont(old_runs: []const CascadeRun, single_font: ?*const Font, run_index: usize) ?*const Font {
+    if (run_index < old_runs.len) return old_runs[run_index].font;
+    return single_font;
 }
 
 fn rebuildRunsForVisualGlyphs(buffer: *LayoutBuffer, old_runs: []const CascadeRun, visual_run_indices: []const usize) !void {

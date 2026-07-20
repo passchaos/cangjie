@@ -3077,6 +3077,34 @@ test "shapes mixed-direction cascade text in bidi visual order" {
     try std.testing.expectEqual(@as(usize, 3), shaped.runs[3].font_index);
 }
 
+test "shapes mirrored bidi punctuation with mirrored glyph ids" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedBidiMirrorTtfWithNames(allocator, "Mirror Sans", "Regular", "Mirror Sans Regular");
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "(\u{05d0})", 20, .{ .direction = .rtl });
+
+    try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
+    try std.testing.expectEqual(@as(u21, '('), run.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x05d0), run.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(u21, ')'), run.glyphs[2].codepoint);
+    try std.testing.expectEqual(try font.glyphIndex('('), run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(try font.glyphIndex(0x05d0), run.glyphs[1].glyph_id);
+    try std.testing.expectEqual(try font.glyphIndex(')'), run.glyphs[2].glyph_id);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 1, 0 }, &.{
+        run.glyphs[0].cluster,
+        run.glyphs[1].cluster,
+        run.glyphs[2].cluster,
+    });
+}
+
 test "defaults right-to-left paragraph alignment to the right edge" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

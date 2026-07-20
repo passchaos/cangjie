@@ -1327,8 +1327,10 @@ fn ensurePositionRecordLookupsWithin(table: Table, records_pos: usize, record_co
 
 fn ensurePositionRecordLookupsWithinDepth(table: Table, records_pos: usize, record_count: usize, depth: usize) GposError!void {
     // Contextual positioning appends adjustments as it walks PosLookupRecords.
-    // Preflight referenced lookup headers so a malformed later lookup count or
-    // UseMarkFilteringSet slot cannot leave earlier nested adjustments visible.
+    // Preflight referenced lookup indexes/headers so a dangling lookup index,
+    // malformed later lookup count, or UseMarkFilteringSet slot cannot leave
+    // earlier nested adjustments visible or silently suppress requested
+    // positioning.
     // Contextual lookups are allowed to reference other contextual lookups; cap
     // validation recursion so cyclic lookup graphs are reported as unsupported
     // instead of overflowing the validator stack.
@@ -1338,7 +1340,7 @@ fn ensurePositionRecordLookupsWithinDepth(table: Table, records_pos: usize, reco
     for (0..record_count) |record_i| {
         const record_offset = records_pos + record_i * 4;
         const lookup_index = try readU16BadGpos(table, record_offset + 2);
-        if (lookup_index >= lookup_count) continue;
+        if (lookup_index >= lookup_count) return error.BadGpos;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
         const lookup_offset = lookup_list_offset + try readU16BadGpos(table, lookup_offset_pos);
         try ensurePositionLookupHeaderWithin(table, lookup_offset);
@@ -2299,7 +2301,7 @@ fn readU32BadGpos(table: Table, relative: usize) GposError!u32 {
 fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: usize, lookup_index: u16, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    if (lookup_index >= lookup_count) return;
+    if (lookup_index >= lookup_count) return error.BadGpos;
     const lookup_offset = lookup_list_offset + try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2);
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
@@ -4063,6 +4065,64 @@ test "GPOS contextual lookup preflight rejects later truncated lookup atomically
 
     try std.testing.expectError(error.BadGpos, collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, &adjustments, allocator, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS contextual lookup records reject dangling lookup indexes atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 94;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // Empty ScriptList.
+    writeU16Test(&bytes, 6, 12); // Empty FeatureList.
+    writeU16Test(&bytes, 8, 14); // LookupList.
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 6); // Lookup 0: ContextPos.
+    writeU16Test(&bytes, 18, 50); // Lookup 1: SinglePos.
+
+    const context_lookup = 20;
+    writeU16Test(&bytes, context_lookup + 0, 7);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 8);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 14);
+    writeCoverage1Test(&bytes, context + 8, 1);
+
+    const set = context + 14;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 2); // Dangling: LookupList has only 0 and 1.
+
+    writeSinglePositionLookup(&bytes, 64, 1, 0, 45);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    const glyphs = [_]GlyphId{1};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 20));
+    try std.testing.expectError(error.BadGpos, collectLookup(table, context_lookup, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    // With every PosLookupRecord targeting an existing lookup, the context
+    // preflight succeeds and both nested SinglePos adjustments are visible.
+    writeU16Test(&bytes, rule + 10, 1);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 20);
+    try collectLookup(table, context_lookup, &glyphs, &adjustments, allocator, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
 }
 
 test "GPOS contextual lookup preflight rejects nested extension payload atomically" {

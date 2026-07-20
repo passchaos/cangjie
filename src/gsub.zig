@@ -1299,14 +1299,16 @@ fn ensureSubstitutionRecordListWithin(table: Table, records_offset: usize, recor
 fn ensureSubstitutionRecordLookupsWithin(table: Table, records_offset: usize, record_count: usize) GsubError!void {
     // A complete SequenceLookupRecord array is not enough for atomic contextual
     // application: a later record may name a lookup whose variable-length
-    // Lookup header is truncated. Validate every referenced lookup's count and
-    // offset array before the first nested lookup mutates `glyphs`.
+    // Lookup header is truncated, or may name no lookup at all. Validate every
+    // referenced lookup index/header before the first nested lookup mutates
+    // `glyphs` so malformed contextual rules cannot silently drop required
+    // nested substitutions.
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGsub(table, lookup_list_offset);
     for (0..record_count) |record_i| {
         const record_offset = records_offset + record_i * 4;
         const lookup_index = try readU16BadGsub(table, record_offset + 2);
-        if (lookup_index >= lookup_count) continue;
+        if (lookup_index >= lookup_count) return error.BadGsub;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
         const lookup_offset = lookup_list_offset + try readU16BadGsub(table, lookup_offset_pos);
         try ensureLookupHeaderWithin(table, lookup_offset);
@@ -2095,7 +2097,7 @@ fn readU32BadGsub(table: Table, relative: usize) GsubError!u32 {
 fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, lookup_index: u16, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!NestedGlyphChange {
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    if (lookup_index >= lookup_count) return .{};
+    if (lookup_index >= lookup_count) return error.BadGsub;
     const nested_lookup_offset = lookup_list_offset + try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2);
     const lookup_type = try readU16(table, nested_lookup_offset);
     const lookup_flag = try readU16(table, nested_lookup_offset + 2);
@@ -3508,6 +3510,63 @@ test "GSUB contextual lookup preflight rejects later truncated lookup atomically
 
     try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, context_lookup, &glyphs, allocator, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+}
+
+test "GSUB contextual lookup records reject dangling lookup indexes atomically" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 90;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // Empty ScriptList.
+    writeU16Test(&bytes, 6, 12); // Empty FeatureList.
+    writeU16Test(&bytes, 8, 14); // LookupList.
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 6); // Lookup 0: ContextSubst.
+    writeU16Test(&bytes, 18, 50); // Lookup 1: SingleSubst.
+
+    const context_lookup = 20;
+    writeU16Test(&bytes, context_lookup + 0, 5);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 8);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 14);
+    writeCoverage1(&bytes, context + 8, 1);
+
+    const set = context + 14;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeU16Test(&bytes, rule + 8, 0);
+    writeU16Test(&bytes, rule + 10, 2); // Dangling: LookupList has only 0 and 1.
+
+    writeSingleDeltaLookup(&bytes, 64, 1, 9);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 20));
+    try std.testing.expectError(error.BadGsub, applyLookup(table, context_lookup, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    // Once every SequenceLookupRecord names an existing lookup, the same
+    // contextual rule is structurally valid and the first nested SingleSubst
+    // can run normally.
+    writeU16Test(&bytes, rule + 10, 1);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 20);
+    try applyLookup(table, context_lookup, &glyphs, allocator, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
 }
 
 test "GSUB contextual lookup preflight rejects nested extension payload atomically" {

@@ -1623,7 +1623,13 @@ fn ensureContextRuleSetWithin(table: Table, rule_set_offset: usize) GsubError!vo
     const rule_offsets_pos = rule_set_offset + 2;
     try ensureBytesWithin(table, rule_offsets_pos, @as(usize, rule_count) * 2);
     for (0..rule_count) |rule_i| {
-        const rule_offset = try checkedSubtableOffset(table, rule_set_offset, try readU16BadGsub(table, rule_offsets_pos + rule_i * 2));
+        const rule_relative = try readU16BadGsub(table, rule_offsets_pos + rule_i * 2);
+        // SubRule and SubClassRule offsets are mandatory once their parent
+        // RuleSet is present. A zero offset aliases the RuleSet header as a
+        // rule, deriving glyph/substitution counts from offset-array metadata
+        // instead of from a declared contextual rule payload.
+        if (rule_relative == 0) return error.BadGsub;
+        const rule_offset = try checkedSubtableOffset(table, rule_set_offset, rule_relative);
         try ensureContextRuleWithin(table, rule_offset);
     }
 }
@@ -1689,7 +1695,13 @@ fn ensureChainingRuleSetWithin(table: Table, rule_set_offset: usize) GsubError!v
     const rule_offsets_pos = rule_set_offset + 2;
     try ensureBytesWithin(table, rule_offsets_pos, @as(usize, rule_count) * 2);
     for (0..rule_count) |rule_i| {
-        const rule_offset = try checkedSubtableOffset(table, rule_set_offset, try readU16BadGsub(table, rule_offsets_pos + rule_i * 2));
+        const rule_relative = try readU16BadGsub(table, rule_offsets_pos + rule_i * 2);
+        // ChainSubRule and ChainSubClassRule offsets are required children.
+        // Treating zero as a relative offset would reinterpret the RuleSet's
+        // own count/offset array as backtrack/input/lookahead counts and make
+        // malformed contextual substitution topology appear valid.
+        if (rule_relative == 0) return error.BadGsub;
+        const rule_offset = try checkedSubtableOffset(table, rule_set_offset, rule_relative);
         try ensureChainingRuleWithin(table, rule_offset);
     }
 }
@@ -2422,6 +2434,50 @@ test "GSUB rejects malformed ClassDef format 2 ranges" {
 
     writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
     try std.testing.expectError(error.BadGsub, classValue(table, 0, 18));
+}
+
+test "GSUB ContextSubst rejects null required rule offsets" {
+    var bytes = [_]u8{0} ** 24;
+    writeU16Test(&bytes, 8, 12); // LookupList offset for nested-record preflight.
+    writeU16Test(&bytes, 12, 0); // Empty LookupList; repaired rule has no records.
+
+    const rule_set = 16;
+    writeU16Test(&bytes, rule_set + 0, 1); // One SubRule offset follows.
+    writeU16Test(&bytes, rule_set + 2, 0); // Invalid: SubRule offsets are not nullable.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureContextRuleSetWithin(table, rule_set));
+
+    // A real rule can still match one input glyph and contain no substitution
+    // records; only the child pointer itself must name an actual SubRule.
+    const rule = rule_set + 4;
+    writeU16Test(&bytes, rule_set + 2, 4);
+    writeU16Test(&bytes, rule + 0, 1); // GlyphCount includes the first covered glyph.
+    writeU16Test(&bytes, rule + 2, 0); // SubstCount.
+    try ensureContextRuleSetWithin(table, rule_set);
+}
+
+test "GSUB ChainingContextSubst rejects null required rule offsets" {
+    var bytes = [_]u8{0} ** 28;
+    writeU16Test(&bytes, 8, 12); // LookupList offset for nested-record preflight.
+    writeU16Test(&bytes, 12, 0); // Empty LookupList; repaired rule has no records.
+
+    const rule_set = 16;
+    writeU16Test(&bytes, rule_set + 0, 1); // One ChainSubRule offset follows.
+    writeU16Test(&bytes, rule_set + 2, 0); // Invalid: ChainSubRule offsets are not nullable.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureChainingRuleSetWithin(table, rule_set));
+
+    // Minimal valid ChainSubRule: no backtrack, one input glyph (the covered
+    // glyph), no lookahead, and no substitution records.
+    const rule = rule_set + 4;
+    writeU16Test(&bytes, rule_set + 2, 4);
+    writeU16Test(&bytes, rule + 0, 0); // BacktrackGlyphCount.
+    writeU16Test(&bytes, rule + 2, 1); // InputGlyphCount.
+    writeU16Test(&bytes, rule + 4, 0); // LookaheadGlyphCount.
+    writeU16Test(&bytes, rule + 6, 0); // SubstCount.
+    try ensureChainingRuleSetWithin(table, rule_set);
 }
 
 test "GSUB glyph ids are validated against maxp glyph count" {

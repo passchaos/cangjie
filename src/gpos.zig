@@ -86,7 +86,8 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const lookup_list_offset = try checkedPositionOffset(table, 0, try readU16BadGpos(table, 8));
     const lookup_count = try readU16BadGpos(table, lookup_list_offset);
     try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    try ensureFeatureLookupReferencesWithin(table, lookup_count);
+    const feature_count = try ensureFeatureLookupReferencesWithin(table, lookup_count);
+    try ensureScriptFeatureReferencesWithin(table, feature_count);
     for (0..lookup_count) |lookup_i| {
         const lookup_offset = try checkedPositionOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_list_offset + 2 + lookup_i * 2));
         try ensurePositionLookupHeaderWithin(table, lookup_offset);
@@ -1394,9 +1395,9 @@ fn ensureExtensionPositionLookupPayloadsWithin(table: Table, lookup_offset: usiz
     }
 }
 
-fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GposError!void {
+fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GposError!u16 {
     const feature_list_relative = try readU16BadGpos(table, 6);
-    if (feature_list_relative == 0) return;
+    if (feature_list_relative == 0) return 0;
 
     const feature_list_offset = try checkedPositionOffset(table, 0, feature_list_relative);
     const feature_count = try readU16BadGpos(table, feature_list_offset);
@@ -1415,6 +1416,50 @@ fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GposErro
             // requested positioning feature disappear later during shaping.
             if (lookup_index >= lookup_count) return error.BadGpos;
         }
+    }
+    return feature_count;
+}
+
+fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GposError!void {
+    const script_list_relative = try readU16BadGpos(table, 4);
+    if (script_list_relative == 0) return;
+
+    const script_list_offset = try checkedPositionOffset(table, 0, script_list_relative);
+    const script_count = try readU16BadGpos(table, script_list_offset);
+    try ensureBytesWithin(table, script_list_offset + 2, @as(usize, script_count) * 6);
+
+    for (0..script_count) |script_i| {
+        const script_record = script_list_offset + 2 + script_i * 6;
+        const script_offset = try checkedPositionOffset(table, script_list_offset, try readU16BadGpos(table, script_record + 4));
+        const default_lang_sys_relative = try readU16BadGpos(table, script_offset);
+        const lang_sys_count = try readU16BadGpos(table, script_offset + 2);
+        try ensureBytesWithin(table, script_offset + 4, @as(usize, lang_sys_count) * 6);
+
+        if (default_lang_sys_relative != 0) {
+            try ensureLangSysFeatureReferencesWithin(table, try checkedPositionOffset(table, script_offset, default_lang_sys_relative), feature_count);
+        }
+        for (0..lang_sys_count) |lang_i| {
+            const lang_record = script_offset + 4 + lang_i * 6;
+            const lang_sys_offset = try checkedPositionOffset(table, script_offset, try readU16BadGpos(table, lang_record + 4));
+            try ensureLangSysFeatureReferencesWithin(table, lang_sys_offset, feature_count);
+        }
+    }
+}
+
+fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, feature_count: u16) GposError!void {
+    // ScriptList is the public activation graph for language-specific
+    // positioning. A dangling feature index would be silently ignored during
+    // selection, dropping required kerning/mark data rather than reporting a
+    // malformed font, so validate LangSys topology while loading the table.
+    try ensureBytesWithin(table, lang_sys_offset, 6);
+    const required_feature_index = try readU16BadGpos(table, lang_sys_offset + 2);
+    if (required_feature_index != 0xffff and required_feature_index >= feature_count) return error.BadGpos;
+
+    const lang_feature_count = try readU16BadGpos(table, lang_sys_offset + 4);
+    try ensureBytesWithin(table, lang_sys_offset + 6, @as(usize, lang_feature_count) * 2);
+    for (0..lang_feature_count) |feature_i| {
+        const feature_index = try readU16BadGpos(table, lang_sys_offset + 6 + feature_i * 2);
+        if (feature_index >= feature_count) return error.BadGpos;
     }
 }
 
@@ -2635,6 +2680,41 @@ test "GPOS validates FeatureList lookup indexes against LookupList" {
 
     writeU16Test(&bytes, 22, 0);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GPOS validates ScriptList LangSys feature indexes against FeatureList" {
+    var bytes = [_]u8{0} ** 86;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // ScriptList.
+    writeU16Test(&bytes, 6, 40); // FeatureList.
+    writeU16Test(&bytes, 8, 56); // LookupList.
+
+    writeU16Test(&bytes, 10, 1);
+    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(&bytes, 16, 8);
+
+    writeU16Test(&bytes, 18, 4); // DefaultLangSys at offset 22.
+    writeU16Test(&bytes, 20, 0);
+    writeU16Test(&bytes, 22, 0);
+    writeU16Test(&bytes, 24, 0xffff);
+    writeU16Test(&bytes, 26, 1);
+    writeU16Test(&bytes, 28, 1); // Dangling: FeatureList has only index 0.
+
+    writeU16Test(&bytes, 40, 1);
+    writeFeatureRecordTest(&bytes, 42, unicode.tag("kern"), 8);
+    writeFeatureTest(&bytes, 50, 0);
+
+    writeU16Test(&bytes, 56, 1);
+    writeU16Test(&bytes, 58, 4);
+    writeSinglePositionLookup(&bytes, 60, 1, 0, 0);
+
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    writeU16Test(&bytes, 28, 0);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+
+    writeU16Test(&bytes, 24, 1); // ReqFeatureIndex is checked too.
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 }
 
 test "GPOS rejects malformed ClassDef format 2 ranges" {

@@ -128,6 +128,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
 
     const script_count = try readU16(table, script_list_offset);
+    try validateScriptRecordOrder(table, script_list_offset, script_count);
     // Prefer the requested script, then fall back to DFLT. Language selection
     // mirrors OpenType: a matching LangSys overrides the default LangSys.
     const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
@@ -138,6 +139,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     }
 
     const feature_count = try readU16(table, feature_list_offset);
+    try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
     for (feature_indices.items) |selection| {
         const feature_index = selection.index;
         if (feature_index >= feature_count) continue;
@@ -188,8 +190,10 @@ fn findScriptOffset(table: Table, script_list_offset: usize, script_count: u16, 
 
 fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
     const default_lang_sys_offset = try readU16(table, script_offset);
+    const lang_sys_count = try readU16(table, script_offset + 2);
+    try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
     if (language_tag != .dflt) {
-        if (try findLangSysOffset(table, script_offset, @intFromEnum(language_tag))) |lang_sys_offset| {
+        if (try findLangSysOffset(table, script_offset, lang_sys_count, @intFromEnum(language_tag))) |lang_sys_offset| {
             try collectLangSysFeatures(table, lang_sys_offset, feature_indices, allocator);
             return;
         }
@@ -199,8 +203,7 @@ fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unico
     }
 }
 
-fn findLangSysOffset(table: Table, script_offset: usize, language_tag: u32) (GsubError || std.mem.Allocator.Error)!?usize {
-    const lang_sys_count = try readU16(table, script_offset + 2);
+fn findLangSysOffset(table: Table, script_offset: usize, lang_sys_count: u16, language_tag: u32) GsubError!?usize {
     for (0..lang_sys_count) |lang_i| {
         const lang_record = script_offset + 4 + lang_i * 6;
         if (try readU32(table, lang_record) != language_tag) continue;
@@ -1362,6 +1365,7 @@ fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GsubErro
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16BadGsub(table, feature_list_offset);
     try ensureBytesWithin(table, feature_list_offset + 2, @as(usize, feature_count) * 6);
+    try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
 
     for (0..feature_count) |feature_i| {
         const feature_record = feature_list_offset + 2 + feature_i * 6;
@@ -1385,6 +1389,7 @@ fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GsubErr
     const script_list_offset = try checkedRequiredScriptListOffset(table);
     const script_count = try readU16BadGsub(table, script_list_offset);
     try ensureBytesWithin(table, script_list_offset + 2, @as(usize, script_count) * 6);
+    try validateScriptRecordOrder(table, script_list_offset, script_count);
 
     for (0..script_count) |script_i| {
         const script_record = script_list_offset + 2 + script_i * 6;
@@ -1392,6 +1397,7 @@ fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GsubErr
         const default_lang_sys_relative = try readU16BadGsub(table, script_offset);
         const lang_sys_count = try readU16BadGsub(table, script_offset + 2);
         try ensureBytesWithin(table, script_offset + 4, @as(usize, lang_sys_count) * 6);
+        try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
 
         if (default_lang_sys_relative != 0) {
             try ensureLangSysFeatureReferencesWithin(table, try checkedSubtableOffset(table, script_offset, default_lang_sys_relative), feature_count);
@@ -1418,6 +1424,33 @@ fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, fe
     for (0..lang_feature_count) |feature_i| {
         const feature_index = try readU16BadGsub(table, lang_sys_offset + 6 + feature_i * 2);
         if (feature_index >= feature_count) return error.BadGsub;
+    }
+}
+
+fn validateScriptRecordOrder(table: Table, script_list_offset: usize, script_count: u16) GsubError!void {
+    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6);
+}
+
+fn validateFeatureRecordOrder(table: Table, feature_list_offset: usize, feature_count: u16) GsubError!void {
+    return validateTagRecordOrder(table, feature_list_offset + 2, feature_count, 6);
+}
+
+fn validateLangSysRecordOrder(table: Table, script_offset: usize, lang_sys_count: u16) GsubError!void {
+    return validateTagRecordOrder(table, script_offset + 4, lang_sys_count, 6);
+}
+
+fn validateTagRecordOrder(table: Table, records_offset: usize, record_count: u16, record_stride: usize) GsubError!void {
+    // OpenType Layout tag records are sorted by tag. Enforcing that canonical
+    // order during both selection and parse-time validation avoids duplicate or
+    // descending records whose meaning would otherwise depend on this parser's
+    // current linear search instead of the table contract shared by engines.
+    var previous_tag: ?u32 = null;
+    for (0..record_count) |record_i| {
+        const tag_value = try readU32BadGsub(table, records_offset + record_i * record_stride);
+        if (previous_tag) |previous| {
+            if (tag_value <= previous) return error.BadGsub;
+        }
+        previous_tag = tag_value;
     }
 }
 
@@ -3096,6 +3129,30 @@ test "GSUB lookup selection honors script and language tags" {
     try std.testing.expectEqualSlices(u16, &.{3}, fallback.items);
 }
 
+test "GSUB validates layout tag record ordering" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 92;
+    writeLayoutTagOrderingTable(&bytes);
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    var selected = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
+    defer selected.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), selected.items.len);
+
+    writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    try std.testing.expectError(error.BadGsub, selectedLookupIndices(table, allocator, .{ .script_tag = .dflt }));
+    writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
+
+    writeU32Test(&bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.ara));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    writeU32Test(&bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.kor));
+
+    writeU32Test(&bytes, 76, unicode.tag("aalt"));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+}
+
 test "GSUB default features do not enable ordinals" {
     try std.testing.expect(defaultFeatureEnabled(unicode.tag("liga")));
     try std.testing.expect(defaultFeatureEnabled(unicode.tag("ccmp")));
@@ -4676,27 +4733,27 @@ fn writeScriptLanguageSelectionTable(bytes: []u8) void {
     writeU16Test(bytes, 10, 3);
     writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
     writeU16Test(bytes, 16, 20);
-    writeU32Test(bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.latn));
-    writeU16Test(bytes, 22, 32);
-    writeU32Test(bytes, 24, @intFromEnum(unicode.OpenTypeScriptTag.hani));
-    writeU16Test(bytes, 28, 44);
+    writeU32Test(bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
+    writeU16Test(bytes, 22, 44);
+    writeU32Test(bytes, 24, @intFromEnum(unicode.OpenTypeScriptTag.latn));
+    writeU16Test(bytes, 28, 32);
 
     writeScriptTable(bytes, 30, 4, 0);
-    writeLangSys(bytes, 34, 3);
+    writeLangSys(bytes, 34, 2);
     writeScriptTable(bytes, 42, 4, 0);
-    writeLangSys(bytes, 46, 0);
+    writeLangSys(bytes, 46, 1);
     writeU16Test(bytes, 54, 10);
     writeU16Test(bytes, 56, 1);
     writeU32Test(bytes, 58, @intFromEnum(unicode.OpenTypeLanguageTag.jan));
     writeU16Test(bytes, 62, 18);
-    writeLangSys(bytes, 64, 1);
-    writeLangSys(bytes, 72, 2);
+    writeLangSys(bytes, 64, 0);
+    writeLangSys(bytes, 72, 3);
 
     writeU16Test(bytes, 90, 4);
-    writeFeatureRecord(bytes, 92, unicode.tag("liga"), 26);
-    writeFeatureRecord(bytes, 98, unicode.tag("ccmp"), 32);
-    writeFeatureRecord(bytes, 104, unicode.tag("rlig"), 38);
-    writeFeatureRecord(bytes, 110, unicode.tag("rclt"), 44);
+    writeFeatureRecord(bytes, 92, unicode.tag("ccmp"), 32);
+    writeFeatureRecord(bytes, 98, unicode.tag("liga"), 26);
+    writeFeatureRecord(bytes, 104, unicode.tag("rclt"), 44);
+    writeFeatureRecord(bytes, 110, unicode.tag("rlig"), 38);
     writeFeature(bytes, 116, 0);
     writeFeature(bytes, 122, 1);
     writeFeature(bytes, 128, 2);
@@ -4732,7 +4789,47 @@ fn writeFeature(bytes: []u8, offset: usize, lookup_index: u16) void {
     writeU16Test(bytes, offset + 4, lookup_index);
 }
 
+fn writeLayoutTagOrderingTable(bytes: []u8) void {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10);
+    writeU16Test(bytes, 6, 68);
+    writeU16Test(bytes, 8, 90);
+
+    writeU16Test(bytes, 10, 2);
+    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(bytes, 16, 14);
+    writeU32Test(bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
+    writeU16Test(bytes, 22, 54);
+
+    writeU16Test(bytes, 24, 16);
+    writeU16Test(bytes, 26, 2);
+    writeU32Test(bytes, 28, @intFromEnum(unicode.OpenTypeLanguageTag.jan));
+    writeU16Test(bytes, 32, 24);
+    writeU32Test(bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.kor));
+    writeU16Test(bytes, 38, 32);
+    writeLangSys(bytes, 40, 0);
+    writeLangSys(bytes, 48, 1);
+    writeLangSys(bytes, 56, 1);
+
+    writeU16Test(bytes, 64, 0);
+    writeU16Test(bytes, 66, 0);
+
+    writeU16Test(bytes, 68, 2);
+    writeFeatureRecord(bytes, 70, unicode.tag("ccmp"), 14);
+    writeFeatureRecord(bytes, 76, unicode.tag("liga"), 18);
+    writeU16Test(bytes, 82, 0);
+    writeU16Test(bytes, 84, 0);
+    writeU16Test(bytes, 86, 0);
+    writeU16Test(bytes, 88, 0);
+
+    writeU16Test(bytes, 90, 0);
+}
+
 fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_tag: u32) void {
+    const required_first = required_tag < optional_tag;
+    const required_feature_index: u16 = if (required_first) 0 else 1;
+    const optional_feature_index: u16 = if (required_first) 1 else 0;
+
     writeU32Test(bytes, 0, 0x00010000);
     writeU16Test(bytes, 4, 10);
     writeU16Test(bytes, 6, 34);
@@ -4745,13 +4842,18 @@ fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_t
     writeU16Test(bytes, 18, 4);
     writeU16Test(bytes, 20, 0);
     writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, 0); // ReqFeatureIndex: feature 0.
+    writeU16Test(bytes, 24, required_feature_index);
     writeU16Test(bytes, 26, 1);
-    writeU16Test(bytes, 28, 1); // Ordinary FeatureIndex[]: feature 1.
+    writeU16Test(bytes, 28, optional_feature_index);
 
     writeU16Test(bytes, 34, 2);
-    writeFeatureRecord(bytes, 36, required_tag, 14);
-    writeFeatureRecord(bytes, 42, optional_tag, 20);
+    if (required_first) {
+        writeFeatureRecord(bytes, 36, required_tag, 14);
+        writeFeatureRecord(bytes, 42, optional_tag, 20);
+    } else {
+        writeFeatureRecord(bytes, 36, optional_tag, 20);
+        writeFeatureRecord(bytes, 42, required_tag, 14);
+    }
     writeFeature(bytes, 48, 0);
     writeFeature(bytes, 54, 1);
 

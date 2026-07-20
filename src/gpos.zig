@@ -145,6 +145,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
 
     const script_count = try readU16(table, script_list_offset);
+    try validateScriptRecordOrder(table, script_list_offset, script_count);
     const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
         try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
         0;
@@ -153,6 +154,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     }
 
     const feature_count = try readU16(table, feature_list_offset);
+    try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
     for (feature_indices.items) |selection| {
         const feature_index = selection.index;
         if (feature_index >= feature_count) continue;
@@ -191,8 +193,10 @@ fn findScriptOffset(table: Table, script_list_offset: usize, script_count: u16, 
 
 fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
     const default_lang_sys_offset = try readU16(table, script_offset);
+    const lang_sys_count = try readU16(table, script_offset + 2);
+    try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
     if (language_tag != .dflt) {
-        if (try findLangSysOffset(table, script_offset, @intFromEnum(language_tag))) |lang_sys_offset| {
+        if (try findLangSysOffset(table, script_offset, lang_sys_count, @intFromEnum(language_tag))) |lang_sys_offset| {
             try collectLangSysFeatures(table, lang_sys_offset, feature_indices, allocator);
             return;
         }
@@ -202,8 +206,7 @@ fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unico
     }
 }
 
-fn findLangSysOffset(table: Table, script_offset: usize, language_tag: u32) (GposError || std.mem.Allocator.Error)!?usize {
-    const lang_sys_count = try readU16(table, script_offset + 2);
+fn findLangSysOffset(table: Table, script_offset: usize, lang_sys_count: u16, language_tag: u32) GposError!?usize {
     for (0..lang_sys_count) |lang_i| {
         const lang_record = script_offset + 4 + lang_i * 6;
         if (try readU32(table, lang_record) != language_tag) continue;
@@ -1401,6 +1404,7 @@ fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GposErro
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16BadGpos(table, feature_list_offset);
     try ensureBytesWithin(table, feature_list_offset + 2, @as(usize, feature_count) * 6);
+    try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
 
     for (0..feature_count) |feature_i| {
         const feature_record = feature_list_offset + 2 + feature_i * 6;
@@ -1423,6 +1427,7 @@ fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GposErr
     const script_list_offset = try checkedRequiredScriptListOffset(table);
     const script_count = try readU16BadGpos(table, script_list_offset);
     try ensureBytesWithin(table, script_list_offset + 2, @as(usize, script_count) * 6);
+    try validateScriptRecordOrder(table, script_list_offset, script_count);
 
     for (0..script_count) |script_i| {
         const script_record = script_list_offset + 2 + script_i * 6;
@@ -1430,6 +1435,7 @@ fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GposErr
         const default_lang_sys_relative = try readU16BadGpos(table, script_offset);
         const lang_sys_count = try readU16BadGpos(table, script_offset + 2);
         try ensureBytesWithin(table, script_offset + 4, @as(usize, lang_sys_count) * 6);
+        try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
 
         if (default_lang_sys_relative != 0) {
             try ensureLangSysFeatureReferencesWithin(table, try checkedPositionOffset(table, script_offset, default_lang_sys_relative), feature_count);
@@ -1456,6 +1462,33 @@ fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, fe
     for (0..lang_feature_count) |feature_i| {
         const feature_index = try readU16BadGpos(table, lang_sys_offset + 6 + feature_i * 2);
         if (feature_index >= feature_count) return error.BadGpos;
+    }
+}
+
+fn validateScriptRecordOrder(table: Table, script_list_offset: usize, script_count: u16) GposError!void {
+    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6);
+}
+
+fn validateFeatureRecordOrder(table: Table, feature_list_offset: usize, feature_count: u16) GposError!void {
+    return validateTagRecordOrder(table, feature_list_offset + 2, feature_count, 6);
+}
+
+fn validateLangSysRecordOrder(table: Table, script_offset: usize, lang_sys_count: u16) GposError!void {
+    return validateTagRecordOrder(table, script_offset + 4, lang_sys_count, 6);
+}
+
+fn validateTagRecordOrder(table: Table, records_offset: usize, record_count: u16, record_stride: usize) GposError!void {
+    // OpenType Layout tag records are sorted by tag. Enforcing that canonical
+    // order during both selection and parse-time validation avoids duplicate or
+    // descending records whose meaning would otherwise depend on this parser's
+    // current linear search instead of the table contract shared by engines.
+    var previous_tag: ?u32 = null;
+    for (0..record_count) |record_i| {
+        const tag_value = try readU32BadGpos(table, records_offset + record_i * record_stride);
+        if (previous_tag) |previous| {
+            if (tag_value <= previous) return error.BadGpos;
+        }
+        previous_tag = tag_value;
     }
 }
 
@@ -3684,6 +3717,30 @@ test "GPOS LangSys required feature bypasses feature overrides" {
     try std.testing.expectEqualSlices(u16, &.{0}, lookups.items);
 }
 
+test "GPOS validates layout tag record ordering" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 92;
+    writeLayoutTagOrderingTable(&bytes);
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    var selected = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
+    defer selected.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), selected.items.len);
+
+    writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    try std.testing.expectError(error.BadGpos, selectedLookupIndices(table, allocator, .{ .script_tag = .dflt }));
+    writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
+
+    writeU32Test(&bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.ara));
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    writeU32Test(&bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.kor));
+
+    writeU32Test(&bytes, 76, unicode.tag("aalt"));
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+}
+
 test "GPOS cursive attachment skips lookup-flag ignored glyphs" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 64;
@@ -5427,7 +5484,54 @@ fn writeAnchor1Test(bytes: []u8, offset: usize, x: i16, y: i16) void {
     writeI16Test(bytes, offset + 4, y);
 }
 
+fn writeLangSysTest(bytes: []u8, offset: usize, feature_index: u16) void {
+    writeU16Test(bytes, offset, 0);
+    writeU16Test(bytes, offset + 2, 0xffff);
+    writeU16Test(bytes, offset + 4, 1);
+    writeU16Test(bytes, offset + 6, feature_index);
+}
+
+fn writeLayoutTagOrderingTable(bytes: []u8) void {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10);
+    writeU16Test(bytes, 6, 68);
+    writeU16Test(bytes, 8, 90);
+
+    writeU16Test(bytes, 10, 2);
+    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(bytes, 16, 14);
+    writeU32Test(bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
+    writeU16Test(bytes, 22, 54);
+
+    writeU16Test(bytes, 24, 16);
+    writeU16Test(bytes, 26, 2);
+    writeU32Test(bytes, 28, @intFromEnum(unicode.OpenTypeLanguageTag.jan));
+    writeU16Test(bytes, 32, 24);
+    writeU32Test(bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.kor));
+    writeU16Test(bytes, 38, 32);
+    writeLangSysTest(bytes, 40, 0);
+    writeLangSysTest(bytes, 48, 1);
+    writeLangSysTest(bytes, 56, 1);
+
+    writeU16Test(bytes, 64, 0);
+    writeU16Test(bytes, 66, 0);
+
+    writeU16Test(bytes, 68, 2);
+    writeFeatureRecordTest(bytes, 70, unicode.tag("kern"), 14);
+    writeFeatureRecordTest(bytes, 76, unicode.tag("mark"), 18);
+    writeU16Test(bytes, 82, 0);
+    writeU16Test(bytes, 84, 0);
+    writeU16Test(bytes, 86, 0);
+    writeU16Test(bytes, 88, 0);
+
+    writeU16Test(bytes, 90, 0);
+}
+
 fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_tag: u32) void {
+    const required_first = required_tag < optional_tag;
+    const required_feature_index: u16 = if (required_first) 0 else 1;
+    const optional_feature_index: u16 = if (required_first) 1 else 0;
+
     writeU32Test(bytes, 0, 0x00010000);
     writeU16Test(bytes, 4, 10);
     writeU16Test(bytes, 6, 34);
@@ -5440,13 +5544,18 @@ fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_t
     writeU16Test(bytes, 18, 4);
     writeU16Test(bytes, 20, 0);
     writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, 0); // ReqFeatureIndex: feature 0.
+    writeU16Test(bytes, 24, required_feature_index);
     writeU16Test(bytes, 26, 1);
-    writeU16Test(bytes, 28, 1); // Ordinary FeatureIndex[]: feature 1.
+    writeU16Test(bytes, 28, optional_feature_index);
 
     writeU16Test(bytes, 34, 2);
-    writeFeatureRecordTest(bytes, 36, required_tag, 14);
-    writeFeatureRecordTest(bytes, 42, optional_tag, 20);
+    if (required_first) {
+        writeFeatureRecordTest(bytes, 36, required_tag, 14);
+        writeFeatureRecordTest(bytes, 42, optional_tag, 20);
+    } else {
+        writeFeatureRecordTest(bytes, 36, optional_tag, 20);
+        writeFeatureRecordTest(bytes, 42, required_tag, 14);
+    }
     writeFeatureTest(bytes, 48, 0);
     writeFeatureTest(bytes, 54, 1);
 

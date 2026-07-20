@@ -3102,17 +3102,17 @@ fn haniJapaneseGsubTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 30, 0);
     writeU16(bytes, 32, 0xffff);
     writeU16(bytes, 34, 1);
-    writeU16(bytes, 36, 0);
+    writeU16(bytes, 36, 1);
     writeU16(bytes, 38, 0);
     writeU16(bytes, 40, 0xffff);
     writeU16(bytes, 42, 1);
-    writeU16(bytes, 44, 1);
+    writeU16(bytes, 44, 0);
 
     writeU16(bytes, 58, 2);
-    writeTag(bytes, 60, "rlig");
-    writeU16(bytes, 64, 14);
-    writeTag(bytes, 66, "locl");
-    writeU16(bytes, 70, 20);
+    writeTag(bytes, 60, "locl");
+    writeU16(bytes, 64, 20);
+    writeTag(bytes, 66, "rlig");
+    writeU16(bytes, 70, 14);
     writeU16(bytes, 72, 0);
     writeU16(bytes, 74, 1);
     writeU16(bytes, 76, 0);

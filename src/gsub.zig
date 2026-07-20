@@ -725,7 +725,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         if (lookupIgnoresGlyph(lookup_flag, options, first)) continue;
         const covered = try coverageIndex(table, coverage_offset, first) orelse continue;
         if (covered >= lig_set_count) continue;
-        const set_offset = subtable_offset + try readU16(table, subtable_offset + 6 + covered * 2);
+        const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2));
         if (try ligatureAt(table, set_offset, glyphs.items[i..], lookup_flag, options)) |match| {
             const component_info = ligatureComponentInfoForMatch(options, i, match);
             glyphs.items[i] = match.ligature;
@@ -778,7 +778,7 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     const lig_set_count = try readU16(table, subtable_offset + 4);
     const covered = try coverageIndex(table, coverage_offset, first) orelse return null;
     if (covered >= lig_set_count) return null;
-    const set_offset = subtable_offset + try readU16(table, subtable_offset + 6 + covered * 2);
+    const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2));
     const match = try ligatureAt(table, set_offset, glyphs.items[glyph_index..], lookup_flag, options) orelse return null;
     const component_info = ligatureComponentInfoForMatch(options, glyph_index, match);
     glyphs.items[glyph_index] = match.ligature;
@@ -1563,12 +1563,18 @@ fn ensureLigatureSubstitutionSubtableWithin(table: Table, subtable_offset: usize
     const lig_set_offsets_pos = subtable_offset + 6;
     try ensureBytesWithin(table, lig_set_offsets_pos, @as(usize, lig_set_count) * 2);
     for (0..lig_set_count) |set_i| {
-        const set_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, lig_set_offsets_pos + set_i * 2));
+        // LigatureSet offsets are required for each covered first component.
+        // Zero would alias the LigatureSubst header as a LigatureSet and can
+        // reinterpret coverage/offset metadata as a real ligature definition.
+        const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16BadGsub(table, lig_set_offsets_pos + set_i * 2));
         const ligature_count = try readU16BadGsub(table, set_offset);
         const ligature_offsets_pos = set_offset + 2;
         try ensureBytesWithin(table, ligature_offsets_pos, @as(usize, ligature_count) * 2);
         for (0..ligature_count) |ligature_i| {
-            const ligature_offset = try checkedSubtableOffset(table, set_offset, try readU16BadGsub(table, ligature_offsets_pos + ligature_i * 2));
+            // Ligature offsets inside a non-empty LigatureSet are required
+            // children as well. Reject nulls before they can be treated as the
+            // LigatureSet header and silently skipped or misread by shaping.
+            const ligature_offset = try checkedRequiredSubtableOffset(table, set_offset, try readU16BadGsub(table, ligature_offsets_pos + ligature_i * 2));
             try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, ligature_offset));
             const component_count = try readU16BadGsub(table, ligature_offset + 2);
             if (component_count == 0) return error.BadGsub;
@@ -2112,7 +2118,7 @@ const max_ligature_components = 64;
 fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!?LigatureMatch {
     const ligature_count = try readU16(table, set_offset);
     for (0..ligature_count) |i| {
-        const lig_offset = set_offset + try readU16(table, set_offset + 2 + i * 2);
+        const lig_offset = try checkedRequiredSubtableOffset(table, set_offset, try readU16(table, set_offset + 2 + i * 2));
         const ligature = try readU16(table, lig_offset);
         const component_count = try readU16(table, lig_offset + 2);
         if (component_count == 0 or component_count > max_ligature_components) continue;
@@ -2546,6 +2552,64 @@ test "GSUB AlternateSubst rejects null AlternateSet offsets" {
     writeU16Test(&bytes, subtable + 14, 0); // AlternateSet.GlyphCount.
     try ensureAlternateSubstitutionSubtableWithin(table, subtable);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GSUB LigatureSubst rejects null required offsets" {
+    {
+        var bytes = [_]u8{0} ** 44;
+        const subtable = writeSingleLookupGsubTest(&bytes, 4);
+        writeU16Test(&bytes, subtable + 0, 1); // LigatureSubst format 1.
+        writeU16Test(&bytes, subtable + 2, 8); // Coverage after LigatureSetOffset array.
+        writeU16Test(&bytes, subtable + 4, 1); // One covered first glyph.
+        writeU16Test(&bytes, subtable + 6, 0); // Invalid: LigatureSet offsets are not nullable.
+        writeCoverage1(&bytes, subtable + 8, 1);
+
+        const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+        try std.testing.expectError(error.BadGsub, ensureLigatureSubstitutionSubtableWithin(table, subtable));
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+        var glyphs = std.ArrayList(GlyphId).empty;
+        defer glyphs.deinit(std.testing.allocator);
+        try glyphs.append(std.testing.allocator, 1);
+        try glyphs.append(std.testing.allocator, 2);
+        try std.testing.expectError(error.BadGsub, applyLigatureSubstitution(table, subtable, &glyphs, std.testing.allocator, 0, .{}));
+        try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+        try std.testing.expectError(error.BadGsub, applyLigatureSubstitutionAt(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
+        try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+
+        // A present but empty LigatureSet is still structurally valid; only the
+        // offset itself is required to name a real child table.
+        writeU16Test(&bytes, subtable + 6, 14);
+        writeU16Test(&bytes, subtable + 14, 0); // LigatureSet.LigatureCount.
+        try ensureLigatureSubstitutionSubtableWithin(table, subtable);
+        try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    }
+
+    {
+        var bytes = [_]u8{0} ** 44;
+        const subtable = writeSingleLookupGsubTest(&bytes, 4);
+        writeU16Test(&bytes, subtable + 0, 1); // LigatureSubst format 1.
+        writeU16Test(&bytes, subtable + 2, 12); // Coverage after the LigatureSet.
+        writeU16Test(&bytes, subtable + 4, 1);
+        writeU16Test(&bytes, subtable + 6, 8); // Non-null LigatureSet.
+        const ligature_set = subtable + 8;
+        writeU16Test(&bytes, ligature_set + 0, 1); // One Ligature offset follows.
+        writeU16Test(&bytes, ligature_set + 2, 0); // Invalid: Ligature offsets are not nullable.
+        writeCoverage1(&bytes, subtable + 12, 1);
+
+        const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+        try std.testing.expectError(error.BadGsub, ensureLigatureSubstitutionSubtableWithin(table, subtable));
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+        var glyphs = std.ArrayList(GlyphId).empty;
+        defer glyphs.deinit(std.testing.allocator);
+        try glyphs.append(std.testing.allocator, 1);
+        try glyphs.append(std.testing.allocator, 2);
+        try std.testing.expectError(error.BadGsub, applyLigatureSubstitution(table, subtable, &glyphs, std.testing.allocator, 0, .{}));
+        try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+        try std.testing.expectError(error.BadGsub, applyLigatureSubstitutionAt(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
+        try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+    }
 }
 
 test "GSUB glyph ids are validated against maxp glyph count" {

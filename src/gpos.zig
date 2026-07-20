@@ -885,7 +885,7 @@ fn collectMarkToBaseAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
     const mark_class = try readU16(table, mark_record_offset);
     if (mark_class >= class_count) return false;
-    const mark_anchor_offset = mark_array_offset + try readU16(table, mark_record_offset + 2);
+    const mark_anchor_offset = try checkedRequiredPositionOffset(table, mark_array_offset, try readU16(table, mark_record_offset + 2));
     const base_anchor_record = base_array_offset + 2 + (base_index * class_count + mark_class) * 2;
     const base_anchor_relative = try readU16(table, base_anchor_record);
     if (base_anchor_relative == 0) return false;
@@ -2427,7 +2427,7 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
     const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
     const mark_class = try readU16(table, mark_record_offset);
     if (mark_class >= class_count) return false;
-    const mark_anchor_offset = mark_array_offset + try readU16(table, mark_record_offset + 2);
+    const mark_anchor_offset = try checkedRequiredPositionOffset(table, mark_array_offset, try readU16(table, mark_record_offset + 2));
     const ligature_attach_offset = ligature_array_offset + try readU16(table, ligature_array_offset + 2 + ligature_index * 2);
     const component_count = try readU16(table, ligature_attach_offset);
     if (component_count == 0) return false;
@@ -2551,7 +2551,7 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     const mark_1_record_offset = mark_1_array_offset + 2 + mark_1_index * 4;
     const mark_class = try readU16(table, mark_1_record_offset);
     if (mark_class >= class_count) return false;
-    const mark_1_anchor_offset = mark_1_array_offset + try readU16(table, mark_1_record_offset + 2);
+    const mark_1_anchor_offset = try checkedRequiredPositionOffset(table, mark_1_array_offset, try readU16(table, mark_1_record_offset + 2));
     const mark_2_anchor_record = mark_2_array_offset + 2 + (mark_2_index * class_count + mark_class) * 2;
     const mark_2_anchor_relative = try readU16(table, mark_2_anchor_record);
     if (mark_2_anchor_relative == 0) return false;
@@ -3652,6 +3652,12 @@ test "GPOS MarkBasePos rejects null required array offsets" {
     try std.testing.expectError(error.BadGpos, ensureMarkToBasePositionSubtableWithin(table, 0));
 
     writeU16Test(&bytes, 10, 36);
+    writeU16Test(&bytes, mark_array + 4, 0); // Invalid: MarkRecord anchors are required.
+    try std.testing.expectError(error.BadGpos, ensureMarkToBasePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, collectMarkToBaseAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16Test(&bytes, mark_array + 4, 6);
     try collectMarkToBaseAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{});
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
@@ -3710,6 +3716,13 @@ test "GPOS MarkLigPos rejects null LigatureAttach offsets" {
     writeU16Test(&bytes, ligature_attach + 2, 4);
     writeAnchor1Test(&bytes, ligature_attach + 4, 100, 120);
     try ensureMarkToLigaturePositionSubtableWithin(table, 0);
+
+    writeU16Test(&bytes, mark_array + 4, 0); // Invalid: MarkRecord anchors are required.
+    try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, collectMarkToLigatureAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16Test(&bytes, mark_array + 4, 6);
     try collectMarkToLigatureAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{});
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
@@ -3755,6 +3768,12 @@ test "GPOS MarkMarkPos rejects null required array offsets" {
     try std.testing.expectError(error.BadGpos, ensureMarkToMarkPositionSubtableWithin(table, 0));
 
     writeU16Test(&bytes, 10, 36);
+    writeU16Test(&bytes, mark_1_array + 4, 0); // Invalid: MarkRecord anchors are required.
+    try std.testing.expectError(error.BadGpos, ensureMarkToMarkPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, collectMarkToMarkAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16Test(&bytes, mark_1_array + 4, 6);
     try collectMarkToMarkAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{});
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);

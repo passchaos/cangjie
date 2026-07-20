@@ -3867,6 +3867,16 @@ fn validateCmapFormat4(data: []const u8, offset: usize, length: usize, validate_
         previous_end = end;
 
         const range_offset = try bin.readU16At(data, id_range_offsets + index * 2);
+        if (index == seg_count - 1) {
+            const delta = try bin.readI16At(data, id_deltas + index * 2);
+            // The terminal segment is not an ordinary mapping range: OpenType
+            // requires the exact 0xffff -> glyph 0 sentinel so binary-search
+            // cmap consumers have a guaranteed stop record. Accepting a wider
+            // or non-missing final range would make U+FFFF visible as a real
+            // glyph in this parser and can make other parsers disagree about
+            // where the searchable character-domain ends.
+            if (start != 0xffff or end != 0xffff or delta != 1 or range_offset != 0) return error.BadSfnt;
+        }
         if (range_offset != 0) {
             if ((range_offset & 1) != 0) return error.BadSfnt;
             const first_glyph = id_range_offsets + index * 2 + @as(usize, range_offset);
@@ -10149,6 +10159,14 @@ test "cmap format 4 parser rejects malformed segment metadata" {
     var missing_sentinel = valid;
     writeCmapFormat4SegmentTest(&missing_sentinel, 1, 'Z', 'Z', 1, 0);
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &missing_sentinel, cmap, 512));
+
+    var sentinel_maps_real_glyph = valid;
+    writeCmapFormat4SegmentTest(&sentinel_maps_real_glyph, 1, 0xffff, 0xffff, 2, 0);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &sentinel_maps_real_glyph, cmap, 512));
+
+    var sentinel_uses_glyph_array = valid;
+    writeCmapFormat4SegmentTest(&sentinel_uses_glyph_array, 1, 0xffff, 0xffff, 0, 2);
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &sentinel_uses_glyph_array, cmap, 512));
 
     var bad_search_range = valid;
     writeU16Test(&bad_search_range, 20, 2);

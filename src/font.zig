@@ -788,6 +788,7 @@ pub const Font = struct {
     pub fn glyphClass(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!GlyphClass {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return .unclassified;
+        try validateSfntTableChecksum(self.data, gdef);
         const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
         const glyph_class_def_offset = try bin.readU16At(self.data, gdef.offset + 4);
         if (glyph_class_def_offset == 0) return .unclassified;
@@ -803,6 +804,7 @@ pub const Font = struct {
     pub fn markAttachClass(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!u16 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return 0;
+        try validateSfntTableChecksum(self.data, gdef);
         const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
         const mark_attach_class_def_offset = try bin.readU16At(self.data, gdef.offset + 10);
         if (mark_attach_class_def_offset == 0) return 0;
@@ -812,6 +814,7 @@ pub const Font = struct {
 
     fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {
         const gdef = self.gdef orelse return null;
+        try validateSfntTableChecksum(self.data, gdef);
         if (gdef.length < 4) return error.BadSfnt;
         const major = try bin.readU16At(self.data, gdef.offset);
         const minor = try bin.readU16At(self.data, gdef.offset + 2);
@@ -9081,7 +9084,27 @@ test "GDEF lazy glyph class rejects mutated class values outside enum" {
     try std.testing.expectError(error.BadSfnt, font.glyphClass(1));
 
     writeU16Test(bytes, gdef_offset + 20, @intFromEnum(GlyphClass.base));
+    try updateSfntTableChecksum(bytes, "GDEF");
     try std.testing.expectEqual(@as(u16, 7), try font.markAttachClass(3));
+}
+
+test "GDEF lazy class APIs revalidate borrowed table checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGdefClassTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(GlyphClass.base, try font.glyphClass(1));
+
+    const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
+    // Keep the ClassDef value inside the valid GDEF enum while changing the
+    // borrowed table after parse. The lazy public API must reject the table
+    // because it no longer matches the SFNT checksum that Font.parse accepted.
+    writeU16Test(bytes, gdef_offset + 20, @intFromEnum(GlyphClass.ligature));
+    try std.testing.expectError(error.BadSfnt, font.glyphClass(1));
 }
 
 test "GDEF lazy class APIs revalidate child offsets after borrowed bytes mutate" {
@@ -15629,6 +15652,8 @@ fn gdefOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    const gdef_record: TableRecord = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = data.len };
+    const gdef_checksum = checksumSfntTable(data, gdef_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -15647,7 +15672,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .os2 = null,
-        .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = data.len },
+        .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = gdef_checksum, .offset = 0, .length = data.len },
         .gpos = null,
         .gsub = null,
         .name = null,

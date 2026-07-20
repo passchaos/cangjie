@@ -927,14 +927,14 @@ pub const TextShaper = struct {
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
         _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, .{ .direction = options.direction });
-        try buildParagraphLines(buffer, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
+        try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
         return buffer.paragraphLayout();
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try validateParagraphOptions(options);
         _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, .{ .direction = options.direction });
-        try buildParagraphLines(buffer, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
+        try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
         return buffer.paragraphLayout();
     }
 
@@ -1187,7 +1187,7 @@ fn recomputeRunOffsets(buffer: *LayoutBuffer) void {
     }
 }
 
-fn buildParagraphLines(buffer: *LayoutBuffer, options: ParagraphOptions, default_metrics: BaselineMetrics) !void {
+fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: ParagraphOptions, default_metrics: BaselineMetrics) !void {
     buffer.lines.clearRetainingCapacity();
     const line_height = options.line_height orelse default_metrics.lineHeight();
     const line_metrics = metricsForLineHeight(default_metrics, line_height);
@@ -1203,10 +1203,16 @@ fn buildParagraphLines(buffer: *LayoutBuffer, options: ParagraphOptions, default
     const max_lines = options.max_lines orelse std.math.maxInt(usize);
     const space_advance = defaultSpaceAdvance(buffer.glyphs.items);
     const tab_stop = @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
+    const grapheme_clusters = try unicode.itemizeGraphemeClusters(buffer.allocator, text);
+    defer buffer.allocator.free(grapheme_clusters);
 
     // Greedy line breaking tracks the most recent soft break. When a line
     // overflows, it prefers that break; otherwise it breaks at the overflowing
-    // glyph so long words and CJK runs still make progress.
+    // grapheme cluster so long words and CJK runs still make progress. Falling
+    // back at grapheme boundaries is critical for clusters that shape into
+    // multiple glyphs, such as base+combining-mark sequences when a font lacks
+    // mark attachment: splitting inside that cluster would put one user-visible
+    // character on two different lines.
     while (index < buffer.glyphs.items.len) : (index += 1) {
         var glyph = &buffer.glyphs.items[index];
         if (glyph.codepoint == '\n') {
@@ -1233,14 +1239,15 @@ fn buildParagraphLines(buffer: *LayoutBuffer, options: ParagraphOptions, default
         line_width += glyph.x_advance;
         const current_line_limit = lineWidthLimit(line_in_paragraph, max_width, options);
         if (line_width > current_line_limit and index + 1 > line_start) {
-            const overflow_break = chooseOverflowBreak(glyph.*, index, line_start, last_break);
+            const overflow_break = chooseOverflowBreak(buffer.glyphs.items, grapheme_clusters, index, line_start, last_break);
+            if (overflow_break.defer_until_cluster_end) continue;
             const break_end = overflow_break.index;
             const break_width = if (overflow_break.uses_current_discardable)
                 line_width - glyph.x_advance
-            else if (break_end == index)
-                lineWidth(buffer.glyphs.items[line_start..break_end])
+            else if (last_break != null and break_end == last_break.?)
+                width_at_break
             else
-                width_at_break;
+                lineWidth(buffer.glyphs.items[line_start..break_end]);
             try appendParagraphLine(buffer, line_start, break_end, break_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
             if (buffer.lines.items.len >= max_lines) {
                 try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
@@ -1264,10 +1271,56 @@ fn buildParagraphLines(buffer: *LayoutBuffer, options: ParagraphOptions, default
     try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, false);
 }
 
-fn chooseOverflowBreak(glyph: GlyphPosition, index: usize, line_start: usize, last_break: ?usize) struct { index: usize, uses_current_discardable: bool } {
-    if (isDiscardableBreak(glyph.codepoint)) return .{ .index = index, .uses_current_discardable = true };
+const OverflowBreak = struct {
+    index: usize,
+    uses_current_discardable: bool = false,
+    defer_until_cluster_end: bool = false,
+};
+
+fn chooseOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []const unicode.GraphemeCluster, index: usize, line_start: usize, last_break: ?usize) OverflowBreak {
+    if (isDiscardableBreak(glyphs[index].codepoint)) return .{ .index = index, .uses_current_discardable = true };
     if (last_break != null and last_break.? > line_start) return .{ .index = last_break.?, .uses_current_discardable = false };
-    return .{ .index = index, .uses_current_discardable = false };
+    return graphemeOverflowBreak(glyphs, grapheme_clusters, index, line_start);
+}
+
+fn graphemeOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []const unicode.GraphemeCluster, index: usize, line_start: usize) OverflowBreak {
+    const cluster_start = glyphClusterStart(glyphs[index]);
+    const line_cluster_start = glyphClusterStart(glyphs[line_start]);
+    const current_cluster = graphemeClusterContaining(grapheme_clusters, cluster_start) orelse return .{ .index = index + 1 };
+    const current_cluster_start = current_cluster.byte_start;
+    const current_cluster_end = current_cluster.byte_start + current_cluster.byte_len;
+
+    if (current_cluster_start > line_cluster_start) {
+        return .{ .index = glyphIndexForSourceBoundary(glyphs, current_cluster_start, line_start, index) orelse index };
+    }
+    if (glyphSourceEnd(glyphs[index]) >= current_cluster_end) {
+        return .{ .index = index + 1 };
+    }
+    return .{ .index = index, .defer_until_cluster_end = true };
+}
+
+fn glyphClusterStart(glyph: GlyphPosition) usize {
+    return glyph.cluster;
+}
+
+fn glyphSourceEnd(glyph: GlyphPosition) usize {
+    return glyph.cluster + @max(glyph.source_byte_len, 1);
+}
+
+fn graphemeClusterContaining(clusters: []const unicode.GraphemeCluster, byte_offset: usize) ?unicode.GraphemeCluster {
+    for (clusters) |cluster| {
+        const end = cluster.byte_start + cluster.byte_len;
+        if (byte_offset >= cluster.byte_start and byte_offset < end) return cluster;
+    }
+    return null;
+}
+
+fn glyphIndexForSourceBoundary(glyphs: []const GlyphPosition, boundary: usize, line_start: usize, fallback: usize) ?usize {
+    var index = line_start + 1;
+    while (index <= fallback) : (index += 1) {
+        if (glyphClusterStart(glyphs[index]) >= boundary) return index;
+    }
+    return null;
 }
 
 fn defaultAlignment(options: ParagraphOptions) TextAlign {

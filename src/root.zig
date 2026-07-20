@@ -3090,6 +3090,37 @@ test "wraps CJK text at character boundaries without spaces" {
     try std.testing.expectEqual(@as(usize, 6), paragraph.glyphs[2].cluster);
 }
 
+test "paragraph wrapping keeps combining grapheme clusters atomic" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A\u{0301}A", 20, .{
+        .max_width = 20,
+        .line_height = 24,
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(u21, 'A'), paragraph.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x0301), paragraph.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(u21, 'A'), paragraph.glyphs[2].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), paragraph.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 1), paragraph.glyphs[1].cluster);
+    try std.testing.expectEqual(@as(usize, 3), paragraph.glyphs[2].cluster);
+}
+
 test "limits paragraph lines and appends ellipsis" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

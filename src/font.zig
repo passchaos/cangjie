@@ -3364,7 +3364,7 @@ fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: 
     const validate_bmp_scalars = cmapSubtableUsesUnicodeScalars(platform_id, encoding_id);
     switch (format) {
         0 => try validateCmapFormat0(length),
-        2 => try validateCmapFormat2(data, offset, length),
+        2 => try validateCmapFormat2(data, offset, length, validate_bmp_scalars),
         6 => try validateCmapFormat6(data, offset, length, validate_bmp_scalars),
         8 => try validateCmapFormat8(data, offset, length),
         10 => try validateCmapFormat10(data, offset, length),
@@ -3639,7 +3639,7 @@ fn validateCmapFormat0(length: usize) FontError!void {
     if (length != 262) return error.BadSfnt;
 }
 
-fn validateCmapFormat2(data: []const u8, offset: usize, length: usize) FontError!void {
+fn validateCmapFormat2(data: []const u8, offset: usize, length: usize, validate_unicode_scalars: bool) FontError!void {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     if (length < 526) return error.BadSfnt;
 
@@ -3669,6 +3669,14 @@ fn validateCmapFormat2(data: []const u8, offset: usize, length: usize) FontError
 
         const last_entry_index = @as(usize, entry_count) - 1;
         if (@as(usize, first_code) + last_entry_index > 0xff) return error.BadSfnt;
+        if (validate_unicode_scalars) {
+            // Format 2 stores only low-byte ranges in each SubHeader; the
+            // high-byte key that selected the SubHeader supplies the rest of
+            // the BMP code point. Validate every referencing high-byte domain
+            // so Unicode cmaps cannot advertise surrogate character codes
+            // while still looking structurally valid at the glyph-array level.
+            try validateCmapFormat2UnicodeScalarRange(data, offset, subheader_index, first_code, entry_count);
+        }
         if ((id_range_offset & 1) != 0) return error.BadSfnt;
         const first_glyph = subheader_offset + 6 + @as(usize, id_range_offset);
         const last_glyph = first_glyph + last_entry_index * 2;
@@ -3676,6 +3684,24 @@ fn validateCmapFormat2(data: []const u8, offset: usize, length: usize) FontError
         // conceptually after the declared SubHeader array, so disallow offsets
         // that point back into SubHeader metadata or beyond the declared cmap.
         if (first_glyph < glyph_array_start or last_glyph > table_end or table_end - last_glyph < 2) return error.BadSfnt;
+    }
+}
+
+fn validateCmapFormat2UnicodeScalarRange(data: []const u8, offset: usize, subheader_index: usize, first_code: u16, entry_count: u16) FontError!void {
+    for (0..256) |high_byte| {
+        const key = try bin.readU16At(data, offset + 6 + high_byte * 2);
+        if (key / 8 != subheader_index) continue;
+        if (subheader_index == 0) {
+            // SubHeader[0] is also the single-byte map. High-byte zero covers
+            // U+00xx; other high bytes with a zero key mean "unmapped" rather
+            // than a two-byte range, matching glyphIndexFormat2.
+            if (high_byte != 0) continue;
+        }
+
+        const start = (@as(u32, @intCast(high_byte)) << 8) | first_code;
+        const end = start + @as(u32, entry_count) - 1;
+        if (!isUnicodeScalarValue(start) or !isUnicodeScalarValue(end)) return error.BadSfnt;
+        if (start < 0xe000 and end > 0xd7ff) return error.BadSfnt;
     }
 }
 
@@ -5057,7 +5083,11 @@ fn glyphIndexFormat0(data: []const u8, offset: usize, codepoint: u21) FontError!
 
 fn glyphIndexFormat2(data: []const u8, offset: usize, length: usize, codepoint: u21) FontError!glyph_mod.GlyphId {
     if (codepoint > 0xffff) return 0;
-    try validateCmapFormat2(data, offset, length);
+    // Public glyphIndex has already rejected surrogate Unicode scalars. The
+    // lazy structural recheck here intentionally keeps the scalar-domain flag
+    // off because the platform/encoding record is validated by
+    // validateCmapLookupSubtable before this format-specific lookup runs.
+    try validateCmapFormat2(data, offset, length, false);
 
     const high_byte: u8 = @intCast((codepoint >> 8) & 0xff);
     const low_byte: u8 = @intCast(codepoint & 0xff);
@@ -9874,6 +9904,39 @@ test "cmap format 2 validates subheader and glyph-array bounds" {
     var backwards_range = valid;
     writeU16Test(&backwards_range, subtable + 532, 0);
     try std.testing.expectError(error.BadSfnt, parseCmapSubtables(std.testing.allocator, &backwards_range, cmap, 128));
+}
+
+test "Unicode cmap format 2 rejects surrogate character ranges" {
+    var surrogate: [12 + 536]u8 = .{0} ** (12 + 536);
+    writeU16Test(&surrogate, 2, 1); // One EncodingRecord.
+    writeU16Test(&surrogate, 4, 0); // Unicode platform.
+    writeU16Test(&surrogate, 6, 2); // Deprecated but Unicode scalar cmap.
+    writeU32Test(&surrogate, 8, 12);
+    const subtable = 12;
+    writeU16Test(&surrogate, subtable, 2);
+    writeU16Test(&surrogate, subtable + 2, 536);
+    writeU16Test(&surrogate, subtable + 6 + 0xd8 * 2, 8); // High byte 0xd8 uses SubHeader[1].
+    writeU16Test(&surrogate, subtable + 526, 0); // Low byte 0 starts at U+d800.
+    writeU16Test(&surrogate, subtable + 528, 1);
+    writeI16Test(&surrogate, subtable + 530, 0);
+    writeU16Test(&surrogate, subtable + 532, 2);
+    writeU16Test(&surrogate, subtable + 534, 1);
+
+    const unicode_cmap: TableRecord = .{
+        .tag = .{ 'c', 'm', 'a', 'p' },
+        .checksum = 0,
+        .offset = 0,
+        .length = surrogate.len,
+    };
+    try std.testing.expectError(error.BadSfnt, parseCmapSubtables(std.testing.allocator, &surrogate, unicode_cmap, 128));
+
+    // Legacy Windows code-page format-2 subtables are byte-code maps rather
+    // than Unicode scalar maps. Keep accepting the same byte range there so the
+    // surrogate check does not reject non-Unicode East Asian production fonts.
+    writeU16Test(&surrogate, 4, 3);
+    writeU16Test(&surrogate, 6, 2);
+    const legacy_subtables = try parseCmapSubtables(std.testing.allocator, &surrogate, unicode_cmap, 128);
+    defer std.testing.allocator.free(legacy_subtables);
 }
 
 test "cmap format 6 and 10 validate declared array size and Unicode range" {

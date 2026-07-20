@@ -89,7 +89,7 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const feature_count = try ensureFeatureLookupReferencesWithin(table, lookup_count);
     try ensureScriptFeatureReferencesWithin(table, feature_count);
     for (0..lookup_count) |lookup_i| {
-        const lookup_offset = try checkedPositionOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_list_offset + 2 + lookup_i * 2));
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_list_offset + 2 + lookup_i * 2));
         try ensurePositionLookupHeaderWithin(table, lookup_offset);
         const lookup_type = try readU16BadGpos(table, lookup_offset);
         const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
@@ -130,8 +130,8 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     const lookup_count = try readU16(table, lookup_list_offset);
     for (0..lookup_count) |i| {
         if (selected_lookups.items.len != 0 and !containsLookup(selected_lookups.items, @intCast(i))) continue;
-        const lookup_offset = try readU16(table, lookup_list_offset + 2 + i * 2);
-        try collectLookup(table, lookup_list_offset + lookup_offset, glyphs, adjustments, allocator, options);
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
+        try collectLookup(table, lookup_offset, glyphs, adjustments, allocator, options);
     }
 }
 
@@ -1342,7 +1342,7 @@ fn ensurePositionRecordLookupsWithinDepth(table: Table, records_pos: usize, reco
         const lookup_index = try readU16BadGpos(table, record_offset + 2);
         if (lookup_index >= lookup_count) return error.BadGpos;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
-        const lookup_offset = lookup_list_offset + try readU16BadGpos(table, lookup_offset_pos);
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_offset_pos));
         try ensurePositionLookupHeaderWithin(table, lookup_offset);
         const lookup_type = try readU16BadGpos(table, lookup_offset);
         const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
@@ -2260,6 +2260,13 @@ fn checkedRequiredLookupListOffset(table: Table) GposError!usize {
     return checkedRequiredPositionOffset(table, 0, try readU16BadGpos(table, 8));
 }
 
+fn checkedRequiredLookupOffset(table: Table, lookup_list_offset: usize, relative_offset: u16) GposError!usize {
+    // LookupList offsets are required children. A zero entry aliases the
+    // LookupList's count/offset array as a Lookup header and can turn layout
+    // directory metadata into positioning operations or mark-filtering state.
+    return checkedRequiredPositionOffset(table, lookup_list_offset, relative_offset);
+}
+
 fn checkedRequiredCoverageOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
     // Coverage offsets are mandatory in GPOS subtables and contextual coverage
     // arrays. A null coverage pointer aliases the parent header as Coverage
@@ -2302,7 +2309,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (lookup_index >= lookup_count) return error.BadGpos;
-    const lookup_offset = lookup_list_offset + try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2);
+    const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
@@ -2941,6 +2948,59 @@ test "GPOS rejects null top-level LookupList offsets" {
     // With the LookupList restored, the same SinglePos lookup is valid and
     // still applies normally; only the header-aliasing null offset is invalid.
     writeU16Test(&bytes, 8, 10);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    try collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 20), adjustments.items[0].x_placement);
+}
+
+test "GPOS rejects null LookupList child offsets" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 42;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 38); // Empty ScriptList.
+    writeU16Test(&bytes, 6, 40); // Empty FeatureList.
+    writeU16Test(&bytes, 8, 10); // LookupList.
+    writeU16Test(&bytes, 10, 1); // LookupCount.
+    writeU16Test(&bytes, 12, 0); // Invalid: LookupList child offsets are required.
+
+    // Without the required-child check, offset zero aliases the LookupList
+    // header as a SinglePos lookup: LookupCount becomes LookupType, the null
+    // offset slot becomes LookupFlag, and following words supply a plausible
+    // SubTable offset and payload. This keeps the regression focused on the
+    // child pointer instead of depending on accidental truncation.
+    writeU16Test(&bytes, 14, 1); // Aliased SubTableCount.
+    writeU16Test(&bytes, 16, 8); // Aliased SubTable offset: 10 + 8 == 18.
+    writeU16Test(&bytes, 18, 1); // SinglePos format 1.
+    writeU16Test(&bytes, 20, 8);
+    writeU16Test(&bytes, 22, 0x0001); // xPlacement.
+    writeI16Test(&bytes, 24, 20);
+    writeCoverage1Test(&bytes, 26, 1);
+    writeU16Test(&bytes, 38, 0); // ScriptCount.
+    writeU16Test(&bytes, 40, 0); // FeatureCount.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, checkedRequiredLookupOffset(table, 10, 0));
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try std.testing.expectError(error.BadGpos, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    // Rebuild the lookup with a non-null child offset. The repaired table keeps
+    // the same logical positioning operation and applies normally.
+    @memset(&bytes, 0);
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 38);
+    writeU16Test(&bytes, 6, 40);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 1);
+    writeU16Test(&bytes, 12, 4);
+    writeSinglePositionLookup(&bytes, 14, 1, 0, 20);
+    writeU16Test(&bytes, 38, 0);
+    writeU16Test(&bytes, 40, 0);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
     try collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{});
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);

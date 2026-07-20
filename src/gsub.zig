@@ -84,8 +84,8 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     const lookup_count = try readU16(table, lookup_list_offset);
     for (0..lookup_count) |i| {
         if (selected_lookups.items.len != 0 and !containsLookup(selected_lookups.items, @intCast(i))) continue;
-        const lookup_offset = try readU16(table, lookup_list_offset + 2 + i * 2);
-        try applyLookup(table, lookup_list_offset + lookup_offset, glyphs, allocator, options);
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
+        try applyLookup(table, lookup_offset, glyphs, allocator, options);
     }
 }
 
@@ -110,7 +110,7 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const feature_count = try ensureFeatureLookupReferencesWithin(table, lookup_count);
     try ensureScriptFeatureReferencesWithin(table, feature_count);
     for (0..lookup_count) |lookup_i| {
-        const lookup_offset = try checkedSubtableOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
         try ensureLookupHeaderWithin(table, lookup_offset);
         const lookup_type = try readU16BadGsub(table, lookup_offset);
         const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
@@ -1310,7 +1310,7 @@ fn ensureSubstitutionRecordLookupsWithin(table: Table, records_offset: usize, re
         const lookup_index = try readU16BadGsub(table, record_offset + 2);
         if (lookup_index >= lookup_count) return error.BadGsub;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
-        const lookup_offset = lookup_list_offset + try readU16BadGsub(table, lookup_offset_pos);
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_offset_pos));
         try ensureLookupHeaderWithin(table, lookup_offset);
     }
 }
@@ -2047,6 +2047,13 @@ fn checkedRequiredLookupListOffset(table: Table) GsubError!usize {
     return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 8));
 }
 
+fn checkedRequiredLookupOffset(table: Table, lookup_list_offset: usize, relative_offset: u16) GsubError!usize {
+    // Each LookupList entry is a mandatory child pointer. Offset zero aliases
+    // the LookupList header as a Lookup table, allowing LookupCount and offset
+    // slots to masquerade as LookupType/LookupFlag/SubTable data.
+    return checkedRequiredSubtableOffset(table, lookup_list_offset, relative_offset);
+}
+
 fn checkedRequiredCoverageOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
     // Coverage offsets are mandatory in GSUB subtables and coverage arrays.
     // Treating zero as "relative to the parent" aliases the parent header as a
@@ -2098,7 +2105,7 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (lookup_index >= lookup_count) return error.BadGsub;
-    const nested_lookup_offset = lookup_list_offset + try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2);
+    const nested_lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
     const lookup_type = try readU16(table, nested_lookup_offset);
     const lookup_flag = try readU16(table, nested_lookup_offset + 2);
     const subtable_count = try readU16(table, nested_lookup_offset + 4);
@@ -2519,6 +2526,51 @@ test "GSUB rejects null top-level LookupList offsets" {
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
     try applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{});
     try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+}
+
+test "GSUB rejects null LookupList child offsets" {
+    var bytes = [_]u8{0} ** 38;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // Empty ScriptList.
+    writeU16Test(&bytes, 6, 12); // Empty FeatureList.
+    writeU16Test(&bytes, 8, 14); // LookupList.
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 1); // LookupCount.
+    writeU16Test(&bytes, 16, 0); // Invalid: LookupList child offsets are required.
+
+    // If the null child pointer were accepted, the LookupList header would be
+    // reinterpreted as a valid SingleSubst lookup: LookupCount becomes
+    // LookupType, the null child offset becomes LookupFlag, and the following
+    // words point at this real subtable. Keep the alias plausible so this test
+    // covers the child-pointer contract rather than relying on later truncation.
+    writeU16Test(&bytes, 18, 1); // Aliased SubTableCount.
+    writeU16Test(&bytes, 20, 8); // Aliased SubTable offset: 14 + 8 == 22.
+    writeU16Test(&bytes, 22, 1); // SingleSubst format 1.
+    writeU16Test(&bytes, 24, 6);
+    writeI16Test(&bytes, 26, 1);
+    writeCoverage1(&bytes, 28, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, checkedRequiredLookupOffset(table, 14, 0));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 1);
+    try std.testing.expectError(error.BadGsub, applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    // Rebuild the same logical lookup with a non-null LookupList child offset.
+    // The repaired table applies normally; only the null Lookup pointer was bad.
+    const subtable = writeSingleLookupGsubTest(&bytes, 1);
+    writeU16Test(&bytes, subtable + 0, 1);
+    writeU16Test(&bytes, subtable + 2, 6);
+    writeI16Test(&bytes, subtable + 4, 1);
+    writeCoverage1(&bytes, subtable + 6, 1);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    try applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{2}, glyphs.items);
 }
 
 test "GSUB rejects null top-level ScriptList and FeatureList offsets" {

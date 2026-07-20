@@ -1124,6 +1124,7 @@ pub const Font = struct {
     pub fn svgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const svg = self.svg orelse return null;
+        try validateSfntTableChecksum(self.data, svg);
         const document_list = try svgDocumentList(self.data, svg);
 
         var previous_end_glyph_id: ?glyph_mod.GlyphId = null;
@@ -12876,6 +12877,28 @@ test "SVG public document lookup revalidates borrowed XML payloads" {
     try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(1));
 }
 
+test "SVG public document lookup revalidates borrowed table checksum" {
+    var bytes: [32]u8 = .{0} ** 32;
+    writeU16Test(&bytes, 0, 0); // SVG table version.
+    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
+    writeU16Test(&bytes, 10, 1); // one SVGDocumentRecord.
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 1);
+    writeU32Test(&bytes, 16, 14); // Document starts at byte 24.
+    writeU32Test(&bytes, 20, 8);
+    @memcpy(bytes[24..32], "<svg/>  ");
+
+    const font = svgOnlyFont(&bytes);
+    const original = (try font.svgGlyphDocument(1)).?;
+    try std.testing.expectEqualSlices(u8, "<svg/>  ", original.data);
+
+    // Keep the XML payload valid while changing only trailing whitespace after
+    // construction. Lazy lookup must reject the borrowed SVG table because its
+    // SFNT checksum no longer matches the parsed table map.
+    bytes[31] = '\n';
+    try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(1));
+}
+
 test "SVG document offsets cannot overlap table metadata" {
     var header_overlap: [18]u8 = .{0} ** 18;
     writeU16Test(&header_overlap, 0, 0);
@@ -15921,6 +15944,8 @@ fn svgOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    const svg_record: TableRecord = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = data.len };
+    const svg_checksum = checksumSfntTable(data, svg_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -15949,7 +15974,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
-        .svg = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = data.len },
+        .svg = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = svg_checksum, .offset = 0, .length = data.len },
         .sbix = null,
         .cblc = null,
         .cbdt = null,

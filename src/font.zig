@@ -4154,7 +4154,10 @@ fn validateGdefTable(data: []const u8, gdef: TableRecord, glyph_count: u16) Font
         try validateClassDefGlyphBounds(table, glyph_class_def_offset, glyph_count);
         try validateGlyphClassDefValues(table, glyph_class_def_offset);
     }
-    if (attach_list_offset != 0) try validateGdefChildOffset(attach_list_offset, gdef.length, header_len);
+    if (attach_list_offset != 0) {
+        try validateGdefChildOffset(attach_list_offset, gdef.length, header_len);
+        try validateGdefAttachList(table, attach_list_offset, glyph_count);
+    }
     if (lig_caret_list_offset != 0) try validateGdefChildOffset(lig_caret_list_offset, gdef.length, header_len);
     if (mark_attach_class_def_offset != 0) {
         try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
@@ -4194,6 +4197,54 @@ fn validateGdefChildOffset(offset: usize, table_len: usize, header_len: usize) F
     // header prevents a malformed table from reinterpreting offset fields as a
     // ClassDef or Coverage payload during lookup-flag filtering.
     if (offset < header_len or offset >= table_len) return error.BadSfnt;
+}
+
+fn validateGdefAttachList(data: []const u8, offset: usize, glyph_count_bound: u16) FontError!void {
+    if (offset + 4 > data.len) return error.BadSfnt;
+    const coverage_relative = try bin.readU16At(data, offset);
+    const glyph_count = try bin.readU16At(data, offset + 2);
+    const attach_offsets_pos = offset + 4;
+    if (@as(usize, glyph_count) * 2 > data.len - attach_offsets_pos) return error.BadSfnt;
+
+    const attach_data_start = 4 + @as(usize, glyph_count) * 2;
+    const coverage_offset = try checkedGdefRelativeOffset(data, offset, coverage_relative, attach_data_start);
+    try validateCoverageGlyphBounds(data, coverage_offset, glyph_count_bound);
+    if (try coverageGlyphCount(data, coverage_offset) != glyph_count) return error.BadSfnt;
+
+    for (0..glyph_count) |index| {
+        const attach_relative = try bin.readU16At(data, attach_offsets_pos + index * 2);
+        // AttachPoint offsets are parallel to Coverage indexes and are not
+        // nullable in GDEF. Requiring them to start after the declared offset
+        // array prevents malformed fonts from reinterpreting AttachList header
+        // bytes as point-count data for covered glyphs.
+        const attach_offset = try checkedGdefRelativeOffset(data, offset, attach_relative, attach_data_start);
+        try validateGdefAttachPoint(data, attach_offset);
+    }
+}
+
+fn checkedGdefRelativeOffset(data: []const u8, base: usize, relative: usize, minimum_relative: usize) FontError!usize {
+    if (relative < minimum_relative) return error.BadSfnt;
+    if (relative > data.len - base) return error.BadSfnt;
+    return base + relative;
+}
+
+fn validateGdefAttachPoint(data: []const u8, offset: usize) FontError!void {
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const point_count = try bin.readU16At(data, offset);
+    if (@as(usize, point_count) * 2 > data.len - (offset + 2)) return error.BadSfnt;
+
+    var previous: ?u16 = null;
+    for (0..point_count) |index| {
+        const point = try bin.readU16At(data, offset + 2 + index * 2);
+        // OpenType requires AttachPoint point indexes to be sorted. Enforcing
+        // that canonical form at parse time keeps attachment metadata stable
+        // instead of making later consumers choose between duplicate or
+        // order-dependent point records.
+        if (previous) |last| {
+            if (point <= last) return error.BadSfnt;
+        }
+        previous = point;
+    }
 }
 
 fn validateClassDefGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
@@ -4308,6 +4359,35 @@ fn validateCoverageGlyphBounds(data: []const u8, offset: usize, glyph_count: u16
                 if (end >= glyph_count) return error.BadSfnt;
                 previous_end = end;
             }
+        },
+        else => return error.BadSfnt,
+    }
+}
+
+fn coverageGlyphCount(data: []const u8, offset: usize) FontError!u16 {
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    switch (format) {
+        1 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, count) * 2 > data.len - (offset + 4)) return error.BadSfnt;
+            return count;
+        },
+        2 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const range_count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
+            var total: usize = 0;
+            for (0..range_count) |index| {
+                const range_offset = offset + 4 + index * 6;
+                const start = try bin.readU16At(data, range_offset);
+                const end = try bin.readU16At(data, range_offset + 2);
+                if (end < start) return error.BadSfnt;
+                total += @as(usize, end) - @as(usize, start) + 1;
+                if (total > std.math.maxInt(u16)) return error.BadSfnt;
+            }
+            return @intCast(total);
         },
         else => return error.BadSfnt,
     }
@@ -8503,6 +8583,53 @@ test "GDEF parse validation rejects class and mark-set glyph ids past maxp" {
     writeU16Test(&mark_set_past_maxp, 26, 1);
     writeU16Test(&mark_set_past_maxp, 28, 4); // Invalid for maxp.numGlyphs == 4.
     try std.testing.expectError(error.BadSfnt, validateGdefTable(&mark_set_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mark_set_past_maxp.len }, 4));
+}
+
+test "GDEF parse validation walks AttachList child tables" {
+    var valid_attach: [30]u8 = .{0} ** 30;
+    writeU16Test(&valid_attach, 0, 1); // GDEF major.
+    writeU16Test(&valid_attach, 2, 0);
+    writeU16Test(&valid_attach, 6, 12); // AttachList follows the GDEF 1.0 header.
+
+    writeU16Test(&valid_attach, 12, 6); // Coverage offset, relative to AttachList.
+    writeU16Test(&valid_attach, 14, 1); // One covered glyph and one AttachPoint.
+    writeU16Test(&valid_attach, 16, 12); // AttachPoint offset, relative to AttachList.
+    writeU16Test(&valid_attach, 18, 1); // Coverage format 1.
+    writeU16Test(&valid_attach, 20, 1);
+    writeU16Test(&valid_attach, 22, 3);
+    writeU16Test(&valid_attach, 24, 2); // AttachPoint: two sorted point indices.
+    writeU16Test(&valid_attach, 26, 4);
+    writeU16Test(&valid_attach, 28, 7);
+    try validateGdefTable(&valid_attach, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = valid_attach.len }, 4);
+
+    var attach_offset_aliases_header = valid_attach;
+    writeU16Test(&attach_offset_aliases_header, 16, 2); // Would reinterpret AttachList glyphCount as pointCount.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&attach_offset_aliases_header, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = attach_offset_aliases_header.len }, 4));
+
+    var unsorted_points = valid_attach;
+    writeU16Test(&unsorted_points, 28, 4); // Duplicate/decreasing point order is not canonical.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&unsorted_points, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = unsorted_points.len }, 4));
+
+    var coverage_past_maxp = valid_attach;
+    writeU16Test(&coverage_past_maxp, 22, 4); // Invalid for maxp.numGlyphs == 4.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&coverage_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = coverage_past_maxp.len }, 4));
+
+    var mismatched_coverage: [34]u8 = .{0} ** 34;
+    writeU16Test(&mismatched_coverage, 0, 1);
+    writeU16Test(&mismatched_coverage, 2, 0);
+    writeU16Test(&mismatched_coverage, 6, 12);
+    writeU16Test(&mismatched_coverage, 12, 8); // Coverage starts after two AttachPoint offsets.
+    writeU16Test(&mismatched_coverage, 14, 2); // Two AttachPoint offsets advertised.
+    writeU16Test(&mismatched_coverage, 16, 14);
+    writeU16Test(&mismatched_coverage, 18, 18);
+    writeU16Test(&mismatched_coverage, 20, 1); // Coverage format 1, but only one glyph.
+    writeU16Test(&mismatched_coverage, 22, 1);
+    writeU16Test(&mismatched_coverage, 24, 1);
+    writeU16Test(&mismatched_coverage, 26, 1);
+    writeU16Test(&mismatched_coverage, 28, 4);
+    writeU16Test(&mismatched_coverage, 30, 1);
+    writeU16Test(&mismatched_coverage, 32, 7);
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&mismatched_coverage, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mismatched_coverage.len }, 4));
 }
 
 test "GDEF lazy glyph class rejects mutated class values outside enum" {

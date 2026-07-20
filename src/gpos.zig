@@ -1901,7 +1901,13 @@ fn ensureLigatureArrayWithin(table: Table, ligature_array_offset: usize, class_c
     const ligature_count = try readU16BadGpos(table, ligature_array_offset);
     try ensureBytesWithin(table, ligature_array_offset + 2, @as(usize, ligature_count) * 2);
     for (0..ligature_count) |ligature_i| {
-        const attach_offset = try checkedPositionOffset(table, ligature_array_offset, try readU16BadGpos(table, ligature_array_offset + 2 + ligature_i * 2));
+        const attach_relative = try readU16BadGpos(table, ligature_array_offset + 2 + ligature_i * 2);
+        // LigatureAttach offsets are required child tables keyed by
+        // LigatureCoverage index. Zero would alias the LigatureArray header as
+        // a component count and make anchor availability depend on unrelated
+        // offset-slot bytes, so reject it instead of silently dropping marks.
+        if (attach_relative == 0) return error.BadGpos;
+        const attach_offset = try checkedPositionOffset(table, ligature_array_offset, attach_relative);
         const component_count = try readU16BadGpos(table, attach_offset);
         const anchor_count = try checkedMul(@as(usize, component_count), class_count);
         try ensureBytesWithin(table, attach_offset + 2, anchor_count * 2);
@@ -3056,6 +3062,43 @@ test "GPOS PairPos format 2 rejects class values outside matrix" {
 
     writeU16Test(&bytes, 30, 1); // Now ClassDef2 exceeds Class2Count.
     try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+}
+
+test "GPOS MarkLigPos rejects null LigatureAttach offsets" {
+    var bytes = [_]u8{0} ** 52;
+    writeU16Test(&bytes, 0, 1); // MarkLigPos format 1.
+    writeU16Test(&bytes, 2, 12); // MarkCoverage.
+    writeU16Test(&bytes, 4, 18); // LigatureCoverage.
+    writeU16Test(&bytes, 6, 1); // ClassCount.
+    writeU16Test(&bytes, 8, 24); // MarkArray.
+    writeU16Test(&bytes, 10, 36); // LigatureArray.
+    writeCoverage1Test(&bytes, 12, 22);
+    writeCoverage1Test(&bytes, 18, 20);
+
+    const mark_array = 24;
+    writeU16Test(&bytes, mark_array + 0, 1);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 6);
+    writeAnchor1Test(&bytes, mark_array + 6, 10, 15);
+
+    const ligature_array = 36;
+    writeU16Test(&bytes, ligature_array + 0, 1);
+    writeU16Test(&bytes, ligature_array + 2, 0); // Invalid: LigatureAttach offsets are not nullable.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
+
+    // A real LigatureAttach may still omit individual class anchors with null
+    // offsets; only the LigatureAttach child pointer itself is mandatory.
+    writeU16Test(&bytes, ligature_array + 2, 4);
+    const ligature_attach = ligature_array + 4;
+    writeU16Test(&bytes, ligature_attach + 0, 1);
+    writeU16Test(&bytes, ligature_attach + 2, 0);
+    try ensureMarkToLigaturePositionSubtableWithin(table, 0);
+
+    writeU16Test(&bytes, ligature_attach + 2, 4);
+    writeAnchor1Test(&bytes, ligature_attach + 4, 100, 120);
+    try ensureMarkToLigaturePositionSubtableWithin(table, 0);
 }
 
 test "GPOS LangSys required feature bypasses feature overrides" {

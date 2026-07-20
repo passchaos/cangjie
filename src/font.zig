@@ -450,6 +450,7 @@ pub const Font = struct {
     fn validateCmapLookupSubtable(self: *const Font, subtable: CmapSubtable) FontError!void {
         const relative_offset = try tableRelativeOffset(self.cmap, subtable.offset);
         if (subtable.length > self.cmap.length - relative_offset) return error.BadSfnt;
+        if (try checksumSfntTable(self.data, self.cmap) != self.cmap.checksum) return error.BadSfnt;
         try validateCachedCmapEncodingRecord(self.data, self.cmap, subtable, relative_offset);
         const format = try bin.readU16At(self.data, subtable.offset);
         if (format != subtable.format) return error.BadSfnt;
@@ -457,9 +458,10 @@ pub const Font = struct {
         if (length != subtable.length) return error.BadSfnt;
 
         // Font keeps borrowed SFNT bytes and cached cmap directory entries.
-        // Re-running the structural and maxp glyph-id checks before lookup
-        // prevents post-parse byte mutations from returning a glyph id that the
-        // originally validated cmap could not have produced.
+        // Re-running the checksum, directory, structural, and maxp glyph-id
+        // checks before lookup prevents post-parse byte mutations from
+        // returning a glyph id that the originally validated cmap could not
+        // have produced.
         try validateCmapSubtable(self.data, subtable.offset, subtable.length, subtable.format, subtable.platform_id, subtable.encoding_id);
         try validateCmapGlyphIds(self.data, subtable.offset, subtable.length, subtable.format, self.glyph_count);
     }
@@ -10088,6 +10090,46 @@ test "cmap public lookup revalidates cached encoding record offsets" {
         const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
         const variation_offset = try bin.readU32At(bytes, cmap_offset + 16);
         writeU32Test(bytes, cmap_offset + 16, variation_offset + 2);
+        try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
+        try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
+    }
+}
+
+test "cmap public lookup revalidates borrowed table checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildSingleCodepointTtf(allocator, 'A');
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expectEqual(@as(glyph_mod.GlyphId, 1), try font.glyphIndex('A'));
+
+        const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
+        const format4_offset: usize = @intCast(try bin.readU32At(bytes, cmap_offset + 8));
+        // Keep the cmap structurally valid and maxp-compatible while changing
+        // U+0041 from glyph 1 to glyph 0. The lazy lookup should still reject
+        // the borrowed table because its directory checksum no longer matches
+        // the table map validated by Font.parse.
+        writeI16Test(bytes, cmap_offset + format4_offset + 24, -@as(i16, @intCast('A')));
+        try std.testing.expectError(error.BadSfnt, font.glyphIndex('A'));
+    }
+
+    {
+        const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expectEqual(@as(?glyph_mod.GlyphId, 3), try font.variationGlyphIndex('A', 0xfe0f));
+
+        const cmap_offset: usize = @intCast(try sfntTableOffset(bytes, "cmap"));
+        const variation_offset: usize = @intCast(try bin.readU32At(bytes, cmap_offset + 16));
+        writeU16Test(bytes, cmap_offset + variation_offset + 36, 1);
         try std.testing.expectError(error.BadSfnt, font.variationGlyphIndex('A', 0xfe0f));
         try std.testing.expectError(error.BadSfnt, font.glyphIndexWithVariation('A', 0xfe0f));
     }

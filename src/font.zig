@@ -347,7 +347,7 @@ pub const Font = struct {
             null;
         try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar, gvar_target_context);
         try validateVariationNameReferences(allocator, data, fvar, stat, name);
-        if (gdef) |gdef_table| try validateGdefTable(data, gdef_table, glyph_count);
+        if (gdef) |gdef_table| try validateGdefTableWithVariationData(data, gdef_table, glyph_count, fvar);
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBounds(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
         if (cpal) |cpal_table| {
@@ -4158,6 +4158,11 @@ fn validateClassDefFormat2Ranges(data: []const u8, offset: usize, range_count: u
 }
 
 fn validateGdefTable(data: []const u8, gdef: TableRecord, glyph_count: u16) FontError!void {
+    return validateGdefTableWithVariationData(data, gdef, glyph_count, null);
+}
+
+fn validateGdefTableWithVariationData(data: []const u8, gdef: TableRecord, glyph_count: u16, fvar: ?TableRecord) FontError!void {
+    if (gdef.offset > data.len or gdef.length > data.len - gdef.offset) return error.BadSfnt;
     if (gdef.length < 12) return error.BadSfnt;
     const table = data[gdef.offset .. gdef.offset + gdef.length];
     const major = try bin.readU16At(table, 0);
@@ -4198,7 +4203,16 @@ fn validateGdefTable(data: []const u8, gdef: TableRecord, glyph_count: u16) Font
     }
     if (minor >= 3) {
         const item_var_store_offset: usize = @intCast(try bin.readU32At(table, 14));
-        if (item_var_store_offset != 0) try validateGdefChildOffset(item_var_store_offset, gdef.length, header_len);
+        if (item_var_store_offset != 0) {
+            try validateGdefChildOffset(item_var_store_offset, gdef.length, header_len);
+            // GDEF 1.3 ItemVariationStore uses the same VariationRegionList
+            // axis contract as HVAR/MVAR/COLR variation stores: its axisCount
+            // must match the fvar axis order. A store without fvar cannot be
+            // interpreted safely, so reject it instead of accepting a payload
+            // that only happens to fit inside the GDEF byte range.
+            const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
+            _ = try validateItemVariationStore(data, gdef, item_var_store_offset, fvar_info.axis_count, header_len);
+        }
     }
 }
 
@@ -8830,6 +8844,43 @@ test "GDEF parse validation walks LigCaretList child tables" {
 
     var truncated_device = format3_caret;
     try std.testing.expectError(error.BadSfnt, validateGdefTable(&truncated_device, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = truncated_device.len - 1 }, 4));
+}
+
+test "GDEF v1.3 validates ItemVariationStore payload" {
+    const fvar_len: usize = 36;
+    const gdef_offset: usize = fvar_len;
+    const item_store_offset: usize = 20;
+    var bytes: [fvar_len + item_store_offset + 34]u8 = .{0} ** (fvar_len + item_store_offset + 34);
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 16); // axesArrayOffset.
+    writeU16Test(&bytes, 6, 2); // countSizePairs.
+    writeU16Test(&bytes, 8, 1); // one design axis.
+    writeU16Test(&bytes, 10, 20); // axisSize.
+    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+
+    writeU16Test(&bytes, gdef_offset + 0, 1); // GDEF major.
+    writeU16Test(&bytes, gdef_offset + 2, 3); // GDEF 1.3 adds ItemVariationStoreOffset.
+    writeU32Test(&bytes, gdef_offset + 14, item_store_offset);
+    writeItemVariationStoreWithOneItem(&bytes, gdef_offset + item_store_offset);
+
+    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = fvar_len };
+    const gdef = TableRecord{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = gdef_offset, .length = bytes.len - gdef_offset };
+    try validateGdefTableWithVariationData(&bytes, gdef, 4, fvar);
+
+    // A GDEF ItemVariationStore is meaningful only in the fvar variation-axis
+    // coordinate system. Keeping that dependency explicit prevents a table that
+    // merely fits in the GDEF byte range from being accepted as usable
+    // variation data.
+    try std.testing.expectError(error.BadSfnt, validateGdefTableWithVariationData(&bytes, gdef, 4, null));
+
+    var bad_store_format = bytes;
+    writeU16Test(&bad_store_format, gdef_offset + item_store_offset, 2);
+    try std.testing.expectError(error.BadSfnt, validateGdefTableWithVariationData(&bad_store_format, gdef, 4, fvar));
+
+    var axis_mismatch = bytes;
+    writeU16Test(&axis_mismatch, gdef_offset + item_store_offset + 12, 2); // VariationRegionList axisCount.
+    try std.testing.expectError(error.BadSfnt, validateGdefTableWithVariationData(&axis_mismatch, gdef, 4, fvar));
 }
 
 test "GDEF lazy glyph class rejects mutated class values outside enum" {

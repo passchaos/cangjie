@@ -124,9 +124,8 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     var lookups = std.ArrayList(u16).empty;
     errdefer lookups.deinit(allocator);
 
-    const script_list_offset = try readU16(table, 4);
-    const feature_list_offset = try readU16(table, 6);
-    if (script_list_offset == 0 or feature_list_offset == 0) return lookups;
+    const script_list_offset = try checkedRequiredScriptListOffset(table);
+    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
 
     const script_count = try readU16(table, script_list_offset);
     // Prefer the requested script, then fall back to DFLT. Language selection
@@ -1360,10 +1359,7 @@ fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, l
 }
 
 fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GsubError!u16 {
-    const feature_list_relative = try readU16BadGsub(table, 6);
-    if (feature_list_relative == 0) return 0;
-
-    const feature_list_offset = try checkedSubtableOffset(table, 0, feature_list_relative);
+    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16BadGsub(table, feature_list_offset);
     try ensureBytesWithin(table, feature_list_offset + 2, @as(usize, feature_count) * 6);
 
@@ -1386,10 +1382,7 @@ fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GsubErro
 }
 
 fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GsubError!void {
-    const script_list_relative = try readU16BadGsub(table, 4);
-    if (script_list_relative == 0) return;
-
-    const script_list_offset = try checkedSubtableOffset(table, 0, script_list_relative);
+    const script_list_offset = try checkedRequiredScriptListOffset(table);
     const script_count = try readU16BadGsub(table, script_list_offset);
     try ensureBytesWithin(table, script_list_offset + 2, @as(usize, script_count) * 6);
 
@@ -1950,6 +1943,22 @@ fn checkedRequiredSubtableOffset(table: Table, base_offset: usize, relative_offs
     return checkedSubtableOffset(table, base_offset, @as(u32, relative_offset));
 }
 
+fn checkedRequiredScriptListOffset(table: Table) GsubError!usize {
+    // ScriptList is a required top-level OpenType Layout table. An offset of
+    // zero aliases the GSUB version/header bytes as a ScriptList and makes
+    // script selection depend on unrelated metadata rather than declared
+    // layout topology.
+    return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 4));
+}
+
+fn checkedRequiredFeatureListOffset(table: Table) GsubError!usize {
+    // FeatureList is likewise mandatory even when it contains zero features.
+    // Treating null as "no features" would let malformed fonts fall through to
+    // the all-lookup fallback and apply substitutions outside the activation
+    // graph advertised by the table.
+    return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 6));
+}
+
 fn checkedRequiredLookupListOffset(table: Table) GsubError!usize {
     // LookupList is the one mandatory top-level navigation table used by both
     // validation and shaping. Offset zero aliases the GSUB header as
@@ -2424,6 +2433,41 @@ test "GSUB rejects null top-level LookupList offsets" {
     try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
 }
 
+test "GSUB rejects null top-level ScriptList and FeatureList offsets" {
+    var bytes = [_]u8{0} ** 38;
+    const subtable = writeSingleLookupGsubTest(&bytes, 1);
+    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
+    writeU16Test(&bytes, subtable + 2, 6);
+    writeI16Test(&bytes, subtable + 4, 1);
+    writeCoverage1(&bytes, subtable + 6, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 1);
+
+    writeU16Test(&bytes, 4, 0); // Invalid: ScriptList is required, even when empty.
+    try std.testing.expectError(error.BadGsub, checkedRequiredScriptListOffset(table));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    try std.testing.expectError(error.BadGsub, applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    writeU16Test(&bytes, 4, 10);
+    writeU16Test(&bytes, 6, 0); // Invalid: FeatureList is required, even when empty.
+    try std.testing.expectError(error.BadGsub, checkedRequiredFeatureListOffset(table));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    try std.testing.expectError(error.BadGsub, applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    // Non-null empty ScriptList/FeatureList tables are valid. With no selected
+    // feature topology, the low-level apply API keeps its historical all-lookup
+    // fallback and applies this SingleSubst normally.
+    writeU16Test(&bytes, 6, 12);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    try applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{2}, glyphs.items);
+}
+
 test "GSUB rejects null Lookup SubTable offsets" {
     var bytes = [_]u8{0} ** 38;
     const subtable = writeSingleLookupGsubTest(&bytes, 1);
@@ -2478,8 +2522,9 @@ test "GSUB rejects null required Coverage offsets" {
 }
 
 test "GSUB validates FeatureList lookup indexes against LookupList" {
-    var bytes = [_]u8{0} ** 48;
+    var bytes = [_]u8{0} ** 50;
     writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 48); // Empty ScriptList; this test targets FeatureList topology.
     writeU16Test(&bytes, 6, 10); // FeatureList.
     writeU16Test(&bytes, 8, 24); // LookupList.
 
@@ -2492,6 +2537,7 @@ test "GSUB validates FeatureList lookup indexes against LookupList" {
     writeU16Test(&bytes, 24, 1);
     writeU16Test(&bytes, 26, 4);
     writeSingleDeltaLookup(&bytes, 28, 1, 0);
+    writeU16Test(&bytes, 48, 0); // ScriptCount.
 
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 

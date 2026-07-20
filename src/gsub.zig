@@ -1313,7 +1313,7 @@ fn ensureSubstitutionRecordLookupsWithin(table: Table, records_offset: usize, re
 
 fn ensureExtensionSubstitutionLookupPayloadsWithin(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!void {
     for (0..subtable_count) |subtable_i| {
-        const subtable_offset = try checkedSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
+        const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
         try ensureExtensionSubstitutionPayloadWithin(table, subtable_offset);
     }
 }
@@ -1350,7 +1350,10 @@ fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, l
         else => return,
     }
     for (0..subtable_count) |subtable_i| {
-        const subtable_offset = try checkedSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
+        // Lookup.SubTable offsets are mandatory child pointers for supported
+        // lookups. Offset zero would alias the Lookup header as a subtable and
+        // let lookup type/flag/count bytes masquerade as substitution payload.
+        const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
         try ensureSubstitutionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
         try ensureSubstitutionSubtableVariableDataWithin(table, subtable_offset, lookup_type);
     }
@@ -2375,6 +2378,32 @@ test "GSUB rejects reserved LookupFlag bits" {
     writeU16Test(&bytes, 20, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
     writeU16Test(&bytes, 26, 0); // MarkFilteringSet index follows the subtable-offset array.
     try ensureLookupHeaderWithin(table, 18);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GSUB rejects null Lookup SubTable offsets" {
+    var bytes = [_]u8{0} ** 38;
+    const subtable = writeSingleLookupGsubTest(&bytes, 1);
+    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
+    writeU16Test(&bytes, subtable + 2, 6);
+    writeI16Test(&bytes, subtable + 4, 0);
+    writeCoverage1(&bytes, subtable + 6, 1);
+    writeU16Test(&bytes, 24, 0); // Invalid: Lookup.SubTable offsets are required.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureSubstitutionLookupSubtablesWithin(table, 18, 1, 1));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 1);
+    try std.testing.expectError(error.BadGsub, applyLookup(table, 18, &glyphs, std.testing.allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    // Repairing only the child pointer should make the otherwise valid lookup
+    // pass; the test guards against rejecting empty/no-op substitution data.
+    writeU16Test(&bytes, 24, 8);
+    try ensureSubstitutionLookupSubtablesWithin(table, 18, 1, 1);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 

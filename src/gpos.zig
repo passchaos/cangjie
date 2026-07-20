@@ -1381,7 +1381,11 @@ fn ensurePositionLookupSubtablesWithinDepth(table: Table, lookup_offset: usize, 
         else => return,
     }
     for (0..subtable_count) |subtable_i| {
-        const subtable_offset = try checkedPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
+        // Lookup.SubTable offsets are required child pointers for supported
+        // positioning lookups. Offset zero would reinterpret the Lookup header
+        // as a subtable and can make malformed data appear valid or derive
+        // value sizes from lookup metadata.
+        const subtable_offset = try checkedRequiredPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
         try ensurePositionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
         try ensurePositionSubtableVariableDataWithinDepth(table, subtable_offset, lookup_type, depth);
     }
@@ -1389,7 +1393,7 @@ fn ensurePositionLookupSubtablesWithinDepth(table: Table, lookup_offset: usize, 
 
 fn ensureExtensionPositionLookupPayloadsWithin(table: Table, lookup_offset: usize, subtable_count: u16) GposError!void {
     for (0..subtable_count) |subtable_i| {
-        const subtable_offset = try checkedPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
+        const subtable_offset = try checkedRequiredPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
         try ensureExtensionPositionPayloadWithin(table, subtable_offset);
     }
 }
@@ -2135,6 +2139,11 @@ fn checkedPositionOffset(table: Table, base_offset: usize, relative_offset: u32)
     return absolute;
 }
 
+fn checkedRequiredPositionOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
+    if (relative_offset == 0) return error.BadGpos;
+    return checkedPositionOffset(table, base_offset, @as(u32, relative_offset));
+}
+
 fn ensureBytesWithin(table: Table, offset: usize, len: usize) GposError!void {
     if (offset > table.length or len > table.length - offset) return error.BadGpos;
 }
@@ -2767,6 +2776,39 @@ test "GPOS rejects reserved LookupFlag bits" {
     writeU16Test(&bytes, 16, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
     writeU16Test(&bytes, 22, 0); // MarkFilteringSet index follows the subtable-offset array.
     try ensurePositionLookupHeaderWithin(table, 14);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GPOS rejects null Lookup SubTable offsets" {
+    var bytes = [_]u8{0} ** 38;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10); // LookupList offset.
+    writeU16Test(&bytes, 10, 1);
+    writeU16Test(&bytes, 12, 4);
+    writeU16Test(&bytes, 14, 1); // SinglePos lookup.
+    writeU16Test(&bytes, 16, 0);
+    writeU16Test(&bytes, 18, 1);
+    writeU16Test(&bytes, 20, 0); // Invalid: Lookup.SubTable offsets are required.
+    const subtable: usize = 24;
+    writeU16Test(&bytes, subtable + 0, 1); // SinglePos format 1.
+    writeU16Test(&bytes, subtable + 2, 8);
+    writeU16Test(&bytes, subtable + 4, 0x0001); // xPlacement.
+    writeI16Test(&bytes, subtable + 6, 20);
+    writeCoverage1Test(&bytes, subtable + 8, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePositionLookupSubtablesWithin(table, 14, 1, 1));
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+    try std.testing.expectError(error.BadGpos, collectLookup(table, 14, &.{1}, &adjustments, std.testing.allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    // A non-null child pointer to an otherwise ordinary SinglePos subtable
+    // remains valid; only the aliasing null offset is rejected.
+    writeU16Test(&bytes, 20, 10);
+    try ensurePositionLookupSubtablesWithin(table, 14, 1, 1);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 

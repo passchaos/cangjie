@@ -451,7 +451,7 @@ fn applySingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_co
 
 fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions, matched: []bool) GsubError!void {
     const subst_format = try readU16(table, subtable_offset);
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     switch (subst_format) {
         1 => {
             const delta = try readI16(table, subtable_offset + 4);
@@ -483,7 +483,7 @@ fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs:
 
 fn applySingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) GsubError!void {
     const subst_format = try readU16(table, subtable_offset);
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     switch (subst_format) {
         1 => {
             const delta = try readI16(table, subtable_offset + 4);
@@ -638,7 +638,7 @@ fn setLigatureMetadata(options: LookupOptions, glyph_index: usize, info: gpos.Li
 fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const sequence_count = try readU16(table, subtable_offset + 4);
 
     var i: usize = 0;
@@ -675,7 +675,7 @@ fn applyAlternateSubstitution(table: Table, subtable_offset: usize, glyphs: *std
 fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions, matched: ?[]bool) GsubError!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const alternate_set_count = try readU16(table, subtable_offset + 4);
 
     for (glyphs.items, 0..) |*glyph, glyph_index| {
@@ -716,7 +716,7 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
 fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const lig_set_count = try readU16(table, subtable_offset + 4);
 
     var i: usize = 0;
@@ -748,7 +748,7 @@ fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     if (glyph_index >= glyphs.items.len) return null;
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) return null;
 
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const sequence_count = try readU16(table, subtable_offset + 4);
     const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return null;
     if (coverage >= sequence_count) return null;
@@ -774,7 +774,7 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     if (glyph_index >= glyphs.items.len) return null;
     const first = glyphs.items[glyph_index];
     if (lookupIgnoresGlyph(lookup_flag, options, first)) return null;
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const lig_set_count = try readU16(table, subtable_offset + 4);
     const covered = try coverageIndex(table, coverage_offset, first) orelse return null;
     if (covered >= lig_set_count) return null;
@@ -803,7 +803,7 @@ fn applyContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.A
     const subst_format = try readU16(table, subtable_offset);
     switch (subst_format) {
         1 => {
-            const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
             const rule_set_count = try readU16(table, subtable_offset + 4);
             var pos: usize = 0;
             while (pos < glyphs.items.len) : (pos += 1) {
@@ -825,7 +825,7 @@ fn applyContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.A
 }
 
 fn applyContextClassSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const class_def_offset = subtable_offset + try readU16(table, subtable_offset + 4);
     const class_set_count = try readU16(table, subtable_offset + 6);
     var pos: usize = 0;
@@ -885,7 +885,7 @@ fn applyContextCoverageSubstitution(table: Table, subtable_offset: usize, glyphs
         if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
         var matched = true;
         for (0..glyph_count) |i| {
-            const coverage_offset = subtable_offset + try readU16(table, coverage_offsets_pos + i * 2);
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, coverage_offsets_pos + i * 2));
             if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices_buf[i]]) == null) {
                 matched = false;
                 break;
@@ -928,7 +928,7 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
     const subst_format = try readU16(table, subtable_offset);
     switch (subst_format) {
         1 => {
-            const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
             const chain_set_count = try readU16(table, subtable_offset + 4);
             var pos: usize = 0;
             while (pos < glyphs.items.len) : (pos += 1) {
@@ -949,7 +949,7 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
 }
 
 fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const backtrack_class_def = subtable_offset + try readU16(table, subtable_offset + 4);
     const input_class_def = subtable_offset + try readU16(table, subtable_offset + 6);
     const lookahead_class_def = subtable_offset + try readU16(table, subtable_offset + 8);
@@ -1113,7 +1113,7 @@ fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_f
 
 fn coverageIndicesMatch(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize) GsubError!bool {
     for (indices, 0..) |glyph_index, i| {
-        const coverage_offset = base_offset + try readU16(table, offsets_pos + i * 2);
+        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
         if (try coverageIndex(table, coverage_offset, glyphs[glyph_index]) == null) return false;
     }
     return true;
@@ -1125,7 +1125,7 @@ fn coverageSequenceMatches(table: Table, base_offset: usize, glyphs: []const Gly
         .input, .lookahead => if (pos + count > glyphs.len) return false,
     }
     for (0..count) |i| {
-        const coverage_offset = base_offset + try readU16(table, offsets_pos + i * 2);
+        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
         const glyph_index = switch (kind) {
             .backtrack => pos - 1 - i,
             .input, .lookahead => pos + i,
@@ -1480,7 +1480,7 @@ fn ensureSubstitutionSubtableVariableDataWithin(table: Table, subtable_offset: u
 
 fn ensureSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
     const subst_format = try readU16BadGsub(table, subtable_offset);
-    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     switch (subst_format) {
         1 => if (table.glyph_count != null) {
@@ -1505,7 +1505,7 @@ fn ensureSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) 
 fn ensureMultipleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
     const subst_format = try readU16BadGsub(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     const sequence_count = try readU16BadGsub(table, subtable_offset + 4);
     // Coverage indexes select Sequence offsets one-for-one. A dangling
@@ -1531,7 +1531,7 @@ fn ensureMultipleSubstitutionSubtableWithin(table: Table, subtable_offset: usize
 fn ensureAlternateSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
     const subst_format = try readU16BadGsub(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     const alternate_set_count = try readU16BadGsub(table, subtable_offset + 4);
     // AlternateSet offsets share the same coverage-index topology as
@@ -1557,7 +1557,7 @@ fn ensureAlternateSubstitutionSubtableWithin(table: Table, subtable_offset: usiz
 fn ensureLigatureSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
     const subst_format = try readU16BadGsub(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     const lig_set_count = try readU16BadGsub(table, subtable_offset + 4);
     // LigatureSet offsets are selected by coverage index. Reject dangling
@@ -1597,7 +1597,7 @@ fn ensureContextSubstitutionSubtableWithin(table: Table, subtable_offset: usize)
     const subst_format = try readU16BadGsub(table, subtable_offset);
     switch (subst_format) {
         1 => {
-            const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
             try ensureCoverageTableWithin(table, coverage_offset);
             const rule_set_count = try readU16BadGsub(table, subtable_offset + 4);
             const rule_set_offsets_pos = subtable_offset + 6;
@@ -1609,7 +1609,7 @@ fn ensureContextSubstitutionSubtableWithin(table: Table, subtable_offset: usize)
             }
         },
         2 => {
-            const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
             const class_def_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 4));
             try ensureCoverageTableWithin(table, coverage_offset);
             try ensureClassDefTableWithin(table, class_def_offset);
@@ -1674,7 +1674,7 @@ fn ensureChainingContextSubstitutionSubtableWithin(table: Table, subtable_offset
     const subst_format = try readU16BadGsub(table, subtable_offset);
     switch (subst_format) {
         1 => {
-            const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
             try ensureCoverageTableWithin(table, coverage_offset);
             const chain_set_count = try readU16BadGsub(table, subtable_offset + 4);
             const chain_set_offsets_pos = subtable_offset + 6;
@@ -1686,7 +1686,7 @@ fn ensureChainingContextSubstitutionSubtableWithin(table: Table, subtable_offset
             }
         },
         2 => {
-            const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
             const backtrack_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 4));
             const input_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 6));
             const lookahead_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 8));
@@ -1784,7 +1784,7 @@ fn ensureChainingCoverageSubstitutionSubtableWithin(table: Table, subtable_offse
 fn ensureReverseChainingSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
     const subst_format = try readU16BadGsub(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
 
     var cursor = subtable_offset + 4;
@@ -1810,7 +1810,7 @@ fn ensureReverseChainingSingleSubstitutionSubtableWithin(table: Table, subtable_
 fn ensureCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GsubError!void {
     try ensureBytesWithin(table, offsets_pos, @as(usize, count) * 2);
     for (0..count) |i| {
-        const coverage_offset = try checkedSubtableOffset(table, base_offset, try readU16BadGsub(table, offsets_pos + i * 2));
+        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16BadGsub(table, offsets_pos + i * 2));
         try ensureCoverageTableWithin(table, coverage_offset);
     }
 }
@@ -1950,6 +1950,14 @@ fn checkedRequiredSubtableOffset(table: Table, base_offset: usize, relative_offs
     return checkedSubtableOffset(table, base_offset, @as(u32, relative_offset));
 }
 
+fn checkedRequiredCoverageOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
+    // Coverage offsets are mandatory in GSUB subtables and coverage arrays.
+    // Treating zero as "relative to the parent" aliases the parent header as a
+    // Coverage table, which can silently disable substitutions or redirect
+    // coverage-indexed arrays through unrelated metadata.
+    return checkedRequiredSubtableOffset(table, base_offset, relative_offset);
+}
+
 fn ensureBytesWithin(table: Table, offset: usize, len: usize) GsubError!void {
     if (offset > table.length or len > table.length - offset) return error.BadGsub;
 }
@@ -2065,7 +2073,7 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
 fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) GsubError!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = subtable_offset + try readU16(table, subtable_offset + 2);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     var cursor = subtable_offset + 4;
 
     const backtrack_count = try readU16(table, cursor);
@@ -2404,6 +2412,33 @@ test "GSUB rejects null Lookup SubTable offsets" {
     // pass; the test guards against rejecting empty/no-op substitution data.
     writeU16Test(&bytes, 24, 8);
     try ensureSubstitutionLookupSubtablesWithin(table, 18, 1, 1);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GSUB rejects null required Coverage offsets" {
+    var bytes = [_]u8{0} ** 38;
+    const subtable = writeSingleLookupGsubTest(&bytes, 1);
+    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
+    writeU16Test(&bytes, subtable + 2, 0); // Invalid: Coverage offsets are required.
+    writeI16Test(&bytes, subtable + 4, 1);
+    writeCoverage1(&bytes, subtable + 6, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureSingleSubstitutionSubtableWithin(table, subtable));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 1);
+    try std.testing.expectError(error.BadGsub, applySingleSubstitution(table, subtable, &glyphs, 0, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+    try std.testing.expectError(error.BadGsub, applyLookup(table, 18, &glyphs, std.testing.allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    // With the Coverage pointer repaired, the same subtable is a normal
+    // SingleSubst; only the aliasing null child pointer is invalid.
+    writeU16Test(&bytes, subtable + 2, 6);
+    try ensureSingleSubstitutionSubtableWithin(table, subtable);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 

@@ -1430,27 +1430,27 @@ fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, fe
 }
 
 fn validateScriptRecordOrder(table: Table, script_list_offset: usize, script_count: u16) GsubError!void {
-    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6);
+    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6, false);
 }
 
 fn validateFeatureRecordOrder(table: Table, feature_list_offset: usize, feature_count: u16) GsubError!void {
-    return validateTagRecordOrder(table, feature_list_offset + 2, feature_count, 6);
+    return validateTagRecordOrder(table, feature_list_offset + 2, feature_count, 6, true);
 }
 
 fn validateLangSysRecordOrder(table: Table, script_offset: usize, lang_sys_count: u16) GsubError!void {
-    return validateTagRecordOrder(table, script_offset + 4, lang_sys_count, 6);
+    return validateTagRecordOrder(table, script_offset + 4, lang_sys_count, 6, false);
 }
 
-fn validateTagRecordOrder(table: Table, records_offset: usize, record_count: u16, record_stride: usize) GsubError!void {
-    // OpenType Layout tag records are sorted by tag. Enforcing that canonical
-    // order during both selection and parse-time validation avoids duplicate or
-    // descending records whose meaning would otherwise depend on this parser's
-    // current linear search instead of the table contract shared by engines.
+fn validateTagRecordOrder(table: Table, records_offset: usize, record_count: u16, record_stride: usize, allow_equal_tags: bool) GsubError!void {
+    // OpenType Layout tag records are sorted by tag. FeatureList records in
+    // widely deployed fonts may repeat a feature tag with different parameter
+    // payloads, so feature ordering is nondecreasing while Script/LangSys
+    // records remain strict to avoid ambiguous script/language selection.
     var previous_tag: ?u32 = null;
     for (0..record_count) |record_i| {
         const tag_value = try readU32BadGsub(table, records_offset + record_i * record_stride);
         if (previous_tag) |previous| {
-            if (tag_value <= previous) return error.BadGsub;
+            if (if (allow_equal_tags) tag_value < previous else tag_value <= previous) return error.BadGsub;
         }
         previous_tag = tag_value;
     }

@@ -750,6 +750,7 @@ pub const Font = struct {
 
     pub fn nameString(self: *const Font, name_id: NameId, out: []u8) FontError!?[]const u8 {
         const name = self.name orelse return null;
+        try validateSfntTableChecksum(self.data, name);
         return try readNameString(self.data, name, @intFromEnum(name_id), out);
     }
 
@@ -12669,7 +12670,31 @@ test "lazy PostScript name lookup revalidates borrowed bytes" {
     const string_offset: usize = @intCast(try bin.readU16At(bytes, record + 10));
     bytes[name_offset + storage_offset + string_offset + 1] = ' ';
 
-    try std.testing.expectError(error.InvalidName, font.nameString(.postscript_name, &out));
+    try std.testing.expectError(error.BadSfnt, font.nameString(.postscript_name, &out));
+}
+
+test "lazy name lookup revalidates borrowed table checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "CangjieSans-Regular");
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var out: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("Cangjie Sans", (try font.nameString(.family, &out)).?);
+
+    const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+    const record = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.family));
+    const storage_offset: usize = @intCast(try bin.readU16At(bytes, name_offset + 4));
+    const string_offset: usize = @intCast(try bin.readU16At(bytes, record + 10));
+    // Keep the UTF-16 string well-formed while changing user-facing metadata
+    // after parse. The public lookup must reject the table because its SFNT
+    // checksum no longer matches the parsed font map.
+    bytes[name_offset + storage_offset + string_offset + 1] = 'D';
+    try std.testing.expectError(error.BadSfnt, font.nameString(.family, &out));
 }
 
 test "name table format 1 language ids reference valid UTF-16 language tags" {

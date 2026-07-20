@@ -656,8 +656,8 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
         2 => {
             // PairPos format 2 maps both glyphs through class definitions and
             // indexes a dense class1 x class2 value matrix.
-            const class_def_1 = subtable_offset + try readU16(table, subtable_offset + 8);
-            const class_def_2 = subtable_offset + try readU16(table, subtable_offset + 10);
+            const class_def_1 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+            const class_def_2 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 10));
             const class_1_count = try readU16(table, subtable_offset + 12);
             const class_2_count = try readU16(table, subtable_offset + 14);
             const record_size = value_size_1 + value_size_2;
@@ -960,7 +960,7 @@ fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
 
 fn collectClassPositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const class_def_offset = subtable_offset + try readU16(table, subtable_offset + 4);
+    const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
     const class_set_count = try readU16(table, subtable_offset + 6);
     var pos: usize = 0;
     while (pos < glyphs.len) : (pos += 1) {
@@ -1091,9 +1091,9 @@ fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const 
 
 fn collectChainingClassPositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const backtrack_class_def = subtable_offset + try readU16(table, subtable_offset + 4);
-    const input_class_def = subtable_offset + try readU16(table, subtable_offset + 6);
-    const lookahead_class_def = subtable_offset + try readU16(table, subtable_offset + 8);
+    const backtrack_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
+    const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
+    const lookahead_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
     const set_count = try readU16(table, subtable_offset + 10);
     var pos: usize = 0;
     while (pos < glyphs.len) : (pos += 1) {
@@ -1573,8 +1573,8 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
             }
         },
         2 => {
-            const class_def_1 = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
-            const class_def_2 = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
+            const class_def_1 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+            const class_def_2 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
             const class_1_count = try readU16BadGpos(table, subtable_offset + 12);
             const class_2_count = try readU16BadGpos(table, subtable_offset + 14);
             try ensureClassDefTableWithinLimit(table, class_def_1, class_1_count);
@@ -1718,7 +1718,7 @@ fn ensureContextPositionSubtableWithin(table: Table, subtable_offset: usize, dep
         },
         2 => {
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
-            const class_def_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
+            const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
             try ensureCoverageTableWithin(table, coverage_offset);
             try ensureClassDefTableWithin(table, class_def_offset);
             const class_set_count = try readU16BadGpos(table, subtable_offset + 6);
@@ -1796,9 +1796,9 @@ fn ensureChainingContextPositionSubtableWithin(table: Table, subtable_offset: us
         },
         2 => {
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
-            const backtrack_class_def = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
-            const input_class_def = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 6));
-            const lookahead_class_def = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
+            const backtrack_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
+            const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 6));
+            const lookahead_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
             try ensureCoverageTableWithin(table, coverage_offset);
             try ensureClassDefTableWithin(table, backtrack_class_def);
             try ensureClassDefTableWithin(table, input_class_def);
@@ -2230,6 +2230,14 @@ fn checkedRequiredCoverageOffset(table: Table, base_offset: usize, relative_offs
     // arrays. A null coverage pointer aliases the parent header as Coverage
     // format/count data, which can make malformed positioning silently vanish
     // or bind value records to unrelated layout metadata.
+    return checkedRequiredPositionOffset(table, base_offset, relative_offset);
+}
+
+fn checkedRequiredClassDefOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
+    // Class-based GPOS subtables use ClassDef offsets as required child tables.
+    // A zero offset aliases the subtable header as class data; that can steer
+    // PairPos matrices or contextual rule sets from value-format and coverage
+    // metadata rather than from an explicit class definition.
     return checkedRequiredPositionOffset(table, base_offset, relative_offset);
 }
 
@@ -3398,6 +3406,114 @@ test "GPOS contextual class subtables reject covered class indexes outside set a
 
     writeU16Test(&chaining_bytes, 36, 0);
     try ensureChainingContextPositionSubtableWithin(table, 0, 0);
+}
+
+test "GPOS class-based positioning rejects null ClassDef offsets" {
+    const allocator = std.testing.allocator;
+
+    var pair_bytes = [_]u8{0} ** 40;
+    writeU16Test(&pair_bytes, 0, 2); // PairPos format 2.
+    writeU16Test(&pair_bytes, 2, 34); // Coverage.
+    writeU16Test(&pair_bytes, 4, 0x0004); // ValueFormat1: xAdvance.
+    writeU16Test(&pair_bytes, 6, 0); // Empty ValueFormat2.
+    writeU16Test(&pair_bytes, 8, 0); // Invalid: ClassDef1 offsets are required.
+    writeU16Test(&pair_bytes, 10, 26); // ClassDef2.
+    writeU16Test(&pair_bytes, 12, 1); // Class1Count.
+    writeU16Test(&pair_bytes, 14, 1); // Class2Count.
+    writeI16Test(&pair_bytes, 16, -15); // Single matrix ValueRecord.
+    writeU16Test(&pair_bytes, 18, 1);
+    writeU16Test(&pair_bytes, 20, 10);
+    writeU16Test(&pair_bytes, 22, 1);
+    writeU16Test(&pair_bytes, 24, 0);
+    writeU16Test(&pair_bytes, 26, 1);
+    writeU16Test(&pair_bytes, 28, 11);
+    writeU16Test(&pair_bytes, 30, 1);
+    writeU16Test(&pair_bytes, 32, 0);
+    writeCoverage1Test(&pair_bytes, 34, 10);
+
+    var table = Table{ .data = &pair_bytes, .offset = 0, .length = pair_bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try std.testing.expectError(error.BadGpos, collectPairAdjustment(table, 0, &.{ 10, 11 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16Test(&pair_bytes, 8, 18);
+    writeU16Test(&pair_bytes, 10, 0); // ClassDef2 is required too.
+    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+
+    writeU16Test(&pair_bytes, 10, 26);
+    try ensurePairPositionSubtableWithin(table, 0);
+    try collectPairAdjustment(table, 0, &.{ 10, 11 }, &adjustments, allocator, 0, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(i16, -15), adjustments.items[0].x_advance);
+    adjustments.clearRetainingCapacity();
+
+    var context_bytes = [_]u8{0} ** 26;
+    writeU16Test(&context_bytes, 0, 2); // ContextPos format 2.
+    writeU16Test(&context_bytes, 2, 12); // Coverage.
+    writeU16Test(&context_bytes, 4, 0); // Invalid: ClassDef offsets are required.
+    writeU16Test(&context_bytes, 6, 1); // One nullable PosClassSet slot.
+    writeU16Test(&context_bytes, 8, 0);
+    writeCoverage1Test(&context_bytes, 12, 5);
+    writeU16Test(&context_bytes, 18, 1);
+    writeU16Test(&context_bytes, 20, 5);
+    writeU16Test(&context_bytes, 22, 1);
+    writeU16Test(&context_bytes, 24, 0);
+
+    table = .{ .data = &context_bytes, .offset = 0, .length = context_bytes.len };
+    try std.testing.expectError(error.BadGpos, ensureContextPositionSubtableWithin(table, 0, 0));
+    try std.testing.expectError(error.BadGpos, collectClassPositioning(table, 0, &.{5}, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16Test(&context_bytes, 4, 18);
+    try ensureContextPositionSubtableWithin(table, 0, 0);
+    try collectClassPositioning(table, 0, &.{5}, &adjustments, allocator, 0, .{});
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    var chaining_bytes = [_]u8{0} ** 46;
+    writeU16Test(&chaining_bytes, 0, 2); // ChainingContextPos format 2.
+    writeU16Test(&chaining_bytes, 2, 16); // Coverage.
+    writeU16Test(&chaining_bytes, 4, 22); // BacktrackClassDef.
+    writeU16Test(&chaining_bytes, 6, 30); // InputClassDef.
+    writeU16Test(&chaining_bytes, 8, 38); // LookaheadClassDef.
+    writeU16Test(&chaining_bytes, 10, 1); // One nullable ChainPosClassSet slot.
+    writeU16Test(&chaining_bytes, 12, 0);
+    writeCoverage1Test(&chaining_bytes, 16, 5);
+    writeU16Test(&chaining_bytes, 22, 1);
+    writeU16Test(&chaining_bytes, 24, 0);
+    writeU16Test(&chaining_bytes, 26, 1);
+    writeU16Test(&chaining_bytes, 28, 0);
+    writeU16Test(&chaining_bytes, 30, 1);
+    writeU16Test(&chaining_bytes, 32, 5);
+    writeU16Test(&chaining_bytes, 34, 1);
+    writeU16Test(&chaining_bytes, 36, 0);
+    writeU16Test(&chaining_bytes, 38, 1);
+    writeU16Test(&chaining_bytes, 40, 0);
+    writeU16Test(&chaining_bytes, 42, 1);
+    writeU16Test(&chaining_bytes, 44, 0);
+
+    table = .{ .data = &chaining_bytes, .offset = 0, .length = chaining_bytes.len };
+    try ensureChainingContextPositionSubtableWithin(table, 0, 0);
+
+    writeU16Test(&chaining_bytes, 4, 0);
+    try std.testing.expectError(error.BadGpos, ensureChainingContextPositionSubtableWithin(table, 0, 0));
+    writeU16Test(&chaining_bytes, 4, 22);
+
+    writeU16Test(&chaining_bytes, 6, 0);
+    try std.testing.expectError(error.BadGpos, ensureChainingContextPositionSubtableWithin(table, 0, 0));
+    try std.testing.expectError(error.BadGpos, collectChainingClassPositioning(table, 0, &.{5}, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+    writeU16Test(&chaining_bytes, 6, 30);
+
+    writeU16Test(&chaining_bytes, 8, 0);
+    try std.testing.expectError(error.BadGpos, ensureChainingContextPositionSubtableWithin(table, 0, 0));
+    writeU16Test(&chaining_bytes, 8, 38);
+
+    try ensureChainingContextPositionSubtableWithin(table, 0, 0);
+    try collectChainingClassPositioning(table, 0, &.{5}, &adjustments, allocator, 0, .{});
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 test "GPOS MarkBasePos rejects null required array offsets" {

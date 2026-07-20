@@ -825,7 +825,7 @@ fn applyContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.A
 
 fn applyContextClassSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const class_def_offset = subtable_offset + try readU16(table, subtable_offset + 4);
+    const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
     const class_set_count = try readU16(table, subtable_offset + 6);
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
@@ -949,9 +949,9 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
 
 fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const backtrack_class_def = subtable_offset + try readU16(table, subtable_offset + 4);
-    const input_class_def = subtable_offset + try readU16(table, subtable_offset + 6);
-    const lookahead_class_def = subtable_offset + try readU16(table, subtable_offset + 8);
+    const backtrack_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
+    const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
+    const lookahead_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
     const set_count = try readU16(table, subtable_offset + 10);
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
@@ -1603,7 +1603,7 @@ fn ensureContextSubstitutionSubtableWithin(table: Table, subtable_offset: usize)
         },
         2 => {
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-            const class_def_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 4));
+            const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 4));
             try ensureCoverageTableWithin(table, coverage_offset);
             try ensureClassDefTableWithin(table, class_def_offset);
             const class_set_count = try readU16BadGsub(table, subtable_offset + 6);
@@ -1681,9 +1681,9 @@ fn ensureChainingContextSubstitutionSubtableWithin(table: Table, subtable_offset
         },
         2 => {
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-            const backtrack_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 4));
-            const input_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 6));
-            const lookahead_class_def = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 8));
+            const backtrack_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 4));
+            const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 6));
+            const lookahead_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 8));
             try ensureCoverageTableWithin(table, coverage_offset);
             try ensureClassDefTableWithin(table, backtrack_class_def);
             try ensureClassDefTableWithin(table, input_class_def);
@@ -2017,6 +2017,14 @@ fn checkedRequiredCoverageOffset(table: Table, base_offset: usize, relative_offs
     // Treating zero as "relative to the parent" aliases the parent header as a
     // Coverage table, which can silently disable substitutions or redirect
     // coverage-indexed arrays through unrelated metadata.
+    return checkedRequiredSubtableOffset(table, base_offset, relative_offset);
+}
+
+fn checkedRequiredClassDefOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
+    // Class-based GSUB formats use ClassDef offsets as required child tables.
+    // A null offset would classify glyphs by reinterpreting the surrounding
+    // substitution header as ClassDef data, changing matching behavior based on
+    // unrelated lookup metadata instead of the font's declared class domain.
     return checkedRequiredSubtableOffset(table, base_offset, relative_offset);
 }
 
@@ -2680,6 +2688,67 @@ test "GSUB contextual class subtables reject covered class indexes outside set a
 
     writeClassDef1(&chaining_bytes, 30, 5, 0);
     try ensureChainingContextSubstitutionSubtableWithin(table, 0);
+}
+
+test "GSUB class-based substitutions reject null ClassDef offsets" {
+    const allocator = std.testing.allocator;
+
+    var context_bytes = [_]u8{0} ** 26;
+    writeU16Test(&context_bytes, 0, 2); // ContextSubst format 2.
+    writeU16Test(&context_bytes, 2, 12); // Coverage.
+    writeU16Test(&context_bytes, 4, 0); // Invalid: ClassDef offsets are required.
+    writeU16Test(&context_bytes, 6, 1); // One nullable SubClassSet slot.
+    writeU16Test(&context_bytes, 8, 0);
+    writeCoverage1(&context_bytes, 12, 5);
+    writeClassDef1(&context_bytes, 18, 5, 0);
+
+    var table = Table{ .data = &context_bytes, .offset = 0, .length = context_bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureContextSubstitutionSubtableWithin(table, 0));
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 5);
+    try std.testing.expectError(error.BadGsub, applyContextClassSubstitution(table, 0, &glyphs, allocator, 0, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
+
+    writeU16Test(&context_bytes, 4, 18);
+    try ensureContextSubstitutionSubtableWithin(table, 0);
+    try applyContextClassSubstitution(table, 0, &glyphs, allocator, 0, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
+
+    var chaining_bytes = [_]u8{0} ** 46;
+    writeU16Test(&chaining_bytes, 0, 2); // ChainingContextSubst format 2.
+    writeU16Test(&chaining_bytes, 2, 16); // Coverage.
+    writeU16Test(&chaining_bytes, 4, 22); // BacktrackClassDef.
+    writeU16Test(&chaining_bytes, 6, 30); // InputClassDef.
+    writeU16Test(&chaining_bytes, 8, 38); // LookaheadClassDef.
+    writeU16Test(&chaining_bytes, 10, 1); // One nullable ChainSubClassSet slot.
+    writeU16Test(&chaining_bytes, 12, 0);
+    writeCoverage1(&chaining_bytes, 16, 5);
+    writeClassDef1(&chaining_bytes, 22, 0, 0);
+    writeClassDef1(&chaining_bytes, 30, 5, 0);
+    writeClassDef1(&chaining_bytes, 38, 0, 0);
+
+    table = .{ .data = &chaining_bytes, .offset = 0, .length = chaining_bytes.len };
+    try ensureChainingContextSubstitutionSubtableWithin(table, 0);
+
+    writeU16Test(&chaining_bytes, 4, 0);
+    try std.testing.expectError(error.BadGsub, ensureChainingContextSubstitutionSubtableWithin(table, 0));
+    writeU16Test(&chaining_bytes, 4, 22);
+
+    writeU16Test(&chaining_bytes, 6, 0);
+    try std.testing.expectError(error.BadGsub, ensureChainingContextSubstitutionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGsub, applyChainingClassSubstitution(table, 0, &glyphs, allocator, 0, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
+    writeU16Test(&chaining_bytes, 6, 30);
+
+    writeU16Test(&chaining_bytes, 8, 0);
+    try std.testing.expectError(error.BadGsub, ensureChainingContextSubstitutionSubtableWithin(table, 0));
+    writeU16Test(&chaining_bytes, 8, 38);
+
+    try ensureChainingContextSubstitutionSubtableWithin(table, 0);
+    try applyChainingClassSubstitution(table, 0, &glyphs, allocator, 0, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 }
 
 test "GSUB ContextSubst rejects null required rule offsets" {

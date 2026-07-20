@@ -637,21 +637,21 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
             if (coverage >= pair_set_count) return false;
             const pair_set_offset = subtable_offset + try readU16(table, subtable_offset + 10 + coverage * 2);
             const pair_value_count = try readU16(table, pair_set_offset);
-            var record_offset = pair_set_offset + 2;
-            for (0..pair_value_count) |_| {
-                const second = try readU16(table, record_offset);
-                record_offset += 2;
-                const value_1 = try readValueRecord(table, record_offset, value_format_1, pair_set_offset);
-                record_offset += value_size_1;
-                const value_2 = try readValueRecord(table, record_offset, value_format_2, pair_set_offset);
-                record_offset += value_size_2;
-                if (second == glyphs[second_index]) {
-                    try appendAdjustment(adjustments, allocator, first_index, value_1, true);
-                    try appendAdjustment(adjustments, allocator, second_index, value_2, false);
-                    return true;
-                }
-            }
-            return false;
+            const pair_record = try ensurePairValueRecordsWithin(
+                table,
+                pair_set_offset,
+                pair_value_count,
+                value_format_1,
+                value_format_2,
+                value_size_1,
+                value_size_2,
+                glyphs[second_index],
+            ) orelse return false;
+            const value_1 = try readValueRecord(table, pair_record + 2, value_format_1, pair_set_offset);
+            const value_2 = try readValueRecord(table, pair_record + 2 + value_size_1, value_format_2, pair_set_offset);
+            try appendAdjustment(adjustments, allocator, first_index, value_1, true);
+            try appendAdjustment(adjustments, allocator, second_index, value_2, false);
+            return true;
         },
         2 => {
             // PairPos format 2 maps both glyphs through class definitions and
@@ -1560,7 +1560,6 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
             try ensureCoverageIndicesWithin(table, coverage_offset, pair_set_count);
             const pair_set_offsets_pos = subtable_offset + 10;
             try ensureBytesWithin(table, pair_set_offsets_pos, @as(usize, pair_set_count) * 2);
-            const pair_record_size = 2 + value_size_1 + value_size_2;
             for (0..pair_set_count) |pair_set_i| {
                 const pair_set_relative = try readU16BadGpos(table, pair_set_offsets_pos + pair_set_i * 2);
                 // PairSet offsets are required child tables. A zero offset
@@ -1570,18 +1569,7 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
                 if (pair_set_relative == 0) return error.BadGpos;
                 const pair_set_offset = try checkedPositionOffset(table, subtable_offset, pair_set_relative);
                 const pair_value_count = try readU16BadGpos(table, pair_set_offset);
-                try ensureBytesWithin(table, pair_set_offset + 2, @as(usize, pair_value_count) * pair_record_size);
-                for (0..pair_value_count) |pair_i| {
-                    const pair_record_offset = pair_set_offset + 2 + pair_i * pair_record_size;
-                    const second_glyph = try readU16BadGpos(table, pair_record_offset);
-                    try ensureGlyphIdWithinMaxp(table, second_glyph);
-                    if (valueRecordHasDeviceOffsets(value_format_1)) {
-                        try ensureValueRecordWithin(table, pair_record_offset + 2, value_format_1, pair_set_offset);
-                    }
-                    if (valueRecordHasDeviceOffsets(value_format_2)) {
-                        try ensureValueRecordWithin(table, pair_record_offset + 2 + value_size_1, value_format_2, pair_set_offset);
-                    }
-                }
+                _ = try ensurePairValueRecordsWithin(table, pair_set_offset, pair_value_count, value_format_1, value_format_2, value_size_1, value_size_2, null);
             }
         },
         2 => {
@@ -1608,6 +1596,37 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+fn ensurePairValueRecordsWithin(table: Table, pair_set_offset: usize, pair_value_count: u16, value_format_1: u16, value_format_2: u16, value_size_1: usize, value_size_2: usize, target_second_glyph: ?GlyphId) GposError!?usize {
+    const pair_record_size = 2 + value_size_1 + value_size_2;
+    try ensureBytesWithin(table, pair_set_offset + 2, try checkedMul(@as(usize, pair_value_count), pair_record_size));
+
+    var previous_second: ?GlyphId = null;
+    var matched_record: ?usize = null;
+    for (0..pair_value_count) |pair_i| {
+        const pair_record_offset = pair_set_offset + 2 + pair_i * pair_record_size;
+        const second_glyph = try readU16BadGpos(table, pair_record_offset);
+        // OpenType requires each PairSet to be sorted by SecondGlyph. Enforce
+        // the strict order while preflighting so duplicate or descending
+        // records cannot make positioning depend on a linear-search accident.
+        if (previous_second) |previous| {
+            if (second_glyph <= previous) return error.BadGpos;
+        }
+        previous_second = second_glyph;
+
+        try ensureGlyphIdWithinMaxp(table, second_glyph);
+        if (valueRecordHasDeviceOffsets(value_format_1)) {
+            try ensureValueRecordWithin(table, pair_record_offset + 2, value_format_1, pair_set_offset);
+        }
+        if (valueRecordHasDeviceOffsets(value_format_2)) {
+            try ensureValueRecordWithin(table, pair_record_offset + 2 + value_size_1, value_format_2, pair_set_offset);
+        }
+        if (target_second_glyph) |target| {
+            if (second_glyph == target) matched_record = pair_record_offset;
+        }
+    }
+    return matched_record;
 }
 
 fn ensureCursivePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
@@ -3220,6 +3239,40 @@ test "GPOS PairPos format 1 rejects null PairSet offsets" {
     writeU16Test(&bytes, 10, 12);
     writeU16Test(&bytes, 12, 0);
     try ensurePairPositionSubtableWithin(table, 0);
+}
+
+test "GPOS PairPos format 1 rejects unsorted PairValue records" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 34;
+    writeU16Test(&bytes, 0, 1); // PairPos format 1.
+    writeU16Test(&bytes, 2, 22); // Coverage table.
+    writeU16Test(&bytes, 4, 0x0004); // ValueFormat1: xAdvance.
+    writeU16Test(&bytes, 6, 0); // Empty ValueFormat2.
+    writeU16Test(&bytes, 8, 1);
+    writeU16Test(&bytes, 10, 12); // PairSet.
+
+    const pair_set = 12;
+    writeU16Test(&bytes, pair_set + 0, 2);
+    writeU16Test(&bytes, pair_set + 2, 11);
+    writeI16Test(&bytes, pair_set + 4, -20);
+    writeU16Test(&bytes, pair_set + 6, 10); // Invalid: SecondGlyph order regresses.
+    writeI16Test(&bytes, pair_set + 8, -40);
+    writeCoverage1Test(&bytes, 22, 5);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try std.testing.expectError(error.BadGpos, collectPairAdjustment(table, 0, &.{ 5, 11 }, &adjustments, allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16Test(&bytes, pair_set + 6, 12);
+    try ensurePairPositionSubtableWithin(table, 0);
+    try collectPairAdjustment(table, 0, &.{ 5, 11 }, &adjustments, allocator, 0, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, -20), adjustments.items[0].x_advance);
 }
 
 test "GPOS PairPos format 2 rejects class values outside matrix" {

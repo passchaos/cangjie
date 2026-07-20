@@ -1565,7 +1565,13 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
             try ensureBytesWithin(table, pair_set_offsets_pos, @as(usize, pair_set_count) * 2);
             const pair_record_size = 2 + value_size_1 + value_size_2;
             for (0..pair_set_count) |pair_set_i| {
-                const pair_set_offset = try checkedPositionOffset(table, subtable_offset, try readU16BadGpos(table, pair_set_offsets_pos + pair_set_i * 2));
+                const pair_set_relative = try readU16BadGpos(table, pair_set_offsets_pos + pair_set_i * 2);
+                // PairSet offsets are required child tables. A zero offset
+                // aliases the PairPos header as PairSet.PairValueCount, which
+                // can make malformed fonts appear structurally valid or derive
+                // record bounds from unrelated header fields.
+                if (pair_set_relative == 0) return error.BadGpos;
+                const pair_set_offset = try checkedPositionOffset(table, subtable_offset, pair_set_relative);
                 const pair_value_count = try readU16BadGpos(table, pair_set_offset);
                 try ensureBytesWithin(table, pair_set_offset + 2, @as(usize, pair_value_count) * pair_record_size);
                 for (0..pair_value_count) |pair_i| {
@@ -2942,6 +2948,26 @@ test "GPOS PairPos format 1 rejects dangling coverage indexes" {
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
     try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+}
+
+test "GPOS PairPos format 1 rejects null PairSet offsets" {
+    var bytes = [_]u8{0} ** 22;
+    writeU16Test(&bytes, 0, 1); // PairPos format 1.
+    writeU16Test(&bytes, 2, 16); // Coverage table.
+    writeU16Test(&bytes, 4, 0); // Empty ValueFormat1.
+    writeU16Test(&bytes, 6, 0); // Empty ValueFormat2.
+    writeU16Test(&bytes, 8, 1); // One covered first glyph requires one PairSet.
+    writeU16Test(&bytes, 10, 0); // Invalid: PairSet offsets are not nullable.
+    writeCoverage1Test(&bytes, 16, 10);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+
+    // A real, non-null empty PairSet remains valid. The parser must reject
+    // only the aliasing offset, not empty pair data.
+    writeU16Test(&bytes, 10, 12);
+    writeU16Test(&bytes, 12, 0);
+    try ensurePairPositionSubtableWithin(table, 0);
 }
 
 test "GPOS PairPos format 2 rejects class values outside matrix" {

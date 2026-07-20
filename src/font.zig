@@ -578,9 +578,11 @@ pub const Font = struct {
         var saw_matching_pair = false;
         for (0..table_count) |_| {
             if (subtable_offset > table_end or table_end - subtable_offset < 6) return error.BadSfnt;
+            const subtable_version = try bin.readU16At(data, subtable_offset);
             const length = try bin.readU16At(data, subtable_offset + 2);
             const coverage = try bin.readU16At(data, subtable_offset + 4);
             if (length < 6 or length > table_end - subtable_offset) return error.BadSfnt;
+            if (subtable_version != 0) return error.BadSfnt;
             const format = coverage >> 8;
             const horizontal = (coverage & 0x0001) != 0;
             const minimum = (coverage & 0x0002) != 0;
@@ -2735,9 +2737,15 @@ fn validateLegacyKernTable(data: []const u8, kern: TableRecord, glyph_count: u16
     var subtable_offset = kern.offset + 4;
     for (0..table_count) |_| {
         if (subtable_offset > table_end or table_end - subtable_offset < 6) return error.BadSfnt;
+        const subtable_version = try bin.readU16At(data, subtable_offset);
         const length = try bin.readU16At(data, subtable_offset + 2);
         const coverage = try bin.readU16At(data, subtable_offset + 4);
         if (length < 6 or length > table_end - subtable_offset) return error.BadSfnt;
+
+        // Legacy OpenType kern subtables carry their own UInt16 version, which
+        // must be zero. Rejecting private variants here keeps later coverage
+        // bits from being interpreted with the standard format-0 body layout.
+        if (subtable_version != 0) return error.BadSfnt;
 
         const format = coverage >> 8;
         const horizontal = (coverage & 0x0001) != 0;
@@ -2748,6 +2756,11 @@ fn validateLegacyKernTable(data: []const u8, kern: TableRecord, glyph_count: u16
         }
         subtable_offset += length;
     }
+    // The SFNT directory length is the unpadded kern payload length. Require
+    // nTables and each subtable length to consume it exactly so orphan bytes
+    // cannot hide an unvalidated subtable that another kern consumer might
+    // still interpret.
+    if (subtable_offset != table_end) return error.BadSfnt;
 }
 
 fn validateAppleKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
@@ -2770,6 +2783,10 @@ fn validateAppleKernTable(data: []const u8, kern: TableRecord, glyph_count: u16)
         }
         subtable_offset += length;
     }
+    // Apple/AAT kern v1 uses 32-bit lengths, but the same ownership rule
+    // applies: the counted subtable sequence must occupy the complete declared
+    // table payload rather than leaving trailing bytes with ambiguous meaning.
+    if (subtable_offset != table_end) return error.BadSfnt;
 }
 
 fn validateKernFormat0Body(data: []const u8, glyph_count: u16) FontError!void {
@@ -9088,6 +9105,99 @@ test "kern public API revalidates borrowed pair arrays" {
     const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
     writeU16Test(bytes, kern_offset + 4 + 6 + 8 + 2, 2); // Mutate right glyph outside maxp.numGlyphs.
     try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
+}
+
+test "legacy kern subtables must use version zero" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        var kern: [24]u8 = .{0} ** 24;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+        writeU16Test(&kern, 4, 1); // Legacy subtable version must be zero.
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var kern: [24]u8 = .{0} ** 24;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
+        writeU16Test(bytes, kern_offset + 4, 2);
+        try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
+    }
+}
+
+test "kern subtable sequence must consume declared payload" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        var kern: [25]u8 = .{0} ** 25;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+
+        const font = kernOnlyFont(&kern);
+        try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
+    }
+
+    {
+        var kern: [32]u8 = .{0} ** 32;
+        writeU32Test(&kern, 0, 0x00010000);
+        writeU32Test(&kern, 4, 1);
+        writeAppleKernFormat0Subtable(&kern, 8, 0x0000, 1, 1, -35);
+
+        const font = kernOnlyFont(&kern);
+        try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
+    }
+
+    {
+        var kern: [28]u8 = .{0} ** 28;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+        // SFNT table lengths exclude padding. Bytes that remain after the
+        // counted subtable sequence are therefore ambiguous orphan payload, not
+        // ignorable alignment data.
+        writeU32Test(&kern, 24, 0xdead_beef);
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var kern: [24]u8 = .{0} ** 24;
+        writeU16Test(&kern, 0, 0);
+        writeU16Test(&kern, 2, 1);
+        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+
+        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expectEqual(@as(i16, -40), try font.kerning(1, 1));
+
+        const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
+        writeU16Test(bytes, kern_offset + 2, 0); // Count no subtables while leaving the original payload bytes reachable.
+        try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
+    }
 }
 
 test "legacy kern format 0 rejects truncated binary-search header" {

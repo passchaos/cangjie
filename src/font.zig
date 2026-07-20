@@ -568,6 +568,7 @@ pub const Font = struct {
         // read so post-parse mutations cannot introduce dangling glyph IDs or
         // unsorted format-0 records that binary search would otherwise observe
         // as an innocuous "no pair" result.
+        try validateSfntTableChecksum(self.data, kern);
         try validateKernTable(self.data, kern, self.glyph_count);
         if (kern.length < 4) return 0;
         const version = try bin.readU32At(self.data, kern.offset);
@@ -9194,6 +9195,31 @@ test "kern public API revalidates borrowed pair arrays" {
     try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
 }
 
+test "kern public API revalidates borrowed table checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var kern: [24]u8 = .{0} ** 24;
+    writeU16Test(&kern, 0, 0);
+    writeU16Test(&kern, 2, 1);
+    writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
+
+    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(i16, -40), try font.kerning(1, 1));
+
+    const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
+    // Keep the pair array sorted and glyph IDs in range while changing only
+    // the kerning value. The lazy public API must reject that borrowed payload
+    // because it no longer matches the SFNT checksum validated by Font.parse.
+    writeI16Test(bytes, kern_offset + 22, -20);
+    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
+}
+
 test "legacy kern subtables must use version zero" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -15830,6 +15856,8 @@ fn kernOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    const kern_record: TableRecord = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = 0, .offset = 0, .length = data.len };
+    const kern_checksum = checksumSfntTable(data, kern_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -15846,7 +15874,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .hmtx = dummy_table,
         .loca = null,
         .cmap = dummy_table,
-        .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = 0, .offset = 0, .length = data.len },
+        .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = kern_checksum, .offset = 0, .length = data.len },
         .os2 = null,
         .gdef = null,
         .gpos = null,

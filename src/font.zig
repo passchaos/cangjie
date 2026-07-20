@@ -6044,7 +6044,20 @@ fn readFvarInfo(data: []const u8, fvar: TableRecord) FontError!FvarInfo {
     const instance_count: usize = @intCast(try bin.readU16At(data, fvar.offset + 12));
     const instance_size: usize = @intCast(try bin.readU16At(data, fvar.offset + 14));
     if (count_size_pairs != 2) return error.BadSfnt;
-    if (axis_size < 20) return error.BadSfnt;
+    const minimum_axis_size: usize = 20;
+    const minimum_instance_size: usize = 4 + axis_count * 4;
+    // fvar defines fixed axis records and instance records that are either the
+    // coordinate payload alone or that payload plus a PostScript-name ID. Do not
+    // accept larger private record strides: extra bytes would be unreachable by
+    // this parser, and an instanceSize that is larger than the coordinates but
+    // not large enough for the optional name ID would make the same bytes look
+    // like padding to one consumer and metadata to another.
+    if (axis_size != minimum_axis_size) return error.BadSfnt;
+    if (instance_count == 0) {
+        if (instance_size != 0 and instance_size != minimum_instance_size and instance_size != minimum_instance_size + 2) return error.BadSfnt;
+    } else if (instance_size != minimum_instance_size and instance_size != minimum_instance_size + 2) {
+        return error.BadSfnt;
+    }
 
     // countSizePairs is part of the fvar header layout contract: exactly two
     // count/size pairs follow it, axisCount/axisSize and
@@ -6055,8 +6068,6 @@ fn readFvarInfo(data: []const u8, fvar: TableRecord) FontError!FvarInfo {
     if (axis_count > (fvar.length - axes_array_offset) / axis_size) return error.BadSfnt;
     const axes_bytes = axis_count * axis_size;
     const instances_offset = axes_array_offset + axes_bytes;
-    const minimum_instance_size = 4 + axis_count * 4;
-    if (instance_count != 0 and instance_size < minimum_instance_size) return error.BadSfnt;
     if (instance_size != 0 and instance_count > (fvar.length - instances_offset) / instance_size) return error.BadSfnt;
 
     return .{
@@ -14099,6 +14110,26 @@ test "fvar axes and instance arrays stay inside declared table regions" {
     writeU16Test(&bad_count_size_pairs, 6, 3);
     const bad_count_size_pairs_font = fvarOnlyFont(&bad_count_size_pairs);
     try std.testing.expectError(error.BadSfnt, bad_count_size_pairs_font.variationAxes(allocator));
+
+    var padded_axis_record: [38]u8 = .{0} ** 38;
+    writeU32Test(&padded_axis_record, 0, 0x00010000);
+    writeU16Test(&padded_axis_record, 4, 16);
+    writeU16Test(&padded_axis_record, 6, 2);
+    writeU16Test(&padded_axis_record, 8, 1);
+    writeU16Test(&padded_axis_record, 10, 22); // fvar AxisRecord is fixed-width: padding is not meaningful.
+    writeFvarAxisTest(&padded_axis_record, 16, "wght", 100.0, 400.0, 900.0, 256);
+    try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&padded_axis_record).variationAxes(allocator));
+
+    var ambiguous_instance_size: [45]u8 = .{0} ** 45;
+    writeU32Test(&ambiguous_instance_size, 0, 0x00010000);
+    writeU16Test(&ambiguous_instance_size, 4, 16);
+    writeU16Test(&ambiguous_instance_size, 6, 2);
+    writeU16Test(&ambiguous_instance_size, 8, 1);
+    writeU16Test(&ambiguous_instance_size, 10, 20);
+    writeU16Test(&ambiguous_instance_size, 12, 1);
+    writeU16Test(&ambiguous_instance_size, 14, 9); // Not coordinates-only and not coordinates plus PostScript name ID.
+    writeFvarAxisTest(&ambiguous_instance_size, 16, "wght", 100.0, 400.0, 900.0, 256);
+    try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&ambiguous_instance_size).variationAxes(allocator));
 }
 
 test "fvar axis records require ordered ranges and unique tags" {

@@ -1277,6 +1277,7 @@ pub const Font = struct {
             // Re-check the maxp/CharStrings contract before serving even a
             // single glyph so a post-parse mutation cannot hide a truncated
             // CharStrings INDEX behind requests for still-present glyph ids.
+            try validateSfntTableChecksum(self.data, cff);
             try validateCffGlyphCount(self.data, cff, self.glyph_count);
             const info = try cff_mod.parseInfo(self.data[cff.offset .. cff.offset + cff.length]);
             try cff_mod.appendGlyphOutline(allocator, self.data[cff.offset .. cff.offset + cff.length], info, &outline, glyph_id);

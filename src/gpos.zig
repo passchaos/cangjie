@@ -1484,6 +1484,11 @@ fn ensureSinglePositionSubtableWithin(table: Table, subtable_offset: usize) Gpos
         1 => try ensureBytesWithin(table, subtable_offset + 6, value_size),
         2 => {
             const value_count = try readU16BadGpos(table, subtable_offset + 6);
+            // Coverage indexes are direct indexes into the ValueRecord array.
+            // Reject dangling coverage entries during preflight instead of
+            // letting shaping silently skip a covered glyph whose record is
+            // absent from a malformed SinglePos format 2 subtable.
+            try ensureCoverageIndicesWithin(table, coverage_offset, value_count);
             try ensureBytesWithin(table, subtable_offset + 8, @as(usize, value_count) * value_size);
         },
         else => return error.UnsupportedGpos,
@@ -1502,6 +1507,11 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
     switch (pos_format) {
         1 => {
             const pair_set_count = try readU16BadGpos(table, subtable_offset + 8);
+            // PairSet offsets are selected by the first glyph's coverage index.
+            // Every covered first glyph must therefore have a corresponding
+            // PairSet slot; otherwise positioning becomes data-dependent on a
+            // malformed coverage table and silently drops declared pairs.
+            try ensureCoverageIndicesWithin(table, coverage_offset, pair_set_count);
             const pair_set_offsets_pos = subtable_offset + 10;
             try ensureBytesWithin(table, pair_set_offsets_pos, @as(usize, pair_set_count) * 2);
             const pair_record_size = 2 + value_size_1 + value_size_2;
@@ -2546,6 +2556,22 @@ test "GPOS rejects reserved ValueFormat bits" {
     try std.testing.expectError(error.BadGpos, ensureSinglePositionSubtableWithin(table, 0));
 }
 
+test "GPOS SinglePos format 2 rejects dangling coverage indexes" {
+    var bytes = [_]u8{0} ** 20;
+    writeU16Test(&bytes, 0, 2); // SinglePos format 2.
+    writeU16Test(&bytes, 2, 12); // Coverage table.
+    writeU16Test(&bytes, 4, 0x0004); // ValueFormat: xAdvance.
+    writeU16Test(&bytes, 6, 1); // One ValueRecord.
+    writeI16Test(&bytes, 8, 40);
+    writeU16Test(&bytes, 12, 1); // Coverage format 1.
+    writeU16Test(&bytes, 14, 2); // But two covered glyphs need value records.
+    writeU16Test(&bytes, 16, 5);
+    writeU16Test(&bytes, 18, 6);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensureSinglePositionSubtableWithin(table, 0));
+}
+
 test "GPOS class format 1 handles upper glyph boundary" {
     var bytes = [_]u8{0} ** 12;
     writeU16Test(&bytes, 0, 1);
@@ -2666,6 +2692,24 @@ test "GPOS value records tolerate device and variation offset fields" {
     try std.testing.expectEqual(@as(i16, -25), value.y_placement);
     try std.testing.expectEqual(@as(i16, 30), value.x_advance);
     try std.testing.expectEqual(@as(i16, -10), value.y_advance);
+}
+
+test "GPOS PairPos format 1 rejects dangling coverage indexes" {
+    var bytes = [_]u8{0} ** 24;
+    writeU16Test(&bytes, 0, 1); // PairPos format 1.
+    writeU16Test(&bytes, 2, 16); // Coverage table.
+    writeU16Test(&bytes, 4, 0); // Empty ValueFormat1.
+    writeU16Test(&bytes, 6, 0); // Empty ValueFormat2.
+    writeU16Test(&bytes, 8, 1); // One PairSet offset.
+    writeU16Test(&bytes, 10, 12);
+    writeU16Test(&bytes, 12, 0); // Empty PairSet is structurally valid.
+    writeU16Test(&bytes, 16, 1); // Coverage format 1.
+    writeU16Test(&bytes, 18, 2); // But two covered first glyphs need PairSet slots.
+    writeU16Test(&bytes, 20, 10);
+    writeU16Test(&bytes, 22, 20);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
 }
 
 test "GPOS LangSys required feature bypasses feature overrides" {

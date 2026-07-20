@@ -335,7 +335,7 @@ fn extensionPositionSubtablePayload(table: Table, subtable_offset: usize, expect
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
     if (extension_lookup_type != expected_lookup_type) return error.UnsupportedGpos;
-    return checkedPositionOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+    return checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 }
 
 fn collectExtensionSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -388,7 +388,7 @@ fn collectExtensionAdjustmentLookup(table: Table, lookup_offset: usize, subtable
         if (pos_format != 1) return error.UnsupportedGpos;
         const extension_lookup_type = try readU16(table, subtable_offset + 2);
         if (extension_lookup_type == 9) return error.UnsupportedGpos;
-        const extension_subtable = try checkedPositionOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+        const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 
         switch (extension_lookup_type) {
             1 => try collectSingleAdjustmentSubtable(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, single_matched),
@@ -602,7 +602,7 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
     if (pos_format != 1) return error.UnsupportedGpos;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_subtable = try checkedPositionOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+    const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
     // The extension wrapper extends addressing only; LookupFlag still belongs
     // to the outer lookup and must filter glyph classes in the delegated body.
     switch (extension_lookup_type) {
@@ -1539,7 +1539,7 @@ fn ensureExtensionPositionPayloadWithin(table: Table, subtable_offset: usize) Gp
     if (pos_format != 1) return error.UnsupportedGpos;
     const extension_lookup_type = try readU16BadGpos(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_subtable = try checkedPositionOffset(table, subtable_offset, try readU32BadGpos(table, subtable_offset + 4));
+    const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32BadGpos(table, subtable_offset + 4));
     try ensurePositionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
     try ensurePositionSubtableVariableDataWithin(table, extension_subtable, extension_lookup_type);
 }
@@ -2270,6 +2270,15 @@ fn checkedRequiredPositionOffset(table: Table, base_offset: usize, relative_offs
     return checkedPositionOffset(table, base_offset, @as(u32, relative_offset));
 }
 
+fn checkedExtensionPositionPayloadOffset(table: Table, extension_offset: usize, relative_offset: u32) GposError!usize {
+    // ExtensionPos.ExtensionOffset is a required Offset32 to a wrapped
+    // positioning subtable. It must not point back into the fixed 8-byte
+    // wrapper header, where format/type/offset words can masquerade as a
+    // plausible SinglePos/PairPos header and make shaping depend on aliases.
+    if (relative_offset < 8) return error.BadGpos;
+    return checkedPositionOffset(table, extension_offset, relative_offset);
+}
+
 fn checkedRequiredScriptListOffset(table: Table) GposError!usize {
     // ScriptList is a mandatory top-level OpenType Layout table. Null would
     // reinterpret the GPOS version/header words as script records, so reject it
@@ -2370,7 +2379,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
     if (pos_format != 1) return error.UnsupportedGpos;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_subtable = try checkedPositionOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+    const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 
     // PosLookupRecord names one glyph in an already-matched input sequence.
     // ExtensionPos only widens the subtable address, so keep using the
@@ -2823,6 +2832,25 @@ test "GPOS rejects ExtensionPos payload offsets outside the table during shaping
     // the wrapper is followed rather than leaking as EndOfStream/traps.
     try std.testing.expectError(error.BadGpos, extensionPositionSubtablePayload(table, 0, 1));
     try std.testing.expectError(error.BadGpos, collectExtensionAdjustment(table, 0, &.{5}, &adjustments, std.testing.allocator, 0, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS rejects ExtensionPos payload offsets that alias the wrapper header" {
+    var bytes = [_]u8{0} ** 8;
+    writeU16Test(&bytes, 0, 1); // ExtensionPos format 1.
+    writeU16Test(&bytes, 2, 1); // Wrapped SinglePos.
+    writeU32Test(&bytes, 4, 4); // Points into the ExtensionOffset field itself.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+
+    // In-range ExtensionOffset values still have to name child subtable data,
+    // not the wrapper's own format/type/offset words.
+    try std.testing.expectError(error.BadGpos, extensionPositionSubtablePayload(table, 0, 1));
+    try std.testing.expectError(error.BadGpos, ensureExtensionPositionPayloadWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, collectExtensionAdjustment(table, 0, &.{5}, &adjustments, std.testing.allocator, 0, .{}));
+    try std.testing.expectError(error.BadGpos, collectNestedExtensionAdjustment(table, 0, &.{5}, 0, &adjustments, std.testing.allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 

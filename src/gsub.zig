@@ -332,7 +332,7 @@ fn extensionSubtablePayload(table: Table, subtable_offset: usize, expected_looku
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
     if (extension_lookup_type != expected_lookup_type) return error.UnsupportedGsub;
-    return checkedSubtableOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+    return checkedExtensionSubtablePayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 }
 
 fn applyExtensionSingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -711,7 +711,7 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
     if (subst_format != 1) return error.UnsupportedGsub;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    const extension_subtable = try checkedSubtableOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+    const extension_subtable = try checkedExtensionSubtablePayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
     // Extension subtables only move the payload past 16-bit offset limits; the
     // wrapper lookup still owns LookupFlag filtering for the enclosed lookup.
     switch (extension_lookup_type) {
@@ -1501,7 +1501,7 @@ fn ensureExtensionSubstitutionPayloadWithin(table: Table, subtable_offset: usize
     if (subst_format != 1) return error.UnsupportedGsub;
     const extension_lookup_type = try readU16BadGsub(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    const extension_subtable = try checkedSubtableOffset(table, subtable_offset, try readU32BadGsub(table, subtable_offset + 4));
+    const extension_subtable = try checkedExtensionSubtablePayloadOffset(table, subtable_offset, try readU32BadGsub(table, subtable_offset + 4));
     try ensureSubstitutionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
     try ensureSubstitutionSubtableVariableDataWithin(table, extension_subtable, extension_lookup_type);
 }
@@ -2054,6 +2054,15 @@ fn checkedRequiredSubtableOffset(table: Table, base_offset: usize, relative_offs
     return checkedSubtableOffset(table, base_offset, @as(u32, relative_offset));
 }
 
+fn checkedExtensionSubtablePayloadOffset(table: Table, extension_offset: usize, relative_offset: u32) GsubError!usize {
+    // ExtensionSubst.ExtensionOffset is a required Offset32 to a wrapped lookup
+    // subtable, not a generic byte pointer. Keep it past the fixed 8-byte
+    // wrapper header so malformed fonts cannot reinterpret extension format,
+    // type, or offset words as a plausible nested subtable.
+    if (relative_offset < 8) return error.BadGsub;
+    return checkedSubtableOffset(table, extension_offset, relative_offset);
+}
+
 fn checkedRequiredScriptListOffset(table: Table) GsubError!usize {
     // ScriptList is a required top-level OpenType Layout table. An offset of
     // zero aliases the GSUB version/header bytes as a ScriptList and makes
@@ -2201,7 +2210,7 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
     if (subst_format != 1) return error.UnsupportedGsub;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    const extension_subtable = try checkedSubtableOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+    const extension_subtable = try checkedExtensionSubtablePayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 
     // ExtensionSubst is only an offset-widening wrapper. Contextual records,
     // however, name one target glyph inside the pre-match input sequence. Apply
@@ -2468,6 +2477,27 @@ test "GSUB rejects ExtensionSubst payload offsets outside the table during shapi
     // path must convert a malicious Offset32 into BadGsub before reading the
     // wrapped payload or mutating the glyph stream.
     try std.testing.expectError(error.BadGsub, extensionSubtablePayload(table, 0, 1));
+    try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
+    try std.testing.expectError(error.BadGsub, applyNestedExtensionSubstitutionAt(table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
+}
+
+test "GSUB rejects ExtensionSubst payload offsets that alias the wrapper header" {
+    var bytes = [_]u8{0} ** 8;
+    writeU16Test(&bytes, 0, 1); // ExtensionSubst format 1.
+    writeU16Test(&bytes, 2, 1); // Wrapped SingleSubst.
+    writeU32Test(&bytes, 4, 4); // Points into the ExtensionOffset field itself.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 5);
+
+    // Offset32 values below the fixed wrapper size are in-range byte addresses,
+    // but they do not name a child subtable. Reject them before wrapper fields
+    // can be reinterpreted as a nested lookup payload.
+    try std.testing.expectError(error.BadGsub, extensionSubtablePayload(table, 0, 1));
+    try std.testing.expectError(error.BadGsub, ensureExtensionSubstitutionPayloadWithin(table, 0));
     try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
     try std.testing.expectError(error.BadGsub, applyNestedExtensionSubstitutionAt(table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);

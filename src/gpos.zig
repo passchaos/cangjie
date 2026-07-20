@@ -2379,6 +2379,7 @@ fn readValueRecord(table: Table, offset: usize, format: u16) GposError!Adjustmen
     // Device/variation-index offset fields are parsed and skipped for now: the
     // base placement/advance remains valid, while size-specific deltas can be
     // layered in later without rejecting common production fonts outright.
+    try ensureValueRecordWithin(table, offset, format);
     var value = Adjustment{ .index = 0 };
     var cursor = offset;
     if ((format & 0x0001) != 0) {
@@ -2401,7 +2402,6 @@ fn readValueRecord(table: Table, offset: usize, format: u16) GposError!Adjustmen
     if ((format & 0x0020) != 0) cursor += 2;
     if ((format & 0x0040) != 0) cursor += 2;
     if ((format & 0x0080) != 0) cursor += 2;
-    if (cursor > table.length) return error.EndOfStream;
     return value;
 }
 
@@ -2772,6 +2772,17 @@ test "GPOS value records tolerate device and variation offset fields" {
     try std.testing.expectEqual(@as(i16, -25), value.y_placement);
     try std.testing.expectEqual(@as(i16, 30), value.x_advance);
     try std.testing.expectEqual(@as(i16, -10), value.y_advance);
+}
+
+test "GPOS value records reject overflowing offset plus size" {
+    const table = Table{ .data = &.{}, .offset = 0, .length = 8 };
+
+    // The value record itself is small, but callers may hand us an already
+    // corrupted absolute table-relative offset. Validate the offset/size pair
+    // before reading any field so malformed subtables fail cleanly instead of
+    // wrapping `offset + size` in safety builds.
+    try std.testing.expectError(error.BadGpos, ensureValueRecordWithin(table, std.math.maxInt(usize) - 1, 0x0004));
+    try std.testing.expectError(error.BadGpos, readValueRecord(table, std.math.maxInt(usize) - 1, 0x0004));
 }
 
 test "GPOS PairPos format 1 rejects dangling coverage indexes" {

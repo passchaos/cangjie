@@ -889,6 +889,7 @@ pub const Font = struct {
         // piecewise interpolation and come back as a plausible endpoint.
         try validateNormalizedVariationCoordinate(normalized);
         const avar = self.avar orelse return normalized;
+        try validateSfntTableChecksum(self.data, avar);
         if (avar.offset > self.data.len or avar.length > self.data.len - avar.offset) return error.BadSfnt;
         const table = self.data[avar.offset .. avar.offset + avar.length];
         if (avar.length < 8) return error.BadSfnt;
@@ -897,6 +898,7 @@ pub const Font = struct {
         if (major != 1 or minor != 0) return error.BadSfnt;
         const axis_count = try bin.readU16At(table, 6);
         if (self.fvar) |fvar| {
+            try validateSfntTableChecksum(self.data, fvar);
             const fvar_info = try readFvarInfo(self.data, fvar);
             if (axis_count != fvar_info.axis_count) return error.BadSfnt;
         } else if (axis_count != 0) {
@@ -15083,6 +15085,26 @@ test "avar public mapping rejects out-of-range axis indexes" {
     try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(2, 0.5));
 }
 
+test "avar public mapping revalidates borrowed table checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariableTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), try font.mapVariationCoordinate(0, 0.5), 0.0001);
+
+    const avar_offset: usize = @intCast(try sfntTableOffset(bytes, "avar"));
+    // Keep the segment map ordered and anchored while changing the mapped
+    // midpoint after Font.parse. The lazy API must reject the borrowed avar
+    // table because its SFNT checksum no longer matches.
+    writeF2Dot14Test(bytes, avar_offset + 20, 0.375);
+    try std.testing.expectError(error.BadSfnt, font.mapVariationCoordinate(0, 0.5));
+}
+
 test "avar public mapping validates normalized coordinates" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -16202,7 +16224,9 @@ fn fvarOnlyFont(data: []const u8) Font {
 fn avarOnlyFont(data: []const u8) Font {
     var font = fvarOnlyFont(data);
     font.fvar = null;
-    font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len };
+    const avar_record: TableRecord = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len };
+    const avar_checksum = checksumSfntTable(data, avar_record) catch 0;
+    font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = avar_checksum, .offset = 0, .length = data.len };
     return font;
 }
 
@@ -16211,7 +16235,9 @@ fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
     const fvar_record: TableRecord = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = fvar_length };
     const fvar_checksum = checksumSfntTable(data, fvar_record) catch 0;
     font.fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = fvar_length };
-    font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = fvar_length, .length = data.len - fvar_length };
+    const avar_record: TableRecord = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = fvar_length, .length = data.len - fvar_length };
+    const avar_checksum = checksumSfntTable(data, avar_record) catch 0;
+    font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = avar_checksum, .offset = fvar_length, .length = data.len - fvar_length };
     return font;
 }
 

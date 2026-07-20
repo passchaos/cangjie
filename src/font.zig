@@ -3380,6 +3380,7 @@ fn validateCmapSubtable(data: []const u8, offset: usize, length: usize, format: 
         14 => try validateCmapFormat14(data, offset, length),
         else => {},
     }
+    try validateCmapLanguageField(data, offset, length, format, platform_id);
 }
 
 fn validateCmapEncodingCompatibility(platform_id: u16, encoding_id: u16, format: u16) FontError!void {
@@ -3456,6 +3457,26 @@ fn cmapSubtableUsesUnicodeScalars(platform_id: u16, encoding_id: u16) bool {
         3 => encoding_id == 1 or encoding_id == 10,
         else => false,
     };
+}
+
+fn validateCmapLanguageField(data: []const u8, offset: usize, length: usize, format: u16, platform_id: u16) FontError!void {
+    // The legacy language field is only meaningful for Macintosh cmap
+    // subtables. Unicode, Windows, ISO, and custom cmap records must keep it
+    // zero; otherwise the same mapping bytes can be interpreted as a
+    // platform-private language variant by one parser and as an ordinary
+    // Unicode mapping by another.
+    if (platform_id == 1) return;
+    switch (format) {
+        0, 2, 4, 6 => {
+            if (length < 6) return error.BadSfnt;
+            if (try bin.readU16At(data, offset + 4) != 0) return error.BadSfnt;
+        },
+        8, 10, 12, 13 => {
+            if (length < 12) return error.BadSfnt;
+            if (try bin.readU32At(data, offset + 8) != 0) return error.BadSfnt;
+        },
+        else => {},
+    }
 }
 
 fn isUnicodeScalarValue(value: u32) bool {
@@ -10298,6 +10319,58 @@ test "cmap platform and encoding records allow only compatible formats" {
         writeU16Test(&non_uvs_format14, 4, 3);
         writeU16Test(&non_uvs_format14, 6, 10);
         try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &non_uvs_format14, cmap, 512));
+    }
+}
+
+test "cmap language fields require zero outside Macintosh platform" {
+    const allocator = std.testing.allocator;
+
+    {
+        const cmap: TableRecord = .{
+            .tag = .{ 'c', 'm', 'a', 'p' },
+            .checksum = 0,
+            .offset = 0,
+            .length = 274,
+        };
+        var format0: [274]u8 = .{0} ** 274;
+        writeU16Test(&format0, 0, 0); // cmap version.
+        writeU16Test(&format0, 2, 1);
+        writeU16Test(&format0, 4, 0); // Unicode platform, deprecated default semantics.
+        writeU16Test(&format0, 6, 0);
+        writeU32Test(&format0, 8, 12);
+        writeU16Test(&format0, 12, 0);
+        writeU16Test(&format0, 14, 262);
+
+        const subtables = try parseCmapSubtables(allocator, &format0, cmap, 2);
+        allocator.free(subtables);
+
+        var unicode_language = format0;
+        writeU16Test(&unicode_language, 16, 1);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &unicode_language, cmap, 2));
+
+        var mac_language = unicode_language;
+        writeU16Test(&mac_language, 4, 1); // Macintosh platform is the only owner of the legacy language field.
+        const mac_subtables = try parseCmapSubtables(allocator, &mac_language, cmap, 2);
+        allocator.free(mac_subtables);
+    }
+
+    {
+        const cmap: TableRecord = .{
+            .tag = .{ 'c', 'm', 'a', 'p' },
+            .checksum = 0,
+            .offset = 0,
+            .length = 40,
+        };
+        var format12: [40]u8 = .{0} ** 40;
+        writeCmapFormat12HeaderTest(&format12, format12.len - 12, 1);
+        writeCmapGroupTest(&format12, 28, 0x100, 0x100, 1);
+
+        const subtables = try parseCmapSubtables(allocator, &format12, cmap, 4);
+        allocator.free(subtables);
+
+        var nonzero_language = format12;
+        writeU32Test(&nonzero_language, 20, 1);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &nonzero_language, cmap, 4));
     }
 }
 

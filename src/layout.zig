@@ -504,10 +504,30 @@ pub const ParagraphLayout = struct {
 
     fn textPositionForCluster(self: ParagraphLayout, cluster: usize) TextPosition {
         if (self.glyphs.len == 0) return .{ .glyph_index = 0, .cluster = cluster };
+        var nearest_after_index: ?usize = null;
+        var nearest_after_cluster: usize = std.math.maxInt(usize);
+        var nearest_before_index: usize = 0;
+        var nearest_before_end: usize = 0;
         for (self.glyphs, 0..) |glyph, index| {
-            if (glyph.cluster >= cluster) return .{ .glyph_index = index, .cluster = glyph.cluster };
+            const glyph_start = glyph.cluster;
+            const glyph_end = glyph_start + @max(glyph.source_byte_len, 1);
+            if (cluster == glyph_start) return .{ .glyph_index = index, .cluster = glyph_start };
+            if (cluster > glyph_start and cluster < glyph_end) {
+                return .{ .glyph_index = index, .cluster = glyph_start, .trailing = cluster - glyph_start >= glyph_end - cluster };
+            }
+            if (glyph_start > cluster and glyph_start < nearest_after_cluster) {
+                nearest_after_index = index;
+                nearest_after_cluster = glyph_start;
+            }
+            if (glyph_end <= cluster and glyph_end >= nearest_before_end) {
+                nearest_before_index = index;
+                nearest_before_end = glyph_end;
+            }
         }
-        return .{ .glyph_index = self.glyphs.len - 1, .cluster = cluster, .trailing = true };
+        if (nearest_after_index) |index| {
+            return .{ .glyph_index = index, .cluster = self.glyphs[index].cluster };
+        }
+        return .{ .glyph_index = nearest_before_index, .cluster = cluster, .trailing = true };
     }
 
     fn lineForCaret(self: ParagraphLayout, glyph_index: usize) ParagraphLine {

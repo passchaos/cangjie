@@ -3160,6 +3160,48 @@ test "shapes right-to-left text with numeric subruns left-to-right" {
     });
 }
 
+test "maps logical carets onto visually reordered bidi glyphs" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const alef_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 0x05d0, "Alef Sans", "Regular", "Alef Sans Regular");
+    defer allocator.free(alef_bytes);
+    const one_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, '1', "One Sans", "Regular", "One Sans Regular");
+    defer allocator.free(one_bytes);
+    const two_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, '2', "Two Sans", "Regular", "Two Sans Regular");
+    defer allocator.free(two_bytes);
+    const bet_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 0x05d1, "Bet Sans", "Regular", "Bet Sans Regular");
+    defer allocator.free(bet_bytes);
+
+    var alef = try Font.parse(allocator, alef_bytes);
+    defer alef.deinit();
+    var one = try Font.parse(allocator, one_bytes);
+    defer one.deinit();
+    var two = try Font.parse(allocator, two_bytes);
+    defer two.deinit();
+    var bet = try Font.parse(allocator, bet_bytes);
+    defer bet.deinit();
+
+    const fonts = [_]*const Font{ &alef, &one, &two, &bet };
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "\u{05d0}12\u{05d1}", 20, .{ .max_width = 200, .direction = .rtl });
+    const clusters = try itemizeGraphemeClusters(allocator, "\u{05d0}12\u{05d1}");
+    defer allocator.free(clusters);
+
+    const after_alef = paragraph.nextGraphemeCaret(clusters, .{ .glyph_index = 3, .cluster = 0 });
+    try std.testing.expectEqual(@as(usize, 1), after_alef.glyph_index);
+    try std.testing.expectEqual(@as(usize, 2), after_alef.cluster);
+    try std.testing.expect(!after_alef.trailing);
+
+    const after_one = paragraph.nextGraphemeCaret(clusters, after_alef);
+    try std.testing.expectEqual(@as(usize, 2), after_one.glyph_index);
+    try std.testing.expectEqual(@as(usize, 3), after_one.cluster);
+    try std.testing.expect(!after_one.trailing);
+}
+
 test "defaults right-to-left paragraph alignment to the right edge" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

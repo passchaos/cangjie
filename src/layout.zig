@@ -811,7 +811,7 @@ pub const TextShaper = struct {
         try validateShapingInput(text, font_size, options);
         buffer.clear();
         try shapeSegmentInto(font, null, null, buffer, text, font_size, 0, lookupOptionsForText(text, options));
-        applyDirection(buffer, options.direction);
+        try applyBidiVisualOrder(buffer, text, options.direction);
         return buffer.run(font, font_size);
     }
 
@@ -885,7 +885,7 @@ pub const TextShaper = struct {
             _ = try appendCascadeRun(cascade.fonts[font_index], metrics_cache, glyph_index_cache, font_index, buffer, text[segment_start..], font_size, segment_start, pen_x, lookupOptionsForText(text[segment_start..], options));
         }
 
-        applyDirection(buffer, options.direction);
+        try applyBidiVisualOrder(buffer, text, options.direction);
         const shaped = buffer.shapedText();
         if (shaped_cache) |cache| {
             try cache.store(cache_key, shaped);
@@ -896,7 +896,7 @@ pub const TextShaper = struct {
     pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
         try validateShapingInput(text, font_size, options);
         try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
-        applyDirection(buffer, options.direction);
+        try applyBidiVisualOrder(buffer, text, options.direction);
         try buildScriptRuns(buffer, text, options.direction, options.language_tag);
         return buffer.scriptedText();
     }
@@ -1166,17 +1166,123 @@ fn appendScriptedRunForByteRange(buffer: *LayoutBuffer, text: []const u8, script
     });
 }
 
-fn applyDirection(buffer: *LayoutBuffer, direction: TextDirection) void {
-    if (direction == .ltr) return;
-    // The current bidi model reverses the shaped glyph/run order for RTL runs.
-    // After reversing, run offsets must be rebuilt from visual order.
-    std.mem.reverse(GlyphPosition, buffer.glyphs.items);
-    for (buffer.runs.items) |*run| {
-        run.glyph_start = buffer.glyphs.items.len - (run.glyph_start + run.glyph_len);
-        run.x_offset = 0;
+fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection) !void {
+    if (buffer.glyphs.items.len == 0) return;
+    const base_direction: unicode.BidiClass = if (direction == .rtl) .rtl else .ltr;
+    var bidi_map = try unicode.buildBidiMap(buffer.allocator, text, base_direction);
+    defer bidi_map.deinit();
+    if (bidi_map.items.len == 0) return;
+
+    const old_runs = try buffer.allocator.dupe(CascadeRun, buffer.runs.items);
+    defer buffer.allocator.free(old_runs);
+    const old_glyphs = try buffer.allocator.dupe(GlyphPosition, buffer.glyphs.items);
+    defer buffer.allocator.free(old_glyphs);
+    var glyph_run_indices = try buffer.allocator.alloc(usize, old_glyphs.len);
+    defer buffer.allocator.free(glyph_run_indices);
+    for (glyph_run_indices) |*slot| slot.* = 0;
+    for (old_runs, 0..) |run, run_index| {
+        const end = @min(old_glyphs.len, run.glyph_start + run.glyph_len);
+        if (run.glyph_start >= end) continue;
+        for (glyph_run_indices[run.glyph_start..end]) |*slot| slot.* = run_index;
     }
-    std.mem.reverse(CascadeRun, buffer.runs.items);
+
+    const seen = try buffer.allocator.alloc(bool, old_glyphs.len);
+    defer buffer.allocator.free(seen);
+    @memset(seen, false);
+    var visual_glyphs: std.ArrayList(GlyphPosition) = .empty;
+    defer visual_glyphs.deinit(buffer.allocator);
+    var visual_run_indices: std.ArrayList(usize) = .empty;
+    defer visual_run_indices.deinit(buffer.allocator);
+
+    for (bidi_map.items) |item| {
+        try appendVisualGlyphsForCluster(
+            buffer.allocator,
+            old_glyphs,
+            glyph_run_indices,
+            seen,
+            item.byte_start,
+            &visual_glyphs,
+            &visual_run_indices,
+        );
+    }
+    // GSUB ligatures or skipped variation selectors can make glyph count differ
+    // from bidi scalar count. Preserve any unmatched glyphs in source order
+    // rather than dropping them when the compact bidi map lacks a one-to-one
+    // visual item.
+    for (old_glyphs, 0..) |_, glyph_index| {
+        if (seen[glyph_index]) continue;
+        try appendVisualGlyph(buffer.allocator, old_glyphs, glyph_run_indices, seen, glyph_index, &visual_glyphs, &visual_run_indices);
+    }
+    if (visual_glyphs.items.len != old_glyphs.len) return error.InvalidBidiMap;
+
+    var changed = false;
+    for (old_glyphs, visual_glyphs.items) |old, visual| {
+        if (old.cluster != visual.cluster or old.glyph_id != visual.glyph_id) {
+            changed = true;
+            break;
+        }
+    }
+    if (!changed) return;
+
+    buffer.glyphs.clearRetainingCapacity();
+    try buffer.glyphs.appendSlice(buffer.allocator, visual_glyphs.items);
+    try rebuildRunsForVisualGlyphs(buffer, old_runs, visual_run_indices.items);
     recomputeRunOffsets(buffer);
+}
+
+fn appendVisualGlyphsForCluster(
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    glyph_run_indices: []const usize,
+    seen: []bool,
+    cluster: usize,
+    out_glyphs: *std.ArrayList(GlyphPosition),
+    out_run_indices: *std.ArrayList(usize),
+) !void {
+    for (glyphs, 0..) |glyph, glyph_index| {
+        if (seen[glyph_index]) continue;
+        if (glyph.cluster != cluster) continue;
+        try appendVisualGlyph(allocator, glyphs, glyph_run_indices, seen, glyph_index, out_glyphs, out_run_indices);
+    }
+}
+
+fn appendVisualGlyph(
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    glyph_run_indices: []const usize,
+    seen: []bool,
+    glyph_index: usize,
+    out_glyphs: *std.ArrayList(GlyphPosition),
+    out_run_indices: *std.ArrayList(usize),
+) !void {
+    seen[glyph_index] = true;
+    try out_glyphs.append(allocator, glyphs[glyph_index]);
+    try out_run_indices.append(allocator, glyph_run_indices[glyph_index]);
+}
+
+fn rebuildRunsForVisualGlyphs(buffer: *LayoutBuffer, old_runs: []const CascadeRun, visual_run_indices: []const usize) !void {
+    buffer.runs.clearRetainingCapacity();
+    if (visual_run_indices.len == 0 or old_runs.len == 0) return;
+    var start: usize = 0;
+    var current_run_index = visual_run_indices[0];
+    var i: usize = 1;
+    while (i <= visual_run_indices.len) : (i += 1) {
+        if (i < visual_run_indices.len and visual_run_indices[i] == current_run_index) continue;
+        if (current_run_index >= old_runs.len) return error.InvalidBidiMap;
+        const source_run = old_runs[current_run_index];
+        try buffer.runs.append(buffer.allocator, .{
+            .font = source_run.font,
+            .font_index = source_run.font_index,
+            .font_size = source_run.font_size,
+            .glyph_start = start,
+            .glyph_len = i - start,
+            .x_offset = 0,
+        });
+        if (i < visual_run_indices.len) {
+            start = i;
+            current_run_index = visual_run_indices[i];
+        }
+    }
 }
 
 fn recomputeRunOffsets(buffer: *LayoutBuffer) void {

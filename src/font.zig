@@ -4158,7 +4158,10 @@ fn validateGdefTable(data: []const u8, gdef: TableRecord, glyph_count: u16) Font
         try validateGdefChildOffset(attach_list_offset, gdef.length, header_len);
         try validateGdefAttachList(table, attach_list_offset, glyph_count);
     }
-    if (lig_caret_list_offset != 0) try validateGdefChildOffset(lig_caret_list_offset, gdef.length, header_len);
+    if (lig_caret_list_offset != 0) {
+        try validateGdefChildOffset(lig_caret_list_offset, gdef.length, header_len);
+        try validateGdefLigCaretList(table, lig_caret_list_offset, glyph_count);
+    }
     if (mark_attach_class_def_offset != 0) {
         try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
         try validateClassDefGlyphBounds(table, mark_attach_class_def_offset, glyph_count);
@@ -4245,6 +4248,87 @@ fn validateGdefAttachPoint(data: []const u8, offset: usize) FontError!void {
         }
         previous = point;
     }
+}
+
+fn validateGdefLigCaretList(data: []const u8, offset: usize, glyph_count_bound: u16) FontError!void {
+    if (offset + 4 > data.len) return error.BadSfnt;
+    const coverage_relative = try bin.readU16At(data, offset);
+    const lig_glyph_count = try bin.readU16At(data, offset + 2);
+    const lig_glyph_offsets_pos = offset + 4;
+    if (@as(usize, lig_glyph_count) * 2 > data.len - lig_glyph_offsets_pos) return error.BadSfnt;
+
+    const lig_caret_data_start = 4 + @as(usize, lig_glyph_count) * 2;
+    const coverage_offset = try checkedGdefRelativeOffset(data, offset, coverage_relative, lig_caret_data_start);
+    try validateCoverageGlyphBounds(data, coverage_offset, glyph_count_bound);
+    if (try coverageGlyphCount(data, coverage_offset) != lig_glyph_count) return error.BadSfnt;
+
+    for (0..lig_glyph_count) |index| {
+        const lig_glyph_relative = try bin.readU16At(data, lig_glyph_offsets_pos + index * 2);
+        // LigGlyph offsets are parallel to Coverage indexes, and a LigGlyph's
+        // own CaretValue offsets are parallel to its caret array.  Rejecting
+        // offsets into either offset array keeps malformed GDEF data from
+        // turning count/offset words into synthetic caret records.
+        const lig_glyph_offset = try checkedGdefRelativeOffset(data, offset, lig_glyph_relative, lig_caret_data_start);
+        try validateGdefLigGlyph(data, lig_glyph_offset);
+    }
+}
+
+fn validateGdefLigGlyph(data: []const u8, offset: usize) FontError!void {
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const caret_count = try bin.readU16At(data, offset);
+    if (@as(usize, caret_count) * 2 > data.len - (offset + 2)) return error.BadSfnt;
+
+    const caret_data_start = 2 + @as(usize, caret_count) * 2;
+    for (0..caret_count) |index| {
+        const caret_relative = try bin.readU16At(data, offset + 2 + index * 2);
+        const caret_offset = try checkedGdefRelativeOffset(data, offset, caret_relative, caret_data_start);
+        try validateGdefCaretValue(data, caret_offset);
+    }
+}
+
+fn validateGdefCaretValue(data: []const u8, offset: usize) FontError!void {
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    switch (format) {
+        1 => try ensureGdefBytesWithin(data, offset, 4),
+        2 => try ensureGdefBytesWithin(data, offset, 4),
+        3 => {
+            try ensureGdefBytesWithin(data, offset, 6);
+            const device_relative = try bin.readU16At(data, offset + 4);
+            if (device_relative == 0) return error.BadSfnt;
+            const device_offset = try checkedGdefRelativeOffset(data, offset, device_relative, 6);
+            try validateGdefDeviceOrVariationIndexTable(data, device_offset);
+        },
+        else => return error.BadSfnt,
+    }
+}
+
+fn validateGdefDeviceOrVariationIndexTable(data: []const u8, offset: usize) FontError!void {
+    try ensureGdefBytesWithin(data, offset, 6);
+    const start_size = try bin.readU16At(data, offset);
+    const end_size = try bin.readU16At(data, offset + 2);
+    const delta_format = try bin.readU16At(data, offset + 4);
+
+    // Variable fonts reuse Device offsets for VariationIndex tables using
+    // DeltaFormat 0x8000.  The table remains exactly the three uint16 fields;
+    // the first two fields are outer/inner variation indexes instead of PPEM
+    // sizes, so no packed delta payload follows.
+    if (delta_format == 0x8000) return;
+    if (end_size < start_size) return error.BadSfnt;
+
+    const bits_per_delta: usize = switch (delta_format) {
+        1 => 2,
+        2 => 4,
+        3 => 8,
+        else => return error.BadSfnt,
+    };
+    const delta_count = @as(usize, end_size) - @as(usize, start_size) + 1;
+    const words = (delta_count * bits_per_delta + 15) / 16;
+    try ensureGdefBytesWithin(data, offset + 6, words * 2);
+}
+
+fn ensureGdefBytesWithin(data: []const u8, offset: usize, len: usize) FontError!void {
+    if (offset > data.len or len > data.len - offset) return error.BadSfnt;
 }
 
 fn validateClassDefGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
@@ -8630,6 +8714,54 @@ test "GDEF parse validation walks AttachList child tables" {
     writeU16Test(&mismatched_coverage, 30, 1);
     writeU16Test(&mismatched_coverage, 32, 7);
     try std.testing.expectError(error.BadSfnt, validateGdefTable(&mismatched_coverage, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mismatched_coverage.len }, 4));
+}
+
+test "GDEF parse validation walks LigCaretList child tables" {
+    var valid_lig_caret: [42]u8 = .{0} ** 42;
+    writeU16Test(&valid_lig_caret, 0, 1); // GDEF major.
+    writeU16Test(&valid_lig_caret, 2, 0);
+    writeU16Test(&valid_lig_caret, 8, 12); // LigCaretList follows the GDEF 1.0 header.
+
+    writeU16Test(&valid_lig_caret, 12, 6); // Coverage offset, relative to LigCaretList.
+    writeU16Test(&valid_lig_caret, 14, 1); // One covered ligature glyph and one LigGlyph.
+    writeU16Test(&valid_lig_caret, 16, 12); // LigGlyph offset, relative to LigCaretList.
+    writeU16Test(&valid_lig_caret, 18, 1); // Coverage format 1.
+    writeU16Test(&valid_lig_caret, 20, 1);
+    writeU16Test(&valid_lig_caret, 22, 3);
+    writeU16Test(&valid_lig_caret, 24, 1); // LigGlyph: one CaretValue offset.
+    writeU16Test(&valid_lig_caret, 26, 4);
+    writeU16Test(&valid_lig_caret, 28, 1); // CaretValue format 1.
+    writeI16Test(&valid_lig_caret, 30, 120);
+    try validateGdefTable(&valid_lig_caret, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = valid_lig_caret.len }, 4);
+
+    var lig_glyph_offset_aliases_header = valid_lig_caret;
+    writeU16Test(&lig_glyph_offset_aliases_header, 16, 2); // Would reinterpret LigGlyphCount as CaretCount.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&lig_glyph_offset_aliases_header, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = lig_glyph_offset_aliases_header.len }, 4));
+
+    var caret_offset_aliases_array = valid_lig_caret;
+    writeU16Test(&caret_offset_aliases_array, 26, 2); // Would reinterpret the CaretValue offset array as a CaretValue.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&caret_offset_aliases_array, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = caret_offset_aliases_array.len }, 4));
+
+    var coverage_past_maxp = valid_lig_caret;
+    writeU16Test(&coverage_past_maxp, 22, 4); // Invalid for maxp.numGlyphs == 4.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&coverage_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = coverage_past_maxp.len }, 4));
+
+    var mismatched_coverage = valid_lig_caret;
+    writeU16Test(&mismatched_coverage, 20, 0); // Coverage count no longer matches LigGlyphCount.
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&mismatched_coverage, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mismatched_coverage.len }, 4));
+
+    var format3_caret = valid_lig_caret;
+    writeU16Test(&format3_caret, 28, 3); // CaretValue format 3.
+    writeI16Test(&format3_caret, 30, 120);
+    writeU16Test(&format3_caret, 32, 6); // Device table offset, relative to CaretValue.
+    writeU16Test(&format3_caret, 34, 12); // Device StartSize.
+    writeU16Test(&format3_caret, 36, 13); // Device EndSize.
+    writeU16Test(&format3_caret, 38, 1); // Two 2-bit deltas need one uint16 word.
+    writeU16Test(&format3_caret, 40, 0);
+    try validateGdefTable(&format3_caret, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = format3_caret.len }, 4);
+
+    var truncated_device = format3_caret;
+    try std.testing.expectError(error.BadSfnt, validateGdefTable(&truncated_device, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = truncated_device.len - 1 }, 4));
 }
 
 test "GDEF lazy glyph class rejects mutated class values outside enum" {

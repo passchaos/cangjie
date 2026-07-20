@@ -4575,6 +4575,22 @@ const NameRecord = struct {
     name_id: u16,
     offset: usize,
     length: usize,
+
+    fn key(self: NameRecord) NameRecordKey {
+        return .{
+            .platform_id = self.platform_id,
+            .encoding_id = self.encoding_id,
+            .language_id = self.language_id,
+            .name_id = self.name_id,
+        };
+    }
+};
+
+const NameRecordKey = struct {
+    platform_id: u16,
+    encoding_id: u16,
+    language_id: u16,
+    name_id: u16,
 };
 
 const NameTableLayout = struct {
@@ -4595,8 +4611,11 @@ fn validateNameTable(data: []const u8, name: TableRecord) FontError!void {
     const layout = try readNameTableLayout(table);
     try validateNameLanguageTags(table, layout);
 
+    var previous_key: ?NameRecordKey = null;
     for (0..layout.count) |index| {
         const record = try readNameRecord(table, index);
+        try validateNameRecordOrdering(previous_key, record.key());
+        previous_key = record.key();
         try validateNameRecordMetadata(layout, record);
         const string_data = try nameRecordString(table, layout, record);
         try validateNameRecordEncoding(record, string_data);
@@ -4633,8 +4652,11 @@ fn readNameIdIndex(data: []const u8, name: TableRecord) FontError!NameIdIndex {
     // STAT AxisValue records. Index the already-validated records once so
     // cross-table checks are deterministic without repeatedly reparsing `name`.
     var index = NameIdIndex{};
+    var previous_key: ?NameRecordKey = null;
     for (0..layout.count) |record_index| {
         const record = try readNameRecord(table, record_index);
+        try validateNameRecordOrdering(previous_key, record.key());
+        previous_key = record.key();
         try validateNameRecordMetadata(layout, record);
         const string_data = try nameRecordString(table, layout, record);
         try validateNameRecordEncoding(record, string_data);
@@ -4762,6 +4784,27 @@ fn readNameRecord(table: []const u8, index: usize) FontError!NameRecord {
     };
 }
 
+fn validateNameRecordOrdering(previous: ?NameRecordKey, current: NameRecordKey) FontError!void {
+    const previous_key = previous orelse return;
+    // OpenType name records form a directory keyed by platform, encoding,
+    // language, and name ID. Requiring the canonical order rejects duplicate
+    // keys before nameString() has to choose between two equally-scored strings,
+    // which would otherwise make localized metadata depend on record order.
+    if (std.math.order(current.platform_id, previous_key.platform_id) != .eq) {
+        if (current.platform_id <= previous_key.platform_id) return error.InvalidName;
+        return;
+    }
+    if (std.math.order(current.encoding_id, previous_key.encoding_id) != .eq) {
+        if (current.encoding_id <= previous_key.encoding_id) return error.InvalidName;
+        return;
+    }
+    if (std.math.order(current.language_id, previous_key.language_id) != .eq) {
+        if (current.language_id <= previous_key.language_id) return error.InvalidName;
+        return;
+    }
+    if (current.name_id <= previous_key.name_id) return error.InvalidName;
+}
+
 fn validateNameRecordMetadata(layout: NameTableLayout, record: NameRecord) FontError!void {
     try validateNameRecordPlatformEncoding(record);
 
@@ -4881,8 +4924,11 @@ fn readNameString(data: []const u8, name: TableRecord, name_id: u16, out: []u8) 
     try validateNameLanguageTags(table, layout);
 
     var best: ?NameRecord = null;
+    var previous_key: ?NameRecordKey = null;
     for (0..layout.count) |i| {
         const record = try readNameRecord(table, i);
+        try validateNameRecordOrdering(previous_key, record.key());
+        previous_key = record.key();
         try validateNameRecordMetadata(layout, record);
         const string_data = try nameRecordString(table, layout, record);
         try validateNameRecordEncoding(record, string_data);
@@ -11692,6 +11738,48 @@ test "name table rejects invalid platform encodings at parse time" {
     writeU16Test(bytes, record, 5); // OpenType name tables only define platform IDs 0 through 4.
 
     try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+}
+
+test "name table records must be sorted by complete key" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildNamedTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtf(allocator);
+        defer allocator.free(bytes);
+        const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+        const subfamily = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.subfamily));
+        // Duplicate platform/encoding/language/nameID tuples are ambiguous:
+        // two records would have the same lookup score, so the returned string
+        // would depend on table order rather than a stable OpenType key.
+        writeU16Test(bytes, subfamily + 6, @intFromEnum(NameId.family));
+        try updateSfntTableChecksum(bytes, "name");
+
+        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildNamedTtf(allocator);
+        defer allocator.free(bytes);
+        const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
+        const family = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.family));
+        const subfamily = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.subfamily));
+        // Reordering keys without changing storage still leaves every string
+        // individually valid. The directory itself is malformed because nameID
+        // 2 appears before nameID 1 for the same platform/encoding/language.
+        writeU16Test(bytes, family + 6, @intFromEnum(NameId.subfamily));
+        writeU16Test(bytes, subfamily + 6, @intFromEnum(NameId.family));
+        try updateSfntTableChecksum(bytes, "name");
+
+        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+    }
 }
 
 test "PostScript name strings validate FontName syntax" {

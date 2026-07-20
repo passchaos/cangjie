@@ -140,10 +140,22 @@ fn validateIndexOffsets(data: []const u8, offsets_pos: usize, count: u16, off_si
 }
 
 fn readOffset(data: []const u8, offset: usize, size: u8) CffError!usize {
-    if (offset + size > data.len) return error.EndOfStream;
+    // INDEX offset arrays come from untrusted CFF bytes. Validate the bounds in
+    // subtraction form so a corrupt caller-supplied offset near maxInt(usize)
+    // reports a parser error instead of overflowing during `offset + size`.
+    if (offset > data.len or size > data.len - offset) return error.EndOfStream;
     var value: usize = 0;
     for (0..size) |i| value = (value << 8) | data[offset + i];
     return value;
+}
+
+test "CFF offset reads reject overflowing absolute offsets" {
+    const empty: []const u8 = &.{};
+    try std.testing.expectError(error.EndOfStream, readOffset(empty, std.math.maxInt(usize), 1));
+
+    const bytes = [_]u8{ 0xaa, 0xbb };
+    try std.testing.expectEqual(@as(usize, 0xaabb), try readOffset(&bytes, 0, 2));
+    try std.testing.expectError(error.EndOfStream, readOffset(&bytes, 1, 2));
 }
 
 fn subrBias(count: u16) i32 {
@@ -453,7 +465,8 @@ test "CFF Private DICT Subrs offset resolves to a Local Subrs INDEX" {
         0x01, 0x00, 0x04, 0x01, // CFF 1.0 header.
         0x00, 0x01, 0x01, 0x01, 0x01, // Name INDEX.
         // Top DICT: CharStrings at 27, Private DICT size 2 at 23.
-        0x00, 0x01, 0x01, 0x01, 0x06, 166, 17, 141, 162, 18,
+        0x00, 0x01, 0x01, 0x01, 0x06,
+        166,  17,   141,  162,  18,
         0x00, 0x00, // String INDEX.
         0x00, 0x00, // Global Subrs INDEX.
         141, 19, // Private DICT: Subrs offset 2, immediately after dict.

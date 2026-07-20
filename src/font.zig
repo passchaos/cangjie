@@ -1019,6 +1019,7 @@ pub const Font = struct {
 
     pub fn paletteColor(self: *const Font, palette_index: u16, color_index: u16) FontError!?PaletteColor {
         const cpal = self.cpal orelse return null;
+        try validateSfntTableChecksum(self.data, cpal);
         if (cpal.length < 12) return error.BadSfnt;
         const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
         // CPAL v1 label arrays borrow name IDs from the same caller-owned SFNT
@@ -13076,7 +13077,8 @@ test "CPAL palette lookup revalidates borrowed label name IDs" {
     bytes[name_offset + 19] = 'P';
 
     var font = cpalOnlyFont(&bytes);
-    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = name_offset };
+    const cpal_record = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = name_offset };
+    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = try checksumSfntTable(&bytes, cpal_record), .offset = 0, .length = name_offset };
     font.name = .{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = name_offset, .length = bytes.len - name_offset };
 
     const color = (try font.paletteColor(0, 0)).?;
@@ -13085,11 +13087,36 @@ test "CPAL palette lookup revalidates borrowed label name IDs" {
     try std.testing.expectEqual(@as(u8, 10), color.blue);
     try std.testing.expectEqual(@as(u8, 40), color.alpha);
 
-    // Font deliberately borrows caller-owned SFNT bytes. A mutation that makes
-    // CPAL v1 labels reference a missing name ID must be observed by the lazy
-    // color API rather than allowing color reads to outlive invalid metadata.
-    writeU16Test(&bytes, 26, 257);
+    // Font deliberately borrows caller-owned SFNT bytes. Mutating only the
+    // borrowed name table keeps CPAL's checksum valid while making its v1 label
+    // reference dangle; the lazy color API must still observe that metadata
+    // failure.
+    writeU16Test(&bytes, name_offset + 12, 257);
     try std.testing.expectError(error.InvalidName, font.paletteColor(0, 0));
+}
+
+test "CPAL palette lookup revalidates borrowed table checksum" {
+    var bytes: [18]u8 = .{0} ** 18;
+    writeU16Test(&bytes, 0, 0); // CPAL version 0.
+    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
+    writeU16Test(&bytes, 4, 1); // numPalettes.
+    writeU16Test(&bytes, 6, 1); // numColorRecords.
+    writeU32Test(&bytes, 8, 14); // ColorRecordsArray after firstColorIndex[0].
+    writeU16Test(&bytes, 12, 0);
+    bytes[14] = 10; // blue
+    bytes[15] = 20; // green
+    bytes[16] = 30; // red
+    bytes[17] = 40; // alpha
+
+    const font = cpalOnlyFont(&bytes);
+    const color = (try font.paletteColor(0, 0)).?;
+    try std.testing.expectEqual(@as(u8, 30), color.red);
+
+    // Keep the CPAL shape and color index in range while changing the borrowed
+    // color record after construction. The lazy public API must reject it
+    // because the table no longer matches the SFNT checksum.
+    bytes[16] = 31;
+    try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
 }
 
 test "CPAL v1 palette types reject reserved bits" {
@@ -15787,7 +15814,9 @@ fn colrOnlyFont(data: []const u8) Font {
 fn colrCpalOnlyFont(data: []const u8, colr_length: usize) Font {
     var font = colrOnlyFont(data);
     font.colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_length };
-    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = colr_length, .length = data.len - colr_length };
+    const cpal_record: TableRecord = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = colr_length, .length = data.len - colr_length };
+    const cpal_checksum = checksumSfntTable(data, cpal_record) catch 0;
+    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = colr_length, .length = data.len - colr_length };
     return font;
 }
 
@@ -15795,6 +15824,8 @@ fn cpalOnlyFont(data: []const u8) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    const cpal_record: TableRecord = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = data.len };
+    const cpal_checksum = checksumSfntTable(data, cpal_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -15822,7 +15853,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .fvar = null,
         .avar = null,
         .colr = null,
-        .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = data.len },
+        .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
         .svg = null,
         .sbix = null,
         .cblc = null,

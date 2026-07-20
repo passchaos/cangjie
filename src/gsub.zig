@@ -329,7 +329,7 @@ fn extensionSubtablePayload(table: Table, subtable_offset: usize, expected_looku
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
     if (extension_lookup_type != expected_lookup_type) return error.UnsupportedGsub;
-    return subtable_offset + try readU32(table, subtable_offset + 4);
+    return checkedSubtableOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 }
 
 fn applyExtensionSingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -698,8 +698,7 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
     if (subst_format != 1) return error.UnsupportedGsub;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    const extension_offset = try readU32(table, subtable_offset + 4);
-    const extension_subtable = subtable_offset + extension_offset;
+    const extension_subtable = try checkedSubtableOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
     // Extension subtables only move the payload past 16-bit offset limits; the
     // wrapper lookup still owns LookupFlag filtering for the enclosed lookup.
     switch (extension_lookup_type) {
@@ -1436,9 +1435,7 @@ fn ensureExtensionSubstitutionPayloadWithin(table: Table, subtable_offset: usize
     if (subst_format != 1) return error.UnsupportedGsub;
     const extension_lookup_type = try readU16BadGsub(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    const extension_offset = try readU32BadGsub(table, subtable_offset + 4);
-    if (extension_offset > table.length - subtable_offset) return error.BadGsub;
-    const extension_subtable = subtable_offset + extension_offset;
+    const extension_subtable = try checkedSubtableOffset(table, subtable_offset, try readU32BadGsub(table, subtable_offset + 4));
     try ensureSubstitutionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
     try ensureSubstitutionSubtableVariableDataWithin(table, extension_subtable, extension_lookup_type);
 }
@@ -2017,7 +2014,7 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
     if (subst_format != 1) return error.UnsupportedGsub;
     const extension_lookup_type = try readU16(table, subtable_offset + 2);
     if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    const extension_subtable = subtable_offset + try readU32(table, subtable_offset + 4);
+    const extension_subtable = try checkedSubtableOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 
     // ExtensionSubst is only an offset-widening wrapper. Contextual records,
     // however, name one target glyph inside the pre-match input sequence. Apply
@@ -2258,6 +2255,27 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return bin.readU32At(table.data, table.offset + relative) catch |err| switch (err) {
         error.EndOfStream => error.EndOfStream,
     };
+}
+
+test "GSUB rejects ExtensionSubst payload offsets outside the table during shaping" {
+    var bytes = [_]u8{0} ** 8;
+    writeU16Test(&bytes, 0, 1); // ExtensionSubst format 1.
+    writeU16Test(&bytes, 2, 1); // Wrapped SingleSubst.
+    writeU32Test(&bytes, 4, 0xffff_fffe); // Far beyond this table.
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 5);
+
+    // These calls intentionally bypass Font.parse/lookup preflight. Extension
+    // wrappers are also followed by low-level shaping helpers, so every runtime
+    // path must convert a malicious Offset32 into BadGsub before reading the
+    // wrapped payload or mutating the glyph stream.
+    try std.testing.expectError(error.BadGsub, extensionSubtablePayload(table, 0, 1));
+    try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
+    try std.testing.expectError(error.BadGsub, applyNestedExtensionSubstitutionAt(table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 }
 
 test "GSUB coverage format 2 widens boundary coverage indexes" {

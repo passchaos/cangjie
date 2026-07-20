@@ -836,6 +836,7 @@ pub const Font = struct {
 
     pub fn styleAttributes(self: *const Font) FontError!StyleAttributes {
         const os2 = self.os2 orelse return .{};
+        try validateSfntTableChecksum(self.data, os2);
         return try readOs2StyleAttributes(self.data, os2);
     }
 
@@ -15466,6 +15467,28 @@ test "OS/2 style attributes revalidate borrowed table bytes" {
     try std.testing.expectError(error.BadSfnt, font.styleAttributes());
 }
 
+test "OS/2 style attributes revalidate borrowed table checksum" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Regular", "Metric Sans Regular", 400, 5, false, false);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const initial = try font.styleAttributes();
+    try std.testing.expectEqual(@as(u16, 400), initial.weight);
+    try std.testing.expectEqual(@as(u16, 5), initial.width);
+
+    const os2_offset: usize = @intCast(try sfntTableOffset(bytes, "OS/2"));
+    // Keep OS/2 style metadata in its valid range while changing the borrowed
+    // payload after Font.parse. The lazy API must reject the table because its
+    // SFNT directory checksum no longer matches the parsed font map.
+    writeU16Test(bytes, os2_offset + 4, 500);
+    try std.testing.expectError(error.BadSfnt, font.styleAttributes());
+}
+
 test "OS/2 table is validated at parse time" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -15571,6 +15594,8 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
+    const os2_record: TableRecord = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = 0, .offset = 0, .length = declared_length };
+    const os2_checksum = checksumSfntTable(data, os2_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -15588,7 +15613,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
-        .os2 = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = 0, .offset = 0, .length = declared_length },
+        .os2 = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = os2_checksum, .offset = 0, .length = declared_length },
         .gdef = null,
         .gpos = null,
         .gsub = null,

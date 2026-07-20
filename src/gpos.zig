@@ -1831,13 +1831,46 @@ fn ensureMark2ArrayWithin(table: Table, mark_2_array_offset: usize, class_count:
 
 fn ensureAnchorTableWithin(table: Table, anchor_offset: usize) GposError!void {
     const format = try readU16BadGpos(table, anchor_offset);
-    const min_len: usize = switch (format) {
-        1 => 6,
-        2 => 8,
-        3 => 10,
+    switch (format) {
+        1 => try ensureBytesWithin(table, anchor_offset, 6),
+        2 => try ensureBytesWithin(table, anchor_offset, 8),
+        3 => {
+            try ensureBytesWithin(table, anchor_offset, 10);
+            const x_device_offset = try readU16BadGpos(table, anchor_offset + 6);
+            const y_device_offset = try readU16BadGpos(table, anchor_offset + 8);
+            // AnchorFormat3 uses nullable offsets for Device/VariationIndex
+            // tables. Non-zero offsets are real child tables relative to the
+            // anchor, so validate them during lookup preflight instead of
+            // allowing a dangling offset to survive until future variation
+            // support tries to follow it.
+            if (x_device_offset != 0) try ensureDeviceOrVariationIndexTableWithin(table, try checkedPositionOffset(table, anchor_offset, x_device_offset));
+            if (y_device_offset != 0) try ensureDeviceOrVariationIndexTableWithin(table, try checkedPositionOffset(table, anchor_offset, y_device_offset));
+        },
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn ensureDeviceOrVariationIndexTableWithin(table: Table, device_offset: usize) GposError!void {
+    try ensureBytesWithin(table, device_offset, 6);
+    const start_size = try readU16BadGpos(table, device_offset);
+    const end_size = try readU16BadGpos(table, device_offset + 2);
+    const delta_format = try readU16BadGpos(table, device_offset + 4);
+
+    // OpenType 1.8 reuses AnchorFormat3's Device-table offsets for variation
+    // indexes by storing DeltaFormat 0x8000. The table remains exactly three
+    // uint16 fields; StartSize and EndSize carry outer/inner variation indexes.
+    if (delta_format == 0x8000) return;
+    if (end_size < start_size) return error.BadGpos;
+
+    const bits_per_delta: usize = switch (delta_format) {
+        1 => 2,
+        2 => 4,
+        3 => 8,
         else => return error.UnsupportedGpos,
     };
-    try ensureBytesWithin(table, anchor_offset, min_len);
+    const delta_count = @as(usize, end_size) - @as(usize, start_size) + 1;
+    const words = (delta_count * bits_per_delta + 15) / 16;
+    try ensureBytesWithin(table, device_offset + 6, words * 2);
 }
 
 fn ensureGlyphIdWithinMaxp(table: Table, glyph_id: usize) GposError!void {
@@ -2438,6 +2471,36 @@ fn validateClassDefFormat2Ranges(table: Table, class_def_offset: usize, range_co
         }
         previous_end = end;
     }
+}
+
+test "GPOS validates AnchorFormat3 device offsets" {
+    var bytes = [_]u8{0} ** 18;
+    writeU16Test(&bytes, 0, 3); // AnchorFormat3.
+    writeI16Test(&bytes, 2, 20);
+    writeI16Test(&bytes, 4, -10);
+    writeU16Test(&bytes, 6, 10); // XDeviceTable offset.
+    writeU16Test(&bytes, 8, 0);
+    writeU16Test(&bytes, 10, 12); // startSize.
+    writeU16Test(&bytes, 12, 14); // endSize: three 2-bit deltas fit in one word.
+    writeU16Test(&bytes, 14, 1); // deltaFormat.
+    writeU16Test(&bytes, 16, 0);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try ensureAnchorTableWithin(table, 0);
+
+    writeU16Test(&bytes, 6, 14); // Points inside an incomplete child DeviceTable.
+    try std.testing.expectError(error.BadGpos, ensureAnchorTableWithin(table, 0));
+
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 12, 11); // endSize must not precede startSize.
+    try std.testing.expectError(error.BadGpos, ensureAnchorTableWithin(table, 0));
+
+    writeU16Test(&bytes, 12, 14);
+    writeU16Test(&bytes, 14, 4); // Unknown delta formats cannot be sized safely.
+    try std.testing.expectError(error.UnsupportedGpos, ensureAnchorTableWithin(table, 0));
+
+    writeU16Test(&bytes, 14, 0x8000); // VariationIndex table: three uint16 fields only.
+    try ensureAnchorTableWithin(table, 0);
 }
 
 test "GPOS coverage format 2 widens boundary coverage indexes" {

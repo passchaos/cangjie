@@ -86,6 +86,7 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const lookup_list_offset = try checkedPositionOffset(table, 0, try readU16BadGpos(table, 8));
     const lookup_count = try readU16BadGpos(table, lookup_list_offset);
     try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
+    try ensureFeatureLookupReferencesWithin(table, lookup_count);
     for (0..lookup_count) |lookup_i| {
         const lookup_offset = try checkedPositionOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_list_offset + 2 + lookup_i * 2));
         try ensurePositionLookupHeaderWithin(table, lookup_offset);
@@ -1393,6 +1394,30 @@ fn ensureExtensionPositionLookupPayloadsWithin(table: Table, lookup_offset: usiz
     }
 }
 
+fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GposError!void {
+    const feature_list_relative = try readU16BadGpos(table, 6);
+    if (feature_list_relative == 0) return;
+
+    const feature_list_offset = try checkedPositionOffset(table, 0, feature_list_relative);
+    const feature_count = try readU16BadGpos(table, feature_list_offset);
+    try ensureBytesWithin(table, feature_list_offset + 2, @as(usize, feature_count) * 6);
+
+    for (0..feature_count) |feature_i| {
+        const feature_record = feature_list_offset + 2 + feature_i * 6;
+        const feature_offset = try checkedPositionOffset(table, feature_list_offset, try readU16BadGpos(table, feature_record + 4));
+        const lookup_index_count = try readU16BadGpos(table, feature_offset + 2);
+        try ensureBytesWithin(table, feature_offset + 4, @as(usize, lookup_index_count) * 2);
+
+        for (0..lookup_index_count) |lookup_i| {
+            const lookup_index = try readU16BadGpos(table, feature_offset + 4 + lookup_i * 2);
+            // Feature selection is the public activation graph for GPOS. Reject
+            // dangling LookupList indexes at parse time instead of letting a
+            // requested positioning feature disappear later during shaping.
+            if (lookup_index >= lookup_count) return error.BadGpos;
+        }
+    }
+}
+
 fn ensureExtensionPositionPayloadWithin(table: Table, subtable_offset: usize) GposError!void {
     // PosLookupRecords are applied eagerly. If a later record references a
     // malformed ExtensionPos wrapper, reject the entire contextual match before
@@ -2498,6 +2523,28 @@ test "GPOS rejects reserved LookupFlag bits" {
     writeU16Test(&bytes, 16, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
     writeU16Test(&bytes, 22, 0); // MarkFilteringSet index follows the subtable-offset array.
     try ensurePositionLookupHeaderWithin(table, 14);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GPOS validates FeatureList lookup indexes against LookupList" {
+    var bytes = [_]u8{0} ** 54;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 6, 10); // FeatureList.
+    writeU16Test(&bytes, 8, 24); // LookupList.
+
+    writeU16Test(&bytes, 10, 1); // FeatureCount.
+    writeU32Test(&bytes, 12, unicode.tag("kern"));
+    writeU16Test(&bytes, 16, 8); // FeatureTable at offset 18.
+    writeU16Test(&bytes, 20, 1); // LookupIndexCount.
+    writeU16Test(&bytes, 22, 1); // Dangling: LookupList has only index 0.
+
+    writeU16Test(&bytes, 24, 1);
+    writeU16Test(&bytes, 26, 4);
+    writeSinglePositionLookup(&bytes, 28, 1, 0, 0);
+
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    writeU16Test(&bytes, 22, 0);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 

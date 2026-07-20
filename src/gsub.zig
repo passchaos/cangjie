@@ -107,6 +107,7 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const lookup_list_offset = try checkedSubtableOffset(table, 0, try readU16BadGsub(table, 8));
     const lookup_count = try readU16BadGsub(table, lookup_list_offset);
     try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
+    try ensureFeatureLookupReferencesWithin(table, lookup_count);
     for (0..lookup_count) |lookup_i| {
         const lookup_offset = try checkedSubtableOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
         try ensureLookupHeaderWithin(table, lookup_offset);
@@ -1355,6 +1356,31 @@ fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, l
     }
 }
 
+fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GsubError!void {
+    const feature_list_relative = try readU16BadGsub(table, 6);
+    if (feature_list_relative == 0) return;
+
+    const feature_list_offset = try checkedSubtableOffset(table, 0, feature_list_relative);
+    const feature_count = try readU16BadGsub(table, feature_list_offset);
+    try ensureBytesWithin(table, feature_list_offset + 2, @as(usize, feature_count) * 6);
+
+    for (0..feature_count) |feature_i| {
+        const feature_record = feature_list_offset + 2 + feature_i * 6;
+        const feature_offset = try checkedSubtableOffset(table, feature_list_offset, try readU16BadGsub(table, feature_record + 4));
+        const lookup_index_count = try readU16BadGsub(table, feature_offset + 2);
+        try ensureBytesWithin(table, feature_offset + 4, @as(usize, lookup_index_count) * 2);
+
+        for (0..lookup_index_count) |lookup_i| {
+            const lookup_index = try readU16BadGsub(table, feature_offset + 4 + lookup_i * 2);
+            // Feature tables are the public activation graph for lookups. If a
+            // feature points past LookupList, shaping would silently skip that
+            // requested substitution and make script/language selection depend
+            // on malformed table topology rather than declared lookup data.
+            if (lookup_index >= lookup_count) return error.BadGsub;
+        }
+    }
+}
+
 fn ensureExtensionSubstitutionPayloadWithin(table: Table, subtable_offset: usize) GsubError!void {
     // A contextual record may reference ExtensionSubst after earlier records
     // have already mutated the glyph stream. Preflight both the wrapper and the
@@ -2240,6 +2266,28 @@ test "GSUB rejects reserved LookupFlag bits" {
     writeU16Test(&bytes, 20, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
     writeU16Test(&bytes, 26, 0); // MarkFilteringSet index follows the subtable-offset array.
     try ensureLookupHeaderWithin(table, 18);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GSUB validates FeatureList lookup indexes against LookupList" {
+    var bytes = [_]u8{0} ** 48;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 6, 10); // FeatureList.
+    writeU16Test(&bytes, 8, 24); // LookupList.
+
+    writeU16Test(&bytes, 10, 1); // FeatureCount.
+    writeU32Test(&bytes, 12, unicode.tag("liga"));
+    writeU16Test(&bytes, 16, 8); // FeatureTable at offset 18.
+    writeU16Test(&bytes, 20, 1); // LookupIndexCount.
+    writeU16Test(&bytes, 22, 1); // Dangling: LookupList has only index 0.
+
+    writeU16Test(&bytes, 24, 1);
+    writeU16Test(&bytes, 26, 4);
+    writeSingleDeltaLookup(&bytes, 28, 1, 0);
+
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    writeU16Test(&bytes, 22, 0);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 

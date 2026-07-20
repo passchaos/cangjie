@@ -255,6 +255,11 @@ const DictParser = struct {
             }
             try self.push(try readNumber(self.data, &self.offset, b));
         }
+        // DICT operands are meaningful only as the argument stack for a
+        // following operator. Treating a trailing operand run as harmless would
+        // let malformed Top/Private DICT data append unreachable bytes that
+        // another CFF consumer might preserve or interpret differently.
+        if (self.stack_len != 0) return error.BadCff;
         return null;
     }
 
@@ -458,6 +463,19 @@ test "CFF DICT offsets reject missing fractional and negative operands" {
 
     var info = Info{ .charstrings_offset = 20, .charstrings_count = 0, .global_subrs_offset = 0, .private_offset = 10 };
     try std.testing.expectError(error.BadCff, parsePrivateDict(&.{ 30, 0x1a, 0x5f, 19 }, &info));
+}
+
+test "CFF DICT data rejects trailing operands without an operator" {
+    try std.testing.expectError(error.BadCff, parseTopDict(&.{ 159, 17, 139 }));
+
+    var info = Info{ .charstrings_offset = 20, .charstrings_count = 0, .global_subrs_offset = 0, .private_offset = 10 };
+    try parsePrivateDict(&.{ 140, 20 }, &info);
+    try std.testing.expectEqual(@as(f32, 1), info.default_width_x);
+
+    // A second operand after the final operator cannot contribute to any DICT
+    // key. Reject it rather than accepting non-canonical bytes after otherwise
+    // valid Private DICT metadata.
+    try std.testing.expectError(error.BadCff, parsePrivateDict(&.{ 140, 20, 139 }, &info));
 }
 
 test "CFF Private DICT Subrs offset resolves to a Local Subrs INDEX" {

@@ -398,7 +398,7 @@ pub const TextEditor = struct {
             const range = selectionRange(self.buffer.selection);
             return self.replaceRange(range.start, range.end, "");
         }
-        const previous = try previousUtf8Boundary(self.buffer.slice(), self.buffer.cursor_byte);
+        const previous = try previousGraphemeBoundary(self.allocator, self.buffer.slice(), self.buffer.cursor_byte);
         if (previous == self.buffer.cursor_byte) return;
         try self.replaceRange(previous, self.buffer.cursor_byte, "");
     }
@@ -409,7 +409,7 @@ pub const TextEditor = struct {
             const range = selectionRange(self.buffer.selection);
             return self.replaceRange(range.start, range.end, "");
         }
-        const next = try nextUtf8Boundary(self.buffer.slice(), self.buffer.cursor_byte);
+        const next = try nextGraphemeBoundary(self.allocator, self.buffer.slice(), self.buffer.cursor_byte);
         if (next == self.buffer.cursor_byte) return;
         try self.replaceRange(self.buffer.cursor_byte, next, "");
     }
@@ -824,19 +824,29 @@ fn isWideDisplayCodepoint(codepoint: u21) bool {
         (codepoint >= 0x20000 and codepoint <= 0x3fffd);
 }
 
-fn previousUtf8Boundary(text: []const u8, byte_offset: usize) !usize {
-    if (byte_offset > text.len) return error.InvalidRange;
-    if (byte_offset == 0) return 0;
-    var cursor = byte_offset - 1;
-    while (cursor > 0 and (text[cursor] & 0b1100_0000) == 0b1000_0000) : (cursor -= 1) {}
-    return cursor;
+fn previousGraphemeBoundary(allocator: std.mem.Allocator, text: []const u8, byte_offset: usize) !usize {
+    const offset = try checkedOffset(text, byte_offset);
+    if (offset == 0) return 0;
+    const clusters = try unicode.itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    var previous: usize = 0;
+    for (clusters) |cluster| {
+        if (cluster.byte_start >= offset) return previous;
+        previous = cluster.byte_start;
+    }
+    return previous;
 }
 
-fn nextUtf8Boundary(text: []const u8, byte_offset: usize) !usize {
-    if (byte_offset > text.len) return error.InvalidRange;
-    if (byte_offset == text.len) return text.len;
-    const len = try std.unicode.utf8ByteSequenceLength(text[byte_offset]);
-    return @min(text.len, byte_offset + len);
+fn nextGraphemeBoundary(allocator: std.mem.Allocator, text: []const u8, byte_offset: usize) !usize {
+    const offset = try checkedOffset(text, byte_offset);
+    if (offset == text.len) return text.len;
+    const clusters = try unicode.itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    for (clusters) |cluster| {
+        const end = cluster.byte_start + cluster.byte_len;
+        if (end > offset) return end;
+    }
+    return text.len;
 }
 
 test "TextEditor records undo and redo for inserts replacements and deletes" {
@@ -890,6 +900,38 @@ test "TextEditor delete commands handle utf8 boundaries" {
     try editor.setCursor(1);
     try editor.deleteForward();
     try std.testing.expectEqualStrings("AB", editor.slice());
+}
+
+test "TextEditor delete commands preserve grapheme clusters" {
+    const allocator = std.testing.allocator;
+
+    var combining = try TextEditor.initText(allocator, "A\u{0301}B");
+    defer combining.deinit();
+
+    try combining.setCursor("A\u{0301}".len);
+    try combining.deleteBackward();
+    try std.testing.expectEqualStrings("B", combining.slice());
+    try std.testing.expect(try combining.undo());
+    try std.testing.expectEqualStrings("A\u{0301}B", combining.slice());
+
+    try combining.setCursor(0);
+    try combining.deleteForward();
+    try std.testing.expectEqualStrings("B", combining.slice());
+    try std.testing.expect(try combining.undo());
+    try std.testing.expectEqualStrings("A\u{0301}B", combining.slice());
+
+    var emoji = try TextEditor.initText(allocator, "👩\u{200d}💻!");
+    defer emoji.deinit();
+
+    try emoji.setCursor("👩\u{200d}💻".len);
+    try emoji.deleteBackward();
+    try std.testing.expectEqualStrings("!", emoji.slice());
+    try std.testing.expect(try emoji.undo());
+    try std.testing.expectEqualStrings("👩\u{200d}💻!", emoji.slice());
+
+    try emoji.setCursor(0);
+    try emoji.deleteForward();
+    try std.testing.expectEqualStrings("!", emoji.slice());
 }
 
 test "TextEditor copies cuts and pastes clipboard payloads" {

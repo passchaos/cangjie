@@ -685,7 +685,7 @@ fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyp
         if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
         const coverage = try coverageIndex(table, coverage_offset, glyph.*) orelse continue;
         if (coverage >= alternate_set_count) continue;
-        const alternate_set_offset = subtable_offset + try readU16(table, subtable_offset + 6 + coverage * 2);
+        const alternate_set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
         const glyph_count = try readU16(table, alternate_set_offset);
         if (glyph_count == 0) continue;
         glyph.* = try readU16(table, alternate_set_offset + 2);
@@ -1537,7 +1537,12 @@ fn ensureAlternateSubstitutionSubtableWithin(table: Table, subtable_offset: usiz
     const alternate_set_offsets_pos = subtable_offset + 6;
     try ensureBytesWithin(table, alternate_set_offsets_pos, @as(usize, alternate_set_count) * 2);
     for (0..alternate_set_count) |alternate_set_i| {
-        const alternate_set_offset = try checkedSubtableOffset(table, subtable_offset, try readU16BadGsub(table, alternate_set_offsets_pos + alternate_set_i * 2));
+        const alternate_set_relative = try readU16BadGsub(table, alternate_set_offsets_pos + alternate_set_i * 2);
+        // AlternateSet offsets are required children selected by Coverage
+        // index. Treating zero as a real offset aliases the AlternateSubst
+        // header as an AlternateSet and can synthesize replacement glyph ids
+        // from unrelated header fields.
+        const alternate_set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, alternate_set_relative);
         const glyph_count = try readU16BadGsub(table, alternate_set_offset);
         try ensureBytesWithin(table, alternate_set_offset + 2, @as(usize, glyph_count) * 2);
         for (0..glyph_count) |glyph_i| {
@@ -2513,6 +2518,33 @@ test "GSUB MultipleSubst rejects null Sequence offsets" {
     writeU16Test(&bytes, subtable + 6, 14);
     writeU16Test(&bytes, subtable + 14, 0); // Sequence.GlyphCount.
     try ensureMultipleSubstitutionSubtableWithin(table, subtable);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+}
+
+test "GSUB AlternateSubst rejects null AlternateSet offsets" {
+    var bytes = [_]u8{0} ** 44;
+    const subtable = writeSingleLookupGsubTest(&bytes, 3);
+    writeU16Test(&bytes, subtable + 0, 1); // AlternateSubst format 1.
+    writeU16Test(&bytes, subtable + 2, 8); // Coverage after AlternateSetOffset array.
+    writeU16Test(&bytes, subtable + 4, 1); // One AlternateSetOffset.
+    writeU16Test(&bytes, subtable + 6, 0); // Invalid: AlternateSet offsets are not nullable.
+    writeCoverage1(&bytes, subtable + 8, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, ensureAlternateSubstitutionSubtableWithin(table, subtable));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 1);
+    try std.testing.expectError(error.BadGsub, applyAlternateSubstitution(table, subtable, &glyphs, 0, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    // A real AlternateSet may still be empty and produce no substitution; only
+    // the child pointer itself is required to name an actual AlternateSet.
+    writeU16Test(&bytes, subtable + 6, 14);
+    writeU16Test(&bytes, subtable + 14, 0); // AlternateSet.GlyphCount.
+    try ensureAlternateSubstitutionSubtableWithin(table, subtable);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 

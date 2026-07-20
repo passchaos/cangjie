@@ -1755,17 +1755,31 @@ fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: u
     if (body_offset + 4 > data.len or body_offset + 4 > strike.offset + strike.index_tables_size) return error.BadSfnt;
     const pair_count = try bin.readU32At(data, body_offset);
     const pairs_offset = body_offset + 4;
-    const pairs_len = (@as(usize, pair_count) + 1) * 4;
-    if (pairs_offset + pairs_len > data.len or pairs_offset + pairs_len > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    const pairs_len = try checkedCblcPairArrayLength(pair_count);
+    if (pairs_len > std.math.maxInt(usize) - pairs_offset) return error.BadSfnt;
+    const pairs_end = pairs_offset + pairs_len;
+    if (pairs_end > data.len or pairs_end > strike.offset + strike.index_tables_size) return error.BadSfnt;
+    var previous_glyph: ?glyph_mod.GlyphId = null;
+    var match: ?CblcGlyphLocation = null;
     for (0..pair_count) |index| {
         const pair = pairs_offset + @as(usize, index) * 4;
         const current_glyph = try bin.readU16At(data, pair);
-        if (current_glyph != glyph_id) continue;
         const start = try bin.readU16At(data, pair + 2);
         const end = try bin.readU16At(data, pair + 6);
-        return try cblcImageLocation(image_format, image_base, start, end);
+        // Index format 4 is sparse, but its codeOffsetPair array is still a
+        // sorted directory scoped by the enclosing IndexSubTableArray range.
+        // Validate every advertised pair before returning a match so an
+        // unrequested malformed glyph cannot hide behind an earlier valid one
+        // during parse-time CBLC/CBDT walks or public bitmap lookups.
+        if (current_glyph < strike.start_glyph or current_glyph > strike.end_glyph) return error.BadSfnt;
+        if (previous_glyph) |previous| {
+            if (current_glyph <= previous) return error.BadSfnt;
+        }
+        previous_glyph = current_glyph;
+        const location = try cblcImageLocation(image_format, image_base, start, end);
+        if (current_glyph == glyph_id) match = location;
     }
-    return null;
+    return match;
 }
 
 fn cblcGlyphLocationFormat5(data: []const u8, strike: CblcStrike, body_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
@@ -1813,6 +1827,14 @@ fn checkedCblcImageEnd(start: usize, image_size: u32) FontError!usize {
     const size: usize = @intCast(image_size);
     if (size > std.math.maxInt(usize) - start) return error.BadSfnt;
     return start + size;
+}
+
+fn checkedCblcPairArrayLength(pair_count: u32) FontError!usize {
+    if (@as(u64, pair_count) >= @as(u64, std.math.maxInt(usize))) return error.BadSfnt;
+    const count: usize = @intCast(pair_count);
+    const entries = count + 1;
+    if (entries > std.math.maxInt(usize) / 4) return error.BadSfnt;
+    return entries * 4;
 }
 
 fn readCblcOffset(data: []const u8, offset: usize, size: usize) FontError!usize {
@@ -9347,6 +9369,37 @@ test "CBLC index subtable array validates ordering before returning a location" 
     writeU16Test(&subtable_overlap, 10, 4);
     writeU32Test(&subtable_overlap, 12, 4); // Points into IndexSubTableArray records.
     try std.testing.expectError(error.BadSfnt, cblcGlyphLocation(&subtable_overlap, strike, 1));
+}
+
+test "CBLC format 4 sparse pairs validate every glyph record" {
+    const strike = CblcStrike{
+        .ppem = 16,
+        .ppi = 0,
+        .offset = 0,
+        .index_tables_size = 24,
+        .table_count = 1,
+        .start_glyph = 1,
+        .end_glyph = 4,
+    };
+
+    var data: [24]u8 = .{0} ** 24;
+    writeU32Test(&data, 0, 2); // Two codeOffsetPair records plus a terminal offset.
+    writeU16Test(&data, 4, 1);
+    writeU16Test(&data, 6, 0);
+    writeU16Test(&data, 8, 2);
+    writeU16Test(&data, 10, 4);
+    writeU16Test(&data, 12, 3);
+    writeU16Test(&data, 14, 8);
+
+    const location = (try cblcGlyphLocationFormat4(&data, strike, 0, 1, 17, 0)).?;
+    try std.testing.expectEqual(@as(usize, 0), location.offset);
+    try std.testing.expectEqual(@as(usize, 4), location.length);
+
+    writeU16Test(&data, 8, 1); // Duplicate/decreasing glyph code after a valid match.
+    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat4(&data, strike, 0, 1, 17, 0));
+
+    writeU16Test(&data, 8, 5); // Outside the enclosing IndexSubTableArray range.
+    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat4(&data, strike, 0, 1, 17, 0));
 }
 
 test "CBLC image locations reject arithmetic overflow before CBDT slicing" {

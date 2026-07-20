@@ -3121,6 +3121,49 @@ test "paragraph wrapping keeps combining grapheme clusters atomic" {
     try std.testing.expectEqual(@as(usize, 3), paragraph.glyphs[2].cluster);
 }
 
+test "paragraph wrapping consumes Unicode line break data" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const ascii_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(ascii_bytes);
+    var ascii_font = try Font.parse(allocator, ascii_bytes);
+    defer ascii_font.deinit();
+    const ascii_fonts = [_]*const Font{&ascii_font};
+    const ascii_cascade = FontCascade.init(&ascii_fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const crlf = try TextShaper.layoutParagraphUtf8(ascii_cascade, &layout_buffer, "A\r\nA", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+    });
+    try std.testing.expectEqual(@as(usize, 2), crlf.lines.len);
+    try std.testing.expectEqual(@as(usize, 1), crlf.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 1), crlf.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(u21, 'A'), crlf.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 'A'), crlf.glyphs[3].codepoint);
+
+    const cjk_bytes = try test_font.buildNamedCjkTtf(allocator);
+    defer allocator.free(cjk_bytes);
+    var cjk_font = try Font.parse(allocator, cjk_bytes);
+    defer cjk_font.deinit();
+    const cjk_fonts = [_]*const Font{&cjk_font};
+    const cjk_cascade = FontCascade.init(&cjk_fonts);
+
+    const ivs = try TextShaper.layoutParagraphUtf8(cjk_cascade, &layout_buffer, "\u{4e00}\u{e0100}丁", 20, .{
+        .max_width = 20,
+        .line_height = 24,
+    });
+    try std.testing.expectEqual(@as(usize, 2), ivs.lines.len);
+    try std.testing.expectEqual(@as(usize, 1), ivs.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 1), ivs.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(u21, 0x4e00), ivs.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), ivs.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 7), ivs.glyphs[0].source_byte_len);
+    try std.testing.expectEqual(@as(usize, 7), ivs.glyphs[1].cluster);
+}
+
 test "limits paragraph lines and appends ellipsis" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

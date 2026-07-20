@@ -1205,6 +1205,9 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
     const tab_stop = @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
     const grapheme_clusters = try unicode.itemizeGraphemeClusters(buffer.allocator, text);
     defer buffer.allocator.free(grapheme_clusters);
+    const line_breaks = try unicode.itemizeLineBreaks(buffer.allocator, text);
+    defer buffer.allocator.free(line_breaks);
+    var line_break_index: usize = 0;
 
     // Greedy line breaking tracks the most recent soft break. When a line
     // overflows, it prefers that break; otherwise it breaks at the overflowing
@@ -1213,21 +1216,24 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
     // multiple glyphs, such as base+combining-mark sequences when a font lacks
     // mark attachment: splitting inside that cluster would put one user-visible
     // character on two different lines.
-    while (index < buffer.glyphs.items.len) : (index += 1) {
+    glyph_loop: while (index < buffer.glyphs.items.len) : (index += 1) {
         var glyph = &buffer.glyphs.items[index];
-        if (glyph.codepoint == '\n') {
+        if (glyph.codepoint == '\n' or glyph.codepoint == '\r') {
             try appendParagraphLine(buffer, line_start, index, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
             if (buffer.lines.items.len >= max_lines) {
                 try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
                 return;
             }
             y += line_height + options.paragraph_spacing;
-            line_start = index + 1;
+            const break_end_index = if (glyph.codepoint == '\r' and index + 1 < buffer.glyphs.items.len and buffer.glyphs.items[index + 1].codepoint == '\n') index + 2 else index + 1;
+            consumeLineBreaksThrough(line_breaks, &line_break_index, glyphSourceEnd(buffer.glyphs.items[break_end_index - 1]));
+            line_start = break_end_index;
             line_width = 0;
             last_break = null;
             width_at_break = 0;
             line_in_paragraph = 0;
-            continue;
+            index = break_end_index - 1;
+            continue :glyph_loop;
         }
 
         if (glyph.codepoint == '\t') {
@@ -1261,9 +1267,14 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
             last_break = null;
             width_at_break = 0;
         }
-        if (isBreakOpportunity(glyph.codepoint)) {
-            last_break = breakIndexAfter(buffer.glyphs.items, index);
-            width_at_break = if (isDiscardableBreak(glyph.codepoint)) line_width - glyph.x_advance else line_width;
+        const glyph_source_end = glyphSourceEnd(glyph.*);
+        while (line_break_index < line_breaks.len and line_breaks[line_break_index].byte_offset <= glyph_source_end) {
+            const line_break = line_breaks[line_break_index];
+            line_break_index += 1;
+            switch (line_break.kind) {
+                .soft => recordSoftLineBreak(buffer.glyphs.items, line_break.byte_offset, index, line_start, line_width, &last_break, &width_at_break),
+                .hard => {},
+            }
         }
     }
 
@@ -1281,6 +1292,29 @@ fn chooseOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []const
     if (isDiscardableBreak(glyphs[index].codepoint)) return .{ .index = index, .uses_current_discardable = true };
     if (last_break != null and last_break.? > line_start) return .{ .index = last_break.?, .uses_current_discardable = false };
     return graphemeOverflowBreak(glyphs, grapheme_clusters, index, line_start);
+}
+
+fn recordSoftLineBreak(glyphs: []const GlyphPosition, byte_offset: usize, index: usize, line_start: usize, line_width: f32, last_break: *?usize, width_at_break: *f32) void {
+    if (glyphs.len == 0) return;
+    const current = glyphs[index];
+    if (isDiscardableBreak(current.codepoint) and glyphSourceEnd(current) == byte_offset) {
+        if (index > line_start) {
+            last_break.* = index;
+            width_at_break.* = line_width - current.x_advance;
+        }
+        return;
+    }
+    const break_index = glyphIndexForSourceBoundary(glyphs, byte_offset, line_start, index + 1) orelse @min(index + 1, glyphs.len);
+    if (break_index > line_start) {
+        last_break.* = break_index;
+        width_at_break.* = lineWidth(glyphs[line_start..break_index]);
+    }
+}
+
+fn consumeLineBreaksThrough(line_breaks: []const unicode.LineBreak, line_break_index: *usize, byte_offset: usize) void {
+    while (line_break_index.* < line_breaks.len and line_breaks[line_break_index.*].byte_offset <= byte_offset) {
+        line_break_index.* += 1;
+    }
 }
 
 fn graphemeOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []const unicode.GraphemeCluster, index: usize, line_start: usize) OverflowBreak {
@@ -1317,9 +1351,10 @@ fn graphemeClusterContaining(clusters: []const unicode.GraphemeCluster, byte_off
 
 fn glyphIndexForSourceBoundary(glyphs: []const GlyphPosition, boundary: usize, line_start: usize, fallback: usize) ?usize {
     var index = line_start + 1;
-    while (index <= fallback) : (index += 1) {
+    while (index < glyphs.len and index <= fallback) : (index += 1) {
         if (glyphClusterStart(glyphs[index]) >= boundary) return index;
     }
+    if (glyphs.len != 0 and fallback >= glyphs.len and boundary >= glyphSourceEnd(glyphs[glyphs.len - 1])) return glyphs.len;
     return null;
 }
 
@@ -1488,30 +1523,6 @@ fn trimLeadingSoftBreaks(glyphs: []const GlyphPosition, start: *usize) void {
 
 fn isDiscardableBreak(codepoint: u21) bool {
     return codepoint == ' ' or codepoint == '\t';
-}
-
-fn isBreakOpportunity(codepoint: u21) bool {
-    return isDiscardableBreak(codepoint) or isEastAsianBreak(codepoint);
-}
-
-fn breakIndexAfter(glyphs: []const GlyphPosition, index: usize) usize {
-    if (isDiscardableBreak(glyphs[index].codepoint)) return index;
-    return index + 1;
-}
-
-fn isEastAsianBreak(codepoint: u21) bool {
-    return (codepoint >= 0x1100 and codepoint <= 0x11ff) or
-        (codepoint >= 0x2e80 and codepoint <= 0x2eff) or
-        (codepoint >= 0x2f00 and codepoint <= 0x2fdf) or
-        (codepoint >= 0x3040 and codepoint <= 0x30ff) or
-        (codepoint >= 0x3130 and codepoint <= 0x318f) or
-        (codepoint >= 0x31a0 and codepoint <= 0x31ff) or
-        (codepoint >= 0x3400 and codepoint <= 0x4dbf) or
-        (codepoint >= 0x4e00 and codepoint <= 0x9fff) or
-        (codepoint >= 0xac00 and codepoint <= 0xd7af) or
-        (codepoint >= 0xf900 and codepoint <= 0xfaff) or
-        (codepoint >= 0x20000 and codepoint <= 0x2fffd) or
-        (codepoint >= 0x30000 and codepoint <= 0x3fffd);
 }
 
 fn runRangeForGlyphs(runs: []const CascadeRun, glyph_start: usize, glyph_end: usize) struct { start: usize, len: usize } {

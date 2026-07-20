@@ -260,6 +260,7 @@ pub const Font = struct {
         }
         try validateSfntTableDirectory(records);
         try validateSfntTableRanges(records, reserved_prefix_end, start, directory_end);
+        try validateSfntTablePadding(data, records);
         if (ttc_header) |header| try validateSfntTablesDoNotOverlapTtcDsig(records, header);
 
         const head = findTable(records, "head") orelse return error.MissingTable;
@@ -2048,6 +2049,27 @@ fn validateSfntTableRanges(records: []const TableRecord, reserved_prefix_end: us
             if (other.length == 0) continue;
             const other_end = other.offset + other.length;
             if (rangesOverlap(record.offset, record_end, other.offset, other_end)) return error.BadSfnt;
+        }
+    }
+}
+
+fn validateSfntTablePadding(data: []const u8, records: []const TableRecord) FontError!void {
+    for (records) |record| {
+        if (record.offset > data.len or record.length > data.len - record.offset) return error.BadSfnt;
+
+        const record_end = record.offset + record.length;
+        const padding_len = (4 - (record.length & 3)) & 3;
+        if (padding_len == 0 or record_end == data.len) continue;
+
+        // SFNT directory lengths intentionally exclude the zero padding that
+        // aligns the next table. Checksums also treat those bytes as zero, so a
+        // non-zero physical padding byte would be invisible to checksum
+        // validation while still being attacker-controlled data between table
+        // payloads. Reject it at the container boundary instead of letting a
+        // later lazy parser accidentally reinterpret padding as child data.
+        const present_padding_len = @min(padding_len, data.len - record_end);
+        for (data[record_end .. record_end + present_padding_len]) |byte| {
+            if (byte != 0) return error.BadSfnt;
         }
     }
 }
@@ -12050,6 +12072,32 @@ test "SFNT table directory offsets must be long aligned" {
     try setSfntTableOffset(bytes, "cmap", cmap_offset + 1);
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "SFNT table padding bytes must be zero" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        font.deinit();
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const head_offset: usize = @intCast(try sfntTableOffset(bytes, "head"));
+        const head_length: usize = @intCast(try sfntTableLength(bytes, "head"));
+        try std.testing.expectEqual(@as(usize, 2), (4 - (head_length & 3)) & 3);
+
+        // This byte is outside the declared head table length, so the table
+        // checksum remains valid. It is still physical SFNT padding and must be
+        // zero to avoid hiding attacker-controlled bytes between tables.
+        bytes[head_offset + head_length] = 0x7f;
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
 }
 
 test "SFNT table directory checksums match borrowed table bytes" {

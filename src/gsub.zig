@@ -1211,8 +1211,7 @@ const NestedGlyphChange = struct {
 };
 
 fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    try ensureSubstitutionRecordListWithin(table, records_offset, record_count);
-    try ensureSubstitutionRecordLookupsWithin(table, records_offset, record_count);
+    try ensureSubstitutionRecordsWithin(table, records_offset, record_count, input_indices.len);
 
     // SequenceLookupRecord sequence indexes are expressed in the input sequence
     // matched before any nested lookup runs. Keep a mutable index map so a
@@ -1234,7 +1233,7 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
         const record_offset = records_offset + subst_i * 4;
         const sequence_index = try readU16(table, record_offset);
         const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= mapped.len) continue;
+        if (sequence_index >= mapped.len) return error.BadGsub;
         if (!mapped_live[sequence_index]) continue;
         const target_index = mapped[sequence_index];
         if (target_index >= glyphs.items.len) continue;
@@ -1296,17 +1295,24 @@ fn ensureSubstitutionRecordListWithin(table: Table, records_offset: usize, recor
     if (record_count > (table.length - records_offset) / 4) return error.BadGsub;
 }
 
-fn ensureSubstitutionRecordLookupsWithin(table: Table, records_offset: usize, record_count: usize) GsubError!void {
-    // A complete SequenceLookupRecord array is not enough for atomic contextual
-    // application: a later record may name a lookup whose variable-length
-    // Lookup header is truncated, or may name no lookup at all. Validate every
-    // referenced lookup index/header before the first nested lookup mutates
-    // `glyphs` so malformed contextual rules cannot silently drop required
-    // nested substitutions.
+fn ensureSubstitutionRecordsWithin(table: Table, records_offset: usize, record_count: usize, input_count: usize) GsubError!void {
+    try ensureSubstitutionRecordListWithin(table, records_offset, record_count);
+    try ensureSubstitutionRecordReferencesWithin(table, records_offset, record_count, input_count);
+}
+
+fn ensureSubstitutionRecordReferencesWithin(table: Table, records_offset: usize, record_count: usize, input_count: usize) GsubError!void {
+    // A complete SequenceLookupRecord array is not enough for atomic
+    // contextual application: each record must target a glyph inside the
+    // already-matched input sequence and must name a real lookup. Preflight
+    // both fields before the first nested lookup mutates `glyphs`, otherwise a
+    // malformed later record could either be silently skipped or leave earlier
+    // substitutions visible to the caller.
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGsub(table, lookup_list_offset);
     for (0..record_count) |record_i| {
         const record_offset = records_offset + record_i * 4;
+        const sequence_index = try readU16BadGsub(table, record_offset);
+        if (sequence_index >= input_count) return error.BadGsub;
         const lookup_index = try readU16BadGsub(table, record_offset + 2);
         if (lookup_index >= lookup_count) return error.BadGsub;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
@@ -1658,8 +1664,7 @@ fn ensureContextSubstitutionSubtableWithin(table: Table, subtable_offset: usize)
             const coverage_offsets_pos = subtable_offset + 6;
             try ensureCoverageOffsetArrayWithin(table, subtable_offset, coverage_offsets_pos, glyph_count);
             const records_offset = coverage_offsets_pos + @as(usize, glyph_count) * 2;
-            try ensureSubstitutionRecordListWithin(table, records_offset, subst_count);
-            try ensureSubstitutionRecordLookupsWithin(table, records_offset, subst_count);
+            try ensureSubstitutionRecordsWithin(table, records_offset, subst_count, glyph_count);
         },
         else => return error.UnsupportedGsub,
     }
@@ -1691,8 +1696,7 @@ fn ensureContextRuleWithin(table: Table, rule_offset: usize) GsubError!void {
         try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, input_pos + (input_i - 1) * 2));
     }
     const records_offset = input_pos + (@as(usize, glyph_count) - 1) * 2;
-    try ensureSubstitutionRecordListWithin(table, records_offset, subst_count);
-    try ensureSubstitutionRecordLookupsWithin(table, records_offset, subst_count);
+    try ensureSubstitutionRecordsWithin(table, records_offset, subst_count, glyph_count);
 }
 
 fn ensureChainingContextSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
@@ -1783,8 +1787,7 @@ fn ensureChainingRuleWithin(table: Table, rule_offset: usize) GsubError!void {
 
     const subst_count = try readU16BadGsub(table, cursor);
     cursor += 2;
-    try ensureSubstitutionRecordListWithin(table, cursor, subst_count);
-    try ensureSubstitutionRecordLookupsWithin(table, cursor, subst_count);
+    try ensureSubstitutionRecordsWithin(table, cursor, subst_count, input_count);
 }
 
 fn ensureChainingCoverageSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
@@ -1807,8 +1810,7 @@ fn ensureChainingCoverageSubstitutionSubtableWithin(table: Table, subtable_offse
 
     const subst_count = try readU16BadGsub(table, cursor);
     cursor += 2;
-    try ensureSubstitutionRecordListWithin(table, cursor, subst_count);
-    try ensureSubstitutionRecordLookupsWithin(table, cursor, subst_count);
+    try ensureSubstitutionRecordsWithin(table, cursor, subst_count, input_count);
 }
 
 fn ensureReverseChainingSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
@@ -3616,6 +3618,59 @@ test "GSUB contextual lookup records reject dangling lookup indexes atomically" 
     // contextual rule is structurally valid and the first nested SingleSubst
     // can run normally.
     writeU16Test(&bytes, rule + 10, 1);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 20);
+    try applyLookup(table, context_lookup, &glyphs, allocator, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
+}
+
+test "GSUB contextual lookup records reject sequence indexes outside matched input" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 84;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // Empty ScriptList.
+    writeU16Test(&bytes, 6, 12); // Empty FeatureList.
+    writeU16Test(&bytes, 8, 14); // LookupList.
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 6); // Lookup 0: ContextSubst.
+    writeU16Test(&bytes, 18, 50); // Lookup 1: SingleSubst.
+
+    const context_lookup = 20;
+    writeU16Test(&bytes, context_lookup + 0, 5);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 8);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 14);
+    writeCoverage1(&bytes, context + 8, 1);
+
+    const set = context + 14;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1); // One input glyph is matched.
+    writeU16Test(&bytes, rule + 2, 1);
+    writeU16Test(&bytes, rule + 4, 1); // Invalid: only sequence index 0 exists.
+    writeU16Test(&bytes, rule + 6, 1);
+
+    writeSingleDeltaLookup(&bytes, 64, 1, 9);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 20));
+    try std.testing.expectError(error.BadGsub, applyLookup(table, context_lookup, &glyphs, allocator, .{}));
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+
+    // With a valid SequenceIndex, the same context applies its nested lookup.
+    writeU16Test(&bytes, rule + 4, 0);
     try validateGlyphBounds(&bytes, 0, bytes.len, 20);
     try applyLookup(table, context_lookup, &glyphs, allocator, .{});
     try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);

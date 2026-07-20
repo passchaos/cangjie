@@ -1297,8 +1297,7 @@ fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset
 }
 
 fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    try ensurePositionRecordListWithin(table, records_pos, record_count);
-    try ensurePositionRecordLookupsWithin(table, records_pos, record_count);
+    try ensurePositionRecordsWithin(table, records_pos, record_count, input_indices.len);
 
     // Context positioning records name a glyph in the matched input sequence
     // and a lookup-list index. Nested lookups own their own LookupFlag, so a
@@ -1307,7 +1306,7 @@ fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: 
         const record_offset = records_pos + record_i * 4;
         const sequence_index = try readU16(table, record_offset);
         const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= input_indices.len) continue;
+        if (sequence_index >= input_indices.len) return error.BadGpos;
         const target_index = input_indices[sequence_index];
         try collectNestedAdjustment(table, glyphs, target_index, lookup_index, adjustments, allocator, options);
     }
@@ -1321,16 +1320,22 @@ fn ensurePositionRecordListWithin(table: Table, records_pos: usize, record_count
     if (record_count > (table.length - records_pos) / 4) return error.BadGpos;
 }
 
-fn ensurePositionRecordLookupsWithin(table: Table, records_pos: usize, record_count: usize) GposError!void {
-    return ensurePositionRecordLookupsWithinDepth(table, records_pos, record_count, 0);
+fn ensurePositionRecordsWithin(table: Table, records_pos: usize, record_count: usize, input_count: usize) GposError!void {
+    try ensurePositionRecordListWithin(table, records_pos, record_count);
+    try ensurePositionRecordReferencesWithinDepth(table, records_pos, record_count, input_count, 0);
 }
 
-fn ensurePositionRecordLookupsWithinDepth(table: Table, records_pos: usize, record_count: usize, depth: usize) GposError!void {
+fn ensurePositionRecordsWithinDepth(table: Table, records_pos: usize, record_count: usize, input_count: usize, depth: usize) GposError!void {
+    try ensurePositionRecordListWithin(table, records_pos, record_count);
+    try ensurePositionRecordReferencesWithinDepth(table, records_pos, record_count, input_count, depth);
+}
+
+fn ensurePositionRecordReferencesWithinDepth(table: Table, records_pos: usize, record_count: usize, input_count: usize, depth: usize) GposError!void {
     // Contextual positioning appends adjustments as it walks PosLookupRecords.
-    // Preflight referenced lookup indexes/headers so a dangling lookup index,
-    // malformed later lookup count, or UseMarkFilteringSet slot cannot leave
-    // earlier nested adjustments visible or silently suppress requested
-    // positioning.
+    // Preflight both record fields: the sequence index must target the matched
+    // input sequence, and the lookup index/header must resolve. Otherwise a
+    // malformed later record could be silently skipped or could leave earlier
+    // nested adjustments visible to the caller.
     // Contextual lookups are allowed to reference other contextual lookups; cap
     // validation recursion so cyclic lookup graphs are reported as unsupported
     // instead of overflowing the validator stack.
@@ -1339,6 +1344,8 @@ fn ensurePositionRecordLookupsWithinDepth(table: Table, records_pos: usize, reco
     const lookup_count = try readU16BadGpos(table, lookup_list_offset);
     for (0..record_count) |record_i| {
         const record_offset = records_pos + record_i * 4;
+        const sequence_index = try readU16BadGpos(table, record_offset);
+        if (sequence_index >= input_count) return error.BadGpos;
         const lookup_index = try readU16BadGpos(table, record_offset + 2);
         if (lookup_index >= lookup_count) return error.BadGpos;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
@@ -1773,8 +1780,7 @@ fn ensureContextPositionSubtableWithin(table: Table, subtable_offset: usize, dep
             const coverage_offsets_pos = subtable_offset + 6;
             try ensureCoverageOffsetArrayWithin(table, subtable_offset, coverage_offsets_pos, glyph_count);
             const records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
-            try ensurePositionRecordListWithin(table, records_pos, pos_count);
-            try ensurePositionRecordLookupsWithinDepth(table, records_pos, pos_count, depth);
+            try ensurePositionRecordsWithinDepth(table, records_pos, pos_count, glyph_count, depth);
         },
         else => return error.UnsupportedGpos,
     }
@@ -1806,8 +1812,7 @@ fn ensurePositionRuleWithin(table: Table, rule_offset: usize, depth: usize) Gpos
         try ensureGlyphIdWithinMaxp(table, try readU16BadGpos(table, input_pos + (input_i - 1) * 2));
     }
     const records_pos = input_pos + (@as(usize, glyph_count) - 1) * 2;
-    try ensurePositionRecordListWithin(table, records_pos, pos_count);
-    try ensurePositionRecordLookupsWithinDepth(table, records_pos, pos_count, depth);
+    try ensurePositionRecordsWithinDepth(table, records_pos, pos_count, glyph_count, depth);
 }
 
 fn ensureChainingContextPositionSubtableWithin(table: Table, subtable_offset: usize, depth: usize) GposError!void {
@@ -1897,8 +1902,7 @@ fn ensureChainingPositionRuleWithin(table: Table, rule_offset: usize, depth: usi
 
     const pos_count = try readU16BadGpos(table, cursor);
     cursor += 2;
-    try ensurePositionRecordListWithin(table, cursor, pos_count);
-    try ensurePositionRecordLookupsWithinDepth(table, cursor, pos_count, depth);
+    try ensurePositionRecordsWithinDepth(table, cursor, pos_count, input_count, depth);
 }
 
 fn ensureChainingCoveragePositionSubtableWithin(table: Table, subtable_offset: usize, depth: usize) GposError!void {
@@ -1921,8 +1925,7 @@ fn ensureChainingCoveragePositionSubtableWithin(table: Table, subtable_offset: u
 
     const pos_count = try readU16BadGpos(table, cursor);
     cursor += 2;
-    try ensurePositionRecordListWithin(table, cursor, pos_count);
-    try ensurePositionRecordLookupsWithinDepth(table, cursor, pos_count, depth);
+    try ensurePositionRecordsWithinDepth(table, cursor, pos_count, input_count, depth);
 }
 
 fn ensureMarkArrayWithin(table: Table, mark_array_offset: usize, class_count: u16) GposError!usize {
@@ -4183,6 +4186,62 @@ test "GPOS contextual lookup records reject dangling lookup indexes atomically" 
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
+}
+
+test "GPOS contextual lookup records reject sequence indexes outside matched input" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 88;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // Empty ScriptList.
+    writeU16Test(&bytes, 6, 12); // Empty FeatureList.
+    writeU16Test(&bytes, 8, 14); // LookupList.
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 6); // Lookup 0: ContextPos.
+    writeU16Test(&bytes, 18, 50); // Lookup 1: SinglePos.
+
+    const context_lookup = 20;
+    writeU16Test(&bytes, context_lookup + 0, 7);
+    writeU16Test(&bytes, context_lookup + 4, 1);
+    writeU16Test(&bytes, context_lookup + 6, 8);
+
+    const context = context_lookup + 8;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 8);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 14);
+    writeCoverage1Test(&bytes, context + 8, 1);
+
+    const set = context + 14;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1); // One input glyph is matched.
+    writeU16Test(&bytes, rule + 2, 1);
+    writeU16Test(&bytes, rule + 4, 1); // Invalid: only sequence index 0 exists.
+    writeU16Test(&bytes, rule + 6, 1);
+
+    writeSinglePositionLookup(&bytes, 64, 1, 0, 45);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    const glyphs = [_]GlyphId{1};
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 20));
+    try std.testing.expectError(error.BadGpos, collectLookup(table, context_lookup, &glyphs, &adjustments, allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    // With a valid SequenceIndex, the same context applies its nested SinglePos
+    // and appends a real adjustment for the matched glyph.
+    writeU16Test(&bytes, rule + 4, 0);
+    try validateGlyphBounds(&bytes, 0, bytes.len, 20);
+    try collectLookup(table, context_lookup, &glyphs, &adjustments, allocator, .{});
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 45), adjustments.items[0].x_placement);
 }
 
 test "GPOS contextual lookup preflight rejects nested extension payload atomically" {

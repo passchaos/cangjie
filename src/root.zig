@@ -3138,6 +3138,16 @@ test "limits paragraph lines and appends ellipsis" {
     });
     try std.testing.expectEqual(@as(usize, 0), hidden.lines.len);
     try std.testing.expectEqual(@as(usize, 0), hidden.glyphs.len);
+
+    const exactly_limited = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+        .max_width = 42,
+        .line_height = 24,
+        .max_lines = 1,
+        .ellipsis = true,
+    });
+    try std.testing.expectEqual(@as(usize, 1), exactly_limited.lines.len);
+    try std.testing.expectEqual(@as(usize, 1), exactly_limited.glyphs.len);
+    try std.testing.expectEqual(@as(u21, 'A'), exactly_limited.glyphs[0].codepoint);
 }
 
 test "expands tabs to configurable tab stops" {

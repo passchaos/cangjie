@@ -258,6 +258,9 @@ pub const ParagraphOptions = struct {
     line_height: ?f32 = null,
     direction: TextDirection = .ltr,
     max_lines: ?usize = null,
+    /// Append a simple "..." marker only when `max_lines` actually removes
+    /// content. A paragraph whose natural line count exactly equals the limit
+    /// should remain byte-for-byte shaped text, not be rewritten as truncated.
     ellipsis: bool = false,
     tab_width: usize = 4,
     letter_spacing: f32 = 0,
@@ -1209,7 +1212,7 @@ fn buildParagraphLines(buffer: *LayoutBuffer, options: ParagraphOptions, default
         if (glyph.codepoint == '\n') {
             try appendParagraphLine(buffer, line_start, index, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
             if (buffer.lines.items.len >= max_lines) {
-                try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment);
+                try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
                 return;
             }
             y += line_height + options.paragraph_spacing;
@@ -1240,7 +1243,7 @@ fn buildParagraphLines(buffer: *LayoutBuffer, options: ParagraphOptions, default
                 width_at_break;
             try appendParagraphLine(buffer, line_start, break_end, break_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
             if (buffer.lines.items.len >= max_lines) {
-                try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment);
+                try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
                 return;
             }
             y += line_height;
@@ -1258,7 +1261,7 @@ fn buildParagraphLines(buffer: *LayoutBuffer, options: ParagraphOptions, default
     }
 
     try appendParagraphLine(buffer, line_start, buffer.glyphs.items.len, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
-    try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment);
+    try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, false);
 }
 
 fn chooseOverflowBreak(glyph: GlyphPosition, index: usize, line_start: usize, last_break: ?usize) struct { index: usize, uses_current_discardable: bool } {
@@ -1286,8 +1289,8 @@ fn lineWidthLimitForIndent(max_width: f32, indent: f32) f32 {
     return @max(0, max_width - indent);
 }
 
-fn truncateParagraphLines(buffer: *LayoutBuffer, max_lines: usize, ellipsis: bool, max_width: f32, alignment: TextAlign) !void {
-    if (buffer.lines.items.len < max_lines) return;
+fn truncateParagraphLines(buffer: *LayoutBuffer, max_lines: usize, ellipsis: bool, max_width: f32, alignment: TextAlign, content_omitted: bool) !void {
+    if (buffer.lines.items.len < max_lines or (buffer.lines.items.len == max_lines and !content_omitted)) return;
     if (max_lines == 0) {
         buffer.lines.clearRetainingCapacity();
         buffer.runs.clearRetainingCapacity();
@@ -1301,7 +1304,7 @@ fn truncateParagraphLines(buffer: *LayoutBuffer, max_lines: usize, ellipsis: boo
     buffer.glyphs.shrinkRetainingCapacity(keep_glyphs);
     trimRunsToGlyphCount(buffer, keep_glyphs);
 
-    if (ellipsis and keep_glyphs > 0) {
+    if (ellipsis and content_omitted and keep_glyphs > 0) {
         try appendEllipsisToLastLine(buffer, max_width, alignment);
     }
 }

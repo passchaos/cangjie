@@ -2994,6 +2994,7 @@ fn validateSimpleGlyphDescription(glyph_data: []const u8, contour_count: u16) Fo
     while (expanded_flags < total_points) {
         if (offset >= glyph_data.len) return error.InvalidGlyph;
         const flag = glyph_data[offset];
+        try validateSimpleGlyphFlag(flag, expanded_flags);
         offset += 1;
         expanded_flags += 1;
         x_bytes += simpleGlyphCoordinateByteCount(flag, true);
@@ -3003,6 +3004,7 @@ fn validateSimpleGlyphDescription(glyph_data: []const u8, contour_count: u16) Fo
             const repeat = glyph_data[offset];
             offset += 1;
             if (@as(usize, repeat) > total_points - expanded_flags) return error.InvalidGlyph;
+            if (repeat != 0) try validateSimpleGlyphFlag(flag, expanded_flags);
             expanded_flags += repeat;
             x_bytes += @as(usize, repeat) * simpleGlyphCoordinateByteCount(flag, true);
             y_bytes += @as(usize, repeat) * simpleGlyphCoordinateByteCount(flag, false);
@@ -3030,6 +3032,15 @@ fn simpleGlyphCoordinateByteCount(flag: u8, x_axis: bool) usize {
     if ((flag & short_vector_bit) != 0) return 1;
     if ((flag & same_or_positive_bit) != 0) return 0;
     return 2;
+}
+
+fn validateSimpleGlyphFlag(flag: u8, point_index: usize) FontError!void {
+    // Simple-glyph flag byte bit 7 is reserved by the glyf grammar, while bit 6
+    // (OVERLAP_SIMPLE) is a whole-glyph hint carried only by the first logical
+    // flag. Validate the expanded RLE stream rather than the raw bytes so a
+    // repeated first flag cannot smuggle the hint onto later points.
+    if ((flag & 0x80) != 0) return error.InvalidGlyph;
+    if (point_index != 0 and (flag & 0x40) != 0) return error.InvalidGlyph;
 }
 
 fn validateCompoundGlyphDescription(allocator: std.mem.Allocator, glyph_data: []const u8, glyph_count: u16) FontError!CompoundGlyphLinks {
@@ -5440,12 +5451,14 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
     var i: usize = 0;
     while (i < total_points) : (i += 1) {
         const flag = try r.readU8();
+        try validateSimpleGlyphFlag(flag, i);
         flags[i] = flag;
         if ((flag & 0x08) != 0) {
             const repeat = try r.readU8();
             for (0..repeat) |_| {
                 i += 1;
                 if (i >= total_points) return error.InvalidGlyph;
+                try validateSimpleGlyphFlag(flag, i);
                 flags[i] = flag;
             }
         }
@@ -11002,6 +11015,40 @@ test "glyph outline API revalidates borrowed loca and glyf bytes" {
 test "simple glyf programs and coordinate streams validate at parse time" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const glyph_one = glyf_offset + 12;
+        bytes[glyph_one + 14] = 0xb1; // Reserved flag bit 7 must not be set.
+        try updateSfntTableChecksum(bytes, "glyf");
+
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const glyph_one = glyf_offset + 12;
+        bytes[glyph_one + 15] = 0x61; // OVERLAP_SIMPLE is only valid on the first logical point.
+        try updateSfntTableChecksum(bytes, "glyf");
+
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const glyf_offset = try sfntTableOffset(bytes, "glyf");
+        const glyph_one = glyf_offset + 12;
+        bytes[glyph_one + 14] = 0x79; // Repeats OVERLAP_SIMPLE onto points 1 and 2.
+        bytes[glyph_one + 15] = 2;
+        try updateSfntTableChecksum(bytes, "glyf");
+
+        try std.testing.expectError(error.InvalidGlyph, Font.parse(allocator, bytes));
+    }
 
     {
         const bytes = try test_font.buildMinimalTtf(allocator);

@@ -52,6 +52,7 @@ pub const Script = enum {
     balinese,
     javanese,
     limbu,
+    lepcha,
     buginese,
     sundanese,
     meetei_mayek,
@@ -188,6 +189,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     bali = tag("bali"),
     java = tag("java"),
     limb = tag("limb"),
+    lepc = tag("lepc"),
     bugi = tag("bugi"),
     sund = tag("sund"),
     mtei = tag("mtei"),
@@ -264,6 +266,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .balinese => .bali,
         .javanese => .java,
         .limbu => .limb,
+        .lepcha => .lepc,
         .buginese => .bugi,
         .sundanese => .sund,
         .meetei_mayek => .mtei,
@@ -366,6 +369,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
+    if (isLepchaScriptCodepoint(codepoint)) return .lepcha;
     if (isBugineseScriptCodepoint(codepoint)) return .buginese;
     if (isSundaneseScriptCodepoint(codepoint)) return .sundanese;
     if (isMeeteiMayekScriptCodepoint(codepoint)) return .meetei_mayek;
@@ -469,6 +473,25 @@ fn isLimbuScriptCodepoint(codepoint: u21) bool {
     // under the `limb` ScriptList entry, so keep the block in one run instead
     // of routing combining pieces through DFLT/unknown before layout.
     return codepoint >= 0x1900 and codepoint <= 0x194f;
+}
+
+fn isLepchaScriptCodepoint(codepoint: u21) bool {
+    // Lepcha letters, subjoined letters, vowel/consonant signs, digits, and
+    // native punctuation select the `lepc` OpenType ScriptList entry. Keep only
+    // assigned scalars in the shaping run so the reserved gaps in the block do
+    // not silently inherit Lepcha script or LTR bidi behavior.
+    return (codepoint >= 0x1c00 and codepoint <= 0x1c37) or
+        (codepoint >= 0x1c3b and codepoint <= 0x1c49) or
+        (codepoint >= 0x1c4d and codepoint <= 0x1c4f);
+}
+
+fn isLepchaWordCodepoint(codepoint: u21) bool {
+    // Anchor word spans on Lepcha base letters and native digits. Dependent
+    // vowels, subjoined letters, finals, and nukta attach through the generic
+    // extender path, while Lepcha punctuation remains a word separator.
+    return (codepoint >= 0x1c00 and codepoint <= 0x1c23) or
+        (codepoint >= 0x1c40 and codepoint <= 0x1c49) or
+        (codepoint >= 0x1c4d and codepoint <= 0x1c4f);
 }
 
 fn isBugineseScriptCodepoint(codepoint: u21) bool {
@@ -1045,7 +1068,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .lepcha, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -2844,6 +2867,49 @@ test "Limbu syllables keep marks and select Limbu OpenType script" {
     try std.testing.expectEqualStrings("ᤋ᤺ᤛ", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Lepcha syllables keep signs and select Lepcha OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "ᰀᰦ ᰁᰤᰬ ᱍ᰷ ᱀᰻";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 8), clusters.len);
+    try std.testing.expectEqualStrings("ᰀᰦ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ᰁᰤᰬ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ᱍ᰷", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("᱀", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("᰻", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.lepcha, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.lepc, openTypeScriptTag(scriptForCodepoint(0x1c00)));
+    try std.testing.expectEqual(OpenTypeScriptTag.lepc, openTypeScriptTag(scriptForCodepoint(0x1c24)));
+    try std.testing.expectEqual(OpenTypeScriptTag.lepc, openTypeScriptTag(scriptForCodepoint(0x1c37)));
+    try std.testing.expectEqual(OpenTypeScriptTag.lepc, openTypeScriptTag(scriptForCodepoint(0x1c3b)));
+    try std.testing.expectEqual(OpenTypeScriptTag.lepc, openTypeScriptTag(scriptForCodepoint(0x1c4d)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x1c38));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1c00));
+    try std.testing.expectEqual(BidiClass.neutral, bidiClassForCodepoint(0x1c38));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 4), words.len);
+    try std.testing.expectEqualStrings("ᰀᰦ", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ᰁᰤᰬ", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("ᱍ᰷", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("᱀", text[words[3].byte_start..][0..words[3].byte_len]);
+}
+
 test "Buginese syllables keep vowels and select Buginese OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -3345,6 +3411,7 @@ const WordKind = enum {
     balinese,
     javanese,
     limbu,
+    lepcha,
     buginese,
     sundanese,
     meetei_mayek,
@@ -3500,6 +3567,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isSyriacWordCodepoint(codepoint)) return .syriac;
     if (isMandaicWordCodepoint(codepoint)) return .mandaic;
     if (isPhoenicianWordCodepoint(codepoint)) return .phoenician;
+    if (isLepchaWordCodepoint(codepoint)) return .lepcha;
     if (isGujaratiWordCodepoint(codepoint)) return .gujarati;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
@@ -3796,6 +3864,12 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x1927 and codepoint <= 0x1928) or
         codepoint == 0x1932 or
         (codepoint >= 0x1939 and codepoint <= 0x193b) or
+        // Lepcha final-consonant signs, vowel E, ran, and nukta are nonspacing
+        // marks typed after a base or subjoined letter. Keep them as Extend so
+        // low-level caret, word, and shaping boundaries preserve one Lepcha
+        // orthographic syllable instead of isolating finals from their base.
+        (codepoint >= 0x1c2c and codepoint <= 0x1c33) or
+        (codepoint >= 0x1c36 and codepoint <= 0x1c37) or
         // Buginese nonspacing vowel signs share the base lontara letter's
         // caret and shaping unit. Without these small GCB=Extend ranges,
         // syllables such as ᨀᨗ and ᨔᨛ split between base and dependent vowel.
@@ -4100,6 +4174,11 @@ fn isSpacingMark(codepoint: u21) bool {
         codepoint == 0x1b3b or
         (codepoint >= 0x1b3d and codepoint <= 0x1b41) or
         (codepoint >= 0x1b43 and codepoint <= 0x1b44) or
+        // Lepcha subjoined letters, spacing vowels, and visible consonant signs
+        // are encoded after the base but belong to the same orthographic
+        // syllable for caret placement and shaping lookup boundaries.
+        (codepoint >= 0x1c24 and codepoint <= 0x1c2b) or
+        (codepoint >= 0x1c34 and codepoint <= 0x1c35) or
         // Javanese spacing signs include dependent vowels, consonant signs,
         // and U+A9C0 PANGKON. These visible signs still belong to the base
         // aksara for grapheme, word, and shaping-boundary purposes.

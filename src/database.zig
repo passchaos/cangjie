@@ -106,8 +106,8 @@ pub fn parseManifest(allocator: std.mem.Allocator, text: []const u8) ![]FontMani
             .postscript_name = postscript_name,
             .content_hash = parseManifestInt(u64, raw[4], 16) catch return error.InvalidManifest,
             .content_size = parseManifestInt(u64, raw[5], 10) catch return error.InvalidManifest,
-            .weight = parseManifestInt(u16, raw[6], 10) catch return error.InvalidManifest,
-            .stretch = parseManifestInt(u16, raw[7], 10) catch return error.InvalidManifest,
+            .weight = parseManifestWeight(raw[6]) catch return error.InvalidManifest,
+            .stretch = parseManifestStretch(raw[7]) catch return error.InvalidManifest,
             .style = try parseFontStyle(raw[8]),
         };
         try entries.append(allocator, entry);
@@ -715,6 +715,16 @@ fn stripManifestLineEnding(line: []const u8) []const u8 {
 fn parseManifestInt(comptime T: type, value: []const u8, base: u8) !T {
     if (value.len == 0) return error.InvalidManifest;
     return std.fmt.parseInt(T, value, base) catch error.InvalidManifest;
+}
+
+fn parseManifestWeight(value: []const u8) !u16 {
+    const weight = try parseManifestInt(u16, value, 10);
+    return if (weight >= 1 and weight <= 1000) weight else error.InvalidManifest;
+}
+
+fn parseManifestStretch(value: []const u8) !u16 {
+    const stretch = try parseManifestInt(u16, value, 10);
+    return if (stretch >= 1 and stretch <= 1000) stretch else error.InvalidManifest;
 }
 
 fn unescapeManifestField(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {

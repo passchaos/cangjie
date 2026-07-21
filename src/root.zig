@@ -2655,6 +2655,14 @@ test "font manifest parse errors free decoded fields" {
         "Leaky\tRegular\tLeaky Regular\tLeaky\\x-Regular\t0\t0\t400\t100\tnormal\n"));
     try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, prefix ++
         "Leaky\tRegular\tLeaky Regular\tLeaky-Regular\t0\t0\t400\t100\tslant\n"));
+    try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, prefix ++
+        "Leaky\tRegular\tLeaky Regular\tLeaky-Regular\t0\t0\t0\t100\tnormal\n"));
+    try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, prefix ++
+        "Leaky\tRegular\tLeaky Regular\tLeaky-Regular\t0\t0\t1001\t100\tnormal\n"));
+    try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, prefix ++
+        "Leaky\tRegular\tLeaky Regular\tLeaky-Regular\t0\t0\t400\t0\tnormal\n"));
+    try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, prefix ++
+        "Leaky\tRegular\tLeaky Regular\tLeaky-Regular\t0\t0\t400\t1001\tnormal\n"));
 }
 
 test "writes and reads font manifest files" {

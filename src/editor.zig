@@ -23,6 +23,7 @@ pub const ClipboardPayload = struct {
     text: []u8,
 
     pub fn init(allocator: std.mem.Allocator, text: []const u8) !ClipboardPayload {
+        if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
         return .{
             .allocator = allocator,
             .text = try allocator.dupe(u8, text),
@@ -1014,6 +1015,8 @@ test "TextEditor copies cuts and pastes clipboard payloads" {
     try editor.setCursor(0);
     try std.testing.expect((try editor.copySelection()) == null);
     try std.testing.expect((try editor.cutSelection()) == null);
+
+    try std.testing.expectError(error.InvalidUtf8, ClipboardPayload.init(allocator, "\xff"));
 }
 
 test "TextEditor tracks and commits IME composition" {

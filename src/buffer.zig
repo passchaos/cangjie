@@ -317,9 +317,9 @@ pub const TextBuffer = struct {
 
     pub fn dirtyIntersectsVisible(self: *TextBuffer, config: LayoutConfig, viewport_height: f32) !bool {
         const dirty = self.dirty_range;
-        if (dirty.isEmpty()) return false;
+        if (dirty.isEmpty()) return !self.layout_valid;
         const visible = try self.visibleByteRange(config, viewport_height);
-        if (visible.isEmpty()) return false;
+        if (visible.isEmpty()) return !self.layout_valid;
         return dirty.byte_start < visible.byte_end and dirty.byte_end > visible.byte_start;
     }
 
@@ -715,6 +715,35 @@ test "TextBuffer vertical cursor keeps folded glyph trailing byte offsets" {
     // caret must therefore use the glyph's shaped source extent rather than
     // fabricating `cluster + 1`, which would land inside/outside UTF-8 text.
     try std.testing.expectEqual(@as(usize, text.len), buffer.cursor_byte);
+}
+
+test "TextBuffer visible dirty check catches deleting all text" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const config = LayoutConfig{
+        .cascade = layout.FontCascade.init(&fonts),
+        .font_size = 20,
+        .paragraph = .{ .max_width = 100, .line_height = 24 },
+    };
+
+    var buffer = try TextBuffer.initText(allocator, "a");
+    defer buffer.deinit();
+    _ = try buffer.ensureLayout(config);
+    try std.testing.expect(buffer.dirtyRange().isEmpty());
+
+    try buffer.setCursor(buffer.slice().len);
+    try buffer.deleteBackward();
+    try std.testing.expectEqualStrings("", buffer.slice());
+    try std.testing.expect(buffer.dirtyRange().isEmpty());
+    try std.testing.expect(try buffer.dirtyIntersectsVisible(config, 24));
 }
 
 test "TextBuffer marks trailing deletions dirty after layout" {

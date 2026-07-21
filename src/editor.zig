@@ -337,6 +337,7 @@ pub const TextEditor = struct {
     }
 
     pub fn insertTextAtCursors(self: *TextEditor, text: []const u8) !void {
+        if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
         if (self.cursors.len() == 0) return self.insertText(text);
         self.cancelComposition();
         const group_id = try self.allocateGroupId();
@@ -1089,6 +1090,22 @@ test "TextEditor inserts text at multiple cursors" {
     try std.testing.expectEqualStrings("abcd", editor.slice());
     try std.testing.expect(try editor.redo());
     try std.testing.expectEqualStrings("aXbcXd", editor.slice());
+}
+
+test "TextEditor multi-cursor invalid UTF-8 preserves redo" {
+    const allocator = std.testing.allocator;
+
+    var editor = try TextEditor.initText(allocator, "ab");
+    defer editor.deinit();
+
+    try editor.insertText("X");
+    try std.testing.expect(try editor.undo());
+    try std.testing.expect(editor.canRedo());
+
+    try editor.addCursor(0, 0);
+    try std.testing.expectError(error.InvalidUtf8, editor.insertTextAtCursors("\xff"));
+    try std.testing.expectEqualStrings("ab", editor.slice());
+    try std.testing.expect(editor.canRedo());
 }
 
 test "TextEditor replaces multiple cursor selections" {

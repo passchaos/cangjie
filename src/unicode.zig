@@ -21,6 +21,7 @@ pub const Script = enum {
     thai,
     lao,
     devanagari,
+    bengali,
     sinhala,
     tamil,
     ethiopic,
@@ -124,6 +125,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     thai = tag("thai"),
     lao = tag("lao "),
     dev2 = tag("dev2"),
+    bng2 = tag("bng2"),
     sinh = tag("sinh"),
     taml = tag("taml"),
     ethi = tag("ethi"),
@@ -167,6 +169,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .thai => .thai,
         .lao => .lao,
         .devanagari => .dev2,
+        .bengali => .bng2,
         .sinhala => .sinh,
         .tamil => .taml,
         .ethiopic => .ethi,
@@ -195,7 +198,7 @@ pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
             .hangul => return .kor,
             .arabic => return .ara,
             .devanagari => return .hin,
-            .tamil, .thai, .lao => return .dflt,
+            .bengali, .tamil, .thai, .lao => return .dflt,
             .han => saw_han = true,
             else => {},
         }
@@ -238,6 +241,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isThaiScriptCodepoint(codepoint)) return .thai;
     if (isLaoScriptCodepoint(codepoint)) return .lao;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
+    if (isBengaliScriptCodepoint(codepoint)) return .bengali;
     if (isSinhalaScriptCodepoint(codepoint)) return .sinhala;
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
     if (isEthiopicScriptCodepoint(codepoint)) return .ethiopic;
@@ -352,6 +356,15 @@ fn isEthiopicScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0xab00 and codepoint <= 0xab2f);
 }
 
+fn isBengaliScriptCodepoint(codepoint: u21) bool {
+    // Bengali/Assamese letters, dependent signs, digits, and punctuation select
+    // the modern `bng2` OpenType script system. Cangjie already treats Bengali
+    // split vowels as grapheme continuations; classifying the full assigned
+    // block as Bengali keeps those syllables in the same shaping run instead
+    // of routing them through DFLT/unknown.
+    return codepoint >= 0x0980 and codepoint <= 0x09ff;
+}
+
 fn isSinhalaScriptCodepoint(codepoint: u21) bool {
     // Sinhala vowels, consonants, dependent signs, punctuation, and numerals
     // live in one Unicode block and are shaped through the `sinh` OpenType
@@ -453,7 +466,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .sinhala, .tamil, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian => .ltr,
         else => .neutral,
     };
 }
@@ -1427,6 +1440,41 @@ test "Telugu and Kannada dependent signs stay with base graphemes" {
     try std.testing.expectEqualStrings("ಕಾ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
 }
 
+test "Bengali syllables keep marks and select Bengali OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "কো ক্ বাংলা";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 6), clusters.len);
+    try std.testing.expectEqualStrings("কো", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ক্", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("বাং", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("লা", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.bengali, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.bng2, openTypeScriptTag(scriptForCodepoint(0x0995)));
+    try std.testing.expectEqual(OpenTypeScriptTag.bng2, openTypeScriptTag(scriptForCodepoint(0x09cd)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x09ac));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("কো", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ক্", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("বাংলা", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 test "Sinhala syllables keep dependent signs and select Sinhala OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -1611,6 +1659,7 @@ const WordKind = enum {
     hebrew,
     armenian,
     devanagari,
+    bengali,
     sinhala,
     tamil,
 };
@@ -1751,6 +1800,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .hebrew => .hebrew,
         .armenian => .armenian,
         .devanagari => .devanagari,
+        .bengali => .bengali,
         .sinhala => .sinhala,
         .tamil => .tamil,
         else => .none,
@@ -1866,6 +1916,14 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x094d or
         (codepoint >= 0x0951 and codepoint <= 0x0957) or
         (codepoint >= 0x0962 and codepoint <= 0x0963) or
+        // Bengali nonspacing signs include nukta, dependent vowels, virama,
+        // and vocalic marks. These are typed after the base consonant but
+        // shape as one orthographic unit, so grapheme and word boundaries must
+        // keep them attached just like the existing Bengali spacing vowels.
+        codepoint == 0x09bc or
+        (codepoint >= 0x09c1 and codepoint <= 0x09c4) or
+        codepoint == 0x09cd or
+        (codepoint >= 0x09e2 and codepoint <= 0x09e3) or
         // Gujarati virama is Extend and participates in Indic ZWJ conjuncts.
         // Keep it attached to the base before applying the InCB ZWJ rule below.
         codepoint == 0x0acd or

@@ -26,6 +26,7 @@ pub const Script = enum {
     gurmukhi,
     sinhala,
     tamil,
+    malayalam,
     ethiopic,
     georgian,
     cherokee,
@@ -132,6 +133,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     gur2 = tag("gur2"),
     sinh = tag("sinh"),
     taml = tag("taml"),
+    mlm2 = tag("mlm2"),
     ethi = tag("ethi"),
     geor = tag("geor"),
     cher = tag("cher"),
@@ -178,6 +180,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .gurmukhi => .gur2,
         .sinhala => .sinh,
         .tamil => .taml,
+        .malayalam => .mlm2,
         .ethiopic => .ethi,
         .georgian => .geor,
         .cherokee => .cher,
@@ -252,6 +255,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isGurmukhiScriptCodepoint(codepoint)) return .gurmukhi;
     if (isSinhalaScriptCodepoint(codepoint)) return .sinhala;
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
+    if (isMalayalamScriptCodepoint(codepoint)) return .malayalam;
     if (isEthiopicScriptCodepoint(codepoint)) return .ethiopic;
     if (isGeorgianScriptCodepoint(codepoint)) return .georgian;
     if (isCherokeeScriptCodepoint(codepoint)) return .cherokee;
@@ -408,6 +412,15 @@ fn isTamilScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x11fc0 and codepoint <= 0x11fff);
 }
 
+fn isMalayalamScriptCodepoint(codepoint: u21) bool {
+    // Malayalam uses the Indic v2 OpenType shaping system (`mlm2`) for
+    // reordering and conjunct formation. The base block contains letters,
+    // dependent vowels, virama, chillus, digits, and script punctuation; keeping
+    // it together avoids sending common Malayalam syllables through DFLT or
+    // splitting marks into separate shaping runs.
+    return codepoint >= 0x0d00 and codepoint <= 0x0d7f;
+}
+
 fn isArabicScriptCodepoint(codepoint: u21) bool {
     // Arabic Presentation Forms are compatibility encodings, but Unicode still
     // assigns them Script=Arabic. Legacy text and normalized-later input should
@@ -491,7 +504,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .sinhala, .tamil, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian => .ltr,
         else => .neutral,
     };
 }
@@ -1617,6 +1630,47 @@ test "Tamil syllables keep marks and select Tamil OpenType script" {
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0b95));
 }
 
+test "Malayalam syllables keep marks and select Malayalam OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "കി ക്‍ഷ കോ മലയാളം";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 10), clusters.len);
+    try std.testing.expectEqualStrings("കി", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ക്‍ഷ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("കോ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("മ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("ല", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings("യാ", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
+    try std.testing.expectEqualStrings("ളം", text[clusters[9].byte_start..][0..clusters[9].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.malayalam, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.mlm2, openTypeScriptTag(scriptForCodepoint(0x0d15)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mlm2, openTypeScriptTag(scriptForCodepoint(0x0d4d)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mlm2, openTypeScriptTag(scriptForCodepoint(0x0d7a)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0d15));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 4), words.len);
+    try std.testing.expectEqualStrings("കി", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ക്‍ഷ", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("കോ", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("മലയാളം", text[words[3].byte_start..][0..words[3].byte_len]);
+}
+
 test "grapheme clusters attach non-Arabic prepend signs to following bases" {
     const allocator = std.testing.allocator;
 
@@ -1755,6 +1809,7 @@ const WordKind = enum {
     gurmukhi,
     sinhala,
     tamil,
+    malayalam,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -1898,6 +1953,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .gurmukhi => .gurmukhi,
         .sinhala => .sinhala,
         .tamil => .tamil,
+        .malayalam => .malayalam,
         else => .none,
     };
 }
@@ -2058,6 +2114,14 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x0bc0 or
         codepoint == 0x0bcd or
         codepoint == 0x0bd7 or
+        // Malayalam dependent signs include combining vowels, dot reph, virama,
+        // and vocalic marks. They share the base consonant's caret and shaping
+        // unit, and U+0D4D VIRAMA also participates in Malayalam ZWJ conjuncts.
+        (codepoint >= 0x0d00 and codepoint <= 0x0d01) or
+        (codepoint >= 0x0d3b and codepoint <= 0x0d3c) or
+        (codepoint >= 0x0d41 and codepoint <= 0x0d44) or
+        codepoint == 0x0d4d or
+        (codepoint >= 0x0d62 and codepoint <= 0x0d63) or
         // Thai and Lao vowels/tone marks are typed after their base consonant
         // but render as a single unit. Treating them as Extend avoids extra
         // caret stops between the consonant and its visible accent/vowel.
@@ -2141,7 +2205,8 @@ fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
     return codepoint == 0x094d or // Devanagari sign virama.
         codepoint == 0x0acd or // Gujarati sign virama.
         codepoint == 0x0b4d or // Odia sign virama.
-        codepoint == 0x0a4d; // Gurmukhi sign virama.
+        codepoint == 0x0a4d or // Gurmukhi sign virama.
+        codepoint == 0x0d4d; // Malayalam sign virama.
 }
 
 fn isIndicConsonant(codepoint: u21) bool {
@@ -2164,7 +2229,9 @@ fn isIndicConsonant(codepoint: u21) bool {
         codepoint == 0x0b5f or
         (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
         (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
-        (codepoint >= 0x0a72 and codepoint <= 0x0a74);
+        (codepoint >= 0x0a72 and codepoint <= 0x0a74) or
+        (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
+        codepoint == 0x0d3a;
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {
@@ -2285,7 +2352,11 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x0bc1 and codepoint <= 0x0bc2) or
         (codepoint >= 0x0bc6 and codepoint <= 0x0bc8) or
         (codepoint >= 0x0bca and codepoint <= 0x0bcc) or
+        (codepoint >= 0x0d02 and codepoint <= 0x0d03) or
         (codepoint >= 0x0d3e and codepoint <= 0x0d40) or
+        (codepoint >= 0x0d46 and codepoint <= 0x0d48) or
+        (codepoint >= 0x0d4a and codepoint <= 0x0d4c) or
+        codepoint == 0x0d57 or
         // Khmer split/spaced dependent vowels are GCB=SpacingMark. They render
         // around or after the base consonant, so a cluster break before them
         // would expose an invalid low-level caret/shaping boundary.

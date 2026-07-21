@@ -3351,6 +3351,15 @@ test "GPOS anchors validate format-specific record sizes" {
     try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 10 }, 0));
 }
 
+test "GPOS scalar reads reject overflowing relative offsets" {
+    const bytes = [_]u8{ 0, 1, 2, 3 };
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    try std.testing.expectError(error.EndOfStream, readU16(table, std.math.maxInt(usize)));
+    try std.testing.expectError(error.EndOfStream, readI16(table, std.math.maxInt(usize)));
+    try std.testing.expectError(error.EndOfStream, readU32(table, std.math.maxInt(usize)));
+}
+
 test "GPOS value records tolerate device and variation offset fields" {
     var bytes = [_]u8{0} ** 32;
     writeI16Test(&bytes, 0, 50);
@@ -5990,21 +5999,24 @@ fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
 }
 
 fn readU16(table: Table, relative: usize) GposError!u16 {
-    if (relative + 2 > table.length) return error.EndOfStream;
+    // `relative` is ultimately derived from font-supplied offsets. Keep the
+    // bounds check in subtraction form so hostile values near usize.max report
+    // a parser error instead of overflowing before the table slice is read.
+    if (relative > table.length or table.length - relative < 2) return error.EndOfStream;
     return bin.readU16At(table.data, table.offset + relative) catch |err| switch (err) {
         error.EndOfStream => error.EndOfStream,
     };
 }
 
 fn readI16(table: Table, relative: usize) GposError!i16 {
-    if (relative + 2 > table.length) return error.EndOfStream;
+    if (relative > table.length or table.length - relative < 2) return error.EndOfStream;
     return bin.readI16At(table.data, table.offset + relative) catch |err| switch (err) {
         error.EndOfStream => error.EndOfStream,
     };
 }
 
 fn readU32(table: Table, relative: usize) GposError!u32 {
-    if (relative + 4 > table.length) return error.EndOfStream;
+    if (relative > table.length or table.length - relative < 4) return error.EndOfStream;
     return bin.readU32At(table.data, table.offset + relative) catch |err| switch (err) {
         error.EndOfStream => error.EndOfStream,
     };

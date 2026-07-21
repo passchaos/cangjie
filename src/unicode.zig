@@ -41,6 +41,7 @@ pub const Script = enum {
     tibetan,
     nko,
     thaana,
+    adlam,
     mongolian,
     balinese,
     javanese,
@@ -170,6 +171,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     tibt = tag("tibt"),
     nko = tag("nko "),
     thaa = tag("thaa"),
+    adlm = tag("adlm"),
     mong = tag("mong"),
     bali = tag("bali"),
     java = tag("java"),
@@ -239,6 +241,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .tibetan => .tibt,
         .nko => .nko,
         .thaana => .thaa,
+        .adlam => .adlm,
         .mongolian => .mong,
         .balinese => .bali,
         .javanese => .java,
@@ -334,6 +337,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isTibetanScriptCodepoint(codepoint)) return .tibetan;
     if (isThaanaScriptCodepoint(codepoint)) return .thaana;
     if (isNkoScriptCodepoint(codepoint)) return .nko;
+    if (isAdlamScriptCodepoint(codepoint)) return .adlam;
     if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
@@ -571,6 +575,27 @@ fn isNkoScriptCodepoint(codepoint: u21) bool {
     // the block in one script run avoids routing valid syllables through DFLT
     // and preserves RTL direction for shaping/layout primitives.
     return codepoint >= 0x07c0 and codepoint <= 0x07ff;
+}
+
+fn isAdlamScriptCodepoint(codepoint: u21) bool {
+    // Adlam is a right-to-left script for Fulani with dedicated OpenType
+    // shaping under `adlm`. Keep the assigned letters, combining marks,
+    // modifier mark, digits, and script punctuation in one RTL run so Adlam
+    // text does not fall through DFLT or neutral bidi handling between bases,
+    // marks, and native digits.
+    return (codepoint >= 0x1e900 and codepoint <= 0x1e94b) or
+        (codepoint >= 0x1e950 and codepoint <= 0x1e959) or
+        (codepoint >= 0x1e95e and codepoint <= 0x1e95f);
+}
+
+fn isAdlamWordCodepoint(codepoint: u21) bool {
+    // Word spans include cased Adlam letters, the spacing nasalization mark,
+    // and native digits. Combining Adlam marks attach through isWordExtender(),
+    // while initial question/exclamation punctuation deliberately terminates a
+    // word rather than becoming selectable text by itself.
+    return (codepoint >= 0x1e900 and codepoint <= 0x1e943) or
+        codepoint == 0x1e94b or
+        (codepoint >= 0x1e950 and codepoint <= 0x1e959);
 }
 
 fn isThaanaScriptCodepoint(codepoint: u21) bool {
@@ -879,7 +904,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .syriac, .nko, .thaana => .rtl,
+        .arabic, .hebrew, .syriac, .nko, .thaana, .adlam => .rtl,
         .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -1641,6 +1666,45 @@ test "NKo text selects NKo script and RTL shaping direction" {
     try std.testing.expectEqual(OpenTypeScriptTag.nko, openTypeScriptTag(scriptForCodepoint(0x07eb)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07d2));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07eb));
+}
+
+test "Adlam text keeps marks and selects Adlam RTL shaping" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{1e922}\u{1e944}\u{1e94a}\u{1e925} \u{1e950}\u{1e951} \u{1e95e}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqualStrings("\u{1e922}\u{1e944}\u{1e94a}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{1e925}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{1e950}", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{1e951}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{1e95e}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.adlam, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.adlm, openTypeScriptTag(scriptForCodepoint(0x1e922)));
+    try std.testing.expectEqual(OpenTypeScriptTag.adlm, openTypeScriptTag(scriptForCodepoint(0x1e944)));
+    try std.testing.expectEqual(OpenTypeScriptTag.adlm, openTypeScriptTag(scriptForCodepoint(0x1e950)));
+    try std.testing.expectEqual(OpenTypeScriptTag.adlm, openTypeScriptTag(scriptForCodepoint(0x1e95e)));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x1e922));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x1e944));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x1e950));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{1e922}\u{1e944}\u{1e94a}\u{1e925}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{1e950}\u{1e951}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Thaana text keeps fili marks and selects Thaana RTL shaping" {
@@ -2895,6 +2959,7 @@ const WordKind = enum {
     hebrew,
     armenian,
     thaana,
+    adlam,
     khmer,
     myanmar,
     devanagari,
@@ -3060,6 +3125,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isKhmerWordCodepoint(codepoint)) return .khmer;
     if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
     if (isThaanaWordCodepoint(codepoint)) return .thaana;
+    if (isAdlamWordCodepoint(codepoint)) return .adlam;
     if (isGujaratiWordCodepoint(codepoint)) return .gujarati;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
@@ -3187,6 +3253,10 @@ fn isCombiningMark(codepoint: u21) bool {
         // typed after RTL bases but form one caret/word/shaping unit with the
         // base letter, so keep them in the compact Extend table.
         (codepoint >= 0x07a6 and codepoint <= 0x07b0) or
+        // Adlam vowel length, gemination, hamza, consonant modifiers, and
+        // nukta are GCB=Extend. They are typed after RTL Adlam letters but
+        // must share one caret/word/shaping unit with the base glyph.
+        (codepoint >= 0x1e944 and codepoint <= 0x1e94a) or
         // Tibetan vowel signs, halanta, subjoined-letter marks, and other
         // signs are typed after the base but form one stack/syllable for
         // grapheme and shaping boundaries.

@@ -20,6 +20,7 @@ pub const Script = enum {
     arabic,
     hebrew,
     syriac,
+    mandaic,
     armenian,
     thai,
     lao,
@@ -150,6 +151,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     arab = tag("arab"),
     hebr = tag("hebr"),
     syrc = tag("syrc"),
+    mand = tag("mand"),
     armn = tag("armn"),
     thai = tag("thai"),
     lao = tag("lao "),
@@ -220,6 +222,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .arabic => .arab,
         .hebrew => .hebr,
         .syriac => .syrc,
+        .mandaic => .mand,
         .armenian => .armn,
         .thai => .thai,
         .lao => .lao,
@@ -315,6 +318,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (isSyriacScriptCodepoint(codepoint)) return .syriac;
+    if (isMandaicScriptCodepoint(codepoint)) return .mandaic;
     if (isArmenianScriptCodepoint(codepoint)) return .armenian;
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
     if (isThaiScriptCodepoint(codepoint)) return .thai;
@@ -689,6 +693,22 @@ fn isSyriacScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x0860 and codepoint <= 0x086f);
 }
 
+fn isMandaicScriptCodepoint(codepoint: u21) bool {
+    // Mandaic is an RTL cursive script with script-specific OpenType shaping
+    // under `mand`. Only assigned scalars in U+0840..U+085E should enter the
+    // shaping run: the unassigned gap at U+085C/U+085D must remain unknown so
+    // malformed/private data does not silently inherit Mandaic bidi behavior.
+    return (codepoint >= 0x0840 and codepoint <= 0x085b) or
+        codepoint == 0x085e;
+}
+
+fn isMandaicWordCodepoint(codepoint: u21) bool {
+    // Mandaic words are anchored by letters. Combining marks attach through the
+    // generic word-extender path, while U+085E punctuation remains a separator
+    // even though it stays in the Mandaic script run for shaping and bidi.
+    return codepoint >= 0x0840 and codepoint <= 0x0858;
+}
+
 fn isGeorgianScriptCodepoint(codepoint: u21) bool {
     // Georgian has casing split across Mkhedruli, Mtavruli, Nuskhuri, and
     // historic Asomtavruli blocks. Fonts expose substitutions and positioning
@@ -904,7 +924,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .syriac, .nko, .thaana, .adlam => .rtl,
+        .arabic, .hebrew, .syriac, .mandaic, .nko, .thaana, .adlam => .rtl,
         .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -1649,6 +1669,44 @@ test "Syriac text selects Syriac script and RTL shaping direction" {
     try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x086d)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x072b));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x086d));
+}
+
+test "Mandaic text keeps marks and selects Mandaic RTL shaping" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{0840}\u{0859}\u{0841} \u{084C}\u{085A}\u{085B}\u{0840} \u{085E}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqualStrings("\u{0840}\u{0859}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{0841}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{084C}\u{085A}\u{085B}", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{0840}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{085E}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.mandaic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.mand, openTypeScriptTag(scriptForCodepoint(0x0840)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mand, openTypeScriptTag(scriptForCodepoint(0x0859)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mand, openTypeScriptTag(scriptForCodepoint(0x085e)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x085c));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x0840));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x0859));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{0840}\u{0859}\u{0841}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{084C}\u{085A}\u{085B}\u{0840}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "NKo text selects NKo script and RTL shaping direction" {
@@ -2960,6 +3018,7 @@ const WordKind = enum {
     armenian,
     thaana,
     adlam,
+    mandaic,
     khmer,
     myanmar,
     devanagari,
@@ -3126,6 +3185,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
     if (isThaanaWordCodepoint(codepoint)) return .thaana;
     if (isAdlamWordCodepoint(codepoint)) return .adlam;
+    if (isMandaicWordCodepoint(codepoint)) return .mandaic;
     if (isGujaratiWordCodepoint(codepoint)) return .gujarati;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
@@ -3249,6 +3309,11 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x06df and codepoint <= 0x06e4) or
         (codepoint >= 0x06e7 and codepoint <= 0x06e8) or
         (codepoint >= 0x06ea and codepoint <= 0x06ed) or
+        // Mandaic affrication, vocalization, and gemination marks are
+        // nonspacing signs typed after RTL bases. Treat them as Extend so
+        // grapheme, word, and shaping boundaries do not split a Mandaic letter
+        // from its marks before OpenType lookup selection.
+        (codepoint >= 0x0859 and codepoint <= 0x085b) or
         // Thaana fili vowel signs and sukun are nonspacing marks. They are
         // typed after RTL bases but form one caret/word/shaping unit with the
         // base letter, so keep them in the compact Extend table.

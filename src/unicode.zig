@@ -1049,6 +1049,19 @@ test "grapheme clusters keep Thai and Lao marks with their base letters" {
     try std.testing.expectEqualStrings("ກີ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
 }
 
+test "grapheme clusters keep Myanmar dependent signs with their base letters" {
+    const allocator = std.testing.allocator;
+
+    const text = "ကေ့ ကွာ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 3), clusters.len);
+    try std.testing.expectEqualStrings("ကေ့", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ကွာ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+}
+
 test "Hangul conjoining jamo classify as Hangul script runs" {
     const allocator = std.testing.allocator;
 
@@ -1319,6 +1332,21 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x0eb1 and codepoint <= 0x0eb1) or
         (codepoint >= 0x0eb4 and codepoint <= 0x0ebc) or
         (codepoint >= 0x0ec8 and codepoint <= 0x0ecd) or
+        // Myanmar dependent signs are encoded after the base consonant but
+        // include both nonspacing and visible-spacing pieces of one orthographic
+        // syllable. Keeping the compact GCB coverage here prevents caret and
+        // shaping clusters from splitting between kinzi/medial/vowel/tone signs.
+        (codepoint >= 0x102d and codepoint <= 0x1030) or
+        (codepoint >= 0x1032 and codepoint <= 0x1037) or
+        (codepoint >= 0x1039 and codepoint <= 0x103a) or
+        (codepoint >= 0x103d and codepoint <= 0x103e) or
+        (codepoint >= 0x1058 and codepoint <= 0x1059) or
+        (codepoint >= 0x105e and codepoint <= 0x1060) or
+        (codepoint >= 0x1071 and codepoint <= 0x1074) or
+        codepoint == 0x1082 or
+        (codepoint >= 0x1085 and codepoint <= 0x1086) or
+        codepoint == 0x108d or
+        codepoint == 0x109d or
         (codepoint >= 0x1ab0 and codepoint <= 0x1aff) or
         (codepoint >= 0x1dc0 and codepoint <= 0x1dff) or
         (codepoint >= 0x20d0 and codepoint <= 0x20ff) or
@@ -1447,7 +1475,18 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x09cb and codepoint <= 0x09cc) or
         codepoint == 0x09d7 or
         (codepoint >= 0x0bbe and codepoint <= 0x0bc2) or
-        (codepoint >= 0x0d3e and codepoint <= 0x0d40);
+        (codepoint >= 0x0d3e and codepoint <= 0x0d40) or
+        (codepoint >= 0x102b and codepoint <= 0x102c) or
+        codepoint == 0x1031 or
+        codepoint == 0x1038 or
+        (codepoint >= 0x103b and codepoint <= 0x103c) or
+        (codepoint >= 0x1056 and codepoint <= 0x1057) or
+        (codepoint >= 0x1062 and codepoint <= 0x1064) or
+        (codepoint >= 0x1067 and codepoint <= 0x106d) or
+        (codepoint >= 0x1083 and codepoint <= 0x1084) or
+        (codepoint >= 0x1087 and codepoint <= 0x108c) or
+        codepoint == 0x108f or
+        (codepoint >= 0x109a and codepoint <= 0x109c);
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

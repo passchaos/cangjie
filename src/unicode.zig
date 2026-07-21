@@ -852,6 +852,18 @@ test "line breaks include breakable Unicode space separators" {
     try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
 }
 
+test "sentence segmentation keeps Arabic-Indic decimal numbers together" {
+    const allocator = std.testing.allocator;
+
+    const text = "القيمة ١.٢ جيدة. انتهى";
+    const sentences = try itemizeSentenceSegments(allocator, text);
+    defer allocator.free(sentences);
+
+    try std.testing.expectEqual(@as(usize, 2), sentences.len);
+    try std.testing.expectEqualStrings("القيمة ١.٢ جيدة. ", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
+    try std.testing.expectEqualStrings("انتهى", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
+}
+
 test "grapheme clusters keep Devanagari virama ZWJ conjuncts atomic" {
     const allocator = std.testing.allocator;
 
@@ -896,20 +908,25 @@ fn isMidNumberSentencePeriod(codepoint: u21, previous: ?u21, text: []const u8, b
     // UAX #29 keeps full stops and similar STerm codepoints inside numeric
     // tokens (SB8), e.g. version strings and decimal values. The segmenter is
     // intentionally compact, but avoiding breaks in the common digit '.' digit
-    // case prevents obviously incorrect sentence cuts in UI text.
+    // case prevents obviously incorrect sentence cuts in UI text. Treat the
+    // decimal digit sets already recognized by the bidi layer as digits here
+    // too, so Arabic-Indic and Extended Arabic-Indic numbers are not split in
+    // mixed-script documents.
     if (codepoint != '.') return false;
     const before = previous orelse return false;
-    if (!isAsciiDigit(before)) return false;
+    if (!isDecimalDigit(before)) return false;
     const after = nextCodepointAt(text, byte_end) orelse return false;
-    return isAsciiDigit(after);
+    return isDecimalDigit(after);
 }
 
 fn nextCodepointAt(text: []const u8, offset: usize) ?u21 {
     return (decodeCodepointAt(text, offset) orelse return null).codepoint;
 }
 
-fn isAsciiDigit(codepoint: u21) bool {
-    return codepoint >= '0' and codepoint <= '9';
+fn isDecimalDigit(codepoint: u21) bool {
+    return (codepoint >= '0' and codepoint <= '9') or
+        (codepoint >= 0x0660 and codepoint <= 0x0669) or
+        (codepoint >= 0x06f0 and codepoint <= 0x06f9);
 }
 
 fn isAsciiApostrophe(codepoint: u21) bool {

@@ -42,6 +42,7 @@ pub const Script = enum {
     sundanese,
     meetei_mayek,
     canadian_aboriginal,
+    cham,
     unknown,
 };
 
@@ -158,6 +159,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     sund = tag("sund"),
     mtei = tag("mtei"),
     cans = tag("cans"),
+    cham = tag("cham"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -214,6 +216,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .sundanese => .sund,
         .meetei_mayek => .mtei,
         .canadian_aboriginal => .cans,
+        .cham => .cham,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -298,6 +301,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isSundaneseScriptCodepoint(codepoint)) return .sundanese;
     if (isMeeteiMayekScriptCodepoint(codepoint)) return .meetei_mayek;
     if (isCanadianAboriginalScriptCodepoint(codepoint)) return .canadian_aboriginal;
+    if (isChamScriptCodepoint(codepoint)) return .cham;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -384,6 +388,14 @@ fn isCanadianAboriginalScriptCodepoint(codepoint: u21) bool {
     return (codepoint >= 0x1400 and codepoint <= 0x167f) or
         (codepoint >= 0x18b0 and codepoint <= 0x18ff) or
         (codepoint >= 0x11ab0 and codepoint <= 0x11abf);
+}
+
+fn isChamScriptCodepoint(codepoint: u21) bool {
+    // Cham uses dependent vowels and final-consonant signs from the same block
+    // as its letters, digits, and punctuation. Fonts select one `cham`
+    // ScriptList entry for these pieces, so keep them in a single script run
+    // instead of routing marks or finals through DFLT/unknown before shaping.
+    return codepoint >= 0xaa00 and codepoint <= 0xaa5f;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -617,7 +629,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham => .ltr,
         else => .neutral,
     };
 }
@@ -2195,6 +2207,45 @@ test "Canadian Aboriginal syllabics select cans script across extensions" {
     try std.testing.expectEqualStrings("𑪰𑪿", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Cham syllables keep signs and select Cham OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "ꨆꨩ ꨆꨯ ꩀꩃꩍ ꩐";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqualStrings("ꨆꨩ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ꨆꨯ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ꩀꩃꩍ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("꩐", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.cham, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.cham, openTypeScriptTag(scriptForCodepoint(0xaa06)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cham, openTypeScriptTag(scriptForCodepoint(0xaa29)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cham, openTypeScriptTag(scriptForCodepoint(0xaa4d)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cham, openTypeScriptTag(scriptForCodepoint(0xaa50)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xaa06));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 4), words.len);
+    try std.testing.expectEqualStrings("ꨆꨩ", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ꨆꨯ", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("ꩀꩃꩍ", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("꩐", text[words[3].byte_start..][0..words[3].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2218,6 +2269,7 @@ const WordKind = enum {
     sundanese,
     meetei_mayek,
     canadian_aboriginal,
+    cham,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2371,6 +2423,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .sundanese => .sundanese,
         .meetei_mayek => .meetei_mayek,
         .canadian_aboriginal => .canadian_aboriginal,
+        .cham => .cham,
         else => .none,
     };
 }
@@ -2616,6 +2669,15 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0xabe5 or
         codepoint == 0xabe8 or
         codepoint == 0xabed or
+        // Cham nonspacing vowels and final-consonant marks are typed after
+        // their base letters but form one orthographic syllable. Treating them
+        // as Extend keeps caret, word, and shaping boundaries out of the
+        // middle of Cham syllables such as ꨆꨩ and final clusters like ꩀꩃ.
+        (codepoint >= 0xaa29 and codepoint <= 0xaa2e) or
+        (codepoint >= 0xaa31 and codepoint <= 0xaa32) or
+        (codepoint >= 0xaa35 and codepoint <= 0xaa36) or
+        codepoint == 0xaa43 or
+        codepoint == 0xaa4c or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the
@@ -2886,7 +2948,13 @@ fn isSpacingMark(codepoint: u21) bool {
         codepoint == 0xaaf5 or
         (codepoint >= 0xabe3 and codepoint <= 0xabe4) or
         (codepoint >= 0xabe6 and codepoint <= 0xabe7) or
-        (codepoint >= 0xabe9 and codepoint <= 0xabec);
+        (codepoint >= 0xabe9 and codepoint <= 0xabec) or
+        // Cham visible dependent vowels and final H are GCB=SpacingMark. They
+        // occupy spacing glyph cells, but still belong to the preceding Cham
+        // base/final letter for low-level grapheme and shaping boundaries.
+        (codepoint >= 0xaa2f and codepoint <= 0xaa30) or
+        (codepoint >= 0xaa33 and codepoint <= 0xaa34) or
+        codepoint == 0xaa4d;
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

@@ -565,21 +565,11 @@ pub const Rasterizer = struct {
 
     fn fillLines(self: *Rasterizer, target: *RenderTarget, lines: []const Line, fill_rule: GlyphFillRule) !void {
         if (lines.len == 0) return;
-        var min_x: i32 = std.math.maxInt(i32);
-        var min_y: i32 = std.math.maxInt(i32);
-        var max_x: i32 = std.math.minInt(i32);
-        var max_y: i32 = std.math.minInt(i32);
-        for (lines) |line| {
-            min_x = @min(min_x, @as(i32, @intFromFloat(@floor(@min(line.a.x, line.b.x)))));
-            min_y = @min(min_y, @as(i32, @intFromFloat(@floor(@min(line.a.y, line.b.y)))));
-            max_x = @max(max_x, @as(i32, @intFromFloat(@ceil(@max(line.a.x, line.b.x)))));
-            max_y = @max(max_y, @as(i32, @intFromFloat(@ceil(@max(line.a.y, line.b.y)))));
-        }
-        min_x = @max(0, min_x - 1);
-        min_y = @max(0, min_y - 1);
-        max_x = @min(@as(i32, @intCast(target.width)) - 1, max_x + 1);
-        max_y = @min(@as(i32, @intCast(target.height)) - 1, max_y + 1);
-        if (max_x < min_x or max_y < min_y) return;
+        const bounds = rasterBoundsForLines(target, lines) orelse return;
+        const min_x = bounds.min_x;
+        const min_y = bounds.min_y;
+        const max_x = bounds.max_x;
+        const max_y = bounds.max_y;
 
         const sample_axis: i32 = @max(1, @as(i32, self.samples_per_axis));
         const sample_count = sample_axis * sample_axis;
@@ -599,10 +589,12 @@ pub const Rasterizer = struct {
                 const py = @as(f32, @floatFromInt(y)) + (@as(f32, @floatFromInt(sy)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
                 intersections.clearRetainingCapacity();
                 for (lines) |line| {
+                    if (!lineFinite(line)) continue;
                     const ay = line.a.y;
                     const by = line.b.y;
                     if ((ay > py) == (by > py)) continue;
                     const x_intersect = (line.b.x - line.a.x) * (py - ay) / (by - ay) + line.a.x;
+                    if (!std.math.isFinite(x_intersect)) continue;
                     try intersections.append(self.allocator, .{
                         .x = x_intersect,
                         .delta = if (by > ay) 1 else -1,
@@ -653,21 +645,11 @@ pub const Rasterizer = struct {
 
     fn emboldenSmallGlyph(self: *Rasterizer, target: *RenderTarget, lines: []const Line, font_size: f32) !void {
         if (lines.len == 0 or font_size > 16.0) return;
-        var min_x: i32 = std.math.maxInt(i32);
-        var min_y: i32 = std.math.maxInt(i32);
-        var max_x: i32 = std.math.minInt(i32);
-        var max_y: i32 = std.math.minInt(i32);
-        for (lines) |line| {
-            min_x = @min(min_x, @as(i32, @intFromFloat(@floor(@min(line.a.x, line.b.x)))));
-            min_y = @min(min_y, @as(i32, @intFromFloat(@floor(@min(line.a.y, line.b.y)))));
-            max_x = @max(max_x, @as(i32, @intFromFloat(@ceil(@max(line.a.x, line.b.x)))));
-            max_y = @max(max_y, @as(i32, @intFromFloat(@ceil(@max(line.a.y, line.b.y)))));
-        }
-        min_x = @max(0, min_x - 1);
-        min_y = @max(0, min_y - 1);
-        max_x = @min(@as(i32, @intCast(target.width)) - 1, max_x + 1);
-        max_y = @min(@as(i32, @intCast(target.height)) - 1, max_y + 1);
-        if (max_x < min_x or max_y < min_y) return;
+        const bounds = rasterBoundsForLines(target, lines) orelse return;
+        const min_x = bounds.min_x;
+        const min_y = bounds.min_y;
+        const max_x = bounds.max_x;
+        const max_y = bounds.max_y;
 
         const width: usize = @intCast(max_x - min_x + 1);
         const height: usize = @intCast(max_y - min_y + 1);
@@ -719,9 +701,11 @@ fn lessThanWindingIntersection(_: void, lhs: WindingIntersection, rhs: WindingIn
 }
 
 fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_axis: i32, start_f: f32, end_f: f32) void {
-    if (end_f <= @as(f32, @floatFromInt(min_x)) or start_f >= @as(f32, @floatFromInt(max_x + 1))) return;
-    var x = @max(min_x, @as(i32, @intFromFloat(@floor(start_f))));
-    const x_end = @min(max_x, @as(i32, @intFromFloat(@ceil(end_f))));
+    if (!std.math.isFinite(start_f) or !std.math.isFinite(end_f)) return;
+    if (@as(f64, end_f) <= @as(f64, @floatFromInt(min_x)) or
+        @as(f64, start_f) >= @as(f64, @floatFromInt(max_x)) + 1.0) return;
+    var x = @max(min_x, floorI32Saturating(start_f));
+    const x_end = @min(max_x, ceilI32Saturating(end_f));
     while (x <= x_end) : (x += 1) {
         var sx: i32 = 0;
         while (sx < sample_axis) : (sx += 1) {
@@ -897,6 +881,77 @@ const Line = struct {
     a: Point,
     b: Point,
 };
+
+const RasterBounds = struct {
+    min_x: i32,
+    min_y: i32,
+    max_x: i32,
+    max_y: i32,
+};
+
+fn rasterBoundsForLines(target: *const RenderTarget, lines: []const Line) ?RasterBounds {
+    const target_max_x = targetMaxPixelIndex(target.width) orelse return null;
+    const target_max_y = targetMaxPixelIndex(target.height) orelse return null;
+    var raw_min_x: i32 = std.math.maxInt(i32);
+    var raw_min_y: i32 = std.math.maxInt(i32);
+    var raw_max_x: i32 = std.math.minInt(i32);
+    var raw_max_y: i32 = std.math.minInt(i32);
+    var saw_finite_line = false;
+    for (lines) |line| {
+        if (!lineFinite(line)) continue;
+        saw_finite_line = true;
+        raw_min_x = @min(raw_min_x, floorI32Saturating(@min(line.a.x, line.b.x)));
+        raw_min_y = @min(raw_min_y, floorI32Saturating(@min(line.a.y, line.b.y)));
+        raw_max_x = @max(raw_max_x, ceilI32Saturating(@max(line.a.x, line.b.x)));
+        raw_max_y = @max(raw_max_y, ceilI32Saturating(@max(line.a.y, line.b.y)));
+    }
+    if (!saw_finite_line) return null;
+
+    const min_x = @max(0, saturatingSubOne(raw_min_x));
+    const min_y = @max(0, saturatingSubOne(raw_min_y));
+    const max_x = @min(target_max_x, saturatingAddOne(raw_max_x));
+    const max_y = @min(target_max_y, saturatingAddOne(raw_max_y));
+    if (max_x < min_x or max_y < min_y) return null;
+    return .{ .min_x = min_x, .min_y = min_y, .max_x = max_x, .max_y = max_y };
+}
+
+fn targetMaxPixelIndex(limit: u32) ?i32 {
+    if (limit == 0) return null;
+    const max_i32_u32: u32 = @intCast(std.math.maxInt(i32));
+    return @intCast(@min(limit - 1, max_i32_u32));
+}
+
+fn lineFinite(line: Line) bool {
+    return pointFinite(line.a) and pointFinite(line.b);
+}
+
+fn pointFinite(point: Point) bool {
+    return std.math.isFinite(point.x) and std.math.isFinite(point.y);
+}
+
+fn floorI32Saturating(value: f32) i32 {
+    if (!std.math.isFinite(value)) return if (value > 0.0) std.math.maxInt(i32) else std.math.minInt(i32);
+    const value64: f64 = value;
+    if (value64 <= @as(f64, @floatFromInt(std.math.minInt(i32)))) return std.math.minInt(i32);
+    if (value64 >= @as(f64, @floatFromInt(std.math.maxInt(i32)))) return std.math.maxInt(i32);
+    return @intFromFloat(@floor(value64));
+}
+
+fn ceilI32Saturating(value: f32) i32 {
+    if (!std.math.isFinite(value)) return if (value > 0.0) std.math.maxInt(i32) else std.math.minInt(i32);
+    const value64: f64 = value;
+    if (value64 <= @as(f64, @floatFromInt(std.math.minInt(i32)))) return std.math.minInt(i32);
+    if (value64 >= @as(f64, @floatFromInt(std.math.maxInt(i32)))) return std.math.maxInt(i32);
+    return @intFromFloat(@ceil(value64));
+}
+
+fn saturatingSubOne(value: i32) i32 {
+    return if (value == std.math.minInt(i32)) value else value - 1;
+}
+
+fn saturatingAddOne(value: i32) i32 {
+    return if (value == std.math.maxInt(i32)) value else value + 1;
+}
 
 fn alignSmallGlyphToPixelGrid(lines: []Line, outline: *const glyph_mod.GlyphOutline, scale: f32, font_size: f32, hint_size: f32) void {
     if (hint_size > 20.0 or lines.len == 0) return;
@@ -3097,6 +3152,47 @@ test "glyph fill uses non-zero winding for overlapping same-direction strokes" {
     try std.testing.expect(target.at(3, 20) > 0);
     try std.testing.expect(target.at(8, 20) > 0);
     try std.testing.expect(target.at(13, 20) > 0);
+}
+
+test "glyph rasterization clamps huge finite outline bounds" {
+    const allocator = std.testing.allocator;
+    const huge: f32 = 1.0e30;
+    const lines = [_]Line{
+        .{ .a = .{ .x = 0, .y = 0 }, .b = .{ .x = huge, .y = 0 } },
+        .{ .a = .{ .x = huge, .y = 0 }, .b = .{ .x = huge, .y = huge } },
+        .{ .a = .{ .x = huge, .y = huge }, .b = .{ .x = 0, .y = huge } },
+        .{ .a = .{ .x = 0, .y = huge }, .b = .{ .x = 0, .y = 0 } },
+    };
+
+    var target = try RenderTarget.init(allocator, 4, 4);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.samples_per_axis = 2;
+    rasterizer.embolden_small_glyphs = true;
+    try rasterizer.fillLines(&target, &lines, .non_zero);
+    try rasterizer.emboldenSmallGlyph(&target, &lines, 12);
+
+    try std.testing.expect(target.at(0, 0) > 0);
+    try std.testing.expect(target.at(3, 3) > 0);
+}
+
+test "glyph rasterization skips non-finite outline lines" {
+    const allocator = std.testing.allocator;
+    const lines = [_]Line{
+        .{ .a = .{ .x = std.math.inf(f32), .y = 0 }, .b = .{ .x = 1, .y = 0 } },
+        .{ .a = .{ .x = 1, .y = 0 }, .b = .{ .x = 1, .y = 1 } },
+        .{ .a = .{ .x = 1, .y = 1 }, .b = .{ .x = std.math.nan(f32), .y = 1 } },
+    };
+
+    var target = try RenderTarget.init(allocator, 4, 4);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.samples_per_axis = 2;
+    rasterizer.embolden_small_glyphs = true;
+    try rasterizer.fillLines(&target, &lines, .non_zero);
+    try rasterizer.emboldenSmallGlyph(&target, &lines, 12);
+
+    try std.testing.expectEqual(@as(u32, 0), alphaSum(&target));
 }
 
 fn alphaSum(target: *const RenderTarget) u32 {

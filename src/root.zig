@@ -2930,6 +2930,11 @@ test "font database scans configured font sources" {
     try std.testing.expect(database.match(.{ .family = "Flat Source" }) != null);
     try std.testing.expect(database.match(.{ .family = "Recursive Source" }) != null);
     try std.testing.expect(database.match(.{ .family = "File Source" }) != null);
+
+    const ignored_unsupported = [_]FontSource{.{ .file = .{ .path = "notes.txt", .ignore_missing = true } }};
+    try std.testing.expectEqual(@as(usize, 0), try database.scanFontSources(std.testing.io, tmp_dir.dir, &ignored_unsupported, .limited(1024 * 1024)));
+    const strict_unsupported = [_]FontSource{.{ .file = .{ .path = "notes.txt", .ignore_missing = false } }};
+    try std.testing.expectError(error.UnsupportedFontSource, database.scanFontSources(std.testing.io, tmp_dir.dir, &strict_unsupported, .limited(1024 * 1024)));
 }
 
 test "builds conservative default system font source lists" {

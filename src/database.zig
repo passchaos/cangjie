@@ -350,7 +350,10 @@ pub const FontDatabase = struct {
                         try self.scanFontDir(io, dir, limit);
                 },
                 .file => |file| {
-                    if (!isSupportedFontPath(file.path)) continue;
+                    if (!isSupportedFontPath(file.path)) {
+                        if (file.ignore_missing) continue;
+                        return error.UnsupportedFontSource;
+                    }
                     if (isCollectionPath(file.path)) {
                         added += self.addFontCollectionFile(io, root, file.path, limit) catch |err| switch (err) {
                             error.FileNotFound => {

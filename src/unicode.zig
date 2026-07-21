@@ -28,6 +28,7 @@ pub const Script = enum {
     cherokee,
     tibetan,
     nko,
+    mongolian,
     unknown,
 };
 
@@ -130,6 +131,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     cher = tag("cher"),
     tibt = tag("tibt"),
     nko = tag("nko "),
+    mong = tag("mong"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -172,6 +174,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .cherokee => .cher,
         .tibetan => .tibt,
         .nko => .nko,
+        .mongolian => .mong,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -242,6 +245,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCherokeeScriptCodepoint(codepoint)) return .cherokee;
     if (isTibetanScriptCodepoint(codepoint)) return .tibetan;
     if (isNkoScriptCodepoint(codepoint)) return .nko;
+    if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -267,6 +271,15 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isMongolianScriptCodepoint(codepoint: u21) bool {
+    // Mongolian fonts expose positional shaping and variation forms under the
+    // `mong` ScriptList entry. The block includes letters, Todo/Sibe/Manchu
+    // additions, punctuation, digits, and free variation selectors; keeping the
+    // assigned block together avoids splitting valid vertical-script words
+    // through DFLT/unknown before GSUB/GPOS lookup selection.
+    return codepoint >= 0x1800 and codepoint <= 0x18af;
 }
 
 fn isNkoScriptCodepoint(codepoint: u21) bool {
@@ -440,7 +453,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian, .cherokee, .tibetan => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian => .ltr,
         else => .neutral,
     };
 }
@@ -1319,7 +1332,6 @@ test "grapheme clusters keep Devanagari virama ZWJ conjuncts atomic" {
     try std.testing.expectEqualStrings("ष", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
 }
 
-
 test "grapheme clusters keep Gujarati virama ZWJ conjuncts atomic" {
     const allocator = std.testing.allocator;
 
@@ -1544,6 +1556,28 @@ test "Ethiopic text selects Ethiopic script runs and direction" {
     try std.testing.expectEqual(OpenTypeScriptTag.ethi, openTypeScriptTag(scriptForCodepoint(0x2d80)));
     try std.testing.expectEqual(OpenTypeScriptTag.ethi, openTypeScriptTag(scriptForCodepoint(0xab20)));
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1230));
+}
+
+test "Mongolian text keeps free variation selectors and selects Mongolian script" {
+    const allocator = std.testing.allocator;
+
+    const text = "ᠮᠣᠩᠭᠣᠯ ᠠ᠋";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 8), clusters.len);
+    try std.testing.expectEqualStrings("ᠠ᠋", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.mongolian, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.mong, openTypeScriptTag(scriptForCodepoint(0x182E)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mong, openTypeScriptTag(scriptForCodepoint(0x180B)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x182E));
 }
 
 test "Tibetan stacks keep marks and select Tibetan OpenType script" {
@@ -1882,6 +1916,12 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x1085 and codepoint <= 0x1086) or
         codepoint == 0x108d or
         codepoint == 0x109d or
+        // Mongolian free variation selectors choose contextual glyph forms
+        // and have Grapheme_Cluster_Break=Extend. They must stay attached to
+        // the preceding Mongolian letter so shaping clusters retain the
+        // requested variant instead of exposing a caret stop before it.
+        (codepoint >= 0x180b and codepoint <= 0x180d) or
+        codepoint == 0x180f or
         (codepoint >= 0x1ab0 and codepoint <= 0x1aff) or
         (codepoint >= 0x1dc0 and codepoint <= 0x1dff) or
         (codepoint >= 0x20d0 and codepoint <= 0x20ff) or

@@ -27,6 +27,7 @@ pub const Script = enum {
     georgian,
     cherokee,
     tibetan,
+    nko,
     unknown,
 };
 
@@ -128,6 +129,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     geor = tag("geor"),
     cher = tag("cher"),
     tibt = tag("tibt"),
+    nko = tag("nko "),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -169,6 +171,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .georgian => .geor,
         .cherokee => .cher,
         .tibetan => .tibt,
+        .nko => .nko,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -238,6 +241,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isGeorgianScriptCodepoint(codepoint)) return .georgian;
     if (isCherokeeScriptCodepoint(codepoint)) return .cherokee;
     if (isTibetanScriptCodepoint(codepoint)) return .tibetan;
+    if (isNkoScriptCodepoint(codepoint)) return .nko;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -263,6 +267,14 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isNkoScriptCodepoint(codepoint: u21) bool {
+    // N'Ko is an RTL script with its own OpenType ScriptList tag (`nko `).
+    // Its combining marks and digits live in the same block as letters; keeping
+    // the block in one script run avoids routing valid syllables through DFLT
+    // and preserves RTL direction for shaping/layout primitives.
+    return codepoint >= 0x07c0 and codepoint <= 0x07ff;
 }
 
 fn isThaiScriptCodepoint(codepoint: u21) bool {
@@ -427,7 +439,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .syriac => .rtl,
+        .arabic, .hebrew, .syriac, .nko => .rtl,
         .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian, .cherokee, .tibetan => .ltr,
         else => .neutral,
     };
@@ -1172,6 +1184,23 @@ test "Syriac text selects Syriac script and RTL shaping direction" {
     try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x086d)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x072b));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x086d));
+}
+
+test "NKo text selects NKo script and RTL shaping direction" {
+    const allocator = std.testing.allocator;
+
+    const text = "ߒߞߏ ߛߓߍ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.nko, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.nko, openTypeScriptTag(scriptForCodepoint(0x07d2)));
+    try std.testing.expectEqual(OpenTypeScriptTag.nko, openTypeScriptTag(scriptForCodepoint(0x07eb)));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07d2));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07eb));
 }
 
 test "Thai and Lao text select script-specific OpenType tags" {

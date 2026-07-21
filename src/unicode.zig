@@ -184,7 +184,7 @@ pub fn tag(comptime bytes: *const [4]u8) u32 {
 
 pub fn scriptForCodepoint(codepoint: u21) Script {
     if ((codepoint >= 'A' and codepoint <= 'Z') or (codepoint >= 'a' and codepoint <= 'z')) return .latin;
-    if (codepoint >= 0x00c0 and codepoint <= 0x024f) return .latin;
+    if (isLatinScriptCodepoint(codepoint)) return .latin;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (codepoint >= 0x0590 and codepoint <= 0x05ff) return .hebrew;
     if (codepoint >= 0x0600 and codepoint <= 0x06ff) return .arabic;
@@ -210,6 +210,21 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isLatinScriptCodepoint(codepoint: u21) bool {
+    // Keep all encoded Latin extension blocks in the Latin shaping script.
+    // Precomposed Vietnamese, phonetic, and medievalist letters are alphabetic
+    // bases, not inherited combining marks; splitting them into DFLT/unknown
+    // runs prevents fonts from selecting their `latn` GSUB/GPOS features.
+    return (codepoint >= 0x00c0 and codepoint <= 0x024f) or
+        (codepoint >= 0x1d00 and codepoint <= 0x1d7f) or
+        (codepoint >= 0x1d80 and codepoint <= 0x1dbf) or
+        (codepoint >= 0x1e00 and codepoint <= 0x1eff) or
+        (codepoint >= 0x2c60 and codepoint <= 0x2c7f) or
+        (codepoint >= 0xa720 and codepoint <= 0xa7ff) or
+        (codepoint >= 0xab30 and codepoint <= 0xab6f) or
+        (codepoint >= 0x1df00 and codepoint <= 0x1dfff);
 }
 
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
@@ -883,6 +898,21 @@ pub fn mirroredCodepoint(codepoint: u21) u21 {
         0x300f => 0x300e,
         else => codepoint,
     };
+}
+
+test "Latin extension letters stay in Latin script runs" {
+    const allocator = std.testing.allocator;
+
+    const text = "Cafẹ Ạꞵ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.latin, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.latn, openTypeScriptTag(scriptForCodepoint(0x1ea0)));
+    try std.testing.expectEqual(OpenTypeScriptTag.latn, openTypeScriptTag(scriptForCodepoint(0xa7b5)));
 }
 
 test "bidi mirroring covers mathematical bracket pairs" {

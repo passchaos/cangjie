@@ -17,6 +17,7 @@ pub const Script = enum {
     arabic,
     hebrew,
     devanagari,
+    tamil,
     unknown,
 };
 
@@ -108,6 +109,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     arab = tag("arab"),
     hebr = tag("hebr"),
     dev2 = tag("dev2"),
+    taml = tag("taml"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -139,6 +141,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .arabic => .arab,
         .hebrew => .hebr,
         .devanagari => .dev2,
+        .tamil => .taml,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -159,6 +162,7 @@ pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
             .hangul => return .kor,
             .arabic => return .ara,
             .devanagari => return .hin,
+            .tamil => return .dflt,
             .han => saw_han = true,
             else => {},
         }
@@ -197,6 +201,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
+    if (isTamilScriptCodepoint(codepoint)) return .tamil;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -222,6 +227,16 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isTamilScriptCodepoint(codepoint: u21) bool {
+    // Tamil shaping depends on keeping consonants, dependent vowels, virama,
+    // numerals, and historic additions in one `taml` script run. Unicode's
+    // Tamil block has unassigned holes, but treating the assigned range as the
+    // script is a safer primitive than splitting common Tamil syllables through
+    // DFLT/unknown before OpenType lookup selection.
+    return (codepoint >= 0x0b82 and codepoint <= 0x0bfa) or
+        (codepoint >= 0x11fc0 and codepoint <= 0x11fff);
 }
 
 fn isArabicScriptCodepoint(codepoint: u21) bool {
@@ -290,7 +305,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .devanagari => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .devanagari, .tamil => .ltr,
         else => .neutral,
     };
 }
@@ -1141,6 +1156,32 @@ test "halfwidth katakana voiced marks stay in kana grapheme and script runs" {
     try std.testing.expectEqual(OpenTypeScriptTag.kana, openTypeScriptTag(scriptForCodepoint(0x31f0)));
 }
 
+test "Tamil syllables keep marks and select Tamil OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "கி கோ 𑿀";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 5), clusters.len);
+    try std.testing.expectEqualStrings("கி", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("கோ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("𑿀", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.tamil, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.taml, openTypeScriptTag(scriptForCodepoint(0x0b95)));
+    try std.testing.expectEqual(OpenTypeScriptTag.taml, openTypeScriptTag(scriptForCodepoint(0x11fc0)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0b95));
+}
+
 test "Hangul conjoining jamo classify as Hangul script runs" {
     const allocator = std.testing.allocator;
 
@@ -1164,6 +1205,7 @@ const WordKind = enum {
     arabic,
     hebrew,
     devanagari,
+    tamil,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -1301,6 +1343,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .arabic => .arabic,
         .hebrew => .hebrew,
         .devanagari => .devanagari,
+        .tamil => .tamil,
         else => .none,
     };
 }
@@ -1402,6 +1445,13 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x094d or
         (codepoint >= 0x0951 and codepoint <= 0x0957) or
         (codepoint >= 0x0962 and codepoint <= 0x0963) or
+        // Tamil dependent vowel signs, pulli, and length mark are Extend in
+        // UAX #29. Keeping them attached prevents caret/shaping clusters from
+        // bisecting syllables such as கி, க், and கோ.
+        codepoint == 0x0b82 or
+        codepoint == 0x0bc0 or
+        codepoint == 0x0bcd or
+        codepoint == 0x0bd7 or
         // Thai and Lao vowels/tone marks are typed after their base consonant
         // but render as a single unit. Treating them as Extend avoids extra
         // caret stops between the consonant and its visible accent/vowel.
@@ -1558,7 +1608,10 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x09c7 and codepoint <= 0x09c8) or
         (codepoint >= 0x09cb and codepoint <= 0x09cc) or
         codepoint == 0x09d7 or
-        (codepoint >= 0x0bbe and codepoint <= 0x0bc2) or
+        (codepoint >= 0x0bbe and codepoint <= 0x0bbf) or
+        (codepoint >= 0x0bc1 and codepoint <= 0x0bc2) or
+        (codepoint >= 0x0bc6 and codepoint <= 0x0bc8) or
+        (codepoint >= 0x0bca and codepoint <= 0x0bcc) or
         (codepoint >= 0x0d3e and codepoint <= 0x0d40) or
         (codepoint >= 0x102b and codepoint <= 0x102c) or
         codepoint == 0x1031 or

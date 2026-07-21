@@ -41,6 +41,7 @@ pub const Script = enum {
     buginese,
     sundanese,
     meetei_mayek,
+    canadian_aboriginal,
     unknown,
 };
 
@@ -156,6 +157,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     bugi = tag("bugi"),
     sund = tag("sund"),
     mtei = tag("mtei"),
+    cans = tag("cans"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -211,6 +213,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .buginese => .bugi,
         .sundanese => .sund,
         .meetei_mayek => .mtei,
+        .canadian_aboriginal => .cans,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -294,6 +297,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isBugineseScriptCodepoint(codepoint)) return .buginese;
     if (isSundaneseScriptCodepoint(codepoint)) return .sundanese;
     if (isMeeteiMayekScriptCodepoint(codepoint)) return .meetei_mayek;
+    if (isCanadianAboriginalScriptCodepoint(codepoint)) return .canadian_aboriginal;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -369,6 +373,17 @@ fn isMeeteiMayekScriptCodepoint(codepoint: u21) bool {
     // and punctuation in one shaping run instead of routing marks through DFLT.
     return (codepoint >= 0xaae0 and codepoint <= 0xaaff) or
         (codepoint >= 0xabc0 and codepoint <= 0xabff);
+}
+
+fn isCanadianAboriginalScriptCodepoint(codepoint: u21) bool {
+    // Unified Canadian Aboriginal Syllabics are encoded across the original
+    // block plus Extended/Extended-A additions used by Inuktitut, Cree, Ojibwe,
+    // Carrier, and related orthographies. Fonts expose their substitutions and
+    // mark positioning under `cans`; keeping all three ranges in one script run
+    // avoids falling back to DFLT when a word mixes base and extended syllables.
+    return (codepoint >= 0x1400 and codepoint <= 0x167f) or
+        (codepoint >= 0x18b0 and codepoint <= 0x18ff) or
+        (codepoint >= 0x11ab0 and codepoint <= 0x11abf);
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -602,7 +617,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal => .ltr,
         else => .neutral,
     };
 }
@@ -2147,6 +2162,39 @@ test "Meetei Mayek syllables keep signs and select Meetei OpenType script" {
     try std.testing.expectEqualStrings("꯱", text[words[4].byte_start..][0..words[4].byte_len]);
 }
 
+test "Canadian Aboriginal syllabics select cans script across extensions" {
+    const allocator = std.testing.allocator;
+
+    const text = "ᐃᓄᒃᑎᑐᑦ ᢰᣵ 𑪰𑪿";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 12), clusters.len);
+    try std.testing.expectEqualStrings("ᐃ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("ᢰ", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings("𑪰", text[clusters[10].byte_start..][0..clusters[10].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.canadian_aboriginal, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.cans, openTypeScriptTag(scriptForCodepoint(0x1403)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cans, openTypeScriptTag(scriptForCodepoint(0x18b0)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cans, openTypeScriptTag(scriptForCodepoint(0x11ab0)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1403));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("ᐃᓄᒃᑎᑐᑦ", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ᢰᣵ", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("𑪰𑪿", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2169,6 +2217,7 @@ const WordKind = enum {
     buginese,
     sundanese,
     meetei_mayek,
+    canadian_aboriginal,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2321,6 +2370,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .buginese => .buginese,
         .sundanese => .sundanese,
         .meetei_mayek => .meetei_mayek,
+        .canadian_aboriginal => .canadian_aboriginal,
         else => .none,
     };
 }

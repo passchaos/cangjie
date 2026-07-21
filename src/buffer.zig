@@ -132,12 +132,14 @@ pub const TextBuffer = struct {
     pub fn replaceRange(self: *TextBuffer, start_byte: usize, end_byte: usize, replacement: []const u8) !void {
         const range = try self.checkedRange(start_byte, end_byte);
         if (!std.unicode.utf8ValidateSlice(replacement)) return error.InvalidUtf8;
-        try self.text.replaceRange(self.allocator, range.start, range.end - range.start, replacement);
+        const old_len = range.end - range.start;
+        try self.text.replaceRange(self.allocator, range.start, old_len, replacement);
         const new_cursor = range.start + replacement.len;
         self.cursor_byte = new_cursor;
         self.selection = Selection.collapsed(new_cursor);
         self.preferred_cursor_x = null;
-        self.markDirty(range.start, new_cursor);
+        const dirty = dirtyRangeAfterReplace(range.start, range.end, replacement.len, self.text.items.len);
+        self.markDirty(dirty.start, dirty.end);
     }
 
     pub fn deleteBackward(self: *TextBuffer) !void {
@@ -337,6 +339,20 @@ pub const TextBuffer = struct {
 
     fn selectionRange(self: *const TextBuffer) struct { start: usize, end: usize } {
         return .{ .start = self.selection.start(), .end = self.selection.end() };
+    }
+
+    fn dirtyRangeAfterReplace(start: usize, old_end: usize, replacement_len: usize, new_text_len: usize) struct { start: usize, end: usize } {
+        const inserted_end = start + replacement_len;
+        const surviving_old_end = @min(old_end, new_text_len);
+        const dirty_end = @max(inserted_end, surviving_old_end);
+        if (dirty_end == start and old_end > start and start > 0) {
+            // Deleting the final byte range leaves no byte after the edit to
+            // mark dirty. Expand left so viewport invalidation still observes a
+            // non-empty range on the affected line. The range is only used for
+            // intersection checks; it need not describe a UTF-8 scalar boundary.
+            return .{ .start = start - 1, .end = start };
+        }
+        return .{ .start = start, .end = dirty_end };
     }
 
     fn markDirty(self: *TextBuffer, start_byte: usize, end_byte: usize) void {
@@ -699,6 +715,35 @@ test "TextBuffer vertical cursor keeps folded glyph trailing byte offsets" {
     // caret must therefore use the glyph's shaped source extent rather than
     // fabricating `cluster + 1`, which would land inside/outside UTF-8 text.
     try std.testing.expectEqual(@as(usize, text.len), buffer.cursor_byte);
+}
+
+test "TextBuffer marks trailing deletions dirty after layout" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const config = LayoutConfig{
+        .cascade = layout.FontCascade.init(&fonts),
+        .font_size = 20,
+        .paragraph = .{ .max_width = 100, .line_height = 24 },
+    };
+
+    var buffer = try TextBuffer.initText(allocator, "abc");
+    defer buffer.deinit();
+    _ = try buffer.ensureLayout(config);
+    try std.testing.expect(buffer.dirtyRange().isEmpty());
+
+    try buffer.setCursor(buffer.slice().len);
+    try buffer.deleteBackward();
+    try std.testing.expectEqualStrings("ab", buffer.slice());
+    try std.testing.expect(!buffer.dirtyRange().isEmpty());
+    try std.testing.expectEqual(@as(usize, 2), buffer.dirtyRange().byte_end);
 }
 
 test "TextBuffer relayout supports hit testing cursor and selection geometry" {

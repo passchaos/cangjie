@@ -11,6 +11,7 @@ pub const Script = enum {
     greek,
     cyrillic,
     han,
+    yi,
     hiragana,
     katakana,
     hangul,
@@ -129,6 +130,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     grek = tag("grek"),
     cyrl = tag("cyrl"),
     hani = tag("hani"),
+    yi = tag("yi  "),
     hira = tag("hira"),
     kana = tag("kana"),
     hang = tag("hang"),
@@ -187,6 +189,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .greek => .grek,
         .cyrillic => .cyrl,
         .han => .hani,
+        .yi => .yi,
         .hiragana => .hira,
         .katakana => .kana,
         .hangul => .hang,
@@ -329,8 +332,19 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0xf900 and codepoint <= 0xfaff) return .han;
     if (codepoint >= 0x20000 and codepoint <= 0x2fffd) return .han;
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
+    if (isYiScriptCodepoint(codepoint)) return .yi;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isYiScriptCodepoint(codepoint: u21) bool {
+    // Yi fonts use a dedicated OpenType ScriptList entry (`yi  `) for the
+    // syllabary and radicals. Keeping both adjacent blocks in one shaping run
+    // prevents Nuosu/Yi text from falling through DFLT and also lets line
+    // breaking treat Yi syllables like the East Asian ideographic units they
+    // are in UAX #14.
+    return (codepoint >= 0xa000 and codepoint <= 0xa48f) or
+        (codepoint >= 0xa490 and codepoint <= 0xa4cf);
 }
 
 fn isBalineseScriptCodepoint(codepoint: u21) bool {
@@ -641,7 +655,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi => .ltr,
         else => .neutral,
     };
 }
@@ -2297,6 +2311,41 @@ test "Brahmi syllables keep marks and select Brahmi OpenType script" {
     try std.testing.expectEqualStrings("\u{11066}", text[words[3].byte_start..][0..words[3].byte_len]);
 }
 
+test "Yi syllables and radicals select Yi script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{a000}\u{a001} \u{a490}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.yi, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.yi, openTypeScriptTag(scriptForCodepoint(0xa000)));
+    try std.testing.expectEqual(OpenTypeScriptTag.yi, openTypeScriptTag(scriptForCodepoint(0xa490)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xa000));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("\u{a000}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{a001}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{a490}", text[words[2].byte_start..][0..words[2].byte_len]);
+
+    const breaks = try itemizeLineBreaks(allocator, "\u{a000}\u{a001}\u{a490}");
+    defer allocator.free(breaks);
+
+    try std.testing.expectEqual(@as(usize, 3), breaks.len);
+    try std.testing.expectEqual(@as(usize, 3), breaks[0].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[0].kind);
+    try std.testing.expectEqual(@as(usize, 6), breaks[1].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
+    try std.testing.expectEqual(@as(usize, 9), breaks[2].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[2].kind);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2439,6 +2488,7 @@ fn isLineBreakEastAsian(codepoint: u21) bool {
         (codepoint >= 0x31a0 and codepoint <= 0x31ff) or
         (codepoint >= 0x3400 and codepoint <= 0x4dbf) or
         (codepoint >= 0x4e00 and codepoint <= 0x9fff) or
+        (codepoint >= 0xa000 and codepoint <= 0xa4cf) or
         (codepoint >= 0xac00 and codepoint <= 0xd7af) or
         (codepoint >= 0xf900 and codepoint <= 0xfaff) or
         (codepoint >= 0x20000 and codepoint <= 0x2fffd) or
@@ -2455,7 +2505,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     }
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .han, .hiragana, .katakana, .hangul => .single,
+        .han, .yi, .hiragana, .katakana, .hangul => .single,
         .arabic => .arabic,
         .hebrew => .hebrew,
         .armenian => .armenian,

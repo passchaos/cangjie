@@ -56,6 +56,7 @@ pub const Script = enum {
     lepcha,
     buginese,
     sundanese,
+    batak,
     meetei_mayek,
     canadian_aboriginal,
     cham,
@@ -195,6 +196,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     lepc = tag("lepc"),
     bugi = tag("bugi"),
     sund = tag("sund"),
+    batk = tag("batk"),
     mtei = tag("mtei"),
     cans = tag("cans"),
     cham = tag("cham"),
@@ -274,6 +276,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .lepcha => .lepc,
         .buginese => .bugi,
         .sundanese => .sund,
+        .batak => .batk,
         .meetei_mayek => .mtei,
         .canadian_aboriginal => .cans,
         .cham => .cham,
@@ -379,6 +382,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isLepchaScriptCodepoint(codepoint)) return .lepcha;
     if (isBugineseScriptCodepoint(codepoint)) return .buginese;
     if (isSundaneseScriptCodepoint(codepoint)) return .sundanese;
+    if (isBatakScriptCodepoint(codepoint)) return .batak;
     if (isMeeteiMayekScriptCodepoint(codepoint)) return .meetei_mayek;
     if (isCanadianAboriginalScriptCodepoint(codepoint)) return .canadian_aboriginal;
     if (isChamScriptCodepoint(codepoint)) return .cham;
@@ -533,6 +537,22 @@ fn isSundaneseScriptCodepoint(codepoint: u21) bool {
     // with the same script, so keep both ranges out of DFLT/unknown runs.
     return (codepoint >= 0x1b80 and codepoint <= 0x1bbf) or
         (codepoint >= 0x1cc0 and codepoint <= 0x1ccf);
+}
+
+fn isBatakScriptCodepoint(codepoint: u21) bool {
+    // Batak fonts expose script-specific substitutions and mark positioning
+    // under `batk`. The compact block has a reserved gap before native
+    // punctuation, so keep assigned letters/signs/punctuation in the shaping
+    // script while leaving U+1BF4..U+1BFB unknown for malformed data.
+    return (codepoint >= 0x1bc0 and codepoint <= 0x1bf3) or
+        (codepoint >= 0x1bfc and codepoint <= 0x1bff);
+}
+
+fn isBatakWordCodepoint(codepoint: u21) bool {
+    // Anchor word spans on Batak letters. Dependent vowels/consonant signs and
+    // pangolat attach through the generic extender tables; bindu punctuation
+    // remains in the script run for shaping but deliberately breaks words.
+    return codepoint >= 0x1bc0 and codepoint <= 0x1be5;
 }
 
 fn isMeeteiMayekScriptCodepoint(codepoint: u21) bool {
@@ -1109,7 +1129,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .rejang, .limbu, .lepcha, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -3068,6 +3088,43 @@ test "Sundanese syllables keep signs and select Sundanese OpenType script" {
     try std.testing.expectEqualStrings("᳀", text[words[3].byte_start..][0..words[3].byte_len]);
 }
 
+test "Batak syllables keep signs and select Batak OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{1bc5}\u{1be6}\u{1be7} \u{1bd4}\u{1bf0}\u{1bf2} \u{1bfc}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 5), clusters.len);
+    try std.testing.expectEqualStrings("\u{1bc5}\u{1be6}\u{1be7}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{1bd4}\u{1bf0}\u{1bf2}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{1bfc}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.batak, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.batk, openTypeScriptTag(scriptForCodepoint(0x1bc5)));
+    try std.testing.expectEqual(OpenTypeScriptTag.batk, openTypeScriptTag(scriptForCodepoint(0x1be6)));
+    try std.testing.expectEqual(OpenTypeScriptTag.batk, openTypeScriptTag(scriptForCodepoint(0x1bf2)));
+    try std.testing.expectEqual(OpenTypeScriptTag.batk, openTypeScriptTag(scriptForCodepoint(0x1bfc)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x1bf4));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1bc5));
+    try std.testing.expectEqual(BidiClass.neutral, bidiClassForCodepoint(0x1bf4));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{1bc5}\u{1be6}\u{1be7}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{1bd4}\u{1bf0}\u{1bf2}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
 test "Meetei Mayek syllables keep signs and select Meetei OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -3538,6 +3595,7 @@ const WordKind = enum {
     lepcha,
     buginese,
     sundanese,
+    batak,
     meetei_mayek,
     canadian_aboriginal,
     tifinagh,
@@ -3697,6 +3755,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
     if (isOghamWordCodepoint(codepoint)) return .ogham;
+    if (isBatakWordCodepoint(codepoint)) return .batak;
     if (isTifinaghWordCodepoint(codepoint)) return .tifinagh;
     if (isGlagoliticWordCodepoint(codepoint)) return .glagolitic;
     if (isOldItalicWordCodepoint(codepoint)) return .old_italic;
@@ -4013,6 +4072,13 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x1ba2 and codepoint <= 0x1ba5) or
         (codepoint >= 0x1ba8 and codepoint <= 0x1ba9) or
         codepoint == 0x1bab or
+        // Batak nonspacing vowel/consonant signs and tompi are typed after
+        // base letters but form one aksara unit. Keep them as Extend so
+        // caret, word, and shaping boundaries preserve Batak syllables.
+        codepoint == 0x1be6 or
+        (codepoint >= 0x1be8 and codepoint <= 0x1be9) or
+        codepoint == 0x1bed or
+        (codepoint >= 0x1bef and codepoint <= 0x1bf1) or
         // Meetei Mayek has nonspacing vowels and viramas in both the extension
         // and main blocks. They are typed after a base letter but form one
         // orthographic unit for caret placement and shaping feature selection.
@@ -4349,6 +4415,13 @@ fn isSpacingMark(codepoint: u21) bool {
         codepoint == 0x1ba1 or
         (codepoint >= 0x1ba6 and codepoint <= 0x1ba7) or
         codepoint == 0x1baa or
+        // Batak spacing vowels and pangolat/panongonan are visible signs, but
+        // they still belong to the previous base for grapheme, word, and
+        // shaping-boundary purposes just like the nonspacing signs above.
+        codepoint == 0x1be7 or
+        (codepoint >= 0x1bea and codepoint <= 0x1bec) or
+        codepoint == 0x1bee or
+        (codepoint >= 0x1bf2 and codepoint <= 0x1bf3) or
         // Meetei Mayek spacing vowel signs and visarga-like marks are visible
         // glyphs but still belong to the preceding base letter's grapheme,
         // word, and shaping unit. Include both encoded blocks so old and new

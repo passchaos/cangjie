@@ -789,6 +789,19 @@ pub fn mirroredCodepoint(codepoint: u21) u21 {
     };
 }
 
+test "line breaks include breakable Unicode space separators" {
+    const allocator = std.testing.allocator;
+
+    const breaks = try itemizeLineBreaks(allocator, "a\xe3\x80\x80b\xc2\xa0c\xe2\x80\x83d");
+    defer allocator.free(breaks);
+
+    try std.testing.expectEqual(@as(usize, 2), breaks.len);
+    try std.testing.expectEqual(@as(usize, 4), breaks[0].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[0].kind);
+    try std.testing.expectEqual(@as(usize, 11), breaks[1].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -847,7 +860,15 @@ fn isSentenceTrailingClose(codepoint: u21) bool {
 }
 
 fn isLineBreakSpace(codepoint: u21) bool {
-    return codepoint == ' ' or codepoint == '\t';
+    return codepoint == ' ' or
+        codepoint == '\t' or
+        // Unicode space separators that permit wrapping should behave like
+        // ASCII spaces here. Keep no-break spaces out of this compact list so
+        // callers do not wrap inside intentionally glued labels or numbers.
+        codepoint == 0x1680 or
+        (codepoint >= 0x2000 and codepoint <= 0x200a) or
+        codepoint == 0x205f or
+        codepoint == 0x3000;
 }
 
 fn isLineBreakEastAsian(codepoint: u21) bool {

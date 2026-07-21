@@ -228,11 +228,13 @@ pub fn itemizeBidiRuns(allocator: std.mem.Allocator, text: []const u8, base_dire
 
     // Neutral spans are attached to the surrounding run when possible. If text
     // starts with neutrals, use the paragraph base direction as their run.
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < text.len) {
-        const cluster = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        const next_index = it.i;
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const cluster = cursor;
+        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
+        const codepoint = decoded.codepoint;
+        const next_index = decoded.next;
+        cursor = next_index;
         const bidi_class = bidiClassForCodepoint(codepoint);
         if (bidi_class == .neutral) {
             if (neutral_start == null) neutral_start = cluster;
@@ -608,11 +610,13 @@ pub fn itemizeScriptRuns(allocator: std.mem.Allocator, text: []const u8) ![]Scri
     // Script runs drive OpenType ScriptList selection. Common/inherited
     // codepoints stay with the surrounding run so punctuation does not split a
     // Latin, Arabic, or CJK shaping segment by itself.
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < text.len) {
-        const cluster = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        const next_index = it.i;
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const cluster = cursor;
+        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
+        const codepoint = decoded.codepoint;
+        const next_index = decoded.next;
+        cursor = next_index;
         const script = scriptForCodepoint(codepoint);
         if (current_script == null) {
             current_script = if (script == .common or script == .inherited) .common else script;

@@ -715,6 +715,8 @@ test "detects scripts and itemizes script runs" {
     try std.testing.expectEqual(@as(usize, 1), leading_inherited.len);
     try std.testing.expectEqual(Script.arabic, leading_inherited[0].script);
     try std.testing.expectEqual(@as(usize, 0), leading_inherited[0].byte_start);
+
+    try std.testing.expectError(error.InvalidUtf8, itemizeScriptRuns(allocator, "ab\xffج"));
 }
 
 test "detects bidi classes and itemizes bidi runs" {
@@ -737,6 +739,7 @@ test "detects bidi classes and itemizes bidi runs" {
     try std.testing.expectEqual(BidiClass.ltr, runs[2].direction);
     try std.testing.expectEqual(@as(usize, 10), runs[2].byte_start);
     try std.testing.expectEqual(@as(usize, 4), runs[2].byte_len);
+    try std.testing.expectError(error.InvalidUtf8, itemizeBidiRuns(allocator, "abc \xff xyz", .ltr));
 
     const ltr_order = try visualOrderBidiRuns(allocator, runs, .ltr);
     defer allocator.free(ltr_order);

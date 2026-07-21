@@ -489,7 +489,16 @@ pub fn itemizeWordSegments(allocator: std.mem.Allocator, text: []const u8) ![]Wo
         const codepoint = decoded.codepoint;
         const byte_end = decoded.next;
         cursor = byte_end;
-        const kind = wordKindForCodepoint(codepoint);
+        var kind = wordKindForCodepoint(codepoint);
+        if (isAsciiApostrophe(codepoint)) {
+            // Keep common contractions such as "don't" as one word without
+            // letting leading/trailing quote marks become part of a word span.
+            // This intentionally requires a word on the left and an alphanumeric
+            // continuation on the right; otherwise the apostrophe behaves like
+            // punctuation and closes the current segment.
+            const next_kind = if (nextCodepointAt(text, byte_end)) |next_codepoint| wordKindForCodepoint(next_codepoint) else .none;
+            kind = if (current_kind == .latin_number and next_kind == .latin_number) .latin_number else .none;
+        }
         if (kind == .none) {
             if (isWordExtender(codepoint)) {
                 // UAX #29 treats Extend/Format-like codepoints as part of the
@@ -789,6 +798,20 @@ pub fn mirroredCodepoint(codepoint: u21) u21 {
     };
 }
 
+test "word segmentation keeps interior apostrophes but trims quotes" {
+    const allocator = std.testing.allocator;
+
+    const words = try itemizeWordSegments(allocator, "'alpha' don't rock 'n' roll");
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 5), words.len);
+    try std.testing.expectEqualStrings("alpha", "'alpha' don't rock 'n' roll"[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("don't", "'alpha' don't rock 'n' roll"[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("rock", "'alpha' don't rock 'n' roll"[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("n", "'alpha' don't rock 'n' roll"[words[3].byte_start..][0..words[3].byte_len]);
+    try std.testing.expectEqualStrings("roll", "'alpha' don't rock 'n' roll"[words[4].byte_start..][0..words[4].byte_len]);
+}
+
 test "line breaks include breakable Unicode space separators" {
     const allocator = std.testing.allocator;
 
@@ -848,6 +871,10 @@ fn isAsciiDigit(codepoint: u21) bool {
     return codepoint >= '0' and codepoint <= '9';
 }
 
+fn isAsciiApostrophe(codepoint: u21) bool {
+    return codepoint == '\'';
+}
+
 fn isSentenceTrailingSpace(codepoint: u21) bool {
     return codepoint == ' ' or codepoint == '\t' or codepoint == '\n' or codepoint == '\r';
 }
@@ -890,8 +917,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if ((codepoint >= 'A' and codepoint <= 'Z') or
         (codepoint >= 'a' and codepoint <= 'z') or
         (codepoint >= '0' and codepoint <= '9') or
-        codepoint == '_' or
-        codepoint == '\'')
+        codepoint == '_')
     {
         return .latin_number;
     }

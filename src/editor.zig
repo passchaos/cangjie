@@ -300,12 +300,12 @@ pub const TextEditor = struct {
 
     pub fn lineColumnAtByte(self: *const TextEditor, byte_offset: usize, tab_width: usize) !LineColumn {
         _ = try checkedOffset(self.buffer.slice(), byte_offset);
-        return lineColumnForByte(self.buffer.slice(), byte_offset, tab_width, .narrow);
+        return try lineColumnForByte(self.buffer.slice(), byte_offset, tab_width, .narrow);
     }
 
     pub fn lineColumnAtByteWithWidth(self: *const TextEditor, byte_offset: usize, tab_width: usize, width_mode: DisplayWidthMode) !LineColumn {
         _ = try checkedOffset(self.buffer.slice(), byte_offset);
-        return lineColumnForByte(self.buffer.slice(), byte_offset, tab_width, width_mode);
+        return try lineColumnForByte(self.buffer.slice(), byte_offset, tab_width, width_mode);
     }
 
     pub fn byteOffsetForLineColumn(self: *const TextEditor, line: usize, column: usize, tab_width: usize) usize {
@@ -327,7 +327,7 @@ pub const TextEditor = struct {
 
     pub fn terminalLineColumnAtByte(self: *const TextEditor, byte_offset: usize, options: TerminalColumnOptions) !LineColumn {
         _ = try checkedOffset(self.buffer.slice(), byte_offset);
-        return lineColumnForByteTerminal(self.buffer.slice(), byte_offset, options);
+        return try lineColumnForByteTerminal(self.buffer.slice(), byte_offset, options);
     }
 
     pub fn terminalByteOffsetForLineColumn(self: *const TextEditor, line: usize, column: usize, options: TerminalColumnOptions) usize {
@@ -595,12 +595,13 @@ fn isUtf8Boundary(text: []const u8, byte_offset: usize) bool {
     return (text[byte_offset] & 0b1100_0000) != 0b1000_0000;
 }
 
-fn lineColumnForByte(text: []const u8, byte_offset: usize, tab_width: usize, width_mode: DisplayWidthMode) LineColumn {
+fn lineColumnForByte(text: []const u8, byte_offset: usize, tab_width: usize, width_mode: DisplayWidthMode) !LineColumn {
     var line: usize = 0;
     var column: usize = 0;
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < byte_offset) {
-        const codepoint = it.nextCodepoint() orelse break;
+    var cursor: usize = 0;
+    while (cursor < byte_offset) {
+        const decoded = try decodeCodepointAt(text, cursor);
+        const codepoint = decoded.codepoint;
         if (codepoint == '\n') {
             line += 1;
             column = 0;
@@ -609,6 +610,7 @@ fn lineColumnForByte(text: []const u8, byte_offset: usize, tab_width: usize, wid
         } else {
             column += codepointDisplayWidth(codepoint, width_mode);
         }
+        cursor = decoded.next;
     }
     return .{ .line = line, .column = column, .byte_offset = byte_offset };
 }
@@ -616,10 +618,11 @@ fn lineColumnForByte(text: []const u8, byte_offset: usize, tab_width: usize, wid
 fn byteOffsetForLineColumnInText(text: []const u8, target_line: usize, target_column: usize, tab_width: usize, width_mode: DisplayWidthMode) usize {
     var line: usize = 0;
     var column: usize = 0;
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < text.len) {
-        const byte_start = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const byte_start = cursor;
+        const decoded = decodeCodepointAt(text, cursor) catch return text.len;
+        const codepoint = decoded.codepoint;
         if (line == target_line and column >= target_column) return byte_start;
         if (codepoint == '\n') {
             if (line == target_line) return byte_start;
@@ -634,11 +637,12 @@ fn byteOffsetForLineColumnInText(text: []const u8, target_line: usize, target_co
             if (line == target_line and next_column > target_column) return byte_start;
             column = next_column;
         }
+        cursor = decoded.next;
     }
     return text.len;
 }
 
-fn lineColumnForByteTerminal(text: []const u8, byte_offset: usize, options: TerminalColumnOptions) LineColumn {
+fn lineColumnForByteTerminal(text: []const u8, byte_offset: usize, options: TerminalColumnOptions) !LineColumn {
     var line: usize = 0;
     var column: usize = 0;
     var cursor: usize = 0;
@@ -647,9 +651,9 @@ fn lineColumnForByteTerminal(text: []const u8, byte_offset: usize, options: Term
             cursor = skipAnsiEscape(text, cursor);
             continue;
         }
-        const len = std.unicode.utf8ByteSequenceLength(text[cursor]) catch 1;
-        const end = @min(text.len, cursor + len);
-        const codepoint = std.unicode.utf8Decode(text[cursor..end]) catch text[cursor];
+        const decoded = try decodeCodepointAt(text, cursor);
+        const codepoint = decoded.codepoint;
+        const end = decoded.next;
         if (codepoint == '\n') {
             line += 1;
             column = 0;
@@ -675,9 +679,9 @@ fn byteOffsetForLineColumnTerminal(text: []const u8, target_line: usize, target_
             cursor = skipAnsiEscape(text, cursor);
             continue;
         }
-        const len = std.unicode.utf8ByteSequenceLength(text[cursor]) catch 1;
-        const end = @min(text.len, cursor + len);
-        const codepoint = std.unicode.utf8Decode(text[cursor..end]) catch text[cursor];
+        const decoded = decodeCodepointAt(text, cursor) catch return text.len;
+        const codepoint = decoded.codepoint;
+        const end = decoded.next;
         if (line == target_line and column >= target_column) return byte_start;
         if (codepoint == '\n') {
             if (line == target_line) return byte_start;
@@ -697,6 +701,20 @@ fn byteOffsetForLineColumnTerminal(text: []const u8, target_line: usize, target_
         cursor = end;
     }
     return text.len;
+}
+
+const DecodedCodepoint = struct {
+    codepoint: u21,
+    next: usize,
+};
+
+fn decodeCodepointAt(text: []const u8, cursor: usize) !DecodedCodepoint {
+    if (cursor >= text.len) return error.EndOfInput;
+    const len = std.unicode.utf8ByteSequenceLength(text[cursor]) catch return error.InvalidUtf8;
+    const end = cursor + @as(usize, len);
+    if (end > text.len) return error.InvalidUtf8;
+    const codepoint = std.unicode.utf8Decode(text[cursor..end]) catch return error.InvalidUtf8;
+    return .{ .codepoint = codepoint, .next = end };
 }
 
 fn lineColumnForByteGrapheme(allocator: std.mem.Allocator, text: []const u8, byte_offset: usize, tab_width: usize, width_mode: DisplayWidthMode) !LineColumn {
@@ -1183,6 +1201,21 @@ test "TextEditor maps byte offsets to line columns" {
     try std.testing.expectEqual(@as(usize, 7), editor.byteOffsetForLineColumn(1, 1, 4));
 
     try std.testing.expectError(error.InvalidUtf8Boundary, editor.lineColumnAtByte(5, 4));
+}
+
+test "TextEditor line column APIs reject mutated invalid UTF-8" {
+    const allocator = std.testing.allocator;
+
+    var editor = try TextEditor.initText(allocator, "ab");
+    defer editor.deinit();
+    editor.buffer.text.items[1] = 0xff;
+
+    try std.testing.expectError(error.InvalidUtf8, editor.lineColumnAtByte(editor.slice().len, 4));
+    try std.testing.expectError(error.InvalidUtf8, editor.lineColumnAtByteWithWidth(editor.slice().len, 4, .east_asian));
+    try std.testing.expectError(error.InvalidUtf8, editor.terminalLineColumnAtByte(editor.slice().len, .{}));
+
+    try std.testing.expectEqual(editor.slice().len, editor.byteOffsetForLineColumn(0, 2, 4));
+    try std.testing.expectEqual(editor.slice().len, editor.terminalByteOffsetForLineColumn(0, 2, .{}));
 }
 
 test "TextEditor maps wide display columns" {

@@ -199,6 +199,12 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
+    // Katakana is also encoded in phonetic-extension and halfwidth forms.
+    // These are real script letters used by Japanese fonts; classifying them
+    // as unknown would split shaping runs and bypass `kana` OpenType lookups.
+    if (codepoint >= 0x31f0 and codepoint <= 0x31ff) return .katakana;
+    if (codepoint >= 0xff66 and codepoint <= 0xff9d) return .katakana;
+    if (codepoint == 0xff9e or codepoint == 0xff9f) return .inherited;
     // Modern and archaic Hangul Jamo must select the Hangul shaping script even
     // before they are composed into precomposed syllables. Grapheme clustering
     // already treats these ranges as Hangul L/V/T components; keeping script
@@ -1112,6 +1118,29 @@ test "grapheme clusters keep Myanmar dependent signs with their base letters" {
     try std.testing.expectEqualStrings("ကွာ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
 }
 
+test "halfwidth katakana voiced marks stay in kana grapheme and script runs" {
+    const allocator = std.testing.allocator;
+
+    const text = "ｶﾞ ㇰ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 3), clusters.len);
+    try std.testing.expectEqualStrings("ｶﾞ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ㇰ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.katakana, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.kana, openTypeScriptTag(scriptForCodepoint(0xff76)));
+    try std.testing.expectEqual(OpenTypeScriptTag.kana, openTypeScriptTag(scriptForCodepoint(0x31f0)));
+}
+
 test "Hangul conjoining jamo classify as Hangul script runs" {
     const allocator = std.testing.allocator;
 
@@ -1400,7 +1429,12 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x1ab0 and codepoint <= 0x1aff) or
         (codepoint >= 0x1dc0 and codepoint <= 0x1dff) or
         (codepoint >= 0x20d0 and codepoint <= 0x20ff) or
-        (codepoint >= 0xfe20 and codepoint <= 0xfe2f);
+        (codepoint >= 0xfe20 and codepoint <= 0xfe2f) or
+        // Halfwidth katakana voiced/semi-voiced marks are compatibility
+        // combining marks (GCB=Extend). They are spacing glyphs, but a base
+        // halfwidth kana plus U+FF9E/U+FF9F is one user-perceived character.
+        codepoint == 0xff9e or
+        codepoint == 0xff9f;
 }
 
 fn isVariationSelector(codepoint: u21) bool {

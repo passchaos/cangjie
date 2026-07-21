@@ -29,6 +29,7 @@ pub const Script = enum {
     bengali,
     odia,
     gurmukhi,
+    gujarati,
     telugu,
     kannada,
     sinhala,
@@ -157,6 +158,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     bng2 = tag("bng2"),
     ory2 = tag("ory2"),
     gur2 = tag("gur2"),
+    gjr2 = tag("gjr2"),
     tel2 = tag("tel2"),
     knd2 = tag("knd2"),
     sinh = tag("sinh"),
@@ -225,6 +227,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .bengali => .bng2,
         .odia => .ory2,
         .gurmukhi => .gur2,
+        .gujarati => .gjr2,
         .telugu => .tel2,
         .kannada => .knd2,
         .sinhala => .sinh,
@@ -319,6 +322,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isBengaliScriptCodepoint(codepoint)) return .bengali;
     if (isOdiaScriptCodepoint(codepoint)) return .odia;
     if (isGurmukhiScriptCodepoint(codepoint)) return .gurmukhi;
+    if (isGujaratiScriptCodepoint(codepoint)) return .gujarati;
     if (isTeluguScriptCodepoint(codepoint)) return .telugu;
     if (isKannadaScriptCodepoint(codepoint)) return .kannada;
     if (isSinhalaScriptCodepoint(codepoint)) return .sinhala;
@@ -715,6 +719,32 @@ fn isGurmukhiScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x0a00 and codepoint <= 0x0a7f;
 }
 
+fn isGujaratiScriptCodepoint(codepoint: u21) bool {
+    // Gujarati uses the Indic v2 shaping model under `gjr2`. Keep the complete
+    // block together for script runs so dependent signs, digits, avagraha/OM,
+    // and modern combining additions select the same GSUB/GPOS ScriptList as
+    // their base consonants instead of falling through DFLT/unknown.
+    return codepoint >= 0x0a80 and codepoint <= 0x0aff;
+}
+
+fn isGujaratiWordCodepoint(codepoint: u21) bool {
+    // Exclude Gujarati abbreviation/currency signs from word spans while
+    // grouping letters, avagraha/OM, vocalic letters, and native digits.
+    // Dependent signs attach through isWordExtender(), which avoids letting a
+    // stray leading vowel mark become a selectable word by itself.
+    return (codepoint >= 0x0a85 and codepoint <= 0x0a8d) or
+        (codepoint >= 0x0a8f and codepoint <= 0x0a91) or
+        (codepoint >= 0x0a93 and codepoint <= 0x0aa8) or
+        (codepoint >= 0x0aaa and codepoint <= 0x0ab0) or
+        (codepoint >= 0x0ab2 and codepoint <= 0x0ab3) or
+        (codepoint >= 0x0ab5 and codepoint <= 0x0ab9) or
+        codepoint == 0x0abd or
+        codepoint == 0x0ad0 or
+        (codepoint >= 0x0ae0 and codepoint <= 0x0ae1) or
+        (codepoint >= 0x0ae6 and codepoint <= 0x0aef) or
+        codepoint == 0x0af9;
+}
+
 fn isOdiaScriptCodepoint(codepoint: u21) bool {
     // Odia/Oriya uses the Indic v2 OpenType shaping system (`ory2`). Its
     // letters, dependent signs, nukta, virama, digits, and script punctuation
@@ -850,7 +880,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko, .thaana => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -2028,6 +2058,43 @@ test "Gurmukhi syllables keep marks and select Gurmukhi OpenType script" {
     try std.testing.expectEqualStrings("ਗ੍‍ਰੰਥ", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
+test "Gujarati syllables keep signs and select Gujarati OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "કિ કા ક્‍ષ ૧૨૰ ૐ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 11), clusters.len);
+    try std.testing.expectEqualStrings("કિ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("કા", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("ક્‍ષ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("૰", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.gujarati, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.gjr2, openTypeScriptTag(scriptForCodepoint(0x0a95)));
+    try std.testing.expectEqual(OpenTypeScriptTag.gjr2, openTypeScriptTag(scriptForCodepoint(0x0abf)));
+    try std.testing.expectEqual(OpenTypeScriptTag.gjr2, openTypeScriptTag(scriptForCodepoint(0x0acd)));
+    try std.testing.expectEqual(OpenTypeScriptTag.gjr2, openTypeScriptTag(scriptForCodepoint(0x0af0)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0a95));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 5), words.len);
+    try std.testing.expectEqualStrings("કિ", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("કા", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("ક્‍ષ", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("૧૨", text[words[3].byte_start..][0..words[3].byte_len]);
+    try std.testing.expectEqualStrings("ૐ", text[words[4].byte_start..][0..words[4].byte_len]);
+}
+
 test "Sinhala syllables keep dependent signs and select Sinhala OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -2834,6 +2901,7 @@ const WordKind = enum {
     bengali,
     odia,
     gurmukhi,
+    gujarati,
     telugu,
     kannada,
     sinhala,
@@ -2992,6 +3060,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isKhmerWordCodepoint(codepoint)) return .khmer;
     if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
     if (isThaanaWordCodepoint(codepoint)) return .thaana;
+    if (isGujaratiWordCodepoint(codepoint)) return .gujarati;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
     if (isOghamWordCodepoint(codepoint)) return .ogham;
@@ -3166,9 +3235,17 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x0a51 or
         (codepoint >= 0x0a70 and codepoint <= 0x0a71) or
         codepoint == 0x0a75 or
-        // Gujarati virama is Extend and participates in Indic ZWJ conjuncts.
-        // Keep it attached to the base before applying the InCB ZWJ rule below.
+        // Gujarati nonspacing signs cover nasalization, nukta, dependent
+        // vowels, virama, vocalic signs, and modern Arabic-style diacritics.
+        // Keep them attached so Gujarati aksharas and virama-ZWJ conjuncts
+        // stay one low-level caret/shaping unit.
+        (codepoint >= 0x0a81 and codepoint <= 0x0a82) or
+        codepoint == 0x0abc or
+        (codepoint >= 0x0ac1 and codepoint <= 0x0ac5) or
+        (codepoint >= 0x0ac7 and codepoint <= 0x0ac8) or
         codepoint == 0x0acd or
+        (codepoint >= 0x0ae2 and codepoint <= 0x0ae3) or
+        (codepoint >= 0x0afa and codepoint <= 0x0aff) or
         // Sinhala nonspacing signs include anusvara/visarga-like marks,
         // dependent vowels, and virama. They are typed after the base but form
         // one akshara for caret and shaping boundaries.
@@ -3506,6 +3583,13 @@ fn isSpacingMark(codepoint: u21) bool {
         // render with the base consonant and should share its caret/shaping unit.
         codepoint == 0x0a03 or
         (codepoint >= 0x0a3e and codepoint <= 0x0a40) or
+        // Gujarati spacing marks include visible dependent vowels and visarga.
+        // They are encoded after the base but render as part of the same
+        // akshara, so grapheme and word segmentation must not split before them.
+        codepoint == 0x0a83 or
+        (codepoint >= 0x0abe and codepoint <= 0x0ac0) or
+        codepoint == 0x0ac9 or
+        (codepoint >= 0x0acb and codepoint <= 0x0acc) or
         (codepoint >= 0x0dcf and codepoint <= 0x0dd1) or
         (codepoint >= 0x0dd8 and codepoint <= 0x0ddf) or
         (codepoint >= 0x0bbe and codepoint <= 0x0bbf) or

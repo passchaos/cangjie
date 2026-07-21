@@ -727,6 +727,17 @@ fn isSyriacScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x0860 and codepoint <= 0x086f);
 }
 
+fn isSyriacWordCodepoint(codepoint: u21) bool {
+    // Anchor Syriac word spans on encoded letters only. Script punctuation and
+    // U+070F abbreviation formatting must remain inside the RTL shaping run,
+    // but they should not become selectable words; vowel/pointing marks attach
+    // through isWordExtender() once a word has started.
+    return codepoint == 0x0710 or
+        (codepoint >= 0x0712 and codepoint <= 0x072f) or
+        (codepoint >= 0x074d and codepoint <= 0x074f) or
+        (codepoint >= 0x0860 and codepoint <= 0x086a);
+}
+
 fn isMandaicScriptCodepoint(codepoint: u21) bool {
     // Mandaic is an RTL cursive script with script-specific OpenType shaping
     // under `mand`. Only assigned scalars in U+0840..U+085E should enter the
@@ -1846,6 +1857,40 @@ test "Syriac text selects Syriac script and RTL shaping direction" {
     try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x086d)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x072b));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x086d));
+}
+
+test "Syriac words keep pointing marks but exclude native punctuation" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{0712}\u{0730}\u{0713}\u{0701} \u{074d}\u{074e} \u{0860}\u{0734}\u{086a}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 9), clusters.len);
+    try std.testing.expectEqualStrings("\u{0712}\u{0730}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{0713}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{0701}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{0860}\u{0734}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.syriac, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x0730)));
+    try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x074d)));
+    try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x086a)));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x0730));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("\u{0712}\u{0730}\u{0713}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{074d}\u{074e}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{0860}\u{0734}\u{086a}", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
 test "Mandaic text keeps marks and selects Mandaic RTL shaping" {
@@ -3230,6 +3275,7 @@ const WordKind = enum {
     vai,
     arabic,
     hebrew,
+    syriac,
     phoenician,
     armenian,
     glagolitic,
@@ -3404,6 +3450,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
     if (isThaanaWordCodepoint(codepoint)) return .thaana;
     if (isAdlamWordCodepoint(codepoint)) return .adlam;
+    if (isSyriacWordCodepoint(codepoint)) return .syriac;
     if (isMandaicWordCodepoint(codepoint)) return .mandaic;
     if (isPhoenicianWordCodepoint(codepoint)) return .phoenician;
     if (isGujaratiWordCodepoint(codepoint)) return .gujarati;
@@ -3532,6 +3579,12 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x06df and codepoint <= 0x06e4) or
         (codepoint >= 0x06e7 and codepoint <= 0x06e8) or
         (codepoint >= 0x06ea and codepoint <= 0x06ed) or
+        // Syriac superscript alaph plus pointing/vowel marks are nonspacing
+        // signs typed after right-to-left bases. Treat them as Extend so
+        // grapheme, word, and shaping boundaries preserve one Syriac syllable
+        // instead of separating a base letter from its diacritics.
+        codepoint == 0x0711 or
+        (codepoint >= 0x0730 and codepoint <= 0x074a) or
         // Mandaic affrication, vocalization, and gemination marks are
         // nonspacing signs typed after RTL bases. Treat them as Extend so
         // grapheme, word, and shaping boundaries do not split a Mandaic letter

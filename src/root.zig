@@ -2629,6 +2629,19 @@ test "serializes font manifest entries with escaping" {
     try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, "bad\n"));
 }
 
+test "font database manifest frees partial entries on allocation failure" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("test_font.zig").buildNamedTtfWithNames(allocator, "OOM Manifest", "Regular", "OOM Manifest Regular");
+    defer allocator.free(bytes);
+
+    var database = FontDatabase.init(allocator);
+    defer database.deinit();
+    _ = try database.addFontBytes(bytes);
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 2 });
+    try std.testing.expectError(error.OutOfMemory, database.manifest(failing.allocator()));
+}
+
 test "font manifest parser accepts CRLF line endings" {
     const allocator = std.testing.allocator;
     const text =

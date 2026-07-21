@@ -519,11 +519,20 @@ pub const FontDatabase = struct {
             allocator.free(entries);
         }
         for (self.faces.items, 0..) |face, index| {
+            const family = try allocator.dupe(u8, face.family);
+            errdefer allocator.free(family);
+            const subfamily = try allocator.dupe(u8, face.subfamily);
+            errdefer allocator.free(subfamily);
+            const full_name = try allocator.dupe(u8, face.full_name);
+            errdefer allocator.free(full_name);
+            const postscript_name = try allocator.dupe(u8, face.postscript_name);
+            errdefer allocator.free(postscript_name);
+
             entries[index] = .{
-                .family = try allocator.dupe(u8, face.family),
-                .subfamily = try allocator.dupe(u8, face.subfamily),
-                .full_name = try allocator.dupe(u8, face.full_name),
-                .postscript_name = try allocator.dupe(u8, face.postscript_name),
+                .family = family,
+                .subfamily = subfamily,
+                .full_name = full_name,
+                .postscript_name = postscript_name,
                 .content_hash = self.contentHashForFont(face.font),
                 .content_size = self.contentSizeForFont(face.font),
                 .weight = face.weight,

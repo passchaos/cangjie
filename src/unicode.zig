@@ -193,8 +193,16 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
+    // Modern and archaic Hangul Jamo must select the Hangul shaping script even
+    // before they are composed into precomposed syllables. Grapheme clustering
+    // already treats these ranges as Hangul L/V/T components; keeping script
+    // classification in sync ensures conjoining-jamo text reaches `hang`
+    // OpenType lookups instead of falling into DFLT/unknown runs.
+    if (codepoint >= 0x1100 and codepoint <= 0x11ff) return .hangul;
     if (codepoint >= 0x3130 and codepoint <= 0x318f) return .hangul;
+    if (codepoint >= 0xa960 and codepoint <= 0xa97f) return .hangul;
     if (codepoint >= 0xac00 and codepoint <= 0xd7af) return .hangul;
+    if (codepoint >= 0xd7b0 and codepoint <= 0xd7ff) return .hangul;
     if (codepoint >= 0x3400 and codepoint <= 0x4dbf) return .han;
     if (codepoint >= 0x4e00 and codepoint <= 0x9fff) return .han;
     if (codepoint >= 0xf900 and codepoint <= 0xfaff) return .han;
@@ -961,6 +969,22 @@ test "grapheme clusters keep Thai and Lao marks with their base letters" {
     try std.testing.expectEqualStrings("ก้", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
     try std.testing.expectEqualStrings("ກີ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+}
+
+test "Hangul conjoining jamo classify as Hangul script runs" {
+    const allocator = std.testing.allocator;
+
+    const text = "한 한";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.hangul, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0x1100)));
+    try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0xA960)));
+    try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0xD7B0)));
 }
 
 const WordKind = enum {

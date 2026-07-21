@@ -589,6 +589,22 @@ test "CFF Type2 charstrings require explicit endchar" {
     try std.testing.expectError(error.BadCff, interpreter.run(&.{139})); // Operand stack without an endchar.
 }
 
+test "CFF Type2 drawing operators reject empty operand stacks" {
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+
+    var interpreter = testInterpreter(&outline);
+    try std.testing.expectError(error.StackUnderflow, interpreter.run(&.{ 5, 14 })); // rlineto
+    try std.testing.expectError(error.StackUnderflow, interpreter.run(&.{ 6, 14 })); // hlineto
+    try std.testing.expectError(error.StackUnderflow, interpreter.run(&.{ 7, 14 })); // vlineto
+    try std.testing.expectError(error.StackUnderflow, interpreter.run(&.{ 8, 14 })); // rrcurveto
+}
+
 test "CFF Type2 subroutines require explicit return or endchar" {
     var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
         .x_min = 0,
@@ -845,7 +861,7 @@ const Type2Interpreter = struct {
     }
 
     fn rlineto(self: *Type2Interpreter) CffError!void {
-        if ((self.stack_len & 1) != 0) return error.StackUnderflow;
+        if (self.stack_len < 2 or (self.stack_len & 1) != 0) return error.StackUnderflow;
         var i: usize = 0;
         while (i < self.stack_len) : (i += 2) {
             self.x += self.stack[i];
@@ -856,6 +872,7 @@ const Type2Interpreter = struct {
     }
 
     fn hlineto(self: *Type2Interpreter) CffError!void {
+        if (self.stack_len == 0) return error.StackUnderflow;
         var horizontal = true;
         for (self.stack[0..self.stack_len]) |delta| {
             if (horizontal) self.x += delta else self.y += delta;
@@ -866,6 +883,7 @@ const Type2Interpreter = struct {
     }
 
     fn vlineto(self: *Type2Interpreter) CffError!void {
+        if (self.stack_len == 0) return error.StackUnderflow;
         var vertical = true;
         for (self.stack[0..self.stack_len]) |delta| {
             if (vertical) self.y += delta else self.x += delta;
@@ -876,7 +894,7 @@ const Type2Interpreter = struct {
     }
 
     fn rrcurveto(self: *Type2Interpreter) CffError!void {
-        if (self.stack_len % 6 != 0) return error.StackUnderflow;
+        if (self.stack_len < 6 or self.stack_len % 6 != 0) return error.StackUnderflow;
         var i: usize = 0;
         while (i < self.stack_len) : (i += 6) {
             try self.curveByDeltas(self.stack[i], self.stack[i + 1], self.stack[i + 2], self.stack[i + 3], self.stack[i + 4], self.stack[i + 5]);

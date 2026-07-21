@@ -50,6 +50,7 @@ pub const Script = enum {
     nushu,
     runic,
     coptic,
+    ogham,
     unknown,
 };
 
@@ -174,6 +175,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     nshu = tag("nshu"),
     runr = tag("runr"),
     copt = tag("copt"),
+    ogam = tag("ogam"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -238,6 +240,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .nushu => .nshu,
         .runic => .runr,
         .coptic => .copt,
+        .ogham => .ogam,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -327,6 +330,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isBrahmiScriptCodepoint(codepoint)) return .brahmi;
     if (isNushuScriptCodepoint(codepoint)) return .nushu;
     if (isRunicScriptCodepoint(codepoint)) return .runic;
+    if (isOghamScriptCodepoint(codepoint)) return .ogham;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -520,6 +524,20 @@ fn isCopticWordCodepoint(codepoint: u21) bool {
         (codepoint >= 0x2ceb and codepoint <= 0x2cee) or
         (codepoint >= 0x2cf2 and codepoint <= 0x2cf3) or
         (codepoint >= 0x102e1 and codepoint <= 0x102fb);
+}
+
+fn isOghamScriptCodepoint(codepoint: u21) bool {
+    // Ogham fonts use the historical `ogam` OpenType script tag for the block's
+    // letters, native space mark, and feather punctuation. Keep those assigned
+    // scalars in one shaping run while leaving the unassigned tail as unknown.
+    return codepoint >= 0x1680 and codepoint <= 0x169c;
+}
+
+fn isOghamWordCodepoint(codepoint: u21) bool {
+    // U+1680 OGHAM SPACE MARK and U+169B/U+169C feather marks are separators,
+    // not word letters. The twenty-five letter names form normal unspaced word
+    // spans for caret movement and selection.
+    return codepoint >= 0x1681 and codepoint <= 0x169a;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -753,7 +771,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -2586,6 +2604,31 @@ test "Coptic text selects Coptic script primitives across blocks" {
     try std.testing.expectEqualStrings("\u{102e1}\u{102e0}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
+test "Ogham text selects Ogham script and excludes native separators from words" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{1681}\u{1682}\u{1680}\u{169a}\u{169b}\u{169c}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.ogham, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.ogam, openTypeScriptTag(scriptForCodepoint(0x1681)));
+    try std.testing.expectEqual(OpenTypeScriptTag.ogam, openTypeScriptTag(scriptForCodepoint(0x1680)));
+    try std.testing.expectEqual(OpenTypeScriptTag.ogam, openTypeScriptTag(scriptForCodepoint(0x169c)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x169d));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1681));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{1681}\u{1682}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{169a}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2615,6 +2658,7 @@ const WordKind = enum {
     brahmi,
     runic,
     coptic,
+    ogham,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2755,6 +2799,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isVaiWordCodepoint(codepoint)) return .vai;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
+    if (isOghamWordCodepoint(codepoint)) return .ogham;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,

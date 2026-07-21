@@ -194,7 +194,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isGreekScriptCodepoint(codepoint)) return .greek;
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
-    if (codepoint >= 0x0590 and codepoint <= 0x05ff) return .hebrew;
+    if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (codepoint >= 0x0600 and codepoint <= 0x06ff) return .arabic;
     if (codepoint >= 0x0750 and codepoint <= 0x077f) return .arabic;
     if (codepoint >= 0x08a0 and codepoint <= 0x08ff) return .arabic;
@@ -244,6 +244,15 @@ fn isGreekScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x1d200 and codepoint <= 0x1d245) or
         (codepoint >= 0x1f00 and codepoint <= 0x1fff) or
         (codepoint >= 0x10140 and codepoint <= 0x1018f);
+}
+
+fn isHebrewScriptCodepoint(codepoint: u21) bool {
+    // Hebrew presentation forms are compatibility characters, but they still
+    // carry Script=Hebrew in Unicode. Treating them as unknown would split
+    // Hebrew script runs and classify them as bidi-neutral, which breaks
+    // low-level shaping and visual ordering for legacy or normalized-later text.
+    return (codepoint >= 0x0590 and codepoint <= 0x05ff) or
+        (codepoint >= 0xfb1d and codepoint <= 0xfb4f);
 }
 
 fn isCyrillicScriptCodepoint(codepoint: u21) bool {
@@ -961,6 +970,21 @@ test "Greek and Cyrillic letters select script-specific OpenType tags" {
     try std.testing.expectEqual(OpenTypeScriptTag.grek, openTypeScriptTag(scriptForCodepoint(0x1f88)));
     try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(scriptForCodepoint(0x0416)));
     try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(scriptForCodepoint(0xa66e)));
+}
+
+test "Hebrew presentation forms keep Hebrew script and RTL direction" {
+    const allocator = std.testing.allocator;
+
+    const text = "אשׁ ב";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.hebrew, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.hebr, openTypeScriptTag(scriptForCodepoint(0xfb2a)));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0xfb2a));
 }
 
 test "bidi mirroring covers mathematical bracket pairs" {

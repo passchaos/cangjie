@@ -23,6 +23,7 @@ pub const Script = enum {
     armenian,
     thai,
     lao,
+    khmer,
     devanagari,
     bengali,
     odia,
@@ -148,6 +149,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     armn = tag("armn"),
     thai = tag("thai"),
     lao = tag("lao "),
+    khmr = tag("khmr"),
     dev2 = tag("dev2"),
     bng2 = tag("bng2"),
     ory2 = tag("ory2"),
@@ -213,6 +215,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .armenian => .armn,
         .thai => .thai,
         .lao => .lao,
+        .khmer => .khmr,
         .devanagari => .dev2,
         .bengali => .bng2,
         .odia => .ory2,
@@ -304,6 +307,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
     if (isThaiScriptCodepoint(codepoint)) return .thai;
     if (isLaoScriptCodepoint(codepoint)) return .lao;
+    if (isKhmerScriptCodepoint(codepoint)) return .khmer;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (isBengaliScriptCodepoint(codepoint)) return .bengali;
     if (isOdiaScriptCodepoint(codepoint)) return .odia;
@@ -572,6 +576,30 @@ fn isLaoScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x0e81 and codepoint <= 0x0edf;
 }
 
+fn isKhmerScriptCodepoint(codepoint: u21) bool {
+    // Khmer shaping depends on `khmr` ScriptList selection for COENG subscript
+    // forms and dependent-vowel positioning. The base block also contains
+    // script punctuation and digits, while Khmer Symbols carries lunar-date
+    // signs that fonts commonly cover with the same Khmer face; keep both
+    // ranges in one script run so punctuation/symbols do not force DFLT in the
+    // middle of Khmer text.
+    return (codepoint >= 0x1780 and codepoint <= 0x17ff) or
+        (codepoint >= 0x19e0 and codepoint <= 0x19ff);
+}
+
+fn isKhmerWordCodepoint(codepoint: u21) bool {
+    // Khmer does not use spaces between every lexical word, so this compact
+    // primitive only exposes contiguous letter/sign/digit spans. It
+    // deliberately excludes Khmer sentence punctuation and lunar-date symbols:
+    // those should remain in the script run for shaping but should not become
+    // selectable "words" on their own.
+    return (codepoint >= 0x1780 and codepoint <= 0x17d3) or
+        codepoint == 0x17d7 or
+        codepoint == 0x17dc or
+        codepoint == 0x17dd or
+        (codepoint >= 0x17e0 and codepoint <= 0x17f9);
+}
+
 fn isSyriacScriptCodepoint(codepoint: u21) bool {
     // Syriac is a right-to-left cursive script with script-specific OpenType
     // shaping. Its base letters, combining marks, abbreviations, and
@@ -771,7 +799,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -1728,6 +1756,44 @@ test "grapheme clusters keep Khmer dependent signs with their base letters" {
     try std.testing.expectEqualStrings("កៀ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
 }
 
+test "Khmer text selects Khmer script and keeps COENG clusters" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{1780}\u{17b6} \u{1780}\u{17d2}\u{1781} \u{17e1}\u{17d4} \u{19e0}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 8), clusters.len);
+    try std.testing.expectEqualStrings("\u{1780}\u{17b6}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{1780}\u{17d2}\u{1781}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{17e1}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("\u{17d4}", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("\u{19e0}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.khmer, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.khmr, openTypeScriptTag(scriptForCodepoint(0x1780)));
+    try std.testing.expectEqual(OpenTypeScriptTag.khmr, openTypeScriptTag(scriptForCodepoint(0x17d2)));
+    try std.testing.expectEqual(OpenTypeScriptTag.khmr, openTypeScriptTag(scriptForCodepoint(0x19e0)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1780));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("\u{1780}\u{17b6}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{1780}\u{17d2}\u{1781}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{17e1}", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 test "Telugu and Kannada syllables select Indic v2 script tags" {
     const allocator = std.testing.allocator;
 
@@ -2638,6 +2704,7 @@ const WordKind = enum {
     arabic,
     hebrew,
     armenian,
+    khmer,
     devanagari,
     bengali,
     odia,
@@ -2797,6 +2864,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     }
     if (isLisuWordCodepoint(codepoint)) return .lisu;
     if (isVaiWordCodepoint(codepoint)) return .vai;
+    if (isKhmerWordCodepoint(codepoint)) return .khmer;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
     if (isOghamWordCodepoint(codepoint)) return .ogham;
@@ -2863,6 +2931,7 @@ fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize,
     if (extendsHangulGrapheme(previous, current)) return true;
     if (isRegionalIndicator(previous) and isRegionalIndicator(current) and regional_indicator_count % 2 == 1) return true;
     if (isGraphemeExtendCodepoint(current)) return true;
+    if (previous == 0x17d2 and isKhmerConsonant(current)) return true;
     if (previous == 0x200d) {
         return (zwj_after_extended_pictographic and isExtendedPictographic(current)) or
             (zwj_after_indic_virama and isIndicConsonant(current));
@@ -3148,6 +3217,14 @@ fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
         codepoint == 0x0d4d or // Malayalam sign virama.
         codepoint == 0x11046 or // Brahmi virama.
         codepoint == 0x11070; // Brahmi old Tamil virama.
+}
+
+fn isKhmerConsonant(codepoint: u21) bool {
+    // U+17D2 COENG turns the following Khmer consonant into a subscript form.
+    // Treating that following consonant as a grapheme continuation keeps the
+    // orthographic syllable atomic for caret movement and for any future Khmer
+    // shaping pass that consumes one cluster at a time.
+    return codepoint >= 0x1780 and codepoint <= 0x17a2;
 }
 
 fn isIndicConsonant(codepoint: u21) bool {

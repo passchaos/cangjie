@@ -11,6 +11,7 @@ pub const Script = enum {
     greek,
     cyrillic,
     glagolitic,
+    old_italic,
     han,
     yi,
     lisu,
@@ -145,6 +146,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     grek = tag("grek"),
     cyrl = tag("cyrl"),
     glag = tag("glag"),
+    ital = tag("ital"),
     hani = tag("hani"),
     yi = tag("yi  "),
     lisu = tag("lisu"),
@@ -219,6 +221,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .greek => .grek,
         .cyrillic => .cyrl,
         .glagolitic => .glag,
+        .old_italic => .ital,
         .han => .hani,
         .yi => .yi,
         .lisu => .lisu,
@@ -325,6 +328,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isGreekScriptCodepoint(codepoint)) return .greek;
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (isGlagoliticScriptCodepoint(codepoint)) return .glagolitic;
+    if (isOldItalicScriptCodepoint(codepoint)) return .old_italic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (isPhoenicianScriptCodepoint(codepoint)) return .phoenician;
@@ -986,6 +990,23 @@ fn isGlagoliticWordCodepoint(codepoint: u21) bool {
     return codepoint >= 0x2c00 and codepoint <= 0x2c5f;
 }
 
+fn isOldItalicScriptCodepoint(codepoint: u21) bool {
+    // Old Italic is a supplementary-plane historic script with a registered
+    // OpenType ScriptList tag (`ital`). The Unicode block has unassigned gaps,
+    // so classify only assigned letters and native numerals; treating the whole
+    // block as script text would give private/malformed data LTR/script shaping
+    // semantics it should not inherit.
+    return (codepoint >= 0x10300 and codepoint <= 0x10323) or
+        (codepoint >= 0x1032d and codepoint <= 0x1032f);
+}
+
+fn isOldItalicWordCodepoint(codepoint: u21) bool {
+    // Native Old Italic numerals share the same strong LTR script behavior as
+    // letters in Unicode. Group them with adjacent letters for coarse word and
+    // caret primitives, while leaving the unassigned block gaps as separators.
+    return isOldItalicScriptCodepoint(codepoint);
+}
+
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
 /// higher-level bidi functions use this coarse class to build visual runs.
 pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
@@ -993,7 +1014,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -1726,6 +1747,32 @@ test "Glagolitic text keeps combining letters and selects Glagolitic OpenType sc
     try std.testing.expectEqual(@as(usize, 2), words.len);
     try std.testing.expectEqualStrings("\u{2c00}\u{1e000}\u{2c30}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{2c5f}\u{1e02a}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Old Italic letters and numerals select Old Italic script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{10300}\u{10301}\u{10320} \u{1032d}\u{1032e}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.old_italic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.ital, openTypeScriptTag(scriptForCodepoint(0x10300)));
+    try std.testing.expectEqual(OpenTypeScriptTag.ital, openTypeScriptTag(scriptForCodepoint(0x10320)));
+    try std.testing.expectEqual(OpenTypeScriptTag.ital, openTypeScriptTag(scriptForCodepoint(0x1032f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x10324));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x10300));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x10320));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{10300}\u{10301}\u{10320}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{1032d}\u{1032e}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Arabic presentation forms keep Arabic script and RTL direction" {
@@ -3186,6 +3233,7 @@ const WordKind = enum {
     phoenician,
     armenian,
     glagolitic,
+    old_italic,
     thaana,
     adlam,
     mandaic,
@@ -3364,6 +3412,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isOghamWordCodepoint(codepoint)) return .ogham;
     if (isTifinaghWordCodepoint(codepoint)) return .tifinagh;
     if (isGlagoliticWordCodepoint(codepoint)) return .glagolitic;
+    if (isOldItalicWordCodepoint(codepoint)) return .old_italic;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,

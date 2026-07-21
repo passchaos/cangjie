@@ -40,6 +40,7 @@ pub const Script = enum {
     limbu,
     buginese,
     sundanese,
+    meetei_mayek,
     unknown,
 };
 
@@ -154,6 +155,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     limb = tag("limb"),
     bugi = tag("bugi"),
     sund = tag("sund"),
+    mtei = tag("mtei"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -208,6 +210,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .limbu => .limb,
         .buginese => .bugi,
         .sundanese => .sund,
+        .meetei_mayek => .mtei,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -290,6 +293,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
     if (isBugineseScriptCodepoint(codepoint)) return .buginese;
     if (isSundaneseScriptCodepoint(codepoint)) return .sundanese;
+    if (isMeeteiMayekScriptCodepoint(codepoint)) return .meetei_mayek;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -356,6 +360,15 @@ fn isSundaneseScriptCodepoint(codepoint: u21) bool {
     // with the same script, so keep both ranges out of DFLT/unknown runs.
     return (codepoint >= 0x1b80 and codepoint <= 0x1bbf) or
         (codepoint >= 0x1cc0 and codepoint <= 0x1ccf);
+}
+
+fn isMeeteiMayekScriptCodepoint(codepoint: u21) bool {
+    // Meetei Mayek letters are split between the main block and an extensions
+    // block that also contains dependent vowel signs. Fonts select the `mtei`
+    // ScriptList entry for both, so keep letters, lonsum finals, signs, digits,
+    // and punctuation in one shaping run instead of routing marks through DFLT.
+    return (codepoint >= 0xaae0 and codepoint <= 0xaaff) or
+        (codepoint >= 0xabc0 and codepoint <= 0xabff);
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -589,7 +602,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek => .ltr,
         else => .neutral,
     };
 }
@@ -2092,6 +2105,48 @@ test "Sundanese syllables keep signs and select Sundanese OpenType script" {
     try std.testing.expectEqualStrings("᳀", text[words[3].byte_start..][0..words[3].byte_len]);
 }
 
+test "Meetei Mayek syllables keep signs and select Meetei OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "ꯀꯤ ꯑꯩ ꫠꫫ ꯄ꯭ ꯱";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 9), clusters.len);
+    try std.testing.expectEqualStrings("ꯀꯤ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ꯑꯩ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ꫠꫫ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("ꯄ꯭", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings("꯱", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.meetei_mayek, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.mtei, openTypeScriptTag(scriptForCodepoint(0xabc0)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mtei, openTypeScriptTag(scriptForCodepoint(0xabe4)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mtei, openTypeScriptTag(scriptForCodepoint(0xaae0)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mtei, openTypeScriptTag(scriptForCodepoint(0xabf1)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xabc0));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 5), words.len);
+    try std.testing.expectEqualStrings("ꯀꯤ", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ꯑꯩ", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("ꫠꫫ", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("ꯄ꯭", text[words[3].byte_start..][0..words[3].byte_len]);
+    try std.testing.expectEqualStrings("꯱", text[words[4].byte_start..][0..words[4].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2113,6 +2168,7 @@ const WordKind = enum {
     limbu,
     buginese,
     sundanese,
+    meetei_mayek,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2264,6 +2320,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .limbu => .limbu,
         .buginese => .buginese,
         .sundanese => .sundanese,
+        .meetei_mayek => .meetei_mayek,
         else => .none,
     };
 }
@@ -2501,6 +2558,14 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x1ba2 and codepoint <= 0x1ba5) or
         (codepoint >= 0x1ba8 and codepoint <= 0x1ba9) or
         codepoint == 0x1bab or
+        // Meetei Mayek has nonspacing vowels and viramas in both the extension
+        // and main blocks. They are typed after a base letter but form one
+        // orthographic unit for caret placement and shaping feature selection.
+        (codepoint >= 0xaaec and codepoint <= 0xaaed) or
+        codepoint == 0xaaf6 or
+        codepoint == 0xabe5 or
+        codepoint == 0xabe8 or
+        codepoint == 0xabed or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the
@@ -2761,7 +2826,17 @@ fn isSpacingMark(codepoint: u21) bool {
         codepoint == 0x1b82 or
         codepoint == 0x1ba1 or
         (codepoint >= 0x1ba6 and codepoint <= 0x1ba7) or
-        codepoint == 0x1baa;
+        codepoint == 0x1baa or
+        // Meetei Mayek spacing vowel signs and visarga-like marks are visible
+        // glyphs but still belong to the preceding base letter's grapheme,
+        // word, and shaping unit. Include both encoded blocks so old and new
+        // orthographies behave consistently.
+        codepoint == 0xaaeb or
+        (codepoint >= 0xaaee and codepoint <= 0xaaef) or
+        codepoint == 0xaaf5 or
+        (codepoint >= 0xabe3 and codepoint <= 0xabe4) or
+        (codepoint >= 0xabe6 and codepoint <= 0xabe7) or
+        (codepoint >= 0xabe9 and codepoint <= 0xabec);
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

@@ -24,6 +24,7 @@ pub const Script = enum {
     thai,
     lao,
     khmer,
+    myanmar,
     devanagari,
     bengali,
     odia,
@@ -150,6 +151,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     thai = tag("thai"),
     lao = tag("lao "),
     khmr = tag("khmr"),
+    mym2 = tag("mym2"),
     dev2 = tag("dev2"),
     bng2 = tag("bng2"),
     ory2 = tag("ory2"),
@@ -216,6 +218,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .thai => .thai,
         .lao => .lao,
         .khmer => .khmr,
+        .myanmar => .mym2,
         .devanagari => .dev2,
         .bengali => .bng2,
         .odia => .ory2,
@@ -308,6 +311,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isThaiScriptCodepoint(codepoint)) return .thai;
     if (isLaoScriptCodepoint(codepoint)) return .lao;
     if (isKhmerScriptCodepoint(codepoint)) return .khmer;
+    if (isMyanmarScriptCodepoint(codepoint)) return .myanmar;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (isBengaliScriptCodepoint(codepoint)) return .bengali;
     if (isOdiaScriptCodepoint(codepoint)) return .odia;
@@ -600,6 +604,33 @@ fn isKhmerWordCodepoint(codepoint: u21) bool {
         (codepoint >= 0x17e0 and codepoint <= 0x17f9);
 }
 
+fn isMyanmarScriptCodepoint(codepoint: u21) bool {
+    // Myanmar shaping depends on the modern `mym2` OpenType script system for
+    // kinzi, medials, stacked consonants, and dependent vowel/tone placement.
+    // Keep the base block and Myanmar Extended-A/B/C additions in one script
+    // run so Burmese, Mon, Shan, Karen, Tai Laing, Khamti, Aiton, and related
+    // text does not fall through DFLT between bases, signs, or native digits.
+    return (codepoint >= 0x1000 and codepoint <= 0x109f) or
+        (codepoint >= 0xa9e0 and codepoint <= 0xa9fe) or
+        (codepoint >= 0xaa60 and codepoint <= 0xaa7f) or
+        (codepoint >= 0x116d0 and codepoint <= 0x116e3);
+}
+
+fn isMyanmarWordCodepoint(codepoint: u21) bool {
+    // Exclude Myanmar section punctuation and symbols from word spans while
+    // keeping letters, dependent signs, medials, viramas/asat, tone marks, and
+    // native digits together as one orthographic token for selection and layout
+    // cache boundaries. Combining/spacing marks also attach through the generic
+    // extender tables, but listing them here keeps a mark following a Myanmar
+    // digit or extension letter in the same script-specific word class.
+    return (codepoint >= 0x1000 and codepoint <= 0x1049) or
+        (codepoint >= 0x1050 and codepoint <= 0x109d) or
+        (codepoint >= 0xa9e0 and codepoint <= 0xa9fe) or
+        (codepoint >= 0xaa60 and codepoint <= 0xaa76) or
+        (codepoint >= 0xaa7a and codepoint <= 0xaa7f) or
+        (codepoint >= 0x116d0 and codepoint <= 0x116e3);
+}
+
 fn isSyriacScriptCodepoint(codepoint: u21) bool {
     // Syriac is a right-to-left cursive script with script-specific OpenType
     // shaping. Its base letters, combining marks, abbreviations, and
@@ -799,7 +830,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -2695,6 +2726,43 @@ test "Ogham text selects Ogham script and excludes native separators from words"
     try std.testing.expectEqualStrings("\u{169a}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
+test "Myanmar text selects Myanmar v2 script primitives across extensions" {
+    const allocator = std.testing.allocator;
+
+    const text = "ကေ့\u{104a} ကွာ \u{a9e0}\u{aa7b} \u{aa60}\u{aa7c}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 8), clusters.len);
+    try std.testing.expectEqualStrings("ကေ့", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{104a}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ကွာ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{a9e0}\u{aa7b}", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{aa60}\u{aa7c}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.myanmar, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.mym2, openTypeScriptTag(scriptForCodepoint(0x1000)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mym2, openTypeScriptTag(scriptForCodepoint(0xa9e0)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mym2, openTypeScriptTag(scriptForCodepoint(0xaa60)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mym2, openTypeScriptTag(scriptForCodepoint(0x116d0)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1000));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 4), words.len);
+    try std.testing.expectEqualStrings("ကေ့", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ကွာ", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{a9e0}\u{aa7b}", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{aa60}\u{aa7c}", text[words[3].byte_start..][0..words[3].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2705,6 +2773,7 @@ const WordKind = enum {
     hebrew,
     armenian,
     khmer,
+    myanmar,
     devanagari,
     bengali,
     odia,
@@ -2865,6 +2934,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isLisuWordCodepoint(codepoint)) return .lisu;
     if (isVaiWordCodepoint(codepoint)) return .vai;
     if (isKhmerWordCodepoint(codepoint)) return .khmer;
+    if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
     if (isOghamWordCodepoint(codepoint)) return .ogham;
@@ -3093,6 +3163,12 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x1085 and codepoint <= 0x1086) or
         codepoint == 0x108d or
         codepoint == 0x109d or
+        // Myanmar Extended-A/B add Shan, Tai Laing, Pao Karen, and Khamti tone
+        // marks used with the same `mym2` shaping model as the base block.
+        // Keep them in the compact Extend table so extension syllables do not
+        // expose caret stops between base letters and tone signs.
+        codepoint == 0xa9e5 or
+        codepoint == 0xaa7c or
         // Balinese nonspacing signs are encoded after the aksara base but
         // render as one syllable with it. Keep vowel signs, rerekan, and
         // musical combining marks attached so caret/word primitives do not
@@ -3397,6 +3473,11 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x1087 and codepoint <= 0x108c) or
         codepoint == 0x108f or
         (codepoint >= 0x109a and codepoint <= 0x109c) or
+        // Myanmar Extended-B spacing tone signs are visible glyph cells but
+        // still belong to the previous Myanmar base for grapheme/word/shaping
+        // boundaries, matching the base-block spacing signs above.
+        codepoint == 0xaa7b or
+        codepoint == 0xaa7d or
         // Balinese spacing signs include visarga-like signs, visible dependent
         // vowels, and U+1B44 ADEG ADEG. They are typed after the base aksara
         // but must remain in the same grapheme/word/shaping unit.

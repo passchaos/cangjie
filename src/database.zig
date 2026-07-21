@@ -64,9 +64,9 @@ pub fn writeManifest(writer: *std.Io.Writer, entries: []const FontManifestEntry)
 
 pub fn parseManifest(allocator: std.mem.Allocator, text: []const u8) ![]FontManifestEntry {
     var lines = std.mem.splitScalar(u8, text, '\n');
-    const magic = lines.next() orelse return error.InvalidManifest;
+    const magic = stripManifestLineEnding(lines.next() orelse return error.InvalidManifest);
     if (!std.mem.eql(u8, magic, "cangjie-font-manifest-v3")) return error.InvalidManifest;
-    const header = lines.next() orelse return error.InvalidManifest;
+    const header = stripManifestLineEnding(lines.next() orelse return error.InvalidManifest);
     if (!std.mem.eql(u8, header, "family\tsubfamily\tfull_name\tpostscript_name\tcontent_hash\tcontent_size\tweight\tstretch\tstyle")) return error.InvalidManifest;
 
     var entries = std.ArrayList(FontManifestEntry).empty;
@@ -80,7 +80,8 @@ pub fn parseManifest(allocator: std.mem.Allocator, text: []const u8) ![]FontMani
         entries.deinit(allocator);
     }
 
-    while (lines.next()) |line| {
+    while (lines.next()) |raw_line| {
+        const line = stripManifestLineEnding(raw_line);
         if (line.len == 0) continue;
         var fields = std.mem.splitScalar(u8, line, '\t');
         var raw: [9][]const u8 = undefined;
@@ -705,6 +706,10 @@ fn writeEscapedField(writer: *std.Io.Writer, value: []const u8) !void {
             else => try writer.writeByte(byte),
         }
     }
+}
+
+fn stripManifestLineEnding(line: []const u8) []const u8 {
+    return if (line.len != 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
 }
 
 fn parseManifestInt(comptime T: type, value: []const u8, base: u8) !T {

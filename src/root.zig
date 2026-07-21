@@ -2629,6 +2629,20 @@ test "serializes font manifest entries with escaping" {
     try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, "bad\n"));
 }
 
+test "font manifest parser accepts CRLF line endings" {
+    const allocator = std.testing.allocator;
+    const text =
+        "cangjie-font-manifest-v3\r\n" ++
+        "family\tsubfamily\tfull_name\tpostscript_name\tcontent_hash\tcontent_size\tweight\tstretch\tstyle\r\n" ++
+        "CRLF Sans\tRegular\tCRLF Sans Regular\tCRLFSans-Regular\t0\t0\t400\t100\tnormal\r\n";
+    const parsed = try parseManifest(allocator, text);
+    defer FontDatabase.freeManifest(allocator, parsed);
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.len);
+    try std.testing.expectEqualStrings("CRLF Sans", parsed[0].family);
+    try std.testing.expectEqual(FontStyle.normal, parsed[0].style);
+}
+
 test "font manifest parse errors free decoded fields" {
     const allocator = std.testing.allocator;
     const prefix =

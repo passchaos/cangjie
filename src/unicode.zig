@@ -673,7 +673,7 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
                 // single caret stop. Without this side state, "क्‍ष" splits
                 // before the final consonant even though the ZWJ requests a
                 // conjunct glyph.
-                zwj_after_indic_virama = previous_codepoint.? == 0x094d;
+                zwj_after_indic_virama = isIndicViramaForZwjConjunct(previous_codepoint.?);
             } else {
                 zwj_after_extended_pictographic = false;
                 zwj_after_indic_virama = false;
@@ -1319,6 +1319,21 @@ test "grapheme clusters keep Devanagari virama ZWJ conjuncts atomic" {
     try std.testing.expectEqualStrings("ष", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
 }
 
+
+test "grapheme clusters keep Gujarati virama ZWJ conjuncts atomic" {
+    const allocator = std.testing.allocator;
+
+    const text = "ક્‍ષ ક્ષ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 4), clusters.len);
+    try std.testing.expectEqualStrings("ક્‍ષ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ક્", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("ષ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+}
+
 test "grapheme clusters keep Thai and Lao marks with their base letters" {
     const allocator = std.testing.allocator;
 
@@ -1817,6 +1832,9 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x094d or
         (codepoint >= 0x0951 and codepoint <= 0x0957) or
         (codepoint >= 0x0962 and codepoint <= 0x0963) or
+        // Gujarati virama is Extend and participates in Indic ZWJ conjuncts.
+        // Keep it attached to the base before applying the InCB ZWJ rule below.
+        codepoint == 0x0acd or
         // Sinhala nonspacing signs include anusvara/visarga-like marks,
         // dependent vowels, and virama. They are typed after the base but form
         // one akshara for caret and shaping boundaries.
@@ -1905,10 +1923,15 @@ fn isEmojiTagCodepoint(codepoint: u21) bool {
     return codepoint >= 0xe0020 and codepoint <= 0xe007f;
 }
 
+fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
+    return codepoint == 0x094d or // Devanagari sign virama.
+        codepoint == 0x0acd; // Gujarati sign virama.
+}
+
 fn isIndicConsonant(codepoint: u21) bool {
-    // Compact InCB=Consonant coverage for the Devanagari block Cangjie already
-    // classifies as a shaped script. The range is deliberately narrow so ZWJ
-    // after a virama only glues to real consonants, not punctuation or digits.
+    // Compact InCB=Consonant coverage for Indic blocks Cangjie clusters today.
+    // The ranges are deliberately narrow so ZWJ after a virama only glues to
+    // real consonants, not punctuation, digits, or vowel letters.
     return (codepoint >= 0x0915 and codepoint <= 0x0939) or
         codepoint == 0x0958 or
         codepoint == 0x0959 or
@@ -1917,7 +1940,8 @@ fn isIndicConsonant(codepoint: u21) bool {
         codepoint == 0x095c or
         codepoint == 0x095d or
         codepoint == 0x095e or
-        codepoint == 0x095f;
+        codepoint == 0x095f or
+        (codepoint >= 0x0a95 and codepoint <= 0x0ab9);
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {

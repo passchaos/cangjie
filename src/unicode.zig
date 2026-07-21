@@ -16,6 +16,7 @@ pub const Script = enum {
     hangul,
     arabic,
     hebrew,
+    armenian,
     devanagari,
     tamil,
     ethiopic,
@@ -110,6 +111,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     hang = tag("hang"),
     arab = tag("arab"),
     hebr = tag("hebr"),
+    armn = tag("armn"),
     dev2 = tag("dev2"),
     taml = tag("taml"),
     ethi = tag("ethi"),
@@ -144,6 +146,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .hangul => .hang,
         .arabic => .arab,
         .hebrew => .hebr,
+        .armenian => .armn,
         .devanagari => .dev2,
         .tamil => .taml,
         .ethiopic => .ethi,
@@ -205,6 +208,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
+    if (isArmenianScriptCodepoint(codepoint)) return .armenian;
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
@@ -316,6 +320,23 @@ fn isHebrewScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0xfb1d and codepoint <= 0xfb4f);
 }
 
+fn isArmenianScriptCodepoint(codepoint: u21) bool {
+    // Armenian has dedicated OpenType shaping/script selection (`armn`) for
+    // localized forms and mark positioning. Keep alphabetic letters,
+    // punctuation, ligature codepoints, and modifier letters in one script run;
+    // otherwise Armenian text is split through DFLT/unknown and loses script-
+    // specific GSUB/GPOS coverage.
+    return (codepoint >= 0x0531 and codepoint <= 0x058f) or
+        (codepoint >= 0xfb13 and codepoint <= 0xfb17) or
+        codepoint == 0x0559 or
+        codepoint == 0x055a or
+        codepoint == 0x055b or
+        codepoint == 0x055c or
+        codepoint == 0x055d or
+        codepoint == 0x055e or
+        codepoint == 0x055f;
+}
+
 fn isCyrillicScriptCodepoint(codepoint: u21) bool {
     // Cyrillic has several extension blocks used by living orthographies.
     // Classifying them as unknown would split runs and route GSUB/GPOS through
@@ -334,7 +355,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .devanagari, .tamil, .ethiopic, .georgian => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .devanagari, .tamil, .ethiopic, .georgian => .ltr,
         else => .neutral,
     };
 }
@@ -1063,6 +1084,29 @@ test "Hebrew presentation forms keep Hebrew script and RTL direction" {
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0xfb2a));
 }
 
+test "Armenian text selects Armenian script, words, and OpenType tag" {
+    const allocator = std.testing.allocator;
+
+    const text = "Հայոց ﬓ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.armenian, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.armn, openTypeScriptTag(scriptForCodepoint(0x0540)));
+    try std.testing.expectEqual(OpenTypeScriptTag.armn, openTypeScriptTag(scriptForCodepoint(0xfb13)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0540));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("Հայոց", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ﬓ", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
 test "bidi mirroring covers mathematical bracket pairs" {
     try std.testing.expectEqual(@as(u21, 0x27e9), mirroredCodepoint(0x27e8));
     try std.testing.expectEqual(@as(u21, 0x27e8), mirroredCodepoint(0x27e9));
@@ -1313,6 +1357,7 @@ const WordKind = enum {
     latin_number,
     arabic,
     hebrew,
+    armenian,
     devanagari,
     tamil,
 };
@@ -1451,6 +1496,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .han, .hiragana, .katakana, .hangul => .single,
         .arabic => .arabic,
         .hebrew => .hebrew,
+        .armenian => .armenian,
         .devanagari => .devanagari,
         .tamil => .tamil,
         else => .none,

@@ -697,10 +697,23 @@ fn isMongolianScriptCodepoint(codepoint: u21) bool {
 
 fn isNkoScriptCodepoint(codepoint: u21) bool {
     // N'Ko is an RTL script with its own OpenType ScriptList tag (`nko `).
-    // Its combining marks and digits live in the same block as letters; keeping
-    // the block in one script run avoids routing valid syllables through DFLT
-    // and preserves RTL direction for shaping/layout primitives.
-    return codepoint >= 0x07c0 and codepoint <= 0x07ff;
+    // Its combining marks, modifier letters, digits, and currency signs live
+    // in the same compact block as letters. Keep assigned scalars in one RTL
+    // shaping run, but leave the two reserved slots unknown so malformed data
+    // does not silently inherit N'Ko script or bidi behavior.
+    return (codepoint >= 0x07c0 and codepoint <= 0x07fa) or
+        (codepoint >= 0x07fd and codepoint <= 0x07ff);
+}
+
+fn isNkoWordCodepoint(codepoint: u21) bool {
+    // N'Ko words can contain native digits and spacing modifier letters. Tone
+    // and nasalization marks attach through isWordExtender(); punctuation,
+    // symbols, and currency signs stay in the script run but do not become
+    // selectable word text by themselves.
+    return (codepoint >= 0x07c0 and codepoint <= 0x07ea) or
+        codepoint == 0x07f4 or
+        codepoint == 0x07f5 or
+        codepoint == 0x07fa;
 }
 
 fn isAdlamScriptCodepoint(codepoint: u21) bool {
@@ -2061,10 +2074,20 @@ test "Mandaic text keeps marks and selects Mandaic RTL shaping" {
     try std.testing.expectEqualStrings("\u{084C}\u{085A}\u{085B}\u{0840}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
-test "NKo text selects NKo script and RTL shaping direction" {
+test "NKo text keeps tone marks with words and selects RTL shaping primitives" {
     const allocator = std.testing.allocator;
 
-    const text = "ߒߞߏ ߛߓߍ";
+    const text = "\u{07d2}\u{07eb}\u{07ec}\u{07f4}\u{07e3} \u{07c1}\u{07fd}\u{07c2} \u{07f8}\u{07fe}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 9), clusters.len);
+    try std.testing.expectEqualStrings("\u{07d2}\u{07eb}\u{07ec}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{07f4}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{07e3}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{07c1}\u{07fd}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("\u{07c2}", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+
     const runs = try itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
 
@@ -2074,8 +2097,19 @@ test "NKo text selects NKo script and RTL shaping direction" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(OpenTypeScriptTag.nko, openTypeScriptTag(scriptForCodepoint(0x07d2)));
     try std.testing.expectEqual(OpenTypeScriptTag.nko, openTypeScriptTag(scriptForCodepoint(0x07eb)));
+    try std.testing.expectEqual(OpenTypeScriptTag.nko, openTypeScriptTag(scriptForCodepoint(0x07fd)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x07fb));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x07fc));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07d2));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07eb));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07c1));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{07d2}\u{07eb}\u{07ec}\u{07f4}\u{07e3}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{07c1}\u{07fd}\u{07c2}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Adlam text keeps marks and selects Adlam RTL shaping" {
@@ -3576,6 +3610,7 @@ const WordKind = enum {
     thaana,
     adlam,
     mandaic,
+    nko,
     khmer,
     myanmar,
     devanagari,
@@ -3749,6 +3784,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isAdlamWordCodepoint(codepoint)) return .adlam;
     if (isSyriacWordCodepoint(codepoint)) return .syriac;
     if (isMandaicWordCodepoint(codepoint)) return .mandaic;
+    if (isNkoWordCodepoint(codepoint)) return .nko;
     if (isPhoenicianWordCodepoint(codepoint)) return .phoenician;
     if (isLepchaWordCodepoint(codepoint)) return .lepcha;
     if (isGujaratiWordCodepoint(codepoint)) return .gujarati;
@@ -3900,6 +3936,12 @@ fn isCombiningMark(codepoint: u21) bool {
         // nukta are GCB=Extend. They are typed after RTL Adlam letters but
         // must share one caret/word/shaping unit with the base glyph.
         (codepoint >= 0x1e944 and codepoint <= 0x1e94a) or
+        // N'Ko tone, nasalization, double-dot, and dantayalan signs are
+        // nonspacing marks in an RTL cursive script. Keep them attached to the
+        // preceding base so grapheme, word, and shaping boundaries preserve one
+        // N'Ko syllable before OpenType `nko ` lookup selection.
+        (codepoint >= 0x07eb and codepoint <= 0x07f3) or
+        codepoint == 0x07fd or
         // Combining Glagolitic letters are encoded in the supplementary plane
         // and stack with BMP Glagolitic bases. Treat them as Extend so
         // manuscript-style abbreviations stay one grapheme, word, and shaping

@@ -39,6 +39,7 @@ pub const Script = enum {
     ethiopic,
     georgian,
     cherokee,
+    tifinagh,
     tibetan,
     nko,
     thaana,
@@ -170,6 +171,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     ethi = tag("ethi"),
     geor = tag("geor"),
     cher = tag("cher"),
+    tfng = tag("tfng"),
     tibt = tag("tibt"),
     nko = tag("nko "),
     thaa = tag("thaa"),
@@ -241,6 +243,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .ethiopic => .ethi,
         .georgian => .geor,
         .cherokee => .cher,
+        .tifinagh => .tfng,
         .tibetan => .tibt,
         .nko => .nko,
         .thaana => .thaa,
@@ -338,6 +341,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isEthiopicScriptCodepoint(codepoint)) return .ethiopic;
     if (isGeorgianScriptCodepoint(codepoint)) return .georgian;
     if (isCherokeeScriptCodepoint(codepoint)) return .cherokee;
+    if (isTifinaghScriptCodepoint(codepoint)) return .tifinagh;
     if (isTibetanScriptCodepoint(codepoint)) return .tibetan;
     if (isThaanaScriptCodepoint(codepoint)) return .thaana;
     if (isNkoScriptCodepoint(codepoint)) return .nko;
@@ -728,6 +732,26 @@ fn isCherokeeScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0xab70 and codepoint <= 0xabbf);
 }
 
+fn isTifinaghScriptCodepoint(codepoint: u21) bool {
+    // Tifinagh uses a dedicated OpenType ScriptList entry (`tfng`) for Amazigh
+    // letters, the labialization modifier, native separator, and consonant
+    // joiner. Keep the assigned scalars precise rather than treating the
+    // unassigned gaps as script text, so fallback and bidi logic do not assign
+    // Tifinagh behavior to malformed/private data in the block.
+    return (codepoint >= 0x2d30 and codepoint <= 0x2d67) or
+        codepoint == 0x2d6f or
+        codepoint == 0x2d70 or
+        codepoint == 0x2d7f;
+}
+
+fn isTifinaghWordCodepoint(codepoint: u21) bool {
+    // Tifinagh words are anchored by letters plus U+2D6F labialization mark.
+    // U+2D70 is punctuation and U+2D7F attaches through isWordExtender(), so
+    // neither should start a selectable word on its own.
+    return (codepoint >= 0x2d30 and codepoint <= 0x2d67) or
+        codepoint == 0x2d6f;
+}
+
 fn isTibetanScriptCodepoint(codepoint: u21) bool {
     // Tibetan stacks rely on script-specific OpenType shaping (`tibt`) for
     // subjoined consonants, vowel signs, and marks. Keep the full Tibetan
@@ -925,7 +949,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .mandaic, .nko, .thaana, .adlam => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -2371,6 +2395,44 @@ test "Cherokee text selects Cherokee script runs and OpenType tag" {
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x13a3));
 }
 
+test "Tifinagh text keeps joiners and selects Tifinagh script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{2d30}\u{2d7f}\u{2d31} \u{2d37}\u{2d6f}\u{2d70}\u{2d59}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqualStrings("\u{2d30}\u{2d7f}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{2d31}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{2d37}", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{2d6f}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("\u{2d70}", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{2d59}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.tifinagh, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.tfng, openTypeScriptTag(scriptForCodepoint(0x2d30)));
+    try std.testing.expectEqual(OpenTypeScriptTag.tfng, openTypeScriptTag(scriptForCodepoint(0x2d6f)));
+    try std.testing.expectEqual(OpenTypeScriptTag.tfng, openTypeScriptTag(scriptForCodepoint(0x2d7f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x2d68));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x2d30));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("\u{2d30}\u{2d7f}\u{2d31}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{2d37}\u{2d6f}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{2d59}", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 test "Ethiopic text selects Ethiopic script runs and direction" {
     const allocator = std.testing.allocator;
 
@@ -3038,6 +3100,7 @@ const WordKind = enum {
     sundanese,
     meetei_mayek,
     canadian_aboriginal,
+    tifinagh,
     cham,
     brahmi,
     runic,
@@ -3190,6 +3253,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
     if (isOghamWordCodepoint(codepoint)) return .ogham;
+    if (isTifinaghWordCodepoint(codepoint)) return .tifinagh;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
@@ -3509,6 +3573,11 @@ fn isCombiningMark(codepoint: u21) bool {
         // primitives do not split a marked Coptic token between base and mark.
         (codepoint >= 0x2cef and codepoint <= 0x2cf1) or
         codepoint == 0x102e0 or
+        // U+2D7F TIFINAGH CONSONANT JOINER is a nonspacing sign that requests
+        // joined behavior with the preceding Tifinagh letter. Treat it as an
+        // Extend codepoint so caret, word, and shaping runs do not split the
+        // requested orthographic unit before font lookup selection.
+        codepoint == 0x2d7f or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the

@@ -48,6 +48,7 @@ pub const Script = enum {
     cham,
     brahmi,
     nushu,
+    runic,
     unknown,
 };
 
@@ -170,6 +171,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     cham = tag("cham"),
     brah = tag("brah"),
     nshu = tag("nshu"),
+    runr = tag("runr"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -232,6 +234,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .cham => .cham,
         .brahmi => .brah,
         .nushu => .nshu,
+        .runic => .runr,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -319,6 +322,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isChamScriptCodepoint(codepoint)) return .cham;
     if (isBrahmiScriptCodepoint(codepoint)) return .brahmi;
     if (isNushuScriptCodepoint(codepoint)) return .nushu;
+    if (isRunicScriptCodepoint(codepoint)) return .runic;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -474,6 +478,23 @@ fn isNushuScriptCodepoint(codepoint: u21) bool {
     // one shaping script so Nushu text selects script-specific font lookups
     // instead of falling through DFLT/unknown primitives.
     return codepoint >= 0x1b170 and codepoint <= 0x1b2ff;
+}
+
+fn isRunicScriptCodepoint(codepoint: u21) bool {
+    // The Runic block includes letters, word/division punctuation, and numeric
+    // symbols that fonts expose through the `runr` ScriptList entry. Keeping
+    // the whole block in one LTR shaping run prevents inscriptions that use
+    // native separators or Golden Number signs from falling back to DFLT in the
+    // middle of otherwise Runic text.
+    return codepoint >= 0x16a0 and codepoint <= 0x16ff;
+}
+
+fn isRunicWordCodepoint(codepoint: u21) bool {
+    // U+16EB..U+16ED are Runic word/division punctuation. Letters and Runic
+    // numeric symbols should group into normal word spans, while those
+    // separators deliberately break words just like spaces or punctuation.
+    return (codepoint >= 0x16a0 and codepoint <= 0x16ea) or
+        (codepoint >= 0x16ee and codepoint <= 0x16f8);
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -707,7 +728,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic => .ltr,
         else => .neutral,
     };
 }
@@ -2482,6 +2503,31 @@ test "Nushu characters select Nushu script and ideographic layout primitives" {
     try std.testing.expectEqual(LineBreakKind.soft, breaks[2].kind);
 }
 
+test "Runic text selects Runic script primitives and groups words around separators" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{16a0}\u{16b1}\u{16eb}\u{16f0} \u{16ee}\u{16f8}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.runic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.runr, openTypeScriptTag(scriptForCodepoint(0x16a0)));
+    try std.testing.expectEqual(OpenTypeScriptTag.runr, openTypeScriptTag(scriptForCodepoint(0x16f8)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x16a0));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x16ee));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("\u{16a0}\u{16b1}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{16f0}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{16ee}\u{16f8}", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2509,6 +2555,7 @@ const WordKind = enum {
     canadian_aboriginal,
     cham,
     brahmi,
+    runic,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2647,6 +2694,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     }
     if (isLisuWordCodepoint(codepoint)) return .lisu;
     if (isVaiWordCodepoint(codepoint)) return .vai;
+    if (isRunicWordCodepoint(codepoint)) return .runic;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,

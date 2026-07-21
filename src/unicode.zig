@@ -1438,7 +1438,14 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x093e and codepoint <= 0x0940) or
         (codepoint >= 0x0949 and codepoint <= 0x094c) or
         (codepoint >= 0x0982 and codepoint <= 0x0983) or
+        // Bengali dependent vowels/length marks with Grapheme_Cluster_Break=SpacingMark.
+        // Bengali split vowels such as U+09CB are encoded after the consonant
+        // but render around it; exposing a caret stop between base and vowel
+        // would bisect one orthographic syllable and desynchronize shaping clusters.
         (codepoint >= 0x09be and codepoint <= 0x09c0) or
+        (codepoint >= 0x09c7 and codepoint <= 0x09c8) or
+        (codepoint >= 0x09cb and codepoint <= 0x09cc) or
+        codepoint == 0x09d7 or
         (codepoint >= 0x0bbe and codepoint <= 0x0bc2) or
         (codepoint >= 0x0d3e and codepoint <= 0x0d40);
 }

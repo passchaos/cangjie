@@ -907,6 +907,12 @@ test "itemizes emoji regional indicator and spacing-mark grapheme clusters" {
     defer allocator.free(spacing_mark);
     try std.testing.expectEqual(@as(usize, 1), spacing_mark.len);
     try std.testing.expectEqual(@as(usize, 6), spacing_mark[0].byte_len);
+
+    const bengali_split_vowel = try itemizeGraphemeClusters(allocator, "কো!");
+    defer allocator.free(bengali_split_vowel);
+    try std.testing.expectEqual(@as(usize, 2), bengali_split_vowel.len);
+    try std.testing.expectEqualStrings("কো", "কো!"[bengali_split_vowel[0].byte_start..][0..bengali_split_vowel[0].byte_len]);
+    try std.testing.expectEqualStrings("!", "কো!"[bengali_split_vowel[1].byte_start..][0..bengali_split_vowel[1].byte_len]);
 }
 
 test "grapheme clusters retain supported-script combining marks and ZWNJ" {

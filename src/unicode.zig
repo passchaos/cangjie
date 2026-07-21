@@ -1214,6 +1214,19 @@ test "Tamil syllables keep marks and select Tamil OpenType script" {
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0b95));
 }
 
+test "grapheme clusters attach non-Arabic prepend signs to following bases" {
+    const allocator = std.testing.allocator;
+
+    const text = "ൎക 𑂽𑂦";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 3), clusters.len);
+    try std.testing.expectEqualStrings("ൎക", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("𑂽𑂦", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+}
+
 test "Hangul conjoining jamo classify as Hangul script runs" {
     const allocator = std.testing.allocator;
 
@@ -1573,11 +1586,19 @@ fn isIndicConsonant(codepoint: u21) bool {
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {
+    // Grapheme_Cluster_Break=Prepend signs render with the following base and
+    // therefore must not expose a caret/shaping boundary after themselves. Keep
+    // this compact table current for the non-Arabic prepend scalars as well;
+    // otherwise scripts such as Malayalam and Kaithi split a single user-
+    // perceived cluster before the base character.
     return (codepoint >= 0x0600 and codepoint <= 0x0605) or
         codepoint == 0x06dd or
         codepoint == 0x070f or
         (codepoint >= 0x0890 and codepoint <= 0x0891) or
-        codepoint == 0x08e2;
+        codepoint == 0x08e2 or
+        codepoint == 0x0d4e or
+        codepoint == 0x110bd or
+        codepoint == 0x110cd;
 }
 
 fn isGraphemeControl(codepoint: u21) bool {

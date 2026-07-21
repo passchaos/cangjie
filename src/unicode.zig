@@ -16,6 +16,7 @@ pub const Script = enum {
     hangul,
     arabic,
     hebrew,
+    syriac,
     armenian,
     devanagari,
     sinhala,
@@ -112,6 +113,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     hang = tag("hang"),
     arab = tag("arab"),
     hebr = tag("hebr"),
+    syrc = tag("syrc"),
     armn = tag("armn"),
     dev2 = tag("dev2"),
     sinh = tag("sinh"),
@@ -148,6 +150,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .hangul => .hang,
         .arabic => .arab,
         .hebrew => .hebr,
+        .syriac => .syrc,
         .armenian => .armn,
         .devanagari => .dev2,
         .sinhala => .sinh,
@@ -211,6 +214,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
+    if (isSyriacScriptCodepoint(codepoint)) return .syriac;
     if (isArmenianScriptCodepoint(codepoint)) return .armenian;
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
@@ -243,6 +247,15 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isSyriacScriptCodepoint(codepoint: u21) bool {
+    // Syriac is a right-to-left cursive script with script-specific OpenType
+    // shaping. Its base letters, combining marks, abbreviations, and
+    // supplementary letters all need to stay in one `syrc` shaping run rather
+    // than being treated as DFLT/neutral text between Arabic/Hebrew support.
+    return (codepoint >= 0x0700 and codepoint <= 0x074f) or
+        (codepoint >= 0x0860 and codepoint <= 0x086f);
 }
 
 fn isGeorgianScriptCodepoint(codepoint: u21) bool {
@@ -366,7 +379,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew => .rtl,
+        .arabic, .hebrew, .syriac => .rtl,
         .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .devanagari, .sinhala, .tamil, .ethiopic, .georgian => .ltr,
         else => .neutral,
     };
@@ -1094,6 +1107,23 @@ test "Hebrew presentation forms keep Hebrew script and RTL direction" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(OpenTypeScriptTag.hebr, openTypeScriptTag(scriptForCodepoint(0xfb2a)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0xfb2a));
+}
+
+test "Syriac text selects Syriac script and RTL shaping direction" {
+    const allocator = std.testing.allocator;
+
+    const text = "ܫܠܡ ݍ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.syriac, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x072b)));
+    try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x086d)));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x072b));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x086d));
 }
 
 test "Armenian text selects Armenian script, words, and OpenType tag" {

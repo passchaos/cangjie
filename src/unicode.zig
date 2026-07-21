@@ -51,6 +51,7 @@ pub const Script = enum {
     mongolian,
     balinese,
     javanese,
+    rejang,
     limbu,
     lepcha,
     buginese,
@@ -188,6 +189,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     mong = tag("mong"),
     bali = tag("bali"),
     java = tag("java"),
+    rjng = tag("rjng"),
     limb = tag("limb"),
     lepc = tag("lepc"),
     bugi = tag("bugi"),
@@ -265,6 +267,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .mongolian => .mong,
         .balinese => .bali,
         .javanese => .java,
+        .rejang => .rjng,
         .limbu => .limb,
         .lepcha => .lepc,
         .buginese => .bugi,
@@ -368,6 +371,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
+    if (isRejangScriptCodepoint(codepoint)) return .rejang;
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
     if (isLepchaScriptCodepoint(codepoint)) return .lepcha;
     if (isBugineseScriptCodepoint(codepoint)) return .buginese;
@@ -465,6 +469,22 @@ fn isJavaneseScriptCodepoint(codepoint: u21) bool {
     // block together avoids splitting aksara syllables through DFLT/unknown
     // runs before GSUB/GPOS lookup selection.
     return codepoint >= 0xa980 and codepoint <= 0xa9df;
+}
+
+fn isRejangScriptCodepoint(codepoint: u21) bool {
+    // Rejang has one compact block with letters, dependent vowel/consonant
+    // signs, virama, and a native section mark. Keep only assigned scalars in
+    // the `rjng` shaping run so the unassigned U+A954..U+A95E gap does not
+    // silently inherit Rejang script or LTR bidi behavior.
+    return (codepoint >= 0xa930 and codepoint <= 0xa953) or
+        codepoint == 0xa95f;
+}
+
+fn isRejangWordCodepoint(codepoint: u21) bool {
+    // Word spans are anchored on Rejang letters. Dependent vowels, final
+    // consonant signs, and virama attach through the generic extender tables,
+    // while the section mark remains script text but not selectable word text.
+    return codepoint >= 0xa930 and codepoint <= 0xa946;
 }
 
 fn isLimbuScriptCodepoint(codepoint: u21) bool {
@@ -1068,7 +1088,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .lepcha, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .rejang, .limbu, .lepcha, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -2831,6 +2851,46 @@ test "Javanese syllables keep marks and select Javanese OpenType script" {
     try std.testing.expectEqualStrings("ꦲꦤꦕꦫꦏ", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Rejang syllables keep signs and select Rejang OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{a930}\u{a947} \u{a930}\u{a952} \u{a930}\u{a953} \u{a95f}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqualStrings("\u{a930}\u{a947}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{a930}\u{a952}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{a930}\u{a953}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{a95f}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.rejang, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.rjng, openTypeScriptTag(scriptForCodepoint(0xa930)));
+    try std.testing.expectEqual(OpenTypeScriptTag.rjng, openTypeScriptTag(scriptForCodepoint(0xa947)));
+    try std.testing.expectEqual(OpenTypeScriptTag.rjng, openTypeScriptTag(scriptForCodepoint(0xa953)));
+    try std.testing.expectEqual(OpenTypeScriptTag.rjng, openTypeScriptTag(scriptForCodepoint(0xa95f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0xa954));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xa930));
+    try std.testing.expectEqual(BidiClass.neutral, bidiClassForCodepoint(0xa954));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("\u{a930}\u{a947}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{a930}\u{a952}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{a930}\u{a953}", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 test "Limbu syllables keep marks and select Limbu OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -3410,6 +3470,7 @@ const WordKind = enum {
     malayalam,
     balinese,
     javanese,
+    rejang,
     limbu,
     lepcha,
     buginese,
@@ -3576,6 +3637,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isGlagoliticWordCodepoint(codepoint)) return .glagolitic;
     if (isOldItalicWordCodepoint(codepoint)) return .old_italic;
     if (isAvestanWordCodepoint(codepoint)) return .avestan;
+    if (isRejangWordCodepoint(codepoint)) return .rejang;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
@@ -3857,6 +3919,10 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0xa9b3 or
         (codepoint >= 0xa9b6 and codepoint <= 0xa9b9) or
         (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
+        // Rejang dependent vowel/consonant signs are nonspacing signs typed
+        // after a base letter. Keep them attached so caret, word, and shaping
+        // primitives do not split one Rejang orthographic syllable.
+        (codepoint >= 0xa947 and codepoint <= 0xa951) or
         // Limbu vowel/final-consonant signs are typed after the base letter
         // but combine with it as one orthographic unit. Preserve that unit for
         // caret, word, and shaping-boundary primitives.
@@ -4186,6 +4252,9 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0xa9b4 and codepoint <= 0xa9b5) or
         (codepoint >= 0xa9ba and codepoint <= 0xa9bb) or
         (codepoint >= 0xa9be and codepoint <= 0xa9c0) or
+        // Rejang final H and virama are visible spacing signs but still belong
+        // to the previous base for grapheme, word, and shaping boundaries.
+        (codepoint >= 0xa952 and codepoint <= 0xa953) or
         // Limbu spacing vowels, subjoined letters, and visible final
         // consonant signs are GCB=SpacingMark. Keeping them attached avoids
         // exposing invalid boundaries inside syllables such as ᤁᤩ and ᤁᤠ.

@@ -19,6 +19,7 @@ pub const Script = enum {
     hangul,
     arabic,
     hebrew,
+    phoenician,
     syriac,
     mandaic,
     armenian,
@@ -151,6 +152,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     hang = tag("hang"),
     arab = tag("arab"),
     hebr = tag("hebr"),
+    phnx = tag("phnx"),
     syrc = tag("syrc"),
     mand = tag("mand"),
     armn = tag("armn"),
@@ -223,6 +225,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .hangul => .hang,
         .arabic => .arab,
         .hebrew => .hebr,
+        .phoenician => .phnx,
         .syriac => .syrc,
         .mandaic => .mand,
         .armenian => .armn,
@@ -320,6 +323,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
+    if (isPhoenicianScriptCodepoint(codepoint)) return .phoenician;
     if (isSyriacScriptCodepoint(codepoint)) return .syriac;
     if (isMandaicScriptCodepoint(codepoint)) return .mandaic;
     if (isArmenianScriptCodepoint(codepoint)) return .armenian;
@@ -566,6 +570,24 @@ fn isOghamWordCodepoint(codepoint: u21) bool {
     // not word letters. The twenty-five letter names form normal unspaced word
     // spans for caret movement and selection.
     return codepoint >= 0x1681 and codepoint <= 0x169a;
+}
+
+fn isPhoenicianScriptCodepoint(codepoint: u21) bool {
+    // Phoenician is an historic right-to-left script with a registered OpenType
+    // script tag (`phnx`). Keep the assigned letters, native number signs, and
+    // word separator in one script run so inscriptions do not fall back to
+    // DFLT/neutral shaping between letters and native punctuation. The
+    // unassigned U+1091C..U+1091E gap remains unknown on purpose.
+    return (codepoint >= 0x10900 and codepoint <= 0x1091b) or
+        codepoint == 0x1091f;
+}
+
+fn isPhoenicianWordCodepoint(codepoint: u21) bool {
+    // Phoenician number signs are strong RTL script characters and should group
+    // with adjacent letters for coarse word/caret primitives. U+1091F is a
+    // word separator, so it stays in the script run but deliberately breaks the
+    // selectable word span.
+    return codepoint >= 0x10900 and codepoint <= 0x1091b;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -948,7 +970,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .syriac, .mandaic, .nko, .thaana, .adlam => .rtl,
+        .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam => .rtl,
         .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -1676,6 +1698,32 @@ test "Hebrew presentation forms keep Hebrew script and RTL direction" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(OpenTypeScriptTag.hebr, openTypeScriptTag(scriptForCodepoint(0xfb2a)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0xfb2a));
+}
+
+test "Phoenician text selects Phoenician RTL script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{10900}\u{10901}\u{1091f}\u{10902}\u{10916}\u{1091a}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.phoenician, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.phnx, openTypeScriptTag(scriptForCodepoint(0x10900)));
+    try std.testing.expectEqual(OpenTypeScriptTag.phnx, openTypeScriptTag(scriptForCodepoint(0x10916)));
+    try std.testing.expectEqual(OpenTypeScriptTag.phnx, openTypeScriptTag(scriptForCodepoint(0x1091f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x1091c));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10900));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10916));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{10900}\u{10901}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{10902}\u{10916}\u{1091a}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Syriac text selects Syriac script and RTL shaping direction" {
@@ -3077,6 +3125,7 @@ const WordKind = enum {
     vai,
     arabic,
     hebrew,
+    phoenician,
     armenian,
     thaana,
     adlam,
@@ -3249,6 +3298,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isThaanaWordCodepoint(codepoint)) return .thaana;
     if (isAdlamWordCodepoint(codepoint)) return .adlam;
     if (isMandaicWordCodepoint(codepoint)) return .mandaic;
+    if (isPhoenicianWordCodepoint(codepoint)) return .phoenician;
     if (isGujaratiWordCodepoint(codepoint)) return .gujarati;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;

@@ -10,6 +10,7 @@ pub const Script = enum {
     latin,
     greek,
     cyrillic,
+    glagolitic,
     han,
     yi,
     lisu,
@@ -143,6 +144,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     latn = tag("latn"),
     grek = tag("grek"),
     cyrl = tag("cyrl"),
+    glag = tag("glag"),
     hani = tag("hani"),
     yi = tag("yi  "),
     lisu = tag("lisu"),
@@ -216,6 +218,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .latin => .latn,
         .greek => .grek,
         .cyrillic => .cyrl,
+        .glagolitic => .glag,
         .han => .hani,
         .yi => .yi,
         .lisu => .lisu,
@@ -321,6 +324,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCopticScriptCodepoint(codepoint)) return .coptic;
     if (isGreekScriptCodepoint(codepoint)) return .greek;
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
+    if (isGlagoliticScriptCodepoint(codepoint)) return .glagolitic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (isPhoenicianScriptCodepoint(codepoint)) return .phoenician;
@@ -964,6 +968,24 @@ fn isCyrillicScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x1e030 and codepoint <= 0x1e08f);
 }
 
+fn isGlagoliticScriptCodepoint(codepoint: u21) bool {
+    // Glagolitic combines a BMP alphabet block with supplementary combining
+    // letters used in historic manuscripts. Fonts expose both through the
+    // `glag` ScriptList entry, so keep base letters and combining letters in a
+    // single LTR shaping run instead of treating the supplement as unknown
+    // combining data between otherwise Glagolitic bases.
+    return (codepoint >= 0x2c00 and codepoint <= 0x2c5f) or
+        (codepoint >= 0x1e000 and codepoint <= 0x1e02a);
+}
+
+fn isGlagoliticWordCodepoint(codepoint: u21) bool {
+    // Word spans are anchored on Glagolitic base letters. Supplementary
+    // combining letters attach through isWordExtender(), which avoids turning a
+    // stray leading combining mark into a selectable word by itself while still
+    // preserving marked manuscript abbreviations as one token.
+    return codepoint >= 0x2c00 and codepoint <= 0x2c5f;
+}
+
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
 /// higher-level bidi functions use this coarse class to build visual runs.
 pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
@@ -971,7 +993,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -1668,6 +1690,42 @@ test "Greek and Cyrillic letters select script-specific OpenType tags" {
     try std.testing.expectEqual(OpenTypeScriptTag.grek, openTypeScriptTag(scriptForCodepoint(0x1f88)));
     try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(scriptForCodepoint(0x0416)));
     try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(scriptForCodepoint(0xa66e)));
+}
+
+test "Glagolitic text keeps combining letters and selects Glagolitic OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{2c00}\u{1e000}\u{2c30} \u{2c5f}\u{1e02a}!";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.glagolitic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.glag, openTypeScriptTag(scriptForCodepoint(0x2c00)));
+    try std.testing.expectEqual(OpenTypeScriptTag.glag, openTypeScriptTag(scriptForCodepoint(0x1e000)));
+    try std.testing.expectEqual(OpenTypeScriptTag.glag, openTypeScriptTag(scriptForCodepoint(0x2c5f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x1e02b));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x2c00));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1e000));
+
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 5), clusters.len);
+    try std.testing.expectEqualStrings("\u{2c00}\u{1e000}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{2c30}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{2c5f}\u{1e02a}", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("!", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{2c00}\u{1e000}\u{2c30}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{2c5f}\u{1e02a}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Arabic presentation forms keep Arabic script and RTL direction" {
@@ -3127,6 +3185,7 @@ const WordKind = enum {
     hebrew,
     phoenician,
     armenian,
+    glagolitic,
     thaana,
     adlam,
     mandaic,
@@ -3304,6 +3363,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isCopticWordCodepoint(codepoint)) return .coptic;
     if (isOghamWordCodepoint(codepoint)) return .ogham;
     if (isTifinaghWordCodepoint(codepoint)) return .tifinagh;
+    if (isGlagoliticWordCodepoint(codepoint)) return .glagolitic;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
@@ -3436,6 +3496,11 @@ fn isCombiningMark(codepoint: u21) bool {
         // nukta are GCB=Extend. They are typed after RTL Adlam letters but
         // must share one caret/word/shaping unit with the base glyph.
         (codepoint >= 0x1e944 and codepoint <= 0x1e94a) or
+        // Combining Glagolitic letters are encoded in the supplementary plane
+        // and stack with BMP Glagolitic bases. Treat them as Extend so
+        // manuscript-style abbreviations stay one grapheme, word, and shaping
+        // unit under the `glag` OpenType script selection.
+        (codepoint >= 0x1e000 and codepoint <= 0x1e02a) or
         // Tibetan vowel signs, halanta, subjoined-letter marks, and other
         // signs are typed after the base but form one stack/syllable for
         // grapheme and shaping boundaries.

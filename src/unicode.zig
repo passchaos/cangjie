@@ -18,6 +18,7 @@ pub const Script = enum {
     hebrew,
     devanagari,
     tamil,
+    ethiopic,
     unknown,
 };
 
@@ -110,6 +111,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     hebr = tag("hebr"),
     dev2 = tag("dev2"),
     taml = tag("taml"),
+    ethi = tag("ethi"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -142,6 +144,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .hebrew => .hebr,
         .devanagari => .dev2,
         .tamil => .taml,
+        .ethiopic => .ethi,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -202,6 +205,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
+    if (isEthiopicScriptCodepoint(codepoint)) return .ethiopic;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -227,6 +231,17 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isEthiopicScriptCodepoint(codepoint: u21) bool {
+    // Ethiopic has no complex OpenType shaper, but fonts still commonly put
+    // language and punctuation-sensitive substitutions/positioning under the
+    // `ethi` ScriptList entry. Keep the base block, supplement, extended, and
+    // extended-A letters/numerals in one LTR script run instead of routing them
+    // through DFLT/unknown.
+    return (codepoint >= 0x1200 and codepoint <= 0x139f) or
+        (codepoint >= 0x2d80 and codepoint <= 0x2ddf) or
+        (codepoint >= 0xab00 and codepoint <= 0xab2f);
 }
 
 fn isTamilScriptCodepoint(codepoint: u21) bool {
@@ -305,7 +320,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .devanagari, .tamil => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .devanagari, .tamil, .ethiopic => .ltr,
         else => .neutral,
     };
 }
@@ -1241,6 +1256,24 @@ test "Hangul conjoining jamo classify as Hangul script runs" {
     try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0x1100)));
     try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0xA960)));
     try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0xD7B0)));
+}
+
+test "Ethiopic text selects Ethiopic script runs and direction" {
+    const allocator = std.testing.allocator;
+
+    const text = "ሰላም። ግዕዝ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.ethiopic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.ethi, openTypeScriptTag(scriptForCodepoint(0x1230)));
+    try std.testing.expectEqual(OpenTypeScriptTag.ethi, openTypeScriptTag(scriptForCodepoint(0x1380)));
+    try std.testing.expectEqual(OpenTypeScriptTag.ethi, openTypeScriptTag(scriptForCodepoint(0x2d80)));
+    try std.testing.expectEqual(OpenTypeScriptTag.ethi, openTypeScriptTag(scriptForCodepoint(0xab20)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1230));
 }
 
 const WordKind = enum {

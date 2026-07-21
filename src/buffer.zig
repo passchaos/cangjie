@@ -283,7 +283,7 @@ pub const TextBuffer = struct {
     }
 
     pub fn setScrollY(self: *TextBuffer, scroll_y: f32) void {
-        self.scroll_y = @max(0, scroll_y);
+        self.scroll_y = if (std.math.isFinite(scroll_y)) @max(0, scroll_y) else 0;
     }
 
     pub fn visibleLineRange(self: *TextBuffer, config: LayoutConfig, viewport_height: f32) !VisibleLineRange {
@@ -951,6 +951,10 @@ test "TextBuffer tracks visible line range and scrolls cursor into view" {
     try std.testing.expectEqual(@as(usize, 5), visible_bytes.byte_end);
 
     buffer.setScrollY(-10);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buffer.scroll_y, 0.001);
+    buffer.setScrollY(std.math.nan(f32));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buffer.scroll_y, 0.001);
+    buffer.setScrollY(std.math.inf(f32));
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), buffer.scroll_y, 0.001);
 
     try buffer.setCursor(4);

@@ -1171,6 +1171,23 @@ test "grapheme clusters keep Khmer dependent signs with their base letters" {
     try std.testing.expectEqualStrings("កៀ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
 }
 
+test "Telugu and Kannada dependent signs stay with base graphemes" {
+    const allocator = std.testing.allocator;
+
+    const text = "కి కా ಕಿ ಕಾ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqualStrings("కి", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("కా", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ಕಿ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("ಕಾ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+}
+
 test "Tamil syllables keep marks and select Tamil OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -1623,6 +1640,22 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x093e and codepoint <= 0x0940) or
         (codepoint >= 0x0949 and codepoint <= 0x094c) or
         (codepoint >= 0x0982 and codepoint <= 0x0983) or
+        // Telugu and Kannada dependent vowels/viramas are encoded after the
+        // consonant but form a single orthographic unit. Covering both Extend
+        // and SpacingMark classes here prevents layout/caret primitives from
+        // creating invalid boundaries inside common South Indian syllables.
+        (codepoint >= 0x0c00 and codepoint <= 0x0c04) or
+        (codepoint >= 0x0c3c and codepoint <= 0x0c44) or
+        (codepoint >= 0x0c46 and codepoint <= 0x0c48) or
+        (codepoint >= 0x0c4a and codepoint <= 0x0c4d) or
+        (codepoint >= 0x0c55 and codepoint <= 0x0c56) or
+        (codepoint >= 0x0c62 and codepoint <= 0x0c63) or
+        (codepoint >= 0x0cbc and codepoint <= 0x0cbe) or
+        (codepoint >= 0x0cbf and codepoint <= 0x0cc4) or
+        (codepoint >= 0x0cc6 and codepoint <= 0x0cc8) or
+        (codepoint >= 0x0cca and codepoint <= 0x0ccd) or
+        (codepoint >= 0x0cd5 and codepoint <= 0x0cd6) or
+        (codepoint >= 0x0ce2 and codepoint <= 0x0ce3) or
         // Bengali dependent vowels/length marks with Grapheme_Cluster_Break=SpacingMark.
         // Bengali split vowels such as U+09CB are encoded after the consonant
         // but render around it; exposing a caret stop between base and vowel

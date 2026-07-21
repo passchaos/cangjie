@@ -681,6 +681,7 @@ test "detects scripts and itemizes script runs" {
     try std.testing.expectEqual(OpenTypeLanguageTag.zhs, inferOpenTypeLanguageTag("一丁"));
     try std.testing.expectEqual(OpenTypeLanguageTag.kor, inferOpenTypeLanguageTag("한글"));
     try std.testing.expectEqual(OpenTypeLanguageTag.ara, inferOpenTypeLanguageTag("ب"));
+    try std.testing.expectEqual(OpenTypeLanguageTag.dflt, inferOpenTypeLanguageTag("A\xff一"));
 
     const runs = try itemizeScriptRuns(allocator, "ab 12一丁،ب");
     defer allocator.free(runs);

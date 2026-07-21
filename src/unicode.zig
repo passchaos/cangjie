@@ -142,8 +142,11 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
 /// LangSys than always using `dflt`.
 pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
     var saw_han = false;
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.nextCodepoint()) |codepoint| {
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const decoded = decodeCodepointAt(text, cursor) orelse return .dflt;
+        const codepoint = decoded.codepoint;
+        cursor = decoded.next;
         const script = scriptForCodepoint(codepoint);
         switch (script) {
             .hiragana, .katakana => return .jan,
@@ -156,6 +159,20 @@ pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
     }
     if (saw_han) return .zhs;
     return .dflt;
+}
+
+const DecodedCodepoint = struct {
+    codepoint: u21,
+    next: usize,
+};
+
+fn decodeCodepointAt(text: []const u8, cursor: usize) ?DecodedCodepoint {
+    if (cursor >= text.len) return null;
+    const len = std.unicode.utf8ByteSequenceLength(text[cursor]) catch return null;
+    const end = cursor + @as(usize, len);
+    if (end > text.len) return null;
+    const codepoint = std.unicode.utf8Decode(text[cursor..end]) catch return null;
+    return .{ .codepoint = codepoint, .next = end };
 }
 
 pub fn tag(comptime bytes: *const [4]u8) u32 {

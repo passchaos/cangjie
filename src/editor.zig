@@ -47,6 +47,7 @@ pub const ImeComposition = struct {
     text: []u8,
 
     pub fn init(allocator: std.mem.Allocator, anchor_byte: usize, replace_start: usize, replace_end: usize, text: []const u8) !ImeComposition {
+        if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
         return .{
             .allocator = allocator,
             .anchor_byte = anchor_byte,
@@ -361,6 +362,7 @@ pub const TextEditor = struct {
             return;
         }
         const composition = &self.composition.?;
+        if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
         const updated = try self.allocator.dupe(u8, text);
         self.allocator.free(composition.text);
         composition.text = updated;
@@ -1021,9 +1023,15 @@ test "TextEditor tracks and commits IME composition" {
     defer editor.deinit();
 
     try editor.setCursor(1);
+    try std.testing.expectError(error.InvalidUtf8, editor.beginComposition("\xff"));
+    try std.testing.expect(!editor.hasComposition());
+
     try editor.beginComposition("x");
     try std.testing.expect(editor.hasComposition());
     try std.testing.expectEqualStrings("ab", editor.slice());
+    try std.testing.expectEqualStrings("x", editor.composition.?.slice());
+
+    try std.testing.expectError(error.InvalidUtf8, editor.updateComposition("\xff"));
     try std.testing.expectEqualStrings("x", editor.composition.?.slice());
 
     try editor.updateComposition("一");

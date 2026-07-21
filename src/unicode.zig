@@ -397,7 +397,7 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
     var clusters = std.ArrayList(GraphemeCluster).empty;
     errdefer clusters.deinit(allocator);
 
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    var cursor: usize = 0;
     var cluster_start: ?usize = null;
     var cluster_end: usize = 0;
     var previous_codepoint: ?u21 = null;
@@ -407,10 +407,12 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
     // Approximate UAX #29 extended grapheme clusters for the scripts supported
     // here: combining marks, variation selectors, emoji modifiers, ZWJ chains,
     // regional-indicator pairs, and Hangul Jamo syllable sequences.
-    while (it.i < text.len) {
-        const byte_start = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        const byte_end = it.i;
+    while (cursor < text.len) {
+        const byte_start = cursor;
+        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
+        const codepoint = decoded.codepoint;
+        const byte_end = decoded.next;
+        cursor = byte_end;
 
         if (cluster_start == null) {
             cluster_start = byte_start;

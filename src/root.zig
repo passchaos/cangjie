@@ -851,6 +851,8 @@ test "itemizes basic grapheme clusters" {
     try std.testing.expectEqual(@as(usize, 2), leading_mark.len);
     try std.testing.expectEqual(@as(usize, 0), leading_mark[0].byte_start);
     try std.testing.expectEqual(@as(usize, 2), leading_mark[0].byte_len);
+
+    try std.testing.expectError(error.InvalidUtf8, itemizeGraphemeClusters(allocator, "a\xffb"));
 }
 
 test "grapheme clusters keep emoji tag sequences atomic" {

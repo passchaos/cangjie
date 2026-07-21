@@ -38,6 +38,7 @@ pub const Script = enum {
     balinese,
     javanese,
     limbu,
+    buginese,
     unknown,
 };
 
@@ -150,6 +151,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     bali = tag("bali"),
     java = tag("java"),
     limb = tag("limb"),
+    bugi = tag("bugi"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -202,6 +204,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .balinese => .bali,
         .javanese => .java,
         .limbu => .limb,
+        .buginese => .bugi,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -282,6 +285,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
+    if (isBugineseScriptCodepoint(codepoint)) return .buginese;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -331,6 +335,14 @@ fn isLimbuScriptCodepoint(codepoint: u21) bool {
     // under the `limb` ScriptList entry, so keep the block in one run instead
     // of routing combining pieces through DFLT/unknown before layout.
     return codepoint >= 0x1900 and codepoint <= 0x194f;
+}
+
+fn isBugineseScriptCodepoint(codepoint: u21) bool {
+    // Buginese dependent vowels are split between nonspacing and spacing
+    // marks, but fonts select one `bugi` OpenType script system for the whole
+    // syllable. Treat the compact block as one shaping script so lontara text
+    // is not split through DFLT/unknown before GSUB/GPOS lookup selection.
+    return codepoint >= 0x1a00 and codepoint <= 0x1a1f;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -564,7 +576,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese => .ltr,
         else => .neutral,
     };
 }
@@ -1990,6 +2002,42 @@ test "Limbu syllables keep marks and select Limbu OpenType script" {
     try std.testing.expectEqualStrings("ᤋ᤺ᤛ", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Buginese syllables keep vowels and select Buginese OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "ᨀᨗ ᨔᨛ ᨄᨙᨑᨗ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 6), clusters.len);
+    try std.testing.expectEqualStrings("ᨀᨗ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ᨔᨛ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ᨄᨙ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("ᨑᨗ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.buginese, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.bugi, openTypeScriptTag(scriptForCodepoint(0x1a00)));
+    try std.testing.expectEqual(OpenTypeScriptTag.bugi, openTypeScriptTag(scriptForCodepoint(0x1a17)));
+    try std.testing.expectEqual(OpenTypeScriptTag.bugi, openTypeScriptTag(scriptForCodepoint(0x1a19)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1a00));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("ᨀᨗ", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ᨔᨛ", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("ᨄᨙᨑᨗ", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2009,6 +2057,7 @@ const WordKind = enum {
     balinese,
     javanese,
     limbu,
+    buginese,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2158,6 +2207,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .balinese => .balinese,
         .javanese => .javanese,
         .limbu => .limbu,
+        .buginese => .buginese,
         else => .none,
     };
 }
@@ -2383,6 +2433,11 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x1927 and codepoint <= 0x1928) or
         codepoint == 0x1932 or
         (codepoint >= 0x1939 and codepoint <= 0x193b) or
+        // Buginese nonspacing vowel signs share the base lontara letter's
+        // caret and shaping unit. Without these small GCB=Extend ranges,
+        // syllables such as ᨀᨗ and ᨔᨛ split between base and dependent vowel.
+        (codepoint >= 0x1a17 and codepoint <= 0x1a18) or
+        codepoint == 0x1a1b or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the
@@ -2630,7 +2685,12 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x1923 and codepoint <= 0x1926) or
         (codepoint >= 0x1929 and codepoint <= 0x192b) or
         (codepoint >= 0x1930 and codepoint <= 0x1931) or
-        (codepoint >= 0x1933 and codepoint <= 0x1938);
+        (codepoint >= 0x1933 and codepoint <= 0x1938) or
+        // Buginese U+1A19/U+1A1A are visible dependent vowels with
+        // Grapheme_Cluster_Break=SpacingMark. They are encoded after the base
+        // but belong to the same orthographic syllable for caret/word/layout
+        // primitives.
+        (codepoint >= 0x1a19 and codepoint <= 0x1a1a);
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

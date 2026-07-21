@@ -13,6 +13,7 @@ pub const Script = enum {
     han,
     yi,
     lisu,
+    vai,
     hiragana,
     katakana,
     hangul,
@@ -133,6 +134,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     hani = tag("hani"),
     yi = tag("yi  "),
     lisu = tag("lisu"),
+    vai = tag("vai "),
     hira = tag("hira"),
     kana = tag("kana"),
     hang = tag("hang"),
@@ -193,6 +195,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .han => .hani,
         .yi => .yi,
         .lisu => .lisu,
+        .vai => .vai,
         .hiragana => .hira,
         .katakana => .kana,
         .hangul => .hang,
@@ -337,8 +340,25 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isYiScriptCodepoint(codepoint)) return .yi;
     if (isLisuScriptCodepoint(codepoint)) return .lisu;
+    if (isVaiScriptCodepoint(codepoint)) return .vai;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isVaiScriptCodepoint(codepoint: u21) bool {
+    // Vai fonts use the `vai ` OpenType ScriptList entry for the syllabary,
+    // digits, lengthener, and script punctuation in the A500 block. Keeping the
+    // whole block in one run prevents Vai words from falling back to DFLT when
+    // they contain native digits or punctuation adjacent to syllables.
+    return codepoint >= 0xa500 and codepoint <= 0xa63f;
+}
+
+fn isVaiWordCodepoint(codepoint: u21) bool {
+    // U+A60D..U+A60F are Vai punctuation. Syllables, the syllable lengthener,
+    // supplementary syllables, and native digits should group into normal
+    // space-delimited words instead of becoming one segment per codepoint.
+    return (codepoint >= 0xa500 and codepoint <= 0xa60c) or
+        (codepoint >= 0xa610 and codepoint <= 0xa62b);
 }
 
 fn isLisuScriptCodepoint(codepoint: u21) bool {
@@ -675,7 +695,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi => .ltr,
         else => .neutral,
     };
 }
@@ -2366,6 +2386,30 @@ test "Yi syllables and radicals select Yi script primitives" {
     try std.testing.expectEqual(LineBreakKind.soft, breaks[2].kind);
 }
 
+test "Vai syllables select Vai script and word primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{a500}\u{a501}\u{a60c} \u{a610}\u{a620}\u{a60d}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.vai, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.vai, openTypeScriptTag(scriptForCodepoint(0xa500)));
+    try std.testing.expectEqual(OpenTypeScriptTag.vai, openTypeScriptTag(scriptForCodepoint(0xa60c)));
+    try std.testing.expectEqual(OpenTypeScriptTag.vai, openTypeScriptTag(scriptForCodepoint(0xa620)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xa500));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{a500}\u{a501}\u{a60c}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{a610}\u{a620}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
 test "Lisu letters select Lisu script primitives" {
     const allocator = std.testing.allocator;
 
@@ -2396,6 +2440,7 @@ const WordKind = enum {
     single,
     latin_number,
     lisu,
+    vai,
     arabic,
     hebrew,
     armenian,
@@ -2550,6 +2595,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         return .latin_number;
     }
     if (isLisuWordCodepoint(codepoint)) return .lisu;
+    if (isVaiWordCodepoint(codepoint)) return .vai;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .hiragana, .katakana, .hangul => .single,

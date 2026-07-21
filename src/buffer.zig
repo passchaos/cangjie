@@ -288,7 +288,7 @@ pub const TextBuffer = struct {
 
     pub fn visibleLineRange(self: *TextBuffer, config: LayoutConfig, viewport_height: f32) !VisibleLineRange {
         const paragraph = try self.ensureLayout(config);
-        if (paragraph.lines.len == 0 or viewport_height <= 0) return .{ .start_line = 0, .end_line = 0 };
+        if (paragraph.lines.len == 0 or !std.math.isFinite(viewport_height) or viewport_height <= 0) return .{ .start_line = 0, .end_line = 0 };
         const view_start = self.scroll_y;
         const view_end = self.scroll_y + viewport_height;
         var start: ?usize = null;
@@ -324,7 +324,7 @@ pub const TextBuffer = struct {
     }
 
     pub fn scrollCursorIntoView(self: *TextBuffer, config: LayoutConfig, viewport_height: f32) !void {
-        if (viewport_height <= 0) return;
+        if (!std.math.isFinite(viewport_height) or viewport_height <= 0) return;
         const cursor = try self.cursorRect(config);
         if (cursor.y < self.scroll_y) {
             self.scroll_y = @max(0, cursor.y);
@@ -938,6 +938,8 @@ test "TextBuffer tracks visible line range and scrolls cursor into view" {
     try std.testing.expectEqual(@as(usize, 0), visible.start_line);
     try std.testing.expectEqual(@as(usize, 2), visible.end_line);
     try std.testing.expect(!visible.isEmpty());
+    try std.testing.expect((try buffer.visibleLineRange(config, std.math.nan(f32))).isEmpty());
+    try std.testing.expect((try buffer.visibleLineRange(config, std.math.inf(f32))).isEmpty());
     var visible_bytes = try buffer.visibleByteRange(config, 48);
     try std.testing.expectEqual(@as(usize, 0), visible_bytes.byte_start);
     try std.testing.expectEqual(@as(usize, 3), visible_bytes.byte_end);
@@ -958,6 +960,11 @@ test "TextBuffer tracks visible line range and scrolls cursor into view" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), buffer.scroll_y, 0.001);
 
     try buffer.setCursor(4);
+    buffer.setScrollY(12);
+    try buffer.scrollCursorIntoView(config, std.math.nan(f32));
+    try std.testing.expectApproxEqAbs(@as(f32, 12.0), buffer.scroll_y, 0.001);
+    try buffer.scrollCursorIntoView(config, std.math.inf(f32));
+    try std.testing.expectApproxEqAbs(@as(f32, 12.0), buffer.scroll_y, 0.001);
     try buffer.scrollCursorIntoView(config, 24);
     try std.testing.expectApproxEqAbs(@as(f32, 48.0), buffer.scroll_y, 0.001);
     visible = try buffer.visibleLineRange(config, 24);

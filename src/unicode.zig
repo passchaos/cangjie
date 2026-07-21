@@ -37,6 +37,7 @@ pub const Script = enum {
     mongolian,
     balinese,
     javanese,
+    limbu,
     unknown,
 };
 
@@ -148,6 +149,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     mong = tag("mong"),
     bali = tag("bali"),
     java = tag("java"),
+    limb = tag("limb"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -199,6 +201,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .mongolian => .mong,
         .balinese => .bali,
         .javanese => .java,
+        .limbu => .limb,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -278,6 +281,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
+    if (isLimbuScriptCodepoint(codepoint)) return .limbu;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -319,6 +323,14 @@ fn isJavaneseScriptCodepoint(codepoint: u21) bool {
     // block together avoids splitting aksara syllables through DFLT/unknown
     // runs before GSUB/GPOS lookup selection.
     return codepoint >= 0xa980 and codepoint <= 0xa9df;
+}
+
+fn isLimbuScriptCodepoint(codepoint: u21) bool {
+    // Limbu has dependent vowel signs, subjoined letters, final consonant
+    // signs, and native digits in one compact block. Fonts can expose these
+    // under the `limb` ScriptList entry, so keep the block in one run instead
+    // of routing combining pieces through DFLT/unknown before layout.
+    return codepoint >= 0x1900 and codepoint <= 0x194f;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -552,7 +564,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu => .ltr,
         else => .neutral,
     };
 }
@@ -1942,6 +1954,42 @@ test "Javanese syllables keep marks and select Javanese OpenType script" {
     try std.testing.expectEqualStrings("ꦲꦤꦕꦫꦏ", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Limbu syllables keep marks and select Limbu OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "ᤁᤠ᤹ ᤁᤩ ᤋ᤺ᤛ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 6), clusters.len);
+    try std.testing.expectEqualStrings("ᤁᤠ᤹", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ᤁᤩ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ᤋ᤺", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("ᤛ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.limbu, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.limb, openTypeScriptTag(scriptForCodepoint(0x1901)));
+    try std.testing.expectEqual(OpenTypeScriptTag.limb, openTypeScriptTag(scriptForCodepoint(0x1929)));
+    try std.testing.expectEqual(OpenTypeScriptTag.limb, openTypeScriptTag(scriptForCodepoint(0x1946)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1901));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("ᤁᤠ᤹", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ᤁᤩ", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("ᤋ᤺ᤛ", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -1960,6 +2008,7 @@ const WordKind = enum {
     malayalam,
     balinese,
     javanese,
+    limbu,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2108,6 +2157,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .malayalam => .malayalam,
         .balinese => .balinese,
         .javanese => .javanese,
+        .limbu => .limbu,
         else => .none,
     };
 }
@@ -2326,6 +2376,13 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0xa9b3 or
         (codepoint >= 0xa9b6 and codepoint <= 0xa9b9) or
         (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
+        // Limbu vowel/final-consonant signs are typed after the base letter
+        // but combine with it as one orthographic unit. Preserve that unit for
+        // caret, word, and shaping-boundary primitives.
+        (codepoint >= 0x1920 and codepoint <= 0x1922) or
+        (codepoint >= 0x1927 and codepoint <= 0x1928) or
+        codepoint == 0x1932 or
+        (codepoint >= 0x1939 and codepoint <= 0x193b) or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the
@@ -2566,7 +2623,14 @@ fn isSpacingMark(codepoint: u21) bool {
         codepoint == 0xa983 or
         (codepoint >= 0xa9b4 and codepoint <= 0xa9b5) or
         (codepoint >= 0xa9ba and codepoint <= 0xa9bb) or
-        (codepoint >= 0xa9be and codepoint <= 0xa9c0);
+        (codepoint >= 0xa9be and codepoint <= 0xa9c0) or
+        // Limbu spacing vowels, subjoined letters, and visible final
+        // consonant signs are GCB=SpacingMark. Keeping them attached avoids
+        // exposing invalid boundaries inside syllables such as ᤁᤩ and ᤁᤠ.
+        (codepoint >= 0x1923 and codepoint <= 0x1926) or
+        (codepoint >= 0x1929 and codepoint <= 0x192b) or
+        (codepoint >= 0x1930 and codepoint <= 0x1931) or
+        (codepoint >= 0x1933 and codepoint <= 0x1938);
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

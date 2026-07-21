@@ -18,6 +18,7 @@ pub const Script = enum {
     hebrew,
     armenian,
     devanagari,
+    sinhala,
     tamil,
     ethiopic,
     georgian,
@@ -113,6 +114,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     hebr = tag("hebr"),
     armn = tag("armn"),
     dev2 = tag("dev2"),
+    sinh = tag("sinh"),
     taml = tag("taml"),
     ethi = tag("ethi"),
     geor = tag("geor"),
@@ -148,6 +150,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .hebrew => .hebr,
         .armenian => .armn,
         .devanagari => .dev2,
+        .sinhala => .sinh,
         .tamil => .taml,
         .ethiopic => .ethi,
         .georgian => .geor,
@@ -211,6 +214,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isArmenianScriptCodepoint(codepoint)) return .armenian;
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
+    if (isSinhalaScriptCodepoint(codepoint)) return .sinhala;
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
     if (isEthiopicScriptCodepoint(codepoint)) return .ethiopic;
     if (isGeorgianScriptCodepoint(codepoint)) return .georgian;
@@ -260,6 +264,14 @@ fn isEthiopicScriptCodepoint(codepoint: u21) bool {
     return (codepoint >= 0x1200 and codepoint <= 0x139f) or
         (codepoint >= 0x2d80 and codepoint <= 0x2ddf) or
         (codepoint >= 0xab00 and codepoint <= 0xab2f);
+}
+
+fn isSinhalaScriptCodepoint(codepoint: u21) bool {
+    // Sinhala vowels, consonants, dependent signs, punctuation, and numerals
+    // live in one Unicode block and are shaped through the `sinh` OpenType
+    // script system. Keeping the full block together prevents valid aksharas
+    // from being split through DFLT/unknown runs before GSUB/GPOS selection.
+    return codepoint >= 0x0d80 and codepoint <= 0x0dff;
 }
 
 fn isTamilScriptCodepoint(codepoint: u21) bool {
@@ -355,7 +367,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .devanagari, .tamil, .ethiopic, .georgian => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .devanagari, .sinhala, .tamil, .ethiopic, .georgian => .ltr,
         else => .neutral,
     };
 }
@@ -1261,6 +1273,31 @@ test "Telugu and Kannada dependent signs stay with base graphemes" {
     try std.testing.expectEqualStrings("ಕಾ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
 }
 
+test "Sinhala syllables keep dependent signs and select Sinhala OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "සිංහල ක්";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 5), clusters.len);
+    try std.testing.expectEqualStrings("සිං", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("හ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ල", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ක්", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.sinhala, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.sinh, openTypeScriptTag(scriptForCodepoint(0x0dc3)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0dc3));
+}
+
 test "Tamil syllables keep marks and select Tamil OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -1359,6 +1396,7 @@ const WordKind = enum {
     hebrew,
     armenian,
     devanagari,
+    sinhala,
     tamil,
 };
 
@@ -1498,6 +1536,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .hebrew => .hebrew,
         .armenian => .armenian,
         .devanagari => .devanagari,
+        .sinhala => .sinhala,
         .tamil => .tamil,
         else => .none,
     };
@@ -1600,6 +1639,14 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x094d or
         (codepoint >= 0x0951 and codepoint <= 0x0957) or
         (codepoint >= 0x0962 and codepoint <= 0x0963) or
+        // Sinhala nonspacing signs include anusvara/visarga-like marks,
+        // dependent vowels, and virama. They are typed after the base but form
+        // one akshara for caret and shaping boundaries.
+        (codepoint >= 0x0d81 and codepoint <= 0x0d81) or
+        codepoint == 0x0d82 or
+        (codepoint >= 0x0dca and codepoint <= 0x0dca) or
+        (codepoint >= 0x0dd2 and codepoint <= 0x0dd4) or
+        codepoint == 0x0dd6 or
         // Tamil dependent vowel signs, pulli, and length mark are Extend in
         // UAX #29. Keeping them attached prevents caret/shaping clusters from
         // bisecting syllables such as கி, க், and கோ.
@@ -1795,6 +1842,8 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x09c7 and codepoint <= 0x09c8) or
         (codepoint >= 0x09cb and codepoint <= 0x09cc) or
         codepoint == 0x09d7 or
+        (codepoint >= 0x0dcf and codepoint <= 0x0dd1) or
+        (codepoint >= 0x0dd8 and codepoint <= 0x0ddf) or
         (codepoint >= 0x0bbe and codepoint <= 0x0bbf) or
         (codepoint >= 0x0bc1 and codepoint <= 0x0bc2) or
         (codepoint >= 0x0bc6 and codepoint <= 0x0bc8) or

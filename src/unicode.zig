@@ -195,9 +195,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
-    if (codepoint >= 0x0600 and codepoint <= 0x06ff) return .arabic;
-    if (codepoint >= 0x0750 and codepoint <= 0x077f) return .arabic;
-    if (codepoint >= 0x08a0 and codepoint <= 0x08ff) return .arabic;
+    if (isArabicScriptCodepoint(codepoint)) return .arabic;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
@@ -218,6 +216,19 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isArabicScriptCodepoint(codepoint: u21) bool {
+    // Arabic Presentation Forms are compatibility encodings, but Unicode still
+    // assigns them Script=Arabic. Legacy text and normalized-later input should
+    // remain in Arabic RTL shaping runs so fonts can select `arab` features
+    // instead of falling back to DFLT/neutral handling.
+    return (codepoint >= 0x0600 and codepoint <= 0x06ff) or
+        (codepoint >= 0x0750 and codepoint <= 0x077f) or
+        (codepoint >= 0x0870 and codepoint <= 0x089f) or
+        (codepoint >= 0x08a0 and codepoint <= 0x08ff) or
+        (codepoint >= 0xfb50 and codepoint <= 0xfdff) or
+        (codepoint >= 0xfe70 and codepoint <= 0xfeff);
 }
 
 fn isLatinScriptCodepoint(codepoint: u21) bool {
@@ -970,6 +981,21 @@ test "Greek and Cyrillic letters select script-specific OpenType tags" {
     try std.testing.expectEqual(OpenTypeScriptTag.grek, openTypeScriptTag(scriptForCodepoint(0x1f88)));
     try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(scriptForCodepoint(0x0416)));
     try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(scriptForCodepoint(0xa66e)));
+}
+
+test "Arabic presentation forms keep Arabic script and RTL direction" {
+    const allocator = std.testing.allocator;
+
+    const text = "اﻟ ﻢ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.arabic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.arab, openTypeScriptTag(scriptForCodepoint(0xfedf)));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0xfedf));
 }
 
 test "Hebrew presentation forms keep Hebrew script and RTL direction" {

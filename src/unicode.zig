@@ -8,6 +8,8 @@ pub const Script = enum {
     common,
     inherited,
     latin,
+    greek,
+    cyrillic,
     han,
     hiragana,
     katakana,
@@ -97,6 +99,8 @@ pub const LineBreak = struct {
 pub const OpenTypeScriptTag = enum(u32) {
     dflt = tag("DFLT"),
     latn = tag("latn"),
+    grek = tag("grek"),
+    cyrl = tag("cyrl"),
     hani = tag("hani"),
     hira = tag("hira"),
     kana = tag("kana"),
@@ -126,6 +130,8 @@ pub const FeatureOverride = struct {
 pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
     return switch (script) {
         .latin => .latn,
+        .greek => .grek,
+        .cyrillic => .cyrl,
         .han => .hani,
         .hiragana => .hira,
         .katakana => .kana,
@@ -185,6 +191,8 @@ pub fn tag(comptime bytes: *const [4]u8) u32 {
 pub fn scriptForCodepoint(codepoint: u21) Script {
     if ((codepoint >= 'A' and codepoint <= 'Z') or (codepoint >= 'a' and codepoint <= 'z')) return .latin;
     if (isLatinScriptCodepoint(codepoint)) return .latin;
+    if (isGreekScriptCodepoint(codepoint)) return .greek;
+    if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (codepoint >= 0x0590 and codepoint <= 0x05ff) return .hebrew;
     if (codepoint >= 0x0600 and codepoint <= 0x06ff) return .arabic;
@@ -227,6 +235,28 @@ fn isLatinScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x1df00 and codepoint <= 0x1dfff);
 }
 
+fn isGreekScriptCodepoint(codepoint: u21) bool {
+    // Greek letters commonly rely on `grek` OpenType lookup selection for
+    // mark positioning and localized alternates. Keep the full encoded Greek
+    // script repertoire in one shaping script, including Coptic-era additions
+    // and ancient Greek notation blocks whose Script property is Greek.
+    return (codepoint >= 0x0370 and codepoint <= 0x03ff) or
+        (codepoint >= 0x1d200 and codepoint <= 0x1d245) or
+        (codepoint >= 0x1f00 and codepoint <= 0x1fff) or
+        (codepoint >= 0x10140 and codepoint <= 0x1018f);
+}
+
+fn isCyrillicScriptCodepoint(codepoint: u21) bool {
+    // Cyrillic has several extension blocks used by living orthographies.
+    // Classifying them as unknown would split runs and route GSUB/GPOS through
+    // DFLT instead of the font's `cyrl` script system.
+    return (codepoint >= 0x0400 and codepoint <= 0x052f) or
+        (codepoint >= 0x1c80 and codepoint <= 0x1c8f) or
+        (codepoint >= 0x2de0 and codepoint <= 0x2dff) or
+        (codepoint >= 0xa640 and codepoint <= 0xa69f) or
+        (codepoint >= 0x1e030 and codepoint <= 0x1e08f);
+}
+
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
 /// higher-level bidi functions use this coarse class to build visual runs.
 pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
@@ -234,7 +264,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew => .rtl,
-        .latin, .han, .hiragana, .katakana, .hangul, .devanagari => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .devanagari => .ltr,
         else => .neutral,
     };
 }
@@ -913,6 +943,24 @@ test "Latin extension letters stay in Latin script runs" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(OpenTypeScriptTag.latn, openTypeScriptTag(scriptForCodepoint(0x1ea0)));
     try std.testing.expectEqual(OpenTypeScriptTag.latn, openTypeScriptTag(scriptForCodepoint(0xa7b5)));
+}
+
+test "Greek and Cyrillic letters select script-specific OpenType tags" {
+    const allocator = std.testing.allocator;
+
+    const text = "ῼЖ ҄";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 2), runs.len);
+    try std.testing.expectEqual(Script.greek, runs[0].script);
+    try std.testing.expectEqualStrings("ῼ", text[runs[0].byte_start..][0..runs[0].byte_len]);
+    try std.testing.expectEqual(Script.cyrillic, runs[1].script);
+    try std.testing.expectEqualStrings("Ж ҄", text[runs[1].byte_start..][0..runs[1].byte_len]);
+    try std.testing.expectEqual(OpenTypeScriptTag.grek, openTypeScriptTag(scriptForCodepoint(0x03a9)));
+    try std.testing.expectEqual(OpenTypeScriptTag.grek, openTypeScriptTag(scriptForCodepoint(0x1f88)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(scriptForCodepoint(0x0416)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(scriptForCodepoint(0xa66e)));
 }
 
 test "bidi mirroring covers mathematical bracket pairs" {

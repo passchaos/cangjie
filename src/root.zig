@@ -671,10 +671,14 @@ test "detects scripts and itemizes script runs" {
     try std.testing.expectEqual(Script.latin, scriptForCodepoint('A'));
     try std.testing.expectEqual(Script.han, scriptForCodepoint(0x4e00));
     try std.testing.expectEqual(Script.arabic, scriptForCodepoint(0x0628));
+    try std.testing.expectEqual(Script.greek, scriptForCodepoint(0x03a9));
+    try std.testing.expectEqual(Script.cyrillic, scriptForCodepoint(0x0416));
     try std.testing.expectEqual(Script.inherited, scriptForCodepoint(0x0301));
     try std.testing.expectEqual(OpenTypeScriptTag.latn, openTypeScriptTag(.latin));
     try std.testing.expectEqual(OpenTypeScriptTag.hani, openTypeScriptTag(.han));
     try std.testing.expectEqual(OpenTypeScriptTag.arab, openTypeScriptTag(.arabic));
+    try std.testing.expectEqual(OpenTypeScriptTag.grek, openTypeScriptTag(.greek));
+    try std.testing.expectEqual(OpenTypeScriptTag.cyrl, openTypeScriptTag(.cyrillic));
     try std.testing.expectEqual(OpenTypeScriptTag.dflt, openTypeScriptTag(.common));
     try std.testing.expectEqual(@intFromEnum(OpenTypeLanguageTag.jan), openTypeTag("JAN "));
     try std.testing.expectEqual(OpenTypeLanguageTag.jan, inferOpenTypeLanguageTag("日本語かな"));

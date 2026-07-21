@@ -39,6 +39,7 @@ pub const Script = enum {
     javanese,
     limbu,
     buginese,
+    sundanese,
     unknown,
 };
 
@@ -152,6 +153,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     java = tag("java"),
     limb = tag("limb"),
     bugi = tag("bugi"),
+    sund = tag("sund"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -205,6 +207,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .javanese => .java,
         .limbu => .limb,
         .buginese => .bugi,
+        .sundanese => .sund,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -286,6 +289,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
     if (isBugineseScriptCodepoint(codepoint)) return .buginese;
+    if (isSundaneseScriptCodepoint(codepoint)) return .sundanese;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -343,6 +347,15 @@ fn isBugineseScriptCodepoint(codepoint: u21) bool {
     // syllable. Treat the compact block as one shaping script so lontara text
     // is not split through DFLT/unknown before GSUB/GPOS lookup selection.
     return codepoint >= 0x1a00 and codepoint <= 0x1a1f;
+}
+
+fn isSundaneseScriptCodepoint(codepoint: u21) bool {
+    // Sundanese fonts select script-specific shaping and mark positioning under
+    // the `sund` ScriptList entry. The base block carries letters, dependent
+    // marks, digits, and punctuation; the supplement extends punctuation used
+    // with the same script, so keep both ranges out of DFLT/unknown runs.
+    return (codepoint >= 0x1b80 and codepoint <= 0x1bbf) or
+        (codepoint >= 0x1cc0 and codepoint <= 0x1ccf);
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -576,7 +589,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese => .ltr,
         else => .neutral,
     };
 }
@@ -2038,6 +2051,47 @@ test "Buginese syllables keep vowels and select Buginese OpenType script" {
     try std.testing.expectEqualStrings("ᨄᨙᨑᨗ", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Sundanese syllables keep signs and select Sundanese OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "ᮊᮥ ᮔ᮪ ᮞᮥᮔ᮪ᮓ ᳀";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 9), clusters.len);
+    try std.testing.expectEqualStrings("ᮊᮥ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ᮔ᮪", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ᮞᮥ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("ᮔ᮪", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("ᮓ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings("᳀", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.sundanese, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.sund, openTypeScriptTag(scriptForCodepoint(0x1b8a)));
+    try std.testing.expectEqual(OpenTypeScriptTag.sund, openTypeScriptTag(scriptForCodepoint(0x1ba5)));
+    try std.testing.expectEqual(OpenTypeScriptTag.sund, openTypeScriptTag(scriptForCodepoint(0x1baa)));
+    try std.testing.expectEqual(OpenTypeScriptTag.sund, openTypeScriptTag(scriptForCodepoint(0x1cc0)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1b8a));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 4), words.len);
+    try std.testing.expectEqualStrings("ᮊᮥ", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ᮔ᮪", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("ᮞᮥᮔ᮪ᮓ", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("᳀", text[words[3].byte_start..][0..words[3].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2058,6 +2112,7 @@ const WordKind = enum {
     javanese,
     limbu,
     buginese,
+    sundanese,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2208,6 +2263,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .javanese => .javanese,
         .limbu => .limbu,
         .buginese => .buginese,
+        .sundanese => .sundanese,
         else => .none,
     };
 }
@@ -2438,6 +2494,13 @@ fn isCombiningMark(codepoint: u21) bool {
         // syllables such as ᨀᨗ and ᨔᨛ split between base and dependent vowel.
         (codepoint >= 0x1a17 and codepoint <= 0x1a18) or
         codepoint == 0x1a1b or
+        // Sundanese nonspacing dependent signs and pamaeh are typed after the
+        // base aksara but shape as one orthographic syllable. Treating them as
+        // Extend preserves caret, word, and shaping boundaries for text such as
+        // ᮊᮥ and final-consonant forms like ᮔ᮪.
+        (codepoint >= 0x1ba2 and codepoint <= 0x1ba5) or
+        (codepoint >= 0x1ba8 and codepoint <= 0x1ba9) or
+        codepoint == 0x1bab or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the
@@ -2690,7 +2753,15 @@ fn isSpacingMark(codepoint: u21) bool {
         // Grapheme_Cluster_Break=SpacingMark. They are encoded after the base
         // but belong to the same orthographic syllable for caret/word/layout
         // primitives.
-        (codepoint >= 0x1a19 and codepoint <= 0x1a1a);
+        (codepoint >= 0x1a19 and codepoint <= 0x1a1a) or
+        // Sundanese spacing signs include pangwisad/visarga-like signs and
+        // visible dependent vowels. They are part of the same aksara syllable
+        // even though they occupy spacing glyph cells, so do not expose a
+        // grapheme or word boundary before them.
+        codepoint == 0x1b82 or
+        codepoint == 0x1ba1 or
+        (codepoint >= 0x1ba6 and codepoint <= 0x1ba7) or
+        codepoint == 0x1baa;
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

@@ -337,7 +337,7 @@ pub const TextEditor = struct {
     pub fn insertTextAtCursors(self: *TextEditor, text: []const u8) !void {
         if (self.cursors.len() == 0) return self.insertText(text);
         self.cancelComposition();
-        const group_id = self.allocateGroupId();
+        const group_id = try self.allocateGroupId();
         clearRecords(self.allocator, &self.redo_stack);
         var index = self.cursors.selections.items.len;
         while (index > 0) {
@@ -439,7 +439,7 @@ pub const TextEditor = struct {
     }
 
     pub fn replaceRange(self: *TextEditor, start_byte: usize, end_byte: usize, replacement: []const u8) !void {
-        try self.replaceRangeGrouped(self.allocateGroupId(), start_byte, end_byte, replacement, true);
+        try self.replaceRangeGrouped(try self.allocateGroupId(), start_byte, end_byte, replacement, true);
     }
 
     fn replaceRangeGrouped(self: *TextEditor, group_id: usize, start_byte: usize, end_byte: usize, replacement: []const u8, clear_redo: bool) !void {
@@ -510,8 +510,9 @@ pub const TextEditor = struct {
         }
     }
 
-    fn allocateGroupId(self: *TextEditor) usize {
+    fn allocateGroupId(self: *TextEditor) !usize {
         const group_id = self.next_group_id;
+        if (group_id == std.math.maxInt(usize)) return error.EditGroupIdOverflow;
         self.next_group_id += 1;
         return group_id;
     }
@@ -866,6 +867,17 @@ fn nextGraphemeBoundary(allocator: std.mem.Allocator, text: []const u8, byte_off
         if (end > offset) return end;
     }
     return text.len;
+}
+
+test "TextEditor edit group id overflow is atomic" {
+    const allocator = std.testing.allocator;
+    var editor = try TextEditor.initText(allocator, "ab");
+    defer editor.deinit();
+
+    editor.next_group_id = std.math.maxInt(usize);
+    try std.testing.expectError(error.EditGroupIdOverflow, editor.replaceRange(0, 1, "X"));
+    try std.testing.expectEqualStrings("ab", editor.slice());
+    try std.testing.expect(!editor.canUndo());
 }
 
 test "TextEditor replacement preflights undo record allocation" {

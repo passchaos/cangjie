@@ -669,15 +669,17 @@ fn isBidiNumberCodepoint(codepoint: u21) bool {
 fn collectLogicalBidiItems(allocator: std.mem.Allocator, text: []const u8) ![]BidiMapItem {
     var items = std.ArrayList(BidiMapItem).empty;
     errdefer items.deinit(allocator);
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < text.len) {
-        const byte_start = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const byte_start = cursor;
+        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
+        const codepoint = decoded.codepoint;
+        cursor = decoded.next;
         try items.append(allocator, .{
             .logical_index = items.items.len,
             .visual_index = 0,
             .byte_start = byte_start,
-            .byte_len = it.i - byte_start,
+            .byte_len = cursor - byte_start,
             .codepoint = codepoint,
             .visual_codepoint = codepoint,
             .direction = bidiClassForCodepoint(codepoint),

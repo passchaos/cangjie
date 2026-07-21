@@ -831,6 +831,8 @@ test "builds bidi logical visual maps" {
     try std.testing.expectEqual(@as(usize, 2), number_map.visualToLogical(2).?);
     try std.testing.expectEqual(@as(usize, 0), number_map.visualToLogical(3).?);
     try std.testing.expectEqual(BidiClass.number, number_map.items[1].direction);
+
+    try std.testing.expectError(error.InvalidUtf8, buildBidiMap(allocator, "ab\xffב", .ltr));
 }
 
 test "itemizes basic grapheme clusters" {

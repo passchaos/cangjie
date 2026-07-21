@@ -24,6 +24,7 @@ pub const Script = enum {
     hebrew,
     phoenician,
     syriac,
+    samaritan,
     mandaic,
     armenian,
     thai,
@@ -165,6 +166,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     hebr = tag("hebr"),
     phnx = tag("phnx"),
     syrc = tag("syrc"),
+    samr = tag("samr"),
     mand = tag("mand"),
     armn = tag("armn"),
     thai = tag("thai"),
@@ -246,6 +248,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .hebrew => .hebr,
         .phoenician => .phnx,
         .syriac => .syrc,
+        .samaritan => .samr,
         .mandaic => .mand,
         .armenian => .armn,
         .thai => .thai,
@@ -352,6 +355,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (isPhoenicianScriptCodepoint(codepoint)) return .phoenician;
     if (isSyriacScriptCodepoint(codepoint)) return .syriac;
+    if (isSamaritanScriptCodepoint(codepoint)) return .samaritan;
     if (isMandaicScriptCodepoint(codepoint)) return .mandaic;
     if (isArmenianScriptCodepoint(codepoint)) return .armenian;
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
@@ -708,6 +712,24 @@ fn isPhoenicianWordCodepoint(codepoint: u21) bool {
     // word separator, so it stays in the script run but deliberately breaks the
     // selectable word span.
     return codepoint >= 0x10900 and codepoint <= 0x1091b;
+}
+
+fn isSamaritanScriptCodepoint(codepoint: u21) bool {
+    // Samaritan letters, vowel signs, reading marks, and punctuation all carry
+    // strong RTL behavior and use the registered `samr` OpenType script tag.
+    // Keep the assigned block together, while leaving U+083F unknown so
+    // malformed/private data does not inherit Samaritan script semantics.
+    return codepoint >= 0x0800 and codepoint <= 0x083e;
+}
+
+fn isSamaritanWordCodepoint(codepoint: u21) bool {
+    // Word spans are anchored on letters and spacing modifier letters. Vowel
+    // and reading marks attach through isWordExtender(), while the native
+    // punctuation remains part of the RTL script run but breaks word selection.
+    return (codepoint >= 0x0800 and codepoint <= 0x0815) or
+        codepoint == 0x081a or
+        codepoint == 0x0824 or
+        codepoint == 0x0828;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -1165,7 +1187,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
         .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -2007,6 +2029,44 @@ test "Phoenician text selects Phoenician RTL script primitives" {
     try std.testing.expectEqual(@as(usize, 2), words.len);
     try std.testing.expectEqualStrings("\u{10900}\u{10901}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{10902}\u{10916}\u{1091a}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Samaritan text keeps vowel marks and selects Samaritan RTL shaping" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{0800}\u{0816}\u{081b}\u{0801}\u{0830} \u{0802}\u{0829}\u{082a}\u{0824}\u{082d}\u{0803}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqualStrings("\u{0800}\u{0816}\u{081b}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{0801}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{0830}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{0802}\u{0829}\u{082a}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("\u{0824}\u{082d}", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{0803}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.samaritan, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.samr, openTypeScriptTag(scriptForCodepoint(0x0800)));
+    try std.testing.expectEqual(OpenTypeScriptTag.samr, openTypeScriptTag(scriptForCodepoint(0x0816)));
+    try std.testing.expectEqual(OpenTypeScriptTag.samr, openTypeScriptTag(scriptForCodepoint(0x083e)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x083f));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x0800));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x0830));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{0800}\u{0816}\u{081b}\u{0801}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{0802}\u{0829}\u{082a}\u{0824}\u{082d}\u{0803}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Syriac text selects Syriac script and RTL shaping direction" {
@@ -3671,6 +3731,7 @@ const WordKind = enum {
     arabic,
     hebrew,
     syriac,
+    samaritan,
     phoenician,
     armenian,
     glagolitic,
@@ -3853,6 +3914,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isThaanaWordCodepoint(codepoint)) return .thaana;
     if (isAdlamWordCodepoint(codepoint)) return .adlam;
     if (isSyriacWordCodepoint(codepoint)) return .syriac;
+    if (isSamaritanWordCodepoint(codepoint)) return .samaritan;
     if (isMandaicWordCodepoint(codepoint)) return .mandaic;
     if (isNkoWordCodepoint(codepoint)) return .nko;
     if (isPhoenicianWordCodepoint(codepoint)) return .phoenician;
@@ -3994,6 +4056,14 @@ fn isCombiningMark(codepoint: u21) bool {
         // instead of separating a base letter from its diacritics.
         codepoint == 0x0711 or
         (codepoint >= 0x0730 and codepoint <= 0x074a) or
+        // Samaritan vowels, reading marks, and epenthetic signs are nonspacing
+        // marks in an RTL script. Treat them as Extend so caret, word, and
+        // shaping primitives keep marked Samaritan letters under one `samr`
+        // lookup boundary.
+        (codepoint >= 0x0816 and codepoint <= 0x0819) or
+        (codepoint >= 0x081b and codepoint <= 0x0823) or
+        (codepoint >= 0x0825 and codepoint <= 0x0827) or
+        (codepoint >= 0x0829 and codepoint <= 0x082d) or
         // Mandaic affrication, vocalization, and gemination marks are
         // nonspacing signs typed after RTL bases. Treat them as Extend so
         // grapheme, word, and shaping boundaries do not split a Mandaic letter

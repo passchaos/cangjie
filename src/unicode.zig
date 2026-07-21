@@ -1156,6 +1156,21 @@ test "halfwidth katakana voiced marks stay in kana grapheme and script runs" {
     try std.testing.expectEqual(OpenTypeScriptTag.kana, openTypeScriptTag(scriptForCodepoint(0x31f0)));
 }
 
+test "grapheme clusters keep Khmer dependent signs with their base letters" {
+    const allocator = std.testing.allocator;
+
+    const text = "កា ក់ កៀ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 5), clusters.len);
+    try std.testing.expectEqualStrings("កា", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ក់", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("កៀ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+}
+
 test "Tamil syllables keep marks and select Tamil OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -1461,6 +1476,14 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x0eb1 and codepoint <= 0x0eb1) or
         (codepoint >= 0x0eb4 and codepoint <= 0x0ebc) or
         (codepoint >= 0x0ec8 and codepoint <= 0x0ecd) or
+        // Khmer vowel signs, robat, coeng, and register/shifter signs are
+        // encoded after the consonant but participate in one orthographic
+        // syllable. Treating them as Extend preserves UAX #29 grapheme cluster
+        // boundaries for Khmer text without requiring a full Khmer shaper.
+        (codepoint >= 0x17b7 and codepoint <= 0x17bd) or
+        codepoint == 0x17c6 or
+        (codepoint >= 0x17c9 and codepoint <= 0x17d3) or
+        codepoint == 0x17dd or
         // Myanmar dependent signs are encoded after the base consonant but
         // include both nonspacing and visible-spacing pieces of one orthographic
         // syllable. Keeping the compact GCB coverage here prevents caret and
@@ -1613,6 +1636,12 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x0bc6 and codepoint <= 0x0bc8) or
         (codepoint >= 0x0bca and codepoint <= 0x0bcc) or
         (codepoint >= 0x0d3e and codepoint <= 0x0d40) or
+        // Khmer split/spaced dependent vowels are GCB=SpacingMark. They render
+        // around or after the base consonant, so a cluster break before them
+        // would expose an invalid low-level caret/shaping boundary.
+        codepoint == 0x17b6 or
+        (codepoint >= 0x17be and codepoint <= 0x17c5) or
+        (codepoint >= 0x17c7 and codepoint <= 0x17c8) or
         (codepoint >= 0x102b and codepoint <= 0x102c) or
         codepoint == 0x1031 or
         codepoint == 0x1038 or

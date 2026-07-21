@@ -472,11 +472,13 @@ pub const TextEditor = struct {
     pub fn undo(self: *TextEditor) !bool {
         if (self.undo_stack.items.len == 0) return false;
         const group_id = self.undo_stack.items[self.undo_stack.items.len - 1].group_id;
+        const group_count = topRecordGroupCount(self.undo_stack.items, group_id);
+        try self.redo_stack.ensureUnusedCapacity(self.allocator, group_count);
         while (self.undo_stack.items.len > 0 and self.undo_stack.items[self.undo_stack.items.len - 1].group_id == group_id) {
             var record = self.undo_stack.pop().?;
             errdefer record.deinit(self.allocator);
             try self.applyRecord(record, .undo);
-            try self.redo_stack.append(self.allocator, record);
+            self.redo_stack.appendAssumeCapacity(record);
         }
         return true;
     }
@@ -484,11 +486,13 @@ pub const TextEditor = struct {
     pub fn redo(self: *TextEditor) !bool {
         if (self.redo_stack.items.len == 0) return false;
         const group_id = self.redo_stack.items[self.redo_stack.items.len - 1].group_id;
+        const group_count = topRecordGroupCount(self.redo_stack.items, group_id);
+        try self.undo_stack.ensureUnusedCapacity(self.allocator, group_count);
         while (self.redo_stack.items.len > 0 and self.redo_stack.items[self.redo_stack.items.len - 1].group_id == group_id) {
             var record = self.redo_stack.pop().?;
             errdefer record.deinit(self.allocator);
             try self.applyRecord(record, .redo);
-            try self.undo_stack.append(self.allocator, record);
+            self.undo_stack.appendAssumeCapacity(record);
         }
         return true;
     }
@@ -521,6 +525,13 @@ pub const TextEditor = struct {
         return group_id;
     }
 };
+
+fn topRecordGroupCount(records: []const EditRecord, group_id: usize) usize {
+    var count: usize = 0;
+    var index = records.len;
+    while (index > 0 and records[index - 1].group_id == group_id) : (index -= 1) count += 1;
+    return count;
+}
 
 fn clearRecords(allocator: std.mem.Allocator, records: *std.ArrayList(EditRecord)) void {
     for (records.items) |*record| record.deinit(allocator);
@@ -893,6 +904,21 @@ test "TextEditor replacement preflights undo record allocation" {
     try std.testing.expectError(error.OutOfMemory, editor.replaceRange(0, 1, "X"));
     try std.testing.expectEqualStrings("ab", editor.slice());
     try std.testing.expect(!editor.canUndo());
+}
+
+test "TextEditor undo preflights redo record allocation" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var editor = try TextEditor.initText(failing.allocator(), "ab");
+    defer editor.deinit();
+
+    try editor.replaceRange(0, 1, "X");
+    try std.testing.expectEqualStrings("Xb", editor.slice());
+    failing.fail_index = failing.alloc_index;
+
+    try std.testing.expectError(error.OutOfMemory, editor.undo());
+    try std.testing.expectEqualStrings("Xb", editor.slice());
+    try std.testing.expect(editor.canUndo());
+    try std.testing.expect(!editor.canRedo());
 }
 
 test "TextEditor records undo and redo for inserts replacements and deletes" {

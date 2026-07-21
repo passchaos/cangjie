@@ -622,6 +622,32 @@ test "CFF Type2 subroutines require explicit return or endchar" {
     try std.testing.expectError(error.BadCff, truncated_interpreter.run(&.{ 32, 10, 14 }));
 }
 
+test "CFF Type2 subroutine indexes reject fractional operands" {
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+
+    const subrs_data = [_]u8{
+        0x00, 0x01, // count
+        0x01, // offSize
+        0x01,
+        0x02,
+        0x0b, // return
+    };
+    var interpreter = testInterpreter(&outline);
+    interpreter.cff_data = &subrs_data;
+    interpreter.local_subrs = try readIndex(&subrs_data, 0);
+
+    // Byte 255 encodes a 16.16 number in Type2 charstrings. A fractional
+    // subroutine operand must be rejected rather than truncated to an adjacent
+    // valid subroutine index.
+    try std.testing.expectError(error.BadCff, interpreter.run(&.{ 255, 0xff, 0x95, 0x80, 0x00, 10, 14 }));
+}
+
 fn testInterpreter(outline: *glyph_mod.GlyphOutline) Type2Interpreter {
     return .{
         .allocator = std.testing.allocator,
@@ -736,17 +762,25 @@ const Type2Interpreter = struct {
         self.stack_len += 1;
     }
 
-    fn popInt(self: *Type2Interpreter) CffError!i32 {
+    fn popInteger(self: *Type2Interpreter) CffError!i32 {
         if (self.stack_len == 0) return error.StackUnderflow;
         self.stack_len -= 1;
-        return @intFromFloat(self.stack[self.stack_len]);
+        const value = self.stack[self.stack_len];
+        // callsubr/callgsubr operands are biased integer indexes. Type2's
+        // general operand encoding can also represent 16.16 fixed values; do
+        // not silently truncate those or let rounded/out-of-range f32 values
+        // reach @intFromFloat and trap under safety checks.
+        if (!std.math.isFinite(value) or value != @trunc(value)) return error.BadCff;
+        const widened: f64 = value;
+        if (widened < @as(f64, @floatFromInt(std.math.minInt(i32))) or widened > @as(f64, @floatFromInt(std.math.maxInt(i32)))) return error.BadCff;
+        return @intFromFloat(widened);
     }
 
     fn callSubr(self: *Type2Interpreter, index: Index, depth: u8) CffError!Type2Termination {
         // The operand names a biased subroutine index, not a direct array index.
-        const operand = try self.popInt();
-        const biased = operand + subrBias(index.count);
-        if (biased < 0) return error.InvalidGlyph;
+        const operand = try self.popInteger();
+        const biased = @as(i64, operand) + @as(i64, subrBias(index.count));
+        if (biased < 0 or biased >= @as(i64, index.count)) return error.InvalidGlyph;
         const subr = try index.object(self.cff_data, @intCast(biased));
         return try self.runCharString(subr, depth);
     }

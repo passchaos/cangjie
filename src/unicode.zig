@@ -62,6 +62,7 @@ pub const Script = enum {
     cham,
     brahmi,
     kaithi,
+    chakma,
     nushu,
     runic,
     coptic,
@@ -202,6 +203,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     cham = tag("cham"),
     brah = tag("brah"),
     kthi = tag("kthi"),
+    cakm = tag("cakm"),
     nshu = tag("nshu"),
     runr = tag("runr"),
     copt = tag("copt"),
@@ -282,6 +284,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .cham => .cham,
         .brahmi => .brah,
         .kaithi => .kthi,
+        .chakma => .cakm,
         .nushu => .nshu,
         .runic => .runr,
         .coptic => .copt,
@@ -388,6 +391,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isChamScriptCodepoint(codepoint)) return .cham;
     if (isBrahmiScriptCodepoint(codepoint)) return .brahmi;
     if (isKaithiScriptCodepoint(codepoint)) return .kaithi;
+    if (isChakmaScriptCodepoint(codepoint)) return .chakma;
     if (isNushuScriptCodepoint(codepoint)) return .nushu;
     if (isRunicScriptCodepoint(codepoint)) return .runic;
     if (isOghamScriptCodepoint(codepoint)) return .ogham;
@@ -606,6 +610,26 @@ fn isKaithiWordCodepoint(codepoint: u21) bool {
     // generic extender tables; number signs and punctuation stay in the script
     // run for shaping but do not become selectable word text by themselves.
     return codepoint >= 0x11083 and codepoint <= 0x110af;
+}
+
+fn isChakmaScriptCodepoint(codepoint: u21) bool {
+    // Chakma uses an Indic-style shaping model under the registered `cakm`
+    // OpenType ScriptList tag. Keep assigned letters, vowel signs, virama,
+    // native digits, and script punctuation in one LTR run while leaving the
+    // reserved U+11135 slot and block tail unknown for malformed/private data.
+    return (codepoint >= 0x11100 and codepoint <= 0x11134) or
+        (codepoint >= 0x11136 and codepoint <= 0x11147);
+}
+
+fn isChakmaWordCodepoint(codepoint: u21) bool {
+    // Word spans are anchored on Chakma letters and native digits. Dependent
+    // signs and virama attach through the generic extender path, while danda,
+    // section, and question punctuation remain shaping script text but break
+    // selectable word spans.
+    return (codepoint >= 0x11103 and codepoint <= 0x11126) or
+        (codepoint >= 0x11136 and codepoint <= 0x1113f) or
+        codepoint == 0x11144 or
+        codepoint == 0x11147;
 }
 
 fn isNushuScriptCodepoint(codepoint: u21) bool {
@@ -1142,7 +1166,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -3354,6 +3378,51 @@ test "Kaithi syllables keep signs and select Kaithi OpenType script" {
     try std.testing.expectEqualStrings("\u{11083}", text[words[3].byte_start..][0..words[3].byte_len]);
 }
 
+test "Chakma syllables keep signs and select Chakma OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{11107}\u{11127} \u{11107}\u{1112c} \u{11107}\u{11133}\u{200d}\u{11108} \u{11136}\u{11141} \u{11144}\u{11145}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 10), clusters.len);
+    try std.testing.expectEqualStrings("\u{11107}\u{11127}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{11107}\u{1112c}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{11107}\u{11133}\u{200d}\u{11108}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{11136}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("\u{11141}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
+    try std.testing.expectEqualStrings("\u{11144}\u{11145}", text[clusters[9].byte_start..][0..clusters[9].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.chakma, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.cakm, openTypeScriptTag(scriptForCodepoint(0x11107)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cakm, openTypeScriptTag(scriptForCodepoint(0x11127)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cakm, openTypeScriptTag(scriptForCodepoint(0x1112c)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cakm, openTypeScriptTag(scriptForCodepoint(0x11141)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cakm, openTypeScriptTag(scriptForCodepoint(0x11147)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x11135));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x11107));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 5), words.len);
+    try std.testing.expectEqualStrings("\u{11107}\u{11127}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{11107}\u{1112c}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{11107}\u{11133}\u{200d}\u{11108}", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{11136}", text[words[3].byte_start..][0..words[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{11144}\u{11145}", text[words[4].byte_start..][0..words[4].byte_len]);
+}
+
 test "Yi syllables and radicals select Yi script primitives" {
     const allocator = std.testing.allocator;
 
@@ -3637,6 +3706,7 @@ const WordKind = enum {
     cham,
     brahmi,
     kaithi,
+    chakma,
     runic,
     coptic,
     ogham,
@@ -3798,6 +3868,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isAvestanWordCodepoint(codepoint)) return .avestan;
     if (isRejangWordCodepoint(codepoint)) return .rejang;
     if (isKaithiWordCodepoint(codepoint)) return .kaithi;
+    if (isChakmaWordCodepoint(codepoint)) return .chakma;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
@@ -4153,6 +4224,13 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x110b3 and codepoint <= 0x110b6) or
         (codepoint >= 0x110b9 and codepoint <= 0x110ba) or
         codepoint == 0x110c2 or
+        // Chakma nonspacing vowel signs, virama, and nasal/visarga signs are
+        // typed after the base but shape as one Indic-style orthographic unit
+        // under `cakm`. Keeping them as Extend avoids caret/word boundaries
+        // between a Chakma consonant and its dependent signs.
+        (codepoint >= 0x11100 and codepoint <= 0x11102) or
+        (codepoint >= 0x11127 and codepoint <= 0x1112b) or
+        (codepoint >= 0x1112d and codepoint <= 0x11134) or
         // Coptic combining marks are used both with Coptic letters and with
         // Coptic Epact Numbers. Keep them attached so caret, word, and shaping
         // primitives do not split a marked Coptic token between base and mark.
@@ -4220,6 +4298,7 @@ fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
         codepoint == 0x0d4d or // Malayalam sign virama.
         codepoint == 0x11046 or // Brahmi virama.
         codepoint == 0x110b9 or // Kaithi sign virama.
+        codepoint == 0x11133 or // Chakma sign virama.
         codepoint == 0x11070; // Brahmi old Tamil virama.
 }
 
@@ -4259,7 +4338,10 @@ fn isIndicConsonant(codepoint: u21) bool {
         (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
         codepoint == 0x0d3a or
         (codepoint >= 0x11013 and codepoint <= 0x11037) or
-        (codepoint >= 0x1108d and codepoint <= 0x110af);
+        (codepoint >= 0x1108d and codepoint <= 0x110af) or
+        (codepoint >= 0x11107 and codepoint <= 0x11126) or
+        codepoint == 0x11144 or
+        codepoint == 0x11147;
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {
@@ -4490,7 +4572,12 @@ fn isSpacingMark(codepoint: u21) bool {
         // boundaries, matching the nonspacing Kaithi marks above.
         codepoint == 0x11082 or
         (codepoint >= 0x110b0 and codepoint <= 0x110b2) or
-        (codepoint >= 0x110b7 and codepoint <= 0x110b8);
+        (codepoint >= 0x110b7 and codepoint <= 0x110b8) or
+        // Chakma spacing vowels are visible dependent signs. They still share
+        // the previous Chakma base's caret and shaping unit, so include them in
+        // the compact SpacingMark table beside the nonspacing Chakma signs.
+        codepoint == 0x1112c or
+        (codepoint >= 0x11145 and codepoint <= 0x11146);
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

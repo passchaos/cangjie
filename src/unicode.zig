@@ -18,6 +18,8 @@ pub const Script = enum {
     hebrew,
     syriac,
     armenian,
+    thai,
+    lao,
     devanagari,
     sinhala,
     tamil,
@@ -115,6 +117,8 @@ pub const OpenTypeScriptTag = enum(u32) {
     hebr = tag("hebr"),
     syrc = tag("syrc"),
     armn = tag("armn"),
+    thai = tag("thai"),
+    lao = tag("lao "),
     dev2 = tag("dev2"),
     sinh = tag("sinh"),
     taml = tag("taml"),
@@ -152,6 +156,8 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .hebrew => .hebr,
         .syriac => .syrc,
         .armenian => .armn,
+        .thai => .thai,
+        .lao => .lao,
         .devanagari => .dev2,
         .sinhala => .sinh,
         .tamil => .taml,
@@ -177,7 +183,7 @@ pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
             .hangul => return .kor,
             .arabic => return .ara,
             .devanagari => return .hin,
-            .tamil => return .dflt,
+            .tamil, .thai, .lao => return .dflt,
             .han => saw_han = true,
             else => {},
         }
@@ -217,6 +223,8 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isSyriacScriptCodepoint(codepoint)) return .syriac;
     if (isArmenianScriptCodepoint(codepoint)) return .armenian;
     if (isArabicScriptCodepoint(codepoint)) return .arabic;
+    if (isThaiScriptCodepoint(codepoint)) return .thai;
+    if (isLaoScriptCodepoint(codepoint)) return .lao;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (isSinhalaScriptCodepoint(codepoint)) return .sinhala;
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
@@ -247,6 +255,21 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isThaiScriptCodepoint(codepoint: u21) bool {
+    // Thai bases, dependent vowels, tone marks, digits, and punctuation select
+    // the `thai` OpenType script system. Treat the whole assigned block as one
+    // shaping script so marks and bases are not split through DFLT runs before
+    // GSUB/GPOS lookup selection.
+    return codepoint >= 0x0e01 and codepoint <= 0x0e5b;
+}
+
+fn isLaoScriptCodepoint(codepoint: u21) bool {
+    // Lao is encoded analogously to Thai and uses its own `lao ` OpenType
+    // ScriptList entry. Keeping letters, dependent signs, digits, and Lao
+    // punctuation in one run avoids losing script-specific shaping lookups.
+    return codepoint >= 0x0e81 and codepoint <= 0x0edf;
 }
 
 fn isSyriacScriptCodepoint(codepoint: u21) bool {
@@ -380,7 +403,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .devanagari, .sinhala, .tamil, .ethiopic, .georgian => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian => .ltr,
         else => .neutral,
     };
 }
@@ -1124,6 +1147,26 @@ test "Syriac text selects Syriac script and RTL shaping direction" {
     try std.testing.expectEqual(OpenTypeScriptTag.syrc, openTypeScriptTag(scriptForCodepoint(0x086d)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x072b));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x086d));
+}
+
+test "Thai and Lao text select script-specific OpenType tags" {
+    const allocator = std.testing.allocator;
+
+    const text = "ไทย ລາວ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 2), runs.len);
+    try std.testing.expectEqual(Script.thai, runs[0].script);
+    try std.testing.expectEqualStrings("ไทย ", text[runs[0].byte_start..][0..runs[0].byte_len]);
+    try std.testing.expectEqual(Script.lao, runs[1].script);
+    try std.testing.expectEqualStrings("ລາວ", text[runs[1].byte_start..][0..runs[1].byte_len]);
+    try std.testing.expectEqual(OpenTypeScriptTag.thai, openTypeScriptTag(scriptForCodepoint(0x0e17)));
+    try std.testing.expectEqual(OpenTypeScriptTag.thai, openTypeScriptTag(scriptForCodepoint(0x0e48)));
+    try std.testing.expectEqual(OpenTypeScriptTag.lao, openTypeScriptTag(scriptForCodepoint(0x0ea5)));
+    try std.testing.expectEqual(OpenTypeScriptTag.lao, openTypeScriptTag(scriptForCodepoint(0x0eb5)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0e17));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0ea5));
 }
 
 test "Armenian text selects Armenian script, words, and OpenType tag" {

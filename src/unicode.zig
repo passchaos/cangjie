@@ -39,6 +39,7 @@ pub const Script = enum {
     cherokee,
     tibetan,
     nko,
+    thaana,
     mongolian,
     balinese,
     javanese,
@@ -166,6 +167,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     cher = tag("cher"),
     tibt = tag("tibt"),
     nko = tag("nko "),
+    thaa = tag("thaa"),
     mong = tag("mong"),
     bali = tag("bali"),
     java = tag("java"),
@@ -233,6 +235,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .cherokee => .cher,
         .tibetan => .tibt,
         .nko => .nko,
+        .thaana => .thaa,
         .mongolian => .mong,
         .balinese => .bali,
         .javanese => .java,
@@ -325,6 +328,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isGeorgianScriptCodepoint(codepoint)) return .georgian;
     if (isCherokeeScriptCodepoint(codepoint)) return .cherokee;
     if (isTibetanScriptCodepoint(codepoint)) return .tibetan;
+    if (isThaanaScriptCodepoint(codepoint)) return .thaana;
     if (isNkoScriptCodepoint(codepoint)) return .nko;
     if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
@@ -563,6 +567,22 @@ fn isNkoScriptCodepoint(codepoint: u21) bool {
     // the block in one script run avoids routing valid syllables through DFLT
     // and preserves RTL direction for shaping/layout primitives.
     return codepoint >= 0x07c0 and codepoint <= 0x07ff;
+}
+
+fn isThaanaScriptCodepoint(codepoint: u21) bool {
+    // Thaana is an RTL abugida used for Dhivehi. Its base letters and fili
+    // vowel signs must select the `thaa` OpenType ScriptList entry together;
+    // otherwise vowel-mark positioning falls back to DFLT or gets split from
+    // the surrounding right-to-left shaping run.
+    return codepoint >= 0x0780 and codepoint <= 0x07b1;
+}
+
+fn isThaanaWordCodepoint(codepoint: u21) bool {
+    // Keep words anchored on Thaana letters. Fili marks attach through the
+    // generic word-extender path so a stray leading mark does not become a word
+    // by itself, but normal letter+mark syllables remain one selectable token.
+    return (codepoint >= 0x0780 and codepoint <= 0x07a5) or
+        codepoint == 0x07b1;
 }
 
 fn isThaiScriptCodepoint(codepoint: u21) bool {
@@ -829,7 +849,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .syriac, .nko => .rtl,
+        .arabic, .hebrew, .syriac, .nko, .thaana => .rtl,
         .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -1591,6 +1611,41 @@ test "NKo text selects NKo script and RTL shaping direction" {
     try std.testing.expectEqual(OpenTypeScriptTag.nko, openTypeScriptTag(scriptForCodepoint(0x07eb)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07d2));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07eb));
+}
+
+test "Thaana text keeps fili marks and selects Thaana RTL shaping" {
+    const allocator = std.testing.allocator;
+
+    const text = "ދިވެހި ބަސް";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 6), clusters.len);
+    try std.testing.expectEqualStrings("ދި", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("ވެ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ހި", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ބަ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("ސް", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.thaana, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.thaa, openTypeScriptTag(scriptForCodepoint(0x078b)));
+    try std.testing.expectEqual(OpenTypeScriptTag.thaa, openTypeScriptTag(scriptForCodepoint(0x07a8)));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x078b));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x07a8));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("ދިވެހި", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ބަސް", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Thai and Lao text select script-specific OpenType tags" {
@@ -2772,6 +2827,7 @@ const WordKind = enum {
     arabic,
     hebrew,
     armenian,
+    thaana,
     khmer,
     myanmar,
     devanagari,
@@ -2935,6 +2991,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isVaiWordCodepoint(codepoint)) return .vai;
     if (isKhmerWordCodepoint(codepoint)) return .khmer;
     if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
+    if (isThaanaWordCodepoint(codepoint)) return .thaana;
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
     if (isOghamWordCodepoint(codepoint)) return .ogham;
@@ -3057,6 +3114,10 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x06df and codepoint <= 0x06e4) or
         (codepoint >= 0x06e7 and codepoint <= 0x06e8) or
         (codepoint >= 0x06ea and codepoint <= 0x06ed) or
+        // Thaana fili vowel signs and sukun are nonspacing marks. They are
+        // typed after RTL bases but form one caret/word/shaping unit with the
+        // base letter, so keep them in the compact Extend table.
+        (codepoint >= 0x07a6 and codepoint <= 0x07b0) or
         // Tibetan vowel signs, halanta, subjoined-letter marks, and other
         // signs are typed after the base but form one stack/syllable for
         // grapheme and shaping boundaries.

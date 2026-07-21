@@ -25,6 +25,7 @@ pub const Script = enum {
     tamil,
     ethiopic,
     georgian,
+    cherokee,
     unknown,
 };
 
@@ -124,6 +125,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     taml = tag("taml"),
     ethi = tag("ethi"),
     geor = tag("geor"),
+    cher = tag("cher"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -163,6 +165,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .tamil => .taml,
         .ethiopic => .ethi,
         .georgian => .geor,
+        .cherokee => .cher,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -230,6 +233,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
     if (isEthiopicScriptCodepoint(codepoint)) return .ethiopic;
     if (isGeorgianScriptCodepoint(codepoint)) return .georgian;
+    if (isCherokeeScriptCodepoint(codepoint)) return .cherokee;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -289,6 +293,15 @@ fn isGeorgianScriptCodepoint(codepoint: u21) bool {
     return (codepoint >= 0x10a0 and codepoint <= 0x10ff) or
         (codepoint >= 0x1c90 and codepoint <= 0x1cbf) or
         (codepoint >= 0x2d00 and codepoint <= 0x2d2f);
+}
+
+fn isCherokeeScriptCodepoint(codepoint: u21) bool {
+    // Cherokee has bicameral letters split between the main block and the
+    // Cherokee Supplement. Fonts expose script-specific substitutions and
+    // positioning through the `cher` ScriptList entry, so upper/lowercase text
+    // must remain in one shaping run instead of being routed through DFLT.
+    return (codepoint >= 0x13a0 and codepoint <= 0x13ff) or
+        (codepoint >= 0xab70 and codepoint <= 0xabbf);
 }
 
 fn isEthiopicScriptCodepoint(codepoint: u21) bool {
@@ -403,7 +416,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian, .cherokee => .ltr,
         else => .neutral,
     };
 }
@@ -1441,6 +1454,22 @@ test "Georgian text selects Georgian script runs and OpenType tag" {
     try std.testing.expectEqual(OpenTypeScriptTag.geor, openTypeScriptTag(scriptForCodepoint(0x1c90)));
     try std.testing.expectEqual(OpenTypeScriptTag.geor, openTypeScriptTag(scriptForCodepoint(0x2d10)));
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x10d0));
+}
+
+test "Cherokee text selects Cherokee script runs and OpenType tag" {
+    const allocator = std.testing.allocator;
+
+    const text = "ᎣᏏᏲ ꭰꮝ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.cherokee, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.cher, openTypeScriptTag(scriptForCodepoint(0x13a3)));
+    try std.testing.expectEqual(OpenTypeScriptTag.cher, openTypeScriptTag(scriptForCodepoint(0xab70)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x13a3));
 }
 
 test "Ethiopic text selects Ethiopic script runs and direction" {

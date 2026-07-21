@@ -450,6 +450,7 @@ pub const TextEditor = struct {
         const after = try self.allocator.dupe(u8, replacement);
         errdefer self.allocator.free(after);
         const selection_before = self.buffer.selection;
+        try self.undo_stack.ensureUnusedCapacity(self.allocator, 1);
 
         try self.buffer.replaceRange(start_byte, end_byte, replacement);
         const selection_after = self.buffer.selection;
@@ -865,6 +866,17 @@ fn nextGraphemeBoundary(allocator: std.mem.Allocator, text: []const u8, byte_off
         if (end > offset) return end;
     }
     return text.len;
+}
+
+test "TextEditor replacement preflights undo record allocation" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var editor = try TextEditor.initText(failing.allocator(), "ab");
+    defer editor.deinit();
+
+    failing.fail_index = failing.alloc_index + 2; // before/after snapshots succeed; undo-stack growth fails.
+    try std.testing.expectError(error.OutOfMemory, editor.replaceRange(0, 1, "X"));
+    try std.testing.expectEqualStrings("ab", editor.slice());
+    try std.testing.expect(!editor.canUndo());
 }
 
 test "TextEditor records undo and redo for inserts replacements and deletes" {

@@ -976,6 +976,8 @@ test "itemizes basic word segments" {
     defer allocator.free(apostrophe);
     try std.testing.expectEqual(@as(usize, 2), apostrophe.len);
     try std.testing.expectEqualStrings("can't", "can't stop"[apostrophe[0].byte_start..][0..apostrophe[0].byte_len]);
+
+    try std.testing.expectError(error.InvalidUtf8, itemizeWordSegments(allocator, "hi\xffthere"));
 }
 
 test "word segments retain combining marks variation selectors and joiners" {

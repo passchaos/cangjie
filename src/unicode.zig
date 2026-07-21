@@ -480,11 +480,13 @@ pub fn itemizeWordSegments(allocator: std.mem.Allocator, text: []const u8) ![]Wo
     var word_end: usize = 0;
     // Latin-like text forms multi-codepoint words. East Asian scripts are
     // exposed as single-codepoint words because they do not require spaces.
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < text.len) {
-        const byte_start = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        const byte_end = it.i;
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const byte_start = cursor;
+        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
+        const codepoint = decoded.codepoint;
+        const byte_end = decoded.next;
+        cursor = byte_end;
         const kind = wordKindForCodepoint(codepoint);
         if (kind == .none) {
             if (isWordExtender(codepoint)) {

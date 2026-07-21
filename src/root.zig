@@ -2629,6 +2629,20 @@ test "serializes font manifest entries with escaping" {
     try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, "bad\n"));
 }
 
+test "font manifest parse errors free decoded fields" {
+    const allocator = std.testing.allocator;
+    const prefix =
+        "cangjie-font-manifest-v3\n" ++
+        "family\tsubfamily\tfull_name\tpostscript_name\tcontent_hash\tcontent_size\tweight\tstretch\tstyle\n";
+
+    try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, prefix ++
+        "Leaky\tRegular\tLeaky Regular\tLeaky-Regular\tnot-hex\t0\t400\t100\tnormal\n"));
+    try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, prefix ++
+        "Leaky\tRegular\tLeaky Regular\tLeaky\\x-Regular\t0\t0\t400\t100\tnormal\n"));
+    try std.testing.expectError(error.InvalidManifest, parseManifest(allocator, prefix ++
+        "Leaky\tRegular\tLeaky Regular\tLeaky-Regular\t0\t0\t400\t100\tslant\n"));
+}
+
 test "writes and reads font manifest files" {
     const allocator = std.testing.allocator;
     const entries = [_]FontManifestEntry{.{

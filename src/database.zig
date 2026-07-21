@@ -89,23 +89,26 @@ pub fn parseManifest(allocator: std.mem.Allocator, text: []const u8) ![]FontMani
         }
         if (fields.next() != null) return error.InvalidManifest;
 
+        const family = try unescapeManifestField(allocator, raw[0]);
+        errdefer allocator.free(family);
+        const subfamily = try unescapeManifestField(allocator, raw[1]);
+        errdefer allocator.free(subfamily);
+        const full_name = try unescapeManifestField(allocator, raw[2]);
+        errdefer allocator.free(full_name);
+        const postscript_name = try unescapeManifestField(allocator, raw[3]);
+        errdefer allocator.free(postscript_name);
+
         const entry = FontManifestEntry{
-            .family = try unescapeManifestField(allocator, raw[0]),
-            .subfamily = try unescapeManifestField(allocator, raw[1]),
-            .full_name = try unescapeManifestField(allocator, raw[2]),
-            .postscript_name = try unescapeManifestField(allocator, raw[3]),
-            .content_hash = try std.fmt.parseInt(u64, raw[4], 16),
-            .content_size = try std.fmt.parseInt(u64, raw[5], 10),
-            .weight = try std.fmt.parseInt(u16, raw[6], 10),
-            .stretch = try std.fmt.parseInt(u16, raw[7], 10),
+            .family = family,
+            .subfamily = subfamily,
+            .full_name = full_name,
+            .postscript_name = postscript_name,
+            .content_hash = parseManifestInt(u64, raw[4], 16) catch return error.InvalidManifest,
+            .content_size = parseManifestInt(u64, raw[5], 10) catch return error.InvalidManifest,
+            .weight = parseManifestInt(u16, raw[6], 10) catch return error.InvalidManifest,
+            .stretch = parseManifestInt(u16, raw[7], 10) catch return error.InvalidManifest,
             .style = try parseFontStyle(raw[8]),
         };
-        errdefer {
-            allocator.free(entry.family);
-            allocator.free(entry.subfamily);
-            allocator.free(entry.full_name);
-            allocator.free(entry.postscript_name);
-        }
         try entries.append(allocator, entry);
     }
 
@@ -702,6 +705,11 @@ fn writeEscapedField(writer: *std.Io.Writer, value: []const u8) !void {
             else => try writer.writeByte(byte),
         }
     }
+}
+
+fn parseManifestInt(comptime T: type, value: []const u8, base: u8) !T {
+    if (value.len == 0) return error.InvalidManifest;
+    return std.fmt.parseInt(T, value, base) catch error.InvalidManifest;
 }
 
 fn unescapeManifestField(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {

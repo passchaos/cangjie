@@ -43,6 +43,7 @@ pub const Script = enum {
     meetei_mayek,
     canadian_aboriginal,
     cham,
+    brahmi,
     unknown,
 };
 
@@ -160,6 +161,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     mtei = tag("mtei"),
     cans = tag("cans"),
     cham = tag("cham"),
+    brah = tag("brah"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -217,6 +219,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .meetei_mayek => .mtei,
         .canadian_aboriginal => .cans,
         .cham => .cham,
+        .brahmi => .brah,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -302,6 +305,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isMeeteiMayekScriptCodepoint(codepoint)) return .meetei_mayek;
     if (isCanadianAboriginalScriptCodepoint(codepoint)) return .canadian_aboriginal;
     if (isChamScriptCodepoint(codepoint)) return .cham;
+    if (isBrahmiScriptCodepoint(codepoint)) return .brahmi;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -396,6 +400,14 @@ fn isChamScriptCodepoint(codepoint: u21) bool {
     // ScriptList entry for these pieces, so keep them in a single script run
     // instead of routing marks or finals through DFLT/unknown before shaping.
     return codepoint >= 0xaa00 and codepoint <= 0xaa5f;
+}
+
+fn isBrahmiScriptCodepoint(codepoint: u21) bool {
+    // Brahmi is an historic Indic script with dependent vowel signs, viramas,
+    // digits, and punctuation in one supplementary-plane block. Fonts expose
+    // Brahmi-specific shaping through the `brah` ScriptList entry, so keep the
+    // block together instead of routing marks or numbers through DFLT/unknown.
+    return codepoint >= 0x11000 and codepoint <= 0x1107f;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -629,7 +641,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi => .ltr,
         else => .neutral,
     };
 }
@@ -2246,6 +2258,45 @@ test "Cham syllables keep signs and select Cham OpenType script" {
     try std.testing.expectEqualStrings("꩐", text[words[3].byte_start..][0..words[3].byte_len]);
 }
 
+test "Brahmi syllables keep marks and select Brahmi OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{11013}\u{11038} \u{11013}\u{11002} \u{11013}\u{11046}\u{200d}\u{11022} \u{11066}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqualStrings("\u{11013}\u{11038}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{11013}\u{11002}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{11013}\u{11046}\u{200d}\u{11022}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{11066}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.brahmi, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.brah, openTypeScriptTag(scriptForCodepoint(0x11013)));
+    try std.testing.expectEqual(OpenTypeScriptTag.brah, openTypeScriptTag(scriptForCodepoint(0x11038)));
+    try std.testing.expectEqual(OpenTypeScriptTag.brah, openTypeScriptTag(scriptForCodepoint(0x11046)));
+    try std.testing.expectEqual(OpenTypeScriptTag.brah, openTypeScriptTag(scriptForCodepoint(0x11066)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x11013));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 4), words.len);
+    try std.testing.expectEqualStrings("\u{11013}\u{11038}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{11013}\u{11002}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{11013}\u{11046}\u{200d}\u{11022}", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{11066}", text[words[3].byte_start..][0..words[3].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2270,6 +2321,7 @@ const WordKind = enum {
     meetei_mayek,
     canadian_aboriginal,
     cham,
+    brahmi,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2424,6 +2476,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .meetei_mayek => .meetei_mayek,
         .canadian_aboriginal => .canadian_aboriginal,
         .cham => .cham,
+        .brahmi => .brahmi,
         else => .none,
     };
 }
@@ -2678,6 +2731,14 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0xaa35 and codepoint <= 0xaa36) or
         codepoint == 0xaa43 or
         codepoint == 0xaa4c or
+        // Brahmi dependent vowels, viramas, and number joiner are combining
+        // signs typed after bases or numbers. Keeping them attached preserves
+        // historic Indic syllable boundaries for caret and shaping primitives.
+        codepoint == 0x11001 or
+        (codepoint >= 0x11038 and codepoint <= 0x11046) or
+        codepoint == 0x11070 or
+        (codepoint >= 0x11073 and codepoint <= 0x11074) or
+        codepoint == 0x1107f or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the
@@ -2732,7 +2793,9 @@ fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
         codepoint == 0x0a4d or // Gurmukhi sign virama.
         codepoint == 0x0c4d or // Telugu sign virama.
         codepoint == 0x0ccd or // Kannada sign virama.
-        codepoint == 0x0d4d; // Malayalam sign virama.
+        codepoint == 0x0d4d or // Malayalam sign virama.
+        codepoint == 0x11046 or // Brahmi virama.
+        codepoint == 0x11070; // Brahmi old Tamil virama.
 }
 
 fn isIndicConsonant(codepoint: u21) bool {
@@ -2761,7 +2824,8 @@ fn isIndicConsonant(codepoint: u21) bool {
         codepoint == 0x0c59 or
         (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
         (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
-        codepoint == 0x0d3a;
+        codepoint == 0x0d3a or
+        (codepoint >= 0x11013 and codepoint <= 0x11037);
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {
@@ -2954,7 +3018,12 @@ fn isSpacingMark(codepoint: u21) bool {
         // base/final letter for low-level grapheme and shaping boundaries.
         (codepoint >= 0xaa2f and codepoint <= 0xaa30) or
         (codepoint >= 0xaa33 and codepoint <= 0xaa34) or
-        codepoint == 0xaa4d;
+        codepoint == 0xaa4d or
+        // Brahmi candrabindu and visarga are spacing signs encoded before the
+        // letters in the same block but belong to adjacent Brahmi syllables for
+        // UAX #29 grapheme and low-level shaping boundaries.
+        codepoint == 0x11000 or
+        codepoint == 0x11002;
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

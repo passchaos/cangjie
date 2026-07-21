@@ -26,6 +26,7 @@ pub const Script = enum {
     ethiopic,
     georgian,
     cherokee,
+    tibetan,
     unknown,
 };
 
@@ -126,6 +127,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     ethi = tag("ethi"),
     geor = tag("geor"),
     cher = tag("cher"),
+    tibt = tag("tibt"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -166,6 +168,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .ethiopic => .ethi,
         .georgian => .geor,
         .cherokee => .cher,
+        .tibetan => .tibt,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -234,6 +237,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isEthiopicScriptCodepoint(codepoint)) return .ethiopic;
     if (isGeorgianScriptCodepoint(codepoint)) return .georgian;
     if (isCherokeeScriptCodepoint(codepoint)) return .cherokee;
+    if (isTibetanScriptCodepoint(codepoint)) return .tibetan;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -302,6 +306,14 @@ fn isCherokeeScriptCodepoint(codepoint: u21) bool {
     // must remain in one shaping run instead of being routed through DFLT.
     return (codepoint >= 0x13a0 and codepoint <= 0x13ff) or
         (codepoint >= 0xab70 and codepoint <= 0xabbf);
+}
+
+fn isTibetanScriptCodepoint(codepoint: u21) bool {
+    // Tibetan stacks rely on script-specific OpenType shaping (`tibt`) for
+    // subjoined consonants, vowel signs, and marks. Keep the full Tibetan
+    // block in one LTR script run so those syllables do not fall through DFLT
+    // lookup selection before shaping.
+    return codepoint >= 0x0f00 and codepoint <= 0x0fff;
 }
 
 fn isEthiopicScriptCodepoint(codepoint: u21) bool {
@@ -416,7 +428,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian, .cherokee => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .sinhala, .tamil, .ethiopic, .georgian, .cherokee, .tibetan => .ltr,
         else => .neutral,
     };
 }
@@ -1490,6 +1502,29 @@ test "Ethiopic text selects Ethiopic script runs and direction" {
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1230));
 }
 
+test "Tibetan stacks keep marks and select Tibetan OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "བོ ཀྱ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 3), clusters.len);
+    try std.testing.expectEqualStrings("བོ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ཀྱ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.tibetan, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.tibt, openTypeScriptTag(scriptForCodepoint(0x0f56)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0f56));
+}
+
 const WordKind = enum {
     none,
     single,
@@ -1734,6 +1769,18 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x06df and codepoint <= 0x06e4) or
         (codepoint >= 0x06e7 and codepoint <= 0x06e8) or
         (codepoint >= 0x06ea and codepoint <= 0x06ed) or
+        // Tibetan vowel signs, halanta, subjoined-letter marks, and other
+        // signs are typed after the base but form one stack/syllable for
+        // grapheme and shaping boundaries.
+        codepoint == 0x0f35 or
+        codepoint == 0x0f37 or
+        codepoint == 0x0f39 or
+        (codepoint >= 0x0f71 and codepoint <= 0x0f7e) or
+        (codepoint >= 0x0f80 and codepoint <= 0x0f84) or
+        (codepoint >= 0x0f86 and codepoint <= 0x0f87) or
+        (codepoint >= 0x0f8d and codepoint <= 0x0f97) or
+        (codepoint >= 0x0f99 and codepoint <= 0x0fbc) or
+        codepoint == 0x0fc6 or
         (codepoint >= 0x0900 and codepoint <= 0x0902) or
         codepoint == 0x093a or
         codepoint == 0x093c or

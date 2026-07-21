@@ -547,11 +547,13 @@ pub fn itemizeSentenceSegments(allocator: std.mem.Allocator, text: []const u8) !
     var sentence_end: usize = 0;
     var pending_break = false;
     var previous_codepoint: ?u21 = null;
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < text.len) {
-        const byte_start = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        const byte_end = it.i;
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const byte_start = cursor;
+        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
+        const codepoint = decoded.codepoint;
+        const byte_end = decoded.next;
+        cursor = byte_end;
         sentence_end = byte_end;
 
         if (pending_break and !isSentenceTrailingSpace(codepoint) and !isSentenceTrailingClose(codepoint)) {
@@ -820,9 +822,7 @@ fn isMidNumberSentencePeriod(codepoint: u21, previous: ?u21, text: []const u8, b
 }
 
 fn nextCodepointAt(text: []const u8, offset: usize) ?u21 {
-    if (offset >= text.len) return null;
-    var it = std.unicode.Utf8Iterator{ .bytes = text[offset..], .i = 0 };
-    return it.nextCodepoint();
+    return (decodeCodepointAt(text, offset) orelse return null).codepoint;
 }
 
 fn isAsciiDigit(codepoint: u21) bool {

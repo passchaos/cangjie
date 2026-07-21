@@ -1090,6 +1090,8 @@ test "itemizes basic sentence segments" {
     try std.testing.expectEqual(@as(usize, 2), quoted.len);
     try std.testing.expectEqualStrings("He said ‘hi!’ ", quoted_text[quoted[0].byte_start..][0..quoted[0].byte_len]);
     try std.testing.expectEqualStrings("Next.", quoted_text[quoted[1].byte_start..][0..quoted[1].byte_len]);
+
+    try std.testing.expectError(error.InvalidUtf8, itemizeSentenceSegments(allocator, "Hello.\xffNext"));
 }
 
 test "sentence segments keep decimal full stops inside numbers" {

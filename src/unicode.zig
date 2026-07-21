@@ -19,6 +19,7 @@ pub const Script = enum {
     devanagari,
     tamil,
     ethiopic,
+    georgian,
     unknown,
 };
 
@@ -112,6 +113,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     dev2 = tag("dev2"),
     taml = tag("taml"),
     ethi = tag("ethi"),
+    geor = tag("geor"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -145,6 +147,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .devanagari => .dev2,
         .tamil => .taml,
         .ethiopic => .ethi,
+        .georgian => .geor,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -206,6 +209,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
     if (isEthiopicScriptCodepoint(codepoint)) return .ethiopic;
+    if (isGeorgianScriptCodepoint(codepoint)) return .georgian;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -231,6 +235,16 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isGeorgianScriptCodepoint(codepoint: u21) bool {
+    // Georgian has casing split across Mkhedruli, Mtavruli, Nuskhuri, and
+    // historic Asomtavruli blocks. Fonts expose substitutions and positioning
+    // under the `geor` ScriptList entry, so all Georgian letters must remain in
+    // one shaping run instead of falling back to DFLT/unknown.
+    return (codepoint >= 0x10a0 and codepoint <= 0x10ff) or
+        (codepoint >= 0x1c90 and codepoint <= 0x1cbf) or
+        (codepoint >= 0x2d00 and codepoint <= 0x2d2f);
 }
 
 fn isEthiopicScriptCodepoint(codepoint: u21) bool {
@@ -320,7 +334,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .devanagari, .tamil, .ethiopic => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .devanagari, .tamil, .ethiopic, .georgian => .ltr,
         else => .neutral,
     };
 }
@@ -1256,6 +1270,23 @@ test "Hangul conjoining jamo classify as Hangul script runs" {
     try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0x1100)));
     try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0xA960)));
     try std.testing.expectEqual(OpenTypeScriptTag.hang, openTypeScriptTag(scriptForCodepoint(0xD7B0)));
+}
+
+test "Georgian text selects Georgian script runs and OpenType tag" {
+    const allocator = std.testing.allocator;
+
+    const text = "ქართული Ქⴐ";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.georgian, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.geor, openTypeScriptTag(scriptForCodepoint(0x10d0)));
+    try std.testing.expectEqual(OpenTypeScriptTag.geor, openTypeScriptTag(scriptForCodepoint(0x1c90)));
+    try std.testing.expectEqual(OpenTypeScriptTag.geor, openTypeScriptTag(scriptForCodepoint(0x2d10)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x10d0));
 }
 
 test "Ethiopic text selects Ethiopic script runs and direction" {

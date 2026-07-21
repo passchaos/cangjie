@@ -47,6 +47,7 @@ pub const Script = enum {
     canadian_aboriginal,
     cham,
     brahmi,
+    nushu,
     unknown,
 };
 
@@ -168,6 +169,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     cans = tag("cans"),
     cham = tag("cham"),
     brah = tag("brah"),
+    nshu = tag("nshu"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -229,6 +231,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .canadian_aboriginal => .cans,
         .cham => .cham,
         .brahmi => .brah,
+        .nushu => .nshu,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -315,6 +318,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCanadianAboriginalScriptCodepoint(codepoint)) return .canadian_aboriginal;
     if (isChamScriptCodepoint(codepoint)) return .cham;
     if (isBrahmiScriptCodepoint(codepoint)) return .brahmi;
+    if (isNushuScriptCodepoint(codepoint)) return .nushu;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -462,6 +466,14 @@ fn isBrahmiScriptCodepoint(codepoint: u21) bool {
     // Brahmi-specific shaping through the `brah` ScriptList entry, so keep the
     // block together instead of routing marks or numbers through DFLT/unknown.
     return codepoint >= 0x11000 and codepoint <= 0x1107f;
+}
+
+fn isNushuScriptCodepoint(codepoint: u21) bool {
+    // Nushu is encoded as a supplementary-plane ideographic script and has a
+    // dedicated OpenType ScriptList tag (`nshu`). Classify the entire block as
+    // one shaping script so Nushu text selects script-specific font lookups
+    // instead of falling through DFLT/unknown primitives.
+    return codepoint >= 0x1b170 and codepoint <= 0x1b2ff;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -695,7 +707,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu => .ltr,
         else => .neutral,
     };
 }
@@ -2435,6 +2447,41 @@ test "Lisu letters select Lisu script primitives" {
     try std.testing.expectEqualStrings("\u{11fb0}\u{a4f0}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
+test "Nushu characters select Nushu script and ideographic layout primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{1b170}\u{1b171} \u{1b2ff}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.nushu, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.nshu, openTypeScriptTag(scriptForCodepoint(0x1b170)));
+    try std.testing.expectEqual(OpenTypeScriptTag.nshu, openTypeScriptTag(scriptForCodepoint(0x1b2ff)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1b170));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("\u{1b170}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{1b171}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{1b2ff}", text[words[2].byte_start..][0..words[2].byte_len]);
+
+    const breaks = try itemizeLineBreaks(allocator, "\u{1b170}\u{1b171}\u{1b2ff}");
+    defer allocator.free(breaks);
+
+    try std.testing.expectEqual(@as(usize, 3), breaks.len);
+    try std.testing.expectEqual(@as(usize, 4), breaks[0].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[0].kind);
+    try std.testing.expectEqual(@as(usize, 8), breaks[1].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
+    try std.testing.expectEqual(@as(usize, 12), breaks[2].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.soft, breaks[2].kind);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2580,6 +2627,10 @@ fn isLineBreakEastAsian(codepoint: u21) bool {
         (codepoint >= 0x3400 and codepoint <= 0x4dbf) or
         (codepoint >= 0x4e00 and codepoint <= 0x9fff) or
         (codepoint >= 0xa000 and codepoint <= 0xa4cf) or
+        // Nushu is a supplementary-plane ideographic script. Treat it like
+        // Han/Yi for this compact line-break primitive so long unspaced Nushu
+        // text can wrap between characters instead of only at ASCII spaces.
+        (codepoint >= 0x1b170 and codepoint <= 0x1b2ff) or
         (codepoint >= 0xac00 and codepoint <= 0xd7af) or
         (codepoint >= 0xf900 and codepoint <= 0xfaff) or
         (codepoint >= 0x20000 and codepoint <= 0x2fffd) or
@@ -2598,7 +2649,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isVaiWordCodepoint(codepoint)) return .vai;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .han, .yi, .hiragana, .katakana, .hangul => .single,
+        .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
         .arabic => .arabic,
         .hebrew => .hebrew,
         .armenian => .armenian,

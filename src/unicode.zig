@@ -49,6 +49,7 @@ pub const Script = enum {
     brahmi,
     nushu,
     runic,
+    coptic,
     unknown,
 };
 
@@ -172,6 +173,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     brah = tag("brah"),
     nshu = tag("nshu"),
     runr = tag("runr"),
+    copt = tag("copt"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -235,6 +237,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .brahmi => .brah,
         .nushu => .nshu,
         .runic => .runr,
+        .coptic => .copt,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -288,6 +291,7 @@ pub fn tag(comptime bytes: *const [4]u8) u32 {
 pub fn scriptForCodepoint(codepoint: u21) Script {
     if ((codepoint >= 'A' and codepoint <= 'Z') or (codepoint >= 'a' and codepoint <= 'z')) return .latin;
     if (isLatinScriptCodepoint(codepoint)) return .latin;
+    if (isCopticScriptCodepoint(codepoint)) return .coptic;
     if (isGreekScriptCodepoint(codepoint)) return .greek;
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
@@ -495,6 +499,27 @@ fn isRunicWordCodepoint(codepoint: u21) bool {
     // separators deliberately break words just like spaces or punctuation.
     return (codepoint >= 0x16a0 and codepoint <= 0x16ea) or
         (codepoint >= 0x16ee and codepoint <= 0x16f8);
+}
+
+fn isCopticScriptCodepoint(codepoint: u21) bool {
+    // Coptic is encoded partly as Coptic letters in the Greek block, partly in
+    // the dedicated Coptic block, and partly as Coptic Epact Numbers in the
+    // supplementary plane. Check this before Greek so fonts can select their
+    // `copt` ScriptList entry instead of shaping U+03E2..U+03EF as Greek.
+    return (codepoint >= 0x03e2 and codepoint <= 0x03ef) or
+        (codepoint >= 0x2c80 and codepoint <= 0x2cff) or
+        (codepoint >= 0x102e0 and codepoint <= 0x102ff);
+}
+
+fn isCopticWordCodepoint(codepoint: u21) bool {
+    // Exclude Coptic block punctuation/fraction signs from words, but keep the
+    // historic letters and Epact number signs grouped as normal unspaced Coptic
+    // tokens. Combining marks attach through isWordExtender().
+    return (codepoint >= 0x03e2 and codepoint <= 0x03ef) or
+        (codepoint >= 0x2c80 and codepoint <= 0x2ce4) or
+        (codepoint >= 0x2ceb and codepoint <= 0x2cee) or
+        (codepoint >= 0x2cf2 and codepoint <= 0x2cf3) or
+        (codepoint >= 0x102e1 and codepoint <= 0x102fb);
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -728,7 +753,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic => .ltr,
+        .latin, .greek, .cyrillic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic => .ltr,
         else => .neutral,
     };
 }
@@ -2528,6 +2553,39 @@ test "Runic text selects Runic script primitives and groups words around separat
     try std.testing.expectEqualStrings("\u{16ee}\u{16f8}", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Coptic text selects Coptic script primitives across blocks" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{03e2}\u{2cef}\u{2c81} \u{102e1}\u{102e0}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.coptic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.copt, openTypeScriptTag(scriptForCodepoint(0x03e2)));
+    try std.testing.expectEqual(OpenTypeScriptTag.copt, openTypeScriptTag(scriptForCodepoint(0x2c81)));
+    try std.testing.expectEqual(OpenTypeScriptTag.copt, openTypeScriptTag(scriptForCodepoint(0x102e1)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x2c81));
+
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 4), clusters.len);
+    try std.testing.expectEqualStrings("\u{03e2}\u{2cef}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{2c81}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{102e1}\u{102e0}", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{03e2}\u{2cef}\u{2c81}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{102e1}\u{102e0}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -2556,6 +2614,7 @@ const WordKind = enum {
     cham,
     brahmi,
     runic,
+    coptic,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2695,6 +2754,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isLisuWordCodepoint(codepoint)) return .lisu;
     if (isVaiWordCodepoint(codepoint)) return .vai;
     if (isRunicWordCodepoint(codepoint)) return .runic;
+    if (isCopticWordCodepoint(codepoint)) return .coptic;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
@@ -2981,6 +3041,11 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x11070 or
         (codepoint >= 0x11073 and codepoint <= 0x11074) or
         codepoint == 0x1107f or
+        // Coptic combining marks are used both with Coptic letters and with
+        // Coptic Epact Numbers. Keep them attached so caret, word, and shaping
+        // primitives do not split a marked Coptic token between base and mark.
+        (codepoint >= 0x2cef and codepoint <= 0x2cf1) or
+        codepoint == 0x102e0 or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the

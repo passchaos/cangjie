@@ -35,6 +35,7 @@ pub const Script = enum {
     tibetan,
     nko,
     mongolian,
+    javanese,
     unknown,
 };
 
@@ -144,6 +145,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     tibt = tag("tibt"),
     nko = tag("nko "),
     mong = tag("mong"),
+    java = tag("java"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -193,6 +195,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .tibetan => .tibt,
         .nko => .nko,
         .mongolian => .mong,
+        .javanese => .java,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -270,6 +273,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isTibetanScriptCodepoint(codepoint)) return .tibetan;
     if (isNkoScriptCodepoint(codepoint)) return .nko;
     if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
+    if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -295,6 +299,14 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (codepoint >= 0x30000 and codepoint <= 0x3fffd) return .han;
     if (isCommonCodepoint(codepoint)) return .common;
     return .unknown;
+}
+
+fn isJavaneseScriptCodepoint(codepoint: u21) bool {
+    // Javanese uses script-specific OpenType shaping (`java`) for dependent
+    // vowels, final consonant signs, and U+A9C0 PANGKON. Keeping the whole
+    // block together avoids splitting aksara syllables through DFLT/unknown
+    // runs before GSUB/GPOS lookup selection.
+    return codepoint >= 0xa980 and codepoint <= 0xa9df;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -528,7 +540,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian, .javanese => .ltr,
         else => .neutral,
     };
 }
@@ -1850,6 +1862,39 @@ test "Tibetan stacks keep marks and select Tibetan OpenType script" {
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0f56));
 }
 
+test "Javanese syllables keep marks and select Javanese OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "ꦏꦺꦴ ꦏ꧀ ꦲꦤꦕꦫꦏ";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 9), clusters.len);
+    try std.testing.expectEqualStrings("ꦏꦺꦴ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("ꦏ꧀", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.javanese, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.java, openTypeScriptTag(scriptForCodepoint(0xa98f)));
+    try std.testing.expectEqual(OpenTypeScriptTag.java, openTypeScriptTag(scriptForCodepoint(0xa9c0)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xa98f));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("ꦏꦺꦴ", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("ꦏ꧀", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("ꦲꦤꦕꦫꦏ", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -1866,6 +1911,7 @@ const WordKind = enum {
     sinhala,
     tamil,
     malayalam,
+    javanese,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -2012,6 +2058,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .sinhala => .sinhala,
         .tamil => .tamil,
         .malayalam => .malayalam,
+        .javanese => .javanese,
         else => .none,
     };
 }
@@ -2212,6 +2259,14 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x1085 and codepoint <= 0x1086) or
         codepoint == 0x108d or
         codepoint == 0x109d or
+        // Javanese nonspacing signs include final consonant signs, vowel
+        // signs, and consonant modifiers. They are typed after an aksara base
+        // but form one caret/shaping unit with it, so keep them as grapheme
+        // and word extenders alongside the spacing Javanese signs below.
+        (codepoint >= 0xa980 and codepoint <= 0xa982) or
+        codepoint == 0xa9b3 or
+        (codepoint >= 0xa9b6 and codepoint <= 0xa9b9) or
+        (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
         // Mongolian free variation selectors choose contextual glyph forms
         // and have Grapheme_Cluster_Break=Extend. They must stay attached to
         // the preceding Mongolian letter so shaping clusters retain the
@@ -2437,7 +2492,14 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x1083 and codepoint <= 0x1084) or
         (codepoint >= 0x1087 and codepoint <= 0x108c) or
         codepoint == 0x108f or
-        (codepoint >= 0x109a and codepoint <= 0x109c);
+        (codepoint >= 0x109a and codepoint <= 0x109c) or
+        // Javanese spacing signs include dependent vowels, consonant signs,
+        // and U+A9C0 PANGKON. These visible signs still belong to the base
+        // aksara for grapheme, word, and shaping-boundary purposes.
+        codepoint == 0xa983 or
+        (codepoint >= 0xa9b4 and codepoint <= 0xa9b5) or
+        (codepoint >= 0xa9ba and codepoint <= 0xa9bb) or
+        (codepoint >= 0xa9be and codepoint <= 0xa9c0);
 }
 
 fn scriptBelongsToRun(script: Script, current: Script) bool {

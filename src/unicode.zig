@@ -405,10 +405,12 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
     var previous_codepoint: ?u21 = null;
     var last_non_extend_codepoint: ?u21 = null;
     var zwj_after_extended_pictographic = false;
+    var zwj_after_indic_virama = false;
     var regional_indicator_count: usize = 0;
     // Approximate UAX #29 extended grapheme clusters for the scripts supported
-    // here: combining marks, variation selectors, emoji modifiers, ZWJ chains,
-    // regional-indicator pairs, and Hangul Jamo syllable sequences.
+    // here: combining marks, variation selectors, emoji modifiers, emoji ZWJ
+    // chains, Indic virama conjuncts, regional-indicator pairs, and Hangul Jamo
+    // syllable sequences.
     while (cursor < text.len) {
         const byte_start = cursor;
         const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
@@ -422,11 +424,12 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
             previous_codepoint = codepoint;
             last_non_extend_codepoint = if (isGraphemeExtendCodepoint(codepoint) or codepoint == 0x200d) null else codepoint;
             zwj_after_extended_pictographic = false;
+            zwj_after_indic_virama = false;
             regional_indicator_count = if (isRegionalIndicator(codepoint)) 1 else 0;
             continue;
         }
 
-        if (extendsGrapheme(previous_codepoint.?, codepoint, regional_indicator_count, zwj_after_extended_pictographic)) {
+        if (extendsGrapheme(previous_codepoint.?, codepoint, regional_indicator_count, zwj_after_extended_pictographic, zwj_after_indic_virama)) {
             cluster_end = byte_end;
             if (codepoint == 0x200d) {
                 // GB11 only suppresses the break after ZWJ for emoji ZWJ
@@ -437,8 +440,14 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
                     isExtendedPictographic(last)
                 else
                     false;
+                // UAX #29's InCB rule keeps virama+ZWJ Indic conjuncts at a
+                // single caret stop. Without this side state, "क्‍ष" splits
+                // before the final consonant even though the ZWJ requests a
+                // conjunct glyph.
+                zwj_after_indic_virama = previous_codepoint.? == 0x094d;
             } else {
                 zwj_after_extended_pictographic = false;
+                zwj_after_indic_virama = false;
                 if (!isGraphemeExtendCodepoint(codepoint)) {
                     last_non_extend_codepoint = codepoint;
                 }
@@ -461,6 +470,7 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
         previous_codepoint = codepoint;
         last_non_extend_codepoint = if (isGraphemeExtendCodepoint(codepoint) or codepoint == 0x200d) null else codepoint;
         zwj_after_extended_pictographic = false;
+        zwj_after_indic_virama = false;
         regional_indicator_count = if (isRegionalIndicator(codepoint)) 1 else 0;
     }
 
@@ -842,6 +852,20 @@ test "line breaks include breakable Unicode space separators" {
     try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
 }
 
+test "grapheme clusters keep Devanagari virama ZWJ conjuncts atomic" {
+    const allocator = std.testing.allocator;
+
+    const text = "क्‍ष क्ष";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 4), clusters.len);
+    try std.testing.expectEqualStrings("क्‍ष", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("क्", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("ष", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+}
+
 const WordKind = enum {
     none,
     single,
@@ -1007,7 +1031,7 @@ fn isWordFormat(codepoint: u21) bool {
         codepoint == 0xfeff;
 }
 
-fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize, zwj_after_extended_pictographic: bool) bool {
+fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize, zwj_after_extended_pictographic: bool, zwj_after_indic_virama: bool) bool {
     // Keep this predicate conservative: it only returns true for continuation
     // codepoints that should share a caret stop with the previous codepoint.
     if (previous == '\r' and current == '\n') return true;
@@ -1020,7 +1044,10 @@ fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize,
     if (extendsHangulGrapheme(previous, current)) return true;
     if (isRegionalIndicator(previous) and isRegionalIndicator(current) and regional_indicator_count % 2 == 1) return true;
     if (isGraphemeExtendCodepoint(current)) return true;
-    if (previous == 0x200d) return zwj_after_extended_pictographic and isExtendedPictographic(current);
+    if (previous == 0x200d) {
+        return (zwj_after_extended_pictographic and isExtendedPictographic(current)) or
+            (zwj_after_indic_virama and isIndicConsonant(current));
+    }
     return false;
 }
 
@@ -1113,6 +1140,21 @@ fn isEmojiTagCodepoint(codepoint: u21) bool {
     // Grapheme_Cluster_Break=Extend, so they must stay attached to the
     // preceding pictograph instead of creating one caret stop per tag byte.
     return codepoint >= 0xe0020 and codepoint <= 0xe007f;
+}
+
+fn isIndicConsonant(codepoint: u21) bool {
+    // Compact InCB=Consonant coverage for the Devanagari block Cangjie already
+    // classifies as a shaped script. The range is deliberately narrow so ZWJ
+    // after a virama only glues to real consonants, not punctuation or digits.
+    return (codepoint >= 0x0915 and codepoint <= 0x0939) or
+        codepoint == 0x0958 or
+        codepoint == 0x0959 or
+        codepoint == 0x095a or
+        codepoint == 0x095b or
+        codepoint == 0x095c or
+        codepoint == 0x095d or
+        codepoint == 0x095e or
+        codepoint == 0x095f;
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {

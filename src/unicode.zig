@@ -12,6 +12,7 @@ pub const Script = enum {
     cyrillic,
     glagolitic,
     old_italic,
+    avestan,
     han,
     yi,
     lisu,
@@ -147,6 +148,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     cyrl = tag("cyrl"),
     glag = tag("glag"),
     ital = tag("ital"),
+    avst = tag("avst"),
     hani = tag("hani"),
     yi = tag("yi  "),
     lisu = tag("lisu"),
@@ -222,6 +224,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .cyrillic => .cyrl,
         .glagolitic => .glag,
         .old_italic => .ital,
+        .avestan => .avst,
         .han => .hani,
         .yi => .yi,
         .lisu => .lisu,
@@ -329,6 +332,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (isGlagoliticScriptCodepoint(codepoint)) return .glagolitic;
     if (isOldItalicScriptCodepoint(codepoint)) return .old_italic;
+    if (isAvestanScriptCodepoint(codepoint)) return .avestan;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (isPhoenicianScriptCodepoint(codepoint)) return .phoenician;
@@ -1018,13 +1022,29 @@ fn isOldItalicWordCodepoint(codepoint: u21) bool {
     return isOldItalicScriptCodepoint(codepoint);
 }
 
+fn isAvestanScriptCodepoint(codepoint: u21) bool {
+    // Avestan is an RTL historic script with its own OpenType ScriptList tag
+    // (`avst`). Include its native punctuation in the script run so separators
+    // do not force a neutral/DFLT shaping island between adjacent letters,
+    // while preserving the unassigned U+10B36..U+10B38 gap as unknown.
+    return (codepoint >= 0x10b00 and codepoint <= 0x10b35) or
+        (codepoint >= 0x10b39 and codepoint <= 0x10b3f);
+}
+
+fn isAvestanWordCodepoint(codepoint: u21) bool {
+    // U+10B39..U+10B3F are Avestan separators and abbreviation punctuation,
+    // not word letters. Keep only the encoded letters in selectable word
+    // spans; the punctuation still remains in the surrounding RTL script run.
+    return codepoint >= 0x10b00 and codepoint <= 0x10b35;
+}
+
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
 /// higher-level bidi functions use this coarse class to build visual runs.
 pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam => .rtl,
+        .arabic, .hebrew, .phoenician, .syriac, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
         .latin, .greek, .cyrillic, .glagolitic, .old_italic, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .limbu, .buginese, .sundanese, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -1784,6 +1804,32 @@ test "Old Italic letters and numerals select Old Italic script primitives" {
     try std.testing.expectEqual(@as(usize, 2), words.len);
     try std.testing.expectEqualStrings("\u{10300}\u{10301}\u{10320}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{1032d}\u{1032e}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Avestan text selects Avestan RTL script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{10b00}\u{10b01}\u{10b39}\u{10b02}\u{10b35}\u{10b3f}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.avestan, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.avst, openTypeScriptTag(scriptForCodepoint(0x10b00)));
+    try std.testing.expectEqual(OpenTypeScriptTag.avst, openTypeScriptTag(scriptForCodepoint(0x10b35)));
+    try std.testing.expectEqual(OpenTypeScriptTag.avst, openTypeScriptTag(scriptForCodepoint(0x10b3f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x10b36));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10b00));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10b3f));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{10b00}\u{10b01}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{10b02}\u{10b35}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Arabic presentation forms keep Arabic script and RTL direction" {
@@ -3280,6 +3326,7 @@ const WordKind = enum {
     armenian,
     glagolitic,
     old_italic,
+    avestan,
     thaana,
     adlam,
     mandaic,
@@ -3460,6 +3507,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isTifinaghWordCodepoint(codepoint)) return .tifinagh;
     if (isGlagoliticWordCodepoint(codepoint)) return .glagolitic;
     if (isOldItalicWordCodepoint(codepoint)) return .old_italic;
+    if (isAvestanWordCodepoint(codepoint)) return .avestan;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,

@@ -24,6 +24,8 @@ pub const Script = enum {
     bengali,
     odia,
     gurmukhi,
+    telugu,
+    kannada,
     sinhala,
     tamil,
     malayalam,
@@ -131,6 +133,8 @@ pub const OpenTypeScriptTag = enum(u32) {
     bng2 = tag("bng2"),
     ory2 = tag("ory2"),
     gur2 = tag("gur2"),
+    tel2 = tag("tel2"),
+    knd2 = tag("knd2"),
     sinh = tag("sinh"),
     taml = tag("taml"),
     mlm2 = tag("mlm2"),
@@ -178,6 +182,8 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .bengali => .bng2,
         .odia => .ory2,
         .gurmukhi => .gur2,
+        .telugu => .tel2,
+        .kannada => .knd2,
         .sinhala => .sinh,
         .tamil => .taml,
         .malayalam => .mlm2,
@@ -207,7 +213,7 @@ pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
             .hangul => return .kor,
             .arabic => return .ara,
             .devanagari => return .hin,
-            .bengali, .odia, .gurmukhi, .tamil, .thai, .lao => return .dflt,
+            .bengali, .odia, .gurmukhi, .telugu, .kannada, .tamil, .thai, .lao => return .dflt,
             .han => saw_han = true,
             else => {},
         }
@@ -253,6 +259,8 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isBengaliScriptCodepoint(codepoint)) return .bengali;
     if (isOdiaScriptCodepoint(codepoint)) return .odia;
     if (isGurmukhiScriptCodepoint(codepoint)) return .gurmukhi;
+    if (isTeluguScriptCodepoint(codepoint)) return .telugu;
+    if (isKannadaScriptCodepoint(codepoint)) return .kannada;
     if (isSinhalaScriptCodepoint(codepoint)) return .sinhala;
     if (isTamilScriptCodepoint(codepoint)) return .tamil;
     if (isMalayalamScriptCodepoint(codepoint)) return .malayalam;
@@ -394,6 +402,22 @@ fn isOdiaScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x0b00 and codepoint <= 0x0b7f;
 }
 
+fn isTeluguScriptCodepoint(codepoint: u21) bool {
+    // Telugu uses the Indic v2 OpenType shaping system (`tel2`). The block
+    // contains independent letters, dependent vowel signs, virama, digits, and
+    // length marks; treating the whole block as Telugu keeps aksharas in one
+    // shaping run instead of routing marks through DFLT/unknown.
+    return codepoint >= 0x0c00 and codepoint <= 0x0c7f;
+}
+
+fn isKannadaScriptCodepoint(codepoint: u21) bool {
+    // Kannada has the same Indic v2 shaping requirements under `knd2`. Keeping
+    // consonants, dependent signs, virama forms, digits, and script-specific
+    // additions together avoids splitting Kannada syllables before GSUB/GPOS
+    // feature selection.
+    return codepoint >= 0x0c80 and codepoint <= 0x0cff;
+}
+
 fn isSinhalaScriptCodepoint(codepoint: u21) bool {
     // Sinhala vowels, consonants, dependent signs, punctuation, and numerals
     // live in one Unicode block and are shaped through the `sinh` OpenType
@@ -504,7 +528,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .syriac, .nko => .rtl,
-        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian => .ltr,
+        .latin, .greek, .cyrillic, .han, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .devanagari, .bengali, .odia, .gurmukhi, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tibetan, .mongolian => .ltr,
         else => .neutral,
     };
 }
@@ -1461,21 +1485,51 @@ test "grapheme clusters keep Khmer dependent signs with their base letters" {
     try std.testing.expectEqualStrings("កៀ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
 }
 
-test "Telugu and Kannada dependent signs stay with base graphemes" {
+test "Telugu and Kannada syllables select Indic v2 script tags" {
     const allocator = std.testing.allocator;
 
-    const text = "కి కా ಕಿ ಕಾ";
+    const text = "కి కా క్‍ష ಕಿ ಕಾ ಕ್‍ಷ";
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqual(@as(usize, 11), clusters.len);
     try std.testing.expectEqualStrings("కి", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
     try std.testing.expectEqualStrings("కా", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
-    try std.testing.expectEqualStrings("ಕಿ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("క్‍ష", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
-    try std.testing.expectEqualStrings("ಕಾ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("ಕಿ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings("ಕಾ", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[9].byte_start..][0..clusters[9].byte_len]);
+    try std.testing.expectEqualStrings("ಕ್‍ಷ", text[clusters[10].byte_start..][0..clusters[10].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 2), runs.len);
+    try std.testing.expectEqual(Script.telugu, runs[0].script);
+    try std.testing.expectEqualStrings("కి కా క్‍ష ", text[runs[0].byte_start..][0..runs[0].byte_len]);
+    try std.testing.expectEqual(Script.kannada, runs[1].script);
+    try std.testing.expectEqualStrings("ಕಿ ಕಾ ಕ್‍ಷ", text[runs[1].byte_start..][0..runs[1].byte_len]);
+    try std.testing.expectEqual(OpenTypeScriptTag.tel2, openTypeScriptTag(scriptForCodepoint(0x0c15)));
+    try std.testing.expectEqual(OpenTypeScriptTag.tel2, openTypeScriptTag(scriptForCodepoint(0x0c4d)));
+    try std.testing.expectEqual(OpenTypeScriptTag.knd2, openTypeScriptTag(scriptForCodepoint(0x0c95)));
+    try std.testing.expectEqual(OpenTypeScriptTag.knd2, openTypeScriptTag(scriptForCodepoint(0x0ccd)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0c15));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0c95));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 6), words.len);
+    try std.testing.expectEqualStrings("కి", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("కా", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("క్‍ష", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("ಕಿ", text[words[3].byte_start..][0..words[3].byte_len]);
+    try std.testing.expectEqualStrings("ಕಾ", text[words[4].byte_start..][0..words[4].byte_len]);
+    try std.testing.expectEqualStrings("ಕ್‍ಷ", text[words[5].byte_start..][0..words[5].byte_len]);
 }
 
 test "Bengali syllables keep marks and select Bengali OpenType script" {
@@ -1807,6 +1861,8 @@ const WordKind = enum {
     bengali,
     odia,
     gurmukhi,
+    telugu,
+    kannada,
     sinhala,
     tamil,
     malayalam,
@@ -1951,6 +2007,8 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .bengali => .bengali,
         .odia => .odia,
         .gurmukhi => .gurmukhi,
+        .telugu => .telugu,
+        .kannada => .kannada,
         .sinhala => .sinhala,
         .tamil => .tamil,
         .malayalam => .malayalam,
@@ -2206,6 +2264,8 @@ fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
         codepoint == 0x0acd or // Gujarati sign virama.
         codepoint == 0x0b4d or // Odia sign virama.
         codepoint == 0x0a4d or // Gurmukhi sign virama.
+        codepoint == 0x0c4d or // Telugu sign virama.
+        codepoint == 0x0ccd or // Kannada sign virama.
         codepoint == 0x0d4d; // Malayalam sign virama.
 }
 
@@ -2230,6 +2290,10 @@ fn isIndicConsonant(codepoint: u21) bool {
         (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
         (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
         (codepoint >= 0x0a72 and codepoint <= 0x0a74) or
+        (codepoint >= 0x0c15 and codepoint <= 0x0c39) or
+        codepoint == 0x0c58 or
+        codepoint == 0x0c59 or
+        (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
         (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
         codepoint == 0x0d3a;
 }

@@ -1720,7 +1720,9 @@ pub fn itemizeSentenceSegments(allocator: std.mem.Allocator, text: []const u8) !
             pending_break = false;
         }
 
-        if (isSentenceTerminator(codepoint) and !isMidNumberSentencePeriod(codepoint, previous_codepoint, text, byte_end)) {
+        if (isSentenceHardBreak(codepoint) or
+            (isSentenceTerminator(codepoint) and !isMidNumberSentencePeriod(codepoint, previous_codepoint, text, byte_end)))
+        {
             pending_break = true;
         }
         previous_codepoint = codepoint;
@@ -2756,6 +2758,19 @@ test "sentence segmentation keeps Arabic-Indic decimal numbers together" {
     try std.testing.expectEqual(@as(usize, 2), sentences.len);
     try std.testing.expectEqualStrings("القيمة ١.٢ جيدة. ", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
     try std.testing.expectEqualStrings("انتهى", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
+}
+
+test "sentence segmentation treats CRLF as a hard boundary" {
+    const allocator = std.testing.allocator;
+
+    const text = "First\r\nSecond. Third";
+    const sentences = try itemizeSentenceSegments(allocator, text);
+    defer allocator.free(sentences);
+
+    try std.testing.expectEqual(@as(usize, 3), sentences.len);
+    try std.testing.expectEqualStrings("First\r\n", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
+    try std.testing.expectEqualStrings("Second. ", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
+    try std.testing.expectEqualStrings("Third", text[sentences[2].byte_start..][0..sentences[2].byte_len]);
 }
 
 test "grapheme clusters keep Devanagari virama ZWJ conjuncts atomic" {
@@ -4221,6 +4236,10 @@ fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayL
 fn isSentenceTerminator(codepoint: u21) bool {
     return codepoint == '.' or codepoint == '!' or codepoint == '?' or
         codepoint == 0x3002 or codepoint == 0xff01 or codepoint == 0xff1f;
+}
+
+fn isSentenceHardBreak(codepoint: u21) bool {
+    return codepoint == '\r' or codepoint == '\n';
 }
 
 fn isMidNumberSentencePeriod(codepoint: u21, previous: ?u21, text: []const u8, byte_end: usize) bool {

@@ -2446,7 +2446,12 @@ fn validatePostFormat25(data: []const u8, post: TableRecord, glyph_count: u16) F
     const number_of_glyphs = try bin.readU16At(table, 32);
     if (number_of_glyphs != glyph_count) return error.BadSfnt;
     const offsets_offset: usize = 34;
-    if (@as(usize, number_of_glyphs) > post.length - offsets_offset) return error.BadSfnt;
+    // Format 2.5 is only the fixed post header, numberOfGlyphs, and one signed
+    // delta byte per glyph. It has no trailing name pool. Require exact
+    // consumption so unreachable bytes cannot be preserved by one consumer and
+    // ignored by another.
+    const required_len = offsets_offset + @as(usize, number_of_glyphs);
+    if (post.length != required_len) return error.BadSfnt;
 
     for (0..number_of_glyphs) |glyph_index| {
         const signed_delta: i8 = @bitCast(table[offsets_offset + glyph_index]);
@@ -12151,6 +12156,19 @@ test "post table structural contracts are validated at parse time" {
         writePostHeaderTest(&post, 0x00025000);
         writeU16Test(&post, 32, 2);
         post[34] = 0xff; // Glyph 0 would map to standard index -1.
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [37]u8 = .{0} ** 37;
+        writePostHeaderTest(&post, 0x00025000);
+        writeU16Test(&post, 32, 2);
+        post[34] = 0;
+        post[35] = 0;
+        post[36] = 0; // Format 2.5 has no trailing payload after deltas.
         const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
         defer allocator.free(bytes);
 

@@ -14,6 +14,7 @@ pub const Script = enum {
     old_italic,
     old_persian,
     avestan,
+    imperial_aramaic,
     han,
     yi,
     lisu,
@@ -158,6 +159,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     ital = tag("ital"),
     xpeo = tag("xpeo"),
     avst = tag("avst"),
+    armi = tag("armi"),
     hani = tag("hani"),
     yi = tag("yi  "),
     lisu = tag("lisu"),
@@ -242,6 +244,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .old_italic => .ital,
         .old_persian => .xpeo,
         .avestan => .avst,
+        .imperial_aramaic => .armi,
         .han => .hani,
         .yi => .yi,
         .lisu => .lisu,
@@ -358,6 +361,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isOldItalicScriptCodepoint(codepoint)) return .old_italic;
     if (isOldPersianScriptCodepoint(codepoint)) return .old_persian;
     if (isAvestanScriptCodepoint(codepoint)) return .avestan;
+    if (isImperialAramaicScriptCodepoint(codepoint)) return .imperial_aramaic;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (isPhoenicianScriptCodepoint(codepoint)) return .phoenician;
@@ -1222,13 +1226,31 @@ fn isAvestanWordCodepoint(codepoint: u21) bool {
     return codepoint >= 0x10b00 and codepoint <= 0x10b35;
 }
 
+fn isImperialAramaicScriptCodepoint(codepoint: u21) bool {
+    // Imperial Aramaic is a supplementary-plane RTL script with the registered
+    // OpenType tag `armi`. Keep letters, the section sign, and native numbers
+    // in one script run, but leave U+10856 unknown so malformed/private data
+    // does not silently inherit right-to-left shaping semantics.
+    return (codepoint >= 0x10840 and codepoint <= 0x10855) or
+        (codepoint >= 0x10857 and codepoint <= 0x1085f);
+}
+
+fn isImperialAramaicWordCodepoint(codepoint: u21) bool {
+    // Native Imperial Aramaic number signs have strong RTL script behavior and
+    // should group with adjacent letters for coarse word/caret primitives. The
+    // section sign remains script text for shaping but deliberately separates
+    // selectable word spans.
+    return (codepoint >= 0x10840 and codepoint <= 0x10855) or
+        (codepoint >= 0x10858 and codepoint <= 0x1085f);
+}
+
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
 /// higher-level bidi functions use this coarse class to build visual runs.
 pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic => .rtl,
         .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -2040,6 +2062,40 @@ test "Avestan text selects Avestan RTL script primitives" {
     try std.testing.expectEqual(@as(usize, 2), words.len);
     try std.testing.expectEqualStrings("\u{10b00}\u{10b01}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{10b02}\u{10b35}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Imperial Aramaic text selects armi RTL script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{10840}\u{10841}\u{10857}\u{10842}\u{10858}\u{1085f}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.imperial_aramaic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.armi, openTypeScriptTag(scriptForCodepoint(0x10840)));
+    try std.testing.expectEqual(OpenTypeScriptTag.armi, openTypeScriptTag(scriptForCodepoint(0x10857)));
+    try std.testing.expectEqual(OpenTypeScriptTag.armi, openTypeScriptTag(scriptForCodepoint(0x1085f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x10856));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10840));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10858));
+
+    const bidi_runs = try itemizeBidiRuns(allocator, text, .rtl);
+    defer allocator.free(bidi_runs);
+
+    try std.testing.expectEqual(@as(usize, 1), bidi_runs.len);
+    try std.testing.expectEqual(BidiClass.rtl, bidi_runs[0].direction);
+    try std.testing.expectEqual(@as(usize, 0), bidi_runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), bidi_runs[0].byte_len);
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{10840}\u{10841}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{10842}\u{10858}\u{1085f}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Arabic presentation forms keep Arabic script and RTL direction" {
@@ -3844,6 +3900,7 @@ const WordKind = enum {
     old_italic,
     old_persian,
     avestan,
+    imperial_aramaic,
     thaana,
     adlam,
     mandaic,
@@ -4037,6 +4094,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isOldItalicWordCodepoint(codepoint)) return .old_italic;
     if (isOldPersianWordCodepoint(codepoint)) return .old_persian;
     if (isAvestanWordCodepoint(codepoint)) return .avestan;
+    if (isImperialAramaicWordCodepoint(codepoint)) return .imperial_aramaic;
     if (isKayahLiWordCodepoint(codepoint)) return .kayah_li;
     if (isRejangWordCodepoint(codepoint)) return .rejang;
     if (isKaithiWordCodepoint(codepoint)) return .kaithi;

@@ -17,6 +17,7 @@ pub const Script = enum {
     avestan,
     imperial_aramaic,
     old_south_arabian,
+    old_north_arabian,
     meroitic_hieroglyphs,
     meroitic_cursive,
     han,
@@ -166,6 +167,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     avst = tag("avst"),
     armi = tag("armi"),
     sarb = tag("sarb"),
+    narb = tag("narb"),
     mero = tag("mero"),
     merc = tag("merc"),
     hani = tag("hani"),
@@ -255,6 +257,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .avestan => .avst,
         .imperial_aramaic => .armi,
         .old_south_arabian => .sarb,
+        .old_north_arabian => .narb,
         .meroitic_hieroglyphs => .mero,
         .meroitic_cursive => .merc,
         .han => .hani,
@@ -376,6 +379,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isAvestanScriptCodepoint(codepoint)) return .avestan;
     if (isImperialAramaicScriptCodepoint(codepoint)) return .imperial_aramaic;
     if (isOldSouthArabianScriptCodepoint(codepoint)) return .old_south_arabian;
+    if (isOldNorthArabianScriptCodepoint(codepoint)) return .old_north_arabian;
     if (isMeroiticHieroglyphsScriptCodepoint(codepoint)) return .meroitic_hieroglyphs;
     if (isMeroiticCursiveScriptCodepoint(codepoint)) return .meroitic_cursive;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
@@ -1291,6 +1295,19 @@ fn isOldSouthArabianWordCodepoint(codepoint: u21) bool {
     return codepoint >= 0x10a60 and codepoint <= 0x10a7e;
 }
 
+fn isOldNorthArabianScriptCodepoint(codepoint: u21) bool {
+    // Old North Arabian is an RTL historic script with registered OpenType tag
+    // `narb`. The block is compact and currently fully assigned: letters and
+    // native number signs share one shaping/bidi run for inscriptional text.
+    return codepoint >= 0x10a80 and codepoint <= 0x10a9f;
+}
+
+fn isOldNorthArabianWordCodepoint(codepoint: u21) bool {
+    // Native Old North Arabian number signs have strong RTL script behavior.
+    // Group them with adjacent letters for coarse word/caret primitives.
+    return isOldNorthArabianScriptCodepoint(codepoint);
+}
+
 fn isMeroiticHieroglyphsScriptCodepoint(codepoint: u21) bool {
     // Meroitic Hieroglyphs is a right-to-left historic script with its own
     // registered OpenType tag (`mero`). The block is fully assigned today, so
@@ -1330,7 +1347,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
         .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -2224,7 +2241,7 @@ test "Old South Arabian text selects sarb RTL script primitives" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(OpenTypeScriptTag.sarb, openTypeScriptTag(scriptForCodepoint(0x10a60)));
     try std.testing.expectEqual(OpenTypeScriptTag.sarb, openTypeScriptTag(scriptForCodepoint(0x10a7f)));
-    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x10a80));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x10aa0));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10a60));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10a7f));
 
@@ -2242,6 +2259,39 @@ test "Old South Arabian text selects sarb RTL script primitives" {
     try std.testing.expectEqual(@as(usize, 2), words.len);
     try std.testing.expectEqualStrings("\u{10a60}\u{10a61}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{10a62}\u{10a7e}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Old North Arabian text selects narb RTL script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{10a80}\u{10a81} \u{10a9d}\u{10a9f}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.old_north_arabian, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.narb, openTypeScriptTag(scriptForCodepoint(0x10a80)));
+    try std.testing.expectEqual(OpenTypeScriptTag.narb, openTypeScriptTag(scriptForCodepoint(0x10a9f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x10aa0));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10a80));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10a9f));
+
+    const bidi_runs = try itemizeBidiRuns(allocator, text, .rtl);
+    defer allocator.free(bidi_runs);
+
+    try std.testing.expectEqual(@as(usize, 1), bidi_runs.len);
+    try std.testing.expectEqual(BidiClass.rtl, bidi_runs[0].direction);
+    try std.testing.expectEqual(@as(usize, 0), bidi_runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), bidi_runs[0].byte_len);
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{10a80}\u{10a81}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{10a9d}\u{10a9f}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Meroitic Hieroglyphs select mero RTL script primitives" {
@@ -4116,6 +4166,7 @@ const WordKind = enum {
     avestan,
     imperial_aramaic,
     old_south_arabian,
+    old_north_arabian,
     meroitic_hieroglyphs,
     meroitic_cursive,
     thaana,
@@ -4314,6 +4365,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isAvestanWordCodepoint(codepoint)) return .avestan;
     if (isImperialAramaicWordCodepoint(codepoint)) return .imperial_aramaic;
     if (isOldSouthArabianWordCodepoint(codepoint)) return .old_south_arabian;
+    if (isOldNorthArabianWordCodepoint(codepoint)) return .old_north_arabian;
     if (isMeroiticHieroglyphsWordCodepoint(codepoint)) return .meroitic_hieroglyphs;
     if (isMeroiticCursiveWordCodepoint(codepoint)) return .meroitic_cursive;
     if (isKayahLiWordCodepoint(codepoint)) return .kayah_li;

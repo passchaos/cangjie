@@ -2245,7 +2245,10 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
             // here would silently classify an internally inconsistent SFNT as
             // a usable TrueType face.
             if (version != 0x00010000) return error.BadSfnt;
-            try requireTableLength(maxp, 32);
+            // maxp v1.0 is a fixed 32-byte table. Reject tail bytes so the
+            // trusted glyph-count/summary contract is consumed identically by
+            // parsers that borrow table bytes and by consumers that cache it.
+            if (maxp.length != 32) return error.BadSfnt;
             const max_zones = try bin.readU16At(data, maxp.offset + 14);
             // maxZones is one of the few maxp v1 maxima with a fixed semantic
             // range: TrueType programs may use either the glyph zone alone or
@@ -2260,6 +2263,8 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
             // belongs to glyf-based fonts and indicates a mismatched outline
             // stack even when the CFF table is otherwise present.
             if (version != 0x00005000) return error.BadSfnt;
+            // maxp v0.5 has only version and numGlyphs.
+            if (maxp.length != 6) return error.BadSfnt;
         },
     }
 }
@@ -11877,6 +11882,18 @@ test "maxp table version and length must match the outline format" {
     }
 
     {
+        const original = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(original);
+        const bytes = try allocator.alloc(u8, original.len + 4);
+        defer allocator.free(bytes);
+        @memcpy(bytes[0..original.len], original);
+        @memset(bytes[original.len..], 0);
+        try setSfntTableLength(bytes, "maxp", 33); // v1.0 maxp has no extension payload.
+        try updateSfntTableChecksum(bytes, "maxp");
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
         const bytes = try test_font.buildMinimalOtf(allocator);
         defer allocator.free(bytes);
         var font = try Font.parse(allocator, bytes);
@@ -11888,6 +11905,18 @@ test "maxp table version and length must match the outline format" {
         defer allocator.free(bytes);
         const maxp_offset = try sfntTableOffset(bytes, "maxp");
         writeU32Test(bytes, maxp_offset, 0x00010000);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const original = try test_font.buildMinimalOtf(allocator);
+        defer allocator.free(original);
+        const bytes = try allocator.alloc(u8, original.len + 4);
+        defer allocator.free(bytes);
+        @memcpy(bytes[0..original.len], original);
+        @memset(bytes[original.len..], 0);
+        try setSfntTableLength(bytes, "maxp", 7); // v0.5 maxp is exactly version + numGlyphs.
+        try updateSfntTableChecksum(bytes, "maxp");
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 }

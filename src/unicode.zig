@@ -53,6 +53,7 @@ pub const Script = enum {
     mongolian,
     balinese,
     javanese,
+    kayah_li,
     rejang,
     limbu,
     lepcha,
@@ -196,6 +197,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     mong = tag("mong"),
     bali = tag("bali"),
     java = tag("java"),
+    kali = tag("kali"),
     rjng = tag("rjng"),
     limb = tag("limb"),
     lepc = tag("lepc"),
@@ -279,6 +281,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .mongolian => .mong,
         .balinese => .bali,
         .javanese => .java,
+        .kayah_li => .kali,
         .rejang => .rjng,
         .limbu => .limb,
         .lepcha => .lepc,
@@ -388,6 +391,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
+    if (isKayahLiScriptCodepoint(codepoint)) return .kayah_li;
     if (isRejangScriptCodepoint(codepoint)) return .rejang;
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
     if (isLepchaScriptCodepoint(codepoint)) return .lepcha;
@@ -489,6 +493,21 @@ fn isJavaneseScriptCodepoint(codepoint: u21) bool {
     // block together avoids splitting aksara syllables through DFLT/unknown
     // runs before GSUB/GPOS lookup selection.
     return codepoint >= 0xa980 and codepoint <= 0xa9df;
+}
+
+fn isKayahLiScriptCodepoint(codepoint: u21) bool {
+    // Kayah Li fonts use the registered `kali` ScriptList entry for native
+    // digits, letters, dependent vowels/tones, and script punctuation in the
+    // compact A900 block. Keeping the whole assigned block in one run prevents
+    // combining tone marks or native separators from forcing DFLT shaping.
+    return codepoint >= 0xa900 and codepoint <= 0xa92f;
+}
+
+fn isKayahLiWordCodepoint(codepoint: u21) bool {
+    // Anchor word spans on Kayah Li digits and base letters. Vowels and tones
+    // attach through the generic extender table, while U+A92E/U+A92F are script
+    // punctuation that should keep shaping context but break selectable words.
+    return codepoint >= 0xa900 and codepoint <= 0xa925;
 }
 
 fn isRejangScriptCodepoint(codepoint: u21) bool {
@@ -1210,7 +1229,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
 }
@@ -3058,6 +3077,45 @@ test "Javanese syllables keep marks and select Javanese OpenType script" {
     try std.testing.expectEqualStrings("ꦲꦤꦕꦫꦏ", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Kayah Li syllables keep marks and select Kayah Li OpenType script" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{a90a}\u{a926}\u{a92b} \u{a900}\u{a901}\u{a92e} \u{a925}\u{a927}\u{a92f}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 8), clusters.len);
+    try std.testing.expectEqualStrings("\u{a90a}\u{a926}\u{a92b}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{a900}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{a901}", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("\u{a92e}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings("\u{a925}\u{a927}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("\u{a92f}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.kayah_li, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.kali, openTypeScriptTag(scriptForCodepoint(0xa90a)));
+    try std.testing.expectEqual(OpenTypeScriptTag.kali, openTypeScriptTag(scriptForCodepoint(0xa926)));
+    try std.testing.expectEqual(OpenTypeScriptTag.kali, openTypeScriptTag(scriptForCodepoint(0xa92f)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xa90a));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xa92e));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 3), words.len);
+    try std.testing.expectEqualStrings("\u{a90a}\u{a926}\u{a92b}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{a900}\u{a901}", text[words[1].byte_start..][0..words[1].byte_len]);
+    try std.testing.expectEqualStrings("\u{a925}\u{a927}", text[words[2].byte_start..][0..words[2].byte_len]);
+}
+
 test "Rejang syllables keep signs and select Rejang OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -3804,6 +3862,7 @@ const WordKind = enum {
     malayalam,
     balinese,
     javanese,
+    kayah_li,
     rejang,
     limbu,
     lepcha,
@@ -3978,6 +4037,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isOldItalicWordCodepoint(codepoint)) return .old_italic;
     if (isOldPersianWordCodepoint(codepoint)) return .old_persian;
     if (isAvestanWordCodepoint(codepoint)) return .avestan;
+    if (isKayahLiWordCodepoint(codepoint)) return .kayah_li;
     if (isRejangWordCodepoint(codepoint)) return .rejang;
     if (isKaithiWordCodepoint(codepoint)) return .kaithi;
     if (isChakmaWordCodepoint(codepoint)) return .chakma;
@@ -4276,6 +4336,10 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0xa9b3 or
         (codepoint >= 0xa9b6 and codepoint <= 0xa9b9) or
         (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
+        // Kayah Li dependent vowels and tones are nonspacing marks. Keeping
+        // them attached preserves one caret/word/shaping unit for syllables
+        // such as ꤊꤦ and prevents tone marks from becoming standalone words.
+        (codepoint >= 0xa926 and codepoint <= 0xa92d) or
         // Rejang dependent vowel/consonant signs are nonspacing signs typed
         // after a base letter. Keep them attached so caret, word, and shaping
         // primitives do not split one Rejang orthographic syllable.

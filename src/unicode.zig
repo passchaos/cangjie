@@ -16,6 +16,7 @@ pub const Script = enum {
     old_persian,
     avestan,
     imperial_aramaic,
+    old_south_arabian,
     meroitic_hieroglyphs,
     meroitic_cursive,
     han,
@@ -164,6 +165,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     xpeo = tag("xpeo"),
     avst = tag("avst"),
     armi = tag("armi"),
+    sarb = tag("sarb"),
     mero = tag("mero"),
     merc = tag("merc"),
     hani = tag("hani"),
@@ -252,6 +254,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .old_persian => .xpeo,
         .avestan => .avst,
         .imperial_aramaic => .armi,
+        .old_south_arabian => .sarb,
         .meroitic_hieroglyphs => .mero,
         .meroitic_cursive => .merc,
         .han => .hani,
@@ -372,6 +375,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isOldPersianScriptCodepoint(codepoint)) return .old_persian;
     if (isAvestanScriptCodepoint(codepoint)) return .avestan;
     if (isImperialAramaicScriptCodepoint(codepoint)) return .imperial_aramaic;
+    if (isOldSouthArabianScriptCodepoint(codepoint)) return .old_south_arabian;
     if (isMeroiticHieroglyphsScriptCodepoint(codepoint)) return .meroitic_hieroglyphs;
     if (isMeroiticCursiveScriptCodepoint(codepoint)) return .meroitic_cursive;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
@@ -1271,6 +1275,22 @@ fn isImperialAramaicWordCodepoint(codepoint: u21) bool {
         (codepoint >= 0x10858 and codepoint <= 0x1085f);
 }
 
+fn isOldSouthArabianScriptCodepoint(codepoint: u21) bool {
+    // Old South Arabian is a compact, fully-assigned RTL historic block with
+    // registered OpenType tag `sarb`. Keep letters, native number signs, and
+    // the numeric indicator in one script/bidi run so mixed inscriptions do not
+    // fall back to DFLT shaping in the middle of a valid numeral sequence.
+    return codepoint >= 0x10a60 and codepoint <= 0x10a7f;
+}
+
+fn isOldSouthArabianWordCodepoint(codepoint: u21) bool {
+    // U+10A7F OLD SOUTH ARABIAN NUMERIC INDICATOR is script text but not a
+    // letter/number value by itself. Let it separate coarse word spans while
+    // grouping native number signs with adjacent letters like the other
+    // historic RTL scripts handled here.
+    return codepoint >= 0x10a60 and codepoint <= 0x10a7e;
+}
+
 fn isMeroiticHieroglyphsScriptCodepoint(codepoint: u21) bool {
     // Meroitic Hieroglyphs is a right-to-left historic script with its own
     // registered OpenType tag (`mero`). The block is fully assigned today, so
@@ -1310,7 +1330,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
         .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -2189,6 +2209,39 @@ test "Imperial Aramaic text selects armi RTL script primitives" {
     try std.testing.expectEqual(@as(usize, 2), words.len);
     try std.testing.expectEqualStrings("\u{10840}\u{10841}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{10842}\u{10858}\u{1085f}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Old South Arabian text selects sarb RTL script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{10a60}\u{10a61}\u{10a7f}\u{10a62}\u{10a7e}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.old_south_arabian, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.sarb, openTypeScriptTag(scriptForCodepoint(0x10a60)));
+    try std.testing.expectEqual(OpenTypeScriptTag.sarb, openTypeScriptTag(scriptForCodepoint(0x10a7f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x10a80));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10a60));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10a7f));
+
+    const bidi_runs = try itemizeBidiRuns(allocator, text, .rtl);
+    defer allocator.free(bidi_runs);
+
+    try std.testing.expectEqual(@as(usize, 1), bidi_runs.len);
+    try std.testing.expectEqual(BidiClass.rtl, bidi_runs[0].direction);
+    try std.testing.expectEqual(@as(usize, 0), bidi_runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), bidi_runs[0].byte_len);
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{10a60}\u{10a61}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{10a62}\u{10a7e}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Meroitic Hieroglyphs select mero RTL script primitives" {
@@ -4062,6 +4115,7 @@ const WordKind = enum {
     old_persian,
     avestan,
     imperial_aramaic,
+    old_south_arabian,
     meroitic_hieroglyphs,
     meroitic_cursive,
     thaana,
@@ -4259,6 +4313,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isOldPersianWordCodepoint(codepoint)) return .old_persian;
     if (isAvestanWordCodepoint(codepoint)) return .avestan;
     if (isImperialAramaicWordCodepoint(codepoint)) return .imperial_aramaic;
+    if (isOldSouthArabianWordCodepoint(codepoint)) return .old_south_arabian;
     if (isMeroiticHieroglyphsWordCodepoint(codepoint)) return .meroitic_hieroglyphs;
     if (isMeroiticCursiveWordCodepoint(codepoint)) return .meroitic_cursive;
     if (isKayahLiWordCodepoint(codepoint)) return .kayah_li;

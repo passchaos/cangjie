@@ -1910,7 +1910,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 }
             }
         }
-        var adjustment = findAdjustment(gpos_adjustments.items, index);
+        const adjustment = findAdjustment(gpos_adjustments.items, index);
+        var adjustment_x_advance = @as(f32, @floatFromInt(adjustment.x_advance));
+        var x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
         if (adjustment.mark_attachment) {
             const advance_to_base = if (adjustment.mark_base_index) |base_index|
                 advanceBetweenGlyphs(buffer.glyphs.items, base_index, index)
@@ -1918,8 +1920,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance
             else
                 0.0;
-            adjustment.x_placement = @intFromFloat(@round(@as(f32, @floatFromInt(adjustment.x_placement)) - advance_to_base / scale));
-            adjustment.x_advance = -@as(i16, @intCast(metrics.advance_width));
+            // The accumulated advance between base and mark is already in
+            // user-space units. Apply it after scaling the font-unit GPOS
+            // placement instead of converting the combined value back to i16
+            // font units; long runs can legitimately exceed the i16 placement
+            // range even though the final f32 offset is perfectly usable.
+            x_offset = markAttachmentXOffset(adjustment.x_placement, advance_to_base, scale);
+            adjustment_x_advance = -@as(f32, @floatFromInt(metrics.advance_width));
         }
         const base_advance = if (glyph_class == .mark and !adjustment.mark_attachment) 0 else metrics.advance_width;
         try buffer.glyphs.append(buffer.allocator, .{
@@ -1927,8 +1934,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index],
             .cluster = source_span.start,
             .source_byte_len = source_span.end - source_span.start,
-            .x_advance = (@as(f32, @floatFromInt(base_advance)) + @as(f32, @floatFromInt(adjustment.x_advance))) * scale,
-            .x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale,
+            .x_advance = (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale,
+            .x_offset = x_offset,
             .y_offset = @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
         });
         previous_glyph = glyph_id;
@@ -1983,6 +1990,10 @@ fn advanceBetweenGlyphs(glyphs: []const GlyphPosition, base_index: usize, mark_i
     return advance;
 }
 
+fn markAttachmentXOffset(x_placement_font_units: i16, advance_to_base: f32, scale: f32) f32 {
+    return @as(f32, @floatFromInt(x_placement_font_units)) * scale - advance_to_base;
+}
+
 fn isVariationSelector(codepoint: u21) bool {
     return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
         (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
@@ -2021,4 +2032,24 @@ fn findAdjustment(adjustments: []const gpos.Adjustment, index: usize) gpos.Adjus
         if (adjustment.index == index) return adjustment;
     }
     return .{ .index = index };
+}
+
+test "mark attachment offsets stay in user space for long advances" {
+    const scale: f32 = 12.0 / 1000.0;
+
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 24.0 - 48.0),
+        markAttachmentXOffset(2000, 48.0, scale),
+        0.0001,
+    );
+
+    // Large paragraphs can place a mark many glyph advances after its base
+    // before MarkBase/MarkLig positioning pulls it back. This offset is well
+    // within f32 layout range but outside the i16 font-unit storage used by
+    // raw GPOS records; it must not be converted back through i16.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 12.0 - 50000.0),
+        markAttachmentXOffset(1000, 50000.0, scale),
+        0.01,
+    );
 }

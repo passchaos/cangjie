@@ -6806,7 +6806,6 @@ fn validateItemVariationData(data: []const u8, table: TableRecord, store_offset:
     else
         word_delta_count * 2 + narrow_delta_count;
     if (row_size != 0 and item_count > remaining / row_size) return error.BadSfnt;
-    if (row_size == 0 and item_count != 0) return error.BadSfnt;
     return .{ .item_count = item_count, .start_offset = item_data_offset, .end_offset = item_data_offset + 6 + region_indexes_bytes + item_count * row_size };
 }
 
@@ -15582,6 +15581,28 @@ test "VariationStore child payloads do not alias each other" {
     writeU32Test(&region_alias, 28, 16); // ItemVariationData aliases the region-list header.
     const hvar_zero_axis = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = region_alias.len };
     try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&region_alias, hvar_zero_axis, 0, 20));
+}
+
+test "VariationStore permits zero-region data with zero-width rows" {
+    var bytes: [42]u8 = .{0} ** 42;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0);
+    writeU32Test(&bytes, 4, 20); // ItemVariationStore offset.
+
+    writeU16Test(&bytes, 20, 1); // ItemVariationStore format.
+    writeU32Test(&bytes, 22, 12); // Empty VariationRegionList.
+    writeU16Test(&bytes, 26, 1); // itemVariationDataCount.
+    writeU32Test(&bytes, 28, 16); // ItemVariationData follows region list.
+
+    writeU16Test(&bytes, 32, 0); // axisCount.
+    writeU16Test(&bytes, 34, 0); // regionCount.
+
+    writeU16Test(&bytes, 36, 3); // itemCount with zero-width delta rows.
+    writeU16Test(&bytes, 38, 0); // wordDeltaCount.
+    writeU16Test(&bytes, 40, 0); // regionIndexCount.
+
+    const hvar = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
+    try validateMetricVariationTable(&bytes, hvar, 0, 20);
 }
 
 test "Metric variation DeltaSetIndexMaps own disjoint top-level payloads" {

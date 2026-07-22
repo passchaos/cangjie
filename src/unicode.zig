@@ -15,6 +15,8 @@ pub const Script = enum {
     old_persian,
     avestan,
     imperial_aramaic,
+    meroitic_hieroglyphs,
+    meroitic_cursive,
     han,
     yi,
     lisu,
@@ -160,6 +162,8 @@ pub const OpenTypeScriptTag = enum(u32) {
     xpeo = tag("xpeo"),
     avst = tag("avst"),
     armi = tag("armi"),
+    mero = tag("mero"),
+    merc = tag("merc"),
     hani = tag("hani"),
     yi = tag("yi  "),
     lisu = tag("lisu"),
@@ -245,6 +249,8 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .old_persian => .xpeo,
         .avestan => .avst,
         .imperial_aramaic => .armi,
+        .meroitic_hieroglyphs => .mero,
+        .meroitic_cursive => .merc,
         .han => .hani,
         .yi => .yi,
         .lisu => .lisu,
@@ -362,6 +368,8 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isOldPersianScriptCodepoint(codepoint)) return .old_persian;
     if (isAvestanScriptCodepoint(codepoint)) return .avestan;
     if (isImperialAramaicScriptCodepoint(codepoint)) return .imperial_aramaic;
+    if (isMeroiticHieroglyphsScriptCodepoint(codepoint)) return .meroitic_hieroglyphs;
+    if (isMeroiticCursiveScriptCodepoint(codepoint)) return .meroitic_cursive;
     if (codepoint >= 0x0300 and codepoint <= 0x036f) return .inherited;
     if (isHebrewScriptCodepoint(codepoint)) return .hebrew;
     if (isPhoenicianScriptCodepoint(codepoint)) return .phoenician;
@@ -1244,13 +1252,46 @@ fn isImperialAramaicWordCodepoint(codepoint: u21) bool {
         (codepoint >= 0x10858 and codepoint <= 0x1085f);
 }
 
+fn isMeroiticHieroglyphsScriptCodepoint(codepoint: u21) bool {
+    // Meroitic Hieroglyphs is a right-to-left historic script with its own
+    // registered OpenType tag (`mero`). The block is fully assigned today, so
+    // the compact script primitive can keep all letters and VIDJ signs in one
+    // RTL shaping run without granting semantics to neighbouring unassigned
+    // Meroitic Cursive gaps.
+    return codepoint >= 0x10980 and codepoint <= 0x1099f;
+}
+
+fn isMeroiticHieroglyphsWordCodepoint(codepoint: u21) bool {
+    // The hieroglyphic block encodes letters and two logographic signs, all
+    // with strong RTL behavior. Group them as word text so caret/selection
+    // primitives do not fall back to one scalar per sign in inscriptions.
+    return isMeroiticHieroglyphsScriptCodepoint(codepoint);
+}
+
+fn isMeroiticCursiveScriptCodepoint(codepoint: u21) bool {
+    // Meroitic Cursive shares the RTL writing direction with the hieroglyphic
+    // script but uses a separate OpenType ScriptList tag (`merc`). Classify
+    // only assigned letters, logograms, numbers, and fractions; reserved gaps
+    // in the block stay unknown instead of inheriting RTL/script semantics.
+    return (codepoint >= 0x109a0 and codepoint <= 0x109b7) or
+        (codepoint >= 0x109bc and codepoint <= 0x109cf) or
+        (codepoint >= 0x109d2 and codepoint <= 0x109ff);
+}
+
+fn isMeroiticCursiveWordCodepoint(codepoint: u21) bool {
+    // Native numeric and fraction signs are strong RTL script characters in
+    // Unicode. Keep them with adjacent cursive letters/logograms for coarse
+    // word movement, matching the behavior of other historic-script numerals.
+    return isMeroiticCursiveScriptCodepoint(codepoint);
+}
+
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
 /// higher-level bidi functions use this coarse class to build visual runs.
 pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic => .rtl,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
         .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -2096,6 +2137,73 @@ test "Imperial Aramaic text selects armi RTL script primitives" {
     try std.testing.expectEqual(@as(usize, 2), words.len);
     try std.testing.expectEqualStrings("\u{10840}\u{10841}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{10842}\u{10858}\u{1085f}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Meroitic Hieroglyphs select mero RTL script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{10980}\u{10981} \u{1099e}\u{1099f}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.meroitic_hieroglyphs, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.mero, openTypeScriptTag(scriptForCodepoint(0x10980)));
+    try std.testing.expectEqual(OpenTypeScriptTag.mero, openTypeScriptTag(scriptForCodepoint(0x1099f)));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10980));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x1099f));
+
+    const bidi_runs = try itemizeBidiRuns(allocator, text, .rtl);
+    defer allocator.free(bidi_runs);
+
+    try std.testing.expectEqual(@as(usize, 1), bidi_runs.len);
+    try std.testing.expectEqual(BidiClass.rtl, bidi_runs[0].direction);
+    try std.testing.expectEqual(@as(usize, 0), bidi_runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), bidi_runs[0].byte_len);
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{10980}\u{10981}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{1099e}\u{1099f}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Meroitic Cursive selects merc RTL script primitives across assigned gaps" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{109a0}\u{109a1}\u{109bc} \u{109be}\u{109c0}\u{109ff}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.meroitic_cursive, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.merc, openTypeScriptTag(scriptForCodepoint(0x109a0)));
+    try std.testing.expectEqual(OpenTypeScriptTag.merc, openTypeScriptTag(scriptForCodepoint(0x109bc)));
+    try std.testing.expectEqual(OpenTypeScriptTag.merc, openTypeScriptTag(scriptForCodepoint(0x109ff)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x109b8));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x109d0));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x109a0));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x109c0));
+
+    const bidi_runs = try itemizeBidiRuns(allocator, text, .rtl);
+    defer allocator.free(bidi_runs);
+
+    try std.testing.expectEqual(@as(usize, 1), bidi_runs.len);
+    try std.testing.expectEqual(BidiClass.rtl, bidi_runs[0].direction);
+    try std.testing.expectEqual(@as(usize, 0), bidi_runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), bidi_runs[0].byte_len);
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{109a0}\u{109a1}\u{109bc}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{109be}\u{109c0}\u{109ff}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Arabic presentation forms keep Arabic script and RTL direction" {
@@ -3901,6 +4009,8 @@ const WordKind = enum {
     old_persian,
     avestan,
     imperial_aramaic,
+    meroitic_hieroglyphs,
+    meroitic_cursive,
     thaana,
     adlam,
     mandaic,
@@ -4095,6 +4205,8 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isOldPersianWordCodepoint(codepoint)) return .old_persian;
     if (isAvestanWordCodepoint(codepoint)) return .avestan;
     if (isImperialAramaicWordCodepoint(codepoint)) return .imperial_aramaic;
+    if (isMeroiticHieroglyphsWordCodepoint(codepoint)) return .meroitic_hieroglyphs;
+    if (isMeroiticCursiveWordCodepoint(codepoint)) return .meroitic_cursive;
     if (isKayahLiWordCodepoint(codepoint)) return .kayah_li;
     if (isRejangWordCodepoint(codepoint)) return .rejang;
     if (isKaithiWordCodepoint(codepoint)) return .kaithi;

@@ -13,9 +13,23 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{
         .root_module = mod,
     });
+    const system_font_raster_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/system_font_raster_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+            },
+        }),
+    });
 
     const test_step = b.step("test", "Run cangjie font tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+    test_step.dependOn(&b.addRunArtifact(system_font_raster_tests).step);
+
+    const system_font_raster_test_step = b.step("system-font-raster-test", "Run macOS system font raster regression tests");
+    system_font_raster_test_step.dependOn(&b.addRunArtifact(system_font_raster_tests).step);
 
     const render_text_exe = b.addExecutable(.{
         .name = "cangjie-render-text",

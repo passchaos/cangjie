@@ -2353,7 +2353,9 @@ fn validateVerticalMetricsTables(data: []const u8, glyph_count: u16, maybe_vhea:
 }
 
 fn validateVerticalMetricHeader(data: []const u8, vhea: TableRecord) FontError!void {
-    try requireTableLength(vhea, 36);
+    // vhea mirrors hhea's fixed-size header contract, with only the version
+    // value differing across accepted OpenType revisions.
+    if (vhea.length != 36) return error.BadSfnt;
     const version = try bin.readU32At(data, vhea.offset);
     if (version != 0x00010000 and version != 0x00011000) return error.InvalidMetrics;
     try validateMetricHeaderLineMetrics(data, vhea);
@@ -2361,7 +2363,10 @@ fn validateVerticalMetricHeader(data: []const u8, vhea: TableRecord) FontError!v
 }
 
 fn validateMetricHeader(data: []const u8, header: TableRecord, expected_version: u32) FontError!void {
-    try requireTableLength(header, 36);
+    // hhea and vhea are fixed-size 36-byte metric headers. They do not define
+    // extension payloads, so accept neither truncation nor tail bytes before
+    // trusting the metric count at byte 34.
+    if (header.length != 36) return error.BadSfnt;
     const version = try bin.readU32At(data, header.offset);
     if (version != expected_version) return error.InvalidMetrics;
     try validateMetricHeaderLineMetrics(data, header);
@@ -11452,6 +11457,46 @@ test "metric headers require positive line advance" {
 
         try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
     }
+}
+
+test "metric headers reject trailing bytes" {
+    var hhea: [37]u8 = .{0} ** 37;
+    writeU32Test(&hhea, 0, 0x00010000);
+    writeI16Test(&hhea, 4, 800);
+    writeI16Test(&hhea, 6, -200);
+    writeU16Test(&hhea, 34, 1);
+
+    try validateMetricHeader(&hhea, .{
+        .tag = .{ 'h', 'h', 'e', 'a' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 36,
+    }, 0x00010000);
+    try std.testing.expectError(error.BadSfnt, validateMetricHeader(&hhea, .{
+        .tag = .{ 'h', 'h', 'e', 'a' },
+        .checksum = 0,
+        .offset = 0,
+        .length = hhea.len,
+    }, 0x00010000));
+
+    var vhea: [37]u8 = .{0} ** 37;
+    writeU32Test(&vhea, 0, 0x00011000);
+    writeI16Test(&vhea, 4, 800);
+    writeI16Test(&vhea, 6, -200);
+    writeU16Test(&vhea, 34, 1);
+
+    try validateVerticalMetricHeader(&vhea, .{
+        .tag = .{ 'v', 'h', 'e', 'a' },
+        .checksum = 0,
+        .offset = 0,
+        .length = 36,
+    });
+    try std.testing.expectError(error.BadSfnt, validateVerticalMetricHeader(&vhea, .{
+        .tag = .{ 'v', 'h', 'e', 'a' },
+        .checksum = 0,
+        .offset = 0,
+        .length = vhea.len,
+    }));
 }
 
 test "horizontal metrics revalidate borrowed hhea bytes" {

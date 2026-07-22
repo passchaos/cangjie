@@ -2461,7 +2461,11 @@ fn validatePostFormat25(data: []const u8, post: TableRecord, glyph_count: u16) F
 }
 
 fn validatePostFormat4(post: TableRecord, glyph_count: u16) FontError!void {
-    if (@as(usize, glyph_count) * 2 > post.length - 32) return error.BadSfnt;
+    // Format 4.0 stores exactly one uint16 character-code slot per glyph after
+    // the fixed post header. It has no string pool or extension payload, so
+    // reject tail bytes that no conforming consumer can address.
+    const required_len = 32 + @as(usize, glyph_count) * 2;
+    if (post.length != required_len) return error.BadSfnt;
 }
 
 fn readPostGlyphName(data: []const u8, post: TableRecord, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
@@ -12185,6 +12189,19 @@ test "post table structural contracts are validated at parse time" {
 
         var font = try Font.parse(allocator, bytes);
         font.deinit();
+    }
+
+    {
+        var post: [38]u8 = .{0} ** 38;
+        writePostHeaderTest(&post, 0x00040000);
+        writeU16Test(&post, 32, 0xffff);
+        writeU16Test(&post, 34, 'A');
+        post[36] = 0;
+        post[37] = 0; // Format 4.0 has no payload after glyph character codes.
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 
     {

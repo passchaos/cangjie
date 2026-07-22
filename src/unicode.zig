@@ -12,6 +12,7 @@ pub const Script = enum {
     cyrillic,
     glagolitic,
     old_italic,
+    ugaritic,
     old_persian,
     avestan,
     imperial_aramaic,
@@ -159,6 +160,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     cyrl = tag("cyrl"),
     glag = tag("glag"),
     ital = tag("ital"),
+    ugar = tag("ugar"),
     xpeo = tag("xpeo"),
     avst = tag("avst"),
     armi = tag("armi"),
@@ -246,6 +248,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .cyrillic => .cyrl,
         .glagolitic => .glag,
         .old_italic => .ital,
+        .ugaritic => .ugar,
         .old_persian => .xpeo,
         .avestan => .avst,
         .imperial_aramaic => .armi,
@@ -365,6 +368,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
     if (isGlagoliticScriptCodepoint(codepoint)) return .glagolitic;
     if (isOldItalicScriptCodepoint(codepoint)) return .old_italic;
+    if (isUgariticScriptCodepoint(codepoint)) return .ugaritic;
     if (isOldPersianScriptCodepoint(codepoint)) return .old_persian;
     if (isAvestanScriptCodepoint(codepoint)) return .avestan;
     if (isImperialAramaicScriptCodepoint(codepoint)) return .imperial_aramaic;
@@ -1200,6 +1204,21 @@ fn isOldItalicWordCodepoint(codepoint: u21) bool {
     return isOldItalicScriptCodepoint(codepoint);
 }
 
+fn isUgariticScriptCodepoint(codepoint: u21) bool {
+    // Ugaritic is a supplementary-plane cuneiform alphabet with registered
+    // OpenType tag `ugar`. Keep assigned letters and the native word divider in
+    // one RTL script run, while leaving the reserved U+1039E slot unknown so
+    // malformed data does not gain Ugaritic shaping or bidi semantics.
+    return (codepoint >= 0x10380 and codepoint <= 0x1039d) or
+        codepoint == 0x1039f;
+}
+
+fn isUgariticWordCodepoint(codepoint: u21) bool {
+    // U+1039F UGARITIC WORD DIVIDER separates words. Ugaritic letters form
+    // normal selectable word spans; the reserved U+1039E remains unknown.
+    return codepoint >= 0x10380 and codepoint <= 0x1039d;
+}
+
 fn isOldPersianScriptCodepoint(codepoint: u21) bool {
     // Old Persian cuneiform has a registered OpenType ScriptList tag (`xpeo`).
     // Classify only assigned signs, logograms, word divider, and native numbers
@@ -1291,7 +1310,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     if (isBidiNumberCodepoint(codepoint)) return .number;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
         .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
         else => .neutral,
     };
@@ -2051,6 +2070,39 @@ test "Old Italic letters and numerals select Old Italic script primitives" {
     try std.testing.expectEqual(@as(usize, 2), words.len);
     try std.testing.expectEqualStrings("\u{10300}\u{10301}\u{10320}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{1032d}\u{1032e}", text[words[1].byte_start..][0..words[1].byte_len]);
+}
+
+test "Ugaritic letters select ugar RTL script and split on word divider" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{10380}\u{10381}\u{1039f}\u{10382}\u{1039d}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.ugaritic, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.ugar, openTypeScriptTag(scriptForCodepoint(0x10380)));
+    try std.testing.expectEqual(OpenTypeScriptTag.ugar, openTypeScriptTag(scriptForCodepoint(0x1039f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x1039e));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10380));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x1039f));
+
+    const bidi_runs = try itemizeBidiRuns(allocator, text, .rtl);
+    defer allocator.free(bidi_runs);
+
+    try std.testing.expectEqual(@as(usize, 1), bidi_runs.len);
+    try std.testing.expectEqual(BidiClass.rtl, bidi_runs[0].direction);
+    try std.testing.expectEqual(@as(usize, 0), bidi_runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), bidi_runs[0].byte_len);
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings("\u{10380}\u{10381}", text[words[0].byte_start..][0..words[0].byte_len]);
+    try std.testing.expectEqualStrings("\u{10382}\u{1039d}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
 test "Old Persian signs select xpeo script and split on word divider" {
@@ -4006,6 +4058,7 @@ const WordKind = enum {
     armenian,
     glagolitic,
     old_italic,
+    ugaritic,
     old_persian,
     avestan,
     imperial_aramaic,
@@ -4202,6 +4255,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isTifinaghWordCodepoint(codepoint)) return .tifinagh;
     if (isGlagoliticWordCodepoint(codepoint)) return .glagolitic;
     if (isOldItalicWordCodepoint(codepoint)) return .old_italic;
+    if (isUgariticWordCodepoint(codepoint)) return .ugaritic;
     if (isOldPersianWordCodepoint(codepoint)) return .old_persian;
     if (isAvestanWordCodepoint(codepoint)) return .avestan;
     if (isImperialAramaicWordCodepoint(codepoint)) return .imperial_aramaic;

@@ -308,7 +308,16 @@ pub const Font = struct {
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
         if (post) |post_table| try validatePostTable(data, post_table, glyph_count);
         const number_of_h_metrics = try validateHorizontalMetricsTables(data, hhea, hmtx, glyph_count);
-        _ = try validateVerticalMetricsTables(data, glyph_count, vhea, vmtx);
+        _ = validateVerticalMetricsTables(data, glyph_count, vhea, vmtx) catch |err| switch (err) {
+            // Vertical metrics are optional for horizontal UI text. Some widely
+            // deployed fallback CJK fonts ship a present-but-unusable vhea/vmtx
+            // pair (for example, zero vertical line metrics) while their cmap,
+            // hhea/hmtx and glyf outlines are valid. Accept those fonts for
+            // horizontal shaping/rasterization; callers that explicitly request
+            // vertical metrics still revalidate and receive InvalidMetrics.
+            error.InvalidMetrics => {},
+            else => return err,
+        };
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (name) |name_table| try validateNameTable(data, name_table);
         if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
@@ -11453,8 +11462,11 @@ test "metric headers require positive line advance" {
         writeI16Test(bytes, vhea_offset + 4, -50);
         writeI16Test(bytes, vhea_offset + 6, 50);
         writeI16Test(bytes, vhea_offset + 8, 0);
+        try updateSfntTableChecksum(bytes, "vhea");
 
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
     }
 }
 
@@ -11564,7 +11576,10 @@ test "vertical metric tables validate paired count and vmtx length at parse time
         const bytes = try test_font.buildVerticalMetricsTtf(allocator);
         defer allocator.free(bytes);
         try setSfntTableLength(bytes, "vmtx", 4); // Missing the compressed top side bearing for glyph 1.
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+        try updateSfntTableChecksum(bytes, "vmtx");
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
     }
 
     {
@@ -11572,24 +11587,34 @@ test "vertical metric tables validate paired count and vmtx length at parse time
         defer allocator.free(bytes);
         const vhea_offset = try sfntTableOffset(bytes, "vhea");
         writeU16Test(bytes, vhea_offset + 34, 0);
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+        try updateSfntTableChecksum(bytes, "vhea");
+        var zero_count = try Font.parse(allocator, bytes);
+        defer zero_count.deinit();
+        try std.testing.expectError(error.InvalidMetrics, zero_count.verticalMetrics(0));
 
         writeU16Test(bytes, vhea_offset + 34, 3); // More full vertical metrics than maxp.numGlyphs.
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+        try updateSfntTableChecksum(bytes, "vhea");
+        var too_many = try Font.parse(allocator, bytes);
+        defer too_many.deinit();
+        try std.testing.expectError(error.InvalidMetrics, too_many.verticalMetrics(0));
     }
 
     {
         const bytes = try test_font.buildVerticalMetricsTtf(allocator);
         defer allocator.free(bytes);
         try setSfntTableTag(bytes, "vmtx", "zzzz");
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
     }
 
     {
         const bytes = try test_font.buildVerticalMetricsTtf(allocator);
         defer allocator.free(bytes);
         try setSfntTableTag(bytes, "vhea", "vhdz");
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
     }
 
     {
@@ -11597,7 +11622,10 @@ test "vertical metric tables validate paired count and vmtx length at parse time
         defer allocator.free(bytes);
         const vhea_offset = try sfntTableOffset(bytes, "vhea");
         writeU16Test(bytes, vhea_offset + 24, 1); // Reserved fields must be zero.
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
+        try updateSfntTableChecksum(bytes, "vhea");
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
     }
 }
 

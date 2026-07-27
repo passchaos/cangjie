@@ -688,6 +688,43 @@ pub const FontFallbackDecision = struct {
     }
 };
 
+/// A missing-glyph entry captured during shaping-quality diagnostics.
+///
+/// This is intentionally source-oriented rather than renderer-oriented: byte
+/// ranges and Unicode scalars are enough for tests, editor overlays, and font
+/// fallback tooling to explain coverage holes without depending on a UI layer.
+pub const MissingGlyphDiagnostic = struct {
+    byte_start: usize,
+    byte_len: usize,
+    codepoint: u21,
+    variation_selector: ?u21 = null,
+    font_index: usize,
+    glyph_id: GlyphId,
+};
+
+/// Headless quality summary for one UTF-8 shaping pass.
+///
+/// Cangjie uses this as a small, deterministic contract for regression tests
+/// and higher-level font pickers: callers can assert that fallback, variation
+/// selector handling, and missing-glyph coverage did not silently regress
+/// without rasterizing pixels or involving platform font APIs.
+pub const ShapeQualityReport = struct {
+    glyph_count: usize,
+    font_run_count: usize,
+    missing_glyph_count: usize,
+    variation_selector_count: usize,
+    fallback_glyph_count: usize,
+    zero_advance_glyph_count: usize,
+    horizontal_advance: f32,
+    vertical_advance: f32,
+    missing_glyphs: []MissingGlyphDiagnostic,
+
+    pub fn deinit(self: *ShapeQualityReport, allocator: std.mem.Allocator) void {
+        allocator.free(self.missing_glyphs);
+        self.* = undefined;
+    }
+};
+
 /// Build a stable fallback trace for UTF-8 text without shaping, rasterizing,
 /// or consulting platform font APIs. Variation selectors are folded into the
 /// preceding scalar, matching the shaping path's cluster model, so the returned
@@ -752,6 +789,71 @@ pub fn diagnoseFontFallbackUtf8(allocator: std.mem.Allocator, cascade: FontCasca
     }
 
     return try decisions.toOwnedSlice(allocator);
+}
+
+/// Shape text and return a compact quality/coverage report.
+///
+/// The report owns only the `missing_glyphs` slice. All other values are scalar
+/// aggregates computed from the shaped glyph stream and deterministic fallback
+/// decisions, so this helper remains cheap enough to run in unit tests,
+/// benchmarks, and CI quality gates.
+pub fn diagnoseShapeQualityUtf8(
+    allocator: std.mem.Allocator,
+    cascade: FontCascade,
+    text: []const u8,
+    font_size: f32,
+    options: ShapeOptions,
+) !ShapeQualityReport {
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const shaped = try TextShaper.shapeUtf8CascadeWithOptions(cascade, &buffer, text, font_size, options);
+    const fallback = try diagnoseFontFallbackUtf8(allocator, cascade, text);
+    defer allocator.free(fallback);
+
+    var missing = std.ArrayList(MissingGlyphDiagnostic).empty;
+    errdefer missing.deinit(allocator);
+
+    var variation_selector_count: usize = 0;
+    for (fallback) |decision| {
+        if (decision.variation_selector != null) variation_selector_count += 1;
+        if (!decision.missingGlyph()) continue;
+        try missing.append(allocator, .{
+            .byte_start = decision.byte_start,
+            .byte_len = decision.byte_len,
+            .codepoint = decision.codepoint,
+            .variation_selector = decision.variation_selector,
+            .font_index = decision.font_index,
+            .glyph_id = decision.glyph_id,
+        });
+    }
+
+    var fallback_glyph_count: usize = 0;
+    for (shaped.runs) |run| {
+        if (run.font_index != 0) fallback_glyph_count += run.glyph_len;
+    }
+
+    var zero_advance_glyph_count: usize = 0;
+    var horizontal_advance: f32 = 0;
+    var vertical_advance: f32 = 0;
+    for (shaped.glyphs) |glyph| {
+        if (glyph.x_advance == 0 and glyph.y_advance == 0) zero_advance_glyph_count += 1;
+        horizontal_advance += glyph.x_advance;
+        vertical_advance += glyph.y_advance;
+    }
+
+    const missing_glyphs = try missing.toOwnedSlice(allocator);
+    return .{
+        .glyph_count = shaped.glyphs.len,
+        .font_run_count = shaped.runs.len,
+        .missing_glyph_count = missing_glyphs.len,
+        .variation_selector_count = variation_selector_count,
+        .fallback_glyph_count = fallback_glyph_count,
+        .zero_advance_glyph_count = zero_advance_glyph_count,
+        .horizontal_advance = horizontal_advance,
+        .vertical_advance = vertical_advance,
+        .missing_glyphs = missing_glyphs,
+    };
 }
 
 /// Caches codepoint-to-font decisions for a cascade. This is separate from the
@@ -2371,6 +2473,41 @@ test "font fallback diagnostics expose deterministic variation and missing glyph
         try std.testing.expectEqual(decision.codepoint, glyph.codepoint);
         try std.testing.expectEqual(decision.glyph_id, glyph.glyph_id);
     }
+}
+
+test "shape quality diagnostics summarize fallback coverage and missing glyphs" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const primary_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 'A', "Primary", "Regular", "Primary Regular");
+    defer allocator.free(primary_bytes);
+    const fallback_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 'B', "Fallback", "Regular", "Fallback Regular");
+    defer allocator.free(fallback_bytes);
+
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var fallback = try Font.parse(allocator, fallback_bytes);
+    defer fallback.deinit();
+
+    const fonts = [_]*const Font{ &primary, &fallback };
+    const cascade = FontCascade.init(&fonts);
+
+    var report = try diagnoseShapeQualityUtf8(allocator, cascade, "AB\u{fe0f}C", 20, .{});
+    defer report.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), report.glyph_count);
+    try std.testing.expectEqual(@as(usize, 3), report.font_run_count);
+    try std.testing.expectEqual(@as(usize, 1), report.variation_selector_count);
+    try std.testing.expectEqual(@as(usize, 1), report.fallback_glyph_count);
+    try std.testing.expectEqual(@as(usize, 1), report.missing_glyph_count);
+    try std.testing.expectEqual(@as(usize, 1), report.missing_glyphs.len);
+    try std.testing.expectEqual(@as(u21, 'C'), report.missing_glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(usize, 5), report.missing_glyphs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 1), report.missing_glyphs[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 0), report.missing_glyphs[0].font_index);
+    try std.testing.expectEqual(@as(GlyphId, 0), report.missing_glyphs[0].glyph_id);
+    try std.testing.expect(report.horizontal_advance > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), report.vertical_advance, 0.001);
 }
 
 test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {

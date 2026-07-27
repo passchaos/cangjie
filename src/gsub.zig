@@ -45,6 +45,18 @@ pub const LookupOptions = struct {
     /// can reason about the original source components of ligatures.
     glyph_source_indices: ?*std.ArrayList(usize) = null,
     ligature_components: ?*std.ArrayList(gpos.LigatureComponentInfo) = null,
+    /// Optional source-level feature assignment. `active_source_feature` gates
+    /// a lookup to glyphs whose original source index carries that tag. Context
+    /// and chaining lookups still see the complete surrounding glyph stream;
+    /// only candidate lookup starts are gated, matching OpenType feature-mask
+    /// semantics.
+    source_features: ?[]const u32 = null,
+    active_source_feature: ?u32 = null,
+};
+
+pub const FeatureApplication = struct {
+    tag: u32,
+    source_scoped: bool = false,
 };
 
 /// Apply default or explicitly enabled substitution features to the glyph
@@ -86,6 +98,141 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
         if (selected_lookups.items.len != 0 and !containsLookup(selected_lookups.items, @intCast(i))) continue;
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
         try applyLookup(table, lookup_offset, glyphs, allocator, options);
+    }
+}
+
+/// Apply one Script/LangSys feature to the source positions carrying its tag.
+///
+/// This is primarily used by cursive joining (`isol`/`init`/`medi`/`fina`),
+/// but the mechanism is deliberately feature-agnostic. The source assignment
+/// remains stable when earlier GSUB stages change glyph cardinality because
+/// `glyph_source_indices` is already maintained alongside the glyph stream.
+pub fn applySourceFeatureWithOptions(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    feature_tag: u32,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    return try applyFeatureSequenceWithOptions(data, offset, length, &.{.{ .tag = feature_tag, .source_scoped = true }}, glyphs, allocator, options);
+}
+
+/// Apply exactly one feature from the active Script/LangSys to the full glyph
+/// stream. Higher-level shapers use this to preserve script-defined feature
+/// ordering when some stages (for example Arabic joining forms) require
+/// position-scoped application between otherwise global features.
+pub fn applyFeatureWithOptions(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    feature_tag: u32,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    return try applyFeatureSequenceWithOptions(data, offset, length, &.{.{ .tag = feature_tag }}, glyphs, allocator, options);
+}
+
+/// Apply an ordered feature plan after validating and preparing the GSUB table
+/// once. This avoids repeating table validation and caller-side GDEF expansion
+/// for scripts whose shaping plan has multiple explicit stages.
+pub fn applyFeatureSequenceWithOptions(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    applications: []const FeatureApplication,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    try validateShapingMetadata(options, glyphs.items.len);
+    const table = Table{ .data = data, .offset = offset, .length = length };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+
+    // Preserve arbitrary LangSys-required features even when a higher-level
+    // script plan names only the well-known stages it needs to interleave.
+    // Required tags already present in the explicit plan are handled there so
+    // position-scoped form features do not run once globally and once scoped.
+    var required_features = std.ArrayList(FeatureSelection).empty;
+    defer required_features.deinit(allocator);
+    const script_list_offset = try checkedRequiredScriptListOffset(table);
+    const script_count = try readU16(table, script_list_offset);
+    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
+        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
+        0;
+    if (script_offset != 0) try collectScriptFeatures(table, script_offset, options.language_tag, &required_features, allocator);
+    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
+    const feature_count = try readU16(table, feature_list_offset);
+    for (required_features.items) |selection| {
+        if (!selection.required or selection.index >= feature_count) continue;
+        const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
+        const required_tag = try readU32(table, feature_record);
+        if (featurePlanContains(applications, required_tag)) continue;
+        var required_options = options;
+        required_options.active_source_feature = null;
+        try applySelectedFeature(table, required_tag, glyphs, allocator, required_options);
+    }
+
+    for (applications) |application| {
+        var selected_options = options;
+        selected_options.active_source_feature = if (application.source_scoped) application.tag else null;
+        try validateShapingMetadata(selected_options, glyphs.items.len);
+        try applySelectedFeature(table, application.tag, glyphs, allocator, selected_options);
+    }
+}
+
+fn featurePlanContains(applications: []const FeatureApplication, feature_tag: u32) bool {
+    for (applications) |application| {
+        if (application.tag == feature_tag) return true;
+    }
+    return false;
+}
+
+fn applySelectedFeature(
+    table: Table,
+    feature_tag: u32,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    var feature_indices = std.ArrayList(FeatureSelection).empty;
+    defer feature_indices.deinit(allocator);
+    const script_list_offset = try checkedRequiredScriptListOffset(table);
+    const script_count = try readU16(table, script_list_offset);
+    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
+        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
+        return;
+    try collectScriptFeatures(table, script_offset, options.language_tag, &feature_indices, allocator);
+
+    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
+    const feature_count = try readU16(table, feature_list_offset);
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+    var applied_lookups = std.ArrayList(u16).empty;
+    defer applied_lookups.deinit(allocator);
+    for (feature_indices.items) |selection| {
+        if (selection.index >= feature_count) continue;
+        const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
+        if (try readU32(table, feature_record) != feature_tag) continue;
+        const feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
+        const lookup_index_count = try readU16(table, feature_offset + 2);
+        for (0..lookup_index_count) |lookup_i| {
+            const lookup_index = try readU16(table, feature_offset + 4 + lookup_i * 2);
+            if (lookup_index >= lookup_count) return error.BadGsub;
+            // Some production fonts repeat a feature record or the same lookup
+            // index within one feature. OpenType feature application is a set
+            // of lookups in lookup-list order; do not feed a replacement back
+            // through the same lookup merely because the activation graph has
+            // duplicate references.
+            if (containsLookup(applied_lookups.items, lookup_index)) continue;
+            try applied_lookups.append(allocator, lookup_index);
+            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+            try applyLookup(table, lookup_offset, glyphs, allocator, options);
+        }
     }
 }
 
@@ -460,6 +607,7 @@ fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs:
             const delta = try readI16(table, subtable_offset + 4);
             for (glyphs.items, 0..) |*glyph, glyph_index| {
                 if (matched[glyph_index]) continue;
+                if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph.*) != null) {
                     glyph.* = @bitCast(@as(i16, @bitCast(glyph.*)) +% delta);
@@ -471,6 +619,7 @@ fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs:
             const glyph_count = try readU16(table, subtable_offset + 4);
             for (glyphs.items, 0..) |*glyph, glyph_index| {
                 if (matched[glyph_index]) continue;
+                if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph.*)) |index| {
                     if (index < glyph_count) {
@@ -490,7 +639,8 @@ fn applySingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.Ar
     switch (subst_format) {
         1 => {
             const delta = try readI16(table, subtable_offset + 4);
-            for (glyphs.items) |*glyph| {
+            for (glyphs.items, 0..) |*glyph, glyph_index| {
+                if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph.*) != null) {
                     glyph.* = @bitCast(@as(i16, @bitCast(glyph.*)) +% delta);
@@ -499,7 +649,8 @@ fn applySingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.Ar
         },
         2 => {
             const glyph_count = try readU16(table, subtable_offset + 4);
-            for (glyphs.items) |*glyph| {
+            for (glyphs.items, 0..) |*glyph, glyph_index| {
+                if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph.*)) |index| {
                     if (index < glyph_count) glyph.* = try readU16(table, subtable_offset + 6 + index * 2);
@@ -582,6 +733,13 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError
             try validateLigatureComponentInfo(component_info);
         }
     }
+    if (options.active_source_feature != null) {
+        const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
+        const features = options.source_features orelse return error.InvalidShapingInput;
+        for (sources.items) |source| {
+            if (source >= features.len) return error.InvalidShapingInput;
+        }
+    }
 }
 
 fn validateLigatureComponentInfo(info: gpos.LigatureComponentInfo) GsubError!void {
@@ -602,6 +760,13 @@ fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {
     const sources = options.glyph_source_indices orelse return glyph_index;
     if (glyph_index >= sources.items.len) return glyph_index;
     return sources.items[glyph_index];
+}
+
+fn sourceFeatureAllowsGlyph(options: LookupOptions, glyph_index: usize) bool {
+    const active = options.active_source_feature orelse return true;
+    const features = options.source_features orelse return false;
+    const source = sourceForGlyph(options, glyph_index);
+    return source < features.len and features[source] == active;
 }
 
 fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
@@ -656,6 +821,7 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
 
     var i: usize = 0;
     while (i < glyphs.items.len) : (i += 1) {
+        if (!sourceFeatureAllowsGlyph(options, i)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[i])) continue;
         const coverage = try coverageIndex(table, coverage_offset, glyphs.items[i]) orelse continue;
         if (coverage >= sequence_count) continue;
@@ -695,6 +861,7 @@ fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyp
         if (matched) |items| {
             if (items[glyph_index]) continue;
         }
+        if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
         const coverage = try coverageIndex(table, coverage_offset, glyph.*) orelse continue;
         if (coverage >= alternate_set_count) continue;
@@ -734,6 +901,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
 
     var i: usize = 0;
     while (i < glyphs.items.len) : (i += 1) {
+        if (!sourceFeatureAllowsGlyph(options, i)) continue;
         const first = glyphs.items[i];
         if (lookupIgnoresGlyph(lookup_flag, options, first)) continue;
         const covered = try coverageIndex(table, coverage_offset, first) orelse continue;
@@ -820,6 +988,7 @@ fn applyContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.A
             const rule_set_count = try readU16(table, subtable_offset + 4);
             var pos: usize = 0;
             while (pos < glyphs.items.len) : (pos += 1) {
+                if (!sourceFeatureAllowsGlyph(options, pos)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
                 const coverage = try coverageIndex(table, coverage_offset, glyphs.items[pos]) orelse continue;
                 if (coverage >= rule_set_count) continue;
@@ -843,6 +1012,7 @@ fn applyContextClassSubstitution(table: Table, subtable_offset: usize, glyphs: *
     const class_set_count = try readU16(table, subtable_offset + 6);
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
+        if (!sourceFeatureAllowsGlyph(options, pos)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
         if (try coverageIndex(table, coverage_offset, glyphs.items[pos]) == null) continue;
         const class = try classValue(table, class_def_offset, glyphs.items[pos]);
@@ -892,6 +1062,7 @@ fn applyContextCoverageSubstitution(table: Table, subtable_offset: usize, glyphs
     const subst_records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
+        if (!sourceFeatureAllowsGlyph(options, pos)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
         var input_indices_buf: [64]usize = undefined;
         if (glyph_count > input_indices_buf.len) return error.UnsupportedGsub;
@@ -945,6 +1116,7 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
             const chain_set_count = try readU16(table, subtable_offset + 4);
             var pos: usize = 0;
             while (pos < glyphs.items.len) : (pos += 1) {
+                if (!sourceFeatureAllowsGlyph(options, pos)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
                 const coverage = try coverageIndex(table, coverage_offset, glyphs.items[pos]) orelse continue;
                 if (coverage >= chain_set_count) continue;
@@ -969,6 +1141,7 @@ fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: 
     const set_count = try readU16(table, subtable_offset + 10);
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
+        if (!sourceFeatureAllowsGlyph(options, pos)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
         if (try coverageIndex(table, coverage_offset, glyphs.items[pos]) == null) continue;
         const input_class = try classValue(table, input_class_def, glyphs.items[pos]);
@@ -1072,6 +1245,7 @@ fn applyChainingCoverageSubstitution(table: Table, subtable_offset: usize, glyph
 
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
+        if (!sourceFeatureAllowsGlyph(options, pos)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
         var input_indices_buf: [64]usize = undefined;
         if (input_count > input_indices_buf.len) return error.UnsupportedGsub;
@@ -2197,6 +2371,8 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     var scratch_options = options;
     scratch_options.glyph_source_indices = null;
     scratch_options.ligature_components = null;
+    scratch_options.source_features = null;
+    scratch_options.active_source_feature = null;
     try applyLookup(table, nested_lookup_offset, &slice, allocator, scratch_options);
     try glyphs.replaceRange(allocator, glyph_index, 1, slice.items);
     if (slice.items.len != 1) {
@@ -2249,6 +2425,7 @@ fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, 
     var pos = glyphs.items.len;
     while (pos > 0) {
         pos -= 1;
+        if (!sourceFeatureAllowsGlyph(options, pos)) continue;
         const glyph = glyphs.items[pos];
         if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         const coverage = try coverageIndex(table, coverage_offset, glyph) orelse continue;
@@ -3298,6 +3475,65 @@ test "GSUB default features do not enable ordinals" {
     try std.testing.expect(defaultFeatureEnabled(unicode.tag("ccmp")));
     try std.testing.expect(!defaultFeatureEnabled(unicode.tag("ordn")));
     try std.testing.expect(!defaultFeatureEnabled(unicode.tag("sups")));
+}
+
+test "GSUB source-scoped feature gates substitution starts" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 68;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // ScriptList.
+    writeU16Test(&bytes, 6, 30); // FeatureList.
+    writeU16Test(&bytes, 8, 44); // LookupList.
+
+    writeU16Test(&bytes, 10, 1); // ScriptCount.
+    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.arab));
+    writeU16Test(&bytes, 16, 8); // Script table at 18.
+    writeU16Test(&bytes, 18, 4); // DefaultLangSys at 22.
+    writeU16Test(&bytes, 20, 0); // LangSysCount.
+    writeU16Test(&bytes, 22, 0); // LookupOrder.
+    writeU16Test(&bytes, 24, 0xffff); // No required feature.
+    writeU16Test(&bytes, 26, 1);
+    writeU16Test(&bytes, 28, 0); // Feature index 0.
+
+    writeU16Test(&bytes, 30, 1); // FeatureCount.
+    writeU32Test(&bytes, 32, unicode.tag("init"));
+    writeU16Test(&bytes, 36, 8); // Feature table at 38.
+    writeU16Test(&bytes, 38, 0); // FeatureParams.
+    writeU16Test(&bytes, 40, 1);
+    writeU16Test(&bytes, 42, 0); // Lookup index 0.
+
+    writeU16Test(&bytes, 44, 1); // LookupCount.
+    writeU16Test(&bytes, 46, 4); // Lookup at 48.
+    writeU16Test(&bytes, 48, 1); // SingleSubst.
+    writeU16Test(&bytes, 50, 0);
+    writeU16Test(&bytes, 52, 1);
+    writeU16Test(&bytes, 54, 8); // Subtable at 56.
+    writeU16Test(&bytes, 56, 1); // SingleSubst format 1.
+    writeU16Test(&bytes, 58, 6); // Coverage at 62.
+    writeI16Test(&bytes, 60, 1); // 1 -> 2.
+    writeCoverage1(&bytes, 62, 1);
+
+    var scoped = std.ArrayList(GlyphId).empty;
+    defer scoped.deinit(allocator);
+    try scoped.appendSlice(allocator, &.{ 1, 1, 1 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+    const source_features = [_]u32{ 0, unicode.tag("init"), 0 };
+    try applySourceFeatureWithOptions(&bytes, 0, bytes.len, unicode.tag("init"), &scoped, allocator, .{
+        .script_tag = .arab,
+        .glyph_source_indices = &sources,
+        .source_features = &source_features,
+    });
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 1 }, scoped.items);
+
+    var global = std.ArrayList(GlyphId).empty;
+    defer global.deinit(allocator);
+    try global.appendSlice(allocator, &.{ 1, 1, 1 });
+    try applyFeatureWithOptions(&bytes, 0, bytes.len, unicode.tag("init"), &global, allocator, .{
+        .script_tag = .arab,
+    });
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 2, 2 }, global.items);
 }
 
 test "GSUB LangSys required feature bypasses optional feature filtering" {

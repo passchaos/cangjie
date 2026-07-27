@@ -2,6 +2,7 @@ const std = @import("std");
 const Font = @import("font.zig").Font;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
+const gsub = @import("gsub.zig");
 const unicode = @import("unicode.zig");
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
@@ -1837,6 +1838,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     defer glyph_source_indices.deinit(buffer.allocator);
     var ligature_components = std.ArrayList(gpos.LigatureComponentInfo).empty;
     defer ligature_components.deinit(buffer.allocator);
+    var joining_forms = std.ArrayList(unicode.JoiningForm).empty;
+    defer joining_forms.deinit(buffer.allocator);
+    var source_features = std.ArrayList(u32).empty;
+    defer source_features.deinit(buffer.allocator);
 
     // Keep three parallel arrays through GSUB: glyph ids are mutable, while
     // codepoints and clusters retain source-text identity for rendering,
@@ -1869,14 +1874,52 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // needs the original component sources for a ligature glyph; otherwise a
     // mark after a ligature can only guess a component from post-substitution
     // mark order.
-    try font.applyGsubWithOptions(&glyph_ids, buffer.allocator, .{
+    const gsub_options = gsub.LookupOptions{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
         .apply_all_if_unselected = false,
         .glyph_source_indices = &glyph_source_indices,
         .ligature_components = &ligature_components,
-    });
+    };
+    if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
+        try joining_forms.resize(buffer.allocator, codepoints.items.len);
+        try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
+        try source_features.resize(buffer.allocator, joining_forms.items.len);
+        for (joining_forms.items, source_features.items) |form, *feature| {
+            feature.* = joiningFormFeatureTag(form);
+        }
+        var arabic_options = gsub_options;
+        arabic_options.source_features = source_features.items;
+
+        // Unicode Arabic joining forms are position-scoped and must run after
+        // canonical/localized substitutions but before required ligatures.
+        // Keeping the order explicit mirrors the OpenType Arabic shaping plan
+        // without globally enabling mutually-exclusive form features.
+        var applications_buf: [11]gsub.FeatureApplication = undefined;
+        var application_count: usize = 0;
+        const planned_features = [_]gsub.FeatureApplication{
+            .{ .tag = unicode.tag("ccmp") },
+            .{ .tag = unicode.tag("locl") },
+            .{ .tag = unicode.tag("isol"), .source_scoped = true },
+            .{ .tag = unicode.tag("fina"), .source_scoped = true },
+            .{ .tag = unicode.tag("medi"), .source_scoped = true },
+            .{ .tag = unicode.tag("init"), .source_scoped = true },
+            .{ .tag = unicode.tag("rlig") },
+            .{ .tag = unicode.tag("liga") },
+            .{ .tag = unicode.tag("clig") },
+            .{ .tag = unicode.tag("calt") },
+            .{ .tag = unicode.tag("rclt") },
+        };
+        for (planned_features) |application| {
+            if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
+            applications_buf[application_count] = application;
+            application_count += 1;
+        }
+        try font.applyGsubFeatureSequenceWithOptions(applications_buf[0..application_count], &glyph_ids, buffer.allocator, arabic_options);
+    } else {
+        try font.applyGsubWithOptions(&glyph_ids, buffer.allocator, gsub_options);
+    }
 
     var gpos_adjustments = std.ArrayList(gpos.Adjustment).empty;
     defer gpos_adjustments.deinit(buffer.allocator);
@@ -1940,6 +1983,23 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         });
         previous_glyph = glyph_id;
     }
+}
+
+fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
+    return switch (form) {
+        .isolated => unicode.tag("isol"),
+        .initial => unicode.tag("init"),
+        .medial => unicode.tag("medi"),
+        .final => unicode.tag("fina"),
+        .none => 0,
+    };
+}
+
+fn shapingFeatureEnabled(feature: u32, overrides: []const unicode.FeatureOverride, default_enabled: bool) bool {
+    for (overrides) |override| {
+        if (override.tag == feature) return override.enabled;
+    }
+    return default_enabled;
 }
 
 const SourceSpan = struct {

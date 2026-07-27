@@ -717,6 +717,45 @@ pub const Font = struct {
         try gsub_mod.applyWithOptions(self.data, gsub.offset, gsub.length, glyphs, allocator, gsub_options);
     }
 
+    pub fn applyGsubFeatureWithOptions(self: *const Font, feature_tag: u32, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
+        return try self.applyGsubFeatureSequenceWithOptions(&.{.{ .tag = feature_tag }}, glyphs, allocator, options);
+    }
+
+    pub fn applyGsubSourceFeatureWithOptions(self: *const Font, feature_tag: u32, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
+        return try self.applyGsubFeatureSequenceWithOptions(&.{.{ .tag = feature_tag, .source_scoped = true }}, glyphs, allocator, options);
+    }
+
+    pub fn applyGsubFeatureSequenceWithOptions(self: *const Font, applications: []const gsub_mod.FeatureApplication, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
+        try self.validateGlyphRun(glyphs.items);
+        const gsub = self.gsub orelse return;
+        try validateSfntTableChecksum(self.data, gsub);
+        try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
+        var gsub_options = options;
+        var glyph_classes: ?[]u16 = null;
+        var mark_attach_classes: ?[]u16 = null;
+        var mark_filtering_sets: ?[][]glyph_mod.GlyphId = null;
+        if (self.gdef != null) {
+            const classes = try allocator.alloc(u16, self.glyph_count);
+            errdefer allocator.free(classes);
+            const attach_classes = try allocator.alloc(u16, self.glyph_count);
+            errdefer allocator.free(attach_classes);
+            for (classes, 0..) |*class, glyph_id| class.* = @intFromEnum(try self.glyphClass(@intCast(glyph_id)));
+            for (attach_classes, 0..) |*class, glyph_id| class.* = try self.markAttachClass(@intCast(glyph_id));
+            glyph_classes = classes;
+            mark_attach_classes = attach_classes;
+            gsub_options.glyph_classes = classes;
+            gsub_options.mark_attach_classes = attach_classes;
+            if (try self.markFilteringSets(allocator)) |sets| {
+                mark_filtering_sets = sets;
+                gsub_options.mark_filtering_sets = sets;
+            }
+        }
+        defer if (glyph_classes) |classes| allocator.free(classes);
+        defer if (mark_attach_classes) |classes| allocator.free(classes);
+        defer if (mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
+        try gsub_mod.applyFeatureSequenceWithOptions(self.data, gsub.offset, gsub.length, applications, glyphs, allocator, gsub_options);
+    }
+
     pub fn collectGposAdjustments(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator) FontError!void {
         return try self.collectGposAdjustmentsWithOptions(glyphs, adjustments, allocator, .{});
     }

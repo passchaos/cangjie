@@ -79,9 +79,19 @@ test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
 
     var layout_buffer = cangjie.LayoutBuffer.init(allocator);
     defer layout_buffer.deinit();
-    const run = try cangjie.TextShaper.shapeUtf8(&font, &layout_buffer, "مرحبا بالعالم", 32);
-    try std.testing.expect(run.glyphs.len > 0);
-    try std.testing.expect(run.width() > 0);
+    const run = try cangjie.TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "مرحبا بالعالم 123", 32, .{ .direction = .rtl });
+    try std.testing.expectEqual(@as(usize, 17), run.glyphs.len);
+    // These are the positional-form glyphs and advances selected by the same
+    // Noto Sans Arabic file through Pango/HarfBuzz. Keep a small tolerance for
+    // float scaling, but require joining to reduce the unshaped 281.824px run.
+    try std.testing.expectApproxEqAbs(@as(f32, 217.408), run.width(), 0.01);
+    var actual_glyph_ids: [17]cangjie.GlyphId = undefined;
+    for (run.glyphs, &actual_glyph_ids) |glyph, *actual| actual.* = glyph.glyph_id;
+    try std.testing.expectEqualSlices(
+        cangjie.GlyphId,
+        &.{ 3, 907, 1380, 1354, 770, 667, 47, 12, 667, 47, 102, 3, 47, 104, 417, 979, 771 },
+        &actual_glyph_ids,
+    );
 
     var target = try cangjie.RenderTarget.init(allocator, 320, 96);
     defer target.deinit();

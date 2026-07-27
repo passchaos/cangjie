@@ -1005,7 +1005,7 @@ fn collectCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []co
         var matched = true;
         for (0..glyph_count) |i| {
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, coverage_offsets_pos + i * 2));
-            if (try coverageIndex(table, coverage_offset, glyphs[input_indices_buf[i]]) == null) {
+            if (!try contextCoverageContains(table, coverage_offset, glyphs[input_indices_buf[i]])) {
                 matched = false;
                 break;
             }
@@ -1232,7 +1232,7 @@ fn gposCoverageSequenceMatches(table: Table, base_offset: usize, glyphs: []const
     for (0..count) |i| {
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
         const glyph = if (backtrack) glyphs[pos - 1 - i] else glyphs[pos + i];
-        if (try coverageIndex(table, coverage_offset, glyph) == null) return false;
+        if (!try contextCoverageContains(table, coverage_offset, glyph)) return false;
     }
     return true;
 }
@@ -1241,7 +1241,7 @@ fn gposLookaheadCoverageMatches(table: Table, base_offset: usize, glyphs: []cons
     if (start + count > glyphs.len) return false;
     for (0..count) |i| {
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
-        if (try coverageIndex(table, coverage_offset, glyphs[start + i]) == null) return false;
+        if (!try contextCoverageContains(table, coverage_offset, glyphs[start + i])) return false;
     }
     return true;
 }
@@ -1249,7 +1249,7 @@ fn gposLookaheadCoverageMatches(table: Table, base_offset: usize, glyphs: []cons
 fn gposCoverageIndicesMatch(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize) GposError!bool {
     for (indices, 0..) |glyph_index, i| {
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
-        if (try coverageIndex(table, coverage_offset, glyphs[glyph_index]) == null) return false;
+        if (!try contextCoverageContains(table, coverage_offset, glyphs[glyph_index])) return false;
     }
     return true;
 }
@@ -1807,7 +1807,7 @@ fn ensureContextPositionSubtableWithin(table: Table, subtable_offset: usize, dep
             if (glyph_count == 0) return error.BadGpos;
             const pos_count = try readU16BadGpos(table, subtable_offset + 4);
             const coverage_offsets_pos = subtable_offset + 6;
-            try ensureCoverageOffsetArrayWithin(table, subtable_offset, coverage_offsets_pos, glyph_count);
+            try ensureContextCoverageOffsetArrayWithin(table, subtable_offset, coverage_offsets_pos, glyph_count);
             const records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
             try ensurePositionRecordsWithinDepth(table, records_pos, pos_count, glyph_count, depth);
         },
@@ -1938,18 +1938,18 @@ fn ensureChainingCoveragePositionSubtableWithin(table: Table, subtable_offset: u
     var cursor = subtable_offset + 2;
     const backtrack_count = try readU16BadGpos(table, cursor);
     cursor += 2;
-    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, backtrack_count);
+    try ensureContextCoverageOffsetArrayWithin(table, subtable_offset, cursor, backtrack_count);
     cursor += @as(usize, backtrack_count) * 2;
 
     const input_count = try readU16BadGpos(table, cursor);
     if (input_count == 0) return error.BadGpos;
     cursor += 2;
-    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, input_count);
+    try ensureContextCoverageOffsetArrayWithin(table, subtable_offset, cursor, input_count);
     cursor += @as(usize, input_count) * 2;
 
     const lookahead_count = try readU16BadGpos(table, cursor);
     cursor += 2;
-    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, lookahead_count);
+    try ensureContextCoverageOffsetArrayWithin(table, subtable_offset, cursor, lookahead_count);
     cursor += @as(usize, lookahead_count) * 2;
 
     const pos_count = try readU16BadGpos(table, cursor);
@@ -2137,11 +2137,11 @@ fn classValueForValidation(table: Table, class_def_offset: usize, glyph: GlyphId
     };
 }
 
-fn ensureCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GposError!void {
+fn ensureContextCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GposError!void {
     try ensureBytesWithin(table, offsets_pos, @as(usize, count) * 2);
     for (0..count) |i| {
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16BadGpos(table, offsets_pos + i * 2));
-        try ensureCoverageTableWithin(table, coverage_offset);
+        try ensureContextCoverageTableWithin(table, coverage_offset);
     }
 }
 
@@ -2182,12 +2182,26 @@ fn valueRecordHasDeviceOffsets(format: u16) bool {
 }
 
 fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!void {
+    return ensureCoverageTableWithinMode(table, coverage_offset, false);
+}
+
+fn ensureContextCoverageTableWithin(table: Table, coverage_offset: usize) GposError!void {
+    // ContextPos/ChainContextPos format 3 use each Coverage only as a set
+    // membership predicate; unlike SinglePos, PairPos, and mark attachment,
+    // the CoverageIndex never selects a parallel record. Some widely deployed
+    // fonts (including Noto Sans Arabic) retain a duplicate glyph in one of
+    // these sets. Accept equal adjacent glyphs only for this membership-only
+    // use while preserving sortedness and the strict indexed-table contract.
+    return ensureCoverageTableWithinMode(table, coverage_offset, true);
+}
+
+fn ensureCoverageTableWithinMode(table: Table, coverage_offset: usize, allow_format_1_duplicates: bool) GposError!void {
     const format = try readU16BadGpos(table, coverage_offset);
     switch (format) {
         1 => {
             const glyph_count = try readU16BadGpos(table, coverage_offset + 2);
             try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
-            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            try validateCoverageFormat1OrderMode(table, coverage_offset, glyph_count, allow_format_1_duplicates);
             for (0..glyph_count) |glyph_i| {
                 try ensureGlyphIdWithinMaxp(table, try readU16BadGpos(table, coverage_offset + 4 + glyph_i * 2));
             }
@@ -2735,12 +2749,39 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError
     }
 }
 
+fn contextCoverageContains(table: Table, coverage_offset: usize, glyph: GlyphId) GposError!bool {
+    const format = try readU16(table, coverage_offset);
+    if (format != 1) return (try coverageIndex(table, coverage_offset, glyph)) != null;
+
+    const glyph_count = try readU16(table, coverage_offset + 2);
+    try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
+    try validateCoverageFormat1OrderMode(table, coverage_offset, glyph_count, true);
+    var lo: usize = 0;
+    var hi: usize = glyph_count;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = try readU16(table, coverage_offset + 4 + mid * 2);
+        if (glyph < candidate) {
+            hi = mid;
+        } else if (glyph > candidate) {
+            lo = mid + 1;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn validateCoverageFormat1Order(table: Table, coverage_offset: usize, glyph_count: u16) GposError!void {
+    return validateCoverageFormat1OrderMode(table, coverage_offset, glyph_count, false);
+}
+
+fn validateCoverageFormat1OrderMode(table: Table, coverage_offset: usize, glyph_count: u16, allow_duplicates: bool) GposError!void {
     var previous: ?GlyphId = null;
     for (0..glyph_count) |index| {
         const glyph = try readU16BadGpos(table, coverage_offset + 4 + index * 2);
         if (previous) |last| {
-            if (glyph <= last) return error.BadGpos;
+            if (glyph < last or (!allow_duplicates and glyph == last)) return error.BadGpos;
         }
         previous = glyph;
     }
@@ -2930,6 +2971,30 @@ test "GPOS rejects malformed coverage ordering before positioning" {
 
     try std.testing.expectError(error.BadGpos, collectSingleAdjustment(table, 0, &.{10}, &adjustments, std.testing.allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS contextual membership coverage tolerates duplicate glyphs" {
+    var bytes = [_]u8{0} ** 10;
+    writeU16Test(&bytes, 0, 1); // Coverage format 1.
+    writeU16Test(&bytes, 2, 3);
+    writeU16Test(&bytes, 4, 5);
+    writeU16Test(&bytes, 6, 5); // Harmless duplicate in a membership-only set.
+    writeU16Test(&bytes, 8, 7);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .glyph_count = 8 };
+    try ensureContextCoverageTableWithin(table, 0);
+    try std.testing.expect(try contextCoverageContains(table, 0, 5));
+    try std.testing.expect(!(try contextCoverageContains(table, 0, 6)));
+    try std.testing.expect(try contextCoverageContains(table, 0, 7));
+
+    // Indexed consumers still reject duplicate CoverageIndex values because
+    // they select parallel arrays and cannot discard an index deterministically.
+    try std.testing.expectError(error.BadGpos, ensureCoverageTableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, coverageIndex(table, 0, 5));
+
+    writeU16Test(&bytes, 8, 4);
+    try std.testing.expectError(error.BadGpos, ensureContextCoverageTableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, contextCoverageContains(table, 0, 5));
 }
 
 test "GPOS rejects reserved ValueFormat bits" {

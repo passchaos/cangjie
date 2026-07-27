@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const cangjie = @import("cangjie");
 
 const system_font_path = "/System/Library/Fonts/SFNSMono.ttf";
+const linux_noto_sans_arabic_path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf";
 const known_sfns_mono_sha256 = hexToBytes("55caaed55254a28ac793847e8976be16c5ba7cbad1ec2ee2d5d86d4e6b3fa0c1");
 const known_raster_sha256 = hexToBytes("34a1bfb1a733fcdd75878af95959d4341557f9991b94ae29110429a6fc5d20b2");
 
@@ -60,6 +61,36 @@ test "macOS SFNSMono parses shapes and rasterizes stable grayscale glyphs" {
         std.crypto.hash.sha2.Sha256.hash(target.pixels, &raster_digest, .{});
         try std.testing.expectEqualSlices(u8, &known_raster_sha256, &raster_digest);
     }
+}
+
+test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const font_bytes = std.Io.Dir.cwd().readFileAlloc(std.testing.io, linux_noto_sans_arabic_path, allocator, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(font_bytes);
+
+    var font = try cangjie.Font.parse(allocator, font_bytes);
+    defer font.deinit();
+    try std.testing.expect((try font.glyphIndex(0x0645)) > 0); // Arabic meem.
+
+    var layout_buffer = cangjie.LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try cangjie.TextShaper.shapeUtf8(&font, &layout_buffer, "مرحبا بالعالم", 32);
+    try std.testing.expect(run.glyphs.len > 0);
+    try std.testing.expect(run.width() > 0);
+
+    var target = try cangjie.RenderTarget.init(allocator, 320, 96);
+    defer target.deinit();
+    var rasterizer = cangjie.Rasterizer.init(allocator);
+    try rasterizer.renderRun(&target, run, 12, 64);
+    const stats = rasterStats(&target);
+    try std.testing.expect(stats.covered > 100);
+    try std.testing.expect(stats.coverage_sum > 1000);
+    try std.testing.expect(stats.bounds != null);
 }
 
 const RasterBounds = struct {

@@ -669,6 +669,91 @@ pub const FontCascade = struct {
     }
 };
 
+/// Deterministic per-cluster fallback decision used by headless tests,
+/// diagnostics, and editor integration code that wants to explain why a glyph
+/// came from a particular font before involving any renderer or UI layer.
+pub const FontFallbackDecision = struct {
+    byte_start: usize,
+    byte_len: usize,
+    codepoint: u21,
+    variation_selector: ?u21 = null,
+    font_index: usize,
+    glyph_id: GlyphId,
+    /// True when the selected font explicitly advertised a cmap format 14
+    /// Unicode Variation Sequence for `codepoint + variation_selector`.
+    used_variation_mapping: bool = false,
+
+    pub fn missingGlyph(self: FontFallbackDecision) bool {
+        return self.glyph_id == 0;
+    }
+};
+
+/// Build a stable fallback trace for UTF-8 text without shaping, rasterizing,
+/// or consulting platform font APIs. Variation selectors are folded into the
+/// preceding scalar, matching the shaping path's cluster model, so the returned
+/// byte ranges can be compared directly against shaped glyph clusters.
+///
+/// The caller owns the returned slice and must free it with `allocator.free`.
+pub fn diagnoseFontFallbackUtf8(allocator: std.mem.Allocator, cascade: FontCascade, text: []const u8) ![]FontFallbackDecision {
+    try validateShapingUtf8(text);
+    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+
+    var decisions = std.ArrayList(FontFallbackDecision).empty;
+    errdefer decisions.deinit(allocator);
+
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (it.i < text.len) {
+        const byte_start = it.i;
+        const codepoint = it.nextCodepoint() orelse break;
+        if (isVariationSelector(codepoint)) {
+            // A leading or otherwise detached variation selector shapes to no
+            // glyph in Cangjie. Diagnostics follow that visible cluster model
+            // instead of emitting a synthetic `.notdef` decision.
+            continue;
+        }
+
+        var byte_len = it.i - byte_start;
+        var variation_selector: ?u21 = null;
+        var used_variation_mapping = false;
+        var font_index: usize = 0;
+
+        if (nextVariationSelector(text, it.i)) |selector| {
+            variation_selector = selector;
+            _ = it.nextCodepoint();
+            byte_len = it.i - byte_start;
+
+            for (cascade.fonts, 0..) |font, index| {
+                if (try font.variationGlyphIndex(codepoint, selector) != null) {
+                    font_index = index;
+                    used_variation_mapping = true;
+                    break;
+                }
+            } else {
+                font_index = try cascade.selectFont(codepoint);
+            }
+        } else {
+            font_index = try cascade.selectFont(codepoint);
+        }
+
+        const glyph_id = if (variation_selector) |selector|
+            try cascade.fonts[font_index].glyphIndexWithVariation(codepoint, selector)
+        else
+            try cascade.fonts[font_index].glyphIndex(codepoint);
+
+        try decisions.append(allocator, .{
+            .byte_start = byte_start,
+            .byte_len = byte_len,
+            .codepoint = codepoint,
+            .variation_selector = variation_selector,
+            .font_index = font_index,
+            .glyph_id = glyph_id,
+            .used_variation_mapping = used_variation_mapping,
+        });
+    }
+
+    return try decisions.toOwnedSlice(allocator);
+}
+
 /// Caches codepoint-to-font decisions for a cascade. This is separate from the
 /// glyph-id cache because the same codepoint can map to different glyph ids in
 /// different fonts, while fallback only needs the winning font index.
@@ -2226,6 +2311,66 @@ fn verticalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCach
         .advance_height = value.advance_height,
         .top_side_bearing = value.top_side_bearing,
     } else null;
+}
+
+test "font fallback diagnostics expose deterministic variation and missing glyph decisions" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const primary_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 'A', "Primary", "Regular", "Primary Regular");
+    defer allocator.free(primary_bytes);
+    const variant_bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(variant_bytes);
+
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var variant = try Font.parse(allocator, variant_bytes);
+    defer variant.deinit();
+
+    const fonts = [_]*const Font{ &primary, &variant };
+    const cascade = FontCascade.init(&fonts);
+
+    const text = "A\u{fe0f}B\u{fe0e}C";
+    const decisions = try diagnoseFontFallbackUtf8(allocator, cascade, text);
+    defer allocator.free(decisions);
+
+    try std.testing.expectEqual(@as(usize, 3), decisions.len);
+
+    try std.testing.expectEqual(@as(usize, 0), decisions[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 4), decisions[0].byte_len);
+    try std.testing.expectEqual(@as(u21, 'A'), decisions[0].codepoint);
+    try std.testing.expectEqual(@as(?u21, 0xfe0f), decisions[0].variation_selector);
+    try std.testing.expectEqual(@as(usize, 1), decisions[0].font_index);
+    try std.testing.expectEqual(@as(GlyphId, 3), decisions[0].glyph_id);
+    try std.testing.expect(decisions[0].used_variation_mapping);
+    try std.testing.expect(!decisions[0].missingGlyph());
+
+    try std.testing.expectEqual(@as(usize, 4), decisions[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 4), decisions[1].byte_len);
+    try std.testing.expectEqual(@as(u21, 'B'), decisions[1].codepoint);
+    try std.testing.expectEqual(@as(?u21, 0xfe0e), decisions[1].variation_selector);
+    try std.testing.expectEqual(@as(usize, 1), decisions[1].font_index);
+    try std.testing.expectEqual(@as(GlyphId, 2), decisions[1].glyph_id);
+    try std.testing.expect(!decisions[1].used_variation_mapping);
+
+    try std.testing.expectEqual(@as(usize, 8), decisions[2].byte_start);
+    try std.testing.expectEqual(@as(usize, 1), decisions[2].byte_len);
+    try std.testing.expectEqual(@as(u21, 'C'), decisions[2].codepoint);
+    try std.testing.expectEqual(@as(?u21, null), decisions[2].variation_selector);
+    try std.testing.expectEqual(@as(usize, 0), decisions[2].font_index);
+    try std.testing.expectEqual(@as(GlyphId, 0), decisions[2].glyph_id);
+    try std.testing.expect(decisions[2].missingGlyph());
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const shaped = try TextShaper.shapeUtf8Cascade(cascade, &buffer, text, 20);
+    try std.testing.expectEqual(decisions.len, shaped.glyphs.len);
+    for (decisions, shaped.glyphs) |decision, glyph| {
+        try std.testing.expectEqual(decision.byte_start, glyph.cluster);
+        try std.testing.expectEqual(decision.byte_len, glyph.source_byte_len);
+        try std.testing.expectEqual(decision.codepoint, glyph.codepoint);
+        try std.testing.expectEqual(decision.glyph_id, glyph.glyph_id);
+    }
 }
 
 test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {

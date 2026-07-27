@@ -769,6 +769,56 @@ pub const ShapeQualityReport = struct {
     }
 };
 
+/// Kind of source/caret invariant violation found in a shaped paragraph.
+///
+/// These diagnostics are intentionally byte-oriented because every public
+/// layout/caret API in Cangjie maps back to UTF-8 byte offsets.  Keeping these
+/// checks renderer-free makes them useful as CI guards for shaper changes that
+/// alter clusters, ligature source spans, variation-selector folding, or bidi
+/// reordering.
+pub const ClusterCaretIssueKind = enum {
+    glyph_cluster_out_of_bounds,
+    glyph_source_end_out_of_bounds,
+    empty_source_span,
+    cluster_not_utf8_boundary,
+    source_end_not_utf8_boundary,
+    leading_caret_roundtrip_mismatch,
+    trailing_caret_roundtrip_mismatch,
+    grapheme_boundary_roundtrip_mismatch,
+};
+
+/// One cluster/caret consistency issue.
+///
+/// `glyph_index` is null for text-wide checks such as grapheme-boundary
+/// round-trips; glyph-specific checks include the source span observed on the
+/// offending glyph.  `expected_byte_offset` and `actual_byte_offset` are filled
+/// for round-trip mismatches, where a source byte boundary was converted to a
+/// TextPosition and then back to a byte offset.
+pub const ClusterCaretDiagnostic = struct {
+    kind: ClusterCaretIssueKind,
+    glyph_index: ?usize = null,
+    cluster: usize = 0,
+    source_end: usize = 0,
+    expected_byte_offset: usize = 0,
+    actual_byte_offset: usize = 0,
+};
+
+/// Headless report that verifies shaped glyph clusters are valid UTF-8 source
+/// spans and that paragraph caret mapping round-trips every glyph edge and
+/// grapheme boundary.
+pub const ClusterCaretConsistencyReport = struct {
+    glyph_count: usize,
+    caret_boundary_count: usize,
+    grapheme_boundary_count: usize,
+    issue_count: usize,
+    issues: []ClusterCaretDiagnostic,
+
+    pub fn deinit(self: *ClusterCaretConsistencyReport, allocator: std.mem.Allocator) void {
+        allocator.free(self.issues);
+        self.* = undefined;
+    }
+};
+
 /// Build a stable fallback trace for UTF-8 text without shaping, rasterizing,
 /// or consulting platform font APIs. Variation selectors are folded into the
 /// preceding scalar, matching the shaping path's cluster model, so the returned
@@ -833,6 +883,31 @@ pub fn diagnoseFontFallbackUtf8(allocator: std.mem.Allocator, cascade: FontCasca
     }
 
     return try decisions.toOwnedSlice(allocator);
+}
+
+/// Shape text and validate source cluster/caret invariants without depending on
+/// a renderer, platform text API, or UI layer.
+///
+/// The paragraph is laid out with unbounded width so the report focuses on
+/// shaper source metadata and caret normalization rather than line wrapping.
+/// Callers can use this in fixtures and benchmarks as a cheap preflight before
+/// asserting pixels or editor selection geometry.
+pub fn diagnoseClusterCaretConsistencyUtf8(
+    allocator: std.mem.Allocator,
+    cascade: FontCascade,
+    text: []const u8,
+    font_size: f32,
+    options: ShapeOptions,
+) !ClusterCaretConsistencyReport {
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    _ = try TextShaper.shapeUtf8CascadeWithOptions(cascade, &buffer, text, font_size, options);
+    try buildParagraphLines(&buffer, text, .{
+        .max_width = std.math.inf(f32),
+        .direction = options.direction,
+    }, defaultBaselineMetrics(cascade.fonts[0], font_size));
+    return try diagnoseClusterCaretConsistencyForLayout(allocator, text, buffer.paragraphLayout());
 }
 
 /// Shape text and return a compact quality/coverage report.
@@ -913,6 +988,152 @@ pub fn diagnoseShapeQualityUtf8(
         .font_runs = font_runs,
         .script_runs = script_runs,
     };
+}
+
+fn diagnoseClusterCaretConsistencyForLayout(allocator: std.mem.Allocator, text: []const u8, paragraph: ParagraphLayout) !ClusterCaretConsistencyReport {
+    var issues = std.ArrayList(ClusterCaretDiagnostic).empty;
+    errdefer issues.deinit(allocator);
+
+    for (paragraph.glyphs, 0..) |glyph, glyph_index| {
+        const source_end = glyphSourceEnd(glyph);
+        const span_valid = try validateGlyphSourceSpanForCaretDiagnostic(allocator, text, glyph, glyph_index, &issues);
+        if (!span_valid) continue;
+
+        try checkCaretBoundaryRoundtrip(
+            allocator,
+            paragraph,
+            glyph_index,
+            glyph.cluster,
+            .leading_caret_roundtrip_mismatch,
+            &issues,
+        );
+        try checkCaretBoundaryRoundtrip(
+            allocator,
+            paragraph,
+            glyph_index,
+            source_end,
+            .trailing_caret_roundtrip_mismatch,
+            &issues,
+        );
+    }
+
+    const graphemes = try unicode.itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(graphemes);
+    for (graphemes) |grapheme| {
+        try checkCaretBoundaryRoundtrip(
+            allocator,
+            paragraph,
+            null,
+            grapheme.byte_start,
+            .grapheme_boundary_roundtrip_mismatch,
+            &issues,
+        );
+        try checkCaretBoundaryRoundtrip(
+            allocator,
+            paragraph,
+            null,
+            grapheme.byte_start + grapheme.byte_len,
+            .grapheme_boundary_roundtrip_mismatch,
+            &issues,
+        );
+    }
+
+    const owned_issues = try issues.toOwnedSlice(allocator);
+    return .{
+        .glyph_count = paragraph.glyphs.len,
+        .caret_boundary_count = paragraph.glyphs.len * 2,
+        .grapheme_boundary_count = graphemes.len * 2,
+        .issue_count = owned_issues.len,
+        .issues = owned_issues,
+    };
+}
+
+fn validateGlyphSourceSpanForCaretDiagnostic(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    glyph: GlyphPosition,
+    glyph_index: usize,
+    issues: *std.ArrayList(ClusterCaretDiagnostic),
+) !bool {
+    const source_end = glyphSourceEnd(glyph);
+    var valid = true;
+
+    if (glyph.source_byte_len == 0) {
+        valid = false;
+        try appendClusterCaretIssue(allocator, issues, .{
+            .kind = .empty_source_span,
+            .glyph_index = glyph_index,
+            .cluster = glyph.cluster,
+            .source_end = source_end,
+        });
+    }
+    if (glyph.cluster > text.len) {
+        valid = false;
+        try appendClusterCaretIssue(allocator, issues, .{
+            .kind = .glyph_cluster_out_of_bounds,
+            .glyph_index = glyph_index,
+            .cluster = glyph.cluster,
+            .source_end = source_end,
+        });
+    } else if (!isUtf8Boundary(text, glyph.cluster)) {
+        valid = false;
+        try appendClusterCaretIssue(allocator, issues, .{
+            .kind = .cluster_not_utf8_boundary,
+            .glyph_index = glyph_index,
+            .cluster = glyph.cluster,
+            .source_end = source_end,
+        });
+    }
+    if (source_end > text.len) {
+        valid = false;
+        try appendClusterCaretIssue(allocator, issues, .{
+            .kind = .glyph_source_end_out_of_bounds,
+            .glyph_index = glyph_index,
+            .cluster = glyph.cluster,
+            .source_end = source_end,
+        });
+    } else if (!isUtf8Boundary(text, source_end)) {
+        valid = false;
+        try appendClusterCaretIssue(allocator, issues, .{
+            .kind = .source_end_not_utf8_boundary,
+            .glyph_index = glyph_index,
+            .cluster = glyph.cluster,
+            .source_end = source_end,
+        });
+    }
+
+    return valid;
+}
+
+fn checkCaretBoundaryRoundtrip(
+    allocator: std.mem.Allocator,
+    paragraph: ParagraphLayout,
+    glyph_index: ?usize,
+    byte_offset: usize,
+    kind: ClusterCaretIssueKind,
+    issues: *std.ArrayList(ClusterCaretDiagnostic),
+) !void {
+    const position = paragraph.textPositionForCluster(byte_offset);
+    const actual = positionByteOffset(paragraph, position);
+    if (actual == byte_offset) return;
+    try appendClusterCaretIssue(allocator, issues, .{
+        .kind = kind,
+        .glyph_index = glyph_index,
+        .cluster = byte_offset,
+        .source_end = byte_offset,
+        .expected_byte_offset = byte_offset,
+        .actual_byte_offset = actual,
+    });
+}
+
+fn appendClusterCaretIssue(allocator: std.mem.Allocator, issues: *std.ArrayList(ClusterCaretDiagnostic), issue: ClusterCaretDiagnostic) !void {
+    try issues.append(allocator, issue);
+}
+
+fn isUtf8Boundary(text: []const u8, byte_offset: usize) bool {
+    if (byte_offset > text.len) return false;
+    if (byte_offset == 0 or byte_offset == text.len) return true;
+    return (text[byte_offset] & 0xc0) != 0x80;
 }
 
 fn fontRunQualityDiagnostic(run: CascadeRun, glyphs: []const GlyphPosition) ShapeQualityFontRunDiagnostic {
@@ -2718,6 +2939,67 @@ test "shape quality diagnostics expose per font and script run counters" {
     try std.testing.expectEqual(@as(usize, 1), report.script_runs[2].font_run_count);
     try std.testing.expectEqual(@as(usize, 0), report.script_runs[2].fallback_glyph_count);
     try std.testing.expectEqual(@as(usize, 1), report.script_runs[2].missing_glyph_count);
+}
+
+test "cluster caret diagnostics accept variation selectors and fallback runs" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const primary_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 'A', "Primary", "Regular", "Primary Regular");
+    defer allocator.free(primary_bytes);
+    const variant_bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(variant_bytes);
+
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var variant = try Font.parse(allocator, variant_bytes);
+    defer variant.deinit();
+
+    const fonts = [_]*const Font{ &primary, &variant };
+    const cascade = FontCascade.init(&fonts);
+
+    var report = try diagnoseClusterCaretConsistencyUtf8(allocator, cascade, "A\u{fe0f}B\u{fe0e}", 20, .{});
+    defer report.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), report.glyph_count);
+    try std.testing.expectEqual(@as(usize, 4), report.caret_boundary_count);
+    try std.testing.expectEqual(@as(usize, 4), report.grapheme_boundary_count);
+    try std.testing.expectEqual(@as(usize, 0), report.issue_count);
+    try std.testing.expectEqual(@as(usize, 0), report.issues.len);
+}
+
+test "cluster caret diagnostics catch invalid UTF-8 source spans" {
+    const allocator = std.testing.allocator;
+    const text = "Aβ";
+    const glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 0x03b2,
+            .cluster = 2,
+            .source_byte_len = 1,
+            .x_advance = 10,
+        },
+    };
+    const paragraph = ParagraphLayout{
+        .glyphs = &glyphs,
+        .runs = &.{},
+        .lines = &.{},
+        .width = 10,
+        .height = 0,
+    };
+
+    var report = try diagnoseClusterCaretConsistencyForLayout(allocator, text, paragraph);
+    defer report.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), report.glyph_count);
+    try std.testing.expectEqual(@as(usize, 4), report.issue_count);
+    try std.testing.expectEqual(ClusterCaretIssueKind.cluster_not_utf8_boundary, report.issues[0].kind);
+    try std.testing.expectEqual(@as(?usize, 0), report.issues[0].glyph_index);
+    try std.testing.expectEqual(@as(usize, 2), report.issues[0].cluster);
+    try std.testing.expectEqual(@as(usize, 3), report.issues[0].source_end);
+    try std.testing.expectEqual(ClusterCaretIssueKind.grapheme_boundary_roundtrip_mismatch, report.issues[1].kind);
+    try std.testing.expectEqual(@as(usize, 0), report.issues[1].expected_byte_offset);
+    try std.testing.expectEqual(@as(usize, 2), report.issues[1].actual_byte_offset);
 }
 
 test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {

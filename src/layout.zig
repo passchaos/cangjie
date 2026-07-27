@@ -22,6 +22,7 @@ pub const GlyphPosition = struct {
     y_advance: f32 = 0,
     x_offset: f32 = 0,
     y_offset: f32 = 0,
+    vertical: bool = false,
 };
 
 /// A contiguous range of glyphs rendered by one font at one size.
@@ -35,6 +36,12 @@ pub const GlyphRun = struct {
         for (self.glyphs) |glyph| total += glyph.x_advance;
         return total;
     }
+
+    pub fn height(self: GlyphRun) f32 {
+        var total: f32 = 0;
+        for (self.glyphs) |glyph| total += glyph.y_advance;
+        return total;
+    }
 };
 
 /// A subrange of the shaped glyph stream selected from a font cascade.
@@ -46,6 +53,7 @@ pub const CascadeRun = struct {
     glyph_start: usize,
     glyph_len: usize,
     x_offset: f32,
+    y_offset: f32 = 0,
 
     pub fn glyphs(self: CascadeRun, shaped: ShapedText) []const GlyphPosition {
         return shaped.glyphs[self.glyph_start .. self.glyph_start + self.glyph_len];
@@ -65,6 +73,12 @@ pub const ShapedText = struct {
     pub fn width(self: ShapedText) f32 {
         var total: f32 = 0;
         for (self.glyphs) |glyph| total += glyph.x_advance;
+        return total;
+    }
+
+    pub fn height(self: ShapedText) f32 {
+        var total: f32 = 0;
+        for (self.glyphs) |glyph| total += glyph.y_advance;
         return total;
     }
 };
@@ -94,8 +108,19 @@ pub const TextDirection = enum {
     rtl,
 };
 
+pub const WritingMode = enum {
+    horizontal_tb,
+    vertical_rl,
+    vertical_lr,
+
+    pub fn isVertical(self: WritingMode) bool {
+        return self != .horizontal_tb;
+    }
+};
+
 pub const ShapeOptions = struct {
     direction: TextDirection = .ltr,
+    writing_mode: WritingMode = .horizontal_tb,
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
     features: []const unicode.FeatureOverride = &.{},
@@ -106,6 +131,7 @@ pub const ShapeOptions = struct {
 /// OpenType selection knobs that change which GSUB/GPOS lookups are active.
 pub const ShapePlanKey = struct {
     direction: TextDirection = .ltr,
+    writing_mode: WritingMode = .horizontal_tb,
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     feature_hash: u64 = 0,
@@ -113,6 +139,7 @@ pub const ShapePlanKey = struct {
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
         return .{
             .direction = options.direction,
+            .writing_mode = options.writing_mode,
             .script_tag = effectiveScriptTag(text, options),
             .language_tag = effectiveLanguageTag(text, options),
             .feature_hash = featureOverridesHash(options.features),
@@ -705,6 +732,7 @@ const GlyphMetricsKey = struct {
 pub const GlyphMetricsCache = struct {
     allocator: std.mem.Allocator,
     entries: std.AutoHashMap(GlyphMetricsKey, GlyphMetrics),
+    vertical_entries: std.AutoHashMap(GlyphMetricsKey, ?VerticalGlyphMetrics),
     hits: usize = 0,
     misses: usize = 0,
 
@@ -712,16 +740,19 @@ pub const GlyphMetricsCache = struct {
         return .{
             .allocator = allocator,
             .entries = std.AutoHashMap(GlyphMetricsKey, GlyphMetrics).init(allocator),
+            .vertical_entries = std.AutoHashMap(GlyphMetricsKey, ?VerticalGlyphMetrics).init(allocator),
         };
     }
 
     pub fn deinit(self: *GlyphMetricsCache) void {
+        self.vertical_entries.deinit();
         self.entries.deinit();
         self.* = undefined;
     }
 
     pub fn clear(self: *GlyphMetricsCache) void {
         self.entries.clearRetainingCapacity();
+        self.vertical_entries.clearRetainingCapacity();
         self.hits = 0;
         self.misses = 0;
     }
@@ -741,6 +772,27 @@ pub const GlyphMetricsCache = struct {
         try self.entries.put(key, metrics);
         return metrics;
     }
+
+    pub fn verticalMetrics(self: *GlyphMetricsCache, font: *const Font, glyph_id: GlyphId) !?VerticalGlyphMetrics {
+        const key = glyphMetricsKey(font, glyph_id);
+        if (self.vertical_entries.get(key)) |metrics| {
+            self.hits += 1;
+            return metrics;
+        }
+        self.misses += 1;
+        const raw = try font.verticalMetrics(glyph_id);
+        const metrics: ?VerticalGlyphMetrics = if (raw) |value| .{
+            .advance_height = value.advance_height,
+            .top_side_bearing = value.top_side_bearing,
+        } else null;
+        try self.vertical_entries.put(key, metrics);
+        return metrics;
+    }
+};
+
+pub const VerticalGlyphMetrics = struct {
+    advance_height: u16,
+    top_side_bearing: i16,
 };
 
 const GlyphIndexKey = struct {
@@ -897,6 +949,7 @@ pub const TextShaper = struct {
         var segment_start: usize = 0;
         var segment_font_index: ?usize = null;
         var pen_x: f32 = 0;
+        var pen_y: f32 = 0;
 
         while (it.i < text.len) {
             const cluster = it.i;
@@ -917,14 +970,38 @@ pub const TextShaper = struct {
                 segment_start = cluster;
                 segment_font_index = font_index;
             } else if (segment_font_index.? != font_index) {
-                pen_x = try appendCascadeRun(cascade.fonts[segment_font_index.?], metrics_cache, glyph_index_cache, segment_font_index.?, buffer, text[segment_start..cluster], font_size, segment_start, pen_x, lookupOptionsForText(text[segment_start..cluster], options));
+                const next_pen = try appendCascadeRun(
+                    cascade.fonts[segment_font_index.?],
+                    metrics_cache,
+                    glyph_index_cache,
+                    segment_font_index.?,
+                    buffer,
+                    text[segment_start..cluster],
+                    font_size,
+                    segment_start,
+                    .{ .x = pen_x, .y = pen_y },
+                    lookupOptionsForText(text[segment_start..cluster], options),
+                );
+                pen_x = next_pen.x;
+                pen_y = next_pen.y;
                 segment_start = cluster;
                 segment_font_index = font_index;
             }
         }
 
         if (segment_font_index) |font_index| {
-            _ = try appendCascadeRun(cascade.fonts[font_index], metrics_cache, glyph_index_cache, font_index, buffer, text[segment_start..], font_size, segment_start, pen_x, lookupOptionsForText(text[segment_start..], options));
+            _ = try appendCascadeRun(
+                cascade.fonts[font_index],
+                metrics_cache,
+                glyph_index_cache,
+                font_index,
+                buffer,
+                text[segment_start..],
+                font_size,
+                segment_start,
+                .{ .x = pen_x, .y = pen_y },
+                lookupOptionsForText(text[segment_start..], options),
+            );
         }
 
         try applyBidiVisualOrder(buffer, text, options.direction, null);
@@ -1083,33 +1160,39 @@ fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []cons
     const script_runs = try unicode.itemizeScriptRuns(buffer.allocator, text);
     defer buffer.allocator.free(script_runs);
 
-    var pen_x: f32 = 0;
+    var pen = PenPosition{};
     for (script_runs) |script_run| {
         const run_text = text[script_run.byte_start .. script_run.byte_start + script_run.byte_len];
-        pen_x = try shapeCascadeSegmentInto(
+        pen = try shapeCascadeSegmentInto(
             cascade,
             buffer,
             run_text,
             font_size,
             script_run.byte_start,
-            pen_x,
+            pen,
             .{
                 .script_tag = unicode.openTypeScriptTag(script_run.script),
                 .language_tag = effectiveLanguageTag(run_text, options),
                 .features = options.features,
+                .writing_mode = options.writing_mode,
             },
         );
     }
 }
 
-fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen_x: f32, lookup_options: LookupOptions) !f32 {
+const PenPosition = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+};
+
+fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: LookupOptions) !PenPosition {
     // Script itemization happens outside this helper. This pass only performs
     // fallback segmentation inside that script run, so each append keeps the
     // same OpenType script/language lookup selection.
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     var segment_start: usize = 0;
     var segment_font_index: ?usize = null;
-    var next_pen_x = pen_x;
+    var next_pen = pen;
 
     while (it.i < text.len) {
         const cluster = it.i;
@@ -1124,16 +1207,16 @@ fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []
             segment_start = cluster;
             segment_font_index = font_index;
         } else if (segment_font_index.? != font_index) {
-            next_pen_x = try appendCascadeRun(cascade.fonts[segment_font_index.?], null, null, segment_font_index.?, buffer, text[segment_start..cluster], font_size, cluster_base + segment_start, next_pen_x, lookup_options);
+            next_pen = try appendCascadeRun(cascade.fonts[segment_font_index.?], null, null, segment_font_index.?, buffer, text[segment_start..cluster], font_size, cluster_base + segment_start, next_pen, lookup_options);
             segment_start = cluster;
             segment_font_index = font_index;
         }
     }
 
     if (segment_font_index) |font_index| {
-        next_pen_x = try appendCascadeRun(cascade.fonts[font_index], null, null, font_index, buffer, text[segment_start..], font_size, cluster_base + segment_start, next_pen_x, lookup_options);
+        next_pen = try appendCascadeRun(cascade.fonts[font_index], null, null, font_index, buffer, text[segment_start..], font_size, cluster_base + segment_start, next_pen, lookup_options);
     }
-    return next_pen_x;
+    return next_pen;
 }
 
 fn nextVariationSelector(text: []const u8, byte_index: usize) ?u21 {
@@ -1348,6 +1431,7 @@ fn rebuildRunsForVisualGlyphs(buffer: *LayoutBuffer, old_runs: []const CascadeRu
             .glyph_start = start,
             .glyph_len = i - start,
             .x_offset = 0,
+            .y_offset = 0,
         });
         if (i < visual_run_indices.len) {
             start = i;
@@ -1358,9 +1442,14 @@ fn rebuildRunsForVisualGlyphs(buffer: *LayoutBuffer, old_runs: []const CascadeRu
 
 fn recomputeRunOffsets(buffer: *LayoutBuffer) void {
     var x_offset: f32 = 0;
+    var y_offset: f32 = 0;
     for (buffer.runs.items) |*run| {
         run.x_offset = x_offset;
-        x_offset += lineWidth(buffer.glyphs.items[run.glyph_start .. run.glyph_start + run.glyph_len]);
+        run.y_offset = y_offset;
+        for (buffer.glyphs.items[run.glyph_start .. run.glyph_start + run.glyph_len]) |glyph| {
+            x_offset += glyph.x_advance;
+            y_offset += glyph.y_advance;
+        }
     }
 }
 
@@ -1742,7 +1831,7 @@ fn metricsForLineHeight(default_metrics: BaselineMetrics, line_height: f32) Base
     };
 }
 
-fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, font_index: usize, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen_x: f32, lookup_options: LookupOptions) !f32 {
+fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, font_index: usize, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: LookupOptions) !PenPosition {
     const glyph_start = buffer.glyphs.items.len;
     try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, cluster_base, lookup_options);
     const glyph_len = buffer.glyphs.items.len - glyph_start;
@@ -1752,17 +1841,22 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .font_size = font_size,
         .glyph_start = glyph_start,
         .glyph_len = glyph_len,
-        .x_offset = pen_x,
+        .x_offset = pen.x,
+        .y_offset = pen.y,
     });
-    var next_pen_x = pen_x;
-    for (buffer.glyphs.items[glyph_start..]) |glyph| next_pen_x += glyph.x_advance;
-    return next_pen_x;
+    var next_pen = pen;
+    for (buffer.glyphs.items[glyph_start..]) |glyph| {
+        next_pen.x += glyph.x_advance;
+        next_pen.y += glyph.y_advance;
+    }
+    return next_pen;
 }
 
 const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     features: []const unicode.FeatureOverride = &.{},
+    writing_mode: WritingMode = .horizontal_tb,
 };
 
 fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
@@ -1770,6 +1864,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
         .script_tag = effectiveScriptTag(text, options),
         .language_tag = effectiveLanguageTag(text, options),
         .features = options.features,
+        .writing_mode = options.writing_mode,
     };
 }
 
@@ -1793,6 +1888,7 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
 
 fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
     return a.direction == b.direction and
+        a.writing_mode == b.writing_mode and
         a.script_tag == b.script_tag and
         a.language_tag == b.language_tag and
         a.feature_hash == b.feature_hash;
@@ -1878,6 +1974,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
+        .vertical = lookup_options.writing_mode.isVertical(),
         .apply_all_if_unselected = false,
         .glyph_source_indices = &glyph_source_indices,
         .ligature_components = &ligature_components,
@@ -1944,12 +2041,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             SourceSpan{ .start = cluster_base, .end = cluster_base };
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
         const glyph_class = font.glyphClass(glyph_id) catch .unclassified;
-        if (previous_glyph) |previous| {
-            const previous_adjustment = findAdjustment(gpos_adjustments.items, index - 1);
-            if (!previous_adjustment.pair_positioned) {
-                const kern = try font.kerning(previous, glyph_id);
-                if (kern != 0 and buffer.glyphs.items.len > 0) {
-                    buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern)) * scale;
+        if (!lookup_options.writing_mode.isVertical()) {
+            if (previous_glyph) |previous| {
+                const previous_adjustment = findAdjustment(gpos_adjustments.items, index - 1);
+                if (!previous_adjustment.pair_positioned) {
+                    const kern = try font.kerning(previous, glyph_id);
+                    if (kern != 0 and buffer.glyphs.items.len > 0) {
+                        buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern)) * scale;
+                    }
                 }
             }
         }
@@ -1972,14 +2071,35 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             adjustment_x_advance = -@as(f32, @floatFromInt(metrics.advance_width));
         }
         const base_advance = if (glyph_class == .mark and !adjustment.mark_attachment) 0 else metrics.advance_width;
+        const vertical_metrics = if (lookup_options.writing_mode.isVertical())
+            try verticalMetricsWithOptionalCache(font, metrics_cache, glyph_id)
+        else
+            null;
+        const vertical_advance = if (vertical_metrics) |value|
+            @as(f32, @floatFromInt(value.advance_height)) * scale
+        else
+            font_size;
+        const vertical_x_offset = if (vertical_metrics) |_|
+            // OpenType's synthesized vertical origin is centered in the
+            // horizontal advance box. This keeps upright ideographs centered
+            // on the column without rotating the entire run.
+            (@as(f32, @floatFromInt(metrics.advance_width)) * 0.5) * scale
+        else
+            0.0;
+        const vertical_y_offset = if (vertical_metrics) |value|
+            @as(f32, @floatFromInt(value.top_side_bearing)) * scale
+        else
+            0.0;
         try buffer.glyphs.append(buffer.allocator, .{
             .glyph_id = glyph_id,
             .codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index],
             .cluster = source_span.start,
             .source_byte_len = source_span.end - source_span.start,
-            .x_advance = (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale,
-            .x_offset = x_offset,
-            .y_offset = @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
+            .x_advance = if (lookup_options.writing_mode.isVertical()) 0.0 else (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale,
+            .y_advance = if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
+            .x_offset = if (lookup_options.writing_mode.isVertical()) vertical_x_offset + @as(f32, @floatFromInt(adjustment.x_placement)) * scale else x_offset,
+            .y_offset = if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale else @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
+            .vertical = lookup_options.writing_mode.isVertical(),
         });
         previous_glyph = glyph_id;
     }
@@ -2085,6 +2205,95 @@ fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCa
         .advance_width = raw.advance_width,
         .left_side_bearing = raw.left_side_bearing,
     };
+}
+
+fn verticalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId) !?VerticalGlyphMetrics {
+    if (cache) |metrics_cache| return try metrics_cache.verticalMetrics(font, glyph_id);
+    const raw = try font.verticalMetrics(glyph_id);
+    return if (raw) |value| .{
+        .advance_height = value.advance_height,
+        .top_side_bearing = value.top_side_bearing,
+    } else null;
+}
+
+test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVerticalMetricsTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const horizontal = try TextShaper.shapeUtf8(&font, &buffer, "AA", 20);
+    try std.testing.expect(horizontal.width() > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), horizontal.height(), 0.001);
+    try std.testing.expect(!horizontal.glyphs[0].vertical);
+
+    const vertical = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "AA",
+        20,
+        .{ .writing_mode = .vertical_rl },
+    );
+    try std.testing.expectEqual(@as(usize, 2), vertical.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), vertical.height(), 0.001);
+    for (vertical.glyphs) |glyph| {
+        try std.testing.expect(glyph.vertical);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), glyph.x_advance, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, 20), glyph.y_advance, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, 8), glyph.x_offset, 0.001);
+    }
+}
+
+test "vertical shaped cache and fallback runs preserve independent y pens" {
+    const test_font = @import("test_font.zig");
+    const primary_bytes = try test_font.buildVerticalMetricsTtf(std.testing.allocator);
+    defer std.testing.allocator.free(primary_bytes);
+    const fallback_bytes = try test_font.buildVerticalMetricsTtf(std.testing.allocator);
+    defer std.testing.allocator.free(fallback_bytes);
+    var primary = try Font.parse(std.testing.allocator, primary_bytes);
+    defer primary.deinit();
+    var fallback = try Font.parse(std.testing.allocator, fallback_bytes);
+    defer fallback.deinit();
+
+    const fonts = [_]*const Font{ &primary, &fallback };
+    const cascade = FontCascade.init(&fonts);
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+    var cache = ShapedRunCache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const horizontal = try TextShaper.shapeUtf8CascadeWithCaches(
+        cascade,
+        null,
+        null,
+        null,
+        &cache,
+        &buffer,
+        "AA",
+        20,
+        .{},
+    );
+    try std.testing.expect(horizontal.width() > 0);
+    const vertical = try TextShaper.shapeUtf8CascadeWithCaches(
+        cascade,
+        null,
+        null,
+        null,
+        &cache,
+        &buffer,
+        "AA",
+        20,
+        .{ .writing_mode = .vertical_lr },
+    );
+    try std.testing.expectApproxEqAbs(@as(f32, 40), vertical.height(), 0.001);
+    try std.testing.expectEqual(@as(usize, 2), cache.entries.items.len);
+    try std.testing.expectEqual(WritingMode.horizontal_tb, cache.entries.items[0].key.plan.writing_mode);
+    try std.testing.expectEqual(WritingMode.vertical_lr, cache.entries.items[1].key.plan.writing_mode);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.runs[0].y_offset, 0.001);
 }
 
 fn findAdjustment(adjustments: []const gpos.Adjustment, index: usize) gpos.Adjustment {

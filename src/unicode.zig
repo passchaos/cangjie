@@ -115,6 +115,66 @@ pub const JoiningForm = enum {
     final,
 };
 
+pub const VerticalOrientation = enum {
+    upright,
+    rotated,
+    transformed_upright,
+    transformed_rotated,
+};
+
+/// Compact UAX #50 classifier for the script families and punctuation used by
+/// desktop UI text. The default is Rotated, while ideographic/kana/hangul,
+/// fullwidth, emoji, and vertical-form ranges stay upright. Transformable CJK
+/// punctuation is separated so `vert`/`vrt2` can select its vertical glyph.
+pub fn verticalOrientationForCodepoint(codepoint: u21) VerticalOrientation {
+    if (codepoint == 0x3001 or codepoint == 0x3002 or
+        codepoint == 0xFF01 or codepoint == 0xFF0C or
+        codepoint == 0xFF0E or codepoint == 0xFF1F)
+    {
+        return .transformed_upright;
+    }
+    if ((codepoint >= 0x3008 and codepoint <= 0x301F) or
+        codepoint == 0x3030 or codepoint == 0x30A0 or
+        codepoint == 0x30FC or
+        (codepoint >= 0xFE59 and codepoint <= 0xFE5E) or
+        codepoint == 0xFF08 or codepoint == 0xFF09 or
+        (codepoint >= 0xFF1A and codepoint <= 0xFF1B) or
+        codepoint == 0xFF3B or codepoint == 0xFF3D or
+        (codepoint >= 0xFF5B and codepoint <= 0xFF60))
+    {
+        return .transformed_rotated;
+    }
+
+    const script = scriptForCodepoint(codepoint);
+    if (script == .han or script == .hiragana or script == .katakana or
+        script == .hangul or script == .yi or script == .nushu or
+        script == .canadian_aboriginal)
+    {
+        return .upright;
+    }
+    if ((codepoint >= 0x2E80 and codepoint <= 0xA4CF) or
+        (codepoint >= 0xAC00 and codepoint <= 0xD7FF) or
+        (codepoint >= 0xE000 and codepoint <= 0xFAFF) or
+        (codepoint >= 0xFE10 and codepoint <= 0xFE48) or
+        (codepoint >= 0xFF01 and codepoint <= 0xFF60) or
+        (codepoint >= 0xFFE0 and codepoint <= 0xFFE7) or
+        (codepoint >= 0x1F000 and codepoint <= 0x1FAFF) or
+        (codepoint >= 0x20000 and codepoint <= 0x3FFFD))
+    {
+        return .upright;
+    }
+    return .rotated;
+}
+
+test "vertical orientation distinguishes upright scripts rotated Latin and transformed punctuation" {
+    try std.testing.expectEqual(VerticalOrientation.upright, verticalOrientationForCodepoint('中'));
+    try std.testing.expectEqual(VerticalOrientation.upright, verticalOrientationForCodepoint('あ'));
+    try std.testing.expectEqual(VerticalOrientation.upright, verticalOrientationForCodepoint(0x1F600));
+    try std.testing.expectEqual(VerticalOrientation.rotated, verticalOrientationForCodepoint('A'));
+    try std.testing.expectEqual(VerticalOrientation.transformed_upright, verticalOrientationForCodepoint(0x3001));
+    try std.testing.expectEqual(VerticalOrientation.transformed_rotated, verticalOrientationForCodepoint(0x3008));
+}
+
 const JoiningTypeRange = struct {
     first: u21,
     last: u21,

@@ -4,6 +4,7 @@ const cangjie = @import("cangjie");
 
 const system_font_path = "/System/Library/Fonts/SFNSMono.ttf";
 const linux_noto_sans_arabic_path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf";
+const linux_noto_sans_cjk_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc";
 const known_sfns_mono_sha256 = hexToBytes("55caaed55254a28ac793847e8976be16c5ba7cbad1ec2ee2d5d86d4e6b3fa0c1");
 const known_raster_sha256 = hexToBytes("34a1bfb1a733fcdd75878af95959d4341557f9991b94ae29110429a6fc5d20b2");
 
@@ -101,6 +102,48 @@ test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
     try std.testing.expect(stats.covered > 100);
     try std.testing.expect(stats.coverage_sum > 1000);
     try std.testing.expect(stats.bounds != null);
+}
+
+test "Linux Noto Sans CJK vertical shaping uses real vert substitutions and vmtx" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const font_bytes = std.Io.Dir.cwd().readFileAlloc(std.testing.io, linux_noto_sans_cjk_path, allocator, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(font_bytes);
+
+    var font = try cangjie.Font.parseFace(allocator, font_bytes, 2); // Noto Sans CJK SC.
+    defer font.deinit();
+    try std.testing.expect(font.hasVerticalMetrics());
+
+    var layout_buffer = cangjie.LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const horizontal = try cangjie.TextShaper.shapeUtf8(&font, &layout_buffer, "中、（", 32);
+    var horizontal_ids: [3]cangjie.GlyphId = undefined;
+    for (horizontal.glyphs, &horizontal_ids) |glyph, *id| id.* = glyph.glyph_id;
+
+    const vertical = try cangjie.TextShaper.shapeUtf8WithOptions(
+        &font,
+        &layout_buffer,
+        "中、（",
+        32,
+        .{ .writing_mode = .vertical_rl },
+    );
+    try std.testing.expectEqual(@as(usize, 3), vertical.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 96), vertical.height(), 0.01);
+    // Ideographs stay on the base glyph while punctuation uses the font's
+    // real vertical alternates selected through vert/vrt2.
+    try std.testing.expectEqual(horizontal_ids[0], vertical.glyphs[0].glyph_id);
+    try std.testing.expect(horizontal_ids[1] != vertical.glyphs[1].glyph_id);
+    try std.testing.expect(horizontal_ids[2] != vertical.glyphs[2].glyph_id);
+    for (vertical.glyphs) |glyph| {
+        try std.testing.expect(glyph.vertical);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), glyph.x_advance, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, 32), glyph.y_advance, 0.01);
+    }
 }
 
 const RasterBounds = struct {

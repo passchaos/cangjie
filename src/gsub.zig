@@ -34,6 +34,7 @@ pub const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     features: []const unicode.FeatureOverride = &.{},
+    vertical: bool = false,
     apply_all_if_unselected: bool = true,
     glyph_classes: ?[]const u16 = null,
     mark_attach_classes: ?[]const u16 = null,
@@ -295,7 +296,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
         // LangSys.ReqFeatureIndex is an OpenType contract: the feature is
         // necessary for that script/language system and must be applied even
         // when its tag is normally optional or an override disables that tag.
-        if (!selection.required and !featureEnabled(feature_tag, options.features)) continue;
+        if (!selection.required and !featureEnabled(feature_tag, options.features, options.vertical)) continue;
         const feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
         const lookup_index_count = try readU16(table, feature_offset + 2);
         for (0..lookup_index_count) |i| {
@@ -307,11 +308,12 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     return lookups;
 }
 
-fn featureEnabled(feature_tag: u32, overrides: []const unicode.FeatureOverride) bool {
+fn featureEnabled(feature_tag: u32, overrides: []const unicode.FeatureOverride, vertical: bool) bool {
     for (overrides) |override| {
         if (override.tag == feature_tag) return override.enabled;
     }
-    return defaultFeatureEnabled(feature_tag);
+    return defaultFeatureEnabled(feature_tag) or
+        (vertical and (feature_tag == unicode.tag("vert") or feature_tag == unicode.tag("vrt2")));
 }
 
 fn defaultFeatureEnabled(feature_tag: u32) bool {

@@ -2208,8 +2208,20 @@ fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCa
 }
 
 fn verticalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId) !?VerticalGlyphMetrics {
-    if (cache) |metrics_cache| return try metrics_cache.verticalMetrics(font, glyph_id);
-    const raw = try font.verticalMetrics(glyph_id);
+    if (cache) |metrics_cache| {
+        return metrics_cache.verticalMetrics(font, glyph_id) catch |err| switch (err) {
+            // Some deployed CJK fonts advertise optional vhea/vmtx tables with
+            // unusable header line metrics. Vertical shaping must still retain
+            // its y-axis contract and vert substitutions; fall back to one em
+            // advance instead of abandoning shaping and rendering horizontally.
+            error.InvalidMetrics => null,
+            else => return err,
+        };
+    }
+    const raw = font.verticalMetrics(glyph_id) catch |err| switch (err) {
+        error.InvalidMetrics => null,
+        else => return err,
+    };
     return if (raw) |value| .{
         .advance_height = value.advance_height,
         .top_side_bearing = value.top_side_bearing,

@@ -702,6 +702,46 @@ pub const MissingGlyphDiagnostic = struct {
     glyph_id: GlyphId,
 };
 
+/// Per-font-run quality details for a shaped UTF-8 pass.
+///
+/// The byte range is derived from glyph source spans instead of fallback
+/// decisions so it also tracks future GSUB ligatures and multi-scalar clusters.
+/// This gives regression tests a stable way to answer "which fallback run
+/// produced the bad glyphs?" without depending on renderer draw commands.
+pub const ShapeQualityFontRunDiagnostic = struct {
+    font_index: usize,
+    glyph_start: usize,
+    glyph_len: usize,
+    byte_start: usize,
+    byte_len: usize,
+    missing_glyph_count: usize,
+    zero_advance_glyph_count: usize,
+    horizontal_advance: f32,
+    vertical_advance: f32,
+};
+
+/// Per-script quality details for a shaped UTF-8 pass.
+///
+/// Script runs are the OpenType lookup boundary used by Cangjie shaping.
+/// Reporting the effective script/language tags next to coverage counters makes
+/// script itemization and fallback splits auditable in headless CI, similar to
+/// the diagnostics exposed by mature text stacks.
+pub const ShapeQualityScriptRunDiagnostic = struct {
+    script: unicode.Script,
+    script_tag: unicode.OpenTypeScriptTag,
+    language_tag: unicode.OpenTypeLanguageTag,
+    glyph_start: usize,
+    glyph_len: usize,
+    byte_start: usize,
+    byte_len: usize,
+    font_run_count: usize,
+    missing_glyph_count: usize,
+    fallback_glyph_count: usize,
+    zero_advance_glyph_count: usize,
+    horizontal_advance: f32,
+    vertical_advance: f32,
+};
+
 /// Headless quality summary for one UTF-8 shaping pass.
 ///
 /// Cangjie uses this as a small, deterministic contract for regression tests
@@ -718,8 +758,12 @@ pub const ShapeQualityReport = struct {
     horizontal_advance: f32,
     vertical_advance: f32,
     missing_glyphs: []MissingGlyphDiagnostic,
+    font_runs: []ShapeQualityFontRunDiagnostic,
+    script_runs: []ShapeQualityScriptRunDiagnostic,
 
     pub fn deinit(self: *ShapeQualityReport, allocator: std.mem.Allocator) void {
+        allocator.free(self.script_runs);
+        allocator.free(self.font_runs);
         allocator.free(self.missing_glyphs);
         self.* = undefined;
     }
@@ -807,12 +851,16 @@ pub fn diagnoseShapeQualityUtf8(
     var buffer = LayoutBuffer.init(allocator);
     defer buffer.deinit();
 
-    const shaped = try TextShaper.shapeUtf8CascadeWithOptions(cascade, &buffer, text, font_size, options);
+    const scripted = try TextShaper.shapeUtf8ScriptRuns(cascade, &buffer, text, font_size, options);
     const fallback = try diagnoseFontFallbackUtf8(allocator, cascade, text);
     defer allocator.free(fallback);
 
     var missing = std.ArrayList(MissingGlyphDiagnostic).empty;
     errdefer missing.deinit(allocator);
+    var font_run_diagnostics = std.ArrayList(ShapeQualityFontRunDiagnostic).empty;
+    errdefer font_run_diagnostics.deinit(allocator);
+    var script_run_diagnostics = std.ArrayList(ShapeQualityScriptRunDiagnostic).empty;
+    errdefer script_run_diagnostics.deinit(allocator);
 
     var variation_selector_count: usize = 0;
     for (fallback) |decision| {
@@ -829,23 +877,32 @@ pub fn diagnoseShapeQualityUtf8(
     }
 
     var fallback_glyph_count: usize = 0;
-    for (shaped.runs) |run| {
+    for (scripted.font_runs) |run| {
         if (run.font_index != 0) fallback_glyph_count += run.glyph_len;
+        try font_run_diagnostics.append(allocator, fontRunQualityDiagnostic(run, scripted.glyphs));
     }
 
     var zero_advance_glyph_count: usize = 0;
     var horizontal_advance: f32 = 0;
     var vertical_advance: f32 = 0;
-    for (shaped.glyphs) |glyph| {
+    for (scripted.glyphs) |glyph| {
         if (glyph.x_advance == 0 and glyph.y_advance == 0) zero_advance_glyph_count += 1;
         horizontal_advance += glyph.x_advance;
         vertical_advance += glyph.y_advance;
     }
 
+    for (scripted.script_runs) |script_run| {
+        try script_run_diagnostics.append(allocator, scriptRunQualityDiagnostic(script_run, scripted));
+    }
+
     const missing_glyphs = try missing.toOwnedSlice(allocator);
+    errdefer allocator.free(missing_glyphs);
+    const font_runs = try font_run_diagnostics.toOwnedSlice(allocator);
+    errdefer allocator.free(font_runs);
+    const script_runs = try script_run_diagnostics.toOwnedSlice(allocator);
     return .{
-        .glyph_count = shaped.glyphs.len,
-        .font_run_count = shaped.runs.len,
+        .glyph_count = scripted.glyphs.len,
+        .font_run_count = scripted.font_runs.len,
         .missing_glyph_count = missing_glyphs.len,
         .variation_selector_count = variation_selector_count,
         .fallback_glyph_count = fallback_glyph_count,
@@ -853,6 +910,86 @@ pub fn diagnoseShapeQualityUtf8(
         .horizontal_advance = horizontal_advance,
         .vertical_advance = vertical_advance,
         .missing_glyphs = missing_glyphs,
+        .font_runs = font_runs,
+        .script_runs = script_runs,
+    };
+}
+
+fn fontRunQualityDiagnostic(run: CascadeRun, glyphs: []const GlyphPosition) ShapeQualityFontRunDiagnostic {
+    const run_glyphs = glyphs[run.glyph_start .. run.glyph_start + run.glyph_len];
+    var byte_start: usize = 0;
+    var byte_end: usize = 0;
+    var missing_glyph_count: usize = 0;
+    var zero_advance_glyph_count: usize = 0;
+    var horizontal_advance: f32 = 0;
+    var vertical_advance: f32 = 0;
+
+    if (run_glyphs.len != 0) {
+        byte_start = run_glyphs[0].cluster;
+        byte_end = glyphSourceEnd(run_glyphs[0]);
+    }
+    for (run_glyphs) |glyph| {
+        byte_start = @min(byte_start, glyph.cluster);
+        byte_end = @max(byte_end, glyphSourceEnd(glyph));
+        if (glyph.glyph_id == 0) missing_glyph_count += 1;
+        if (glyph.x_advance == 0 and glyph.y_advance == 0) zero_advance_glyph_count += 1;
+        horizontal_advance += glyph.x_advance;
+        vertical_advance += glyph.y_advance;
+    }
+
+    return .{
+        .font_index = run.font_index,
+        .glyph_start = run.glyph_start,
+        .glyph_len = run.glyph_len,
+        .byte_start = byte_start,
+        .byte_len = byte_end - byte_start,
+        .missing_glyph_count = missing_glyph_count,
+        .zero_advance_glyph_count = zero_advance_glyph_count,
+        .horizontal_advance = horizontal_advance,
+        .vertical_advance = vertical_advance,
+    };
+}
+
+fn scriptRunQualityDiagnostic(run: ScriptedRun, scripted: ScriptedText) ShapeQualityScriptRunDiagnostic {
+    const glyph_end = run.glyph_start + run.glyph_len;
+    var font_run_count: usize = 0;
+    var missing_glyph_count: usize = 0;
+    var fallback_glyph_count: usize = 0;
+    var zero_advance_glyph_count: usize = 0;
+    var horizontal_advance: f32 = 0;
+    var vertical_advance: f32 = 0;
+
+    for (scripted.glyphs[run.glyph_start..glyph_end]) |glyph| {
+        if (glyph.glyph_id == 0) missing_glyph_count += 1;
+        if (glyph.x_advance == 0 and glyph.y_advance == 0) zero_advance_glyph_count += 1;
+        horizontal_advance += glyph.x_advance;
+        vertical_advance += glyph.y_advance;
+    }
+
+    for (scripted.font_runs) |font_run| {
+        const font_glyph_start = font_run.glyph_start;
+        const font_glyph_end = font_run.glyph_start + font_run.glyph_len;
+        const overlap_start = @max(run.glyph_start, font_glyph_start);
+        const overlap_end = @min(glyph_end, font_glyph_end);
+        if (overlap_start >= overlap_end) continue;
+        font_run_count += 1;
+        if (font_run.font_index != 0) fallback_glyph_count += overlap_end - overlap_start;
+    }
+
+    return .{
+        .script = run.script,
+        .script_tag = run.script_tag,
+        .language_tag = run.language_tag,
+        .glyph_start = run.glyph_start,
+        .glyph_len = run.glyph_len,
+        .byte_start = run.byte_start,
+        .byte_len = run.byte_len,
+        .font_run_count = font_run_count,
+        .missing_glyph_count = missing_glyph_count,
+        .fallback_glyph_count = fallback_glyph_count,
+        .zero_advance_glyph_count = zero_advance_glyph_count,
+        .horizontal_advance = horizontal_advance,
+        .vertical_advance = vertical_advance,
     };
 }
 
@@ -2506,8 +2643,81 @@ test "shape quality diagnostics summarize fallback coverage and missing glyphs" 
     try std.testing.expectEqual(@as(usize, 1), report.missing_glyphs[0].byte_len);
     try std.testing.expectEqual(@as(usize, 0), report.missing_glyphs[0].font_index);
     try std.testing.expectEqual(@as(GlyphId, 0), report.missing_glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 3), report.font_runs.len);
+    try std.testing.expectEqual(@as(usize, 2), report.script_runs.len);
+    var script_fallback_glyphs: usize = 0;
+    var script_missing_glyphs: usize = 0;
+    for (report.script_runs) |script_run| {
+        script_fallback_glyphs += script_run.fallback_glyph_count;
+        script_missing_glyphs += script_run.missing_glyph_count;
+    }
+    try std.testing.expectEqual(report.fallback_glyph_count, script_fallback_glyphs);
+    try std.testing.expectEqual(report.missing_glyph_count, script_missing_glyphs);
     try std.testing.expect(report.horizontal_advance > 0);
     try std.testing.expectApproxEqAbs(@as(f32, 0), report.vertical_advance, 0.001);
+}
+
+test "shape quality diagnostics expose per font and script run counters" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const latin_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 'A', "Latin", "Regular", "Latin Regular");
+    defer allocator.free(latin_bytes);
+    const greek_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(allocator, 0x03b2, "Greek", "Regular", "Greek Regular");
+    defer allocator.free(greek_bytes);
+
+    var latin = try Font.parse(allocator, latin_bytes);
+    defer latin.deinit();
+    var greek = try Font.parse(allocator, greek_bytes);
+    defer greek.deinit();
+
+    const fonts = [_]*const Font{ &latin, &greek };
+    const cascade = FontCascade.init(&fonts);
+
+    var report = try diagnoseShapeQualityUtf8(allocator, cascade, "AβZ", 20, .{});
+    defer report.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), report.glyph_count);
+    try std.testing.expectEqual(@as(usize, 3), report.font_runs.len);
+    try std.testing.expectEqual(@as(usize, 3), report.script_runs.len);
+    try std.testing.expectEqual(@as(usize, 1), report.fallback_glyph_count);
+    try std.testing.expectEqual(@as(usize, 1), report.missing_glyph_count);
+
+    try std.testing.expectEqual(@as(usize, 0), report.font_runs[0].font_index);
+    try std.testing.expectEqual(@as(usize, 0), report.font_runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 1), report.font_runs[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 0), report.font_runs[0].missing_glyph_count);
+
+    try std.testing.expectEqual(@as(usize, 1), report.font_runs[1].font_index);
+    try std.testing.expectEqual(@as(usize, 1), report.font_runs[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 2), report.font_runs[1].byte_len);
+    try std.testing.expectEqual(@as(usize, 0), report.font_runs[1].missing_glyph_count);
+
+    try std.testing.expectEqual(@as(usize, 0), report.font_runs[2].font_index);
+    try std.testing.expectEqual(@as(usize, 3), report.font_runs[2].byte_start);
+    try std.testing.expectEqual(@as(usize, 1), report.font_runs[2].byte_len);
+    try std.testing.expectEqual(@as(usize, 1), report.font_runs[2].missing_glyph_count);
+
+    try std.testing.expectEqual(unicode.Script.latin, report.script_runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), report.script_runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs[0].font_run_count);
+    try std.testing.expectEqual(@as(usize, 0), report.script_runs[0].fallback_glyph_count);
+    try std.testing.expectEqual(@as(usize, 0), report.script_runs[0].missing_glyph_count);
+
+    try std.testing.expectEqual(unicode.Script.greek, report.script_runs[1].script);
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 2), report.script_runs[1].byte_len);
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs[1].font_run_count);
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs[1].fallback_glyph_count);
+    try std.testing.expectEqual(@as(usize, 0), report.script_runs[1].missing_glyph_count);
+
+    try std.testing.expectEqual(unicode.Script.latin, report.script_runs[2].script);
+    try std.testing.expectEqual(@as(usize, 3), report.script_runs[2].byte_start);
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs[2].byte_len);
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs[2].font_run_count);
+    try std.testing.expectEqual(@as(usize, 0), report.script_runs[2].fallback_glyph_count);
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs[2].missing_glyph_count);
 }
 
 test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {

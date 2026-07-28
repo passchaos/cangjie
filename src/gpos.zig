@@ -128,10 +128,18 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    for (0..lookup_count) |i| {
-        if (selected_lookups.items.len != 0 and !containsLookup(selected_lookups.items, @intCast(i))) continue;
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
-        try collectLookup(table, lookup_offset, glyphs, adjustments, allocator, options);
+    if (selected_lookups.items.len != 0) {
+        std.sort.heap(u16, selected_lookups.items, {}, lookupIndexLessThan);
+        for (selected_lookups.items) |lookup_index| {
+            if (lookup_index >= lookup_count) continue;
+            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+            try collectLookup(table, lookup_offset, glyphs, adjustments, allocator, options);
+        }
+    } else {
+        for (0..lookup_count) |i| {
+            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
+            try collectLookup(table, lookup_offset, glyphs, adjustments, allocator, options);
+        }
     }
 }
 
@@ -234,6 +242,10 @@ fn appendFeatureSelection(feature_indices: *std.ArrayList(FeatureSelection), all
         return;
     }
     try feature_indices.append(allocator, .{ .index = index, .required = required });
+}
+
+fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
+    return lhs < rhs;
 }
 
 fn containsLookup(items: []const u16, needle: u16) bool {

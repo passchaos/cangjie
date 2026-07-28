@@ -815,11 +815,7 @@ pub const Font = struct {
             try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
             const classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(classes);
-            for (classes, 0..) |*class, glyph_id| {
-                const value = try classDefValue(table, glyph_class_def_offset, @intCast(glyph_id));
-                try validateGlyphClassValue(value);
-                class.* = value;
-            }
+            try readClassDefDense(table, glyph_class_def_offset, self.glyph_count, classes, true);
             metadata.glyph_classes = classes;
         }
 
@@ -828,9 +824,7 @@ pub const Font = struct {
             try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
             const attach_classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(attach_classes);
-            for (attach_classes, 0..) |*class, glyph_id| {
-                class.* = try classDefValue(table, mark_attach_class_def_offset, @intCast(glyph_id));
-            }
+            try readClassDefDense(table, mark_attach_class_def_offset, self.glyph_count, attach_classes, false);
             metadata.mark_attach_classes = attach_classes;
         }
 
@@ -4458,6 +4452,59 @@ fn classDefValue(data: []const u8, offset: usize, glyph_id: glyph_mod.GlyphId) F
                 if (glyph_id >= start and glyph_id <= end) return class;
             }
             return 0;
+        },
+        else => return error.BadSfnt,
+    }
+}
+
+fn readClassDefDense(data: []const u8, offset: usize, glyph_count: u16, out: []u16, comptime validate_glyph_class_values: bool) FontError!void {
+    if (out.len != glyph_count) return error.BadSfnt;
+    @memset(out, 0);
+
+    if (offset + 2 > data.len) return error.BadSfnt;
+    const format = try bin.readU16At(data, offset);
+    switch (format) {
+        1 => {
+            if (offset + 6 > data.len) return error.BadSfnt;
+            const start_glyph = try bin.readU16At(data, offset + 2);
+            const count = try bin.readU16At(data, offset + 4);
+            if (@as(usize, count) * 2 > data.len - (offset + 6)) return error.BadSfnt;
+            if (count == 0) return;
+            if (start_glyph >= glyph_count) return error.BadSfnt;
+            if (@as(usize, count) > @as(usize, glyph_count - start_glyph)) return error.BadSfnt;
+
+            const dst_start: usize = start_glyph;
+            for (out[dst_start .. dst_start + count], 0..) |*class, index| {
+                const value = try bin.readU16At(data, offset + 6 + index * 2);
+                if (validate_glyph_class_values) try validateGlyphClassValue(value);
+                class.* = value;
+            }
+        },
+        2 => {
+            if (offset + 4 > data.len) return error.BadSfnt;
+            const range_count = try bin.readU16At(data, offset + 2);
+            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
+
+            var previous_end: ?glyph_mod.GlyphId = null;
+            for (0..range_count) |index| {
+                const range_offset = offset + 4 + index * 6;
+                const start = try bin.readU16At(data, range_offset);
+                const end = try bin.readU16At(data, range_offset + 2);
+                const class = try bin.readU16At(data, range_offset + 4);
+                if (end < start) return error.BadSfnt;
+                if (previous_end) |last_end| {
+                    if (start <= last_end) return error.BadSfnt;
+                }
+                if (end >= glyph_count) return error.BadSfnt;
+                if (validate_glyph_class_values) try validateGlyphClassValue(class);
+
+                // The shaping hot path wants glyph-id indexed metadata, not
+                // repeated ClassDef interpretation. Fill each canonical range
+                // once here so GSUB/GPOS lookup-flag filtering becomes a
+                // branch-light slice lookup.
+                @memset(out[@as(usize, start) .. @as(usize, end) + 1], class);
+                previous_end = end;
+            }
         },
         else => return error.BadSfnt,
     }
@@ -9028,6 +9075,45 @@ test "GDEF ClassDef format 2 rejects overlapping and reversed ranges" {
 
     writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
     try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 18));
+}
+
+test "GDEF dense ClassDef reader fills glyph-indexed metadata" {
+    var format1: [12]u8 = .{0} ** 12;
+    writeU16Test(&format1, 0, 1); // ClassDef format 1.
+    writeU16Test(&format1, 2, 2); // startGlyphID.
+    writeU16Test(&format1, 4, 3); // glyphCount.
+    writeU16Test(&format1, 6, @intFromEnum(GlyphClass.base));
+    writeU16Test(&format1, 8, @intFromEnum(GlyphClass.mark));
+    writeU16Test(&format1, 10, @intFromEnum(GlyphClass.component));
+
+    var dense1: [8]u16 = undefined;
+    try readClassDefDense(&format1, 0, @intCast(dense1.len), dense1[0..], true);
+    try std.testing.expectEqualSlices(u16, &.{
+        0,
+        0,
+        @intFromEnum(GlyphClass.base),
+        @intFromEnum(GlyphClass.mark),
+        @intFromEnum(GlyphClass.component),
+        0,
+        0,
+        0,
+    }, &dense1);
+
+    var format2: [16]u8 = .{0} ** 16;
+    writeU16Test(&format2, 0, 2); // ClassDef format 2.
+    writeU16Test(&format2, 2, 2); // Two ranges.
+    writeU16Test(&format2, 4, 1);
+    writeU16Test(&format2, 6, 3);
+    writeU16Test(&format2, 8, @intFromEnum(GlyphClass.ligature));
+    writeU16Test(&format2, 10, 5);
+    writeU16Test(&format2, 12, 5);
+    writeU16Test(&format2, 14, 7); // MarkAttachClassDef values are font-defined, not GlyphClass enum values.
+
+    var dense2: [8]u16 = undefined;
+    try readClassDefDense(&format2, 0, @intCast(dense2.len), dense2[0..], false);
+    try std.testing.expectEqualSlices(u16, &.{ 0, 2, 2, 2, 0, 7, 0, 0 }, &dense2);
+
+    try std.testing.expectError(error.BadSfnt, readClassDefDense(&format2, 0, @intCast(dense2.len), dense2[0..], true));
 }
 
 test "GDEF parse validation rejects class and mark-set glyph ids past maxp" {

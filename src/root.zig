@@ -793,6 +793,9 @@ test "detects bidi classes and itemizes bidi runs" {
     const number_visual = try visualOrderCodepoints(allocator, "א12ב", .rtl);
     defer allocator.free(number_visual);
     try std.testing.expectEqualSlices(u21, &.{ 0x05d1, '1', '2', 0x05d0 }, number_visual);
+    const neutral_before_number_visual = try visualOrderCodepoints(allocator, "א 12ב", .rtl);
+    defer allocator.free(neutral_before_number_visual);
+    try std.testing.expectEqualSlices(u21, &.{ 0x05d1, '1', '2', ' ', 0x05d0 }, neutral_before_number_visual);
 
     const neutral_prefix = try itemizeBidiRuns(allocator, "  ב", .rtl);
     defer allocator.free(neutral_prefix);
@@ -854,6 +857,14 @@ test "builds bidi logical visual maps" {
     try std.testing.expectEqual(@as(usize, 2), number_map.visualToLogical(2).?);
     try std.testing.expectEqual(@as(usize, 0), number_map.visualToLogical(3).?);
     try std.testing.expectEqual(BidiClass.number, number_map.items[1].direction);
+
+    var neutral_number_map = try buildBidiMap(allocator, "א 12ב", .rtl);
+    defer neutral_number_map.deinit();
+    try std.testing.expectEqual(@as(usize, 4), neutral_number_map.visualToLogical(0).?);
+    try std.testing.expectEqual(@as(usize, 2), neutral_number_map.visualToLogical(1).?);
+    try std.testing.expectEqual(@as(usize, 3), neutral_number_map.visualToLogical(2).?);
+    try std.testing.expectEqual(@as(usize, 1), neutral_number_map.visualToLogical(3).?);
+    try std.testing.expectEqual(@as(usize, 0), neutral_number_map.visualToLogical(4).?);
 
     try std.testing.expectError(error.InvalidUtf8, buildBidiMap(allocator, "ab\xffב", .ltr));
 }

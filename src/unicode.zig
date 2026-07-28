@@ -1683,14 +1683,21 @@ pub fn itemizeBidiRuns(allocator: std.mem.Allocator, text: []const u8, base_dire
         }
 
         if (current_direction.? == .rtl and bidi_class == .number) {
-            const split_at = neutral_start orelse cluster;
+            // In an RTL paragraph, whitespace between RTL text and a following
+            // number remains visually between those two runs.  If it is moved
+            // to the beginning of the number run, left-to-right materialization
+            // produces a leading blank before the digits, shifting the visible
+            // number/Arabic cluster away from native Pango/CoreText behavior.
+            // Keep the neutral span attached to the preceding RTL run so that
+            // reversing that run places the space after the digits instead.
+            const split_at = cluster;
             try runs.append(allocator, .{
                 .direction = current_direction.?,
                 .byte_start = run_start,
                 .byte_len = split_at - run_start,
             });
             current_direction = .number;
-            run_start = neutral_start orelse cluster;
+            run_start = cluster;
             run_end = next_index;
             neutral_start = null;
             continue;

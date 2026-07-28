@@ -90,7 +90,7 @@ test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
     for (run.glyphs, &actual_glyph_ids) |glyph, *actual| actual.* = glyph.glyph_id;
     try std.testing.expectEqualSlices(
         cangjie.GlyphId,
-        &.{ 3, 907, 1380, 1354, 770, 667, 47, 12, 667, 47, 102, 3, 47, 104, 417, 979, 771 },
+        &.{ 907, 1380, 1354, 3, 770, 667, 47, 12, 667, 47, 102, 3, 47, 104, 417, 979, 771 },
         &actual_glyph_ids,
     );
 

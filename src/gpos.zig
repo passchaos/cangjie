@@ -350,14 +350,37 @@ fn extensionPositionSubtablePayload(table: Table, subtable_offset: usize, expect
     return checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 }
 
+const stack_matched_capacity = 128;
+
+const BoolScratch = struct {
+    items: []bool,
+    heap: ?[]bool = null,
+
+    fn init(allocator: std.mem.Allocator, len: usize, stack: *[stack_matched_capacity]bool) (GposError || std.mem.Allocator.Error)!BoolScratch {
+        const items = if (len <= stack.len)
+            stack[0..len]
+        else {
+            const heap = try allocator.alloc(bool, len);
+            return .{ .items = heap, .heap = heap };
+        };
+        return .{ .items = items };
+    }
+
+    fn deinit(self: BoolScratch, allocator: std.mem.Allocator) void {
+        if (self.heap) |heap| allocator.free(heap);
+    }
+};
+
 fn collectExtensionSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     // Preserve SinglePos lookup ordering through ExtensionPos. Without a
     // lookup-level matched set, overlapping wrapped subtables would stack their
     // deltas even though OpenType treats subtables in one lookup as ordered
     // alternatives for each original glyph position.
     if (glyphs.len == 0) return;
-    const matched = try allocator.alloc(bool, glyphs.len);
-    defer allocator.free(matched);
+    var matched_stack: [stack_matched_capacity]bool = undefined;
+    const matched_scratch = try BoolScratch.init(allocator, glyphs.len, &matched_stack);
+    defer matched_scratch.deinit(allocator);
+    const matched = matched_scratch.items;
     @memset(matched, false);
 
     for (0..subtable_count) |subtable_i| {
@@ -386,12 +409,16 @@ fn collectExtensionAdjustmentLookup(table: Table, lookup_offset: usize, subtable
     // wrapped positioning kind still matters. In particular, two wrapped
     // PairPos subtables remain alternatives for the same first glyph even when
     // another wrapped type prevents the homogeneous fast path above.
-    const single_matched = try allocator.alloc(bool, glyphs.len);
-    defer allocator.free(single_matched);
+    var single_matched_stack: [stack_matched_capacity]bool = undefined;
+    const single_matched_scratch = try BoolScratch.init(allocator, glyphs.len, &single_matched_stack);
+    defer single_matched_scratch.deinit(allocator);
+    const single_matched = single_matched_scratch.items;
     @memset(single_matched, false);
 
-    const pair_matched = try allocator.alloc(bool, glyphs.len);
-    defer allocator.free(pair_matched);
+    var pair_matched_stack: [stack_matched_capacity]bool = undefined;
+    const pair_matched_scratch = try BoolScratch.init(allocator, glyphs.len, &pair_matched_stack);
+    defer pair_matched_scratch.deinit(allocator);
+    const pair_matched = pair_matched_scratch.items;
     @memset(pair_matched, false);
 
     for (0..subtable_count) |subtable_i| {
@@ -445,8 +472,10 @@ fn collectSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_co
     // which input positions have already matched so overlapping SinglePos
     // subtables do not accumulate deltas in the same lookup.
     if (glyphs.len == 0) return;
-    const matched = try allocator.alloc(bool, glyphs.len);
-    defer allocator.free(matched);
+    var matched_stack: [stack_matched_capacity]bool = undefined;
+    const matched_scratch = try BoolScratch.init(allocator, glyphs.len, &matched_stack);
+    defer matched_scratch.deinit(allocator);
+    const matched = matched_scratch.items;
     @memset(matched, false);
 
     for (0..subtable_count) |subtable_i| {

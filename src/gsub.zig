@@ -496,13 +496,36 @@ fn extensionSubtablePayload(table: Table, subtable_offset: usize, expected_looku
     return checkedExtensionSubtablePayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 }
 
+const stack_matched_capacity = 128;
+
+const BoolScratch = struct {
+    items: []bool,
+    heap: ?[]bool = null,
+
+    fn init(allocator: std.mem.Allocator, len: usize, stack: *[stack_matched_capacity]bool) (GsubError || std.mem.Allocator.Error)!BoolScratch {
+        const items = if (len <= stack.len)
+            stack[0..len]
+        else {
+            const heap = try allocator.alloc(bool, len);
+            return .{ .items = heap, .heap = heap };
+        };
+        return .{ .items = items };
+    }
+
+    fn deinit(self: BoolScratch, allocator: std.mem.Allocator) void {
+        if (self.heap) |heap| allocator.free(heap);
+    }
+};
+
 fn applyExtensionSingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     // ExtensionSubst only widens subtable offsets; homogeneous wrapped
     // SingleSubst subtables are still ordered alternatives within one lookup.
     // Track physical positions matched by earlier wrapped subtables so a
     // replacement glyph cannot cascade into a later ExtensionSubst wrapper.
-    const matched = try allocator.alloc(bool, glyphs.items.len);
-    defer allocator.free(matched);
+    var matched_stack: [stack_matched_capacity]bool = undefined;
+    const matched_scratch = try BoolScratch.init(allocator, glyphs.items.len, &matched_stack);
+    defer matched_scratch.deinit(allocator);
+    const matched = matched_scratch.items;
     @memset(matched, false);
 
     for (0..subtable_count) |i| {
@@ -517,8 +540,10 @@ fn applyAlternateSubstitutionLookup(table: Table, lookup_offset: usize, subtable
     // alternatives for each input position. A glyph chosen from an earlier
     // alternate set must not be reconsidered by later subtables in the same
     // lookup, even if that replacement glyph is covered there.
-    const matched = try allocator.alloc(bool, glyphs.items.len);
-    defer allocator.free(matched);
+    var matched_stack: [stack_matched_capacity]bool = undefined;
+    const matched_scratch = try BoolScratch.init(allocator, glyphs.items.len, &matched_stack);
+    defer matched_scratch.deinit(allocator);
+    const matched = matched_scratch.items;
     @memset(matched, false);
 
     for (0..subtable_count) |i| {
@@ -531,8 +556,10 @@ fn applyExtensionAlternateSubstitutionLookup(table: Table, lookup_offset: usize,
     // Match direct AlternateSubst lookup ordering through ExtensionSubst: the
     // chosen alternate for one original glyph is final for this lookup, even if
     // that alternate is covered by a later wrapped subtable.
-    const matched = try allocator.alloc(bool, glyphs.items.len);
-    defer allocator.free(matched);
+    var matched_stack: [stack_matched_capacity]bool = undefined;
+    const matched_scratch = try BoolScratch.init(allocator, glyphs.items.len, &matched_stack);
+    defer matched_scratch.deinit(allocator);
+    const matched = matched_scratch.items;
     @memset(matched, false);
 
     for (0..subtable_count) |i| {
@@ -603,8 +630,10 @@ fn applySingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_co
     // that matched an earlier SingleSubst subtable must not be fed into later
     // subtables in the same lookup; otherwise fonts that split disjoint rules
     // into subtables can accidentally cascade (for example 10->20 then 20->30).
-    const matched = try allocator.alloc(bool, glyphs.items.len);
-    defer allocator.free(matched);
+    var matched_stack: [stack_matched_capacity]bool = undefined;
+    const matched_scratch = try BoolScratch.init(allocator, glyphs.items.len, &matched_stack);
+    defer matched_scratch.deinit(allocator);
+    const matched = matched_scratch.items;
     @memset(matched, false);
 
     for (0..subtable_count) |i| {

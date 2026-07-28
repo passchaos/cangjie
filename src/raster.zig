@@ -450,7 +450,7 @@ pub const Rasterizer = struct {
     pub fn renderRun(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32) !void {
         var pen_x = x;
         for (run.glyphs) |position| {
-            var outline = try run.font.glyphOutline(self.allocator, position.glyph_id);
+            var outline = try run.font.glyphOutlineForRaster(self.allocator, position.glyph_id);
             defer outline.deinit();
             try self.renderGlyph(target, &outline, pen_x + position.x_offset, baseline_y + position.y_offset, run.font_size, run.font.units_per_em);
             pen_x += position.x_advance;
@@ -504,7 +504,7 @@ pub const Rasterizer = struct {
                     return;
                 }
             }
-            var outline = try font.glyphOutline(self.allocator, glyph_id);
+            var outline = try font.glyphOutlineForRaster(self.allocator, glyph_id);
             defer outline.deinit();
             var mask = try RenderTarget.init(self.allocator, target.width, target.height);
             defer mask.deinit();
@@ -515,7 +515,7 @@ pub const Rasterizer = struct {
 
         for (layers) |layer| {
             const color = (try font.paletteColor(palette_index, layer.palette_index)) orelse continue;
-            var outline = try font.glyphOutline(self.allocator, layer.glyph_id);
+            var outline = try font.glyphOutlineForRaster(self.allocator, layer.glyph_id);
             defer outline.deinit();
             var mask = try RenderTarget.init(self.allocator, target.width, target.height);
             defer mask.deinit();
@@ -539,7 +539,7 @@ pub const Rasterizer = struct {
 
     fn renderSolidPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, solid: font_mod.ColorPaint.Solid, font_size: f32, x: f32, baseline_y: f32, palette_index: u16) !void {
         const base_color = (try font.paletteColor(palette_index, solid.palette_index)) orelse return;
-        var outline = try font.glyphOutline(self.allocator, glyph_id);
+        var outline = try font.glyphOutlineForRaster(self.allocator, glyph_id);
         defer outline.deinit();
         var mask = try RenderTarget.init(self.allocator, target.width, target.height);
         defer mask.deinit();

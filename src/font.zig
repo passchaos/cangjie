@@ -1325,6 +1325,22 @@ pub const Font = struct {
                 max_component_depth,
             );
         }
+        return self.glyphOutlineFromParsedTables(allocator, glyph_id);
+    }
+
+    pub fn glyphOutlineForRaster(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        // Font.parse has already validated the table grammar and checksums.
+        // Rasterization is a hot path that can request dozens of outlines from
+        // the same immutable parsed font in one SVG/UI frame; revalidating the
+        // whole glyf/CFF table for every glyph makes real rendering do repeated
+        // document-level validation work. Keep `glyphOutline()` as the strict
+        // defensive API for callers that need post-parse mutation checks, and
+        // use this parsed-font fast path for normal rendering.
+        return self.glyphOutlineFromParsedTables(allocator, glyph_id);
+    }
+
+    fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
         const metrics = try self.horizontalMetrics(glyph_id);
         const bounds = if (self.format == .truetype)
             try self.glyphBounds(glyph_id)

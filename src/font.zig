@@ -165,6 +165,17 @@ const CmapSubtable = struct {
     format: u16,
 };
 
+pub const GdefGlyphClassReader = struct {
+    table: []const u8,
+    class_def_offset: usize,
+
+    pub fn glyphClass(self: GdefGlyphClassReader, glyph_id: glyph_mod.GlyphId) FontError!GlyphClass {
+        const value = try classDefValue(self.table, self.class_def_offset, glyph_id);
+        try validateGlyphClassValue(value);
+        return @enumFromInt(value);
+    }
+};
+
 const GdefLookupMetadata = struct {
     glyph_classes: ?[]u16 = null,
     mark_attach_classes: ?[]u16 = null,
@@ -848,6 +859,23 @@ pub const Font = struct {
 
     pub fn hasStyleAttributes(self: *const Font) bool {
         return self.os2 != null;
+    }
+
+    pub fn glyphClassReaderForShaping(self: *const Font) FontError!?GdefGlyphClassReader {
+        const gdef = self.gdef orelse return null;
+        // Shape finalization may inspect every glyph in the run. Validate the
+        // GDEF table once at the shaping boundary, then use the returned reader
+        // for cheap per-glyph ClassDef lookups. Standalone public glyphClass()
+        // remains deliberately defensive and revalidates for each call.
+        try validateSfntTableChecksum(self.data, gdef);
+        const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
+        const glyph_class_def_offset = try bin.readU16At(self.data, gdef.offset + 4);
+        if (glyph_class_def_offset == 0) return null;
+        try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
+        return .{
+            .table = self.data[gdef.offset .. gdef.offset + gdef.length],
+            .class_def_offset = glyph_class_def_offset,
+        };
     }
 
     /// Read the GDEF class definition for lookup-flag filtering.
@@ -8957,6 +8985,25 @@ test "ignores mark glyph filtering offset field before GDEF 1.2" {
     const font = gdefOnlyFont(&bytes);
     try std.testing.expectEqual(GlyphClass.mark, try font.glyphClass(3));
     try std.testing.expect((try font.markFilteringSets(std.testing.allocator)) == null);
+}
+
+test "GDEF glyph class reader validates once for shaping" {
+    var bytes: [32]u8 = .{0} ** 32;
+    writeU16Test(&bytes, 0, 1); // major
+    writeU16Test(&bytes, 2, 0); // minor
+    writeU16Test(&bytes, 4, 14); // GlyphClassDef offset.
+    writeU16Test(&bytes, 14, 1); // ClassDef format 1.
+    writeU16Test(&bytes, 16, 3); // startGlyphID
+    writeU16Test(&bytes, 18, 2); // glyphCount
+    writeU16Test(&bytes, 20, @intFromEnum(GlyphClass.mark));
+    writeU16Test(&bytes, 22, @intFromEnum(GlyphClass.ligature));
+
+    const font = gdefOnlyFont(&bytes);
+    const reader = (try font.glyphClassReaderForShaping()) orelse return error.TestExpectedGdefClasses;
+    try std.testing.expectEqual(GlyphClass.unclassified, try reader.glyphClass(2));
+    try std.testing.expectEqual(GlyphClass.mark, try reader.glyphClass(3));
+    try std.testing.expectEqual(GlyphClass.ligature, try reader.glyphClass(4));
+    try std.testing.expectEqual(GlyphClass.unclassified, try reader.glyphClass(5));
 }
 
 test "GDEF ClassDef format 1 validates upper glyph boundary without overflow" {

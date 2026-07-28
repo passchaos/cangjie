@@ -1,5 +1,7 @@
 const std = @import("std");
 const Font = @import("font.zig").Font;
+const GlyphClass = @import("font.zig").GlyphClass;
+const GdefGlyphClassReader = @import("font.zig").GdefGlyphClassReader;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
 const gsub = @import("gsub.zig");
@@ -2587,6 +2589,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .ligature_components = ligature_components.items,
     });
 
+    const glyph_class_reader = font.glyphClassReaderForShaping() catch null;
+
     // GPOS adjustments and legacy kern are accumulated in font units, then
     // scaled into user-space coordinates for the final GlyphPosition stream.
     var previous_glyph: ?GlyphId = null;
@@ -2598,7 +2602,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const source_span = sourceSpanForGlyph(index, source_index, clusters.items, source_ends.items, ligature_components.items) orelse
             SourceSpan{ .start = cluster_base, .end = cluster_base };
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
-        const glyph_class = font.glyphClass(glyph_id) catch .unclassified;
+        const glyph_class = glyphClassFromReader(glyph_class_reader, glyph_id);
         if (!lookup_options.writing_mode.isVertical()) {
             if (previous_glyph) |previous| {
                 const previous_adjustment = findAdjustment(gpos_adjustments.items, index - 1);
@@ -2667,6 +2671,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         });
         previous_glyph = glyph_id;
     }
+}
+
+fn glyphClassFromReader(reader: ?GdefGlyphClassReader, glyph_id: GlyphId) GlyphClass {
+    return if (reader) |value| value.glyphClass(glyph_id) catch .unclassified else .unclassified;
 }
 
 fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {

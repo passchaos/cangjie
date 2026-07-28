@@ -729,6 +729,17 @@ pub const Font = struct {
         const gsub = self.gsub orelse return;
         try validateSfntTableChecksum(self.data, gsub);
         try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
+        try self.applyGsubWithOptionsUsingGdefForShaping(glyphs, allocator, options, gdef_metadata);
+    }
+
+    pub fn applyGsubWithOptionsUsingGdefForShaping(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        try self.validateGlyphRun(glyphs.items);
+        const gsub = self.gsub orelse return;
+        // Font.parse already walked all supported GSUB glyph references. The
+        // layout hot path may shape many small runs from the same validated
+        // font, so repeat only the borrowed-table checksum proof here instead
+        // of rewalking every lookup for every text node.
+        try validateSfntTableChecksum(self.data, gsub);
         var gsub_options = options;
         gdef_metadata.applyToGsubOptions(&gsub_options);
         try gsub_mod.applyWithOptions(self.data, gsub.offset, gsub.length, glyphs, allocator, gsub_options);
@@ -757,6 +768,13 @@ pub const Font = struct {
         const gsub = self.gsub orelse return;
         try validateSfntTableChecksum(self.data, gsub);
         try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
+        try self.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyphs, allocator, options, gdef_metadata);
+    }
+
+    pub fn applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(self: *const Font, applications: []const gsub_mod.FeatureApplication, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        try self.validateGlyphRun(glyphs.items);
+        const gsub = self.gsub orelse return;
+        try validateSfntTableChecksum(self.data, gsub);
         var gsub_options = options;
         gdef_metadata.applyToGsubOptions(&gsub_options);
         try gsub_mod.applyFeatureSequenceWithOptions(self.data, gsub.offset, gsub.length, applications, glyphs, allocator, gsub_options);
@@ -788,6 +806,13 @@ pub const Font = struct {
         const gpos = self.gpos orelse return;
         try validateSfntTableChecksum(self.data, gpos);
         try gpos_mod.validateGlyphBounds(self.data, gpos.offset, gpos.length, self.glyph_count);
+        try self.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyphs, adjustments, allocator, options, gdef_metadata);
+    }
+
+    pub fn collectGposAdjustmentsWithOptionsUsingGdefForShaping(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        try self.validateGlyphRun(glyphs);
+        const gpos = self.gpos orelse return;
+        try validateSfntTableChecksum(self.data, gpos);
         var gpos_options = options;
         gdef_metadata.applyToGposOptions(&gpos_options);
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);

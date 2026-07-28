@@ -2599,9 +2599,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             applications_buf[application_count] = application;
             application_count += 1;
         }
-        try font.applyGsubFeatureSequenceWithOptionsUsingGdef(applications_buf[0..application_count], &glyph_ids, buffer.allocator, arabic_options, gdef_metadata);
+        try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], &glyph_ids, buffer.allocator, arabic_options, gdef_metadata);
     } else {
-        try font.applyGsubWithOptionsUsingGdef(&glyph_ids, buffer.allocator, gsub_options, gdef_metadata);
+        try font.applyGsubWithOptionsUsingGdefForShaping(&glyph_ids, buffer.allocator, gsub_options, gdef_metadata);
     }
 
     if (shape_profile) |p| p.gsub_ns += shapeProfileElapsed(gsub_start, profile_io);
@@ -2609,7 +2609,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     var gpos_adjustments = std.ArrayList(gpos.Adjustment).empty;
     defer gpos_adjustments.deinit(buffer.allocator);
     const gpos_start = shapeProfileNow(shape_profile, profile_io);
-    try font.collectGposAdjustmentsWithOptionsUsingGdef(glyph_ids.items, &gpos_adjustments, buffer.allocator, .{
+    try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyph_ids.items, &gpos_adjustments, buffer.allocator, .{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,

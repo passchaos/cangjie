@@ -578,6 +578,8 @@ pub const Rasterizer = struct {
         const row_width: usize = @intCast(row_width_i32);
         const coverage_counts = try self.allocator.alloc(u8, row_width);
         defer self.allocator.free(coverage_counts);
+        var prepared_lines = try prepareFillLines(self.allocator, lines);
+        defer prepared_lines.deinit(self.allocator);
         var intersections: std.ArrayList(WindingIntersection) = .empty;
         defer intersections.deinit(self.allocator);
 
@@ -588,16 +590,13 @@ pub const Rasterizer = struct {
             while (sy < sample_axis) : (sy += 1) {
                 const py = @as(f32, @floatFromInt(y)) + (@as(f32, @floatFromInt(sy)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
                 intersections.clearRetainingCapacity();
-                for (lines) |line| {
-                    if (!lineFinite(line)) continue;
-                    const ay = line.a.y;
-                    const by = line.b.y;
-                    if ((ay > py) == (by > py)) continue;
-                    const x_intersect = (line.b.x - line.a.x) * (py - ay) / (by - ay) + line.a.x;
+                for (prepared_lines.items) |line| {
+                    if ((line.ay > py) == (line.by > py)) continue;
+                    const x_intersect = line.dx * (py - line.ay) / line.dy + line.ax;
                     if (!std.math.isFinite(x_intersect)) continue;
                     try intersections.append(self.allocator, .{
                         .x = x_intersect,
-                        .delta = if (by > ay) 1 else -1,
+                        .delta = line.delta,
                     });
                 }
                 if (intersections.items.len < 2) continue;
@@ -690,6 +689,37 @@ const WindingIntersection = struct {
     x: f32,
     delta: i8,
 };
+
+const PreparedFillLine = struct {
+    ax: f32,
+    ay: f32,
+    by: f32,
+    dx: f32,
+    dy: f32,
+    delta: i8,
+};
+
+fn prepareFillLines(allocator: std.mem.Allocator, lines: []const Line) !std.ArrayList(PreparedFillLine) {
+    var prepared = try std.ArrayList(PreparedFillLine).initCapacity(allocator, lines.len);
+    errdefer prepared.deinit(allocator);
+    for (lines) |line| {
+        if (!lineFinite(line)) continue;
+        const dy = line.b.y - line.a.y;
+        // Horizontal edges never cross the half-open scanline test used by the
+        // rasterizer. Dropping them here keeps the hot sample loop focused on
+        // candidate edges while preserving the exact winding rule for all rows.
+        if (dy == 0.0) continue;
+        prepared.appendAssumeCapacity(.{
+            .ax = line.a.x,
+            .ay = line.a.y,
+            .by = line.b.y,
+            .dx = line.b.x - line.a.x,
+            .dy = dy,
+            .delta = if (dy > 0.0) 1 else -1,
+        });
+    }
+    return prepared;
+}
 
 const GlyphFillRule = enum {
     non_zero,

@@ -154,6 +154,7 @@ pub const ScriptedText = @import("layout.zig").ScriptedText;
 pub const TextAlign = @import("layout.zig").TextAlign;
 pub const TextCursorGeometry = @import("render_bridge.zig").TextCursorGeometry;
 pub const TextDirection = @import("layout.zig").TextDirection;
+pub const TextOrientation = @import("layout.zig").TextOrientation;
 pub const WritingMode = @import("layout.zig").WritingMode;
 pub const TextPosition = @import("layout.zig").TextPosition;
 pub const TextRect = @import("layout.zig").TextRect;

@@ -118,9 +118,16 @@ pub const WritingMode = enum {
     }
 };
 
+pub const TextOrientation = enum {
+    mixed,
+    upright,
+    sideways,
+};
+
 pub const ShapeOptions = struct {
     direction: TextDirection = .ltr,
     writing_mode: WritingMode = .horizontal_tb,
+    text_orientation: TextOrientation = .mixed,
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
     features: []const unicode.FeatureOverride = &.{},
@@ -132,6 +139,7 @@ pub const ShapeOptions = struct {
 pub const ShapePlanKey = struct {
     direction: TextDirection = .ltr,
     writing_mode: WritingMode = .horizontal_tb,
+    text_orientation: TextOrientation = .mixed,
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     feature_hash: u64 = 0,
@@ -140,6 +148,7 @@ pub const ShapePlanKey = struct {
         return .{
             .direction = options.direction,
             .writing_mode = options.writing_mode,
+            .text_orientation = options.text_orientation,
             .script_tag = effectiveScriptTag(text, options),
             .language_tag = effectiveLanguageTag(text, options),
             .feature_hash = featureOverridesHash(options.features),
@@ -1720,6 +1729,7 @@ fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []cons
                 .language_tag = effectiveLanguageTag(run_text, options),
                 .features = options.features,
                 .writing_mode = options.writing_mode,
+                .text_orientation = options.text_orientation,
             },
         );
     }
@@ -2402,6 +2412,7 @@ const LookupOptions = struct {
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     features: []const unicode.FeatureOverride = &.{},
     writing_mode: WritingMode = .horizontal_tb,
+    text_orientation: TextOrientation = .mixed,
 };
 
 fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
@@ -2410,6 +2421,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
         .language_tag = effectiveLanguageTag(text, options),
         .features = options.features,
         .writing_mode = options.writing_mode,
+        .text_orientation = options.text_orientation,
     };
 }
 
@@ -2434,6 +2446,7 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
 fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
     return a.direction == b.direction and
         a.writing_mode == b.writing_mode and
+        a.text_orientation == b.text_orientation and
         a.script_tag == b.script_tag and
         a.language_tag == b.language_tag and
         a.feature_hash == b.feature_hash;
@@ -2616,11 +2629,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             adjustment_x_advance = -@as(f32, @floatFromInt(metrics.advance_width));
         }
         const base_advance = if (glyph_class == .mark and !adjustment.mark_attachment) 0 else metrics.advance_width;
+        const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
+        const horizontal_advance = (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale;
+        const use_sideways_vertical_advance = lookup_options.writing_mode.isVertical() and
+            glyphUsesSidewaysAdvance(source_codepoint, lookup_options.text_orientation);
         const vertical_metrics = if (lookup_options.writing_mode.isVertical())
             try verticalMetricsWithOptionalCache(font, metrics_cache, glyph_id)
         else
             null;
-        const vertical_advance = if (vertical_metrics) |value|
+        const vertical_advance = if (use_sideways_vertical_advance)
+            horizontal_advance
+        else if (vertical_metrics) |value|
             @as(f32, @floatFromInt(value.advance_height)) * scale
         else
             font_size;
@@ -2637,10 +2656,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             0.0;
         try buffer.glyphs.append(buffer.allocator, .{
             .glyph_id = glyph_id,
-            .codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index],
+            .codepoint = source_codepoint,
             .cluster = source_span.start,
             .source_byte_len = source_span.end - source_span.start,
-            .x_advance = if (lookup_options.writing_mode.isVertical()) 0.0 else (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale,
+            .x_advance = if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
             .y_advance = if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
             .x_offset = if (lookup_options.writing_mode.isVertical()) vertical_x_offset + @as(f32, @floatFromInt(adjustment.x_placement)) * scale else x_offset,
             .y_offset = if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale else @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
@@ -2717,6 +2736,20 @@ fn advanceBetweenGlyphs(glyphs: []const GlyphPosition, base_index: usize, mark_i
 
 fn markAttachmentXOffset(x_placement_font_units: i16, advance_to_base: f32, scale: f32) f32 {
     return @as(f32, @floatFromInt(x_placement_font_units)) * scale - advance_to_base;
+}
+
+fn glyphUsesSidewaysAdvance(_: u21, orientation: TextOrientation) bool {
+    return switch (orientation) {
+        .sideways => true,
+        .upright => false,
+        // Keep mixed-mode advances on the existing vertical metrics path until
+        // the Linux vertical gate has a true browser/CSS writing-mode
+        // reference.  The current Pango gravity reference is still sensitive to
+        // its rotated-line geometry, so changing mixed defaults here would
+        // regress the committed quality signal even though explicit sideways
+        // text benefits from horizontal advances.
+        .mixed => false,
+    };
 }
 
 fn isVariationSelector(codepoint: u21) bool {
@@ -3021,7 +3054,7 @@ test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {
         &buffer,
         "AA",
         20,
-        .{ .writing_mode = .vertical_rl },
+        .{ .writing_mode = .vertical_rl, .text_orientation = .upright },
     );
     try std.testing.expectEqual(@as(usize, 2), vertical.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.width(), 0.001);
@@ -3032,6 +3065,47 @@ test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {
         try std.testing.expectApproxEqAbs(@as(f32, 20), glyph.y_advance, 0.001);
         try std.testing.expectApproxEqAbs(@as(f32, 8), glyph.x_offset, 0.001);
     }
+}
+
+test "vertical sideways text uses horizontal advance for rotated glyphs" {
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const sideways = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "AA",
+        20,
+        .{ .writing_mode = .vertical_rl, .text_orientation = .sideways },
+    );
+    try std.testing.expectEqual(@as(usize, 2), sideways.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 16), sideways.glyphs[0].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 32), sideways.height(), 0.001);
+
+    const mixed = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "AA",
+        20,
+        .{ .writing_mode = .vertical_rl },
+    );
+    try std.testing.expectApproxEqAbs(@as(f32, 20), mixed.glyphs[0].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), mixed.height(), 0.001);
+
+    const upright = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "AA",
+        20,
+        .{ .writing_mode = .vertical_rl, .text_orientation = .upright },
+    );
+    try std.testing.expectApproxEqAbs(@as(f32, 20), upright.glyphs[0].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), upright.height(), 0.001);
 }
 
 test "vertical shaped cache and fallback runs preserve independent y pens" {
@@ -3073,7 +3147,7 @@ test "vertical shaped cache and fallback runs preserve independent y pens" {
         &buffer,
         "AA",
         20,
-        .{ .writing_mode = .vertical_lr },
+        .{ .writing_mode = .vertical_lr, .text_orientation = .upright },
     );
     try std.testing.expectApproxEqAbs(@as(f32, 40), vertical.height(), 0.001);
     try std.testing.expectEqual(@as(usize, 2), cache.entries.items.len);

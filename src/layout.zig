@@ -1395,9 +1395,11 @@ pub const GlyphIndexCache = struct {
 
 pub const ShapeStageProfile = struct {
     cmap_ns: i128 = 0,
+    gdef_ns: i128 = 0,
     gsub_ns: i128 = 0,
     gpos_ns: i128 = 0,
     position_ns: i128 = 0,
+    glyph_count: usize = 0,
 };
 
 pub const LayoutBuffer = struct {
@@ -2539,9 +2541,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try glyph_source_indices.append(buffer.allocator, glyph_source_indices.items.len);
         try ligature_components.append(buffer.allocator, defaultLigatureComponentInfo(glyph_source_indices.items.len - 1));
     }
-    if (shape_profile) |p| p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);
+    if (shape_profile) |p| {
+        p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);
+        p.glyph_count += glyph_ids.items.len;
+    }
 
+    const gdef_start = shapeProfileNow(shape_profile, profile_io);
     var gdef_metadata = try font.gdefLookupMetadataForShaping(buffer.allocator);
+    if (shape_profile) |p| p.gdef_ns += shapeProfileElapsed(gdef_start, profile_io);
     defer gdef_metadata.deinit(buffer.allocator);
 
     // Keep source metadata parallel to glyph ids through GSUB. GPOS MarkLigPos

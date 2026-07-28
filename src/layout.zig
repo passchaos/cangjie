@@ -1393,12 +1393,21 @@ pub const GlyphIndexCache = struct {
     }
 };
 
+pub const ShapeStageProfile = struct {
+    cmap_ns: i128 = 0,
+    gsub_ns: i128 = 0,
+    gpos_ns: i128 = 0,
+    position_ns: i128 = 0,
+};
+
 pub const LayoutBuffer = struct {
     allocator: std.mem.Allocator,
     glyphs: std.ArrayList(GlyphPosition) = .empty,
     runs: std.ArrayList(CascadeRun) = .empty,
     lines: std.ArrayList(ParagraphLine) = .empty,
     script_runs: std.ArrayList(ScriptedRun) = .empty,
+    shape_profile: ?*ShapeStageProfile = null,
+    profile_io: ?std.Io = null,
 
     pub fn init(allocator: std.mem.Allocator) LayoutBuffer {
         return .{ .allocator = allocator };
@@ -2499,6 +2508,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     var source_features = std.ArrayList(u32).empty;
     defer source_features.deinit(buffer.allocator);
 
+    const shape_profile = buffer.shape_profile;
+    const profile_io = buffer.profile_io;
+    const cmap_start = shapeProfileNow(shape_profile, profile_io);
+
     // Keep three parallel arrays through GSUB: glyph ids are mutable, while
     // codepoints and clusters retain source-text identity for rendering,
     // hit-testing, and debug output after substitutions.
@@ -2526,6 +2539,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try glyph_source_indices.append(buffer.allocator, glyph_source_indices.items.len);
         try ligature_components.append(buffer.allocator, defaultLigatureComponentInfo(glyph_source_indices.items.len - 1));
     }
+    if (shape_profile) |p| p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);
+
     var gdef_metadata = try font.gdefLookupMetadataForShaping(buffer.allocator);
     defer gdef_metadata.deinit(buffer.allocator);
 
@@ -2542,6 +2557,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .glyph_source_indices = &glyph_source_indices,
         .ligature_components = &ligature_components,
     };
+    const gsub_start = shapeProfileNow(shape_profile, profile_io);
     if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
         try joining_forms.resize(buffer.allocator, codepoints.items.len);
         try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
@@ -2581,8 +2597,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try font.applyGsubWithOptionsUsingGdef(&glyph_ids, buffer.allocator, gsub_options, gdef_metadata);
     }
 
+    if (shape_profile) |p| p.gsub_ns += shapeProfileElapsed(gsub_start, profile_io);
+
     var gpos_adjustments = std.ArrayList(gpos.Adjustment).empty;
     defer gpos_adjustments.deinit(buffer.allocator);
+    const gpos_start = shapeProfileNow(shape_profile, profile_io);
     try font.collectGposAdjustmentsWithOptionsUsingGdef(glyph_ids.items, &gpos_adjustments, buffer.allocator, .{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
@@ -2591,7 +2610,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .glyph_source_indices = glyph_source_indices.items,
         .ligature_components = ligature_components.items,
     }, gdef_metadata);
+    if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 
+    const position_start = shapeProfileNow(shape_profile, profile_io);
     // GPOS adjustments and legacy kern are accumulated in font units, then
     // scaled into user-space coordinates for the final GlyphPosition stream.
     var previous_glyph: ?GlyphId = null;
@@ -2672,6 +2693,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         });
         previous_glyph = glyph_id;
     }
+    if (shape_profile) |p| p.position_ns += shapeProfileElapsed(position_start, profile_io);
+}
+
+fn shapeProfileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {
+    return if (profile != null) std.Io.Clock.now(.awake, io.?).nanoseconds else 0;
+}
+
+fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
+    return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
 }
 
 fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {

@@ -136,6 +136,7 @@ pub const ParagraphOptions = @import("layout.zig").ParagraphOptions;
 pub const PositionedGlyph = @import("render_bridge.zig").PositionedGlyph;
 pub const PositionedAttributedRun = @import("core.zig").PositionedAttributedRun;
 pub const ShapeOptions = @import("layout.zig").ShapeOptions;
+pub const ShapeStageProfile = @import("layout.zig").ShapeStageProfile;
 pub const ShapePlan = @import("layout.zig").ShapePlan;
 pub const ShapePlanCache = @import("layout.zig").ShapePlanCache;
 pub const ShapePlanKey = @import("layout.zig").ShapePlanKey;

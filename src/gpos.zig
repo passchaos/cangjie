@@ -2,6 +2,7 @@ const std = @import("std");
 const bin = @import("binary.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
 const unicode = @import("unicode.zig");
+const shape_profile_mod = @import("shape_profile.zig");
 
 pub const max_ligature_components = 64;
 
@@ -64,6 +65,8 @@ pub const LookupOptions = struct {
     /// Optional ligature component metadata parallel to the post-GSUB glyph
     /// stream. Entries are only meaningful for ligature glyph positions.
     ligature_components: ?[]const LigatureComponentInfo = null,
+    shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
+    profile_io: ?std.Io = null,
 };
 
 const max_context_preflight_depth = 16;
@@ -111,7 +114,9 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     // GPOS uses the same ScriptList/FeatureList/LookupList topology as GSUB,
     // but feature defaults differ: positioning lookups are generally active
     // unless an explicit feature override disables them.
+    const select_start = shapeProfileNow(options.shape_profile, options.profile_io);
     var selected_lookups = try selectedLookupIndices(table, allocator, options);
+    if (options.shape_profile) |profile| profile.gpos_select_ns += shapeProfileElapsed(select_start, options.profile_io);
     defer selected_lookups.deinit(allocator);
     const script_list_offset = try readU16(table, 4);
     const feature_list_offset = try readU16(table, 6);
@@ -126,6 +131,10 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     if (selected_lookups.items.len == 0 and
         (options.features.len != 0 or (!options.apply_all_if_unselected and has_feature_topology))) return;
 
+    const apply_start = shapeProfileNow(options.shape_profile, options.profile_io);
+    defer {
+        if (options.shape_profile) |profile| profile.gpos_apply_ns += shapeProfileElapsed(apply_start, options.profile_io);
+    }
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (selected_lookups.items.len != 0) {
@@ -610,6 +619,14 @@ fn validateMarkFilteringSetIndex(options: LookupOptions) GposError!void {
     // positioning depend on missing state instead of the font's declared lookup
     // flag contract.
     if (mark_filtering_set_index >= mark_sets.len) return error.BadGpos;
+}
+
+fn shapeProfileNow(profile: ?*shape_profile_mod.ShapeStageProfile, io: ?std.Io) i128 {
+    return if (profile != null) std.Io.Clock.now(.awake, io.?).nanoseconds else 0;
+}
+
+fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
+    return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
 }
 
 fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GposError!void {

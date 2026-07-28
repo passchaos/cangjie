@@ -6,6 +6,7 @@ const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
 const gsub = @import("gsub.zig");
 const unicode = @import("unicode.zig");
+pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
 /// adjustment. `cluster` is a byte offset into the original UTF-8 text, so
@@ -1393,15 +1394,6 @@ pub const GlyphIndexCache = struct {
     }
 };
 
-pub const ShapeStageProfile = struct {
-    cmap_ns: i128 = 0,
-    gdef_ns: i128 = 0,
-    gsub_ns: i128 = 0,
-    gpos_ns: i128 = 0,
-    position_ns: i128 = 0,
-    glyph_count: usize = 0,
-};
-
 pub const LayoutBuffer = struct {
     allocator: std.mem.Allocator,
     glyphs: std.ArrayList(GlyphPosition) = .empty,
@@ -2563,6 +2555,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .apply_all_if_unselected = false,
         .glyph_source_indices = &glyph_source_indices,
         .ligature_components = &ligature_components,
+        .shape_profile = shape_profile,
+        .profile_io = profile_io,
     };
     const gsub_start = shapeProfileNow(shape_profile, profile_io);
     if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
@@ -2616,6 +2610,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .apply_all_if_unselected = false,
         .glyph_source_indices = glyph_source_indices.items,
         .ligature_components = ligature_components.items,
+        .shape_profile = shape_profile,
+        .profile_io = profile_io,
     }, gdef_metadata);
     if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 

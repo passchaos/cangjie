@@ -165,6 +165,31 @@ const CmapSubtable = struct {
     format: u16,
 };
 
+const GdefLookupMetadata = struct {
+    glyph_classes: ?[]u16 = null,
+    mark_attach_classes: ?[]u16 = null,
+    mark_filtering_sets: ?[][]glyph_mod.GlyphId = null,
+
+    fn deinit(self: *GdefLookupMetadata, allocator: std.mem.Allocator) void {
+        if (self.glyph_classes) |classes| allocator.free(classes);
+        if (self.mark_attach_classes) |classes| allocator.free(classes);
+        if (self.mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
+        self.* = .{};
+    }
+
+    fn applyToGsubOptions(self: GdefLookupMetadata, options: *gsub_mod.LookupOptions) void {
+        if (self.glyph_classes) |classes| options.glyph_classes = classes;
+        if (self.mark_attach_classes) |classes| options.mark_attach_classes = classes;
+        if (self.mark_filtering_sets) |sets| options.mark_filtering_sets = sets;
+    }
+
+    fn applyToGposOptions(self: GdefLookupMetadata, options: *gpos_mod.LookupOptions) void {
+        if (self.glyph_classes) |classes| options.glyph_classes = classes;
+        if (self.mark_attach_classes) |classes| options.mark_attach_classes = classes;
+        if (self.mark_filtering_sets) |sets| options.mark_filtering_sets = sets;
+    }
+};
+
 pub const Font = struct {
     /// The font is a borrowed byte slice. Table records and cmap subtable
     /// descriptors below only point back into this slice, so the caller must
@@ -688,32 +713,9 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, gsub);
         try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
         var gsub_options = options;
-        var glyph_classes: ?[]u16 = null;
-        var mark_attach_classes: ?[]u16 = null;
-        var mark_filtering_sets: ?[][]glyph_mod.GlyphId = null;
-        if (self.gdef != null) {
-            const classes = try allocator.alloc(u16, self.glyph_count);
-            errdefer allocator.free(classes);
-            const attach_classes = try allocator.alloc(u16, self.glyph_count);
-            errdefer allocator.free(attach_classes);
-            for (classes, 0..) |*class, glyph_id| {
-                class.* = @intFromEnum(try self.glyphClass(@intCast(glyph_id)));
-            }
-            for (attach_classes, 0..) |*class, glyph_id| {
-                class.* = try self.markAttachClass(@intCast(glyph_id));
-            }
-            glyph_classes = classes;
-            mark_attach_classes = attach_classes;
-            gsub_options.glyph_classes = classes;
-            gsub_options.mark_attach_classes = attach_classes;
-            if (try self.markFilteringSets(allocator)) |sets| {
-                mark_filtering_sets = sets;
-                gsub_options.mark_filtering_sets = sets;
-            }
-        }
-        defer if (glyph_classes) |classes| allocator.free(classes);
-        defer if (mark_attach_classes) |classes| allocator.free(classes);
-        defer if (mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
+        var gdef_metadata = try self.gdefLookupMetadata(allocator);
+        defer gdef_metadata.deinit(allocator);
+        gdef_metadata.applyToGsubOptions(&gsub_options);
         try gsub_mod.applyWithOptions(self.data, gsub.offset, gsub.length, glyphs, allocator, gsub_options);
     }
 
@@ -731,28 +733,9 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, gsub);
         try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
         var gsub_options = options;
-        var glyph_classes: ?[]u16 = null;
-        var mark_attach_classes: ?[]u16 = null;
-        var mark_filtering_sets: ?[][]glyph_mod.GlyphId = null;
-        if (self.gdef != null) {
-            const classes = try allocator.alloc(u16, self.glyph_count);
-            errdefer allocator.free(classes);
-            const attach_classes = try allocator.alloc(u16, self.glyph_count);
-            errdefer allocator.free(attach_classes);
-            for (classes, 0..) |*class, glyph_id| class.* = @intFromEnum(try self.glyphClass(@intCast(glyph_id)));
-            for (attach_classes, 0..) |*class, glyph_id| class.* = try self.markAttachClass(@intCast(glyph_id));
-            glyph_classes = classes;
-            mark_attach_classes = attach_classes;
-            gsub_options.glyph_classes = classes;
-            gsub_options.mark_attach_classes = attach_classes;
-            if (try self.markFilteringSets(allocator)) |sets| {
-                mark_filtering_sets = sets;
-                gsub_options.mark_filtering_sets = sets;
-            }
-        }
-        defer if (glyph_classes) |classes| allocator.free(classes);
-        defer if (mark_attach_classes) |classes| allocator.free(classes);
-        defer if (mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
+        var gdef_metadata = try self.gdefLookupMetadata(allocator);
+        defer gdef_metadata.deinit(allocator);
+        gdef_metadata.applyToGsubOptions(&gsub_options);
         try gsub_mod.applyFeatureSequenceWithOptions(self.data, gsub.offset, gsub.length, applications, glyphs, allocator, gsub_options);
     }
 
@@ -773,33 +756,53 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, gpos);
         try gpos_mod.validateGlyphBounds(self.data, gpos.offset, gpos.length, self.glyph_count);
         var gpos_options = options;
-        var glyph_classes: ?[]u16 = null;
-        var mark_attach_classes: ?[]u16 = null;
-        var mark_filtering_sets: ?[][]glyph_mod.GlyphId = null;
-        if (self.gdef != null) {
+        var gdef_metadata = try self.gdefLookupMetadata(allocator);
+        defer gdef_metadata.deinit(allocator);
+        gdef_metadata.applyToGposOptions(&gpos_options);
+        try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
+    }
+
+    fn gdefLookupMetadata(self: *const Font, allocator: std.mem.Allocator) FontError!GdefLookupMetadata {
+        var metadata = GdefLookupMetadata{};
+        errdefer metadata.deinit(allocator);
+        const gdef = self.gdef orelse return metadata;
+
+        // GSUB/GPOS lookup-flag filtering is on the shaping hot path. The
+        // public glyphClass/markAttachClass APIs defensively revalidate GDEF on
+        // every single glyph query; shaping only needs one call-boundary proof
+        // for the already-parsed font before expanding dense metadata arrays.
+        try validateSfntTableChecksum(self.data, gdef);
+        const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
+        const table = self.data[gdef.offset .. gdef.offset + gdef.length];
+
+        const glyph_class_def_offset = try bin.readU16At(self.data, gdef.offset + 4);
+        if (glyph_class_def_offset != 0) {
+            try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
             const classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(classes);
+            for (classes, 0..) |*class, glyph_id| {
+                const value = try classDefValue(table, glyph_class_def_offset, @intCast(glyph_id));
+                try validateGlyphClassValue(value);
+                class.* = value;
+            }
+            metadata.glyph_classes = classes;
+        }
+
+        const mark_attach_class_def_offset = try bin.readU16At(self.data, gdef.offset + 10);
+        if (mark_attach_class_def_offset != 0) {
+            try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
             const attach_classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(attach_classes);
-            for (classes, 0..) |*class, glyph_id| {
-                class.* = @intFromEnum(try self.glyphClass(@intCast(glyph_id)));
-            }
             for (attach_classes, 0..) |*class, glyph_id| {
-                class.* = try self.markAttachClass(@intCast(glyph_id));
+                class.* = try classDefValue(table, mark_attach_class_def_offset, @intCast(glyph_id));
             }
-            glyph_classes = classes;
-            mark_attach_classes = attach_classes;
-            gpos_options.glyph_classes = classes;
-            gpos_options.mark_attach_classes = attach_classes;
-            if (try self.markFilteringSets(allocator)) |sets| {
-                mark_filtering_sets = sets;
-                gpos_options.mark_filtering_sets = sets;
-            }
+            metadata.mark_attach_classes = attach_classes;
         }
-        defer if (glyph_classes) |classes| allocator.free(classes);
-        defer if (mark_attach_classes) |classes| allocator.free(classes);
-        defer if (mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
-        try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
+
+        if (try self.markFilteringSets(allocator)) |sets| {
+            metadata.mark_filtering_sets = sets;
+        }
+        return metadata;
     }
 
     fn validateGlyphRun(self: *const Font, glyphs: []const glyph_mod.GlyphId) FontError!void {

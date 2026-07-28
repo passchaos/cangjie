@@ -592,7 +592,7 @@ pub const Rasterizer = struct {
                 intersections.clearRetainingCapacity();
                 for (prepared_lines.items) |line| {
                     if ((line.ay > py) == (line.by > py)) continue;
-                    const x_intersect = line.dx * (py - line.ay) / line.dy + line.ax;
+                    const x_intersect = line.slope * (py - line.ay) + line.ax;
                     if (!std.math.isFinite(x_intersect)) continue;
                     try intersections.append(self.allocator, .{
                         .x = x_intersect,
@@ -694,8 +694,7 @@ const PreparedFillLine = struct {
     ax: f32,
     ay: f32,
     by: f32,
-    dx: f32,
-    dy: f32,
+    slope: f32,
     delta: i8,
 };
 
@@ -713,8 +712,7 @@ fn prepareFillLines(allocator: std.mem.Allocator, lines: []const Line) !std.Arra
             .ax = line.a.x,
             .ay = line.a.y,
             .by = line.b.y,
-            .dx = line.b.x - line.a.x,
-            .dy = dy,
+            .slope = (line.b.x - line.a.x) / dy,
             .delta = if (dy > 0.0) 1 else -1,
         });
     }

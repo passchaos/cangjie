@@ -1273,6 +1273,7 @@ test "caches shape plans by direction script language and features" {
     const latin_key = ShapePlanKey.fromText("abc", .{});
     const latin_again = ShapePlanKey.fromText("def", .{});
     const rtl_key = ShapePlanKey.fromText("abc", .{ .direction = .rtl });
+    const logical_key = ShapePlanKey.fromText("abc", .{ .reorder_bidi = false });
     const feature_key = ShapePlanKey.fromText("abc", .{ .features = &disable_liga });
     const japanese_key = ShapePlanKey.fromText("一", .{ .language_tag = .jan });
 
@@ -1283,9 +1284,10 @@ test "caches shape plans by direction script language and features" {
     try std.testing.expectEqual(@as(usize, 1), cache.plans.items.len);
 
     _ = try cache.getOrPut(rtl_key);
+    _ = try cache.getOrPut(logical_key);
     _ = try cache.getOrPut(feature_key);
     _ = try cache.getOrPut(japanese_key);
-    try std.testing.expectEqual(@as(usize, 4), cache.plans.items.len);
+    try std.testing.expectEqual(@as(usize, 5), cache.plans.items.len);
     try std.testing.expect(latin_key.feature_hash != feature_key.feature_hash);
     try std.testing.expect(japanese_key.language_tag == .jan);
 }
@@ -3117,6 +3119,42 @@ test "builds coverage-aware fallback cascades from the font database" {
     try std.testing.expectEqual(@as(usize, 0), shaped.runs[0].font_index);
     try std.testing.expectEqual(@as(usize, 1), shaped.runs[1].font_index);
     try std.testing.expectEqual(@as(usize, 0), shaped.runs[2].font_index);
+}
+
+test "cascade shaping can preserve caller-materialized visual order" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedBidiMirrorTtfWithNames(allocator, "Visual Sans", "Regular", "Visual Sans Regular");
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const reordered = try TextShaper.shapeUtf8CascadeWithOptions(
+        cascade,
+        &layout_buffer,
+        "A\u{05d0}",
+        20,
+        .{ .direction = .rtl },
+    );
+    try std.testing.expectEqual(@as(u21, 0x05d0), reordered.glyphs[0].codepoint);
+
+    const preserved = try TextShaper.shapeUtf8CascadeWithOptions(
+        cascade,
+        &layout_buffer,
+        "A\u{05d0}",
+        20,
+        .{ .direction = .rtl, .reorder_bidi = false },
+    );
+    try std.testing.expectEqual(@as(u21, 'A'), preserved.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x05d0), preserved.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), preserved.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 1), preserved.glyphs[1].cluster);
 }
 
 test "shapes cascade text right-to-left with visual glyph order" {

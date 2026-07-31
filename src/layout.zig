@@ -129,6 +129,12 @@ pub const TextOrientation = enum {
 
 pub const ShapeOptions = struct {
     direction: TextDirection = .ltr,
+    /// Reorder the logical UTF-8 input into bidi visual order after shaping.
+    ///
+    /// Callers that already materialized visual text (for example, a retained
+    /// document engine implementing its own unicode-bidi run boundaries) can
+    /// disable this while retaining all other GSUB/GPOS and fallback behavior.
+    reorder_bidi: bool = true,
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
     script_tag: ?unicode.OpenTypeScriptTag = null,
@@ -141,6 +147,7 @@ pub const ShapeOptions = struct {
 /// OpenType selection knobs that change which GSUB/GPOS lookups are active.
 pub const ShapePlanKey = struct {
     direction: TextDirection = .ltr,
+    reorder_bidi: bool = true,
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
     script_tag: unicode.OpenTypeScriptTag = .dflt,
@@ -150,6 +157,7 @@ pub const ShapePlanKey = struct {
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
         return .{
             .direction = options.direction,
+            .reorder_bidi = options.reorder_bidi,
             .writing_mode = options.writing_mode,
             .text_orientation = options.text_orientation,
             .script_tag = effectiveScriptTag(text, options),
@@ -1464,7 +1472,9 @@ pub const TextShaper = struct {
         try validateShapingInput(text, font_size, options);
         buffer.clear();
         try shapeSegmentInto(font, null, null, buffer, text, font_size, 0, lookupOptionsForText(text, options));
-        try applyBidiVisualOrder(buffer, text, options.direction, font);
+        if (options.reorder_bidi) {
+            try applyBidiVisualOrder(buffer, text, options.direction, font);
+        }
         return buffer.run(font, font_size);
     }
 
@@ -1563,7 +1573,9 @@ pub const TextShaper = struct {
             );
         }
 
-        try applyBidiVisualOrder(buffer, text, options.direction, null);
+        if (options.reorder_bidi) {
+            try applyBidiVisualOrder(buffer, text, options.direction, null);
+        }
         const shaped = buffer.shapedText();
         if (shaped_cache) |cache| {
             try cache.store(cache_key, shaped);
@@ -1574,7 +1586,9 @@ pub const TextShaper = struct {
     pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
         try validateShapingInput(text, font_size, options);
         try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
-        try applyBidiVisualOrder(buffer, text, options.direction, null);
+        if (options.reorder_bidi) {
+            try applyBidiVisualOrder(buffer, text, options.direction, null);
+        }
         try buildScriptRuns(buffer, text, options.direction, options.language_tag);
         return buffer.scriptedText();
     }
@@ -2450,6 +2464,7 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
 
 fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
     return a.direction == b.direction and
+        a.reorder_bidi == b.reorder_bidi and
         a.writing_mode == b.writing_mode and
         a.text_orientation == b.text_orientation and
         a.script_tag == b.script_tag and

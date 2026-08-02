@@ -245,6 +245,10 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     const kerned = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 20);
     try std.testing.expectApproxEqAbs(@as(f32, 30.0), kerned.width(), 0.001);
 
+    const disable_kern = [_]FeatureOverride{.{ .tag = openTypeTag("kern"), .enabled = false }};
+    const unkerned = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "AA", 20, .{ .features = &disable_kern });
+    try std.testing.expectApproxEqAbs(@as(f32, 32.0), unkerned.width(), 0.001);
+
     var target = try RenderTarget.init(allocator, 32, 32);
     defer target.deinit();
     var rasterizer = Rasterizer.init(allocator);

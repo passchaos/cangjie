@@ -2643,7 +2643,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             SourceSpan{ .start = cluster_base, .end = cluster_base };
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
-        if (!lookup_options.writing_mode.isVertical()) {
+        if (!lookup_options.writing_mode.isVertical() and shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true)) {
             if (previous_glyph) |previous| {
                 const previous_adjustment = findAdjustment(gpos_adjustments.items, index - 1);
                 if (!previous_adjustment.pair_positioned) {

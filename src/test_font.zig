@@ -12,6 +12,10 @@ pub fn buildMinimalTtfWithKern(allocator: std.mem.Allocator, kern: []const u8) !
     return buildSfnt(allocator, 0x00010000, try minimalTtfWithKernTables(allocator, kern));
 }
 
+pub fn buildScriptMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try scriptMetricsTtfTables(allocator));
+}
+
 pub fn buildVerticalMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try verticalMetricsTtfTables(allocator));
 }
@@ -425,6 +429,21 @@ fn minimalTtfWithPostTables(allocator: std.mem.Allocator, post: []const u8) ![]T
     // Table.data and frees each payload after writing the SFNT.
     tables[8] = .{ .tag = "post", .data = try allocator.dupe(u8, post) };
     initialized += 1;
+    return tables;
+}
+
+fn scriptMetricsTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "OS/2", .data = try scriptMetricsOs2Table(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -2100,6 +2119,7 @@ fn os2Table(allocator: std.mem.Allocator, weight: u16, width: u16, italic: bool,
     const bytes = try allocator.alloc(u8, 96);
     @memset(bytes, 0);
     writeU16(bytes, 0, 4);
+    writeScriptMetricsDefaults(bytes);
     writeU16(bytes, 4, weight);
     writeU16(bytes, 6, width);
     var selection: u16 = 0;
@@ -2107,6 +2127,30 @@ fn os2Table(allocator: std.mem.Allocator, weight: u16, width: u16, italic: bool,
     if (bold) selection |= 0x0020;
     writeU16(bytes, 62, selection);
     return bytes;
+}
+
+fn scriptMetricsOs2Table(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try os2Table(allocator, 400, 5, false, false);
+    writeI16(bytes, 10, 620);
+    writeI16(bytes, 12, 610);
+    writeI16(bytes, 14, 11);
+    writeI16(bytes, 16, 140);
+    writeI16(bytes, 18, 640);
+    writeI16(bytes, 20, 630);
+    writeI16(bytes, 22, 13);
+    writeI16(bytes, 24, 360);
+    return bytes;
+}
+
+fn writeScriptMetricsDefaults(bytes: []u8) void {
+    writeI16(bytes, 10, 650);
+    writeI16(bytes, 12, 600);
+    writeI16(bytes, 14, 0);
+    writeI16(bytes, 16, 120);
+    writeI16(bytes, 18, 650);
+    writeI16(bytes, 20, 600);
+    writeI16(bytes, 22, 0);
+    writeI16(bytes, 24, 350);
 }
 
 fn fvarTable(allocator: std.mem.Allocator) ![]u8 {

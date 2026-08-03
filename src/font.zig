@@ -62,6 +62,43 @@ pub const ScaledFontDecorationMetrics = struct {
     strikeout_thickness: f32,
 };
 
+pub const ScaledFontScriptMetrics = struct {
+    superscript_x_size: f32,
+    superscript_y_size: f32,
+    superscript_x_offset: f32,
+    superscript_y_offset: f32,
+    subscript_x_size: f32,
+    subscript_y_size: f32,
+    subscript_x_offset: f32,
+    subscript_y_offset: f32,
+};
+
+pub const FontScriptMetrics = struct {
+    superscript_x_size: i16,
+    superscript_y_size: i16,
+    superscript_x_offset: i16,
+    superscript_y_offset: i16,
+    subscript_x_size: i16,
+    subscript_y_size: i16,
+    subscript_x_offset: i16,
+    subscript_y_offset: i16,
+
+    pub fn scale(self: FontScriptMetrics, font_size: f32, units_per_em: u16) ScaledFontScriptMetrics {
+        const units = @max(@as(f32, @floatFromInt(units_per_em)), 1.0);
+        const factor = font_size / units;
+        return .{
+            .superscript_x_size = @as(f32, @floatFromInt(self.superscript_x_size)) * factor,
+            .superscript_y_size = @as(f32, @floatFromInt(self.superscript_y_size)) * factor,
+            .superscript_x_offset = @as(f32, @floatFromInt(self.superscript_x_offset)) * factor,
+            .superscript_y_offset = @as(f32, @floatFromInt(self.superscript_y_offset)) * factor,
+            .subscript_x_size = @as(f32, @floatFromInt(self.subscript_x_size)) * factor,
+            .subscript_y_size = @as(f32, @floatFromInt(self.subscript_y_size)) * factor,
+            .subscript_x_offset = @as(f32, @floatFromInt(self.subscript_x_offset)) * factor,
+            .subscript_y_offset = @as(f32, @floatFromInt(self.subscript_y_offset)) * factor,
+        };
+    }
+};
+
 pub const FontDecorationMetrics = struct {
     underline_position: i16,
     underline_thickness: i16,
@@ -946,6 +983,18 @@ pub const Font = struct {
 
     pub fn scaledDecorationMetrics(self: *const Font, font_size: f32) FontError!ScaledFontDecorationMetrics {
         return (try self.decorationMetrics()).scale(font_size, self.units_per_em);
+    }
+
+    pub fn scriptMetrics(self: *const Font) FontError!?FontScriptMetrics {
+        const os2 = self.os2 orelse return null;
+        try validateSfntTableChecksum(self.data, os2);
+        _ = try readOs2StyleAttributes(self.data, os2);
+        return try readOs2ScriptMetrics(self.data, os2);
+    }
+
+    pub fn scaledScriptMetrics(self: *const Font, font_size: f32) FontError!?ScaledFontScriptMetrics {
+        const metrics = (try self.scriptMetrics()) orelse return null;
+        return metrics.scale(font_size, self.units_per_em);
     }
 
     pub fn hasStyleAttributes(self: *const Font) bool {
@@ -2550,6 +2599,26 @@ fn readOs2StrikeoutMetrics(data: []const u8, os2: TableRecord) FontError!struct 
         .thickness = try bin.readI16At(data, os2.offset + 26),
         .position = try bin.readI16At(data, os2.offset + 28),
     };
+}
+
+fn readOs2ScriptMetrics(data: []const u8, os2: TableRecord) FontError!FontScriptMetrics {
+    try requireTableLength(os2, 26);
+    const metrics = FontScriptMetrics{
+        .subscript_x_size = try bin.readI16At(data, os2.offset + 10),
+        .subscript_y_size = try bin.readI16At(data, os2.offset + 12),
+        .subscript_x_offset = try bin.readI16At(data, os2.offset + 14),
+        .subscript_y_offset = try bin.readI16At(data, os2.offset + 16),
+        .superscript_x_size = try bin.readI16At(data, os2.offset + 18),
+        .superscript_y_size = try bin.readI16At(data, os2.offset + 20),
+        .superscript_x_offset = try bin.readI16At(data, os2.offset + 22),
+        .superscript_y_offset = try bin.readI16At(data, os2.offset + 24),
+    };
+    if (metrics.subscript_x_size <= 0 or metrics.subscript_y_size <= 0 or
+        metrics.superscript_x_size <= 0 or metrics.superscript_y_size <= 0)
+    {
+        return error.InvalidMetrics;
+    }
+    return metrics;
 }
 
 fn fallbackDecorationMetrics(units_per_em: u16, ascender: i16, descender: i16) FontDecorationMetrics {
@@ -12795,6 +12864,56 @@ test "font decoration metrics read OS/2 strikeout and fallback invalid underline
     try std.testing.expectEqual(FontDecorationMetricSource.font, metrics.strikeout_source);
     try std.testing.expectEqual(@as(i16, 330), metrics.strikeout_position);
     try std.testing.expectEqual(@as(i16, 70), metrics.strikeout_thickness);
+}
+
+test "font script metrics read OS/2 superscript and subscript values" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildScriptMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const metrics = (try font.scriptMetrics()) orelse return error.MissingScriptMetrics;
+    try std.testing.expectEqual(@as(i16, 640), metrics.superscript_x_size);
+    try std.testing.expectEqual(@as(i16, 630), metrics.superscript_y_size);
+    try std.testing.expectEqual(@as(i16, 13), metrics.superscript_x_offset);
+    try std.testing.expectEqual(@as(i16, 360), metrics.superscript_y_offset);
+    try std.testing.expectEqual(@as(i16, 620), metrics.subscript_x_size);
+    try std.testing.expectEqual(@as(i16, 610), metrics.subscript_y_size);
+    try std.testing.expectEqual(@as(i16, 11), metrics.subscript_x_offset);
+    try std.testing.expectEqual(@as(i16, 140), metrics.subscript_y_offset);
+
+    const scaled = (try font.scaledScriptMetrics(20)) orelse return error.MissingScaledScriptMetrics;
+    try std.testing.expectApproxEqAbs(@as(f32, 12.8), scaled.superscript_x_size, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.6), scaled.superscript_y_size, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.26), scaled.superscript_x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.2), scaled.superscript_y_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.4), scaled.subscript_x_size, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.2), scaled.subscript_y_size, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.22), scaled.subscript_x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.8), scaled.subscript_y_offset, 0.001);
+}
+
+test "font script metrics handle missing and mutated OS/2 tables" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const minimal = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(minimal);
+    var minimal_font = try Font.parse(allocator, minimal);
+    defer minimal_font.deinit();
+    try std.testing.expect((try minimal_font.scriptMetrics()) == null);
+
+    const bytes = try test_font.buildScriptMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    _ = try font.scriptMetrics();
+    const os2_offset: usize = @intCast(try sfntTableOffset(bytes, "OS/2"));
+    writeI16Test(bytes, os2_offset + 20, 631);
+    try std.testing.expectError(error.BadSfnt, font.scriptMetrics());
 }
 
 test "font decoration metrics revalidate borrowed table checksums" {

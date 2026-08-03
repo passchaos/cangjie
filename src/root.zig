@@ -4523,6 +4523,59 @@ test "applies optional GSUB superscript and subscript features when enabled" {
     try std.testing.expectEqual(@as(GlyphId, 3), preset_subscript.glyphs[0].glyph_id);
 }
 
+test "script feature visual test font gives substitute glyphs outlines" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildScriptFeatureGsubVisualTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const normal = try TextShaper.shapeUtf8(&font, &layout_buffer, "A", 20);
+    const normal_id = normal.glyphs[0].glyph_id;
+    const superscript = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .script_position = .superscript });
+    const superscript_id = superscript.glyphs[0].glyph_id;
+    const subscript = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .script_position = .subscript });
+    const subscript_id = subscript.glyphs[0].glyph_id;
+    try std.testing.expectEqual(@as(GlyphId, 1), normal_id);
+    try std.testing.expectEqual(@as(GlyphId, 2), superscript_id);
+    try std.testing.expectEqual(@as(GlyphId, 3), subscript_id);
+
+    var normal_outline = try font.glyphOutline(allocator, 1);
+    defer normal_outline.deinit();
+    var superscript_outline = try font.glyphOutline(allocator, 2);
+    defer superscript_outline.deinit();
+    var subscript_outline = try font.glyphOutline(allocator, 3);
+    defer subscript_outline.deinit();
+
+    try std.testing.expect(normal_outline.commands.items.len >= 4);
+    try std.testing.expect(superscript_outline.commands.items.len >= 4);
+    try std.testing.expect(subscript_outline.commands.items.len >= 4);
+    const normal_second_x = switch (normal_outline.commands.items[1]) {
+        .line_to => |point| point.x,
+        else => return error.UnexpectedOutlineCommand,
+    };
+    const superscript_second_x = switch (superscript_outline.commands.items[1]) {
+        .line_to => |point| point.x,
+        else => return error.UnexpectedOutlineCommand,
+    };
+    const normal_peak_y = switch (normal_outline.commands.items[2]) {
+        .line_to => |point| point.y,
+        else => return error.UnexpectedOutlineCommand,
+    };
+    const subscript_peak_y = switch (subscript_outline.commands.items[2]) {
+        .line_to => |point| point.y,
+        else => return error.UnexpectedOutlineCommand,
+    };
+    try std.testing.expect(superscript_second_x < normal_second_x);
+    try std.testing.expect(subscript_peak_y < normal_peak_y);
+}
+
 test "applies GSUB contextual substitution with nested lookup" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

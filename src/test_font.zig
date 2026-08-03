@@ -302,6 +302,10 @@ pub fn buildScriptFeatureGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try scriptFeatureGsubTtfTables(allocator));
 }
 
+pub fn buildScriptFeatureGsubVisualTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try scriptFeatureGsubVisualTtfTables(allocator));
+}
+
 pub fn buildContextGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try contextGsubTtfTables(allocator));
 }
@@ -1381,6 +1385,21 @@ fn scriptFeatureGsubTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
     tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    return tables;
+}
+
+fn scriptFeatureGsubVisualTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "GSUB", .data = try scriptFeatureGsubTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTableWithThreeOutlinedGlyphs(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
+    tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTableWithThreeOutlinedGlyphs(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
     return tables;
 }
@@ -2864,6 +2883,37 @@ fn glyfTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn glyfTableWithThreeOutlinedGlyphs(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 96);
+    @memset(bytes, 0);
+    // Glyph 1 is the base "A" shape. Glyphs 2/3 are the `sups`/`subs`
+    // substitutes declared by scriptFeatureGsubTable(). Unlike the compact
+    // substitution-only fixture, these substitutes carry distinct outlines so
+    // renderers can verify the feature path with pixel comparisons instead of
+    // only checking glyph IDs.
+    writeSimpleTriangleGlyph(bytes, 12, 350, 350, 250);
+    writeSimpleTriangleGlyph(bytes, 40, 160, 160, 250);
+    writeSimpleTriangleGlyph(bytes, 68, 350, 350, 80);
+    return bytes;
+}
+
+fn writeSimpleTriangleGlyph(bytes: []u8, off: usize, first_dx: u16, second_dx: u16, peak_dy: u8) void {
+    writeI16(bytes, off + 0, 1);
+    writeI16(bytes, off + 2, 0);
+    writeI16(bytes, off + 4, 0);
+    writeI16(bytes, off + 6, 700);
+    writeI16(bytes, off + 8, 700);
+    writeU16(bytes, off + 10, 2);
+    writeU16(bytes, off + 12, 0);
+    bytes[off + 14] = 0x31;
+    bytes[off + 15] = 0x21;
+    bytes[off + 16] = 0x25;
+    writeU16(bytes, off + 17, first_dx);
+    writeU16(bytes, off + 19, second_dx);
+    bytes[off + 21] = peak_dy;
+    writeU16(bytes, off + 22, 700);
+}
+
 fn cffTable(allocator: std.mem.Allocator) ![]u8 {
     var local_subrs = std.ArrayList(u8).empty;
     defer local_subrs.deinit(allocator);
@@ -3036,6 +3086,17 @@ fn locaTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 6, 20);
     writeU16(bytes, 8, 20);
     writeU16(bytes, 10, 20);
+    return bytes;
+}
+
+fn locaTableWithThreeOutlinedGlyphs(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 12);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 6);
+    writeU16(bytes, 4, 20);
+    writeU16(bytes, 6, 34);
+    writeU16(bytes, 8, 48);
+    writeU16(bytes, 10, 48);
     return bytes;
 }
 

@@ -50,6 +50,38 @@ pub const StyleAttributes = struct {
     bold: bool = false,
 };
 
+pub const FontDecorationMetricSource = enum {
+    font,
+    fallback,
+};
+
+pub const ScaledFontDecorationMetrics = struct {
+    underline_position: f32,
+    underline_thickness: f32,
+    strikeout_position: f32,
+    strikeout_thickness: f32,
+};
+
+pub const FontDecorationMetrics = struct {
+    underline_position: i16,
+    underline_thickness: i16,
+    strikeout_position: i16,
+    strikeout_thickness: i16,
+    underline_source: FontDecorationMetricSource = .fallback,
+    strikeout_source: FontDecorationMetricSource = .fallback,
+
+    pub fn scale(self: FontDecorationMetrics, font_size: f32, units_per_em: u16) ScaledFontDecorationMetrics {
+        const units = @max(@as(f32, @floatFromInt(units_per_em)), 1.0);
+        const factor = font_size / units;
+        return .{
+            .underline_position = @as(f32, @floatFromInt(self.underline_position)) * factor,
+            .underline_thickness = @max(0.5, @as(f32, @floatFromInt(self.underline_thickness)) * factor),
+            .strikeout_position = @as(f32, @floatFromInt(self.strikeout_position)) * factor,
+            .strikeout_thickness = @max(0.5, @as(f32, @floatFromInt(self.strikeout_thickness)) * factor),
+        };
+    }
+};
+
 pub const VerticalMetrics = struct {
     advance_height: u16,
     top_side_bearing: i16,
@@ -898,6 +930,22 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, post);
         try validatePostTable(self.data, post, self.glyph_count, .{});
         return try readPostGlyphName(self.data, post, glyph_id);
+    }
+
+    pub fn decorationMetrics(self: *const Font) FontError!FontDecorationMetrics {
+        if (self.post) |post| {
+            try validateSfntTableChecksum(self.data, post);
+            try validatePostTable(self.data, post, self.glyph_count, .{});
+        }
+        if (self.os2) |os2| {
+            try validateSfntTableChecksum(self.data, os2);
+            _ = try readOs2StyleAttributes(self.data, os2);
+        }
+        return try readFontDecorationMetrics(self.data, self.post, self.os2, self.units_per_em, self.ascender, self.descender);
+    }
+
+    pub fn scaledDecorationMetrics(self: *const Font, font_size: f32) FontError!ScaledFontDecorationMetrics {
+        return (try self.decorationMetrics()).scale(font_size, self.units_per_em);
     }
 
     pub fn hasStyleAttributes(self: *const Font) bool {
@@ -2458,6 +2506,71 @@ fn readOs2StyleAttributes(data: []const u8, os2: TableRecord) FontError!StyleAtt
         .italic = (fs_selection & 0x0001) != 0,
         .bold = (fs_selection & 0x0020) != 0,
     };
+}
+
+fn readFontDecorationMetrics(
+    data: []const u8,
+    post: ?TableRecord,
+    os2: ?TableRecord,
+    units_per_em: u16,
+    ascender: i16,
+    descender: i16,
+) FontError!FontDecorationMetrics {
+    var metrics = fallbackDecorationMetrics(units_per_em, ascender, descender);
+    if (post) |post_table| {
+        const post_metrics = try readPostDecorationMetrics(data, post_table);
+        if (post_metrics.thickness > 0) {
+            metrics.underline_position = post_metrics.position;
+            metrics.underline_thickness = post_metrics.thickness;
+            metrics.underline_source = .font;
+        }
+    }
+    if (os2) |os2_table| {
+        const strike_metrics = try readOs2StrikeoutMetrics(data, os2_table);
+        if (strike_metrics.thickness > 0) {
+            metrics.strikeout_position = strike_metrics.position;
+            metrics.strikeout_thickness = strike_metrics.thickness;
+            metrics.strikeout_source = .font;
+        }
+    }
+    return metrics;
+}
+
+fn readPostDecorationMetrics(data: []const u8, post: TableRecord) FontError!struct { position: i16, thickness: i16 } {
+    try requireTableLength(post, 12);
+    return .{
+        .position = try bin.readI16At(data, post.offset + 8),
+        .thickness = try bin.readI16At(data, post.offset + 10),
+    };
+}
+
+fn readOs2StrikeoutMetrics(data: []const u8, os2: TableRecord) FontError!struct { position: i16, thickness: i16 } {
+    try requireTableLength(os2, 30);
+    return .{
+        .thickness = try bin.readI16At(data, os2.offset + 26),
+        .position = try bin.readI16At(data, os2.offset + 28),
+    };
+}
+
+fn fallbackDecorationMetrics(units_per_em: u16, ascender: i16, descender: i16) FontDecorationMetrics {
+    const units = @max(@as(i32, @intCast(units_per_em)), 1);
+    const thickness = @max(1, @divTrunc(units, 16));
+    const underline_position = -@as(i32, @max(thickness, @divTrunc(units, 9)));
+    const asc = if (ascender > 0) @as(i32, ascender) else @divTrunc(units * 4, 5);
+    const desc = if (descender < 0) -@as(i32, descender) else @divTrunc(units, 5);
+    const strikeout_position = @max(thickness, @divTrunc(asc * 3, 10));
+    return .{
+        .underline_position = clampI16(underline_position),
+        .underline_thickness = clampI16(thickness),
+        .strikeout_position = clampI16(@min(strikeout_position, asc + desc)),
+        .strikeout_thickness = clampI16(thickness),
+    };
+}
+
+fn clampI16(value: i32) i16 {
+    if (value < std.math.minInt(i16)) return std.math.minInt(i16);
+    if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
+    return @intCast(value);
 }
 
 fn validateHorizontalMetricsTables(data: []const u8, hhea: TableRecord, hmtx: TableRecord, glyph_count: u16) FontError!u16 {
@@ -12635,6 +12748,73 @@ test "post glyph names support standard aliases and absent-name formats" {
 
         try std.testing.expectEqual(@as(?[]const u8, null), try font.glyphName(1));
     }
+}
+
+test "font decoration metrics prefer post underline and OS/2 strikeout" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var post: [32]u8 = .{0} ** 32;
+    writePostHeaderTest(&post, 0x00030000);
+    writeI16Test(&post, 8, -125);
+    writeI16Test(&post, 10, 45);
+
+    const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const metrics = try font.decorationMetrics();
+    try std.testing.expectEqual(FontDecorationMetricSource.font, metrics.underline_source);
+    try std.testing.expectEqual(@as(i16, -125), metrics.underline_position);
+    try std.testing.expectEqual(@as(i16, 45), metrics.underline_thickness);
+    try std.testing.expectEqual(FontDecorationMetricSource.fallback, metrics.strikeout_source);
+    try std.testing.expect(metrics.strikeout_thickness > 0);
+
+    const scaled = try font.scaledDecorationMetrics(20);
+    try std.testing.expectApproxEqAbs(@as(f32, -2.5), scaled.underline_position, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.9), scaled.underline_thickness, 0.001);
+}
+
+test "font decoration metrics read OS/2 strikeout and fallback invalid underline" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Regular", "Metric Sans Regular", 400, 5, false, false);
+    defer allocator.free(bytes);
+    const os2_offset: usize = @intCast(try sfntTableOffset(bytes, "OS/2"));
+    writeI16Test(bytes, os2_offset + 26, 70);
+    writeI16Test(bytes, os2_offset + 28, 330);
+    try updateSfntTableChecksum(bytes, "OS/2");
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const metrics = try font.decorationMetrics();
+    try std.testing.expectEqual(FontDecorationMetricSource.fallback, metrics.underline_source);
+    try std.testing.expectEqual(FontDecorationMetricSource.font, metrics.strikeout_source);
+    try std.testing.expectEqual(@as(i16, 330), metrics.strikeout_position);
+    try std.testing.expectEqual(@as(i16, 70), metrics.strikeout_thickness);
+}
+
+test "font decoration metrics revalidate borrowed table checksums" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var post: [32]u8 = .{0} ** 32;
+    writePostHeaderTest(&post, 0x00030000);
+    writeI16Test(&post, 8, -100);
+    writeI16Test(&post, 10, 40);
+
+    const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    _ = try font.decorationMetrics();
+    const post_offset = try sfntTableOffset(bytes, "post");
+    writeI16Test(bytes, post_offset + 10, 41);
+    try std.testing.expectError(error.BadSfnt, font.decorationMetrics());
 }
 
 test "TTC face offsets cannot overlap collection metadata" {

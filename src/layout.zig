@@ -127,6 +127,12 @@ pub const TextOrientation = enum {
     sideways,
 };
 
+pub const ScriptPosition = enum {
+    normal,
+    superscript,
+    subscript,
+};
+
 pub const ShapeOptions = struct {
     direction: TextDirection = .ltr,
     /// Reorder the logical UTF-8 input into bidi visual order after shaping.
@@ -139,6 +145,7 @@ pub const ShapeOptions = struct {
     text_orientation: TextOrientation = .mixed,
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
+    script_position: ScriptPosition = .normal,
     features: []const unicode.FeatureOverride = &.{},
 };
 
@@ -152,6 +159,7 @@ pub const ShapePlanKey = struct {
     text_orientation: TextOrientation = .mixed,
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
+    script_position: ScriptPosition = .normal,
     feature_hash: u64 = 0,
 
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
@@ -162,6 +170,7 @@ pub const ShapePlanKey = struct {
             .text_orientation = options.text_orientation,
             .script_tag = effectiveScriptTag(text, options),
             .language_tag = effectiveLanguageTag(text, options),
+            .script_position = options.script_position,
             .feature_hash = featureOverridesHash(options.features),
         };
     }
@@ -2429,6 +2438,7 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
+    script_position: ScriptPosition = .normal,
     features: []const unicode.FeatureOverride = &.{},
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
@@ -2438,6 +2448,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
     return .{
         .script_tag = effectiveScriptTag(text, options),
         .language_tag = effectiveLanguageTag(text, options),
+        .script_position = options.script_position,
         .features = options.features,
         .writing_mode = options.writing_mode,
         .text_orientation = options.text_orientation,
@@ -2469,6 +2480,7 @@ fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
         a.text_orientation == b.text_orientation and
         a.script_tag == b.script_tag and
         a.language_tag == b.language_tag and
+        a.script_position == b.script_position and
         a.feature_hash == b.feature_hash;
 }
 
@@ -2588,7 +2600,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         // canonical/localized substitutions but before required ligatures.
         // Keeping the order explicit mirrors the OpenType Arabic shaping plan
         // without globally enabling mutually-exclusive form features.
-        var applications_buf: [11]gsub.FeatureApplication = undefined;
+        var applications_buf: [12]gsub.FeatureApplication = undefined;
         var application_count: usize = 0;
         const planned_features = [_]gsub.FeatureApplication{
             .{ .tag = unicode.tag("ccmp") },
@@ -2608,9 +2620,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             applications_buf[application_count] = application;
             application_count += 1;
         }
+        if (scriptPositionFeatureApplication(lookup_options.script_position)) |application| {
+            applications_buf[application_count] = application;
+            application_count += 1;
+        }
         try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], &glyph_ids, buffer.allocator, arabic_options, gdef_metadata);
     } else {
         try font.applyGsubWithOptionsUsingGdefForShaping(&glyph_ids, buffer.allocator, gsub_options, gdef_metadata);
+        if (scriptPositionFeatureApplication(lookup_options.script_position)) |application| {
+            try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, &glyph_ids, buffer.allocator, gsub_options, gdef_metadata);
+        }
     }
 
     if (shape_profile) |p| p.gsub_ns += shapeProfileElapsed(gsub_start, profile_io);
@@ -2737,6 +2756,14 @@ fn shapingFeatureEnabled(feature: u32, overrides: []const unicode.FeatureOverrid
         if (override.tag == feature) return override.enabled;
     }
     return default_enabled;
+}
+
+fn scriptPositionFeatureApplication(position: ScriptPosition) ?gsub.FeatureApplication {
+    return switch (position) {
+        .normal => null,
+        .superscript => .{ .tag = unicode.tag("sups") },
+        .subscript => .{ .tag = unicode.tag("subs") },
+    };
 }
 
 const SourceSpan = struct {

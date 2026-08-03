@@ -140,6 +140,7 @@ pub const ParagraphLine = @import("layout.zig").ParagraphLine;
 pub const ParagraphOptions = @import("layout.zig").ParagraphOptions;
 pub const PositionedGlyph = @import("render_bridge.zig").PositionedGlyph;
 pub const PositionedAttributedRun = @import("core.zig").PositionedAttributedRun;
+pub const ScriptPosition = @import("layout.zig").ScriptPosition;
 pub const ShapeOptions = @import("layout.zig").ShapeOptions;
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
 pub const ShapePlan = @import("layout.zig").ShapePlan;
@@ -1284,6 +1285,7 @@ test "caches shape plans by direction script language and features" {
     const rtl_key = ShapePlanKey.fromText("abc", .{ .direction = .rtl });
     const logical_key = ShapePlanKey.fromText("abc", .{ .reorder_bidi = false });
     const feature_key = ShapePlanKey.fromText("abc", .{ .features = &disable_liga });
+    const superscript_key = ShapePlanKey.fromText("abc", .{ .script_position = .superscript });
     const japanese_key = ShapePlanKey.fromText("一", .{ .language_tag = .jan });
 
     const first = try cache.getOrPut(latin_key);
@@ -1295,9 +1297,11 @@ test "caches shape plans by direction script language and features" {
     _ = try cache.getOrPut(rtl_key);
     _ = try cache.getOrPut(logical_key);
     _ = try cache.getOrPut(feature_key);
+    _ = try cache.getOrPut(superscript_key);
     _ = try cache.getOrPut(japanese_key);
-    try std.testing.expectEqual(@as(usize, 5), cache.plans.items.len);
+    try std.testing.expectEqual(@as(usize, 6), cache.plans.items.len);
     try std.testing.expect(latin_key.feature_hash != feature_key.feature_hash);
+    try std.testing.expect(latin_key.script_position != superscript_key.script_position);
     try std.testing.expect(japanese_key.language_tag == .jan);
 }
 
@@ -4509,6 +4513,14 @@ test "applies optional GSUB superscript and subscript features when enabled" {
     const subscript = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .features = &enable_subs });
     try std.testing.expectEqual(@as(usize, 1), subscript.glyphs.len);
     try std.testing.expectEqual(@as(GlyphId, 3), subscript.glyphs[0].glyph_id);
+
+    const preset_superscript = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .script_position = .superscript });
+    try std.testing.expectEqual(@as(usize, 1), preset_superscript.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 2), preset_superscript.glyphs[0].glyph_id);
+
+    const preset_subscript = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .script_position = .subscript });
+    try std.testing.expectEqual(@as(usize, 1), preset_subscript.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 3), preset_subscript.glyphs[0].glyph_id);
 }
 
 test "applies GSUB contextual substitution with nested lookup" {

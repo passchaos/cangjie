@@ -298,6 +298,10 @@ pub fn buildSelectiveGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try selectiveGsubTtfTables(allocator));
 }
 
+pub fn buildScriptFeatureGsubTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try scriptFeatureGsubTtfTables(allocator));
+}
+
 pub fn buildContextGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try contextGsubTtfTables(allocator));
 }
@@ -1355,6 +1359,21 @@ fn selectiveGsubTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 9);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "GSUB", .data = try selectiveGsubTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
+    tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    return tables;
+}
+
+fn scriptFeatureGsubTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "GSUB", .data = try scriptFeatureGsubTable(allocator) };
     tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
@@ -3296,6 +3315,65 @@ fn selectiveGsubTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 110, 2);
     writeU16(bytes, 112, 2);
     writeU16(bytes, 114, 1);
+    return bytes;
+}
+
+fn scriptFeatureGsubTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 106);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 34);
+    writeU16(bytes, 8, 60);
+
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 0);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 0);
+    writeU16(bytes, 30, 1);
+
+    writeU16(bytes, 34, 2);
+    writeTag(bytes, 36, "subs");
+    writeU16(bytes, 40, 14);
+    writeTag(bytes, 42, "sups");
+    writeU16(bytes, 46, 20);
+    writeU16(bytes, 48, 0);
+    writeU16(bytes, 50, 1);
+    writeU16(bytes, 52, 1);
+    writeU16(bytes, 54, 0);
+    writeU16(bytes, 56, 1);
+    writeU16(bytes, 58, 0);
+
+    writeU16(bytes, 60, 2);
+    writeU16(bytes, 62, 6);
+    writeU16(bytes, 64, 26);
+
+    writeU16(bytes, 66, 1);
+    writeU16(bytes, 68, 0);
+    writeU16(bytes, 70, 1);
+    writeU16(bytes, 72, 8);
+    writeU16(bytes, 74, 1);
+    writeU16(bytes, 76, 6);
+    writeI16(bytes, 78, 1);
+    writeU16(bytes, 80, 1);
+    writeU16(bytes, 82, 1);
+    writeU16(bytes, 84, 1);
+
+    writeU16(bytes, 86, 1);
+    writeU16(bytes, 88, 0);
+    writeU16(bytes, 90, 1);
+    writeU16(bytes, 92, 8);
+    writeU16(bytes, 94, 1);
+    writeU16(bytes, 96, 6);
+    writeI16(bytes, 98, 2);
+    writeU16(bytes, 100, 1);
+    writeU16(bytes, 102, 1);
+    writeU16(bytes, 104, 1);
     return bytes;
 }
 

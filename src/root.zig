@@ -4483,6 +4483,34 @@ test "applies only GSUB lookups referenced by active features" {
     try std.testing.expectEqual(@as(GlyphId, 1), unligated.glyphs[1].glyph_id);
 }
 
+test "applies optional GSUB superscript and subscript features when enabled" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildScriptFeatureGsubTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const plain = try TextShaper.shapeUtf8(&font, &layout_buffer, "A", 20);
+    try std.testing.expectEqual(@as(usize, 1), plain.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), plain.glyphs[0].glyph_id);
+
+    const enable_sups = [_]FeatureOverride{.{ .tag = openTypeTag("sups"), .enabled = true }};
+    const superscript = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .features = &enable_sups });
+    try std.testing.expectEqual(@as(usize, 1), superscript.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 2), superscript.glyphs[0].glyph_id);
+
+    const enable_subs = [_]FeatureOverride{.{ .tag = openTypeTag("subs"), .enabled = true }};
+    const subscript = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .features = &enable_subs });
+    try std.testing.expectEqual(@as(usize, 1), subscript.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 3), subscript.glyphs[0].glyph_id);
+}
+
 test "applies GSUB contextual substitution with nested lookup" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

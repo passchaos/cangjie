@@ -101,9 +101,12 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
         harfrust_result.glyph_count,
     });
     if (mismatch) |m| {
+        const mismatch_text = if (m.line_index < base_options.text_lines.len) base_options.text_lines[m.line_index] else "";
         std.debug.print(
             \\parity=fail
+            \\mismatch_index={d}
             \\mismatch_line={d}
+            \\mismatch_text={s}
             \\cangjie_line_glyphs={d}
             \\harfrust_line_glyphs={d}
             \\cangjie_line_checksum={x}
@@ -111,6 +114,8 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
             \\cangjie_glyph_ids=
         , .{
             m.line_index,
+            m.line_index + 1,
+            mismatch_text,
             m.cangjie.glyph_count,
             m.harfrust.glyph_count,
             m.cangjie.checksum,

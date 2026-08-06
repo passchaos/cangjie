@@ -2181,12 +2181,42 @@ fn appendRtlVisualBidiItemsByGrapheme(allocator: std.mem.Allocator, items: *std.
         const cluster_start = run.byte_start + cluster.byte_start;
         const cluster_end = cluster_start + cluster.byte_len;
         const cluster_range = logicalRangeForBytes(logical, cluster_start, cluster_end);
-        var index = @max(cluster_range.start, range.start);
+        const start = @max(cluster_range.start, range.start);
         const end = @min(cluster_range.end, range.end);
-        while (index < end) : (index += 1) {
-            try appendVisualBidiItem(allocator, items, logical_to_visual, logical[index], run.direction);
+        if (rtlClusterNeedsCodepointOrder(logical[start..end])) {
+            var index = end;
+            while (index > start) {
+                index -= 1;
+                try appendVisualBidiItem(allocator, items, logical_to_visual, logical[index], run.direction);
+            }
+        } else {
+            var index = start;
+            while (index < end) : (index += 1) {
+                try appendVisualBidiItem(allocator, items, logical_to_visual, logical[index], run.direction);
+            }
         }
     }
+}
+
+fn rtlClusterNeedsCodepointOrder(items: []const BidiMapItem) bool {
+    if (items.len < 2) return false;
+    for (items) |item| {
+        if (isBidiFormatControl(item.codepoint)) return true;
+    }
+    return false;
+}
+
+fn isBidiFormatControl(codepoint: u21) bool {
+    return codepoint == 0x00ad or
+        codepoint == 0x034f or
+        codepoint == 0x061c or
+        codepoint == 0x180e or
+        (codepoint >= 0x180b and codepoint <= 0x180f) or
+        (codepoint >= 0x200b and codepoint <= 0x200f) or
+        (codepoint >= 0x202a and codepoint <= 0x202e) or
+        (codepoint >= 0x2060 and codepoint <= 0x206f) or
+        codepoint == 0xfeff or
+        (codepoint >= 0xe0000 and codepoint <= 0xe0fff);
 }
 
 fn appendVisualBidiItem(allocator: std.mem.Allocator, items: *std.ArrayList(BidiMapItem), logical_to_visual: []usize, logical: BidiMapItem, direction: BidiClass) !void {

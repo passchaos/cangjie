@@ -2475,6 +2475,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // codepoints and clusters retain source-text identity for rendering,
     // hit-testing, and debug output after substitutions.
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    var has_default_ignorable = false;
     while (it.i < text.len) {
         const cluster = it.i;
         const codepoint = it.nextCodepoint() orelse break;
@@ -2491,6 +2492,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             // still allowing cmap format 14 to select emoji/text or IVS glyphs.
             continue;
         }
+        has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
         try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint));
         try codepoints.append(buffer.allocator, codepoint);
         try clusters.append(buffer.allocator, cluster_base + cluster);
@@ -2650,6 +2652,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try font.kernLookupForShaping()
     else
         null;
+    const invisible_glyph_id = if (has_default_ignorable)
+        try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ')
+    else
+        0;
     for (glyph_ids.items, 0..) |glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
@@ -2688,9 +2694,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             x_offset = markAttachmentXOffset(adjustment.x_placement, advance_to_base, scale);
             adjustment_x_advance = -@as(f32, @floatFromInt(metrics.advance_width));
         }
-        const base_advance = if (glyph_class == .mark and !adjustment.mark_attachment) 0 else metrics.advance_width;
         const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
-        const horizontal_advance = (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale;
+        const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint);
+        const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
+        const base_advance = if (hide_default_ignorable or (glyph_class == .mark and !adjustment.mark_attachment)) 0 else metrics.advance_width;
+        const horizontal_advance = if (hide_default_ignorable)
+            0
+        else
+            (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale;
         const use_sideways_vertical_advance = lookup_options.writing_mode.isVertical() and
             glyphUsesSidewaysAdvance(source_codepoint, lookup_options.text_orientation);
         const vertical_metrics = if (lookup_options.writing_mode.isVertical())
@@ -2715,14 +2726,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         else
             0.0;
         try buffer.glyphs.append(buffer.allocator, .{
-            .glyph_id = glyph_id,
+            .glyph_id = output_glyph_id,
             .codepoint = source_codepoint,
             .cluster = source_span.start,
             .source_byte_len = source_span.end - source_span.start,
             .x_advance = if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
-            .y_advance = if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
-            .x_offset = if (lookup_options.writing_mode.isVertical()) vertical_x_offset + @as(f32, @floatFromInt(adjustment.x_placement)) * scale else x_offset,
-            .y_offset = if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale else @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
+            .y_advance = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
+            .x_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_x_offset + @as(f32, @floatFromInt(adjustment.x_placement)) * scale else x_offset,
+            .y_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale else @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
         previous_glyph = glyph_id;
@@ -2832,6 +2843,23 @@ fn glyphUsesSidewaysAdvance(_: u21, orientation: TextOrientation) bool {
 fn isVariationSelector(codepoint: u21) bool {
     return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
         (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
+}
+
+fn isDefaultIgnorableForShaping(codepoint: u21) bool {
+    return codepoint == 0x00ad or
+        codepoint == 0x034f or
+        codepoint == 0x061c or
+        codepoint == 0x180e or
+        (codepoint >= 0x180b and codepoint <= 0x180f) or
+        (codepoint >= 0x200b and codepoint <= 0x200f) or
+        (codepoint >= 0x202a and codepoint <= 0x202e) or
+        (codepoint >= 0x2060 and codepoint <= 0x206f) or
+        (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
+        codepoint == 0xfeff or
+        (codepoint >= 0xfff0 and codepoint <= 0xfff8) or
+        (codepoint >= 0x1bca0 and codepoint <= 0x1bca3) or
+        (codepoint >= 0x1d173 and codepoint <= 0x1d17a) or
+        (codepoint >= 0xe0000 and codepoint <= 0xe0fff);
 }
 
 fn glyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {

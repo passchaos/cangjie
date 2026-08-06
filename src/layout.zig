@@ -2382,6 +2382,7 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
+    direction: TextDirection = .ltr,
     script_position: ScriptPosition = .normal,
     features: []const unicode.FeatureOverride = &.{},
     writing_mode: WritingMode = .horizontal_tb,
@@ -2392,6 +2393,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
     return .{
         .script_tag = effectiveScriptTag(text, options),
         .language_tag = effectiveLanguageTag(text, options),
+        .direction = options.direction,
         .script_position = options.script_position,
         .features = options.features,
         .writing_mode = options.writing_mode,
@@ -2493,7 +2495,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             continue;
         }
         has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
-        try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint));
+        const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
+        try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint));
         try codepoints.append(buffer.allocator, codepoint);
         try clusters.append(buffer.allocator, cluster_base + cluster);
         try source_ends.append(buffer.allocator, cluster_base + it.i);
@@ -2845,6 +2848,14 @@ fn glyphUsesSidewaysAdvance(_: u21, orientation: TextOrientation) bool {
 fn isVariationSelector(codepoint: u21) bool {
     return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
         (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
+}
+
+fn mirroredCodepointForRtlShaping(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21, lookup_options: LookupOptions) !u21 {
+    if (lookup_options.direction != .rtl) return codepoint;
+    if (lookup_options.writing_mode.isVertical()) return codepoint;
+    const mirrored = unicode.mirroredCodepoint(codepoint);
+    if (mirrored == codepoint) return codepoint;
+    return if (try glyphIndexWithOptionalCache(font, glyph_index_cache, mirrored) != 0) mirrored else codepoint;
 }
 
 fn reorderArabicMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21) void {

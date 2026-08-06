@@ -7,9 +7,7 @@ const report = @import("shape_bench/report.zig");
 const runner = @import("shape_bench/runner.zig");
 
 pub fn main(init: std.process.Init) !void {
-    var debug_allocator = std.heap.DebugAllocator(.{}){};
-    defer _ = debug_allocator.deinit();
-    const allocator = debug_allocator.allocator();
+    const allocator = std.heap.smp_allocator;
 
     var args_iterator = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
     defer args_iterator.deinit();

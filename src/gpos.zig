@@ -572,6 +572,12 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
 }
 
 fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*RunDigestCache) (GposError || std.mem.Allocator.Error)!void {
+    const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
+    defer {
+        if (options.shape_profile) |profile| {
+            profile.recordGposLookupTime(lookup_index, shapeProfileElapsed(lookup_start, options.profile_io));
+        }
+    }
     try ensurePositionLookupHeaderWithin(table, lookup_offset);
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);

@@ -162,6 +162,26 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
             result.profile.arabic_stage_lookup_count[stage_index],
         });
     }
+    for (result.profile.gsub_lookup_entries[0..result.profile.gsub_lookup_entry_count]) |entry| {
+        std.debug.print(
+            \\profile_gsub_lookup index={d} ns={d} count={d}
+            \\
+        , .{
+            entry.lookup_index,
+            entry.elapsed_ns,
+            entry.count,
+        });
+    }
+    for (result.profile.gpos_lookup_entries[0..result.profile.gpos_lookup_entry_count]) |entry| {
+        std.debug.print(
+            \\profile_gpos_lookup index={d} ns={d} count={d}
+            \\
+        , .{
+            entry.lookup_index,
+            entry.elapsed_ns,
+            entry.count,
+        });
+    }
     for (result.samples) |sample| {
         const sample_ns_per_glyph = if (sample.glyph_count == 0) 0 else divFloat(sample.elapsed_ns, sample.glyph_count);
         std.debug.print(

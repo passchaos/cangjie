@@ -1,4 +1,12 @@
 pub const ShapeStageProfile = struct {
+    pub const max_lookup_entries = 32;
+
+    pub const LookupEntry = struct {
+        lookup_index: u16 = 0,
+        elapsed_ns: i128 = 0,
+        count: usize = 0,
+    };
+
     total_ns: i128 = 0,
     validate_ns: i128 = 0,
     options_ns: i128 = 0,
@@ -29,4 +37,34 @@ pub const ShapeStageProfile = struct {
     gpos_mark_lookup_count: usize = 0,
     gpos_context_lookup_count: usize = 0,
     gpos_extension_lookup_count: usize = 0,
+    gsub_lookup_entries: [max_lookup_entries]LookupEntry = [_]LookupEntry{.{}} ** max_lookup_entries,
+    gsub_lookup_entry_count: usize = 0,
+    gpos_lookup_entries: [max_lookup_entries]LookupEntry = [_]LookupEntry{.{}} ** max_lookup_entries,
+    gpos_lookup_entry_count: usize = 0,
+
+    pub fn recordGsubLookupTime(self: *ShapeStageProfile, lookup_index: ?u16, elapsed_ns: i128) void {
+        self.recordLookupTime(&self.gsub_lookup_entries, &self.gsub_lookup_entry_count, lookup_index, elapsed_ns);
+    }
+
+    pub fn recordGposLookupTime(self: *ShapeStageProfile, lookup_index: ?u16, elapsed_ns: i128) void {
+        self.recordLookupTime(&self.gpos_lookup_entries, &self.gpos_lookup_entry_count, lookup_index, elapsed_ns);
+    }
+
+    fn recordLookupTime(self: *ShapeStageProfile, entries: *[max_lookup_entries]LookupEntry, entry_count: *usize, lookup_index: ?u16, elapsed_ns: i128) void {
+        _ = self;
+        const index = lookup_index orelse return;
+        for (entries[0..entry_count.*]) |*entry| {
+            if (entry.lookup_index != index) continue;
+            entry.elapsed_ns += elapsed_ns;
+            entry.count += 1;
+            return;
+        }
+        if (entry_count.* >= entries.len) return;
+        entries[entry_count.*] = .{
+            .lookup_index = index,
+            .elapsed_ns = elapsed_ns,
+            .count = 1,
+        };
+        entry_count.* += 1;
+    }
 };

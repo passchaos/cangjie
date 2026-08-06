@@ -2655,6 +2655,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // scaled into user-space coordinates for the final GlyphPosition stream.
     var previous_glyph: ?GlyphId = null;
     var adjustment_cursor: usize = 0;
+    const kern_lookup = if (!lookup_options.writing_mode.isVertical() and shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true))
+        try font.kernLookupForShaping()
+    else
+        null;
     for (glyph_ids.items, 0..) |glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
@@ -2664,11 +2668,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             SourceSpan{ .start = cluster_base, .end = cluster_base };
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
-        if (!lookup_options.writing_mode.isVertical() and shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true)) {
+        if (kern_lookup) |lookup| {
             if (previous_glyph) |previous| {
                 const previous_adjustment = findAdjustmentSorted(gpos_adjustments.items, index - 1, &adjustment_cursor);
                 if (!previous_adjustment.pair_positioned) {
-                    const kern = try font.kerning(previous, glyph_id);
+                    const kern = try lookup.kerning(previous, glyph_id);
                     if (kern != 0 and buffer.glyphs.items.len > 0) {
                         buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern)) * scale;
                     }

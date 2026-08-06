@@ -266,6 +266,23 @@ pub const GdefLookupMetadata = struct {
     }
 };
 
+pub const KernLookupForShaping = struct {
+    font: *const Font,
+    kern: ?TableRecord,
+
+    pub fn kerning(self: KernLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
+        if (left >= self.font.glyph_count or right >= self.font.glyph_count) return error.InvalidGlyph;
+        const kern = self.kern orelse return 0;
+        if (kern.length < 4) return 0;
+        const version = try bin.readU32At(self.font.data, kern.offset);
+        if (version == 0x00010000) {
+            return try Font.appleKernKerning(self.font.data, kern, left, right);
+        }
+        if ((version >> 16) != 0) return 0;
+        return try Font.legacyKernKerning(self.font.data, kern, left, right);
+    }
+};
+
 pub const Font = struct {
     /// The font is a borrowed byte slice. Table records and cmap subtable
     /// descriptors below only point back into this slice, so the caller must
@@ -699,6 +716,12 @@ pub const Font = struct {
         }
         if ((version >> 16) != 0) return 0;
         return try legacyKernKerning(self.data, kern, left, right);
+    }
+
+    pub fn kernLookupForShaping(self: *const Font) FontError!KernLookupForShaping {
+        const kern = self.kern;
+        if (kern) |kern_table| try validateSfntTableChecksum(self.data, kern_table);
+        return .{ .font = self, .kern = kern };
     }
 
     fn legacyKernKerning(data: []const u8, kern: TableRecord, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {

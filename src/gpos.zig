@@ -1773,6 +1773,9 @@ fn collectChainingCoveragePositioningLookup(table: Table, lookup_offset: usize, 
 
 fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverageSubtable, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    if (table.assume_validated and subtable.input_count == 1 and subtable.backtrack_count == 0 and subtable.lookahead_count == 1 and subtable.pos_count == 1) {
+        return try collectSimpleChainingCoveragePositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options);
+    }
     var input_indices_buf: [64]usize = undefined;
     if (subtable.input_count > input_indices_buf.len) return error.UnsupportedGpos;
     if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..subtable.input_count])) return false;
@@ -1787,6 +1790,19 @@ fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverage
     if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos)) return false;
     if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos)) return false;
     try collectPositionRecordsMapped(table, subtable.records_pos, subtable.pos_count, input_indices_buf[0..subtable.input_count], glyphs, adjustments, allocator, options);
+    return true;
+}
+
+fn collectSimpleChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverageSubtable, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    const input_coverage_offset = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.input_offsets_pos));
+    if (!try contextCoverageContains(table, input_coverage_offset, glyphs[pos])) return false;
+    const lookahead_index = nextUnignoredGlyph(glyphs, pos + 1, lookup_flag, options) orelse return false;
+    const lookahead_coverage_offset = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.lookahead_offsets_pos));
+    if (!try contextCoverageContains(table, lookahead_coverage_offset, glyphs[lookahead_index])) return false;
+    const sequence_index = try readU16(table, subtable.records_pos);
+    if (sequence_index != 0) return false;
+    const lookup_index = try readU16(table, subtable.records_pos + 2);
+    try collectNestedAdjustment(table, glyphs, pos, lookup_index, adjustments, allocator, options);
     return true;
 }
 

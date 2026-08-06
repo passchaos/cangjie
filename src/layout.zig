@@ -2586,7 +2586,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 }
             }
         } else {
-            if (gsub_after_proof) {
+            if (gsub_after_proof and buffer.lookup_selection_cache != null) {
+                const plan = try buffer.lookup_selection_cache.?.gsubFeatureLookupPlan(font, applications_buf[0..application_count], arabic_options, gdef_metadata.*);
+                try font.applyGsubFeatureLookupPlanUsingGdefAfterProof(plan, glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+            } else if (gsub_after_proof) {
                 try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
             } else {
                 try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
@@ -2626,6 +2629,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .profile_io = profile_io,
     };
     if (buffer.lookup_selection_cache) |selection_cache| {
+        gpos_options.lookup_accelerators = try selection_cache.gposLookupAccelerators(font);
         gpos_options.selected_lookups = try selection_cache.gposLookups(font, gpos_options, gdef_metadata.*);
     }
     if (buffer.gpos_table_proof_cache) |proof_cache| {

@@ -172,10 +172,22 @@ pub const LookupSelectionCache = struct {
         font_addr: usize,
         accelerators: []gsub.LookupAccelerator,
     };
+    const GposAcceleratorEntry = struct {
+        font_addr: usize,
+        accelerators: []gpos.LookupAccelerator,
+    };
+    const FeaturePlanEntry = struct {
+        key: LookupSelectionKey,
+        features: []unicode.FeatureOverride,
+        applications: []gsub.FeatureApplication,
+        plan: gsub.FeatureLookupPlan,
+    };
 
     allocator: std.mem.Allocator,
     entries: std.ArrayList(Entry) = .empty,
     gsub_accelerator_entries: std.ArrayList(GsubAcceleratorEntry) = .empty,
+    gpos_accelerator_entries: std.ArrayList(GposAcceleratorEntry) = .empty,
+    gsub_feature_plan_entries: std.ArrayList(FeaturePlanEntry) = .empty,
     hits: usize = 0,
     misses: usize = 0,
 
@@ -185,6 +197,8 @@ pub const LookupSelectionCache = struct {
 
     pub fn deinit(self: *LookupSelectionCache) void {
         self.clear();
+        self.gsub_feature_plan_entries.deinit(self.allocator);
+        self.gpos_accelerator_entries.deinit(self.allocator);
         self.gsub_accelerator_entries.deinit(self.allocator);
         self.entries.deinit(self.allocator);
         self.* = undefined;
@@ -200,6 +214,16 @@ pub const LookupSelectionCache = struct {
             gsub.deinitLookupAccelerators(self.allocator, entry.accelerators);
         }
         self.gsub_accelerator_entries.clearRetainingCapacity();
+        for (self.gpos_accelerator_entries.items) |entry| {
+            self.allocator.free(entry.accelerators);
+        }
+        self.gpos_accelerator_entries.clearRetainingCapacity();
+        for (self.gsub_feature_plan_entries.items) |*entry| {
+            self.allocator.free(entry.features);
+            self.allocator.free(entry.applications);
+            entry.plan.deinit(self.allocator);
+        }
+        self.gsub_feature_plan_entries.clearRetainingCapacity();
         self.hits = 0;
         self.misses = 0;
     }
@@ -233,6 +257,53 @@ pub const LookupSelectionCache = struct {
             .accelerators = accelerators,
         });
         return self.gsub_accelerator_entries.items[self.gsub_accelerator_entries.items.len - 1].accelerators;
+    }
+
+    pub fn gsubFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.FeatureApplication, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) !gsub.FeatureLookupPlan {
+        const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
+        for (self.gsub_feature_plan_entries.items) |entry| {
+            if (!lookupSelectionKeysEqual(entry.key, key)) continue;
+            if (!featureOverridesEqual(entry.features, options.features)) continue;
+            if (!featureApplicationsEqual(entry.applications, applications)) continue;
+            self.hits += 1;
+            return entry.plan;
+        }
+
+        self.misses += 1;
+        const plan = try font.gsubFeatureLookupPlanForShaping(self.allocator, applications, options, gdef_metadata);
+        errdefer {
+            var mutable_plan = plan;
+            mutable_plan.deinit(self.allocator);
+        }
+        const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
+        errdefer self.allocator.free(features);
+        const applications_copy = try self.allocator.dupe(gsub.FeatureApplication, applications);
+        errdefer self.allocator.free(applications_copy);
+        try self.gsub_feature_plan_entries.append(self.allocator, .{
+            .key = key,
+            .features = features,
+            .applications = applications_copy,
+            .plan = plan,
+        });
+        return self.gsub_feature_plan_entries.items[self.gsub_feature_plan_entries.items.len - 1].plan;
+    }
+
+    pub fn gposLookupAccelerators(self: *LookupSelectionCache, font: *const Font) ![]const gpos.LookupAccelerator {
+        const font_addr = @intFromPtr(font);
+        for (self.gpos_accelerator_entries.items) |entry| {
+            if (entry.font_addr != font_addr) continue;
+            self.hits += 1;
+            return entry.accelerators;
+        }
+
+        self.misses += 1;
+        const accelerators = try font.gposLookupAcceleratorsForShaping(self.allocator);
+        errdefer self.allocator.free(accelerators);
+        try self.gpos_accelerator_entries.append(self.allocator, .{
+            .font_addr = font_addr,
+            .accelerators = accelerators,
+        });
+        return self.gpos_accelerator_entries.items[self.gpos_accelerator_entries.items.len - 1].accelerators;
     }
 
     pub fn gposLookups(self: *LookupSelectionCache, font: *const Font, options: gpos.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {
@@ -295,6 +366,14 @@ fn featureOverridesEqual(a: []const unicode.FeatureOverride, b: []const unicode.
     if (a.len != b.len) return false;
     for (a, b) |a_feature, b_feature| {
         if (a_feature.tag != b_feature.tag or a_feature.enabled != b_feature.enabled) return false;
+    }
+    return true;
+}
+
+fn featureApplicationsEqual(a: []const gsub.FeatureApplication, b: []const gsub.FeatureApplication) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |a_application, b_application| {
+        if (a_application.tag != b_application.tag or a_application.source_scoped != b_application.source_scoped) return false;
     }
     return true;
 }

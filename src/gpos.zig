@@ -1,5 +1,6 @@
 const std = @import("std");
 const bin = @import("binary.zig");
+const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
@@ -73,9 +74,16 @@ pub const LookupOptions = struct {
     /// This is a shaping fast path; callers that supply it must keep it in
     /// sync with the other selection options.
     selected_lookups: ?[]const u16 = null,
+    /// Optional per-lookup prefilters built once for the validated GPOS table.
+    /// The slice is indexed by LookupList index and may be shared across runs.
+    lookup_accelerators: ?[]const LookupAccelerator = null,
     assume_validated: bool = false,
     shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
     profile_io: ?std.Io = null,
+};
+
+pub const LookupAccelerator = struct {
+    coverage_digest: GlyphDigest = .{},
 };
 
 const max_context_preflight_depth = 16;
@@ -154,12 +162,12 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
         for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-            try collectLookup(table, lookup_offset, glyphs, adjustments, allocator, options);
+            try collectLookupWithIndex(table, lookup_offset, lookup_index, glyphs, adjustments, allocator, options);
         }
     } else {
         for (0..lookup_count) |i| {
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
-            try collectLookup(table, lookup_offset, glyphs, adjustments, allocator, options);
+            try collectLookupWithIndex(table, lookup_offset, @intCast(i), glyphs, adjustments, allocator, options);
         }
     }
 }
@@ -171,6 +179,82 @@ pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: 
     if (major != 1) return error.UnsupportedGpos;
     var lookups = try selectedLookupIndices(table, allocator, options);
     return try lookups.toOwnedSlice(allocator);
+}
+
+pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)![]LookupAccelerator {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = true };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGpos;
+
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+    const accelerators = try allocator.alloc(LookupAccelerator, lookup_count);
+    @memset(accelerators, .{});
+    errdefer allocator.free(accelerators);
+    for (accelerators, 0..) |*accelerator, lookup_i| {
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + lookup_i * 2));
+        accelerator.* = try buildLookupAccelerator(table, lookup_offset);
+    }
+    return accelerators;
+}
+
+fn buildLookupAccelerator(table: Table, lookup_offset: usize) GposError!LookupAccelerator {
+    const lookup_type = try readU16(table, lookup_offset);
+    const subtable_count = try readU16(table, lookup_offset + 4);
+    var digest = GlyphDigest.empty();
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        if (try lookupSubtableCoverageOffset(table, subtable_offset, lookup_type)) |coverage_offset| {
+            digest.unionWith(try coverageDigest(table, coverage_offset));
+        }
+    }
+    return .{ .coverage_digest = digest };
+}
+
+fn lookupSubtableCoverageOffset(table: Table, subtable_offset: usize, lookup_type: u16) GposError!?usize {
+    switch (lookup_type) {
+        1, 2, 3 => return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
+        4, 5, 6 => return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
+        7 => {
+            const pos_format = try readU16(table, subtable_offset);
+            switch (pos_format) {
+                1, 2 => return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
+                3 => {
+                    const glyph_count = try readU16(table, subtable_offset + 2);
+                    if (glyph_count == 0) return null;
+                    return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
+                },
+                else => return error.UnsupportedGpos,
+            }
+        },
+        8 => {
+            const pos_format = try readU16(table, subtable_offset);
+            switch (pos_format) {
+                1 => return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
+                2 => return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
+                3 => {
+                    var cursor = subtable_offset + 2;
+                    const backtrack_count = try readU16(table, cursor);
+                    cursor += 2 + backtrack_count * 2;
+                    const input_count = try readU16(table, cursor);
+                    cursor += 2;
+                    if (input_count == 0) return null;
+                    return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, cursor));
+                },
+                else => return error.UnsupportedGpos,
+            }
+        },
+        9 => {
+            const pos_format = try readU16(table, subtable_offset);
+            if (pos_format != 1) return error.UnsupportedGpos;
+            const extension_lookup_type = try readU16(table, subtable_offset + 2);
+            if (extension_lookup_type == 9) return error.UnsupportedGpos;
+            const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+            return try lookupSubtableCoverageOffset(table, extension_subtable, extension_lookup_type);
+        },
+        else => return null,
+    }
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!std.ArrayList(u16) {
@@ -354,6 +438,10 @@ fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
 }
 
 fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    try collectLookupWithIndex(table, lookup_offset, null, glyphs, adjustments, allocator, options);
+}
+
+fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     try ensurePositionLookupHeaderWithin(table, lookup_offset);
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
@@ -370,6 +458,10 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
         // MarkAttachmentType mechanism when bit 4 is clear.
         lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
         try validateMarkFilteringSetIndex(lookup_options);
+    }
+    if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        const run_digest = glyphRunDigest(glyphs, lookup_flag, lookup_options);
+        if (run_digest.isEmpty() or !accelerator.coverage_digest.mayIntersect(run_digest)) return;
     }
     if (lookup_type == 1) {
         try collectSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
@@ -416,6 +508,24 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
             else => {},
         }
     }
+}
+
+fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
+    const accelerators = options.lookup_accelerators orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const accelerator = &accelerators[index];
+    if (accelerator.coverage_digest.isEmpty()) return null;
+    return accelerator;
+}
+
+fn glyphRunDigest(glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
+    var digest = GlyphDigest.empty();
+    for (glyphs) |glyph| {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+        digest.add(glyph);
+    }
+    return digest;
 }
 
 fn extensionPositionLookupType(table: Table, lookup_offset: usize, subtable_count: u16) GposError!?u16 {
@@ -2928,6 +3038,30 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+fn coverageDigest(table: Table, coverage_offset: usize) GposError!GlyphDigest {
+    const format = try readU16(table, coverage_offset);
+    var digest = GlyphDigest.empty();
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16(table, coverage_offset + 2);
+            if (!table.assume_validated) try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            for (0..glyph_count) |glyph_i| {
+                digest.add(try readU16(table, coverage_offset + 4 + glyph_i * 2));
+            }
+        },
+        2 => {
+            const range_count = try readU16(table, coverage_offset + 2);
+            if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                digest.addRange(try readU16(table, range_offset), try readU16(table, range_offset + 2));
+            }
+        },
+        else => return error.UnsupportedGpos,
+    }
+    return digest;
 }
 
 fn contextCoverageContains(table: Table, coverage_offset: usize, glyph: GlyphId) GposError!bool {

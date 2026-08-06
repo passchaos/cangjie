@@ -794,11 +794,21 @@ fn collectPairAdjustmentLookup(table: Table, lookup_offset: usize, subtable_coun
     // lookup must not add more deltas for that same first glyph; otherwise
     // split pair data cascades instead of following OpenType lookup ordering.
     if (glyphs.len < 2) return;
-    var first_index: usize = 0;
-    while (first_index + 1 < glyphs.len) : (first_index += 1) {
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, first_index, adjustments, allocator, lookup_flag, options)) break;
+    var matched_stack: [stack_matched_capacity]bool = undefined;
+    const matched_scratch = try BoolScratch.init(allocator, glyphs.len, &matched_stack);
+    defer matched_scratch.deinit(allocator);
+    const matched = matched_scratch.items;
+    @memset(matched, false);
+
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const parsed = try parsePairPositionSubtable(table, subtable_offset);
+        var first_index: usize = 0;
+        while (first_index + 1 < glyphs.len) : (first_index += 1) {
+            if (matched[first_index]) continue;
+            if (try collectPairAdjustmentAtParsed(table, parsed, glyphs, first_index, adjustments, allocator, lookup_flag, options)) {
+                matched[first_index] = true;
+            }
         }
     }
 }
@@ -1014,13 +1024,42 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
 
 fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (glyphs.len < 2) return;
+    const parsed = try parsePairPositionSubtable(table, subtable_offset);
     var i: usize = 0;
     while (i + 1 < glyphs.len) : (i += 1) {
-        _ = try collectPairAdjustmentAt(table, subtable_offset, glyphs, i, adjustments, allocator, lookup_flag, options);
+        _ = try collectPairAdjustmentAtParsed(table, parsed, glyphs, i, adjustments, allocator, lookup_flag, options);
     }
 }
 
+const PairPositionSubtable = struct {
+    subtable_offset: usize,
+    pos_format: u16,
+    coverage_offset: usize,
+    value_format_1: u16,
+    value_format_2: u16,
+    value_size_1: usize,
+    value_size_2: usize,
+};
+
+fn parsePairPositionSubtable(table: Table, subtable_offset: usize) GposError!PairPositionSubtable {
+    const pos_format = try readU16(table, subtable_offset);
+    return .{
+        .subtable_offset = subtable_offset,
+        .pos_format = pos_format,
+        .coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
+        .value_format_1 = try readU16(table, subtable_offset + 4),
+        .value_format_2 = try readU16(table, subtable_offset + 6),
+        .value_size_1 = try valueRecordSize(try readU16(table, subtable_offset + 4)),
+        .value_size_2 = try valueRecordSize(try readU16(table, subtable_offset + 6)),
+    };
+}
+
 fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, first_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    const parsed = try parsePairPositionSubtable(table, subtable_offset);
+    return try collectPairAdjustmentAtParsed(table, parsed, glyphs, first_index, adjustments, allocator, lookup_flag, options);
+}
+
+fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, glyphs: []const GlyphId, first_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     // Contextual positioning can invoke a PairPos lookup at a specific matched
     // sequence index. Keep the pair matcher index-addressable so top-level
     // PairPos and nested PosLookupRecord application share the same semantics,
@@ -1029,37 +1068,30 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) return false;
     const second_index = nextUnignoredGlyph(glyphs, first_index + 1, lookup_flag, options) orelse return false;
 
-    const pos_format = try readU16(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const value_format_1 = try readU16(table, subtable_offset + 4);
-    const value_format_2 = try readU16(table, subtable_offset + 6);
-    const value_size_1 = try valueRecordSize(value_format_1);
-    const value_size_2 = try valueRecordSize(value_format_2);
-
-    switch (pos_format) {
+    switch (parsed.pos_format) {
         1 => {
             // PairPos format 1 is a sparse list keyed by the first glyph's
             // coverage index, then searched by the second glyph.
-            const pair_set_count = try readU16(table, subtable_offset + 8);
-            const coverage = try coverageIndex(table, coverage_offset, glyphs[first_index]) orelse return false;
+            const pair_set_count = try readU16(table, parsed.subtable_offset + 8);
+            const coverage = try coverageIndex(table, parsed.coverage_offset, glyphs[first_index]) orelse return false;
             if (coverage >= pair_set_count) return false;
-            const pair_set_offset = subtable_offset + try readU16(table, subtable_offset + 10 + coverage * 2);
+            const pair_set_offset = parsed.subtable_offset + try readU16(table, parsed.subtable_offset + 10 + coverage * 2);
             const pair_value_count = try readU16(table, pair_set_offset);
             const pair_record = if (table.assume_validated)
-                try findValidatedPairValueRecord(table, pair_set_offset, pair_value_count, value_size_1, value_size_2, glyphs[second_index]) orelse return false
+                try findValidatedPairValueRecord(table, pair_set_offset, pair_value_count, parsed.value_size_1, parsed.value_size_2, glyphs[second_index]) orelse return false
             else
                 try ensurePairValueRecordsWithin(
                     table,
                     pair_set_offset,
                     pair_value_count,
-                    value_format_1,
-                    value_format_2,
-                    value_size_1,
-                    value_size_2,
+                    parsed.value_format_1,
+                    parsed.value_format_2,
+                    parsed.value_size_1,
+                    parsed.value_size_2,
                     glyphs[second_index],
                 ) orelse return false;
-            const value_1 = try readValueRecord(table, pair_record + 2, value_format_1, pair_set_offset);
-            const value_2 = try readValueRecord(table, pair_record + 2 + value_size_1, value_format_2, pair_set_offset);
+            const value_1 = try readValueRecord(table, pair_record + 2, parsed.value_format_1, pair_set_offset);
+            const value_2 = try readValueRecord(table, pair_record + 2 + parsed.value_size_1, parsed.value_format_2, pair_set_offset);
             try appendAdjustment(adjustments, allocator, first_index, value_1, true);
             try appendAdjustment(adjustments, allocator, second_index, value_2, false);
             return true;
@@ -1067,19 +1099,19 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
         2 => {
             // PairPos format 2 maps both glyphs through class definitions and
             // indexes a dense class1 x class2 value matrix.
-            const class_def_1 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
-            const class_def_2 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 10));
-            const class_1_count = try readU16(table, subtable_offset + 12);
-            const class_2_count = try readU16(table, subtable_offset + 14);
-            const record_size = value_size_1 + value_size_2;
-            const matrix_offset = subtable_offset + 16;
-            if (try coverageIndex(table, coverage_offset, glyphs[first_index]) == null) return false;
+            const class_def_1 = try checkedRequiredClassDefOffset(table, parsed.subtable_offset, try readU16(table, parsed.subtable_offset + 8));
+            const class_def_2 = try checkedRequiredClassDefOffset(table, parsed.subtable_offset, try readU16(table, parsed.subtable_offset + 10));
+            const class_1_count = try readU16(table, parsed.subtable_offset + 12);
+            const class_2_count = try readU16(table, parsed.subtable_offset + 14);
+            const record_size = parsed.value_size_1 + parsed.value_size_2;
+            const matrix_offset = parsed.subtable_offset + 16;
+            if (try coverageIndex(table, parsed.coverage_offset, glyphs[first_index]) == null) return false;
             const class_1 = try classValue(table, class_def_1, glyphs[first_index]);
             const class_2 = try classValue(table, class_def_2, glyphs[second_index]);
             if (class_1 >= class_1_count or class_2 >= class_2_count) return false;
             const record_offset = matrix_offset + (@as(usize, class_1) * class_2_count + class_2) * record_size;
-            const value_1 = try readValueRecord(table, record_offset, value_format_1, subtable_offset);
-            const value_2 = try readValueRecord(table, record_offset + value_size_1, value_format_2, subtable_offset);
+            const value_1 = try readValueRecord(table, record_offset, parsed.value_format_1, parsed.subtable_offset);
+            const value_2 = try readValueRecord(table, record_offset + parsed.value_size_1, parsed.value_format_2, parsed.subtable_offset);
             try appendAdjustment(adjustments, allocator, first_index, value_1, true);
             try appendAdjustment(adjustments, allocator, second_index, value_2, false);
             return true;

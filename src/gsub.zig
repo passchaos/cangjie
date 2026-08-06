@@ -1901,6 +1901,7 @@ const NestedGlyphChange = struct {
 fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     try ensureSubstitutionRecordsWithin(table, records_offset, record_count, input_indices.len);
     try ensureSubstitutionRecordMarkFilteringSetsValid(table, records_offset, record_count, options);
+    if (try applySingleSubstitutionRecordsMappedFast(table, glyphs, records_offset, record_count, input_indices, options)) return;
 
     // SequenceLookupRecord sequence indexes are expressed in the input sequence
     // matched before any nested lookup runs. Keep a mutable index map so a
@@ -1974,6 +1975,48 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
             }
         }
     }
+}
+
+const max_fast_single_records = 64;
+
+fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, options: LookupOptions) GsubError!bool {
+    if (record_count == 0) return true;
+    if (record_count > max_fast_single_records) return false;
+
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+    var target_indices: [max_fast_single_records]usize = undefined;
+    var lookup_offsets: [max_fast_single_records]usize = undefined;
+    var lookup_flags: [max_fast_single_records]u16 = undefined;
+    var subtable_counts: [max_fast_single_records]u16 = undefined;
+
+    for (0..record_count) |record_i| {
+        const record_offset = records_offset + record_i * 4;
+        const sequence_index = try readU16(table, record_offset);
+        const lookup_index = try readU16(table, record_offset + 2);
+        if (sequence_index >= input_indices.len) return error.BadGsub;
+        if (lookup_index >= lookup_count) return error.BadGsub;
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+        if (try readU16(table, lookup_offset) != 1) return false;
+        target_indices[record_i] = input_indices[sequence_index];
+        lookup_offsets[record_i] = lookup_offset;
+        lookup_flags[record_i] = try readU16(table, lookup_offset + 2);
+        subtable_counts[record_i] = try readU16(table, lookup_offset + 4);
+    }
+
+    for (0..record_count) |record_i| {
+        if (target_indices[record_i] >= glyphs.items.len) continue;
+        var lookup_options = options;
+        if ((lookup_flags[record_i] & 0x0010) != 0) {
+            lookup_options.active_mark_filtering_set = try readU16(table, lookup_offsets[record_i] + 6 + @as(usize, subtable_counts[record_i]) * 2);
+            try validateMarkFilteringSetIndex(lookup_options);
+        }
+        for (0..subtable_counts[record_i]) |subtable_i| {
+            const subtable_offset = lookup_offsets[record_i] + try readU16(table, lookup_offsets[record_i] + 6 + subtable_i * 2);
+            if (try applySingleSubstitutionAt(table, subtable_offset, glyphs, target_indices[record_i], lookup_flags[record_i], lookup_options)) break;
+        }
+    }
+    return true;
 }
 
 fn ensureSubstitutionRecordListWithin(table: Table, records_offset: usize, record_count: usize) GsubError!void {

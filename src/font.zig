@@ -832,6 +832,17 @@ pub const Font = struct {
         // font, so repeat only the borrowed-table checksum proof here instead
         // of rewalking every lookup for every text node.
         try validateSfntTableChecksum(self.data, gsub);
+        try self.applyGsubWithOptionsUsingGdefAfterProof(glyphs, allocator, options, gdef_metadata);
+    }
+
+    pub fn proveGsubTableForShaping(self: *const Font) FontError!void {
+        const gsub = self.gsub orelse return;
+        try validateSfntTableChecksum(self.data, gsub);
+    }
+
+    pub fn applyGsubWithOptionsUsingGdefAfterProof(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        try self.validateGlyphRun(glyphs.items);
+        const gsub = self.gsub orelse return;
         var gsub_options = options;
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
@@ -845,6 +856,12 @@ pub const Font = struct {
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
         return try gsub_mod.selectedLookupIndicesForOptions(self.data, gsub.offset, gsub.length, allocator, gsub_options);
+    }
+
+    pub fn gsubLookupAcceleratorsForShaping(self: *const Font, allocator: std.mem.Allocator) FontError![]gsub_mod.LookupAccelerator {
+        const gsub = self.gsub orelse return try allocator.alloc(gsub_mod.LookupAccelerator, 0);
+        try validateSfntTableChecksum(self.data, gsub);
+        return try gsub_mod.buildLookupAccelerators(self.data, gsub.offset, gsub.length, allocator);
     }
 
     pub fn applyGsubFeatureWithOptions(self: *const Font, feature_tag: u32, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
@@ -877,6 +894,12 @@ pub const Font = struct {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
         try validateSfntTableChecksum(self.data, gsub);
+        try self.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications, glyphs, allocator, options, gdef_metadata);
+    }
+
+    pub fn applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(self: *const Font, applications: []const gsub_mod.FeatureApplication, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        try self.validateGlyphRun(glyphs.items);
+        const gsub = self.gsub orelse return;
         var gsub_options = options;
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);

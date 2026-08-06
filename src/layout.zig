@@ -14,6 +14,7 @@ pub const GlyphIndexCache = layout_cache.GlyphIndexCache;
 pub const GlyphMetrics = layout_cache.GlyphMetrics;
 pub const GlyphMetricsCache = layout_cache.GlyphMetricsCache;
 pub const GposTableProofCache = layout_cache.GposTableProofCache;
+pub const GsubTableProofCache = layout_cache.GsubTableProofCache;
 pub const LookupSelectionCache = layout_cache.LookupSelectionCache;
 pub const VerticalGlyphMetrics = layout_cache.VerticalGlyphMetrics;
 
@@ -1319,6 +1320,7 @@ pub const LayoutBuffer = struct {
     shape_profile: ?*ShapeStageProfile = null,
     profile_io: ?std.Io = null,
     gdef_metadata_cache: ?*GdefMetadataCache = null,
+    gsub_table_proof_cache: ?*GsubTableProofCache = null,
     gpos_table_proof_cache: ?*GposTableProofCache = null,
     lookup_selection_cache: ?*LookupSelectionCache = null,
     shape_scratch: layout_scratch.ShapeScratch = .{},
@@ -2523,6 +2525,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .profile_io = profile_io,
     };
     const gsub_start = shapeProfileNow(shape_profile, profile_io);
+    const gsub_after_proof = if (buffer.gsub_table_proof_cache) |proof_cache| proof: {
+        try proof_cache.prove(font);
+        break :proof true;
+    } else false;
+    if (buffer.lookup_selection_cache) |selection_cache| {
+        gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
+    }
     if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
         try joining_forms.resize(buffer.allocator, codepoints.items.len);
         try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
@@ -2565,7 +2574,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             for (applications_buf[0..application_count], 0..) |application, stage_index| {
                 const stage_start = shapeProfileNow(shape_profile, profile_io);
                 const lookup_count_before = profile.gsub_lookup_count;
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                if (gsub_after_proof) {
+                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                } else {
+                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                }
                 if (stage_index < profile.arabic_stage_ns.len) {
                     profile.arabic_stage_ns[stage_index] += shapeProfileElapsed(stage_start, profile_io);
                     profile.arabic_stage_lookup_count[stage_index] += profile.gsub_lookup_count - lookup_count_before;
@@ -2573,15 +2586,27 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 }
             }
         } else {
-            try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+            if (gsub_after_proof) {
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+            } else {
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+            }
         }
     } else {
         if (buffer.lookup_selection_cache) |selection_cache| {
             gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
         }
-        try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+        if (gsub_after_proof) {
+            try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+        } else {
+            try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+        }
         if (scriptPositionFeatureApplication(lookup_options.script_position)) |application| {
-            try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+            if (gsub_after_proof) {
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+            } else {
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+            }
         }
     }
 

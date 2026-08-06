@@ -27,6 +27,8 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\glyph_metrics_cache_misses={d}
         \\gdef_cache_hits={d}
         \\gdef_cache_misses={d}
+        \\gsub_proof_cache_hits={d}
+        \\gsub_proof_cache_misses={d}
         \\gpos_proof_cache_hits={d}
         \\gpos_proof_cache_misses={d}
         \\lookup_selection_cache_hits={d}
@@ -54,6 +56,8 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.glyph_metrics_cache_misses,
         result.gdef_cache_hits,
         result.gdef_cache_misses,
+        result.gsub_proof_cache_hits,
+        result.gsub_proof_cache_misses,
         result.gpos_proof_cache_hits,
         result.gpos_proof_cache_misses,
         result.lookup_selection_cache_hits,

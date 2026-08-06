@@ -1,5 +1,6 @@
 const std = @import("std");
 const bin = @import("binary.zig");
+const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
 const unicode = @import("unicode.zig");
@@ -59,9 +60,19 @@ pub const LookupOptions = struct {
     /// This is a shaping fast path; callers that supply it must keep it in
     /// sync with the other selection options.
     selected_lookups: ?[]const u16 = null,
+    /// Optional per-lookup prefilters built once for the validated GSUB table.
+    /// The slice is indexed by LookupList index and may be shared across many
+    /// shaping runs for the same font.
+    lookup_accelerators: ?[]const LookupAccelerator = null,
     assume_validated: bool = false,
     shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
     profile_io: ?std.Io = null,
+};
+
+pub const LookupAccelerator = struct {
+    chaining_coverage_only: bool = false,
+    chaining_input_digest: GlyphDigest = .{},
+    chaining_subtable_digests: []const GlyphDigest = &.{},
 };
 
 pub const FeatureApplication = struct {
@@ -118,12 +129,12 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
         for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-            try applyLookup(table, lookup_offset, glyphs, allocator, options);
+            try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, options);
         }
     } else {
         for (0..lookup_count) |i| {
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
-            try applyLookup(table, lookup_offset, glyphs, allocator, options);
+            try applyLookupWithIndex(table, lookup_offset, @intCast(i), glyphs, allocator, options);
         }
     }
 }
@@ -193,31 +204,33 @@ pub fn applyFeatureSequenceWithOptions(
     // script plan names only the well-known stages it needs to interleave.
     // Required tags already present in the explicit plan are handled there so
     // position-scoped form features do not run once globally and once scoped.
-    var required_features = std.ArrayList(FeatureSelection).empty;
-    defer required_features.deinit(allocator);
+    var feature_indices = std.ArrayList(FeatureSelection).empty;
+    defer feature_indices.deinit(allocator);
     const script_list_offset = try checkedRequiredScriptListOffset(table);
     const script_count = try readU16(table, script_list_offset);
     const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
         try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
         0;
-    if (script_offset != 0) try collectScriptFeatures(table, script_offset, options.language_tag, &required_features, allocator);
+    if (script_offset != 0) try collectScriptFeatures(table, script_offset, options.language_tag, &feature_indices, allocator);
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16(table, feature_list_offset);
-    for (required_features.items) |selection| {
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+    for (feature_indices.items) |selection| {
         if (!selection.required or selection.index >= feature_count) continue;
         const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
         const required_tag = try readU32(table, feature_record);
         if (featurePlanContains(applications, required_tag)) continue;
         var required_options = options;
         required_options.active_source_feature = null;
-        try applySelectedFeature(table, required_tag, glyphs, allocator, required_options);
+        try applySelectedFeatureFromPlan(table, required_tag, feature_indices.items, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, required_options);
     }
 
     for (applications) |application| {
         var selected_options = options;
         selected_options.active_source_feature = if (application.source_scoped) application.tag else null;
         try validateShapingMetadata(selected_options, glyphs.items.len);
-        try applySelectedFeature(table, application.tag, glyphs, allocator, selected_options);
+        try applySelectedFeatureFromPlan(table, application.tag, feature_indices.items, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, selected_options);
     }
 }
 
@@ -248,9 +261,24 @@ fn applySelectedFeature(
     const feature_count = try readU16(table, feature_list_offset);
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
+    try applySelectedFeatureFromPlan(table, feature_tag, feature_indices.items, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, options);
+}
+
+fn applySelectedFeatureFromPlan(
+    table: Table,
+    feature_tag: u32,
+    feature_indices: []const FeatureSelection,
+    feature_list_offset: usize,
+    feature_count: u16,
+    lookup_list_offset: usize,
+    lookup_count: u16,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
     var selected_lookups = std.ArrayList(u16).empty;
     defer selected_lookups.deinit(allocator);
-    for (feature_indices.items) |selection| {
+    for (feature_indices) |selection| {
         if (selection.index >= feature_count) continue;
         const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
         if (try readU32(table, feature_record) != feature_tag) continue;
@@ -270,8 +298,71 @@ fn applySelectedFeature(
     sortUniqueLookupIndices(&selected_lookups);
     for (selected_lookups.items) |lookup_index| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-        try applyLookup(table, lookup_offset, glyphs, allocator, options);
+        try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, options);
     }
+}
+
+pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]LookupAccelerator {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = true };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+    const accelerators = try allocator.alloc(LookupAccelerator, lookup_count);
+    @memset(accelerators, .{});
+    var built_count: usize = 0;
+    errdefer {
+        deinitLookupAcceleratorContents(allocator, accelerators[0..built_count]);
+        allocator.free(accelerators);
+    }
+    for (accelerators, 0..) |*accelerator, lookup_i| {
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + lookup_i * 2));
+        accelerator.* = try buildLookupAccelerator(table, lookup_offset, allocator);
+        built_count += 1;
+    }
+    return accelerators;
+}
+
+pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
+    deinitLookupAcceleratorContents(allocator, accelerators);
+    allocator.free(accelerators);
+}
+
+fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
+    for (accelerators) |accelerator| {
+        allocator.free(accelerator.chaining_subtable_digests);
+    }
+}
+
+fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LookupAccelerator {
+    const lookup_type = try readU16(table, lookup_offset);
+    const subtable_count = try readU16(table, lookup_offset + 4);
+    if (lookup_type != 6 or !try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) return .{};
+
+    var digest = GlyphDigest.empty();
+    const subtable_digests = try allocator.alloc(GlyphDigest, subtable_count);
+    errdefer allocator.free(subtable_digests);
+    @memset(subtable_digests, .{});
+    var saw_input_coverage = false;
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const coverage_offset = try firstChainingInputCoverageOffset(table, subtable_offset) orelse continue;
+        const subtable_digest = try coverageDigest(table, coverage_offset);
+        subtable_digests[subtable_i] = subtable_digest;
+        digest.unionWith(subtable_digest);
+        saw_input_coverage = true;
+    }
+    if (!saw_input_coverage or digest.isEmpty()) {
+        allocator.free(subtable_digests);
+        return .{};
+    }
+    return .{
+        .chaining_coverage_only = true,
+        .chaining_input_digest = digest,
+        .chaining_subtable_digests = subtable_digests,
+    };
 }
 
 /// Validate GSUB glyph references that are meaningful at font-load time.
@@ -454,6 +545,10 @@ fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
 }
 
 fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    try applyLookupWithIndex(table, lookup_offset, null, glyphs, allocator, options);
+}
+
+fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     try ensureLookupHeaderWithin(table, lookup_offset);
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
@@ -508,8 +603,14 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
         }
     }
     if (lookup_type == 6 and try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
+        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            const run_digest = glyphRunDigest(glyphs.items, lookup_flag, lookup_options);
+            if (run_digest.isEmpty() or !accelerator.chaining_input_digest.mayIntersect(run_digest)) return;
+            try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
+            return;
+        }
         if (!try chainingCoverageLookupMayMatch(table, lookup_offset, subtable_count, glyphs.items, lookup_flag, lookup_options)) return;
-        try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
+        try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
         return;
     }
 
@@ -527,6 +628,15 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
             else => {},
         }
     }
+}
+
+fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
+    const accelerators = options.lookup_accelerators orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const accelerator = &accelerators[index];
+    if (!accelerator.chaining_coverage_only) return null;
+    return accelerator;
 }
 
 fn extensionLookupType(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!?u16 {
@@ -1260,6 +1370,22 @@ fn chainingLookupUsesCoverageOnly(table: Table, lookup_offset: usize, subtable_c
 
 fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!bool {
     if (glyphs.len == 0) return false;
+    // Arabic shaping often reaches this path one short word at a time. For
+    // those tiny runs the exact scan is cheaper than building coverage digests;
+    // reserve the approximate filter for longer runs where it can amortize.
+    if (glyphs.len < 32) return try chainingCoverageLookupMayMatchByScan(table, lookup_offset, subtable_count, glyphs, lookup_flag, options);
+    const run_digest = glyphRunDigest(glyphs, lookup_flag, options);
+    if (run_digest.isEmpty()) return false;
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const coverage_offset = try firstChainingInputCoverageOffset(table, subtable_offset) orelse continue;
+        const coverage_digest = try coverageDigest(table, coverage_offset);
+        if (coverage_digest.mayIntersect(run_digest)) return true;
+    }
+    return false;
+}
+
+fn chainingCoverageLookupMayMatchByScan(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!bool {
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
         const coverage_offset = try firstChainingInputCoverageOffset(table, subtable_offset) orelse continue;
@@ -1272,6 +1398,16 @@ fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_c
     return false;
 }
 
+fn glyphRunDigest(glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
+    var digest = GlyphDigest.empty();
+    for (glyphs, 0..) |glyph, glyph_index| {
+        if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+        digest.add(glyph);
+    }
+    return digest;
+}
+
 fn firstChainingInputCoverageOffset(table: Table, subtable_offset: usize) GsubError!?usize {
     var cursor = subtable_offset + 2;
     const backtrack_count = try readU16(table, cursor);
@@ -1282,10 +1418,17 @@ fn firstChainingInputCoverageOffset(table: Table, subtable_offset: usize) GsubEr
     return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, cursor));
 }
 
-fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: ?*const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
+        const current_glyph = glyphs.items[pos];
         for (0..subtable_count) |subtable_i| {
+            if (accelerator) |accel| {
+                if (sourceFeatureAllowsGlyph(options, pos) and
+                    !lookupIgnoresGlyph(lookup_flag, options, current_glyph) and
+                    subtable_i < accel.chaining_subtable_digests.len and
+                    !accel.chaining_subtable_digests[subtable_i].mayHave(current_glyph)) continue;
+            }
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
             if (try applyChainingContextSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options)) break;
         }
@@ -2704,6 +2847,30 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GsubError
         },
         else => return error.UnsupportedGsub,
     }
+}
+
+fn coverageDigest(table: Table, coverage_offset: usize) GsubError!GlyphDigest {
+    const format = try readU16(table, coverage_offset);
+    var digest = GlyphDigest.empty();
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16(table, coverage_offset + 2);
+            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            for (0..glyph_count) |glyph_i| {
+                digest.add(try readU16(table, coverage_offset + 4 + glyph_i * 2));
+            }
+        },
+        2 => {
+            const range_count = try readU16(table, coverage_offset + 2);
+            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                digest.addRange(try readU16(table, range_offset), try readU16(table, range_offset + 2));
+            }
+        },
+        else => return error.UnsupportedGsub,
+    }
+    return digest;
 }
 
 fn validateCoverageFormat1Order(table: Table, coverage_offset: usize, glyph_count: u16) GsubError!void {

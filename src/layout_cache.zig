@@ -71,20 +71,56 @@ pub const GdefMetadataCache = struct {
     }
 };
 
-const GposTableProofCacheKey = struct {
+const TableProofCacheKey = struct {
     font_addr: usize,
+};
+
+pub const GsubTableProofCache = struct {
+    allocator: std.mem.Allocator,
+    entries: std.AutoHashMap(TableProofCacheKey, void),
+    hits: usize = 0,
+    misses: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) GsubTableProofCache {
+        return .{
+            .allocator = allocator,
+            .entries = std.AutoHashMap(TableProofCacheKey, void).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *GsubTableProofCache) void {
+        self.entries.deinit();
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *GsubTableProofCache) void {
+        self.entries.clearRetainingCapacity();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    pub fn prove(self: *GsubTableProofCache, font: *const Font) !void {
+        const key = TableProofCacheKey{ .font_addr = @intFromPtr(font) };
+        if (self.entries.contains(key)) {
+            self.hits += 1;
+            return;
+        }
+        self.misses += 1;
+        try font.proveGsubTableForShaping();
+        try self.entries.put(key, {});
+    }
 };
 
 pub const GposTableProofCache = struct {
     allocator: std.mem.Allocator,
-    entries: std.AutoHashMap(GposTableProofCacheKey, void),
+    entries: std.AutoHashMap(TableProofCacheKey, void),
     hits: usize = 0,
     misses: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) GposTableProofCache {
         return .{
             .allocator = allocator,
-            .entries = std.AutoHashMap(GposTableProofCacheKey, void).init(allocator),
+            .entries = std.AutoHashMap(TableProofCacheKey, void).init(allocator),
         };
     }
 
@@ -100,7 +136,7 @@ pub const GposTableProofCache = struct {
     }
 
     pub fn prove(self: *GposTableProofCache, font: *const Font) !void {
-        const key = GposTableProofCacheKey{ .font_addr = @intFromPtr(font) };
+        const key = TableProofCacheKey{ .font_addr = @intFromPtr(font) };
         if (self.entries.contains(key)) {
             self.hits += 1;
             return;
@@ -132,9 +168,14 @@ pub const LookupSelectionCache = struct {
         features: []unicode.FeatureOverride,
         lookups: []u16,
     };
+    const GsubAcceleratorEntry = struct {
+        font_addr: usize,
+        accelerators: []gsub.LookupAccelerator,
+    };
 
     allocator: std.mem.Allocator,
     entries: std.ArrayList(Entry) = .empty,
+    gsub_accelerator_entries: std.ArrayList(GsubAcceleratorEntry) = .empty,
     hits: usize = 0,
     misses: usize = 0,
 
@@ -144,6 +185,7 @@ pub const LookupSelectionCache = struct {
 
     pub fn deinit(self: *LookupSelectionCache) void {
         self.clear();
+        self.gsub_accelerator_entries.deinit(self.allocator);
         self.entries.deinit(self.allocator);
         self.* = undefined;
     }
@@ -154,6 +196,10 @@ pub const LookupSelectionCache = struct {
             self.allocator.free(entry.lookups);
         }
         self.entries.clearRetainingCapacity();
+        for (self.gsub_accelerator_entries.items) |entry| {
+            gsub.deinitLookupAccelerators(self.allocator, entry.accelerators);
+        }
+        self.gsub_accelerator_entries.clearRetainingCapacity();
         self.hits = 0;
         self.misses = 0;
     }
@@ -169,6 +215,24 @@ pub const LookupSelectionCache = struct {
         errdefer self.allocator.free(features);
         try self.entries.append(self.allocator, .{ .key = key, .features = features, .lookups = lookups });
         return self.entries.items[self.entries.items.len - 1].lookups;
+    }
+
+    pub fn gsubLookupAccelerators(self: *LookupSelectionCache, font: *const Font) ![]const gsub.LookupAccelerator {
+        const font_addr = @intFromPtr(font);
+        for (self.gsub_accelerator_entries.items) |entry| {
+            if (entry.font_addr != font_addr) continue;
+            self.hits += 1;
+            return entry.accelerators;
+        }
+
+        self.misses += 1;
+        const accelerators = try font.gsubLookupAcceleratorsForShaping(self.allocator);
+        errdefer self.allocator.free(accelerators);
+        try self.gsub_accelerator_entries.append(self.allocator, .{
+            .font_addr = font_addr,
+            .accelerators = accelerators,
+        });
+        return self.gsub_accelerator_entries.items[self.gsub_accelerator_entries.items.len - 1].accelerators;
     }
 
     pub fn gposLookups(self: *LookupSelectionCache, font: *const Font, options: gpos.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {

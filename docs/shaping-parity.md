@@ -43,8 +43,8 @@ Run these after shaping hot-path changes:
 
 ```sh
 zig build test
-zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --no-bidi-reorder --iterations 1 --warmup 2 --samples 5
-zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/fa-words.txt --direction rtl --no-bidi-reorder --iterations 1 --warmup 2 --samples 5
+zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
+zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/fa-words.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/en-words.txt --direction ltr --iterations 1 --warmup 1 --samples 2
 zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 ```
@@ -69,13 +69,13 @@ serialization/parsing overhead. A library runner is still needed for strict
 HarfRust/HarfBuzz timing.
 
 `compare-harfrust` runs Cangjie and HarfRust in the same invocation and compares
-per-line glyph-id, UTF-8 cluster, and font-unit x/y advance sequences. Offsets
-are collected and printed for diagnostics, but they still need an attachment-
-aware normalized comparison before they can be a pass/fail gate. When
-`--language` is not specified, compare mode forces Cangjie to `dflt` because the
-current `hr-shape` runner guesses script and direction but does not guess
-language. Pass `--language ara`, `--language zhs`, etc. to compare an explicit
-LangSys on both engines.
+per-line glyph-id, UTF-8 cluster, and font-unit x/y advance sequences in
+HarfBuzz-style buffer order. Offsets are collected and printed for diagnostics,
+but they still need an attachment-aware normalized comparison before they can be
+a pass/fail gate. When `--language` is not specified, compare mode forces
+Cangjie to `dflt` because the current `hr-shape` runner guesses script and
+direction but does not guess language. Pass `--language ara`, `--language zhs`,
+etc. to compare an explicit LangSys on both engines.
 
 ## Current Evidence Snapshot
 
@@ -98,9 +98,8 @@ Current HarfRust glyph-id, UTF-8 cluster, and advance parity evidence:
   `--language ara`.
 - Amiri `fa-words.txt` passes default `compare-harfrust` for 10,000 lines.
 - Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
-- Amiri `fa-thelittleprince.txt` passes glyph-id and UTF-8 cluster parity, but
-  advance parity currently fails later in the corpus at a Latin/neutral mixed
-  line and remains an active follow-up.
+- Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
+  lines.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

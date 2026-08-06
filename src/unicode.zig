@@ -629,6 +629,30 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
     };
 }
 
+pub fn openTypeScriptHorizontalDirection(script_tag: OpenTypeScriptTag) ?BidiClass {
+    return switch (script_tag) {
+        .arab,
+        .hebr,
+        .phnx,
+        .syrc,
+        .samr,
+        .mand,
+        .nko,
+        .thaa,
+        .adlm,
+        .ugar,
+        .avst,
+        .armi,
+        .sarb,
+        .narb,
+        .mero,
+        .merc,
+        => .rtl,
+        .dflt => null,
+        else => .ltr,
+    };
+}
+
 /// Infer a coarse OpenType language tag from script content when the caller did
 /// not specify one. This gives CJK, Arabic, and Indic fonts a better default
 /// LangSys than always using `dflt`.

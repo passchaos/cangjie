@@ -151,6 +151,10 @@ pub const ShapeOptions = struct {
     /// document engine implementing its own unicode-bidi run boundaries) can
     /// disable this while retaining all other GSUB/GPOS and fallback behavior.
     reorder_bidi: bool = true,
+    /// Shape through the OpenType native-direction buffer order even when final
+    /// bidi reordering is disabled. This is mainly for parity tools that need
+    /// HarfBuzz buffer order without Cangjie's paragraph-level bidi pass.
+    native_direction_shaping: bool = false,
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
     script_tag: ?unicode.OpenTypeScriptTag = null,
@@ -165,6 +169,7 @@ pub const ShapeOptions = struct {
 pub const ShapePlanKey = struct {
     direction: TextDirection = .ltr,
     reorder_bidi: bool = true,
+    native_direction_shaping: bool = false,
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
     script_tag: unicode.OpenTypeScriptTag = .dflt,
@@ -176,6 +181,7 @@ pub const ShapePlanKey = struct {
         return .{
             .direction = options.direction,
             .reorder_bidi = options.reorder_bidi,
+            .native_direction_shaping = options.native_direction_shaping,
             .writing_mode = options.writing_mode,
             .text_orientation = options.text_orientation,
             .script_tag = effectiveScriptTag(text, options),
@@ -1659,6 +1665,9 @@ fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []cons
             .{
                 .script_tag = unicode.openTypeScriptTag(script_run.script),
                 .language_tag = effectiveLanguageTag(run_text, options),
+                .direction = options.direction,
+                .reorder_bidi = options.reorder_bidi,
+                .native_direction_shaping = options.native_direction_shaping,
                 .features = options.features,
                 .writing_mode = options.writing_mode,
                 .text_orientation = options.text_orientation,
@@ -1895,6 +1904,22 @@ fn appendVisualGlyphsForBidiItem(
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
 ) !void {
+    if (item.direction == .rtl) {
+        var glyph_index = glyphs.len;
+        while (glyph_index > 0) {
+            glyph_index -= 1;
+            const glyph = glyphs[glyph_index];
+            if (seen[glyph_index]) continue;
+            if (glyph.cluster != item.byte_start) continue;
+            const visual_codepoint = if (@max(glyph.source_byte_len, 1) == item.byte_len)
+                item.visual_codepoint
+            else
+                null;
+            try appendVisualGlyph(allocator, glyphs, old_runs, single_font, glyph_run_indices, seen, glyph_index, visual_codepoint, out_glyphs, out_run_indices);
+        }
+        return;
+    }
+
     for (glyphs, 0..) |glyph, glyph_index| {
         if (seen[glyph_index]) continue;
         if (glyph.cluster != item.byte_start) continue;
@@ -2383,6 +2408,8 @@ const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     direction: TextDirection = .ltr,
+    reorder_bidi: bool = true,
+    native_direction_shaping: bool = false,
     script_position: ScriptPosition = .normal,
     features: []const unicode.FeatureOverride = &.{},
     writing_mode: WritingMode = .horizontal_tb,
@@ -2394,6 +2421,8 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
         .script_tag = effectiveScriptTag(text, options),
         .language_tag = effectiveLanguageTag(text, options),
         .direction = options.direction,
+        .reorder_bidi = options.reorder_bidi,
+        .native_direction_shaping = options.native_direction_shaping,
         .script_position = options.script_position,
         .features = options.features,
         .writing_mode = options.writing_mode,
@@ -2422,6 +2451,7 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
 fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
     return a.direction == b.direction and
         a.reorder_bidi == b.reorder_bidi and
+        a.native_direction_shaping == b.native_direction_shaping and
         a.writing_mode == b.writing_mode and
         a.text_orientation == b.text_orientation and
         a.script_tag == b.script_tag and
@@ -2512,6 +2542,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     if (shape_profile) |p| {
         p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);
         p.glyph_count += glyph_ids.items.len;
+    }
+
+    if (shouldShapeInNativeDirection(lookup_options)) {
+        reverseScratchGlyphOrderForNativeDirection(scratch);
     }
 
     const gdef_start = shapeProfileNow(shape_profile, profile_io);
@@ -2786,6 +2820,54 @@ fn scriptPositionFeatureApplication(position: ScriptPosition) ?gsub.FeatureAppli
         .superscript => .{ .tag = unicode.tag("sups") },
         .subscript => .{ .tag = unicode.tag("subs") },
     };
+}
+
+fn shouldShapeInNativeDirection(options: LookupOptions) bool {
+    if (!options.reorder_bidi and !options.native_direction_shaping) return false;
+    if (options.writing_mode.isVertical()) return false;
+    const native_direction = textDirectionFromBidiClass(unicode.openTypeScriptHorizontalDirection(options.script_tag) orelse return false);
+    return options.direction != native_direction;
+}
+
+fn textDirectionFromBidiClass(direction: unicode.BidiClass) TextDirection {
+    return if (direction == .rtl) .rtl else .ltr;
+}
+
+fn reverseScratchGlyphOrderForNativeDirection(scratch: *layout_scratch.ShapeScratch) void {
+    const len = scratch.glyph_ids.items.len;
+    if (len < 2) return;
+
+    var group_start: usize = 0;
+    var index: usize = 1;
+    while (index <= len) : (index += 1) {
+        if (index < len and scratchGlyphCluster(scratch, index) == scratchGlyphCluster(scratch, index - 1)) continue;
+        reverseScratchGlyphRange(scratch, group_start, index);
+        group_start = index;
+    }
+    reverseScratchGlyphRange(scratch, 0, len);
+}
+
+fn scratchGlyphCluster(scratch: *const layout_scratch.ShapeScratch, glyph_index: usize) usize {
+    if (glyph_index >= scratch.glyph_source_indices.items.len) return glyph_index;
+    const source_index = scratch.glyph_source_indices.items[glyph_index];
+    if (source_index >= scratch.clusters.items.len) return source_index;
+    return scratch.clusters.items[source_index];
+}
+
+fn reverseScratchGlyphRange(scratch: *layout_scratch.ShapeScratch, start: usize, end: usize) void {
+    var left = start;
+    var right = end;
+    while (left + 1 < right) {
+        right -= 1;
+        swapScratchGlyphs(scratch, left, right);
+        left += 1;
+    }
+}
+
+fn swapScratchGlyphs(scratch: *layout_scratch.ShapeScratch, a: usize, b: usize) void {
+    std.mem.swap(GlyphId, &scratch.glyph_ids.items[a], &scratch.glyph_ids.items[b]);
+    std.mem.swap(usize, &scratch.glyph_source_indices.items[a], &scratch.glyph_source_indices.items[b]);
+    std.mem.swap(gpos.LigatureComponentInfo, &scratch.ligature_components.items[a], &scratch.ligature_components.items[b]);
 }
 
 const SourceSpan = struct {

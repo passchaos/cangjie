@@ -209,6 +209,7 @@ pub const layoutAttributedRunsUtf8 = @import("core.zig").layoutAttributedRunsUtf
 pub const layoutAttributedGlyphRunsUtf8 = @import("core.zig").layoutAttributedGlyphRunsUtf8;
 pub const openTypeTag = @import("unicode.zig").tag;
 pub const openTypeScriptTag = @import("unicode.zig").openTypeScriptTag;
+pub const openTypeScriptHorizontalDirection = @import("unicode.zig").openTypeScriptHorizontalDirection;
 pub const paragraphDirection = @import("unicode.zig").paragraphDirection;
 pub const joiningTypeForCodepoint = @import("unicode.zig").joiningTypeForCodepoint;
 pub const resolveJoiningForms = @import("unicode.zig").resolveJoiningForms;

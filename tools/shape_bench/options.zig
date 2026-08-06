@@ -62,6 +62,7 @@ pub const Options = struct {
     samples: usize = 1,
     direction: cangjie.TextDirection = .ltr,
     reorder_bidi: bool = true,
+    native_direction_shaping: bool = false,
     language_tag: ?cangjie.OpenTypeLanguageTag = null,
     script_position: cangjie.ScriptPosition = .normal,
     use_caches: bool = true,

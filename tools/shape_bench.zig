@@ -74,6 +74,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     options.line_summary = true;
     options.glyph_summary = true;
     options.reorder_bidi = false;
+    options.native_direction_shaping = true;
     options.language_tag = base_options.language_tag orelse .dflt;
 
     var font = try cangjie.Font.parse(allocator, font_bytes);
@@ -86,7 +87,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     const harfrust_result = try harfrust.run(io, allocator, harfrust_options);
     defer freeResult(allocator, harfrust_result);
 
-    const mismatch = try firstLineMismatch(allocator, cangjie_result.line_summaries, harfrust_result.line_summaries, base_options.direction);
+    const mismatch = try firstLineMismatch(allocator, base_options.text_lines, cangjie_result.line_summaries, harfrust_result.line_summaries, base_options.direction);
     std.debug.print(
         \\engine=compare-harfrust
         \\font={s}
@@ -192,10 +193,33 @@ const LineMismatch = struct {
     cangjie_position_values: []const i32,
 };
 
-fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: cangjie.TextDirection) !?LineMismatch {
+const CompareOrder = enum {
+    source,
+    reverse_source,
+};
+
+fn compareOrder(text: []const u8, direction: cangjie.TextDirection) CompareOrder {
+    if (direction == .ltr) return .source;
+    const native_direction = cangjie.openTypeScriptHorizontalDirection(scriptTagForText(text)) orelse .rtl;
+    return if (native_direction == .ltr) .source else .reverse_source;
+}
+
+fn scriptTagForText(text: []const u8) cangjie.OpenTypeScriptTag {
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (it.nextCodepoint()) |codepoint| {
+        const script = cangjie.scriptForCodepoint(codepoint);
+        if (script != .common and script != .inherited and script != .unknown) {
+            return cangjie.openTypeScriptTag(script);
+        }
+    }
+    return .dflt;
+}
+
+fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u8, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: cangjie.TextDirection) !?LineMismatch {
     const count = @min(cangjie_lines.len, harfrust_lines.len);
     for (0..count) |line_index| {
-        const cangjie_ids = try comparableSlice(u16, allocator, cangjie_lines[line_index].glyph_ids, direction);
+        const order = compareOrder(if (line_index < text_lines.len) text_lines[line_index] else "", direction);
+        const cangjie_ids = try comparableSlice(u16, allocator, cangjie_lines[line_index].glyph_ids, order);
         errdefer allocator.free(cangjie_ids);
         if (!std.mem.eql(u16, cangjie_ids, harfrust_lines[line_index].glyph_ids)) {
             return .{
@@ -204,11 +228,11 @@ fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner
                 .cangjie = cangjie_lines[line_index],
                 .harfrust = harfrust_lines[line_index],
                 .cangjie_glyph_ids = cangjie_ids,
-                .cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, direction),
+                .cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, order),
                 .cangjie_position_values = try allocator.alloc(i32, 0),
             };
         }
-        const cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, direction);
+        const cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, order);
         errdefer allocator.free(cangjie_clusters);
         if (!std.mem.eql(u32, cangjie_clusters, harfrust_lines[line_index].clusters)) {
             return .{
@@ -222,7 +246,7 @@ fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner
             };
         }
         inline for (.{ MismatchKind.x_advance, MismatchKind.y_advance }) |kind| {
-            const cangjie_values = try comparableSlice(i32, allocator, positionValues(cangjie_lines[line_index], kind), direction);
+            const cangjie_values = try comparableSlice(i32, allocator, positionValues(cangjie_lines[line_index], kind), order);
             errdefer allocator.free(cangjie_values);
             if (!std.mem.eql(i32, cangjie_values, positionValues(harfrust_lines[line_index], kind))) {
                 return .{
@@ -242,13 +266,14 @@ fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner
     }
     if (cangjie_lines.len != harfrust_lines.len) {
         const line_index = count;
+        const order = compareOrder(if (line_index < text_lines.len) text_lines[line_index] else "", direction);
         const cangjie_ids = if (line_index < cangjie_lines.len)
-            try comparableSlice(u16, allocator, cangjie_lines[line_index].glyph_ids, direction)
+            try comparableSlice(u16, allocator, cangjie_lines[line_index].glyph_ids, order)
         else
             try allocator.alloc(u16, 0);
         errdefer allocator.free(cangjie_ids);
         const cangjie_clusters = if (line_index < cangjie_lines.len)
-            try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, direction)
+            try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, order)
         else
             try allocator.alloc(u32, 0);
         return .{
@@ -278,11 +303,11 @@ fn emptyLineSummary(line_index: usize) runner.BenchResult.LineSummary {
     return .{ .index = line_index, .text_bytes = 0, .glyph_count = 0, .checksum = 0 };
 }
 
-fn comparableSlice(comptime T: type, allocator: std.mem.Allocator, items: []const T, direction: cangjie.TextDirection) ![]const T {
+fn comparableSlice(comptime T: type, allocator: std.mem.Allocator, items: []const T, order: CompareOrder) ![]const T {
     const comparable = try allocator.alloc(T, items.len);
-    switch (direction) {
-        .ltr => @memcpy(comparable, items),
-        .rtl => {
+    switch (order) {
+        .source => @memcpy(comparable, items),
+        .reverse_source => {
             for (items, 0..) |item, index| {
                 comparable[items.len - 1 - index] = item;
             }

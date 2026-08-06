@@ -19,6 +19,38 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\ns_per_iter={d:.3}
         \\ns_per_glyph={d:.3}
         \\checksum={x}
+        \\glyph_index_cache_hits={d}
+        \\glyph_index_cache_misses={d}
+        \\glyph_metrics_cache_hits={d}
+        \\glyph_metrics_cache_misses={d}
+        \\gdef_cache_hits={d}
+        \\gdef_cache_misses={d}
+        \\gpos_proof_cache_hits={d}
+        \\gpos_proof_cache_misses={d}
+    , .{
+        options.engine.label(),
+        options.fontLabel(),
+        options.text.len,
+        options.iterations,
+        options.warmup,
+        options.use_caches,
+        options.profile,
+        result.elapsed_ns,
+        result.glyph_count,
+        ns_per_iter,
+        ns_per_glyph,
+        result.checksum,
+        result.glyph_index_cache_hits,
+        result.glyph_index_cache_misses,
+        result.glyph_metrics_cache_hits,
+        result.glyph_metrics_cache_misses,
+        result.gdef_cache_hits,
+        result.gdef_cache_misses,
+        result.gpos_proof_cache_hits,
+        result.gpos_proof_cache_misses,
+    });
+    std.debug.print(
+        \\
         \\profile_cmap_ns={d}
         \\profile_gdef_ns={d}
         \\profile_gsub_ns={d}
@@ -37,18 +69,6 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\profile_gpos_extension_lookups={d}
         \\
     , .{
-        options.engine.label(),
-        options.fontLabel(),
-        options.text.len,
-        options.iterations,
-        options.warmup,
-        options.use_caches,
-        options.profile,
-        result.elapsed_ns,
-        result.glyph_count,
-        ns_per_iter,
-        ns_per_glyph,
-        result.checksum,
         result.profile.cmap_ns,
         result.profile.gdef_ns,
         result.profile.gsub_ns,

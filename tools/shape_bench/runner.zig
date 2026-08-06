@@ -8,6 +8,14 @@ pub const BenchResult = struct {
     glyph_count: usize,
     checksum: u64,
     profile: cangjie.ShapeStageProfile,
+    glyph_index_cache_hits: usize = 0,
+    glyph_index_cache_misses: usize = 0,
+    glyph_metrics_cache_hits: usize = 0,
+    glyph_metrics_cache_misses: usize = 0,
+    gdef_cache_hits: usize = 0,
+    gdef_cache_misses: usize = 0,
+    gpos_proof_cache_hits: usize = 0,
+    gpos_proof_cache_misses: usize = 0,
 };
 
 pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options) ![]u8 {
@@ -77,6 +85,14 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .glyph_count = glyph_count,
         .checksum = checksum,
         .profile = profile,
+        .glyph_index_cache_hits = glyph_index_cache.hits,
+        .glyph_index_cache_misses = glyph_index_cache.misses,
+        .glyph_metrics_cache_hits = metrics_cache.hits,
+        .glyph_metrics_cache_misses = metrics_cache.misses,
+        .gdef_cache_hits = gdef_cache.hits,
+        .gdef_cache_misses = gdef_cache.misses,
+        .gpos_proof_cache_hits = gpos_proof_cache.hits,
+        .gpos_proof_cache_misses = gpos_proof_cache.misses,
     };
 }
 

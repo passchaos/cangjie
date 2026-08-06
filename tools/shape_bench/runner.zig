@@ -4,10 +4,19 @@ const cangjie = @import("cangjie");
 const options_mod = @import("options.zig");
 
 pub const BenchResult = struct {
+    pub const LineSummary = struct {
+        index: usize,
+        text_bytes: usize,
+        glyph_count: usize,
+        checksum: u64,
+        glyph_ids: []const u16 = &.{},
+    };
+
     elapsed_ns: i128,
     glyph_count: usize,
     checksum: u64,
     profile: cangjie.ShapeStageProfile,
+    line_summaries: []LineSummary = &.{},
     glyph_index_cache_hits: usize = 0,
     glyph_index_cache_misses: usize = 0,
     glyph_metrics_cache_hits: usize = 0,
@@ -61,9 +70,12 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     const shape_options = cangjie.ShapeOptions{
         .direction = options.direction,
         .script_position = options.script_position,
+        .features = options.featureOverrides(),
     };
     const inline_text_lines = [_][]const u8{options.text};
     const text_lines = if (options.text_lines.len != 0) options.text_lines else inline_text_lines[0..];
+    var line_summaries = std.ArrayList(BenchResult.LineSummary).empty;
+    errdefer line_summaries.deinit(allocator);
 
     var warmup_index: usize = 0;
     while (warmup_index < options.warmup) : (warmup_index += 1) {
@@ -87,10 +99,20 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     const start = std.Io.Clock.now(.awake, io).nanoseconds;
     var i: usize = 0;
     while (i < options.iterations) : (i += 1) {
-        for (text_lines) |line| {
+        for (text_lines, 0..) |line, line_index| {
             const glyphs = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, line, options, shape_options);
             glyph_count += glyphs.len;
-            checksum = updateChecksum(checksum, glyphs);
+            const line_checksum = glyphsChecksum(glyphs);
+            checksum = updateChecksumWithLine(checksum, line_checksum);
+            if (options.line_summary and i == 0) {
+                try line_summaries.append(allocator, .{
+                    .index = line_index,
+                    .text_bytes = line.len,
+                    .glyph_count = glyphs.len,
+                    .checksum = line_checksum,
+                    .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
+                });
+            }
         }
     }
     const elapsed = std.Io.Clock.now(.awake, io).nanoseconds - start;
@@ -100,6 +122,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .glyph_count = glyph_count,
         .checksum = checksum,
         .profile = profile,
+        .line_summaries = try line_summaries.toOwnedSlice(allocator),
         .glyph_index_cache_hits = glyph_index_cache.hits,
         .glyph_index_cache_misses = glyph_index_cache.misses,
         .glyph_metrics_cache_hits = metrics_cache.hits,
@@ -113,6 +136,12 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .shaped_cache_hits = shaped_cache.hits,
         .shaped_cache_misses = shaped_cache.misses,
     };
+}
+
+fn glyphIds(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosition) ![]const u16 {
+    const ids = try allocator.alloc(u16, glyphs.len);
+    for (glyphs, ids) |glyph, *id| id.* = glyph.glyph_id;
+    return ids;
 }
 
 fn shapeOnce(
@@ -138,8 +167,8 @@ fn shapeOnce(
     return run.glyphs;
 }
 
-fn updateChecksum(seed: u64, glyphs: []const cangjie.GlyphPosition) u64 {
-    var hasher = std.hash.Wyhash.init(seed);
+fn glyphsChecksum(glyphs: []const cangjie.GlyphPosition) u64 {
+    var hasher = std.hash.Wyhash.init(0);
     for (glyphs) |glyph| {
         hasher.update(std.mem.asBytes(&glyph.glyph_id));
         hasher.update(std.mem.asBytes(&glyph.cluster));
@@ -148,5 +177,11 @@ fn updateChecksum(seed: u64, glyphs: []const cangjie.GlyphPosition) u64 {
         hasher.update(std.mem.asBytes(&glyph.x_offset));
         hasher.update(std.mem.asBytes(&glyph.y_offset));
     }
+    return hasher.final();
+}
+
+fn updateChecksumWithLine(seed: u64, line_checksum: u64) u64 {
+    var hasher = std.hash.Wyhash.init(seed);
+    hasher.update(std.mem.asBytes(&line_checksum));
     return hasher.final();
 }

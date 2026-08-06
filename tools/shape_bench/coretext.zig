@@ -66,6 +66,8 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     defer CFRelease(font);
     const inline_text_lines = [_][]const u8{options.text};
     const text_lines = if (options.text_lines.len != 0) options.text_lines else inline_text_lines[0..];
+    var line_summaries = std.ArrayList(runner.BenchResult.LineSummary).empty;
+    errdefer line_summaries.deinit(allocator);
 
     var warmup_index: usize = 0;
     while (warmup_index < options.warmup) : (warmup_index += 1) {
@@ -80,14 +82,24 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     const start = std.Io.Clock.now(.awake, io).nanoseconds;
     var i: usize = 0;
     while (i < options.iterations) : (i += 1) {
-        for (text_lines) |text| {
+        for (text_lines, 0..) |text, line_index| {
             {
                 const line = try createLine(text, font);
                 defer CFRelease(line);
                 const glyphs = try readLineGlyphs(allocator, line);
                 defer allocator.free(glyphs);
                 glyph_count += glyphs.len;
-                checksum = updateChecksum(checksum, glyphs);
+                const line_checksum = glyphsChecksum(glyphs);
+                checksum = updateChecksumWithLine(checksum, line_checksum);
+                if (options.line_summary and i == 0) {
+                    try line_summaries.append(allocator, .{
+                        .index = line_index,
+                        .text_bytes = text.len,
+                        .glyph_count = glyphs.len,
+                        .checksum = line_checksum,
+                        .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
+                    });
+                }
             }
         }
     }
@@ -98,6 +110,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
         .glyph_count = glyph_count,
         .checksum = checksum,
         .profile = cangjie.ShapeStageProfile{},
+        .line_summaries = try line_summaries.toOwnedSlice(allocator),
     };
 }
 
@@ -167,18 +180,30 @@ fn readLineGlyphs(allocator: std.mem.Allocator, line: CTLineRef) ![]CoreTextGlyp
     return try glyphs.toOwnedSlice(allocator);
 }
 
+fn glyphIds(allocator: std.mem.Allocator, glyphs: []const CoreTextGlyph) ![]const u16 {
+    const ids = try allocator.alloc(u16, glyphs.len);
+    for (glyphs, ids) |glyph, *id| id.* = glyph.glyph_id;
+    return ids;
+}
+
 const CoreTextGlyph = struct {
     glyph_id: CGGlyph,
     x_advance: f32,
     y_advance: f32,
 };
 
-fn updateChecksum(seed: u64, glyphs: []const CoreTextGlyph) u64 {
-    var hasher = std.hash.Wyhash.init(seed);
+fn glyphsChecksum(glyphs: []const CoreTextGlyph) u64 {
+    var hasher = std.hash.Wyhash.init(0);
     for (glyphs) |glyph| {
         hasher.update(std.mem.asBytes(&glyph.glyph_id));
         hasher.update(std.mem.asBytes(&glyph.x_advance));
         hasher.update(std.mem.asBytes(&glyph.y_advance));
     }
+    return hasher.final();
+}
+
+fn updateChecksumWithLine(seed: u64, line_checksum: u64) u64 {
+    var hasher = std.hash.Wyhash.init(seed);
+    hasher.update(std.mem.asBytes(&line_checksum));
     return hasher.final();
 }

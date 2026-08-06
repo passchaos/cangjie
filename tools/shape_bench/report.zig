@@ -120,6 +120,24 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.profile.gpos_context_lookup_count,
         result.profile.gpos_extension_lookup_count,
     });
+    for (result.line_summaries) |summary| {
+        std.debug.print(
+            \\line_summary index={d} text_bytes={d} glyphs={d} checksum={x}
+        , .{
+            summary.index,
+            summary.text_bytes,
+            summary.glyph_count,
+            summary.checksum,
+        });
+        if (summary.glyph_ids.len != 0) {
+            std.debug.print(" glyph_ids=", .{});
+            for (summary.glyph_ids, 0..) |glyph_id, index| {
+                if (index != 0) std.debug.print(",", .{});
+                std.debug.print("{d}", .{glyph_id});
+            }
+        }
+        std.debug.print("\n", .{});
+    }
 }
 
 fn divFloat(numerator: i128, denominator: usize) f64 {

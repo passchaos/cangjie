@@ -1,6 +1,8 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
 
+const max_feature_overrides = 16;
+
 pub const Engine = enum {
     cangjie,
     coretext,
@@ -55,6 +57,10 @@ pub const Options = struct {
     use_caches: bool = true,
     use_shaped_cache: bool = false,
     profile: bool = false,
+    line_summary: bool = false,
+    glyph_summary: bool = false,
+    feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
+    feature_override_count: usize = 0,
 
     pub fn fontLabel(self: Options) []const u8 {
         if (self.font_path) |path| return path;
@@ -64,6 +70,10 @@ pub const Options = struct {
     pub fn textLabel(self: Options) []const u8 {
         if (self.text_path) |path| return path;
         return "inline";
+    }
+
+    pub fn featureOverrides(self: *const Options) []const cangjie.FeatureOverride {
+        return self.feature_override_buf[0..self.feature_override_count];
     }
 };
 
@@ -122,6 +132,19 @@ pub fn parse(args: []const []const u8) !Options {
             options.use_shaped_cache = true;
         } else if (std.mem.eql(u8, arg, "--profile")) {
             options.profile = true;
+        } else if (std.mem.eql(u8, arg, "--line-summary")) {
+            options.line_summary = true;
+        } else if (std.mem.eql(u8, arg, "--glyph-summary")) {
+            options.line_summary = true;
+            options.glyph_summary = true;
+        } else if (std.mem.eql(u8, arg, "--enable-feature")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            try appendFeatureOverride(&options, args[i], true);
+        } else if (std.mem.eql(u8, arg, "--disable-feature")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            try appendFeatureOverride(&options, args[i], false);
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.InvalidArguments;
         } else {
@@ -139,6 +162,27 @@ fn parsePositiveUsize(text: []const u8) !usize {
     const value = try std.fmt.parseInt(usize, text, 10);
     if (value == 0) return error.InvalidArguments;
     return value;
+}
+
+fn appendFeatureOverride(options: *Options, tag_text: []const u8, enabled: bool) !void {
+    if (tag_text.len != 4) return error.InvalidArguments;
+    if (options.feature_override_count >= options.feature_override_buf.len) return error.InvalidArguments;
+    const tag_value = runtimeOpenTypeTag(tag_text[0..4]);
+    for (options.feature_override_buf[0..options.feature_override_count]) |existing| {
+        if (existing.tag == tag_value) return error.InvalidArguments;
+    }
+    options.feature_override_buf[options.feature_override_count] = .{
+        .tag = tag_value,
+        .enabled = enabled,
+    };
+    options.feature_override_count += 1;
+}
+
+fn runtimeOpenTypeTag(bytes: []const u8) u32 {
+    return (@as(u32, bytes[0]) << 24) |
+        (@as(u32, bytes[1]) << 16) |
+        (@as(u32, bytes[2]) << 8) |
+        @as(u32, bytes[3]);
 }
 
 fn parseDirection(text: []const u8) ?cangjie.TextDirection {
@@ -173,6 +217,10 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --no-caches                  bypass glyph metric and cmap caches
         \\  --shaped-cache               cache complete shaped runs
         \\  --profile                    collect Cangjie stage timings
+        \\  --line-summary               print per-line glyph counts and checksums for the first measured iteration
+        \\  --glyph-summary              include per-line glyph id lists with --line-summary
+        \\  --enable-feature TAG         enable one OpenType feature tag for Cangjie
+        \\  --disable-feature TAG        disable one OpenType feature tag for Cangjie
         \\
         \\examples:
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --iterations 50000

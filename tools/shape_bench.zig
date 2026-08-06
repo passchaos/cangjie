@@ -51,6 +51,10 @@ pub fn main(init: std.process.Init) !void {
         },
         .coretext => try coretext.run(init.io, allocator, font_bytes, options),
     };
+    defer {
+        for (result.line_summaries) |summary| allocator.free(summary.glyph_ids);
+        allocator.free(result.line_summaries);
+    }
     report.print(options, result);
 }
 

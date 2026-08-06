@@ -1277,37 +1277,54 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
 }
 
 fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    const parsed = try parseCursivePositionSubtable(table, subtable_offset);
+    try collectCursiveAdjustmentParsed(table, parsed, glyphs, adjustments, allocator, lookup_flag, options);
+}
+
+const CursivePositionSubtable = struct {
+    subtable_offset: usize,
+    coverage_offset: usize,
+    entry_exit_count: u16,
+};
+
+fn parseCursivePositionSubtable(table: Table, subtable_offset: usize) GposError!CursivePositionSubtable {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const entry_exit_count = try readU16(table, subtable_offset + 4);
+    return .{
+        .subtable_offset = subtable_offset,
+        .coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
+        .entry_exit_count = try readU16(table, subtable_offset + 4),
+    };
+}
+
+fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (glyphs.len < 2) return;
 
     var previous_covered_position: ?usize = null;
     var previous_coverage_index: usize = 0;
     for (glyphs, 0..) |glyph, i| {
         if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        const current_index = try coverageIndex(table, coverage_offset, glyph) orelse {
+        const current_index = try coverageIndex(table, parsed.coverage_offset, glyph) orelse {
             // A non-ignored, non-covered glyph breaks cursive adjacency. Ignored
             // glyphs are skipped above, matching OpenType LookupFlag semantics.
             previous_covered_position = null;
             continue;
         };
-        if (current_index >= entry_exit_count) {
+        if (current_index >= parsed.entry_exit_count) {
             previous_covered_position = null;
             continue;
         }
 
         if (previous_covered_position) |_| {
-            const current_record = subtable_offset + 6 + current_index * 4;
-            const previous_record = subtable_offset + 6 + previous_coverage_index * 4;
+            const current_record = parsed.subtable_offset + 6 + current_index * 4;
+            const previous_record = parsed.subtable_offset + 6 + previous_coverage_index * 4;
             const entry_relative = try readU16(table, current_record);
             const exit_relative = try readU16(table, previous_record + 2);
             if (entry_relative != 0 and exit_relative != 0) {
                 // Position the current glyph so its entry anchor lands on the
                 // previous non-ignored covered glyph's exit anchor.
-                const entry = try readAnchor(table, subtable_offset + entry_relative);
-                const exit = try readAnchor(table, subtable_offset + exit_relative);
+                const entry = try readAnchor(table, parsed.subtable_offset + entry_relative);
+                const exit = try readAnchor(table, parsed.subtable_offset + exit_relative);
                 try appendAdjustment(adjustments, allocator, i, .{
                     .index = i,
                     .x_placement = exit.x - entry.x,

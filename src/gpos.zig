@@ -1119,11 +1119,16 @@ const PairPositionSubtable = struct {
     value_format_2: u16,
     value_size_1: usize,
     value_size_2: usize,
+    class_def_1: usize = 0,
+    class_def_2: usize = 0,
+    class_1_count: u16 = 0,
+    class_2_count: u16 = 0,
+    matrix_offset: usize = 0,
 };
 
 fn parsePairPositionSubtable(table: Table, subtable_offset: usize) GposError!PairPositionSubtable {
     const pos_format = try readU16(table, subtable_offset);
-    return .{
+    var parsed = PairPositionSubtable{
         .subtable_offset = subtable_offset,
         .pos_format = pos_format,
         .coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
@@ -1132,6 +1137,14 @@ fn parsePairPositionSubtable(table: Table, subtable_offset: usize) GposError!Pai
         .value_size_1 = try valueRecordSize(try readU16(table, subtable_offset + 4)),
         .value_size_2 = try valueRecordSize(try readU16(table, subtable_offset + 6)),
     };
+    if (pos_format == 2) {
+        parsed.class_def_1 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+        parsed.class_def_2 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 10));
+        parsed.class_1_count = try readU16(table, subtable_offset + 12);
+        parsed.class_2_count = try readU16(table, subtable_offset + 14);
+        parsed.matrix_offset = subtable_offset + 16;
+    }
+    return parsed;
 }
 
 fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, first_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
@@ -1179,17 +1192,12 @@ fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, gly
         2 => {
             // PairPos format 2 maps both glyphs through class definitions and
             // indexes a dense class1 x class2 value matrix.
-            const class_def_1 = try checkedRequiredClassDefOffset(table, parsed.subtable_offset, try readU16(table, parsed.subtable_offset + 8));
-            const class_def_2 = try checkedRequiredClassDefOffset(table, parsed.subtable_offset, try readU16(table, parsed.subtable_offset + 10));
-            const class_1_count = try readU16(table, parsed.subtable_offset + 12);
-            const class_2_count = try readU16(table, parsed.subtable_offset + 14);
             const record_size = parsed.value_size_1 + parsed.value_size_2;
-            const matrix_offset = parsed.subtable_offset + 16;
             if (try coverageIndex(table, parsed.coverage_offset, glyphs[first_index]) == null) return false;
-            const class_1 = try classValue(table, class_def_1, glyphs[first_index]);
-            const class_2 = try classValue(table, class_def_2, glyphs[second_index]);
-            if (class_1 >= class_1_count or class_2 >= class_2_count) return false;
-            const record_offset = matrix_offset + (@as(usize, class_1) * class_2_count + class_2) * record_size;
+            const class_1 = try classValue(table, parsed.class_def_1, glyphs[first_index]);
+            const class_2 = try classValue(table, parsed.class_def_2, glyphs[second_index]);
+            if (class_1 >= parsed.class_1_count or class_2 >= parsed.class_2_count) return false;
+            const record_offset = parsed.matrix_offset + (@as(usize, class_1) * parsed.class_2_count + class_2) * record_size;
             const value_1 = try readValueRecord(table, record_offset, parsed.value_format_1, parsed.subtable_offset);
             const value_2 = try readValueRecord(table, record_offset + parsed.value_size_1, parsed.value_format_2, parsed.subtable_offset);
             try appendAdjustment(adjustments, allocator, first_index, value_1, true);

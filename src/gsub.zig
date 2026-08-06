@@ -630,6 +630,10 @@ fn applyMultipleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_
     // the same lookup.
     var glyph_index: usize = 0;
     while (glyph_index < glyphs.items.len) {
+        if (!sourceFeatureAllowsGlyph(options, glyph_index)) {
+            glyph_index += 1;
+            continue;
+        }
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) {
             glyph_index += 1;
             continue;
@@ -660,6 +664,10 @@ fn applyExtensionMultipleSubstitutionLookup(table: Table, lookup_offset: usize, 
     // lookup and should be alternatives for the original glyph.
     var glyph_index: usize = 0;
     while (glyph_index < glyphs.items.len) {
+        if (!sourceFeatureAllowsGlyph(options, glyph_index)) {
+            glyph_index += 1;
+            continue;
+        }
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) {
             glyph_index += 1;
             continue;
@@ -3638,6 +3646,62 @@ test "GSUB source-scoped feature gates substitution starts" {
         .script_tag = .arab,
     });
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 2, 2 }, global.items);
+}
+
+test "GSUB source-scoped feature gates multiple substitutions" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 78;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // ScriptList.
+    writeU16Test(&bytes, 6, 30); // FeatureList.
+    writeU16Test(&bytes, 8, 44); // LookupList.
+
+    writeU16Test(&bytes, 10, 1);
+    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.arab));
+    writeU16Test(&bytes, 16, 8);
+    writeU16Test(&bytes, 18, 4);
+    writeU16Test(&bytes, 20, 0);
+    writeU16Test(&bytes, 22, 0);
+    writeU16Test(&bytes, 24, 0xffff);
+    writeU16Test(&bytes, 26, 1);
+    writeU16Test(&bytes, 28, 0);
+
+    writeU16Test(&bytes, 30, 1);
+    writeU32Test(&bytes, 32, unicode.tag("fina"));
+    writeU16Test(&bytes, 36, 8);
+    writeU16Test(&bytes, 38, 0);
+    writeU16Test(&bytes, 40, 1);
+    writeU16Test(&bytes, 42, 0);
+
+    writeU16Test(&bytes, 44, 1);
+    writeU16Test(&bytes, 46, 4);
+    writeU16Test(&bytes, 48, 2); // MultipleSubst.
+    writeU16Test(&bytes, 50, 0);
+    writeU16Test(&bytes, 52, 1);
+    writeU16Test(&bytes, 54, 8);
+    const subtable = 56;
+    writeU16Test(&bytes, subtable + 0, 1);
+    writeU16Test(&bytes, subtable + 2, 8); // Coverage at 64.
+    writeU16Test(&bytes, subtable + 4, 1);
+    writeU16Test(&bytes, subtable + 6, 14); // Sequence at 70.
+    writeCoverage1(&bytes, 64, 1);
+    writeU16Test(&bytes, 70, 2);
+    writeU16Test(&bytes, 72, 2);
+    writeU16Test(&bytes, 74, 3);
+
+    var scoped = std.ArrayList(GlyphId).empty;
+    defer scoped.deinit(allocator);
+    try scoped.appendSlice(allocator, &.{ 1, 1, 1 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+    const source_features = [_]u32{ 0, unicode.tag("fina"), 0 };
+    try applySourceFeatureWithOptions(&bytes, 0, bytes.len, unicode.tag("fina"), &scoped, allocator, .{
+        .script_tag = .arab,
+        .glyph_source_indices = &sources,
+        .source_features = &source_features,
+    });
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 3, 1 }, scoped.items);
 }
 
 test "GSUB LangSys required feature bypasses optional feature filtering" {

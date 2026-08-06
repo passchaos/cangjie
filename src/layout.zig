@@ -1298,6 +1298,68 @@ pub const GlyphMetrics = struct {
     left_side_bearing: i16,
 };
 
+const GdefMetadataCacheKey = struct {
+    font_addr: usize,
+};
+
+pub const GdefMetadataCache = struct {
+    const Entry = struct {
+        key: GdefMetadataCacheKey,
+        metadata: GdefLookupMetadata,
+    };
+
+    allocator: std.mem.Allocator,
+    entries: std.ArrayList(Entry) = .empty,
+    hits: usize = 0,
+    misses: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) GdefMetadataCache {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *GdefMetadataCache) void {
+        self.clear();
+        self.entries.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *GdefMetadataCache) void {
+        for (self.entries.items) |*entry| {
+            entry.metadata.deinit(self.allocator);
+        }
+        self.entries.clearRetainingCapacity();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    pub fn metadata(self: *GdefMetadataCache, font: *const Font) !*const GdefLookupMetadata {
+        const key = GdefMetadataCacheKey{ .font_addr = @intFromPtr(font) };
+        for (self.entries.items) |*entry| {
+            if (entry.key.font_addr == key.font_addr) {
+                self.hits += 1;
+                return &entry.metadata;
+            }
+        }
+
+        self.misses += 1;
+        var metadata_value = try font.gdefLookupMetadataForShaping(self.allocator);
+        errdefer metadata_value.deinit(self.allocator);
+        try self.entries.append(self.allocator, .{
+            .key = key,
+            .metadata = metadata_value,
+        });
+        return &self.entries.items[self.entries.items.len - 1].metadata;
+    }
+};
+
+fn gdefMetadataForShaping(font: *const Font, allocator: std.mem.Allocator, cache: ?*GdefMetadataCache, out_owned: *?GdefLookupMetadata) !*const GdefLookupMetadata {
+    if (cache) |metadata_cache| {
+        return try metadata_cache.metadata(font);
+    }
+    out_owned.* = try font.gdefLookupMetadataForShaping(allocator);
+    return &out_owned.*.?;
+}
+
 const GlyphMetricsKey = struct {
     font_addr: usize,
     glyph_id: GlyphId,
@@ -1419,6 +1481,7 @@ pub const LayoutBuffer = struct {
     script_runs: std.ArrayList(ScriptedRun) = .empty,
     shape_profile: ?*ShapeStageProfile = null,
     profile_io: ?std.Io = null,
+    gdef_metadata_cache: ?*GdefMetadataCache = null,
 
     pub fn init(allocator: std.mem.Allocator) LayoutBuffer {
         return .{ .allocator = allocator };
@@ -2566,9 +2629,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     }
 
     const gdef_start = shapeProfileNow(shape_profile, profile_io);
-    var gdef_metadata = try font.gdefLookupMetadataForShaping(buffer.allocator);
+    var owned_gdef_metadata: ?GdefLookupMetadata = null;
+    const gdef_metadata = try gdefMetadataForShaping(font, buffer.allocator, buffer.gdef_metadata_cache, &owned_gdef_metadata);
     if (shape_profile) |p| p.gdef_ns += shapeProfileElapsed(gdef_start, profile_io);
-    defer gdef_metadata.deinit(buffer.allocator);
+    defer if (owned_gdef_metadata) |*metadata| metadata.deinit(buffer.allocator);
 
     // Keep source metadata parallel to glyph ids through GSUB. GPOS MarkLigPos
     // needs the original component sources for a ligature glyph; otherwise a
@@ -2624,11 +2688,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             applications_buf[application_count] = application;
             application_count += 1;
         }
-        try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], &glyph_ids, buffer.allocator, arabic_options, gdef_metadata);
+        try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], &glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
     } else {
-        try font.applyGsubWithOptionsUsingGdefForShaping(&glyph_ids, buffer.allocator, gsub_options, gdef_metadata);
+        try font.applyGsubWithOptionsUsingGdefForShaping(&glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
         if (scriptPositionFeatureApplication(lookup_options.script_position)) |application| {
-            try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, &glyph_ids, buffer.allocator, gsub_options, gdef_metadata);
+            try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, &glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
         }
     }
 
@@ -2646,7 +2710,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .ligature_components = ligature_components.items,
         .shape_profile = shape_profile,
         .profile_io = profile_io,
-    }, gdef_metadata);
+    }, gdef_metadata.*);
     if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 
     const position_start = shapeProfileNow(shape_profile, profile_io);

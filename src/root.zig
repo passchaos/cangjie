@@ -93,6 +93,7 @@ pub const GlyphClass = @import("font.zig").GlyphClass;
 pub const NameId = @import("font.zig").NameId;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
+pub const GdefMetadataCache = @import("layout.zig").GdefMetadataCache;
 pub const GlyphIndexCache = @import("layout.zig").GlyphIndexCache;
 pub const GlyphMetrics = @import("layout.zig").GlyphMetrics;
 pub const GlyphMetricsCache = @import("layout.zig").GlyphMetricsCache;

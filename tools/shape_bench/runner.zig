@@ -30,6 +30,11 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     defer metrics_cache.deinit();
     var glyph_index_cache = cangjie.GlyphIndexCache.init(allocator);
     defer glyph_index_cache.deinit();
+    var gdef_cache = cangjie.GdefMetadataCache.init(allocator);
+    defer gdef_cache.deinit();
+    if (options.use_caches) {
+        layout_buffer.gdef_metadata_cache = &gdef_cache;
+    }
 
     const cascade_fonts = [_]*const cangjie.Font{font};
     const cascade = cangjie.FontCascade.init(&cascade_fonts);

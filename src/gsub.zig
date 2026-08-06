@@ -1902,6 +1902,7 @@ fn applyChainingCoverageSubstitutionAt(table: Table, subtable_info: ChainingCove
     var input_indices_buf: [64]usize = undefined;
     if (subtable_info.input_count > input_indices_buf.len) return error.UnsupportedGsub;
     if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..subtable_info.input_count])) return false;
+    if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, input_indices_buf[0..subtable_info.input_count], subtable_info.input_offsets_pos)) return false;
     var backtrack_indices_buf: [64]usize = undefined;
     if (subtable_info.backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
     if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..subtable_info.backtrack_count])) return false;
@@ -1910,7 +1911,6 @@ fn applyChainingCoverageSubstitutionAt(table: Table, subtable_info: ChainingCove
     if (subtable_info.lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
     if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable_info.lookahead_count])) return false;
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, backtrack_indices_buf[0..subtable_info.backtrack_count], subtable_info.backtrack_offsets_pos)) return false;
-    if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, input_indices_buf[0..subtable_info.input_count], subtable_info.input_offsets_pos)) return false;
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, lookahead_indices_buf[0..subtable_info.lookahead_count], subtable_info.lookahead_offsets_pos)) return false;
     try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices_buf[0..subtable_info.input_count], allocator, options);
     return true;

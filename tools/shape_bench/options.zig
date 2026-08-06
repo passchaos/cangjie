@@ -53,6 +53,7 @@ pub const Options = struct {
     iterations: usize = 10_000,
     warmup: usize = 1_000,
     direction: cangjie.TextDirection = .ltr,
+    reorder_bidi: bool = true,
     script_position: cangjie.ScriptPosition = .normal,
     use_caches: bool = true,
     use_shaped_cache: bool = false,
@@ -121,6 +122,8 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.direction = parseDirection(args[i]) orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--no-bidi-reorder")) {
+            options.reorder_bidi = false;
         } else if (std.mem.eql(u8, arg, "--script-position")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -213,6 +216,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --iterations N               measured iterations, default 10000
         \\  --warmup N                   unmeasured warmup iterations, default 1000
         \\  --direction ltr|rtl          shaping direction, default ltr
+        \\  --no-bidi-reorder            keep logical glyph order after shaping
         \\  --script-position normal|superscript|subscript
         \\  --no-caches                  bypass glyph metric and cmap caches
         \\  --shaped-cache               cache complete shaped runs

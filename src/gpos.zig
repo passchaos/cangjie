@@ -1760,8 +1760,10 @@ fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset
 }
 
 fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    try ensurePositionRecordsWithin(table, records_pos, record_count, input_indices.len);
-    try ensurePositionRecordMarkFilteringSetsValid(table, records_pos, record_count, options);
+    if (!table.assume_validated) {
+        try ensurePositionRecordsWithin(table, records_pos, record_count, input_indices.len);
+        try ensurePositionRecordMarkFilteringSetsValid(table, records_pos, record_count, options);
+    }
 
     // Context positioning records name a glyph in the matched input sequence
     // and a lookup-list index. Nested lookups own their own LookupFlag, so a

@@ -121,6 +121,7 @@ pub const FeatureApplication = struct {
 pub const FeatureLookupPlanEntry = struct {
     application: FeatureApplication,
     lookups: []u16,
+    lookup_offsets: []usize,
 };
 
 pub const FeatureLookupPlan = struct {
@@ -129,6 +130,7 @@ pub const FeatureLookupPlan = struct {
     pub fn deinit(self: *FeatureLookupPlan, allocator: std.mem.Allocator) void {
         for (self.entries) |entry| {
             allocator.free(entry.lookups);
+            allocator.free(entry.lookup_offsets);
         }
         allocator.free(self.entries);
         self.* = .{ .entries = &.{} };
@@ -327,17 +329,23 @@ pub fn buildFeatureLookupPlan(
         if (featurePlanContains(applications, required_tag)) continue;
         const lookups = try selectedFeatureLookupsFromPlanOwned(table, required_tag, feature_indices.items, feature_list_offset, feature_count, lookup_count, allocator);
         errdefer allocator.free(lookups);
+        const lookup_offsets = try lookupOffsetsForIndices(table, lookup_list_offset, lookups, allocator);
+        errdefer allocator.free(lookup_offsets);
         try entries.append(allocator, .{
             .application = .{ .tag = required_tag },
             .lookups = lookups,
+            .lookup_offsets = lookup_offsets,
         });
     }
     for (applications) |application| {
         const lookups = try selectedFeatureLookupsFromPlanOwned(table, application.tag, feature_indices.items, feature_list_offset, feature_count, lookup_count, allocator);
         errdefer allocator.free(lookups);
+        const lookup_offsets = try lookupOffsetsForIndices(table, lookup_list_offset, lookups, allocator);
+        errdefer allocator.free(lookup_offsets);
         try entries.append(allocator, .{
             .application = application,
             .lookups = lookups,
+            .lookup_offsets = lookup_offsets,
         });
     }
     return .{ .entries = try entries.toOwnedSlice(allocator) };
@@ -364,7 +372,7 @@ pub fn applyFeatureLookupPlanWithOptions(
         var selected_options = options;
         selected_options.active_source_feature = if (entry.application.source_scoped) entry.application.tag else null;
         try validateShapingMetadata(selected_options, glyphs.items.len);
-        try applyLookupIndices(table, lookup_list_offset, lookup_count, entry.lookups, glyphs, allocator, selected_options);
+        try applyLookupPlanEntry(table, lookup_count, entry, glyphs, allocator, selected_options);
     }
 }
 
@@ -459,6 +467,23 @@ fn applyLookupIndices(
     for (selected_lookups) |lookup_index| {
         if (lookup_index >= lookup_count) return error.BadGsub;
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+        try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, options);
+    }
+}
+
+fn lookupOffsetsForIndices(table: Table, lookup_list_offset: usize, selected_lookups: []const u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]usize {
+    const lookup_offsets = try allocator.alloc(usize, selected_lookups.len);
+    errdefer allocator.free(lookup_offsets);
+    for (selected_lookups, lookup_offsets) |lookup_index, *lookup_offset| {
+        lookup_offset.* = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+    }
+    return lookup_offsets;
+}
+
+fn applyLookupPlanEntry(table: Table, lookup_count: u16, entry: FeatureLookupPlanEntry, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    if (entry.lookup_offsets.len != entry.lookups.len) return error.BadGsub;
+    for (entry.lookups, entry.lookup_offsets) |lookup_index, lookup_offset| {
+        if (lookup_index >= lookup_count) return error.BadGsub;
         try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, options);
     }
 }

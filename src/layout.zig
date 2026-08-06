@@ -1477,8 +1477,16 @@ const GlyphIndexKey = struct {
 };
 
 pub const GlyphIndexCache = struct {
+    const ascii_capacity = 128;
+    const AsciiEntry = struct {
+        font_addr: usize = 0,
+        glyph_id: GlyphId = 0,
+        valid: bool = false,
+    };
+
     allocator: std.mem.Allocator,
     entries: std.AutoHashMap(GlyphIndexKey, GlyphId),
+    ascii_entries: [ascii_capacity]AsciiEntry = [_]AsciiEntry{.{}} ** ascii_capacity,
     hits: usize = 0,
     misses: usize = 0,
 
@@ -1496,19 +1504,43 @@ pub const GlyphIndexCache = struct {
 
     pub fn clear(self: *GlyphIndexCache) void {
         self.entries.clearRetainingCapacity();
+        self.ascii_entries = [_]AsciiEntry{.{}} ** ascii_capacity;
         self.hits = 0;
         self.misses = 0;
     }
 
     pub fn glyphIndex(self: *GlyphIndexCache, font: *const Font, codepoint: u21) !GlyphId {
-        const key = glyphIndexKey(font, codepoint);
+        const font_addr = @intFromPtr(font);
+        if (codepoint < ascii_capacity) {
+            const ascii = &self.ascii_entries[@intCast(codepoint)];
+            if (ascii.valid and ascii.font_addr == font_addr) {
+                self.hits += 1;
+                return ascii.glyph_id;
+            }
+        }
+
+        const key = GlyphIndexKey{ .font_addr = font_addr, .codepoint = codepoint };
         if (self.entries.get(key)) |glyph_id| {
             self.hits += 1;
+            if (codepoint < ascii_capacity) {
+                self.ascii_entries[@intCast(codepoint)] = .{
+                    .font_addr = font_addr,
+                    .glyph_id = glyph_id,
+                    .valid = true,
+                };
+            }
             return glyph_id;
         }
         self.misses += 1;
         const glyph_id = try font.glyphIndex(codepoint);
         try self.entries.put(key, glyph_id);
+        if (codepoint < ascii_capacity) {
+            self.ascii_entries[@intCast(codepoint)] = .{
+                .font_addr = font_addr,
+                .glyph_id = glyph_id,
+                .valid = true,
+            };
+        }
         return glyph_id;
     }
 };

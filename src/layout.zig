@@ -6,6 +6,7 @@ const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
 const gsub = @import("gsub.zig");
 const layout_cache = @import("layout_cache.zig");
+const layout_scratch = @import("layout_scratch.zig");
 const unicode = @import("unicode.zig");
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
 pub const GdefMetadataCache = layout_cache.GdefMetadataCache;
@@ -1318,12 +1319,14 @@ pub const LayoutBuffer = struct {
     profile_io: ?std.Io = null,
     gdef_metadata_cache: ?*GdefMetadataCache = null,
     gpos_table_proof_cache: ?*GposTableProofCache = null,
+    shape_scratch: layout_scratch.ShapeScratch = .{},
 
     pub fn init(allocator: std.mem.Allocator) LayoutBuffer {
         return .{ .allocator = allocator };
     }
 
     pub fn deinit(self: *LayoutBuffer) void {
+        self.shape_scratch.deinit(self.allocator);
         self.script_runs.deinit(self.allocator);
         self.lines.deinit(self.allocator);
         self.runs.deinit(self.allocator);
@@ -2411,22 +2414,16 @@ fn scriptForText(text: []const u8) unicode.Script {
 
 fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, lookup_options: LookupOptions) !void {
     const scale = font_size / @as(f32, @floatFromInt(font.units_per_em));
-    var glyph_ids = std.ArrayList(GlyphId).empty;
-    defer glyph_ids.deinit(buffer.allocator);
-    var codepoints = std.ArrayList(u21).empty;
-    defer codepoints.deinit(buffer.allocator);
-    var clusters = std.ArrayList(usize).empty;
-    defer clusters.deinit(buffer.allocator);
-    var source_ends = std.ArrayList(usize).empty;
-    defer source_ends.deinit(buffer.allocator);
-    var glyph_source_indices = std.ArrayList(usize).empty;
-    defer glyph_source_indices.deinit(buffer.allocator);
-    var ligature_components = std.ArrayList(gpos.LigatureComponentInfo).empty;
-    defer ligature_components.deinit(buffer.allocator);
-    var joining_forms = std.ArrayList(unicode.JoiningForm).empty;
-    defer joining_forms.deinit(buffer.allocator);
-    var source_features = std.ArrayList(u32).empty;
-    defer source_features.deinit(buffer.allocator);
+    const scratch = &buffer.shape_scratch;
+    scratch.clear();
+    const glyph_ids = &scratch.glyph_ids;
+    const codepoints = &scratch.codepoints;
+    const clusters = &scratch.clusters;
+    const source_ends = &scratch.source_ends;
+    const glyph_source_indices = &scratch.glyph_source_indices;
+    const ligature_components = &scratch.ligature_components;
+    const joining_forms = &scratch.joining_forms;
+    const source_features = &scratch.source_features;
 
     const shape_profile = buffer.shape_profile;
     const profile_io = buffer.profile_io;
@@ -2480,8 +2477,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .features = lookup_options.features,
         .vertical = lookup_options.writing_mode.isVertical(),
         .apply_all_if_unselected = false,
-        .glyph_source_indices = &glyph_source_indices,
-        .ligature_components = &ligature_components,
+        .glyph_source_indices = glyph_source_indices,
+        .ligature_components = ligature_components,
         .shape_profile = shape_profile,
         .profile_io = profile_io,
     };
@@ -2524,18 +2521,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             applications_buf[application_count] = application;
             application_count += 1;
         }
-        try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], &glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+        try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
     } else {
-        try font.applyGsubWithOptionsUsingGdefForShaping(&glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+        try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
         if (scriptPositionFeatureApplication(lookup_options.script_position)) |application| {
-            try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, &glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+            try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
         }
     }
 
     if (shape_profile) |p| p.gsub_ns += shapeProfileElapsed(gsub_start, profile_io);
 
-    var gpos_adjustments = std.ArrayList(gpos.Adjustment).empty;
-    defer gpos_adjustments.deinit(buffer.allocator);
+    const gpos_adjustments = &scratch.gpos_adjustments;
     const gpos_start = shapeProfileNow(shape_profile, profile_io);
     const gpos_options = gpos.LookupOptions{
         .script_tag = lookup_options.script_tag,
@@ -2549,9 +2545,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     };
     if (buffer.gpos_table_proof_cache) |proof_cache| {
         try proof_cache.prove(font);
-        try font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyph_ids.items, &gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
+        try font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
     } else {
-        try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyph_ids.items, &gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
+        try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
     }
     if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 

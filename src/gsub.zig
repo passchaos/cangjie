@@ -73,6 +73,19 @@ pub const LookupAccelerator = struct {
     chaining_coverage_only: bool = false,
     chaining_input_digest: GlyphDigest = .{},
     chaining_subtable_digests: []const GlyphDigest = &.{},
+    chaining_subtables: []const ChainingCoverageSubtable = &.{},
+};
+
+const ChainingCoverageSubtable = struct {
+    subtable_offset: usize = 0,
+    backtrack_offsets_pos: usize = 0,
+    backtrack_count: u16 = 0,
+    input_offsets_pos: usize = 0,
+    input_count: u16 = 0,
+    lookahead_offsets_pos: usize = 0,
+    lookahead_count: u16 = 0,
+    records_pos: usize = 0,
+    subst_count: u16 = 0,
 };
 
 pub const FeatureApplication = struct {
@@ -456,6 +469,7 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
 fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
     for (accelerators) |accelerator| {
         allocator.free(accelerator.chaining_subtable_digests);
+        allocator.free(accelerator.chaining_subtables);
     }
 }
 
@@ -468,10 +482,15 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     const subtable_digests = try allocator.alloc(GlyphDigest, subtable_count);
     errdefer allocator.free(subtable_digests);
     @memset(subtable_digests, .{});
+    const chaining_subtables = try allocator.alloc(ChainingCoverageSubtable, subtable_count);
+    errdefer allocator.free(chaining_subtables);
+    @memset(chaining_subtables, .{});
     var saw_input_coverage = false;
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const coverage_offset = try firstChainingInputCoverageOffset(table, subtable_offset) orelse continue;
+        const parsed_subtable = try parseChainingCoverageSubtable(table, subtable_offset) orelse continue;
+        chaining_subtables[subtable_i] = parsed_subtable;
+        const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos));
         const subtable_digest = try coverageDigest(table, coverage_offset);
         subtable_digests[subtable_i] = subtable_digest;
         digest.unionWith(subtable_digest);
@@ -479,12 +498,14 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     }
     if (!saw_input_coverage or digest.isEmpty()) {
         allocator.free(subtable_digests);
+        allocator.free(chaining_subtables);
         return .{};
     }
     return .{
         .chaining_coverage_only = true,
         .chaining_input_digest = digest,
         .chaining_subtable_digests = subtable_digests,
+        .chaining_subtables = chaining_subtables,
     };
 }
 
@@ -1541,6 +1562,40 @@ fn firstChainingInputCoverageOffset(table: Table, subtable_offset: usize) GsubEr
     return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, cursor));
 }
 
+fn parseChainingCoverageSubtable(table: Table, subtable_offset: usize) GsubError!?ChainingCoverageSubtable {
+    if (try readU16(table, subtable_offset) != 3) return null;
+    var cursor = subtable_offset + 2;
+    const backtrack_count = try readU16(table, cursor);
+    cursor += 2;
+    const backtrack_offsets_pos = cursor;
+    cursor += backtrack_count * 2;
+
+    const input_count = try readU16(table, cursor);
+    cursor += 2;
+    if (input_count == 0) return null;
+    const input_offsets_pos = cursor;
+    cursor += input_count * 2;
+
+    const lookahead_count = try readU16(table, cursor);
+    cursor += 2;
+    const lookahead_offsets_pos = cursor;
+    cursor += lookahead_count * 2;
+
+    const subst_count = try readU16(table, cursor);
+    cursor += 2;
+    return .{
+        .subtable_offset = subtable_offset,
+        .backtrack_offsets_pos = backtrack_offsets_pos,
+        .backtrack_count = backtrack_count,
+        .input_offsets_pos = input_offsets_pos,
+        .input_count = input_count,
+        .lookahead_offsets_pos = lookahead_offsets_pos,
+        .lookahead_count = lookahead_count,
+        .records_pos = cursor,
+        .subst_count = subst_count,
+    };
+}
+
 fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: ?*const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
@@ -1553,15 +1608,22 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
                     !accel.chaining_subtable_digests[subtable_i].mayHave(current_glyph)) continue;
             }
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            if (try applyChainingContextSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options)) break;
+            const parsed_subtable = if (accelerator) |accel|
+                if (subtable_i < accel.chaining_subtables.len and accel.chaining_subtables[subtable_i].input_count != 0)
+                    accel.chaining_subtables[subtable_i]
+                else
+                    null
+            else
+                null;
+            if (try applyChainingContextSubstitutionAt(table, subtable_offset, parsed_subtable, glyphs, pos, allocator, lookup_flag, options)) break;
         }
     }
 }
 
-fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
+fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, parsed_subtable: ?ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
     const subst_format = try readU16(table, subtable_offset);
     return switch (subst_format) {
-        3 => try applyChainingCoverageSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options),
+        3 => try applyChainingCoverageSubstitutionAt(table, parsed_subtable orelse (try parseChainingCoverageSubtable(table, subtable_offset) orelse return false), glyphs, pos, allocator, lookup_flag, options),
         else => false,
     };
 }
@@ -1655,51 +1717,31 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
 }
 
 fn applyChainingCoverageSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    const parsed_subtable = try parseChainingCoverageSubtable(table, subtable_offset) orelse return;
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
-        _ = try applyChainingCoverageSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options);
+        _ = try applyChainingCoverageSubstitutionAt(table, parsed_subtable, glyphs, pos, allocator, lookup_flag, options);
     }
 }
 
-fn applyChainingCoverageSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
-    var cursor = subtable_offset + 2;
-    const backtrack_count = try readU16(table, cursor);
-    cursor += 2;
-    const backtrack_offsets_pos = cursor;
-    cursor += backtrack_count * 2;
-
-    const input_count = try readU16(table, cursor);
-    cursor += 2;
-    if (input_count == 0) return false;
-    const input_offsets_pos = cursor;
-    cursor += input_count * 2;
-
-    const lookahead_count = try readU16(table, cursor);
-    cursor += 2;
-    const lookahead_offsets_pos = cursor;
-    cursor += lookahead_count * 2;
-
-    const subst_count = try readU16(table, cursor);
-    cursor += 2;
-    const records_pos = cursor;
-
+fn applyChainingCoverageSubstitutionAt(table: Table, subtable_info: ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
     if (!sourceFeatureAllowsGlyph(options, pos)) return false;
     if (pos >= glyphs.items.len) return false;
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return false;
     var input_indices_buf: [64]usize = undefined;
-    if (input_count > input_indices_buf.len) return error.UnsupportedGsub;
-    if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..input_count])) return false;
+    if (subtable_info.input_count > input_indices_buf.len) return error.UnsupportedGsub;
+    if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..subtable_info.input_count])) return false;
     var backtrack_indices_buf: [64]usize = undefined;
-    if (backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
-    if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count])) return false;
-    const lookahead_start = input_indices_buf[input_count - 1] + 1;
+    if (subtable_info.backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
+    if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..subtable_info.backtrack_count])) return false;
+    const lookahead_start = input_indices_buf[subtable_info.input_count - 1] + 1;
     var lookahead_indices_buf: [64]usize = undefined;
-    if (lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
-    if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count])) return false;
-    if (!try coverageIndicesMatch(table, subtable_offset, glyphs.items, backtrack_indices_buf[0..backtrack_count], backtrack_offsets_pos)) return false;
-    if (!try coverageIndicesMatch(table, subtable_offset, glyphs.items, input_indices_buf[0..input_count], input_offsets_pos)) return false;
-    if (!try coverageIndicesMatch(table, subtable_offset, glyphs.items, lookahead_indices_buf[0..lookahead_count], lookahead_offsets_pos)) return false;
-    try applySubstitutionRecordsMapped(table, glyphs, records_pos, subst_count, input_indices_buf[0..input_count], allocator, options);
+    if (subtable_info.lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
+    if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable_info.lookahead_count])) return false;
+    if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, backtrack_indices_buf[0..subtable_info.backtrack_count], subtable_info.backtrack_offsets_pos)) return false;
+    if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, input_indices_buf[0..subtable_info.input_count], subtable_info.input_offsets_pos)) return false;
+    if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, lookahead_indices_buf[0..subtable_info.lookahead_count], subtable_info.lookahead_offsets_pos)) return false;
+    try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices_buf[0..subtable_info.input_count], allocator, options);
     return true;
 }
 

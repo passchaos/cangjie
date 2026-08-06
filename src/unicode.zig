@@ -2690,6 +2690,11 @@ test "Arabic joining forms skip transparent marks and honor join controls" {
     var zwj_forms: [with_zwj.len]JoiningForm = undefined;
     try resolveJoiningForms(&with_zwj, &zwj_forms);
     try std.testing.expectEqualSlices(JoiningForm, &.{ .initial, .none, .final }, &zwj_forms);
+
+    const persian_kaf_lam = [_]u21{ 0x0627, 0x0644, 0x06af, 0x0648 };
+    var persian_forms: [persian_kaf_lam.len]JoiningForm = undefined;
+    try resolveJoiningForms(&persian_kaf_lam, &persian_forms);
+    try std.testing.expectEqualSlices(JoiningForm, &.{ .isolated, .initial, .medial, .final }, &persian_forms);
 }
 
 test "paragraph direction follows the first strong character" {

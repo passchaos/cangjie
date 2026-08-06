@@ -2172,6 +2172,7 @@ const max_fast_single_records = 64;
 fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, options: LookupOptions) GsubError!bool {
     if (record_count == 0) return true;
     if (record_count > max_fast_single_records) return false;
+    if (try applyAcceleratedSingleSubstitutionRecordsMapped(table, glyphs, records_offset, record_count, input_indices, options)) return true;
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
@@ -2237,6 +2238,30 @@ fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList
             const subtable_offset = lookup_offsets[record_i] + try readU16(table, lookup_offsets[record_i] + 6 + subtable_i * 2);
             if (try applySingleSubstitutionAt(table, subtable_offset, glyphs, target_indices[record_i], lookup_flags[record_i], lookup_options)) break;
         }
+    }
+    return true;
+}
+
+fn applyAcceleratedSingleSubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, options: LookupOptions) GsubError!bool {
+    const accelerators = options.lookup_accelerators orelse return false;
+    var target_indices: [max_fast_single_records]usize = undefined;
+    var single_accelerators: [max_fast_single_records]SingleSubstAccelerator = undefined;
+
+    for (0..record_count) |record_i| {
+        const record_offset = records_offset + record_i * 4;
+        const sequence_index = try readU16(table, record_offset);
+        const lookup_index = try readU16(table, record_offset + 2);
+        if (sequence_index >= input_indices.len) return error.BadGsub;
+        if (lookup_index >= accelerators.len) return error.BadGsub;
+        const single_accelerator = accelerators[lookup_index].single_subst;
+        if (!single_accelerator.enabled) return false;
+        target_indices[record_i] = input_indices[sequence_index];
+        single_accelerators[record_i] = single_accelerator;
+    }
+
+    for (0..record_count) |record_i| {
+        if (target_indices[record_i] >= glyphs.items.len) continue;
+        _ = try applySingleSubstitutionAccelerated(table, single_accelerators[record_i], glyphs, target_indices[record_i], options);
     }
     return true;
 }

@@ -98,6 +98,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
   lines.
+- NotoSansDevanagari `के` parses and passes `compare-harfrust`; broader
+  `hi-words.txt` parity is blocked at Indic pre-base matra reordering, for
+  example `कि` currently shapes as `[25,67]` instead of HarfRust `[601,25]`.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -114,6 +117,9 @@ goal is active, not complete.
 - Track output parity, not only timing. `compare-harfrust` now compares glyph
   ids, clusters, advances, and offsets in HarfBuzz-style buffer order; feature
   override and broader font/script matrices still need expansion.
+- Implement an Indic shaper stage for syllable detection, pre-base matra
+  reordering, and Indic feature sequencing before treating `hi-words.txt` as a
+  parity corpus.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups and GPOS lookups `37`, `57`, and `74`.
 - Avoid retaining optimizations that only improve a single noisy run or regress

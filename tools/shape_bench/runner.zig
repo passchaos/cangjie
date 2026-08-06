@@ -137,7 +137,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                         .glyph_count = glyphs.len,
                         .checksum = line_checksum,
                         .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
-                        .clusters = if (options.glyph_summary) try glyphClusters(allocator, glyphs) else &.{},
+                        .clusters = if (options.glyph_summary) try glyphClusters(allocator, line, glyphs, options.normalize_clusters_to_graphemes) else &.{},
                         .x_advances = if (options.glyph_summary) try glyphXAdvances(allocator, font, options.size, glyphs) else &.{},
                         .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, font, options.size, glyphs) else &.{},
                         .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, glyphs) else &.{},
@@ -189,10 +189,33 @@ fn glyphIds(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosition)
     return ids;
 }
 
-fn glyphClusters(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosition) ![]const u32 {
+fn glyphClusters(allocator: std.mem.Allocator, text: []const u8, glyphs: []const cangjie.GlyphPosition, normalize_to_graphemes: bool) ![]const u32 {
     const clusters = try allocator.alloc(u32, glyphs.len);
-    for (glyphs, clusters) |glyph, *cluster| cluster.* = @intCast(glyph.cluster);
+    if (!normalize_to_graphemes) {
+        for (glyphs, clusters) |glyph, *cluster| cluster.* = @intCast(glyph.cluster);
+        return clusters;
+    }
+
+    const graphemes = try cangjie.itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(graphemes);
+    var cursor: usize = 0;
+    for (glyphs, clusters) |glyph, *cluster| {
+        cluster.* = @intCast(graphemeClusterStartForByte(graphemes, &cursor, glyph.cluster));
+    }
     return clusters;
+}
+
+fn graphemeClusterStartForByte(graphemes: []const cangjie.GraphemeCluster, cursor: *usize, byte_offset: usize) usize {
+    while (cursor.* + 1 < graphemes.len) {
+        const current = graphemes[cursor.*];
+        if (byte_offset < current.byte_start + current.byte_len) break;
+        cursor.* += 1;
+    }
+    if (cursor.* < graphemes.len) {
+        const current = graphemes[cursor.*];
+        if (byte_offset >= current.byte_start and byte_offset < current.byte_start + current.byte_len) return current.byte_start;
+    }
+    return byte_offset;
 }
 
 fn glyphXAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {

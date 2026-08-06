@@ -6259,11 +6259,9 @@ fn validateStatTable(allocator: std.mem.Allocator, data: []const u8, stat: Table
 
     const axis_values = try allocator.alloc(StatAxisValueSummary, info.axis_value_count);
     defer allocator.free(axis_values);
-    var previous_axis_value_offset: ?usize = null;
     for (axis_values, 0..) |*axis_value, index| {
         const entry_offset = stat.offset + info.axis_value_offsets_offset + index * 2;
         const axis_value_offset = try resolveStatAxisValueOffset(data, stat, info.axis_value_offsets_offset, entry_offset);
-        try validateStatAxisValueOffsetOrder(axis_value_offset, &previous_axis_value_offset);
         axis_value.* = try validateStatAxisValue(
             data,
             stat,
@@ -6337,17 +6335,6 @@ fn resolveStatAxisValueOffset(data: []const u8, stat: TableRecord, axis_value_of
     const axis_value_offset = axis_value_offsets_offset + relative_offset;
     if (axis_value_offset < 20 or axis_value_offset > stat.length - 4) return error.BadSfnt;
     return axis_value_offset;
-}
-
-fn validateStatAxisValueOffsetOrder(axis_value_offset: usize, previous_axis_value_offset: *?usize) FontError!void {
-    if (previous_axis_value_offset.*) |previous| {
-        // The AxisValue offset array is the canonical child-table directory for
-        // STAT style labels. Keep it in table order so equivalent records cannot
-        // be reordered to produce multiple normal forms, and so later
-        // cross-record checks never depend on offset-array presentation order.
-        if (axis_value_offset <= previous) return error.BadSfnt;
-    }
-    previous_axis_value_offset.* = axis_value_offset;
 }
 
 const StatAxisPoint = struct {
@@ -16360,7 +16347,7 @@ test "STAT AxisValue offsets and axis indexes stay inside declared records" {
     try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &bad_axis_index, stat, null, &names));
 }
 
-test "STAT AxisValue offset array is strictly increasing" {
+test "STAT AxisValue offset array may be out of payload order" {
     var bytes: [64]u8 = .{0} ** 64;
     writeStatHeaderTest(&bytes, 0, 1, 2, 28);
     writeStatAxisTest(&bytes, 20, "wght", 256, 0);
@@ -16376,7 +16363,7 @@ test "STAT AxisValue offset array is strictly increasing" {
     var decreasing_offsets = bytes;
     writeU16Test(&decreasing_offsets, 28, 24);
     writeU16Test(&decreasing_offsets, 30, 4);
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &decreasing_offsets, stat, null, &names));
+    try validateStatTable(std.testing.allocator, &decreasing_offsets, stat, null, &names);
 
     var duplicate_offsets = bytes;
     writeU16Test(&duplicate_offsets, 30, 4);

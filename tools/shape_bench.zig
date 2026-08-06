@@ -73,6 +73,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     options.samples = 1;
     options.line_summary = true;
     options.glyph_summary = true;
+    options.reorder_bidi = false;
 
     var font = try cangjie.Font.parse(allocator, font_bytes);
     defer font.deinit();
@@ -84,7 +85,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     const harfrust_result = try harfrust.run(io, allocator, harfrust_options);
     defer freeResult(allocator, harfrust_result);
 
-    const mismatch = firstGlyphIdMismatch(cangjie_result.line_summaries, harfrust_result.line_summaries);
+    const mismatch = try firstGlyphIdMismatch(allocator, cangjie_result.line_summaries, harfrust_result.line_summaries, base_options.direction);
     std.debug.print(
         \\engine=compare-harfrust
         \\font={s}
@@ -101,6 +102,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
         harfrust_result.glyph_count,
     });
     if (mismatch) |m| {
+        defer allocator.free(m.cangjie_glyph_ids);
         const mismatch_text = if (m.line_index < base_options.text_lines.len) base_options.text_lines[m.line_index] else "";
         std.debug.print(
             \\parity=fail
@@ -121,7 +123,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
             m.cangjie.checksum,
             m.harfrust.checksum,
         });
-        printGlyphIds(m.cangjie.glyph_ids);
+        printGlyphIds(m.cangjie_glyph_ids);
         std.debug.print("\nharfrust_glyph_ids=", .{});
         printGlyphIds(m.harfrust.glyph_ids);
         std.debug.print("\n", .{});
@@ -138,28 +140,51 @@ const GlyphIdMismatch = struct {
     line_index: usize,
     cangjie: runner.BenchResult.LineSummary,
     harfrust: runner.BenchResult.LineSummary,
+    cangjie_glyph_ids: []const u16,
 };
 
-fn firstGlyphIdMismatch(cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary) ?GlyphIdMismatch {
+fn firstGlyphIdMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: cangjie.TextDirection) !?GlyphIdMismatch {
     const count = @min(cangjie_lines.len, harfrust_lines.len);
     for (0..count) |line_index| {
-        if (!std.mem.eql(u16, cangjie_lines[line_index].glyph_ids, harfrust_lines[line_index].glyph_ids)) {
+        const cangjie_ids = try comparableCangjieGlyphIds(allocator, cangjie_lines[line_index].glyph_ids, direction);
+        errdefer allocator.free(cangjie_ids);
+        if (!std.mem.eql(u16, cangjie_ids, harfrust_lines[line_index].glyph_ids)) {
             return .{
                 .line_index = line_index,
                 .cangjie = cangjie_lines[line_index],
                 .harfrust = harfrust_lines[line_index],
+                .cangjie_glyph_ids = cangjie_ids,
             };
         }
+        allocator.free(cangjie_ids);
     }
     if (cangjie_lines.len != harfrust_lines.len) {
         const line_index = count;
+        const cangjie_ids = if (line_index < cangjie_lines.len)
+            try comparableCangjieGlyphIds(allocator, cangjie_lines[line_index].glyph_ids, direction)
+        else
+            try allocator.alloc(u16, 0);
         return .{
             .line_index = line_index,
             .cangjie = if (line_index < cangjie_lines.len) cangjie_lines[line_index] else .{ .index = line_index, .text_bytes = 0, .glyph_count = 0, .checksum = 0 },
             .harfrust = if (line_index < harfrust_lines.len) harfrust_lines[line_index] else .{ .index = line_index, .text_bytes = 0, .glyph_count = 0, .checksum = 0 },
+            .cangjie_glyph_ids = cangjie_ids,
         };
     }
     return null;
+}
+
+fn comparableCangjieGlyphIds(allocator: std.mem.Allocator, glyph_ids: []const u16, direction: cangjie.TextDirection) ![]const u16 {
+    const comparable = try allocator.alloc(u16, glyph_ids.len);
+    switch (direction) {
+        .ltr => @memcpy(comparable, glyph_ids),
+        .rtl => {
+            for (glyph_ids, 0..) |glyph_id, index| {
+                comparable[glyph_ids.len - 1 - index] = glyph_id;
+            }
+        },
+    }
+    return comparable;
 }
 
 fn printGlyphIds(glyph_ids: []const u16) void {

@@ -85,9 +85,10 @@ Representative validated state near that commit:
 - Roboto `en-words`, Cangjie: about `1118 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1233 ns/glyph` median.
 - HarfRust glyph-id smoke: Amiri `"سلام"` passes `compare-harfrust`.
-- HarfRust corpus gate: Amiri `fa-words` currently fails first at line 80
-  (`۱۵`), where Cangjie emits glyph ids `588,592` and HarfRust emits
-  `592,588`.
+- HarfRust corpus gate: Amiri `fa-words` currently fails first at line 2510
+  (`آیت‌الله`), where Cangjie emits glyph ids
+  `1823,6639,1821,386,3,3778,3772,381` and HarfRust emits
+  `4899,5439,5349,386,3,3778,3772,381`.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -101,8 +102,10 @@ goal is active, not complete.
 - Expand the benchmark matrix beyond Amiri and Roboto:
   `NotoSansDevanagari-Regular.ttf`, `NotoNastaliqUrdu-Regular.ttf`,
   `SourceSerifVariable-Roman.ttf`, and the harfrust text corpus.
-- Track output parity, not only timing. At minimum, record glyph ids, clusters,
-  advances, offsets, and feature overrides per case.
+- Track output parity, not only timing. `compare-harfrust` compares Cangjie
+  logical shaping order to `hr-shape`'s low-level RTL serialization by reversing
+  Cangjie glyph ids for RTL lines; clusters, advances, offsets, and feature
+  overrides still need normalized comparison.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups and GPOS lookups `37`, `57`, and `74`.
 - Avoid retaining optimizations that only improve a single noisy run or regress

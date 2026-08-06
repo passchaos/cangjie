@@ -812,17 +812,19 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
     // even if the first ValueRecord is empty and all numeric deltas live on the
     // second glyph. Keep a zero-valued record when metadata carries that fact.
     if (!has_delta and !flags.pair_positioned and !flags.mark_attachment) return;
-    for (adjustments.items) |*existing| {
-        if (existing.index == index) {
-            existing.x_advance += value.x_advance;
-            existing.x_placement += value.x_placement;
-            existing.y_placement += value.y_placement;
-            existing.y_advance += value.y_advance;
-            existing.pair_positioned = existing.pair_positioned or flags.pair_positioned;
-            existing.mark_attachment = existing.mark_attachment or flags.mark_attachment;
-            if (flags.mark_base_index) |base_index| existing.mark_base_index = base_index;
-            return;
-        }
+    var existing_i = adjustments.items.len;
+    while (existing_i > 0) {
+        existing_i -= 1;
+        if (adjustments.items[existing_i].index != index) continue;
+        const existing = &adjustments.items[existing_i];
+        existing.x_advance += value.x_advance;
+        existing.x_placement += value.x_placement;
+        existing.y_placement += value.y_placement;
+        existing.y_advance += value.y_advance;
+        existing.pair_positioned = existing.pair_positioned or flags.pair_positioned;
+        existing.mark_attachment = existing.mark_attachment or flags.mark_attachment;
+        if (flags.mark_base_index) |base_index| existing.mark_base_index = base_index;
+        return;
     }
     try adjustments.append(allocator, .{
         .index = index,

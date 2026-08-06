@@ -1,4 +1,7 @@
 pub const ShapeStageProfile = struct {
+    total_ns: i128 = 0,
+    validate_ns: i128 = 0,
+    options_ns: i128 = 0,
     cmap_ns: i128 = 0,
     gdef_ns: i128 = 0,
     gsub_ns: i128 = 0,
@@ -8,6 +11,7 @@ pub const ShapeStageProfile = struct {
     gpos_select_ns: i128 = 0,
     gpos_apply_ns: i128 = 0,
     position_ns: i128 = 0,
+    bidi_ns: i128 = 0,
     glyph_count: usize = 0,
     gsub_lookup_count: usize = 0,
     gsub_single_lookup_count: usize = 0,

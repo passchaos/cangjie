@@ -1382,13 +1382,11 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8WithOptions(font: *const Font, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
-        try validateShapingInput(text, font_size, options);
-        buffer.clear();
-        try shapeSegmentInto(font, null, null, buffer, text, font_size, 0, lookupOptionsForText(text, options));
-        if (options.reorder_bidi) {
-            try applyBidiVisualOrder(buffer, text, options.direction, font);
-        }
-        return buffer.run(font, font_size);
+        return try shapeSingleFontInto(font, null, null, buffer, text, font_size, options);
+    }
+
+    pub fn shapeUtf8WithCaches(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
+        return try shapeSingleFontInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, options);
     }
 
     pub fn shapeUtf8Cascade(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32) !ShapedText {
@@ -1486,7 +1484,7 @@ pub const TextShaper = struct {
             );
         }
 
-        if (options.reorder_bidi) {
+        if (shouldApplyBidiVisualOrder(text, options)) {
             try applyBidiVisualOrder(buffer, text, options.direction, null);
         }
         const shaped = buffer.shapedText();
@@ -1499,7 +1497,7 @@ pub const TextShaper = struct {
     pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
         try validateShapingInput(text, font_size, options);
         try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
-        if (options.reorder_bidi) {
+        if (shouldApplyBidiVisualOrder(text, options)) {
             try applyBidiVisualOrder(buffer, text, options.direction, null);
         }
         try buildScriptRuns(buffer, text, options.direction, options.language_tag);
@@ -1671,6 +1669,46 @@ const PenPosition = struct {
     x: f32 = 0,
     y: f32 = 0,
 };
+
+fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
+    const shape_profile = buffer.shape_profile;
+    const profile_io = buffer.profile_io;
+    const total_start = shapeProfileNow(shape_profile, profile_io);
+    defer {
+        if (shape_profile) |p| p.total_ns += shapeProfileElapsed(total_start, profile_io);
+    }
+
+    const validate_start = shapeProfileNow(shape_profile, profile_io);
+    try validateShapingInput(text, font_size, options);
+    if (shape_profile) |p| p.validate_ns += shapeProfileElapsed(validate_start, profile_io);
+
+    buffer.clear();
+    const options_start = shapeProfileNow(shape_profile, profile_io);
+    const lookup_options = lookupOptionsForText(text, options);
+    if (shape_profile) |p| p.options_ns += shapeProfileElapsed(options_start, profile_io);
+
+    try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, 0, lookup_options);
+    const bidi_start = shapeProfileNow(shape_profile, profile_io);
+    if (shouldApplyBidiVisualOrder(text, options)) {
+        try applyBidiVisualOrder(buffer, text, options.direction, font);
+    }
+    if (shape_profile) |p| p.bidi_ns += shapeProfileElapsed(bidi_start, profile_io);
+    return buffer.run(font, font_size);
+}
+
+fn shouldApplyBidiVisualOrder(text: []const u8, options: ShapeOptions) bool {
+    if (!options.reorder_bidi) return false;
+    if (options.direction == .rtl) return true;
+    return textHasRtlBidiClass(text);
+}
+
+fn textHasRtlBidiClass(text: []const u8) bool {
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (it.nextCodepoint()) |codepoint| {
+        if (unicode.bidiClassForCodepoint(codepoint) == .rtl) return true;
+    }
+    return false;
+}
 
 fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: LookupOptions) !PenPosition {
     // Script itemization happens outside this helper. This pass only performs

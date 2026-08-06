@@ -120,8 +120,12 @@ fn shapeOnce(
     shape_options: cangjie.ShapeOptions,
 ) ![]const cangjie.GlyphPosition {
     if (options.use_caches) {
-        const shaped = try cangjie.TextShaper.shapeUtf8CascadeWithCaches(cascade, null, metrics_cache, glyph_index_cache, shaped_cache, layout_buffer, options.text, options.size, shape_options);
-        return shaped.glyphs;
+        if (shaped_cache) |cache| {
+            const shaped = try cangjie.TextShaper.shapeUtf8CascadeWithCaches(cascade, null, metrics_cache, glyph_index_cache, cache, layout_buffer, options.text, options.size, shape_options);
+            return shaped.glyphs;
+        }
+        const run = try cangjie.TextShaper.shapeUtf8WithCaches(font, metrics_cache, glyph_index_cache, layout_buffer, options.text, options.size, shape_options);
+        return run.glyphs;
     }
     const run = try cangjie.TextShaper.shapeUtf8WithOptions(font, layout_buffer, options.text, options.size, shape_options);
     return run.glyphs;

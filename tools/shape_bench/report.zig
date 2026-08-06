@@ -61,6 +61,9 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
     });
     std.debug.print(
         \\
+        \\profile_total_ns={d}
+        \\profile_validate_ns={d}
+        \\profile_options_ns={d}
         \\profile_cmap_ns={d}
         \\profile_gdef_ns={d}
         \\profile_gsub_ns={d}
@@ -70,6 +73,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\profile_gpos_select_ns={d}
         \\profile_gpos_apply_ns={d}
         \\profile_position_ns={d}
+        \\profile_bidi_ns={d}
         \\profile_glyphs={d}
         \\profile_gsub_lookups={d}
         \\profile_gsub_single_lookups={d}
@@ -86,6 +90,9 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\profile_gpos_extension_lookups={d}
         \\
     , .{
+        result.profile.total_ns,
+        result.profile.validate_ns,
+        result.profile.options_ns,
         result.profile.cmap_ns,
         result.profile.gdef_ns,
         result.profile.gsub_ns,
@@ -95,6 +102,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.profile.gpos_select_ns,
         result.profile.gpos_apply_ns,
         result.profile.position_ns,
+        result.profile.bidi_ns,
         result.profile.glyph_count,
         result.profile.gsub_lookup_count,
         result.profile.gsub_single_lookup_count,

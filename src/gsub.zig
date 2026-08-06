@@ -70,10 +70,20 @@ pub const LookupOptions = struct {
 };
 
 pub const LookupAccelerator = struct {
+    single_subst: SingleSubstAccelerator = .{},
     chaining_coverage_only: bool = false,
     chaining_input_digest: GlyphDigest = .{},
     chaining_subtable_digests: []const GlyphDigest = &.{},
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
+};
+
+const SingleSubstAccelerator = struct {
+    enabled: bool = false,
+    subst_format: u16 = 0,
+    coverage_offset: usize = 0,
+    delta: i16 = 0,
+    glyph_count: u16 = 0,
+    substitutes_pos: usize = 0,
 };
 
 const ChainingCoverageSubtable = struct {
@@ -475,8 +485,14 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
 
 fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LookupAccelerator {
     const lookup_type = try readU16(table, lookup_offset);
+    const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
-    if (lookup_type != 6 or !try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) return .{};
+    var accelerator = LookupAccelerator{};
+    if (lookup_type == 1 and lookup_flag == 0 and subtable_count == 1) {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
+        accelerator.single_subst = try buildSingleSubstAccelerator(table, subtable_offset);
+    }
+    if (lookup_type != 6 or !try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) return accelerator;
 
     var digest = GlyphDigest.empty();
     const subtable_digests = try allocator.alloc(GlyphDigest, subtable_count);
@@ -502,10 +518,32 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         return .{};
     }
     return .{
+        .single_subst = accelerator.single_subst,
         .chaining_coverage_only = true,
         .chaining_input_digest = digest,
         .chaining_subtable_digests = subtable_digests,
         .chaining_subtables = chaining_subtables,
+    };
+}
+
+fn buildSingleSubstAccelerator(table: Table, subtable_offset: usize) GsubError!SingleSubstAccelerator {
+    const subst_format = try readU16(table, subtable_offset);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    return switch (subst_format) {
+        1 => .{
+            .enabled = true,
+            .subst_format = subst_format,
+            .coverage_offset = coverage_offset,
+            .delta = try readI16(table, subtable_offset + 4),
+        },
+        2 => .{
+            .enabled = true,
+            .subst_format = subst_format,
+            .coverage_offset = coverage_offset,
+            .glyph_count = try readU16(table, subtable_offset + 4),
+            .substitutes_pos = subtable_offset + 6,
+        },
+        else => .{},
     };
 }
 
@@ -1044,6 +1082,26 @@ fn applySingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.
             return true;
         },
         else => return error.UnsupportedGsub,
+    }
+}
+
+fn applySingleSubstitutionAccelerated(table: Table, accelerator: SingleSubstAccelerator, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, options: LookupOptions) GsubError!bool {
+    if (!accelerator.enabled) return false;
+    if (glyph_index >= glyphs.items.len) return false;
+    if (lookupIgnoresGlyph(0, options, glyphs.items[glyph_index])) return false;
+    switch (accelerator.subst_format) {
+        1 => {
+            if (try coverageIndex(table, accelerator.coverage_offset, glyphs.items[glyph_index]) == null) return false;
+            glyphs.items[glyph_index] = @bitCast(@as(i16, @bitCast(glyphs.items[glyph_index])) +% accelerator.delta);
+            return true;
+        },
+        2 => {
+            const coverage = try coverageIndex(table, accelerator.coverage_offset, glyphs.items[glyph_index]) orelse return false;
+            if (coverage >= accelerator.glyph_count) return false;
+            glyphs.items[glyph_index] = try readU16(table, accelerator.substitutes_pos + coverage * 2);
+            return true;
+        },
+        else => return false,
     }
 }
 
@@ -1990,6 +2048,7 @@ fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList
     var lookup_flags: [max_fast_single_records]u16 = undefined;
     var subtable_counts: [max_fast_single_records]u16 = undefined;
     var lookup_indices: [max_fast_single_records]u16 = undefined;
+    var single_accelerators: [max_fast_single_records]SingleSubstAccelerator = undefined;
 
     for (0..record_count) |record_i| {
         const record_offset = records_offset + record_i * 4;
@@ -1997,19 +2056,27 @@ fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList
         const lookup_index = try readU16(table, record_offset + 2);
         if (sequence_index >= input_indices.len) return error.BadGsub;
         if (lookup_index >= lookup_count) return error.BadGsub;
+        var single_accelerator = SingleSubstAccelerator{};
         var lookup_offset: usize = 0;
         var lookup_flag: u16 = 0;
         var subtable_count: u16 = 0;
         var cached = false;
+        if (options.lookup_accelerators) |accelerators| {
+            if (lookup_index < accelerators.len and accelerators[lookup_index].single_subst.enabled) {
+                single_accelerator = accelerators[lookup_index].single_subst;
+                cached = true;
+            }
+        }
         for (lookup_indices[0..record_i], 0..) |existing_index, existing_i| {
             if (existing_index != lookup_index) continue;
             lookup_offset = lookup_offsets[existing_i];
             lookup_flag = lookup_flags[existing_i];
             subtable_count = subtable_counts[existing_i];
+            single_accelerator = single_accelerators[existing_i];
             cached = true;
             break;
         }
-        if (!cached) {
+        if (!cached or !single_accelerator.enabled) {
             lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
             if (try readU16(table, lookup_offset) != 1) return false;
             lookup_flag = try readU16(table, lookup_offset + 2);
@@ -2020,10 +2087,15 @@ fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList
         lookup_offsets[record_i] = lookup_offset;
         lookup_flags[record_i] = lookup_flag;
         subtable_counts[record_i] = subtable_count;
+        single_accelerators[record_i] = single_accelerator;
     }
 
     for (0..record_count) |record_i| {
         if (target_indices[record_i] >= glyphs.items.len) continue;
+        if (single_accelerators[record_i].enabled) {
+            _ = try applySingleSubstitutionAccelerated(table, single_accelerators[record_i], glyphs, target_indices[record_i], options);
+            continue;
+        }
         var lookup_options = options;
         if ((lookup_flags[record_i] & 0x0010) != 0) {
             lookup_options.active_mark_filtering_set = try readU16(table, lookup_offsets[record_i] + 6 + @as(usize, subtable_counts[record_i]) * 2);

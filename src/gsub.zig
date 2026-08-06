@@ -84,6 +84,9 @@ const SingleSubstAccelerator = struct {
     delta: i16 = 0,
     glyph_count: u16 = 0,
     substitutes_pos: usize = 0,
+    single_mapping: bool = false,
+    single_from: GlyphId = 0,
+    single_to: GlyphId = 0,
 };
 
 const ChainingCoverageSubtable = struct {
@@ -529,22 +532,60 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
 fn buildSingleSubstAccelerator(table: Table, subtable_offset: usize) GsubError!SingleSubstAccelerator {
     const subst_format = try readU16(table, subtable_offset);
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    return switch (subst_format) {
-        1 => .{
-            .enabled = true,
-            .subst_format = subst_format,
-            .coverage_offset = coverage_offset,
-            .delta = try readI16(table, subtable_offset + 4),
+    switch (subst_format) {
+        1 => {
+            const delta = try readI16(table, subtable_offset + 4);
+            var accelerator = SingleSubstAccelerator{
+                .enabled = true,
+                .subst_format = subst_format,
+                .coverage_offset = coverage_offset,
+                .delta = delta,
+            };
+            try fillSingleMapping(table, coverage_offset, delta, null, &accelerator);
+            return accelerator;
         },
-        2 => .{
-            .enabled = true,
-            .subst_format = subst_format,
-            .coverage_offset = coverage_offset,
-            .glyph_count = try readU16(table, subtable_offset + 4),
-            .substitutes_pos = subtable_offset + 6,
+        2 => {
+            const glyph_count = try readU16(table, subtable_offset + 4);
+            var accelerator = SingleSubstAccelerator{
+                .enabled = true,
+                .subst_format = subst_format,
+                .coverage_offset = coverage_offset,
+                .glyph_count = glyph_count,
+                .substitutes_pos = subtable_offset + 6,
+            };
+            try fillSingleMapping(table, coverage_offset, 0, subtable_offset + 6, &accelerator);
+            return accelerator;
         },
-        else => .{},
+        else => return .{},
+    }
+}
+
+fn fillSingleMapping(table: Table, coverage_offset: usize, delta: i16, substitutes_pos: ?usize, accelerator: *SingleSubstAccelerator) GsubError!void {
+    const format = try readU16(table, coverage_offset);
+    const glyph = switch (format) {
+        1 => glyph: {
+            const glyph_count = try readU16(table, coverage_offset + 2);
+            if (glyph_count != 1) return;
+            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            break :glyph try readU16(table, coverage_offset + 4);
+        },
+        2 => glyph: {
+            const range_count = try readU16(table, coverage_offset + 2);
+            if (range_count != 1) return;
+            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            const start = try readU16(table, coverage_offset + 4);
+            const end = try readU16(table, coverage_offset + 6);
+            if (start != end) return;
+            break :glyph start;
+        },
+        else => return,
     };
+    accelerator.single_mapping = true;
+    accelerator.single_from = glyph;
+    accelerator.single_to = if (substitutes_pos) |pos|
+        try readU16(table, pos)
+    else
+        @bitCast(@as(i16, @bitCast(glyph)) +% delta);
 }
 
 /// Validate GSUB glyph references that are meaningful at font-load time.
@@ -1089,6 +1130,11 @@ fn applySingleSubstitutionAccelerated(table: Table, accelerator: SingleSubstAcce
     if (!accelerator.enabled) return false;
     if (glyph_index >= glyphs.items.len) return false;
     if (lookupIgnoresGlyph(0, options, glyphs.items[glyph_index])) return false;
+    if (accelerator.single_mapping) {
+        if (glyphs.items[glyph_index] != accelerator.single_from) return false;
+        glyphs.items[glyph_index] = accelerator.single_to;
+        return true;
+    }
     switch (accelerator.subst_format) {
         1 => {
             if (try coverageIndex(table, accelerator.coverage_offset, glyphs.items[glyph_index]) == null) return false;

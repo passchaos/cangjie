@@ -373,7 +373,10 @@ fn featureOverridesEqual(a: []const unicode.FeatureOverride, b: []const unicode.
 fn featureApplicationsEqual(a: []const gsub.FeatureApplication, b: []const gsub.FeatureApplication) bool {
     if (a.len != b.len) return false;
     for (a, b) |a_application, b_application| {
-        if (a_application.tag != b_application.tag or a_application.source_scoped != b_application.source_scoped) return false;
+        if (a_application.tag != b_application.tag or
+            a_application.source_scoped != b_application.source_scoped or
+            a_application.auto_zwnj != b_application.auto_zwnj or
+            a_application.auto_zwj != b_application.auto_zwj) return false;
     }
     return true;
 }

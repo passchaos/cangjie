@@ -56,6 +56,12 @@ pub const LookupOptions = struct {
     /// semantics.
     source_features: ?[]const u32 = null,
     active_source_feature: ?u32 = null,
+    /// Original Unicode scalars indexed by `glyph_source_indices`. Contextual
+    /// GSUB uses this to mirror HarfBuzz's joiner/default-ignorable skipping
+    /// semantics without guessing from substituted glyph ids.
+    source_codepoints: ?[]const u21 = null,
+    active_auto_zwnj: bool = true,
+    active_auto_zwj: bool = true,
     /// Preselected lookup indices for the active script/language/features.
     /// This is a shaping fast path; callers that supply it must keep it in
     /// sync with the other selection options.
@@ -116,6 +122,8 @@ const ChainingSubtablePair = struct {
 pub const FeatureApplication = struct {
     tag: u32,
     source_scoped: bool = false,
+    auto_zwnj: bool = true,
+    auto_zwj: bool = true,
 };
 
 pub const FeatureLookupPlanEntry = struct {
@@ -286,6 +294,8 @@ pub fn applyFeatureSequenceWithOptions(
     for (applications) |application| {
         var selected_options = options;
         selected_options.active_source_feature = if (application.source_scoped) application.tag else null;
+        selected_options.active_auto_zwnj = application.auto_zwnj;
+        selected_options.active_auto_zwj = application.auto_zwj;
         try validateShapingMetadata(selected_options, glyphs.items.len);
         try applySelectedFeatureFromPlan(table, application.tag, feature_indices.items, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, selected_options);
     }
@@ -371,6 +381,8 @@ pub fn applyFeatureLookupPlanWithOptions(
     for (plan.entries) |entry| {
         var selected_options = options;
         selected_options.active_source_feature = if (entry.application.source_scoped) entry.application.tag else null;
+        selected_options.active_auto_zwnj = entry.application.auto_zwnj;
+        selected_options.active_auto_zwj = entry.application.auto_zwj;
         try validateShapingMetadata(selected_options, glyphs.items.len);
         try applyLookupPlanEntry(table, lookup_count, entry, glyphs, allocator, selected_options);
     }
@@ -1305,6 +1317,12 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError
             if (source >= features.len) return error.InvalidShapingInput;
         }
     }
+    if (options.source_codepoints) |codepoints| {
+        const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
+        for (sources.items) |source| {
+            if (source >= codepoints.len) return error.InvalidShapingInput;
+        }
+    }
 }
 
 fn validateLigatureComponentInfo(info: gpos.LigatureComponentInfo) GsubError!void {
@@ -1332,6 +1350,23 @@ fn sourceFeatureAllowsGlyph(options: LookupOptions, glyph_index: usize) bool {
     const features = options.source_features orelse return false;
     const source = sourceForGlyph(options, glyph_index);
     return source < features.len and features[source] == active;
+}
+
+fn sourceCodepointForGlyph(options: LookupOptions, glyph_index: usize) ?u21 {
+    const codepoints = options.source_codepoints orelse return null;
+    const source = sourceForGlyph(options, glyph_index);
+    if (source >= codepoints.len) return null;
+    return codepoints[source];
+}
+
+fn contextualMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []const GlyphId, glyph_index: usize, context_match: bool) bool {
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_index])) return true;
+    if (!context_match) return false;
+    const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
+    if (!unicode.isDefaultIgnorableForShaping(codepoint)) return false;
+    if (codepoint == 0x200c and !options.active_auto_zwnj) return false;
+    if (codepoint == 0x200d and !options.active_auto_zwj) return false;
+    return true;
 }
 
 fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
@@ -1599,7 +1634,7 @@ fn applyClassRuleSet(table: Table, rule_set_offset: usize, class_def_offset: usi
         if (glyph_count == 0 or pos + glyph_count > glyphs.items.len) continue;
         var input_indices_buf: [64]usize = undefined;
         if (glyph_count > input_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
+        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..glyph_count], false)) continue;
         var matched = true;
         for (1..glyph_count) |i| {
             const expected_class = try readU16(table, rule_offset + 4 + (i - 1) * 2);
@@ -1631,7 +1666,7 @@ fn applyContextCoverageSubstitution(table: Table, subtable_offset: usize, glyphs
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
         var input_indices_buf: [64]usize = undefined;
         if (glyph_count > input_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
+        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..glyph_count], false)) continue;
         var matched = true;
         for (0..glyph_count) |i| {
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, coverage_offsets_pos + i * 2));
@@ -1655,7 +1690,7 @@ fn applyContextRuleSet(table: Table, rule_set_offset: usize, glyphs: *std.ArrayL
         if (glyph_count == 0 or pos + glyph_count > glyphs.items.len) continue;
         var input_indices_buf: [64]usize = undefined;
         if (glyph_count > input_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
+        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..glyph_count], false)) continue;
         var matched = true;
         for (1..glyph_count) |component_i| {
             const expected = try readU16(table, rule_offset + 4 + (component_i - 1) * 2);
@@ -1798,7 +1833,7 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
             const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, current_glyph) orelse continue;
-            const second_glyph = nextUnignoredGlyph(glyphs.items, pos + 1, lookup_flag, options);
+            const second_glyph = nextUnignoredGlyph(glyphs.items, pos + 1, lookup_flag, options, false);
             for (grouped_subtables) |subtable_i| {
                 const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + @as(usize, subtable_i) * 2);
                 const parsed_subtable = if (subtable_i < accel.chaining_subtables.len and accel.chaining_subtables[subtable_i].input_count != 0)
@@ -1863,7 +1898,7 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
         cursor += 2;
         var backtrack_indices_buf: [64]usize = undefined;
         if (backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count])) continue;
+        if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count], true)) continue;
         var matched = true;
         for (0..backtrack_count) |i| {
             const expected_class = try readU16(table, cursor + i * 2);
@@ -1881,7 +1916,7 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
         if (input_count == 0) continue;
         var input_indices_buf: [64]usize = undefined;
         if (input_count > input_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..input_count])) continue;
+        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..input_count], false)) continue;
         for (1..input_count) |i| {
             const expected_class = try readU16(table, cursor + (i - 1) * 2);
             const actual_class = try classValue(table, input_class_def, glyphs.items[input_indices_buf[i]]);
@@ -1898,7 +1933,7 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
         const lookahead_start = input_indices_buf[input_count - 1] + 1;
         var lookahead_indices_buf: [64]usize = undefined;
         if (lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count])) continue;
+        if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count], true)) continue;
         for (0..lookahead_count) |i| {
             const expected_class = try readU16(table, cursor + i * 2);
             const actual_class = try classValue(table, lookahead_class_def, glyphs.items[lookahead_indices_buf[i]]);
@@ -1932,15 +1967,15 @@ fn applyChainingCoverageSubstitutionAt(table: Table, subtable_info: ChainingCove
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return false;
     var input_indices_buf: [64]usize = undefined;
     if (subtable_info.input_count > input_indices_buf.len) return error.UnsupportedGsub;
-    if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..subtable_info.input_count])) return false;
+    if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..subtable_info.input_count], false)) return false;
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, input_indices_buf[0..subtable_info.input_count], subtable_info.input_offsets_pos)) return false;
     var backtrack_indices_buf: [64]usize = undefined;
     if (subtable_info.backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
-    if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..subtable_info.backtrack_count])) return false;
+    if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..subtable_info.backtrack_count], true)) return false;
     const lookahead_start = input_indices_buf[subtable_info.input_count - 1] + 1;
     var lookahead_indices_buf: [64]usize = undefined;
     if (subtable_info.lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
-    if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable_info.lookahead_count])) return false;
+    if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable_info.lookahead_count], true)) return false;
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, backtrack_indices_buf[0..subtable_info.backtrack_count], subtable_info.backtrack_offsets_pos)) return false;
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, lookahead_indices_buf[0..subtable_info.lookahead_count], subtable_info.lookahead_offsets_pos)) return false;
     try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices_buf[0..subtable_info.input_count], allocator, options);
@@ -1953,36 +1988,39 @@ const CoverageSequenceKind = enum {
     lookahead,
 };
 
-fn collectForwardUnignoredGlyphs(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, out: []usize) bool {
+fn collectForwardUnignoredGlyphs(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, out: []usize, context_match: bool) bool {
     // Contextual GSUB sequences are written in terms of glyphs that the lookup
     // participates in. IgnoreBase/Ligature/Mark and mark attachment filters
     // remove glyphs from matching, but those skipped glyphs must remain in the
     // buffer so sequence indexes can still target the original glyph positions.
+    // HarfBuzz also skips default-ignorable joiners only for contextual
+    // backtrack/lookahead matching when the active feature allows auto joiners;
+    // input matching keeps ZWNJ/ZWJ visible unless LookupFlag itself ignores it.
     var out_i: usize = 0;
     var glyph_i = start;
     while (glyph_i < glyphs.len and out_i < out.len) : (glyph_i += 1) {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_i])) continue;
+        if (contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
         out[out_i] = glyph_i;
         out_i += 1;
     }
     return out_i == out.len;
 }
 
-fn nextUnignoredGlyph(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions) ?GlyphId {
+fn nextUnignoredGlyph(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, context_match: bool) ?GlyphId {
     var glyph_i = start;
     while (glyph_i < glyphs.len) : (glyph_i += 1) {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_i])) continue;
+        if (contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
         return glyphs[glyph_i];
     }
     return null;
 }
 
-fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_flag: u16, options: LookupOptions, out: []usize) bool {
+fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_flag: u16, options: LookupOptions, out: []usize, context_match: bool) bool {
     var out_i: usize = 0;
     var glyph_i = pos;
     while (glyph_i > 0 and out_i < out.len) {
         glyph_i -= 1;
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_i])) continue;
+        if (contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
         out[out_i] = glyph_i;
         out_i += 1;
     }
@@ -2023,7 +2061,7 @@ fn applyChainingRuleSet(table: Table, chain_set_offset: usize, glyphs: *std.Arra
         cursor += 2;
         var backtrack_indices_buf: [64]usize = undefined;
         if (backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count])) continue;
+        if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count], true)) continue;
         var matched = true;
         for (0..backtrack_count) |i| {
             const expected = try readU16(table, cursor + i * 2);
@@ -2040,7 +2078,7 @@ fn applyChainingRuleSet(table: Table, chain_set_offset: usize, glyphs: *std.Arra
         if (input_count == 0) continue;
         var input_indices_buf: [64]usize = undefined;
         if (input_count > input_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..input_count])) continue;
+        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..input_count], false)) continue;
         for (1..input_count) |i| {
             const expected = try readU16(table, cursor + (i - 1) * 2);
             if (glyphs.items[input_indices_buf[i]] != expected) {
@@ -2056,7 +2094,7 @@ fn applyChainingRuleSet(table: Table, chain_set_offset: usize, glyphs: *std.Arra
         const lookahead_start = input_indices_buf[input_count - 1] + 1;
         var lookahead_indices_buf: [64]usize = undefined;
         if (lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count])) continue;
+        if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count], true)) continue;
         for (0..lookahead_count) |i| {
             const expected = try readU16(table, cursor + i * 2);
             if (glyphs.items[lookahead_indices_buf[i]] != expected) {
@@ -3241,9 +3279,9 @@ fn reverseCoverageMatches(table: Table, subtable_offset: usize, glyphs: []const 
     if (count > indices_buf.len) return error.UnsupportedGsub;
     const indices = indices_buf[0..count];
     const has_context = if (backtrack)
-        collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, indices)
+        collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, indices, true)
     else
-        collectForwardUnignoredGlyphs(glyphs, pos + 1, lookup_flag, options, indices);
+        collectForwardUnignoredGlyphs(glyphs, pos + 1, lookup_flag, options, indices, true);
     if (!has_context) return false;
     return try coverageIndicesMatch(table, subtable_offset, glyphs, indices, offsets_pos);
 }

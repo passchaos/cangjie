@@ -62,6 +62,7 @@ pub const Options = struct {
     samples: usize = 1,
     direction: cangjie.TextDirection = .ltr,
     reorder_bidi: bool = true,
+    language_tag: ?cangjie.OpenTypeLanguageTag = null,
     script_position: cangjie.ScriptPosition = .normal,
     use_caches: bool = true,
     use_shaped_cache: bool = false,
@@ -149,6 +150,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.direction = parseDirection(args[i]) orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--language")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.language_tag = parseLanguageTag(args[i]) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--no-bidi-reorder")) {
             options.reorder_bidi = false;
         } else if (std.mem.eql(u8, arg, "--script-position")) {
@@ -221,6 +226,29 @@ fn parseDirection(text: []const u8) ?cangjie.TextDirection {
     return null;
 }
 
+fn parseLanguageTag(text: []const u8) ?cangjie.OpenTypeLanguageTag {
+    if (std.ascii.eqlIgnoreCase(text, "dflt")) return .dflt;
+    if (std.ascii.eqlIgnoreCase(text, "ara")) return .ara;
+    if (std.ascii.eqlIgnoreCase(text, "jan")) return .jan;
+    if (std.ascii.eqlIgnoreCase(text, "kor")) return .kor;
+    if (std.ascii.eqlIgnoreCase(text, "zhs")) return .zhs;
+    if (std.ascii.eqlIgnoreCase(text, "zht")) return .zht;
+    if (std.ascii.eqlIgnoreCase(text, "hin")) return .hin;
+    return null;
+}
+
+pub fn harfrustLanguageArgument(tag_value: cangjie.OpenTypeLanguageTag) ?[]const u8 {
+    return switch (tag_value) {
+        .dflt => null,
+        .ara => "ar",
+        .jan => "ja",
+        .kor => "ko",
+        .zhs => "zh-Hans",
+        .zht => "zh-Hant",
+        .hin => "hi",
+    };
+}
+
 fn parseScriptPosition(text: []const u8) ?cangjie.ScriptPosition {
     if (std.mem.eql(u8, text, "normal")) return .normal;
     if (std.mem.eql(u8, text, "superscript")) return .superscript;
@@ -246,6 +274,8 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --warmup N                   unmeasured warmup iterations, default 1000
         \\  --samples N                  independent measured samples, default 1
         \\  --direction ltr|rtl          shaping direction, default ltr
+        \\  --language dflt|ara|jan|kor|zhs|zht|hin
+        \\                               force an OpenType language system
         \\  --no-bidi-reorder            keep logical glyph order after shaping
         \\  --script-position normal|superscript|subscript
         \\  --no-caches                  bypass glyph metric and cmap caches

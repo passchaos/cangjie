@@ -2523,6 +2523,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .apply_all_if_unselected = false,
         .glyph_source_indices = glyph_source_indices,
         .ligature_components = ligature_components,
+        .source_codepoints = codepoints.items,
         .shape_profile = shape_profile,
         .profile_io = profile_io,
     };
@@ -2535,6 +2536,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
     }
     if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
+        reorderArabicMarksForShaping(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
         try joining_forms.resize(buffer.allocator, codepoints.items.len);
         try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
         try source_features.resize(buffer.allocator, joining_forms.items.len);
@@ -2551,17 +2553,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         var applications_buf: [12]gsub.FeatureApplication = undefined;
         var application_count: usize = 0;
         const planned_features = [_]gsub.FeatureApplication{
-            .{ .tag = unicode.tag("ccmp") },
-            .{ .tag = unicode.tag("locl") },
-            .{ .tag = unicode.tag("isol"), .source_scoped = true },
-            .{ .tag = unicode.tag("fina"), .source_scoped = true },
-            .{ .tag = unicode.tag("medi"), .source_scoped = true },
-            .{ .tag = unicode.tag("init"), .source_scoped = true },
-            .{ .tag = unicode.tag("rlig") },
-            .{ .tag = unicode.tag("liga") },
-            .{ .tag = unicode.tag("clig") },
-            .{ .tag = unicode.tag("calt") },
-            .{ .tag = unicode.tag("rclt") },
+            .{ .tag = unicode.tag("ccmp"), .auto_zwj = false },
+            .{ .tag = unicode.tag("locl"), .auto_zwj = false },
+            .{ .tag = unicode.tag("isol"), .source_scoped = true, .auto_zwj = false },
+            .{ .tag = unicode.tag("fina"), .source_scoped = true, .auto_zwj = false },
+            .{ .tag = unicode.tag("medi"), .source_scoped = true, .auto_zwj = false },
+            .{ .tag = unicode.tag("init"), .source_scoped = true, .auto_zwj = false },
+            .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
+            .{ .tag = unicode.tag("calt"), .auto_zwj = false },
+            .{ .tag = unicode.tag("rclt"), .auto_zwj = false },
+            .{ .tag = unicode.tag("liga"), .auto_zwj = false },
+            .{ .tag = unicode.tag("clig"), .auto_zwj = false },
         };
         for (planned_features) |application| {
             if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
@@ -2845,21 +2847,39 @@ fn isVariationSelector(codepoint: u21) bool {
         (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
 }
 
+fn reorderArabicMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21) void {
+    var run_start: ?usize = null;
+    for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
+        const modified_class = arabicMarkSortClass(source_index, codepoints);
+        if (modified_class == 0) {
+            if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, ligature_components, codepoints, start, glyph_index);
+            run_start = null;
+            continue;
+        }
+        if (run_start == null) run_start = glyph_index;
+    }
+    if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, ligature_components, codepoints, start, glyph_source_indices.items.len);
+}
+
+fn reorderArabicMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21, start: usize, end: usize) void {
+    var i = start + 1;
+    while (i < end) : (i += 1) {
+        var j = i;
+        while (j > start and arabicMarkSortClass(glyph_source_indices.items[j - 1], codepoints) > arabicMarkSortClass(glyph_source_indices.items[j], codepoints)) : (j -= 1) {
+            std.mem.swap(GlyphId, &glyph_ids.items[j - 1], &glyph_ids.items[j]);
+            std.mem.swap(usize, &glyph_source_indices.items[j - 1], &glyph_source_indices.items[j]);
+            std.mem.swap(gpos.LigatureComponentInfo, &ligature_components.items[j - 1], &ligature_components.items[j]);
+        }
+    }
+}
+
+fn arabicMarkSortClass(source_index: usize, codepoints: []const u21) u8 {
+    if (source_index >= codepoints.len) return 0;
+    return unicode.arabicModifiedCombiningClassForShaping(codepoints[source_index]);
+}
+
 fn isDefaultIgnorableForShaping(codepoint: u21) bool {
-    return codepoint == 0x00ad or
-        codepoint == 0x034f or
-        codepoint == 0x061c or
-        codepoint == 0x180e or
-        (codepoint >= 0x180b and codepoint <= 0x180f) or
-        (codepoint >= 0x200b and codepoint <= 0x200f) or
-        (codepoint >= 0x202a and codepoint <= 0x202e) or
-        (codepoint >= 0x2060 and codepoint <= 0x206f) or
-        (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
-        codepoint == 0xfeff or
-        (codepoint >= 0xfff0 and codepoint <= 0xfff8) or
-        (codepoint >= 0x1bca0 and codepoint <= 0x1bca3) or
-        (codepoint >= 0x1d173 and codepoint <= 0x1d17a) or
-        (codepoint >= 0xe0000 and codepoint <= 0xe0fff);
+    return unicode.isDefaultIgnorableForShaping(codepoint);
 }
 
 fn glyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {

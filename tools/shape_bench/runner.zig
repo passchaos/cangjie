@@ -82,6 +82,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     const shape_options = cangjie.ShapeOptions{
         .direction = options.direction,
         .reorder_bidi = options.reorder_bidi,
+        .language_tag = options.language_tag,
         .script_position = options.script_position,
         .features = options.featureOverrides(),
     };

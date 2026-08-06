@@ -70,25 +70,32 @@ HarfRust/HarfBuzz timing.
 
 `compare-harfrust` runs Cangjie and HarfRust in the same invocation and compares
 per-line glyph-id sequences. It currently checks glyph ids only; clusters and
-positions still need a unit-normalized comparison.
+positions still need a unit-normalized comparison. When `--language` is not
+specified, compare mode forces Cangjie to `dflt` because the current `hr-shape`
+runner guesses script and direction but does not guess language. Pass
+`--language ara`, `--language zhs`, etc. to compare an explicit LangSys on both
+engines.
 
 ## Current Evidence Snapshot
 
-Latest retained optimization commit:
+Latest retained optimization commit before this parity work:
 
 - `266a5ec Fast path accelerated GSUB context records`
 
-Representative validated state near that commit:
+Representative performance state near that commit:
 
 - Amiri `fa-thelittleprince`, Cangjie: about `1705 ns/glyph` median.
 - Amiri `fa-words`, Cangjie: about `1970 ns/glyph` median.
 - Roboto `en-words`, Cangjie: about `1118 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1233 ns/glyph` median.
-- HarfRust glyph-id smoke: Amiri `"سلام"` passes `compare-harfrust`.
-- HarfRust corpus gate: Amiri `fa-words` currently fails first at line 2510
-  (`آیت‌الله`), where Cangjie emits glyph ids
-  `1823,6639,1821,386,3,3778,3772,381` and HarfRust emits
-  `4899,5439,5349,386,3,3778,3772,381`.
+
+Current HarfRust glyph-id parity evidence:
+
+- Amiri `"آیت‌الله"` passes `compare-harfrust`.
+- Amiri `"اللَّهِ"` passes `compare-harfrust`.
+- Amiri `"تثبیت"` passes default `compare-harfrust`; it also passes with
+  `--language ara`.
+- Amiri `fa-words.txt` passes default `compare-harfrust` for 10,000 lines.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

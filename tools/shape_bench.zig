@@ -74,6 +74,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     options.line_summary = true;
     options.glyph_summary = true;
     options.reorder_bidi = false;
+    options.language_tag = base_options.language_tag orelse .dflt;
 
     var font = try cangjie.Font.parse(allocator, font_bytes);
     defer font.deinit();

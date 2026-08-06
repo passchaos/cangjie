@@ -402,6 +402,38 @@ pub const BidiMap = struct {
     }
 };
 
+pub fn isDefaultIgnorableForShaping(codepoint: u21) bool {
+    return codepoint == 0x00ad or
+        codepoint == 0x034f or
+        codepoint == 0x061c or
+        codepoint == 0x180e or
+        (codepoint >= 0x180b and codepoint <= 0x180f) or
+        (codepoint >= 0x200b and codepoint <= 0x200f) or
+        (codepoint >= 0x202a and codepoint <= 0x202e) or
+        (codepoint >= 0x2060 and codepoint <= 0x206f) or
+        (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
+        codepoint == 0xfeff or
+        (codepoint >= 0xfff0 and codepoint <= 0xfff8) or
+        (codepoint >= 0x1bca0 and codepoint <= 0x1bca3) or
+        (codepoint >= 0x1d173 and codepoint <= 0x1d17a) or
+        (codepoint >= 0xe0000 and codepoint <= 0xe0fff);
+}
+
+pub fn arabicModifiedCombiningClassForShaping(codepoint: u21) u8 {
+    return switch (codepoint) {
+        0x064b => 28, // fathatan
+        0x064c => 29, // dammatan
+        0x064d => 30, // kasratan
+        0x064e => 31, // fatha
+        0x064f => 32, // damma
+        0x0650 => 33, // kasra
+        0x0651 => 27, // shadda, reordered before other Arabic marks.
+        0x0652 => 34, // sukun
+        0x0670 => 35, // superscript alef
+        else => 0,
+    };
+}
+
 pub const GraphemeCluster = struct {
     byte_start: usize,
     byte_len: usize,

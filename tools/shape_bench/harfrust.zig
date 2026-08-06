@@ -108,6 +108,11 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         "-n",
         iterations_text,
     });
+    if (options.language_tag) |language_tag| {
+        if (options_mod.harfrustLanguageArgument(language_tag)) |language_text| {
+            try args.appendSlice(allocator, &.{ "--language", language_text });
+        }
+    }
     if (options.text_path) |path| {
         try args.appendSlice(allocator, &.{ "--text-file", path });
     } else {

@@ -2056,8 +2056,10 @@ const NestedGlyphChange = struct {
 };
 
 fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    try ensureSubstitutionRecordsWithin(table, records_offset, record_count, input_indices.len);
-    try ensureSubstitutionRecordMarkFilteringSetsValid(table, records_offset, record_count, options);
+    if (!table.assume_validated) {
+        try ensureSubstitutionRecordsWithin(table, records_offset, record_count, input_indices.len);
+        try ensureSubstitutionRecordMarkFilteringSetsValid(table, records_offset, record_count, options);
+    }
     if (try applySingleSubstitutionRecordsMappedFast(table, glyphs, records_offset, record_count, input_indices, options)) return;
 
     // SequenceLookupRecord sequence indexes are expressed in the input sequence

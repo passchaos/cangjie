@@ -1024,6 +1024,29 @@ fn applySingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.Ar
     }
 }
 
+fn applySingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
+    if (glyph_index >= glyphs.items.len) return false;
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) return false;
+    const subst_format = try readU16(table, subtable_offset);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    switch (subst_format) {
+        1 => {
+            const delta = try readI16(table, subtable_offset + 4);
+            if (try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) == null) return false;
+            glyphs.items[glyph_index] = @bitCast(@as(i16, @bitCast(glyphs.items[glyph_index])) +% delta);
+            return true;
+        },
+        2 => {
+            const glyph_count = try readU16(table, subtable_offset + 4);
+            const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return false;
+            if (coverage >= glyph_count) return false;
+            glyphs.items[glyph_index] = try readU16(table, subtable_offset + 6 + coverage * 2);
+            return true;
+        },
+        else => return error.UnsupportedGsub,
+    }
+}
+
 fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) bool {
     const classes = options.glyph_classes;
     const class = if (classes) |items| if (glyph < items.len) items[glyph] else 0 else 0;
@@ -2807,6 +2830,13 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     if ((lookup_flag & 0x0010) != 0) {
         lookup_options.active_mark_filtering_set = try readU16(table, nested_lookup_offset + 6 + @as(usize, subtable_count) * 2);
         try validateMarkFilteringSetIndex(lookup_options);
+    }
+    if (lookup_type == 1) {
+        for (0..subtable_count) |subtable_i| {
+            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
+            if (try applySingleSubstitutionAt(table, subtable_offset, glyphs, glyph_index, lookup_flag, lookup_options)) return .{};
+        }
+        return .{};
     }
     if (lookup_type == 4) {
         for (0..subtable_count) |subtable_i| {

@@ -37,6 +37,7 @@ const Table = struct {
     data: []const u8,
     offset: usize,
     length: usize,
+    assume_validated: bool = false,
     /// Optional maxp.numGlyphs bound supplied by Font.parse. Runtime shaping
     /// callers do not know the SFNT maxp table, so their Table values leave
     /// this null and keep the historical structural-only validation.
@@ -65,6 +66,7 @@ pub const LookupOptions = struct {
     /// Optional ligature component metadata parallel to the post-GSUB glyph
     /// stream. Entries are only meaningful for ligature glyph positions.
     ligature_components: ?[]const LigatureComponentInfo = null,
+    assume_validated: bool = false,
     shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
     profile_io: ?std.Io = null,
 };
@@ -108,7 +110,7 @@ pub fn collectAdjustments(data: []const u8, offset: usize, length: usize, glyphs
 pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
     try validateShapingMetadata(options, glyphs.len);
-    const table = Table{ .data = data, .offset = offset, .length = length };
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGpos;
     // GPOS uses the same ScriptList/FeatureList/LookupList topology as GSUB,
@@ -2777,7 +2779,7 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError
     switch (format) {
         1 => {
             const glyph_count = try readU16(table, coverage_offset + 2);
-            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            if (!table.assume_validated) try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
             var lo: usize = 0;
             var hi: usize = glyph_count;
             while (lo < hi) {
@@ -2795,7 +2797,7 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError
         },
         2 => {
             const range_count = try readU16(table, coverage_offset + 2);
-            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
             for (0..range_count) |i| {
                 const range_offset = coverage_offset + 4 + i * 6;
                 const start = try readU16(table, range_offset);

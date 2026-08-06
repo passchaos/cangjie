@@ -883,6 +883,7 @@ pub const Font = struct {
         const gpos = self.gpos orelse return;
         try validateSfntTableChecksum(self.data, gpos);
         var gpos_options = options;
+        gpos_options.assume_validated = true;
         gdef_metadata.applyToGposOptions(&gpos_options);
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
     }

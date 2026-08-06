@@ -2650,9 +2650,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 
     const position_start = shapeProfileNow(shape_profile, profile_io);
+    std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, adjustmentIndexLessThan);
     // GPOS adjustments and legacy kern are accumulated in font units, then
     // scaled into user-space coordinates for the final GlyphPosition stream.
     var previous_glyph: ?GlyphId = null;
+    var adjustment_cursor: usize = 0;
     for (glyph_ids.items, 0..) |glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
@@ -2664,7 +2666,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
         if (!lookup_options.writing_mode.isVertical() and shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true)) {
             if (previous_glyph) |previous| {
-                const previous_adjustment = findAdjustment(gpos_adjustments.items, index - 1);
+                const previous_adjustment = findAdjustmentSorted(gpos_adjustments.items, index - 1, &adjustment_cursor);
                 if (!previous_adjustment.pair_positioned) {
                     const kern = try font.kerning(previous, glyph_id);
                     if (kern != 0 and buffer.glyphs.items.len > 0) {
@@ -2673,7 +2675,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 }
             }
         }
-        const adjustment = findAdjustment(gpos_adjustments.items, index);
+        const adjustment = findAdjustmentSorted(gpos_adjustments.items, index, &adjustment_cursor);
         var adjustment_x_advance = @as(f32, @floatFromInt(adjustment.x_advance));
         var x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
         if (adjustment.mark_attachment) {
@@ -3236,11 +3238,41 @@ test "vertical shaped cache and fallback runs preserve independent y pens" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.runs[0].y_offset, 0.001);
 }
 
-fn findAdjustment(adjustments: []const gpos.Adjustment, index: usize) gpos.Adjustment {
-    for (adjustments) |adjustment| {
-        if (adjustment.index == index) return adjustment;
+fn adjustmentIndexLessThan(_: void, lhs: gpos.Adjustment, rhs: gpos.Adjustment) bool {
+    return lhs.index < rhs.index;
+}
+
+fn findAdjustmentSorted(adjustments: []const gpos.Adjustment, index: usize, cursor: *usize) gpos.Adjustment {
+    while (cursor.* < adjustments.len and adjustments[cursor.*].index < index) {
+        cursor.* += 1;
     }
+    if (cursor.* < adjustments.len and adjustments[cursor.*].index == index) return adjustments[cursor.*];
     return .{ .index = index };
+}
+
+test "sorted adjustment cursor finds sparse GPOS entries in linear order" {
+    const adjustments = [_]gpos.Adjustment{
+        .{ .index = 1, .x_advance = 10 },
+        .{ .index = 3, .x_placement = -4, .pair_positioned = true },
+    };
+    var cursor: usize = 0;
+
+    const missing_0 = findAdjustmentSorted(&adjustments, 0, &cursor);
+    try std.testing.expectEqual(@as(usize, 0), missing_0.index);
+    try std.testing.expectEqual(@as(i16, 0), missing_0.x_advance);
+    try std.testing.expectEqual(@as(usize, 0), cursor);
+
+    const found_1 = findAdjustmentSorted(&adjustments, 1, &cursor);
+    try std.testing.expectEqual(@as(i16, 10), found_1.x_advance);
+    try std.testing.expectEqual(@as(usize, 0), cursor);
+
+    const missing_2 = findAdjustmentSorted(&adjustments, 2, &cursor);
+    try std.testing.expectEqual(@as(usize, 2), missing_2.index);
+    try std.testing.expectEqual(@as(usize, 1), cursor);
+
+    const found_3 = findAdjustmentSorted(&adjustments, 3, &cursor);
+    try std.testing.expectEqual(@as(i16, -4), found_3.x_placement);
+    try std.testing.expect(found_3.pair_positioned);
 }
 
 test "mark attachment offsets stay in user space for long advances" {

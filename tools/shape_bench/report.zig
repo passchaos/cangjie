@@ -29,6 +29,12 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\profile_gpos_apply_ns={d}
         \\profile_position_ns={d}
         \\profile_glyphs={d}
+        \\profile_gpos_lookups={d}
+        \\profile_gpos_single_lookups={d}
+        \\profile_gpos_pair_lookups={d}
+        \\profile_gpos_mark_lookups={d}
+        \\profile_gpos_context_lookups={d}
+        \\profile_gpos_extension_lookups={d}
         \\
     , .{
         options.engine.label(),
@@ -53,6 +59,12 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.profile.gpos_apply_ns,
         result.profile.position_ns,
         result.profile.glyph_count,
+        result.profile.gpos_lookup_count,
+        result.profile.gpos_single_lookup_count,
+        result.profile.gpos_pair_lookup_count,
+        result.profile.gpos_mark_lookup_count,
+        result.profile.gpos_context_lookup_count,
+        result.profile.gpos_extension_lookup_count,
     });
 }
 

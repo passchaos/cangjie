@@ -259,6 +259,19 @@ fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
     return lhs < rhs;
 }
 
+fn recordGposLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, lookup_type: u16) void {
+    const p = profile orelse return;
+    p.gpos_lookup_count += 1;
+    switch (lookup_type) {
+        1 => p.gpos_single_lookup_count += 1,
+        2 => p.gpos_pair_lookup_count += 1,
+        4, 5, 6 => p.gpos_mark_lookup_count += 1,
+        7, 8 => p.gpos_context_lookup_count += 1,
+        9 => p.gpos_extension_lookup_count += 1,
+        else => {},
+    }
+}
+
 fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
     if (lookups.items.len < 2) return;
 
@@ -279,6 +292,7 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
+    recordGposLookupProfile(options.shape_profile, lookup_type);
     // Positioning results are appended incrementally, but OpenType lookups are
     // atomic units. Preflight supported direct subtables before collecting any
     // adjustment so malformed later subtables cannot leave partial positioning.

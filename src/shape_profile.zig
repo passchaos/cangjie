@@ -9,4 +9,10 @@ pub const ShapeStageProfile = struct {
     gpos_apply_ns: i128 = 0,
     position_ns: i128 = 0,
     glyph_count: usize = 0,
+    gpos_lookup_count: usize = 0,
+    gpos_single_lookup_count: usize = 0,
+    gpos_pair_lookup_count: usize = 0,
+    gpos_mark_lookup_count: usize = 0,
+    gpos_context_lookup_count: usize = 0,
+    gpos_extension_lookup_count: usize = 0,
 };

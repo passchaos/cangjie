@@ -59,6 +59,7 @@ For output parity against HarfRust, build the local CLI once:
 (cd /Users/bytedance/Work/harfrust && cargo build --release -p hr-shape)
 zig build shape-bench -Doptimize=ReleaseFast -- --engine harfrust --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
 zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
+zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl
 ```
 
 The `harfrust` engine shells out to `hr-shape` once per sample and uses
@@ -66,6 +67,10 @@ The `harfrust` engine shells out to `hr-shape` once per sample and uses
 rough timing against HarfRust, but still includes external process startup and
 serialization/parsing overhead. A library runner is still needed for strict
 HarfRust/HarfBuzz timing.
+
+`compare-harfrust` runs Cangjie and HarfRust in the same invocation and compares
+per-line glyph-id sequences. It currently checks glyph ids only; clusters and
+positions still need a unit-normalized comparison.
 
 ## Current Evidence Snapshot
 
@@ -79,6 +84,11 @@ Representative validated state near that commit:
 - Amiri `fa-words`, Cangjie: about `1970 ns/glyph` median.
 - Roboto `en-words`, Cangjie: about `1118 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1233 ns/glyph` median.
+- HarfRust glyph-id smoke: Amiri `"سلام"` passes `compare-harfrust`.
+- HarfRust corpus gate: Amiri `fa-words` currently fails first at line 4
+  (`از`), where Cangjie emits glyph ids
+  `2019,2107,2748,2719,3538,736,3522,2107,419` and HarfRust emits
+  `2019,2107,2748,2719,3,3538,3522,2107,419`.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

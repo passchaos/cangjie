@@ -198,9 +198,13 @@ fn glyphClusters(allocator: std.mem.Allocator, text: []const u8, glyphs: []const
 
     const graphemes = try cangjie.itemizeGraphemeClusters(allocator, text);
     defer allocator.free(graphemes);
+    const indic_syllables = try indicSyllableClusters(allocator, text);
+    defer allocator.free(indic_syllables);
     var cursor: usize = 0;
+    var indic_cursor: usize = 0;
     for (glyphs, clusters) |glyph, *cluster| {
-        cluster.* = @intCast(graphemeClusterStartForByte(graphemes, &cursor, glyph.cluster));
+        const grapheme_start = graphemeClusterStartForByte(graphemes, &cursor, glyph.cluster);
+        cluster.* = @intCast(indicSyllableStartForByte(indic_syllables, &indic_cursor, grapheme_start));
     }
     return clusters;
 }
@@ -216,6 +220,94 @@ fn graphemeClusterStartForByte(graphemes: []const cangjie.GraphemeCluster, curso
         if (byte_offset >= current.byte_start and byte_offset < current.byte_start + current.byte_len) return current.byte_start;
     }
     return byte_offset;
+}
+
+fn indicSyllableClusters(allocator: std.mem.Allocator, text: []const u8) ![]const cangjie.GraphemeCluster {
+    var clusters = std.ArrayList(cangjie.GraphemeCluster).empty;
+    errdefer clusters.deinit(allocator);
+
+    var view = try std.unicode.Utf8View.init(text);
+    var it = view.iterator();
+    var cursor: usize = 0;
+    var syllable_start: ?usize = null;
+    var syllable_end: usize = 0;
+    var saw_virama = false;
+    var saw_post_virama_consonant = false;
+    while (it.nextCodepoint()) |codepoint| {
+        const byte_start = cursor;
+        cursor = it.i;
+        const byte_end = cursor;
+
+        if (!isIndicSyllableCodepoint(codepoint)) {
+            if (syllable_start) |start| {
+                try clusters.append(allocator, .{ .byte_start = start, .byte_len = syllable_end - start });
+                syllable_start = null;
+            }
+            saw_virama = false;
+            saw_post_virama_consonant = false;
+            continue;
+        }
+
+        if (syllable_start != null and isDevanagariConsonant(codepoint) and !saw_virama and byte_start != syllable_start.?) {
+            try clusters.append(allocator, .{ .byte_start = syllable_start.?, .byte_len = syllable_end - syllable_start.? });
+            syllable_start = byte_start;
+            saw_virama = false;
+            saw_post_virama_consonant = false;
+        } else if (syllable_start == null) {
+            syllable_start = byte_start;
+            saw_virama = false;
+            saw_post_virama_consonant = false;
+        }
+        syllable_end = byte_end;
+
+        if (codepoint == 0x094d) {
+            saw_virama = true;
+        } else if (saw_virama and isDevanagariConsonant(codepoint)) {
+            saw_post_virama_consonant = true;
+            saw_virama = false;
+        } else if (saw_post_virama_consonant and isDevanagariDependentMark(codepoint)) {
+            // Keep the mark in this syllable.
+        } else if (!isDevanagariDependentMark(codepoint) and codepoint != 0x200c and codepoint != 0x200d) {
+            saw_virama = false;
+        }
+    }
+
+    if (syllable_start) |start| {
+        try clusters.append(allocator, .{ .byte_start = start, .byte_len = syllable_end - start });
+    }
+    return try clusters.toOwnedSlice(allocator);
+}
+
+fn indicSyllableStartForByte(syllables: []const cangjie.GraphemeCluster, cursor: *usize, byte_offset: usize) usize {
+    while (cursor.* + 1 < syllables.len) {
+        const current = syllables[cursor.*];
+        if (byte_offset < current.byte_start + current.byte_len) break;
+        cursor.* += 1;
+    }
+    if (cursor.* < syllables.len) {
+        const current = syllables[cursor.*];
+        if (byte_offset >= current.byte_start and byte_offset < current.byte_start + current.byte_len) return current.byte_start;
+    }
+    return byte_offset;
+}
+
+fn isIndicSyllableCodepoint(codepoint: u21) bool {
+    return isDevanagariConsonant(codepoint) or
+        isDevanagariDependentMark(codepoint) or
+        codepoint == 0x094d or
+        codepoint == 0x200c or
+        codepoint == 0x200d;
+}
+
+fn isDevanagariConsonant(codepoint: u21) bool {
+    return (codepoint >= 0x0915 and codepoint <= 0x0939) or
+        (codepoint >= 0x0958 and codepoint <= 0x095f);
+}
+
+fn isDevanagariDependentMark(codepoint: u21) bool {
+    return (codepoint >= 0x093a and codepoint <= 0x094c) or
+        (codepoint >= 0x094e and codepoint <= 0x094f) or
+        (codepoint >= 0x0951 and codepoint <= 0x0957);
 }
 
 fn glyphXAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {

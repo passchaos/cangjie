@@ -30,6 +30,7 @@ pub fn reorderPreBaseMatras(
 const gsub = @import("gsub.zig");
 
 const indic_feature_applications = [_]gsub.FeatureApplication{
+    .{ .tag = unicode.tag("rkrf") },
     .{ .tag = unicode.tag("abvs") },
     .{ .tag = unicode.tag("psts") },
 };

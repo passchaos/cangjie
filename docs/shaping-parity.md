@@ -98,9 +98,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
   lines.
-- NotoSansDevanagari parses and focused vowel-sign words `के`, `कि`, `की`,
-  and `का` pass `compare-harfrust`; broader `hi-words.txt` parity is now
-  blocked later at Indic conjunct/half-form shaping, for example `श्रेणी`.
+- NotoSansDevanagari parses and focused words `के`, `कि`, `की`, `का`, and
+  `श्रेणी` pass `compare-harfrust`; broader `hi-words.txt` parity is now
+  blocked later at another Indic conjunct/half-form case, `वार्ता`.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

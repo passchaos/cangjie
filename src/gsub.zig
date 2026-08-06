@@ -3231,14 +3231,14 @@ fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, lookup_f
 fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GsubError!?usize {
     // Coverage tables are the common membership/index primitive used by nearly
     // every GSUB subtable. Format 1 is sorted glyph ids; format 2 is sorted
-    // and non-overlapping. Validate those ordering invariants before relying on
-    // binary search or range scans so malformed layout data cannot silently
-    // suppress or redirect a substitution.
+    // and non-overlapping. Unvalidated public callers keep checking those
+    // invariants before relying on binary search or range scans; shaping hot
+    // paths that already proved the table can reuse that proof.
     const format = try readU16(table, coverage_offset);
     switch (format) {
         1 => {
             const glyph_count = try readU16(table, coverage_offset + 2);
-            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            if (!table.assume_validated) try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
             var lo: usize = 0;
             var hi: usize = glyph_count;
             while (lo < hi) {
@@ -3256,7 +3256,7 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GsubError
         },
         2 => {
             const range_count = try readU16(table, coverage_offset + 2);
-            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
             for (0..range_count) |i| {
                 const range_offset = coverage_offset + 4 + i * 6;
                 const start = try readU16(table, range_offset);
@@ -3282,14 +3282,14 @@ fn coverageDigest(table: Table, coverage_offset: usize) GsubError!GlyphDigest {
     switch (format) {
         1 => {
             const glyph_count = try readU16(table, coverage_offset + 2);
-            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            if (!table.assume_validated) try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
             for (0..glyph_count) |glyph_i| {
                 digest.add(try readU16(table, coverage_offset + 4 + glyph_i * 2));
             }
         },
         2 => {
             const range_count = try readU16(table, coverage_offset + 2);
-            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
             for (0..range_count) |range_i| {
                 const range_offset = coverage_offset + 4 + range_i * 6;
                 digest.addRange(try readU16(table, range_offset), try readU16(table, range_offset + 2));
@@ -3305,7 +3305,7 @@ fn appendChainingSubtablePairs(table: Table, coverage_offset: usize, subtable_in
     switch (format) {
         1 => {
             const glyph_count = try readU16(table, coverage_offset + 2);
-            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            if (!table.assume_validated) try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
             try pairs.ensureUnusedCapacity(allocator, glyph_count);
             for (0..glyph_count) |glyph_i| {
                 pairs.appendAssumeCapacity(.{
@@ -3316,7 +3316,7 @@ fn appendChainingSubtablePairs(table: Table, coverage_offset: usize, subtable_in
         },
         2 => {
             const range_count = try readU16(table, coverage_offset + 2);
-            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
             for (0..range_count) |range_i| {
                 const range_offset = coverage_offset + 4 + range_i * 6;
                 const start = try readU16(table, range_offset);

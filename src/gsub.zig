@@ -105,7 +105,6 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (selected_lookups.items.len != 0) {
-        std.sort.heap(u16, selected_lookups.items, {}, lookupIndexLessThan);
         for (selected_lookups.items) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
@@ -230,8 +229,8 @@ fn applySelectedFeature(
     const feature_count = try readU16(table, feature_list_offset);
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    var applied_lookups = std.ArrayList(u16).empty;
-    defer applied_lookups.deinit(allocator);
+    var selected_lookups = std.ArrayList(u16).empty;
+    defer selected_lookups.deinit(allocator);
     for (feature_indices.items) |selection| {
         if (selection.index >= feature_count) continue;
         const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
@@ -246,11 +245,13 @@ fn applySelectedFeature(
             // of lookups in lookup-list order; do not feed a replacement back
             // through the same lookup merely because the activation graph has
             // duplicate references.
-            if (containsLookup(applied_lookups.items, lookup_index)) continue;
-            try applied_lookups.append(allocator, lookup_index);
-            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-            try applyLookup(table, lookup_offset, glyphs, allocator, options);
+            try selected_lookups.append(allocator, lookup_index);
         }
+    }
+    sortUniqueLookupIndices(&selected_lookups);
+    for (selected_lookups.items) |lookup_index| {
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+        try applyLookup(table, lookup_offset, glyphs, allocator, options);
     }
 }
 
@@ -318,10 +319,11 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
         const lookup_index_count = try readU16(table, feature_offset + 2);
         for (0..lookup_index_count) |i| {
             const lookup_index = try readU16(table, feature_offset + 4 + i * 2);
-            if (!containsLookup(lookups.items, lookup_index)) try lookups.append(allocator, lookup_index);
+            try lookups.append(allocator, lookup_index);
         }
     }
 
+    sortUniqueLookupIndices(&lookups);
     return lookups;
 }
 
@@ -403,11 +405,19 @@ fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
     return lhs < rhs;
 }
 
-fn containsLookup(items: []const u16, needle: u16) bool {
-    for (items) |item| {
-        if (item == needle) return true;
+fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
+    if (lookups.items.len < 2) return;
+
+    std.sort.heap(u16, lookups.items, {}, lookupIndexLessThan);
+    var write: usize = 1;
+    var previous = lookups.items[0];
+    for (lookups.items[1..]) |lookup_index| {
+        if (lookup_index == previous) continue;
+        lookups.items[write] = lookup_index;
+        write += 1;
+        previous = lookup_index;
     }
-    return false;
+    lookups.shrinkRetainingCapacity(write);
 }
 
 fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -3616,6 +3626,18 @@ test "GSUB LangSys required feature bypasses optional feature filtering" {
     try std.testing.expectEqualSlices(u16, &.{0}, lookups.items);
 }
 
+test "GSUB lookup selection sorts and deduplicates repeated feature lookups" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 78;
+    writeRepeatedLookupSelectionTable(&bytes, unicode.tag("liga"));
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    var lookups = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
+    defer lookups.deinit(allocator);
+
+    try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, lookups.items);
+}
+
 test "GSUB chaining class substitution applies nested lookup" {
     const allocator = std.testing.allocator;
     const bytes = try allocator.alloc(u8, 112);
@@ -5424,6 +5446,14 @@ fn writeFeature(bytes: []u8, offset: usize, lookup_index: u16) void {
     writeU16Test(bytes, offset + 4, lookup_index);
 }
 
+fn writeFeatureList(bytes: []u8, offset: usize, lookups: []const u16) void {
+    writeU16Test(bytes, offset, 0);
+    writeU16Test(bytes, offset + 2, @intCast(lookups.len));
+    for (lookups, 0..) |lookup_index, index| {
+        writeU16Test(bytes, offset + 4 + index * 2, lookup_index);
+    }
+}
+
 fn writeLayoutTagOrderingTable(bytes: []u8) void {
     writeU32Test(bytes, 0, 0x00010000);
     writeU16Test(bytes, 4, 10);
@@ -5495,6 +5525,37 @@ fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_t
     writeU16Test(bytes, 60, 2);
     writeU16Test(bytes, 62, 0);
     writeU16Test(bytes, 64, 0);
+}
+
+fn writeRepeatedLookupSelectionTable(bytes: []u8, feature_tag: u32) void {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10);
+    writeU16Test(bytes, 6, 34);
+    writeU16Test(bytes, 8, 66);
+
+    writeU16Test(bytes, 10, 1);
+    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(bytes, 16, 8);
+
+    writeU16Test(bytes, 18, 4);
+    writeU16Test(bytes, 20, 0);
+    writeU16Test(bytes, 22, 0);
+    writeU16Test(bytes, 24, 0xffff);
+    writeU16Test(bytes, 26, 2);
+    writeU16Test(bytes, 28, 0);
+    writeU16Test(bytes, 30, 1);
+
+    writeU16Test(bytes, 34, 2);
+    writeFeatureRecord(bytes, 36, feature_tag, 14);
+    writeFeatureRecord(bytes, 42, feature_tag, 24);
+    writeFeatureList(bytes, 48, &.{ 3, 1, 3 });
+    writeFeatureList(bytes, 58, &.{ 2, 1 });
+
+    writeU16Test(bytes, 66, 4);
+    writeU16Test(bytes, 68, 0);
+    writeU16Test(bytes, 70, 0);
+    writeU16Test(bytes, 72, 0);
+    writeU16Test(bytes, 74, 0);
 }
 
 test "GSUB public apply validates source metadata cardinality" {

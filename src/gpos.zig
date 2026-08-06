@@ -138,7 +138,6 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (selected_lookups.items.len != 0) {
-        std.sort.heap(u16, selected_lookups.items, {}, lookupIndexLessThan);
         for (selected_lookups.items) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
@@ -185,10 +184,11 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
         const lookup_index_count = try readU16(table, feature_offset + 2);
         for (0..lookup_index_count) |i| {
             const lookup_index = try readU16(table, feature_offset + 4 + i * 2);
-            if (!containsLookup(lookups.items, lookup_index)) try lookups.append(allocator, lookup_index);
+            try lookups.append(allocator, lookup_index);
         }
     }
 
+    sortUniqueLookupIndices(&lookups);
     return lookups;
 }
 
@@ -257,11 +257,19 @@ fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
     return lhs < rhs;
 }
 
-fn containsLookup(items: []const u16, needle: u16) bool {
-    for (items) |item| {
-        if (item == needle) return true;
+fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
+    if (lookups.items.len < 2) return;
+
+    std.sort.heap(u16, lookups.items, {}, lookupIndexLessThan);
+    var write: usize = 1;
+    var previous = lookups.items[0];
+    for (lookups.items[1..]) |lookup_index| {
+        if (lookup_index == previous) continue;
+        lookups.items[write] = lookup_index;
+        write += 1;
+        previous = lookup_index;
     }
-    return false;
+    lookups.shrinkRetainingCapacity(write);
 }
 
 fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -4014,6 +4022,18 @@ test "GPOS LangSys required feature bypasses feature overrides" {
     try std.testing.expectEqualSlices(u16, &.{0}, lookups.items);
 }
 
+test "GPOS lookup selection sorts and deduplicates repeated feature lookups" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 78;
+    writeRepeatedLookupSelectionTable(&bytes, unicode.tag("kern"));
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    var lookups = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
+    defer lookups.deinit(allocator);
+
+    try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, lookups.items);
+}
+
 test "GPOS validates layout tag record ordering" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 92;
@@ -6074,6 +6094,45 @@ fn writeFeatureTest(bytes: []u8, offset: usize, lookup_index: u16) void {
     writeU16Test(bytes, offset, 0);
     writeU16Test(bytes, offset + 2, 1);
     writeU16Test(bytes, offset + 4, lookup_index);
+}
+
+fn writeFeatureListTest(bytes: []u8, offset: usize, lookups: []const u16) void {
+    writeU16Test(bytes, offset, 0);
+    writeU16Test(bytes, offset + 2, @intCast(lookups.len));
+    for (lookups, 0..) |lookup_index, index| {
+        writeU16Test(bytes, offset + 4 + index * 2, lookup_index);
+    }
+}
+
+fn writeRepeatedLookupSelectionTable(bytes: []u8, feature_tag: u32) void {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10);
+    writeU16Test(bytes, 6, 34);
+    writeU16Test(bytes, 8, 66);
+
+    writeU16Test(bytes, 10, 1);
+    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(bytes, 16, 8);
+
+    writeU16Test(bytes, 18, 4);
+    writeU16Test(bytes, 20, 0);
+    writeU16Test(bytes, 22, 0);
+    writeU16Test(bytes, 24, 0xffff);
+    writeU16Test(bytes, 26, 2);
+    writeU16Test(bytes, 28, 0);
+    writeU16Test(bytes, 30, 1);
+
+    writeU16Test(bytes, 34, 2);
+    writeFeatureRecordTest(bytes, 36, feature_tag, 14);
+    writeFeatureRecordTest(bytes, 42, feature_tag, 24);
+    writeFeatureListTest(bytes, 48, &.{ 3, 1, 3 });
+    writeFeatureListTest(bytes, 58, &.{ 2, 1 });
+
+    writeU16Test(bytes, 66, 4);
+    writeU16Test(bytes, 68, 0);
+    writeU16Test(bytes, 70, 0);
+    writeU16Test(bytes, 72, 0);
+    writeU16Test(bytes, 74, 0);
 }
 
 test "GPOS public adjustment collection validates source metadata cardinality" {

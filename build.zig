@@ -49,4 +49,23 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         render_text_cmd.addArgs(args);
     }
+
+    const shape_bench_exe = b.addExecutable(.{
+        .name = "cangjie-shape-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/shape_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+            },
+        }),
+    });
+
+    const shape_bench_step = b.step("shape-bench", "Benchmark Cangjie text shaping");
+    const shape_bench_cmd = b.addRunArtifact(shape_bench_exe);
+    shape_bench_step.dependOn(&shape_bench_cmd.step);
+    if (b.args) |args| {
+        shape_bench_cmd.addArgs(args);
+    }
 }

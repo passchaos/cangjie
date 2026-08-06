@@ -905,6 +905,17 @@ pub const Font = struct {
         try self.validateGlyphRun(glyphs);
         const gpos = self.gpos orelse return;
         try validateSfntTableChecksum(self.data, gpos);
+        try self.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyphs, adjustments, allocator, options, gdef_metadata);
+    }
+
+    pub fn proveGposTableForShaping(self: *const Font) FontError!void {
+        const gpos = self.gpos orelse return;
+        try validateSfntTableChecksum(self.data, gpos);
+    }
+
+    pub fn collectGposAdjustmentsWithOptionsUsingGdefAfterProof(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        try self.validateGlyphRun(glyphs);
+        const gpos = self.gpos orelse return;
         var gpos_options = options;
         gpos_options.assume_validated = true;
         gdef_metadata.applyToGposOptions(&gpos_options);

@@ -1352,6 +1352,46 @@ pub const GdefMetadataCache = struct {
     }
 };
 
+const GposTableProofCacheKey = struct {
+    font_addr: usize,
+};
+
+pub const GposTableProofCache = struct {
+    allocator: std.mem.Allocator,
+    entries: std.AutoHashMap(GposTableProofCacheKey, void),
+    hits: usize = 0,
+    misses: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) GposTableProofCache {
+        return .{
+            .allocator = allocator,
+            .entries = std.AutoHashMap(GposTableProofCacheKey, void).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *GposTableProofCache) void {
+        self.entries.deinit();
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *GposTableProofCache) void {
+        self.entries.clearRetainingCapacity();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    pub fn prove(self: *GposTableProofCache, font: *const Font) !void {
+        const key = GposTableProofCacheKey{ .font_addr = @intFromPtr(font) };
+        if (self.entries.contains(key)) {
+            self.hits += 1;
+            return;
+        }
+        self.misses += 1;
+        try font.proveGposTableForShaping();
+        try self.entries.put(key, {});
+    }
+};
+
 fn gdefMetadataForShaping(font: *const Font, allocator: std.mem.Allocator, cache: ?*GdefMetadataCache, out_owned: *?GdefLookupMetadata) !*const GdefLookupMetadata {
     if (cache) |metadata_cache| {
         return try metadata_cache.metadata(font);
@@ -1482,6 +1522,7 @@ pub const LayoutBuffer = struct {
     shape_profile: ?*ShapeStageProfile = null,
     profile_io: ?std.Io = null,
     gdef_metadata_cache: ?*GdefMetadataCache = null,
+    gpos_table_proof_cache: ?*GposTableProofCache = null,
 
     pub fn init(allocator: std.mem.Allocator) LayoutBuffer {
         return .{ .allocator = allocator };
@@ -2701,7 +2742,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     var gpos_adjustments = std.ArrayList(gpos.Adjustment).empty;
     defer gpos_adjustments.deinit(buffer.allocator);
     const gpos_start = shapeProfileNow(shape_profile, profile_io);
-    try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyph_ids.items, &gpos_adjustments, buffer.allocator, .{
+    const gpos_options = gpos.LookupOptions{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
@@ -2710,7 +2751,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .ligature_components = ligature_components.items,
         .shape_profile = shape_profile,
         .profile_io = profile_io,
-    }, gdef_metadata.*);
+    };
+    if (buffer.gpos_table_proof_cache) |proof_cache| {
+        try proof_cache.prove(font);
+        try font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyph_ids.items, &gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
+    } else {
+        try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyph_ids.items, &gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
+    }
     if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 
     const position_start = shapeProfileNow(shape_profile, profile_io);

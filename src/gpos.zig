@@ -341,9 +341,9 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
             1 => {}, // SinglePos needs whole-lookup subtable ordering; handled above.
             2 => {}, // PairPos needs whole-lookup subtable ordering; handled above.
             3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            4 => try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            5 => try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            6 => try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            4 => if (runMayHaveGdefMarks(glyphs, lookup_options)) try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            5 => if (runMayHaveGdefMarks(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            6 => if (runMayHaveGdefMarks(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
@@ -643,6 +643,14 @@ fn validateMarkFilteringSetIndex(options: LookupOptions) GposError!void {
     // positioning depend on missing state instead of the font's declared lookup
     // flag contract.
     if (mark_filtering_set_index >= mark_sets.len) return error.BadGpos;
+}
+
+fn runMayHaveGdefMarks(glyphs: []const GlyphId, options: LookupOptions) bool {
+    const classes = options.glyph_classes orelse return true;
+    for (glyphs) |glyph| {
+        if (glyph < classes.len and classes[glyph] == 3) return true;
+    }
+    return false;
 }
 
 fn shapeProfileNow(profile: ?*shape_profile_mod.ShapeStageProfile, io: ?std.Io) i128 {
@@ -3941,6 +3949,61 @@ test "GPOS MarkBasePos rejects null required array offsets" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+}
+
+test "GPOS skips direct mark lookups when GDEF classes show no marks" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 56;
+
+    writeU16Test(&bytes, 0, 4); // MarkBasePos lookup.
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const mark_base = 8;
+    writeU16Test(&bytes, mark_base + 0, 1);
+    writeU16Test(&bytes, mark_base + 2, 12);
+    writeU16Test(&bytes, mark_base + 4, 18);
+    writeU16Test(&bytes, mark_base + 6, 1);
+    writeU16Test(&bytes, mark_base + 8, 24);
+    writeU16Test(&bytes, mark_base + 10, 36);
+    writeCoverage1Test(&bytes, mark_base + 12, 22);
+    writeCoverage1Test(&bytes, mark_base + 18, 20);
+
+    const mark_array = mark_base + 24;
+    writeU16Test(&bytes, mark_array + 0, 1);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 6);
+    writeAnchor1Test(&bytes, mark_array + 6, 10, 15);
+
+    const base_array = mark_base + 36;
+    writeU16Test(&bytes, base_array + 0, 1);
+    writeU16Test(&bytes, base_array + 2, 4);
+    writeAnchor1Test(&bytes, base_array + 4, 100, 120);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    const glyphs = [_]GlyphId{ 20, 22 };
+
+    var fallback_adjustments = std.ArrayList(Adjustment).empty;
+    defer fallback_adjustments.deinit(allocator);
+    try collectLookup(table, 0, &glyphs, &fallback_adjustments, allocator, .{});
+    try std.testing.expectEqual(@as(usize, 1), fallback_adjustments.items.len);
+
+    var glyph_classes = [_]u16{0} ** 24;
+    glyph_classes[20] = 1; // Base.
+    glyph_classes[22] = 1; // GDEF says this covered glyph is not a mark.
+    var classified_adjustments = std.ArrayList(Adjustment).empty;
+    defer classified_adjustments.deinit(allocator);
+    try collectLookup(table, 0, &glyphs, &classified_adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+    try std.testing.expectEqual(@as(usize, 0), classified_adjustments.items.len);
+
+    glyph_classes[22] = 3;
+    try collectLookup(table, 0, &glyphs, &classified_adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+    try std.testing.expectEqual(@as(usize, 1), classified_adjustments.items.len);
 }
 
 test "GPOS MarkLigPos rejects null LigatureAttach offsets" {

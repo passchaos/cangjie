@@ -57,6 +57,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Option
                         .glyph_count = line.glyphs.len,
                         .checksum = line.checksum,
                         .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, line.glyphs) else &.{},
+                        .clusters = if (options.glyph_summary) try glyphClusters(allocator, line.glyphs) else &.{},
                     });
                 }
             }
@@ -105,6 +106,7 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         "--direction",
         direction_text,
         "--no-glyph-names",
+        "--utf8-clusters",
         "-n",
         iterations_text,
     });
@@ -229,6 +231,12 @@ fn glyphIds(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]cons
     const ids = try allocator.alloc(u16, glyphs.len);
     for (glyphs, ids) |glyph, *id| id.* = glyph.glyph_id;
     return ids;
+}
+
+fn glyphClusters(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const u32 {
+    const clusters = try allocator.alloc(u32, glyphs.len);
+    for (glyphs, clusters) |glyph, *cluster| cluster.* = glyph.cluster;
+    return clusters;
 }
 
 fn glyphsChecksum(glyphs: []const HarfRustGlyph) u64 {

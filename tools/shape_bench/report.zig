@@ -211,6 +211,13 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
                 std.debug.print("{d}", .{glyph_id});
             }
         }
+        if (summary.clusters.len != 0) {
+            std.debug.print(" clusters=", .{});
+            for (summary.clusters, 0..) |cluster, index| {
+                if (index != 0) std.debug.print(",", .{});
+                std.debug.print("{d}", .{cluster});
+            }
+        }
         std.debug.print("\n", .{});
     }
 }

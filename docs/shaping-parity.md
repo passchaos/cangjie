@@ -69,12 +69,11 @@ serialization/parsing overhead. A library runner is still needed for strict
 HarfRust/HarfBuzz timing.
 
 `compare-harfrust` runs Cangjie and HarfRust in the same invocation and compares
-per-line glyph-id sequences. It currently checks glyph ids only; clusters and
-positions still need a unit-normalized comparison. When `--language` is not
-specified, compare mode forces Cangjie to `dflt` because the current `hr-shape`
-runner guesses script and direction but does not guess language. Pass
-`--language ara`, `--language zhs`, etc. to compare an explicit LangSys on both
-engines.
+per-line glyph-id and UTF-8 cluster sequences. Positions and advances still need
+a unit-normalized comparison. When `--language` is not specified, compare mode
+forces Cangjie to `dflt` because the current `hr-shape` runner guesses script
+and direction but does not guess language. Pass `--language ara`,
+`--language zhs`, etc. to compare an explicit LangSys on both engines.
 
 ## Current Evidence Snapshot
 
@@ -89,13 +88,16 @@ Representative performance state near that commit:
 - Roboto `en-words`, Cangjie: about `1118 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1233 ns/glyph` median.
 
-Current HarfRust glyph-id parity evidence:
+Current HarfRust glyph-id and UTF-8 cluster parity evidence:
 
 - Amiri `"آیت‌الله"` passes `compare-harfrust`.
 - Amiri `"اللَّهِ"` passes `compare-harfrust`.
 - Amiri `"تثبیت"` passes default `compare-harfrust`; it also passes with
   `--language ara`.
 - Amiri `fa-words.txt` passes default `compare-harfrust` for 10,000 lines.
+- Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
+  non-empty lines.
+- Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -111,7 +113,7 @@ goal is active, not complete.
   `SourceSerifVariable-Roman.ttf`, and the harfrust text corpus.
 - Track output parity, not only timing. `compare-harfrust` compares Cangjie
   logical shaping order to `hr-shape`'s low-level RTL serialization by reversing
-  Cangjie glyph ids for RTL lines; clusters, advances, offsets, and feature
+  Cangjie glyph ids and clusters for RTL lines; advances, offsets, and feature
   overrides still need normalized comparison.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups and GPOS lookups `37`, `57`, and `74`.

@@ -2496,9 +2496,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
         const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
+        const source_cluster = if (lookup_options.direction == .rtl and
+            unicode.inheritsPreviousClusterInRtlShaping(codepoint) and
+            clusters.items.len != 0)
+            clusters.items[clusters.items.len - 1] - cluster_base
+        else
+            cluster;
         try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint));
         try codepoints.append(buffer.allocator, codepoint);
-        try clusters.append(buffer.allocator, cluster_base + cluster);
+        try clusters.append(buffer.allocator, cluster_base + source_cluster);
         try source_ends.append(buffer.allocator, cluster_base + it.i);
         try glyph_source_indices.append(buffer.allocator, glyph_source_indices.items.len);
         try ligature_components.append(buffer.allocator, defaultLigatureComponentInfo(glyph_source_indices.items.len - 1));

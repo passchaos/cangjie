@@ -58,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
         .compare_harfrust => unreachable,
     };
     defer {
-        for (result.line_summaries) |summary| allocator.free(summary.glyph_ids);
+        freeLineSummaries(allocator, result.line_summaries);
         allocator.free(result.line_summaries);
         allocator.free(result.samples);
     }
@@ -86,7 +86,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     const harfrust_result = try harfrust.run(io, allocator, harfrust_options);
     defer freeResult(allocator, harfrust_result);
 
-    const mismatch = try firstGlyphIdMismatch(allocator, cangjie_result.line_summaries, harfrust_result.line_summaries, base_options.direction);
+    const mismatch = try firstLineMismatch(allocator, cangjie_result.line_summaries, harfrust_result.line_summaries, base_options.direction);
     std.debug.print(
         \\engine=compare-harfrust
         \\font={s}
@@ -104,6 +104,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     });
     if (mismatch) |m| {
         defer allocator.free(m.cangjie_glyph_ids);
+        defer allocator.free(m.cangjie_clusters);
         const mismatch_text = if (m.line_index < base_options.text_lines.len) base_options.text_lines[m.line_index] else "";
         std.debug.print(
             \\parity=fail
@@ -114,6 +115,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
             \\harfrust_line_glyphs={d}
             \\cangjie_line_checksum={x}
             \\harfrust_line_checksum={x}
+            \\mismatch_kind={s}
             \\cangjie_glyph_ids=
         , .{
             m.line_index,
@@ -123,10 +125,17 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
             m.harfrust.glyph_count,
             m.cangjie.checksum,
             m.harfrust.checksum,
+            m.kind.label(),
         });
         printGlyphIds(m.cangjie_glyph_ids);
         std.debug.print("\nharfrust_glyph_ids=", .{});
         printGlyphIds(m.harfrust.glyph_ids);
+        if (m.kind == .cluster) {
+            std.debug.print("\ncangjie_clusters=", .{});
+            printClusters(m.cangjie_clusters);
+            std.debug.print("\nharfrust_clusters=", .{});
+            printClusters(m.harfrust.clusters);
+        }
         std.debug.print("\n", .{});
         return error.HarfRustParityMismatch;
     }
@@ -137,51 +146,93 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     , .{cangjie_result.checksum});
 }
 
-const GlyphIdMismatch = struct {
+const MismatchKind = enum {
+    glyph_id,
+    cluster,
+    line_count,
+
+    fn label(self: MismatchKind) []const u8 {
+        return switch (self) {
+            .glyph_id => "glyph_id",
+            .cluster => "cluster",
+            .line_count => "line_count",
+        };
+    }
+};
+
+const LineMismatch = struct {
+    kind: MismatchKind,
     line_index: usize,
     cangjie: runner.BenchResult.LineSummary,
     harfrust: runner.BenchResult.LineSummary,
     cangjie_glyph_ids: []const u16,
+    cangjie_clusters: []const u32,
 };
 
-fn firstGlyphIdMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: cangjie.TextDirection) !?GlyphIdMismatch {
+fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: cangjie.TextDirection) !?LineMismatch {
     const count = @min(cangjie_lines.len, harfrust_lines.len);
     for (0..count) |line_index| {
-        const cangjie_ids = try comparableCangjieGlyphIds(allocator, cangjie_lines[line_index].glyph_ids, direction);
+        const cangjie_ids = try comparableSlice(u16, allocator, cangjie_lines[line_index].glyph_ids, direction);
         errdefer allocator.free(cangjie_ids);
         if (!std.mem.eql(u16, cangjie_ids, harfrust_lines[line_index].glyph_ids)) {
             return .{
+                .kind = .glyph_id,
                 .line_index = line_index,
                 .cangjie = cangjie_lines[line_index],
                 .harfrust = harfrust_lines[line_index],
                 .cangjie_glyph_ids = cangjie_ids,
+                .cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, direction),
+            };
+        }
+        const cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, direction);
+        errdefer allocator.free(cangjie_clusters);
+        if (!std.mem.eql(u32, cangjie_clusters, harfrust_lines[line_index].clusters)) {
+            return .{
+                .kind = .cluster,
+                .line_index = line_index,
+                .cangjie = cangjie_lines[line_index],
+                .harfrust = harfrust_lines[line_index],
+                .cangjie_glyph_ids = cangjie_ids,
+                .cangjie_clusters = cangjie_clusters,
             };
         }
         allocator.free(cangjie_ids);
+        allocator.free(cangjie_clusters);
     }
     if (cangjie_lines.len != harfrust_lines.len) {
         const line_index = count;
         const cangjie_ids = if (line_index < cangjie_lines.len)
-            try comparableCangjieGlyphIds(allocator, cangjie_lines[line_index].glyph_ids, direction)
+            try comparableSlice(u16, allocator, cangjie_lines[line_index].glyph_ids, direction)
         else
             try allocator.alloc(u16, 0);
+        errdefer allocator.free(cangjie_ids);
+        const cangjie_clusters = if (line_index < cangjie_lines.len)
+            try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, direction)
+        else
+            try allocator.alloc(u32, 0);
         return .{
+            .kind = .line_count,
             .line_index = line_index,
-            .cangjie = if (line_index < cangjie_lines.len) cangjie_lines[line_index] else .{ .index = line_index, .text_bytes = 0, .glyph_count = 0, .checksum = 0 },
-            .harfrust = if (line_index < harfrust_lines.len) harfrust_lines[line_index] else .{ .index = line_index, .text_bytes = 0, .glyph_count = 0, .checksum = 0 },
+            .cangjie = if (line_index < cangjie_lines.len) cangjie_lines[line_index] else emptyLineSummary(line_index),
+            .harfrust = if (line_index < harfrust_lines.len) harfrust_lines[line_index] else emptyLineSummary(line_index),
             .cangjie_glyph_ids = cangjie_ids,
+            .cangjie_clusters = cangjie_clusters,
         };
     }
     return null;
 }
 
-fn comparableCangjieGlyphIds(allocator: std.mem.Allocator, glyph_ids: []const u16, direction: cangjie.TextDirection) ![]const u16 {
-    const comparable = try allocator.alloc(u16, glyph_ids.len);
+fn emptyLineSummary(line_index: usize) runner.BenchResult.LineSummary {
+    return .{ .index = line_index, .text_bytes = 0, .glyph_count = 0, .checksum = 0 };
+}
+
+fn comparableSlice(comptime T: type, allocator: std.mem.Allocator, items: []const T, direction: cangjie.TextDirection) ![]const T {
+    const comparable = try allocator.alloc(T, items.len);
     switch (direction) {
-        .ltr => @memcpy(comparable, glyph_ids),
+        .ltr => @memcpy(comparable, items),
         .rtl => {
-            for (glyph_ids, 0..) |glyph_id, index| {
-                comparable[glyph_ids.len - 1 - index] = glyph_id;
+            for (items, 0..) |item, index| {
+                comparable[items.len - 1 - index] = item;
             }
         },
     }
@@ -195,10 +246,24 @@ fn printGlyphIds(glyph_ids: []const u16) void {
     }
 }
 
+fn printClusters(clusters: []const u32) void {
+    for (clusters, 0..) |cluster, index| {
+        if (index != 0) std.debug.print(",", .{});
+        std.debug.print("{d}", .{cluster});
+    }
+}
+
 fn freeResult(allocator: std.mem.Allocator, result: runner.BenchResult) void {
-    for (result.line_summaries) |summary| allocator.free(summary.glyph_ids);
+    freeLineSummaries(allocator, result.line_summaries);
     allocator.free(result.line_summaries);
     allocator.free(result.samples);
+}
+
+fn freeLineSummaries(allocator: std.mem.Allocator, summaries: []const runner.BenchResult.LineSummary) void {
+    for (summaries) |summary| {
+        allocator.free(summary.glyph_ids);
+        allocator.free(summary.clusters);
+    }
 }
 
 fn splitTextLines(allocator: std.mem.Allocator, text: []const u8) ![]const []const u8 {

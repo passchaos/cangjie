@@ -103,6 +103,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
                         .glyph_count = glyphs.len,
                         .checksum = line_checksum,
                         .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
+                        .clusters = &.{},
                     });
                 }
             }

@@ -434,6 +434,11 @@ pub fn arabicModifiedCombiningClassForShaping(codepoint: u21) u8 {
     };
 }
 
+pub fn inheritsPreviousClusterInRtlShaping(codepoint: u21) bool {
+    if (codepoint == 0x200d) return true;
+    return scriptForCodepoint(codepoint) == .arabic and isCombiningMark(codepoint) and !isVariationSelector(codepoint);
+}
+
 pub const GraphemeCluster = struct {
     byte_start: usize,
     byte_len: usize,

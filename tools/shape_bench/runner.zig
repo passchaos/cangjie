@@ -10,6 +10,7 @@ pub const BenchResult = struct {
         glyph_count: usize,
         checksum: u64,
         glyph_ids: []const u16 = &.{},
+        clusters: []const u32 = &.{},
     };
     pub const Sample = struct {
         index: usize,
@@ -131,6 +132,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                         .glyph_count = glyphs.len,
                         .checksum = line_checksum,
                         .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
+                        .clusters = if (options.glyph_summary) try glyphClusters(allocator, glyphs) else &.{},
                     });
                 }
             }
@@ -176,6 +178,12 @@ fn glyphIds(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosition)
     const ids = try allocator.alloc(u16, glyphs.len);
     for (glyphs, ids) |glyph, *id| id.* = glyph.glyph_id;
     return ids;
+}
+
+fn glyphClusters(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosition) ![]const u32 {
+    const clusters = try allocator.alloc(u32, glyphs.len);
+    for (glyphs, clusters) |glyph, *cluster| cluster.* = @intCast(glyph.cluster);
+    return clusters;
 }
 
 fn shapeOnce(

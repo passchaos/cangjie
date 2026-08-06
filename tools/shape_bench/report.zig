@@ -15,6 +15,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\iterations={d}
         \\warmup={d}
         \\samples={d}
+        \\feature_overrides={d}
         \\use_caches={any}
         \\use_shaped_cache={any}
         \\profile={any}
@@ -26,6 +27,29 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\sample_median_ns_per_glyph={d:.3}
         \\sample_max_ns_per_glyph={d:.3}
         \\checksum={x}
+        \\
+    , .{
+        options.engine.label(),
+        options.fontLabel(),
+        options.textLabel(),
+        options.text.len,
+        options.iterations,
+        options.warmup,
+        options.samples,
+        options.featureOverrideCount(),
+        options.use_caches,
+        options.use_shaped_cache,
+        options.profile,
+        result.elapsed_ns,
+        result.glyph_count,
+        ns_per_iter,
+        ns_per_glyph,
+        stats.min,
+        stats.median,
+        stats.max,
+        result.checksum,
+    });
+    std.debug.print(
         \\glyph_index_cache_hits={d}
         \\glyph_index_cache_misses={d}
         \\glyph_metrics_cache_hits={d}
@@ -40,25 +64,8 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\lookup_selection_cache_misses={d}
         \\shaped_cache_hits={d}
         \\shaped_cache_misses={d}
+        \\
     , .{
-        options.engine.label(),
-        options.fontLabel(),
-        options.textLabel(),
-        options.text.len,
-        options.iterations,
-        options.warmup,
-        options.samples,
-        options.use_caches,
-        options.use_shaped_cache,
-        options.profile,
-        result.elapsed_ns,
-        result.glyph_count,
-        ns_per_iter,
-        ns_per_glyph,
-        stats.min,
-        stats.median,
-        stats.max,
-        result.checksum,
         result.glyph_index_cache_hits,
         result.glyph_index_cache_misses,
         result.glyph_metrics_cache_hits,
@@ -74,6 +81,18 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.shaped_cache_hits,
         result.shaped_cache_misses,
     });
+    for (options.featureOverrides(), 0..) |feature, index| {
+        var tag_buf: [4]u8 = undefined;
+        options_mod.writeFeatureTag(&tag_buf, feature.tag);
+        std.debug.print(
+            \\feature_override index={d} tag={s} enabled={any}
+            \\
+        , .{
+            index,
+            tag_buf[0..],
+            feature.enabled,
+        });
+    }
     std.debug.print(
         \\
         \\profile_total_ns={d}

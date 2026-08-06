@@ -77,7 +77,18 @@ pub const Options = struct {
     pub fn featureOverrides(self: *const Options) []const cangjie.FeatureOverride {
         return self.feature_override_buf[0..self.feature_override_count];
     }
+
+    pub fn featureOverrideCount(self: Options) usize {
+        return self.feature_override_count;
+    }
 };
+
+pub fn writeFeatureTag(buf: *[4]u8, tag: u32) void {
+    buf[0] = @intCast((tag >> 24) & 0xff);
+    buf[1] = @intCast((tag >> 16) & 0xff);
+    buf[2] = @intCast((tag >> 8) & 0xff);
+    buf[3] = @intCast(tag & 0xff);
+}
 
 pub fn parse(args: []const []const u8) !Options {
     var options = Options{};

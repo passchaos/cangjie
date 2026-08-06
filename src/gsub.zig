@@ -75,6 +75,7 @@ pub const LookupAccelerator = struct {
     chaining_input_digest: GlyphDigest = .{},
     chaining_subtable_digests: []const GlyphDigest = &.{},
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
+    chaining_groups: []const ChainingSubtableGroup = &.{},
 };
 
 const SingleSubstAccelerator = struct {
@@ -99,6 +100,16 @@ const ChainingCoverageSubtable = struct {
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
     subst_count: u16 = 0,
+};
+
+const ChainingSubtableGroup = struct {
+    glyph: GlyphId,
+    subtable_indices: []const u16,
+};
+
+const ChainingSubtablePair = struct {
+    glyph: GlyphId,
+    subtable_index: u16,
 };
 
 pub const FeatureApplication = struct {
@@ -483,6 +494,10 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
     for (accelerators) |accelerator| {
         allocator.free(accelerator.chaining_subtable_digests);
         allocator.free(accelerator.chaining_subtables);
+        for (accelerator.chaining_groups) |group| {
+            allocator.free(group.subtable_indices);
+        }
+        allocator.free(accelerator.chaining_groups);
     }
 }
 
@@ -498,6 +513,8 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     if (lookup_type != 6 or !try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) return accelerator;
 
     var digest = GlyphDigest.empty();
+    var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
+    errdefer group_pairs.deinit(allocator);
     const subtable_digests = try allocator.alloc(GlyphDigest, subtable_count);
     errdefer allocator.free(subtable_digests);
     @memset(subtable_digests, .{});
@@ -510,15 +527,23 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         const parsed_subtable = try parseChainingCoverageSubtable(table, subtable_offset) orelse continue;
         chaining_subtables[subtable_i] = parsed_subtable;
         const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos));
+        try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
         const subtable_digest = try coverageDigest(table, coverage_offset);
         subtable_digests[subtable_i] = subtable_digest;
         digest.unionWith(subtable_digest);
         saw_input_coverage = true;
     }
     if (!saw_input_coverage or digest.isEmpty()) {
+        group_pairs.deinit(allocator);
         allocator.free(subtable_digests);
         allocator.free(chaining_subtables);
         return .{};
+    }
+    const chaining_groups = try buildChainingSubtableGroups(group_pairs.items, allocator);
+    group_pairs.deinit(allocator);
+    errdefer {
+        for (chaining_groups) |group| allocator.free(group.subtable_indices);
+        allocator.free(chaining_groups);
     }
     return .{
         .single_subst = accelerator.single_subst,
@@ -526,6 +551,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         .chaining_input_digest = digest,
         .chaining_subtable_digests = subtable_digests,
         .chaining_subtables = chaining_subtables,
+        .chaining_groups = chaining_groups,
     };
 }
 
@@ -736,6 +762,11 @@ fn appendFeatureSelection(feature_indices: *std.ArrayList(FeatureSelection), all
 
 fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
     return lhs < rhs;
+}
+
+fn chainingSubtablePairLessThan(_: void, lhs: ChainingSubtablePair, rhs: ChainingSubtablePair) bool {
+    if (lhs.glyph != rhs.glyph) return lhs.glyph < rhs.glyph;
+    return lhs.subtable_index < rhs.subtable_index;
 }
 
 fn recordGsubLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, lookup_type: u16) void {
@@ -1727,22 +1758,23 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
     var pos: usize = 0;
     while (pos < glyphs.items.len) : (pos += 1) {
         const current_glyph = glyphs.items[pos];
-        for (0..subtable_count) |subtable_i| {
-            if (accelerator) |accel| {
-                if (sourceFeatureAllowsGlyph(options, pos) and
-                    !lookupIgnoresGlyph(lookup_flag, options, current_glyph) and
-                    subtable_i < accel.chaining_subtable_digests.len and
-                    !accel.chaining_subtable_digests[subtable_i].mayHave(current_glyph)) continue;
-            }
-            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            const parsed_subtable = if (accelerator) |accel|
-                if (subtable_i < accel.chaining_subtables.len and accel.chaining_subtables[subtable_i].input_count != 0)
+        if (accelerator) |accel| {
+            if (!sourceFeatureAllowsGlyph(options, pos)) continue;
+            if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
+            const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, current_glyph) orelse continue;
+            for (grouped_subtables) |subtable_i| {
+                const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + @as(usize, subtable_i) * 2);
+                const parsed_subtable = if (subtable_i < accel.chaining_subtables.len and accel.chaining_subtables[subtable_i].input_count != 0)
                     accel.chaining_subtables[subtable_i]
                 else
-                    null
-            else
-                null;
-            if (try applyChainingContextSubstitutionAt(table, subtable_offset, parsed_subtable, glyphs, pos, allocator, lookup_flag, options)) break;
+                    null;
+                if (try applyChainingContextSubstitutionAt(table, subtable_offset, parsed_subtable, glyphs, pos, allocator, lookup_flag, options)) break;
+            }
+        } else {
+            for (0..subtable_count) |subtable_i| {
+                const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+                if (try applyChainingContextSubstitutionAt(table, subtable_offset, null, glyphs, pos, allocator, lookup_flag, options)) break;
+            }
         }
     }
 }
@@ -3245,6 +3277,90 @@ fn coverageDigest(table: Table, coverage_offset: usize) GsubError!GlyphDigest {
         else => return error.UnsupportedGsub,
     }
     return digest;
+}
+
+fn appendChainingSubtablePairs(table: Table, coverage_offset: usize, subtable_index: u16, pairs: *std.ArrayList(ChainingSubtablePair), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
+    const format = try readU16(table, coverage_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16(table, coverage_offset + 2);
+            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            try pairs.ensureUnusedCapacity(allocator, glyph_count);
+            for (0..glyph_count) |glyph_i| {
+                pairs.appendAssumeCapacity(.{
+                    .glyph = try readU16(table, coverage_offset + 4 + glyph_i * 2),
+                    .subtable_index = subtable_index,
+                });
+            }
+        },
+        2 => {
+            const range_count = try readU16(table, coverage_offset + 2);
+            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                const start = try readU16(table, range_offset);
+                const end = try readU16(table, range_offset + 2);
+                try pairs.ensureUnusedCapacity(allocator, @as(usize, end) - @as(usize, start) + 1);
+                for (@as(usize, start)..@as(usize, end) + 1) |glyph| {
+                    pairs.appendAssumeCapacity(.{
+                        .glyph = @intCast(glyph),
+                        .subtable_index = subtable_index,
+                    });
+                }
+            }
+        },
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn buildChainingSubtableGroups(pairs: []ChainingSubtablePair, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ChainingSubtableGroup {
+    if (pairs.len == 0) return try allocator.alloc(ChainingSubtableGroup, 0);
+    std.sort.heap(ChainingSubtablePair, pairs, {}, chainingSubtablePairLessThan);
+
+    var group_count: usize = 1;
+    var previous_glyph = pairs[0].glyph;
+    for (pairs[1..]) |pair| {
+        if (pair.glyph == previous_glyph) continue;
+        group_count += 1;
+        previous_glyph = pair.glyph;
+    }
+
+    const groups = try allocator.alloc(ChainingSubtableGroup, group_count);
+    var built_group_count: usize = 0;
+    errdefer {
+        for (groups[0..built_group_count]) |group| allocator.free(group.subtable_indices);
+        allocator.free(groups);
+    }
+    var pair_index: usize = 0;
+    for (groups) |*group| {
+        const glyph = pairs[pair_index].glyph;
+        const start = pair_index;
+        while (pair_index < pairs.len and pairs[pair_index].glyph == glyph) : (pair_index += 1) {}
+        const indices = try allocator.alloc(u16, pair_index - start);
+        for (indices, 0..) |*index, i| {
+            index.* = pairs[start + i].subtable_index;
+        }
+        group.* = .{ .glyph = glyph, .subtable_indices = indices };
+        built_group_count += 1;
+    }
+    return groups;
+}
+
+fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, glyph: GlyphId) ?[]const u16 {
+    var lo: usize = 0;
+    var hi: usize = groups.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = groups[mid].glyph;
+        if (glyph < candidate) {
+            hi = mid;
+        } else if (glyph > candidate) {
+            lo = mid + 1;
+        } else {
+            return groups[mid].subtable_indices;
+        }
+    }
+    return null;
 }
 
 fn validateCoverageFormat1Order(table: Table, coverage_offset: usize, glyph_count: u16) GsubError!void {

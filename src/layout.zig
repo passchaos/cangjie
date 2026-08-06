@@ -14,6 +14,7 @@ pub const GlyphIndexCache = layout_cache.GlyphIndexCache;
 pub const GlyphMetrics = layout_cache.GlyphMetrics;
 pub const GlyphMetricsCache = layout_cache.GlyphMetricsCache;
 pub const GposTableProofCache = layout_cache.GposTableProofCache;
+pub const LookupSelectionCache = layout_cache.LookupSelectionCache;
 pub const VerticalGlyphMetrics = layout_cache.VerticalGlyphMetrics;
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
@@ -1319,6 +1320,7 @@ pub const LayoutBuffer = struct {
     profile_io: ?std.Io = null,
     gdef_metadata_cache: ?*GdefMetadataCache = null,
     gpos_table_proof_cache: ?*GposTableProofCache = null,
+    lookup_selection_cache: ?*LookupSelectionCache = null,
     shape_scratch: layout_scratch.ShapeScratch = .{},
 
     pub fn init(allocator: std.mem.Allocator) LayoutBuffer {
@@ -2471,7 +2473,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // needs the original component sources for a ligature glyph; otherwise a
     // mark after a ligature can only guess a component from post-substitution
     // mark order.
-    const gsub_options = gsub.LookupOptions{
+    var gsub_options = gsub.LookupOptions{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
@@ -2523,6 +2525,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
     } else {
+        if (buffer.lookup_selection_cache) |selection_cache| {
+            gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
+        }
         try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
         if (scriptPositionFeatureApplication(lookup_options.script_position)) |application| {
             try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
@@ -2533,7 +2538,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 
     const gpos_adjustments = &scratch.gpos_adjustments;
     const gpos_start = shapeProfileNow(shape_profile, profile_io);
-    const gpos_options = gpos.LookupOptions{
+    var gpos_options = gpos.LookupOptions{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
@@ -2543,6 +2548,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .shape_profile = shape_profile,
         .profile_io = profile_io,
     };
+    if (buffer.lookup_selection_cache) |selection_cache| {
+        gpos_options.selected_lookups = try selection_cache.gposLookups(font, gpos_options, gdef_metadata.*);
+    }
     if (buffer.gpos_table_proof_cache) |proof_cache| {
         try proof_cache.prove(font);
         try font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);

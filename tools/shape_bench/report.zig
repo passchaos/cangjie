@@ -28,6 +28,8 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\gdef_cache_misses={d}
         \\gpos_proof_cache_hits={d}
         \\gpos_proof_cache_misses={d}
+        \\lookup_selection_cache_hits={d}
+        \\lookup_selection_cache_misses={d}
         \\shaped_cache_hits={d}
         \\shaped_cache_misses={d}
     , .{
@@ -52,6 +54,8 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.gdef_cache_misses,
         result.gpos_proof_cache_hits,
         result.gpos_proof_cache_misses,
+        result.lookup_selection_cache_hits,
+        result.lookup_selection_cache_misses,
         result.shaped_cache_hits,
         result.shaped_cache_misses,
     });

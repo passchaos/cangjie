@@ -55,6 +55,10 @@ pub const LookupOptions = struct {
     /// semantics.
     source_features: ?[]const u32 = null,
     active_source_feature: ?u32 = null,
+    /// Preselected lookup indices for the active script/language/features.
+    /// This is a shaping fast path; callers that supply it must keep it in
+    /// sync with the other selection options.
+    selected_lookups: ?[]const u16 = null,
     assume_validated: bool = false,
     shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
     profile_io: ?std.Io = null,
@@ -82,9 +86,13 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     // When no explicit features are supplied, selectedLookupIndices returns the
     // default-enabled lookups for the requested script/language.
     const select_start = shapeProfileNow(options.shape_profile, options.profile_io);
-    var selected_lookups = try selectedLookupIndices(table, allocator, options);
+    var selected_lookups_owned = if (options.selected_lookups == null)
+        try selectedLookupIndices(table, allocator, options)
+    else
+        std.ArrayList(u16).empty;
     if (options.shape_profile) |profile| profile.gsub_select_ns += shapeProfileElapsed(select_start, options.profile_io);
-    defer selected_lookups.deinit(allocator);
+    defer selected_lookups_owned.deinit(allocator);
+    const selected_lookups = options.selected_lookups orelse selected_lookups_owned.items;
     const script_list_offset = try readU16(table, 4);
     const feature_list_offset = try readU16(table, 6);
     const has_feature_topology = script_list_offset != 0 and
@@ -97,7 +105,7 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     // Devanagari digit substitutions for ordinary ASCII digits. Low-level
     // callers can retain the historical all-lookup behavior; the text shaper
     // explicitly disables it after Script/LangSys selection.
-    if (selected_lookups.items.len == 0 and
+    if (selected_lookups.len == 0 and
         (options.features.len != 0 or (!options.apply_all_if_unselected and has_feature_topology))) return;
 
     const apply_start = shapeProfileNow(options.shape_profile, options.profile_io);
@@ -106,8 +114,8 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     }
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    if (selected_lookups.items.len != 0) {
-        for (selected_lookups.items) |lookup_index| {
+    if (selected_lookups.len != 0) {
+        for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
             try applyLookup(table, lookup_offset, glyphs, allocator, options);
@@ -118,6 +126,15 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
             try applyLookup(table, lookup_offset, glyphs, allocator, options);
         }
     }
+}
+
+pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)![]u16 {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+    var lookups = try selectedLookupIndices(table, allocator, options);
+    return try lookups.toOwnedSlice(allocator);
 }
 
 /// Apply one Script/LangSys feature to the source positions carrying its tag.

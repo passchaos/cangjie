@@ -838,6 +838,15 @@ pub const Font = struct {
         try gsub_mod.applyWithOptions(self.data, gsub.offset, gsub.length, glyphs, allocator, gsub_options);
     }
 
+    pub fn selectGsubLookupsForShaping(self: *const Font, allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError![]u16 {
+        const gsub = self.gsub orelse return try allocator.alloc(u16, 0);
+        try validateSfntTableChecksum(self.data, gsub);
+        var gsub_options = options;
+        gsub_options.assume_validated = true;
+        gdef_metadata.applyToGsubOptions(&gsub_options);
+        return try gsub_mod.selectedLookupIndicesForOptions(self.data, gsub.offset, gsub.length, allocator, gsub_options);
+    }
+
     pub fn applyGsubFeatureWithOptions(self: *const Font, feature_tag: u32, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
         return try self.applyGsubFeatureSequenceWithOptions(&.{.{ .tag = feature_tag }}, glyphs, allocator, options);
     }
@@ -922,6 +931,15 @@ pub const Font = struct {
         gpos_options.assume_validated = true;
         gdef_metadata.applyToGposOptions(&gpos_options);
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
+    }
+
+    pub fn selectGposLookupsForShaping(self: *const Font, allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError![]u16 {
+        const gpos = self.gpos orelse return try allocator.alloc(u16, 0);
+        try validateSfntTableChecksum(self.data, gpos);
+        var gpos_options = options;
+        gpos_options.assume_validated = true;
+        gdef_metadata.applyToGposOptions(&gpos_options);
+        return try gpos_mod.selectedLookupIndicesForOptions(self.data, gpos.offset, gpos.length, allocator, gpos_options);
     }
 
     pub fn gdefLookupMetadataForShaping(self: *const Font, allocator: std.mem.Allocator) FontError!GdefLookupMetadata {

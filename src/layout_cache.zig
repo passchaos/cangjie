@@ -3,6 +3,9 @@ const std = @import("std");
 const Font = @import("font.zig").Font;
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
 const GlyphId = @import("glyph.zig").GlyphId;
+const gpos = @import("gpos.zig");
+const gsub = @import("gsub.zig");
+const unicode = @import("unicode.zig");
 
 pub const GlyphMetrics = struct {
     advance_width: u16,
@@ -107,6 +110,127 @@ pub const GposTableProofCache = struct {
         try self.entries.put(key, {});
     }
 };
+
+const LookupTableKind = enum {
+    gsub,
+    gpos,
+};
+
+const LookupSelectionKey = struct {
+    font_addr: usize,
+    table: LookupTableKind,
+    script_tag: unicode.OpenTypeScriptTag,
+    language_tag: unicode.OpenTypeLanguageTag,
+    feature_hash: u64,
+    vertical: bool,
+};
+
+pub const LookupSelectionCache = struct {
+    const Entry = struct {
+        key: LookupSelectionKey,
+        features: []unicode.FeatureOverride,
+        lookups: []u16,
+    };
+
+    allocator: std.mem.Allocator,
+    entries: std.ArrayList(Entry) = .empty,
+    hits: usize = 0,
+    misses: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) LookupSelectionCache {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *LookupSelectionCache) void {
+        self.clear();
+        self.entries.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *LookupSelectionCache) void {
+        for (self.entries.items) |entry| {
+            self.allocator.free(entry.features);
+            self.allocator.free(entry.lookups);
+        }
+        self.entries.clearRetainingCapacity();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    pub fn gsubLookups(self: *LookupSelectionCache, font: *const Font, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {
+        const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical);
+        if (self.lookup(key, options.features)) |lookups| return lookups;
+
+        self.misses += 1;
+        const lookups = try font.selectGsubLookupsForShaping(self.allocator, options, gdef_metadata);
+        errdefer self.allocator.free(lookups);
+        const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
+        errdefer self.allocator.free(features);
+        try self.entries.append(self.allocator, .{ .key = key, .features = features, .lookups = lookups });
+        return self.entries.items[self.entries.items.len - 1].lookups;
+    }
+
+    pub fn gposLookups(self: *LookupSelectionCache, font: *const Font, options: gpos.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {
+        const key = lookupSelectionKey(font, .gpos, options.script_tag, options.language_tag, options.features, false);
+        if (self.lookup(key, options.features)) |lookups| return lookups;
+
+        self.misses += 1;
+        const lookups = try font.selectGposLookupsForShaping(self.allocator, options, gdef_metadata);
+        errdefer self.allocator.free(lookups);
+        const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
+        errdefer self.allocator.free(features);
+        try self.entries.append(self.allocator, .{ .key = key, .features = features, .lookups = lookups });
+        return self.entries.items[self.entries.items.len - 1].lookups;
+    }
+
+    fn lookup(self: *LookupSelectionCache, key: LookupSelectionKey, features: []const unicode.FeatureOverride) ?[]const u16 {
+        for (self.entries.items) |entry| {
+            if (!lookupSelectionKeysEqual(entry.key, key)) continue;
+            if (!featureOverridesEqual(entry.features, features)) continue;
+            self.hits += 1;
+            return entry.lookups;
+        }
+        return null;
+    }
+};
+
+fn lookupSelectionKey(font: *const Font, table: LookupTableKind, script_tag: unicode.OpenTypeScriptTag, language_tag: unicode.OpenTypeLanguageTag, features: []const unicode.FeatureOverride, vertical: bool) LookupSelectionKey {
+    return .{
+        .font_addr = @intFromPtr(font),
+        .table = table,
+        .script_tag = script_tag,
+        .language_tag = language_tag,
+        .feature_hash = featureOverridesHash(features),
+        .vertical = vertical,
+    };
+}
+
+fn lookupSelectionKeysEqual(a: LookupSelectionKey, b: LookupSelectionKey) bool {
+    return a.font_addr == b.font_addr and
+        a.table == b.table and
+        a.script_tag == b.script_tag and
+        a.language_tag == b.language_tag and
+        a.feature_hash == b.feature_hash and
+        a.vertical == b.vertical;
+}
+
+fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    for (features) |feature| {
+        hasher.update(std.mem.asBytes(&feature.tag));
+        const enabled: u8 = @intFromBool(feature.enabled);
+        hasher.update(std.mem.asBytes(&enabled));
+    }
+    return hasher.final();
+}
+
+fn featureOverridesEqual(a: []const unicode.FeatureOverride, b: []const unicode.FeatureOverride) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |a_feature, b_feature| {
+        if (a_feature.tag != b_feature.tag or a_feature.enabled != b_feature.enabled) return false;
+    }
+    return true;
+}
 
 const GlyphMetricsKey = struct {
     font_addr: usize,

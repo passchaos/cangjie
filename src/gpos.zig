@@ -66,6 +66,10 @@ pub const LookupOptions = struct {
     /// Optional ligature component metadata parallel to the post-GSUB glyph
     /// stream. Entries are only meaningful for ligature glyph positions.
     ligature_components: ?[]const LigatureComponentInfo = null,
+    /// Preselected lookup indices for the active script/language/features.
+    /// This is a shaping fast path; callers that supply it must keep it in
+    /// sync with the other selection options.
+    selected_lookups: ?[]const u16 = null,
     assume_validated: bool = false,
     shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
     profile_io: ?std.Io = null,
@@ -117,9 +121,13 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     // but feature defaults differ: positioning lookups are generally active
     // unless an explicit feature override disables them.
     const select_start = shapeProfileNow(options.shape_profile, options.profile_io);
-    var selected_lookups = try selectedLookupIndices(table, allocator, options);
+    var selected_lookups_owned = if (options.selected_lookups == null)
+        try selectedLookupIndices(table, allocator, options)
+    else
+        std.ArrayList(u16).empty;
     if (options.shape_profile) |profile| profile.gpos_select_ns += shapeProfileElapsed(select_start, options.profile_io);
-    defer selected_lookups.deinit(allocator);
+    defer selected_lookups_owned.deinit(allocator);
+    const selected_lookups = options.selected_lookups orelse selected_lookups_owned.items;
     const script_list_offset = try readU16(table, 4);
     const feature_list_offset = try readU16(table, 6);
     const has_feature_topology = script_list_offset != 0 and
@@ -130,7 +138,7 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     // for this Script/LangSys. Executing the full lookup list would leak
     // optional or unrelated-script positioning into the run. Low-level callers
     // can opt into the historical all-lookup fallback.
-    if (selected_lookups.items.len == 0 and
+    if (selected_lookups.len == 0 and
         (options.features.len != 0 or (!options.apply_all_if_unselected and has_feature_topology))) return;
 
     const apply_start = shapeProfileNow(options.shape_profile, options.profile_io);
@@ -139,8 +147,8 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     }
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    if (selected_lookups.items.len != 0) {
-        for (selected_lookups.items) |lookup_index| {
+    if (selected_lookups.len != 0) {
+        for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
             try collectLookup(table, lookup_offset, glyphs, adjustments, allocator, options);
@@ -151,6 +159,15 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
             try collectLookup(table, lookup_offset, glyphs, adjustments, allocator, options);
         }
     }
+}
+
+pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)![]u16 {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGpos;
+    var lookups = try selectedLookupIndices(table, allocator, options);
+    return try lookups.toOwnedSlice(allocator);
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!std.ArrayList(u16) {

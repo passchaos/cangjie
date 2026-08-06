@@ -98,6 +98,7 @@ pub const GposTableProofCache = @import("layout.zig").GposTableProofCache;
 pub const GlyphIndexCache = @import("layout.zig").GlyphIndexCache;
 pub const GlyphMetrics = @import("layout.zig").GlyphMetrics;
 pub const GlyphMetricsCache = @import("layout.zig").GlyphMetricsCache;
+pub const LookupSelectionCache = @import("layout.zig").LookupSelectionCache;
 pub const MissingGlyphDiagnostic = @import("layout.zig").MissingGlyphDiagnostic;
 pub const DirtyRange = @import("buffer.zig").DirtyRange;
 pub const LayoutConfig = @import("buffer.zig").LayoutConfig;

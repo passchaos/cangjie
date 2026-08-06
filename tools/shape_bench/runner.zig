@@ -16,6 +16,8 @@ pub const BenchResult = struct {
     gdef_cache_misses: usize = 0,
     gpos_proof_cache_hits: usize = 0,
     gpos_proof_cache_misses: usize = 0,
+    lookup_selection_cache_hits: usize = 0,
+    lookup_selection_cache_misses: usize = 0,
     shaped_cache_hits: usize = 0,
     shaped_cache_misses: usize = 0,
 };
@@ -44,11 +46,14 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     defer gdef_cache.deinit();
     var gpos_proof_cache = cangjie.GposTableProofCache.init(allocator);
     defer gpos_proof_cache.deinit();
+    var lookup_selection_cache = cangjie.LookupSelectionCache.init(allocator);
+    defer lookup_selection_cache.deinit();
     var shaped_cache = cangjie.ShapedRunCache.init(allocator);
     defer shaped_cache.deinit();
     if (options.use_caches) {
         layout_buffer.gdef_metadata_cache = &gdef_cache;
         layout_buffer.gpos_table_proof_cache = &gpos_proof_cache;
+        layout_buffer.lookup_selection_cache = &lookup_selection_cache;
     }
 
     const cascade_fonts = [_]*const cangjie.Font{font};
@@ -97,6 +102,8 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .gdef_cache_misses = gdef_cache.misses,
         .gpos_proof_cache_hits = gpos_proof_cache.hits,
         .gpos_proof_cache_misses = gpos_proof_cache.misses,
+        .lookup_selection_cache_hits = lookup_selection_cache.hits,
+        .lookup_selection_cache_misses = lookup_selection_cache.misses,
         .shaped_cache_hits = shaped_cache.hits,
         .shaped_cache_misses = shaped_cache.misses,
     };

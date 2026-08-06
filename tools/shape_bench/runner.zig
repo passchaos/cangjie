@@ -44,12 +44,14 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     }
 
     var profile = cangjie.ShapeStageProfile{};
-    layout_buffer.shape_profile = &profile;
-    layout_buffer.profile_io = io;
-    defer {
+    if (options.profile) {
+        layout_buffer.shape_profile = &profile;
+        layout_buffer.profile_io = io;
+    }
+    defer if (options.profile) {
         layout_buffer.shape_profile = null;
         layout_buffer.profile_io = null;
-    }
+    };
 
     var checksum: u64 = 0;
     var glyph_count: usize = 0;

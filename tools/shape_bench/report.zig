@@ -13,6 +13,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\iterations={d}
         \\warmup={d}
         \\use_caches={any}
+        \\profile={any}
         \\elapsed_ns={d}
         \\glyphs={d}
         \\ns_per_iter={d:.3}
@@ -36,6 +37,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         options.iterations,
         options.warmup,
         options.use_caches,
+        options.profile,
         result.elapsed_ns,
         result.glyph_count,
         ns_per_iter,

@@ -85,9 +85,21 @@ pub const LookupOptions = struct {
 pub const LookupAccelerator = struct {
     coverage_digest: GlyphDigest = .{},
     coverage_groups: []const ChainingSubtableGroup = &.{},
+    single_pos_subtables: []const SinglePosSubtable = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
+};
+
+const SinglePosSubtable = struct {
+    subtable_offset: usize = 0,
+    pos_format: u16 = 0,
+    coverage_offset: usize = 0,
+    value_format: u16 = 0,
+    value_count: u16 = 0,
+    value_size: usize = 0,
+    values_pos: usize = 0,
+    value: Adjustment = .{ .index = 0 },
 };
 
 const max_run_digest_cache_entries = 16;
@@ -274,6 +286,7 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
     for (accelerators) |accelerator| {
         for (accelerator.coverage_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.coverage_groups);
+        allocator.free(accelerator.single_pos_subtables);
         for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.chaining_groups);
         allocator.free(accelerator.chaining_subtables);
@@ -285,6 +298,12 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     const subtable_count = try readU16(table, lookup_offset + 4);
     var digest = GlyphDigest.empty();
     var accelerator = LookupAccelerator{};
+    const single_pos_subtables = if (lookup_type == 1)
+        try allocator.alloc(SinglePosSubtable, subtable_count)
+    else
+        try allocator.alloc(SinglePosSubtable, 0);
+    errdefer allocator.free(single_pos_subtables);
+    @memset(single_pos_subtables, .{});
     var coverage_pairs = std.ArrayList(ChainingSubtablePair).empty;
     errdefer coverage_pairs.deinit(allocator);
     var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
@@ -300,6 +319,9 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         if (try lookupSubtableCoverageOffset(table, subtable_offset, lookup_type)) |coverage_offset| {
             digest.unionWith(try coverageDigest(table, coverage_offset));
             try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &coverage_pairs, allocator);
+            if (single_pos_subtables.len != 0) {
+                single_pos_subtables[subtable_i] = try parseSinglePositionSubtable(table, subtable_offset);
+            }
             if (chaining_subtables.len != 0) {
                 const parsed = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse continue;
                 chaining_subtables[subtable_i] = parsed;
@@ -312,6 +334,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         }
     }
     accelerator.coverage_digest = digest;
+    accelerator.single_pos_subtables = single_pos_subtables;
     if (coverage_pairs.items.len != 0) {
         accelerator.coverage_groups = try buildChainingSubtableGroups(coverage_pairs.items, allocator);
     }
@@ -857,6 +880,34 @@ fn collectSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_co
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
         try collectSingleAdjustmentSubtable(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options, matched);
     }
+}
+
+fn parseSinglePositionSubtable(table: Table, subtable_offset: usize) GposError!SinglePosSubtable {
+    const pos_format = try readU16(table, subtable_offset);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    const value_format = try readU16(table, subtable_offset + 4);
+    const value_size = try valueRecordSize(value_format);
+    return switch (pos_format) {
+        1 => .{
+            .subtable_offset = subtable_offset,
+            .pos_format = pos_format,
+            .coverage_offset = coverage_offset,
+            .value_format = value_format,
+            .value_size = value_size,
+            .values_pos = subtable_offset + 6,
+            .value = try readValueRecord(table, subtable_offset + 6, value_format, subtable_offset),
+        },
+        2 => .{
+            .subtable_offset = subtable_offset,
+            .pos_format = pos_format,
+            .coverage_offset = coverage_offset,
+            .value_format = value_format,
+            .value_count = try readU16(table, subtable_offset + 6),
+            .value_size = value_size,
+            .values_pos = subtable_offset + 8,
+        },
+        else => error.UnsupportedGpos,
+    };
 }
 
 fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, matched: []bool) (GposError || std.mem.Allocator.Error)!void {
@@ -2907,6 +2958,14 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
         try validateMarkFilteringSetIndex(lookup_options);
     }
+    if (lookup_type == 1) {
+        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            if (accelerator.single_pos_subtables.len != 0) {
+                if (try collectSingleAdjustmentAtAccelerated(table, accelerator.single_pos_subtables, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options)) return;
+                return;
+            }
+        }
+    }
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         switch (lookup_type) {
@@ -2977,6 +3036,28 @@ fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphI
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+fn collectSingleAdjustmentAtAccelerated(table: Table, subtables: []const SinglePosSubtable, glyph: GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+    for (subtables) |subtable| {
+        switch (subtable.pos_format) {
+            1 => {
+                if (try coverageIndex(table, subtable.coverage_offset, glyph) == null) continue;
+                try appendAdjustment(adjustments, allocator, target_index, subtable.value, false);
+                return true;
+            },
+            2 => {
+                const coverage = try coverageIndex(table, subtable.coverage_offset, glyph) orelse continue;
+                if (coverage >= subtable.value_count) continue;
+                const value = try readValueRecord(table, subtable.values_pos + coverage * subtable.value_size, subtable.value_format, subtable.subtable_offset);
+                try appendAdjustment(adjustments, allocator, target_index, value, false);
+                return true;
+            },
+            else => return error.UnsupportedGpos,
+        }
+    }
+    return false;
 }
 
 fn collectMarkToLigatureAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {

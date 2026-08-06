@@ -508,6 +508,7 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
         }
     }
     if (lookup_type == 6 and try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
+        if (!try chainingCoverageLookupMayMatch(table, lookup_offset, subtable_count, glyphs.items, lookup_flag, lookup_options)) return;
         try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
         return;
     }
@@ -1255,6 +1256,30 @@ fn chainingLookupUsesCoverageOnly(table: Table, lookup_offset: usize, subtable_c
         if (try readU16(table, subtable_offset) != 3) return false;
     }
     return true;
+}
+
+fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!bool {
+    if (glyphs.len == 0) return false;
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const coverage_offset = try firstChainingInputCoverageOffset(table, subtable_offset) orelse continue;
+        for (glyphs, 0..) |glyph, glyph_index| {
+            if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
+            if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+            if (try coverageIndex(table, coverage_offset, glyph) != null) return true;
+        }
+    }
+    return false;
+}
+
+fn firstChainingInputCoverageOffset(table: Table, subtable_offset: usize) GsubError!?usize {
+    var cursor = subtable_offset + 2;
+    const backtrack_count = try readU16(table, cursor);
+    cursor += 2 + backtrack_count * 2;
+    const input_count = try readU16(table, cursor);
+    cursor += 2;
+    if (input_count == 0) return null;
+    return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, cursor));
 }
 
 fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {

@@ -5,6 +5,7 @@ const GlyphClass = @import("font.zig").GlyphClass;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
 const gsub = @import("gsub.zig");
+const indic = @import("indic.zig");
 const layout_cache = @import("layout_cache.zig");
 const layout_scratch = @import("layout_scratch.zig");
 const unicode = @import("unicode.zig");
@@ -2656,6 +2657,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
             } else {
                 try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+            }
+        }
+        if (indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0) {
+            indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
+            const applications = indic.featureApplications();
+            if (gsub_after_proof and buffer.lookup_selection_cache != null) {
+                const plan = try buffer.lookup_selection_cache.?.gsubFeatureLookupPlan(font, applications, gsub_options, gdef_metadata.*);
+                try font.applyGsubFeatureLookupPlanUsingGdefAfterProof(plan, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+            } else if (gsub_after_proof) {
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+            } else {
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
             }
         }
     }

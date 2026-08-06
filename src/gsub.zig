@@ -1766,8 +1766,8 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
         if (accelerator) |accel| {
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
-            const second_glyph = nextUnignoredGlyph(glyphs.items, pos + 1, lookup_flag, options);
             const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, current_glyph) orelse continue;
+            const second_glyph = nextUnignoredGlyph(glyphs.items, pos + 1, lookup_flag, options);
             for (grouped_subtables) |subtable_i| {
                 const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + @as(usize, subtable_i) * 2);
                 const parsed_subtable = if (subtable_i < accel.chaining_subtables.len and accel.chaining_subtables[subtable_i].input_count != 0)

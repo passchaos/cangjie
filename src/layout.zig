@@ -2561,7 +2561,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             applications_buf[application_count] = application;
             application_count += 1;
         }
-        try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+        if (shape_profile) |profile| {
+            for (applications_buf[0..application_count], 0..) |application, stage_index| {
+                const stage_start = shapeProfileNow(shape_profile, profile_io);
+                const lookup_count_before = profile.gsub_lookup_count;
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                if (stage_index < profile.arabic_stage_ns.len) {
+                    profile.arabic_stage_ns[stage_index] += shapeProfileElapsed(stage_start, profile_io);
+                    profile.arabic_stage_lookup_count[stage_index] += profile.gsub_lookup_count - lookup_count_before;
+                    profile.arabic_stage_count = @max(profile.arabic_stage_count, stage_index + 1);
+                }
+            }
+        } else {
+            try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+        }
     } else {
         if (buffer.lookup_selection_cache) |selection_cache| {
             gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);

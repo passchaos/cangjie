@@ -120,6 +120,16 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.profile.gpos_context_lookup_count,
         result.profile.gpos_extension_lookup_count,
     });
+    for (0..result.profile.arabic_stage_count) |stage_index| {
+        std.debug.print(
+            \\profile_arabic_stage index={d} ns={d} lookups={d}
+            \\
+        , .{
+            stage_index,
+            result.profile.arabic_stage_ns[stage_index],
+            result.profile.arabic_stage_lookup_count[stage_index],
+        });
+    }
     for (result.line_summaries) |summary| {
         std.debug.print(
             \\line_summary index={d} text_bytes={d} glyphs={d} checksum={x}

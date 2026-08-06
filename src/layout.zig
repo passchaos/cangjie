@@ -2688,7 +2688,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             }
         }
         const adjustment = findAdjustmentSorted(gpos_adjustments.items, index, &adjustment_cursor);
-        var adjustment_x_advance = @as(f32, @floatFromInt(adjustment.x_advance));
+        var adjustment_x_advance = if (adjustment.x_advance_absolute)
+            @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
+        else
+            @as(f32, @floatFromInt(adjustment.x_advance));
         var x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
         if (adjustment.mark_attachment) {
             const advance_to_base = if (adjustment.mark_base_index) |base_index|

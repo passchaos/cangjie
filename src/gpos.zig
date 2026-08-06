@@ -32,6 +32,8 @@ pub const Adjustment = struct {
     pair_positioned: bool = false,
     mark_attachment: bool = false,
     mark_base_index: ?usize = null,
+    x_advance_absolute: bool = false,
+    y_advance_absolute: bool = false,
 };
 
 const Table = struct {
@@ -1247,6 +1249,8 @@ const AdjustmentFlags = struct {
     pair_positioned: bool = false,
     mark_attachment: bool = false,
     mark_base_index: ?usize = null,
+    x_advance_absolute: bool = false,
+    y_advance_absolute: bool = false,
 };
 
 fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment, flags: AdjustmentFlags) std.mem.Allocator.Error!void {
@@ -1269,6 +1273,8 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         existing.y_advance += value.y_advance;
         existing.pair_positioned = existing.pair_positioned or flags.pair_positioned;
         existing.mark_attachment = existing.mark_attachment or flags.mark_attachment;
+        existing.x_advance_absolute = existing.x_advance_absolute or flags.x_advance_absolute;
+        existing.y_advance_absolute = existing.y_advance_absolute or flags.y_advance_absolute;
         if (flags.mark_base_index) |base_index| existing.mark_base_index = base_index;
         return;
     }
@@ -1281,6 +1287,8 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         .pair_positioned = flags.pair_positioned,
         .mark_attachment = flags.mark_attachment,
         .mark_base_index = flags.mark_base_index,
+        .x_advance_absolute = flags.x_advance_absolute,
+        .y_advance_absolute = flags.y_advance_absolute,
     });
 }
 
@@ -1323,21 +1331,15 @@ fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable,
             continue;
         }
 
-        if (previous_covered_position) |_| {
+        if (previous_covered_position) |previous_position| {
             const current_record = parsed.subtable_offset + 6 + current_index * 4;
             const previous_record = parsed.subtable_offset + 6 + previous_coverage_index * 4;
             const entry_relative = try readU16(table, current_record);
             const exit_relative = try readU16(table, previous_record + 2);
             if (entry_relative != 0 and exit_relative != 0) {
-                // Position the current glyph so its entry anchor lands on the
-                // previous non-ignored covered glyph's exit anchor.
                 const entry = try readAnchor(table, parsed.subtable_offset + entry_relative);
                 const exit = try readAnchor(table, parsed.subtable_offset + exit_relative);
-                try appendAdjustment(adjustments, allocator, i, .{
-                    .index = i,
-                    .x_placement = exit.x - entry.x,
-                    .y_placement = exit.y - entry.y,
-                }, false);
+                try appendCursiveAdjustments(adjustments, allocator, previous_position, i, exit, entry, lookup_flag);
             }
         }
         previous_covered_position = i;
@@ -1371,12 +1373,35 @@ fn collectCursiveAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []co
 
     const entry = try readAnchor(table, subtable_offset + entry_relative);
     const exit = try readAnchor(table, subtable_offset + exit_relative);
-    try appendAdjustment(adjustments, allocator, target_index, .{
-        .index = target_index,
-        .x_placement = exit.x - entry.x,
-        .y_placement = exit.y - entry.y,
-    }, false);
+    try appendCursiveAdjustments(adjustments, allocator, previous_position, target_index, exit, entry, lookup_flag);
     return true;
+}
+
+fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, previous_position: usize, current_position: usize, exit: Anchor, entry: Anchor, lookup_flag: u16) std.mem.Allocator.Error!void {
+    const right_to_left = (lookup_flag & 0x0001) != 0;
+    if (right_to_left) {
+        try appendAdjustment(adjustments, allocator, previous_position, .{
+            .index = previous_position,
+            .x_advance = -exit.x,
+            .x_placement = -exit.x,
+            .y_placement = entry.y - exit.y,
+        }, false);
+        try appendAdjustmentEx(adjustments, allocator, current_position, .{
+            .index = current_position,
+            .x_advance = entry.x,
+        }, .{ .x_advance_absolute = true });
+    } else {
+        try appendAdjustmentEx(adjustments, allocator, previous_position, .{
+            .index = previous_position,
+            .x_advance = exit.x,
+        }, .{ .x_advance_absolute = true });
+        try appendAdjustment(adjustments, allocator, current_position, .{
+            .index = current_position,
+            .x_advance = -entry.x,
+            .x_placement = -entry.x,
+            .y_placement = exit.y - entry.y,
+        }, false);
+    }
 }
 
 fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, target_index: usize, entry_exit_count: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {
@@ -4903,10 +4928,14 @@ test "GPOS cursive attachment skips lookup-flag ignored glyphs" {
         .glyph_classes = &mutable_classes,
     });
 
-    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
-    try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
-    try std.testing.expectEqual(@as(i16, 80), adjustments.items[0].x_placement);
-    try std.testing.expectEqual(@as(i16, 25), adjustments.items[0].y_placement);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 100), adjustments.items[0].x_advance);
+    try std.testing.expect(adjustments.items[0].x_advance_absolute);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items[1].index);
+    try std.testing.expectEqual(@as(i16, -20), adjustments.items[1].x_advance);
+    try std.testing.expectEqual(@as(i16, -20), adjustments.items[1].x_placement);
+    try std.testing.expectEqual(@as(i16, 25), adjustments.items[1].y_placement);
 }
 
 test "GPOS mark-to-base stops at intervening non-covered base" {
@@ -5795,10 +5824,14 @@ test "GPOS context nested lookup can apply cursive positioning" {
 
     try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, &adjustments, allocator, .{});
 
-    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
-    try std.testing.expectEqual(@as(usize, 3), adjustments.items[0].index);
-    try std.testing.expectEqual(@as(i16, 150), adjustments.items[0].x_placement);
-    try std.testing.expectEqual(@as(i16, 60), adjustments.items[0].y_placement);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 200), adjustments.items[0].x_advance);
+    try std.testing.expect(adjustments.items[0].x_advance_absolute);
+    try std.testing.expectEqual(@as(usize, 3), adjustments.items[1].index);
+    try std.testing.expectEqual(@as(i16, -50), adjustments.items[1].x_advance);
+    try std.testing.expectEqual(@as(i16, -50), adjustments.items[1].x_placement);
+    try std.testing.expectEqual(@as(i16, 60), adjustments.items[1].y_placement);
 }
 
 test "GPOS single positioning subtables do not cascade within lookup" {

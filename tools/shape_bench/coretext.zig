@@ -104,6 +104,10 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
                         .checksum = line_checksum,
                         .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
                         .clusters = &.{},
+                        .x_advances = &.{},
+                        .y_advances = &.{},
+                        .x_offsets = &.{},
+                        .y_offsets = &.{},
                     });
                 }
             }

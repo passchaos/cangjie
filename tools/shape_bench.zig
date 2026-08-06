@@ -105,6 +105,7 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     if (mismatch) |m| {
         defer allocator.free(m.cangjie_glyph_ids);
         defer allocator.free(m.cangjie_clusters);
+        defer allocator.free(m.cangjie_position_values);
         const mismatch_text = if (m.line_index < base_options.text_lines.len) base_options.text_lines[m.line_index] else "";
         std.debug.print(
             \\parity=fail
@@ -136,6 +137,12 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
             std.debug.print("\nharfrust_clusters=", .{});
             printClusters(m.harfrust.clusters);
         }
+        if (m.kind.isPosition()) {
+            std.debug.print("\ncangjie_{s}=", .{m.kind.label()});
+            printI32Values(m.cangjie_position_values);
+            std.debug.print("\nharfrust_{s}=", .{m.kind.label()});
+            printI32Values(positionValues(m.harfrust, m.kind));
+        }
         std.debug.print("\n", .{});
         return error.HarfRustParityMismatch;
     }
@@ -149,13 +156,28 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
 const MismatchKind = enum {
     glyph_id,
     cluster,
+    x_advance,
+    y_advance,
+    x_offset,
+    y_offset,
     line_count,
 
     fn label(self: MismatchKind) []const u8 {
         return switch (self) {
             .glyph_id => "glyph_id",
             .cluster => "cluster",
+            .x_advance => "x_advance",
+            .y_advance => "y_advance",
+            .x_offset => "x_offset",
+            .y_offset => "y_offset",
             .line_count => "line_count",
+        };
+    }
+
+    fn isPosition(self: MismatchKind) bool {
+        return switch (self) {
+            .x_advance, .y_advance, .x_offset, .y_offset => true,
+            else => false,
         };
     }
 };
@@ -167,6 +189,7 @@ const LineMismatch = struct {
     harfrust: runner.BenchResult.LineSummary,
     cangjie_glyph_ids: []const u16,
     cangjie_clusters: []const u32,
+    cangjie_position_values: []const i32,
 };
 
 fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: cangjie.TextDirection) !?LineMismatch {
@@ -182,6 +205,7 @@ fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner
                 .harfrust = harfrust_lines[line_index],
                 .cangjie_glyph_ids = cangjie_ids,
                 .cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, direction),
+                .cangjie_position_values = try allocator.alloc(i32, 0),
             };
         }
         const cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, direction);
@@ -194,7 +218,24 @@ fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner
                 .harfrust = harfrust_lines[line_index],
                 .cangjie_glyph_ids = cangjie_ids,
                 .cangjie_clusters = cangjie_clusters,
+                .cangjie_position_values = try allocator.alloc(i32, 0),
             };
+        }
+        inline for (.{ MismatchKind.x_advance, MismatchKind.y_advance }) |kind| {
+            const cangjie_values = try comparableSlice(i32, allocator, positionValues(cangjie_lines[line_index], kind), direction);
+            errdefer allocator.free(cangjie_values);
+            if (!std.mem.eql(i32, cangjie_values, positionValues(harfrust_lines[line_index], kind))) {
+                return .{
+                    .kind = kind,
+                    .line_index = line_index,
+                    .cangjie = cangjie_lines[line_index],
+                    .harfrust = harfrust_lines[line_index],
+                    .cangjie_glyph_ids = cangjie_ids,
+                    .cangjie_clusters = cangjie_clusters,
+                    .cangjie_position_values = cangjie_values,
+                };
+            }
+            allocator.free(cangjie_values);
         }
         allocator.free(cangjie_ids);
         allocator.free(cangjie_clusters);
@@ -217,9 +258,20 @@ fn firstLineMismatch(allocator: std.mem.Allocator, cangjie_lines: []const runner
             .harfrust = if (line_index < harfrust_lines.len) harfrust_lines[line_index] else emptyLineSummary(line_index),
             .cangjie_glyph_ids = cangjie_ids,
             .cangjie_clusters = cangjie_clusters,
+            .cangjie_position_values = try allocator.alloc(i32, 0),
         };
     }
     return null;
+}
+
+fn positionValues(summary: runner.BenchResult.LineSummary, kind: MismatchKind) []const i32 {
+    return switch (kind) {
+        .x_advance => summary.x_advances,
+        .y_advance => summary.y_advances,
+        .x_offset => summary.x_offsets,
+        .y_offset => summary.y_offsets,
+        else => &.{},
+    };
 }
 
 fn emptyLineSummary(line_index: usize) runner.BenchResult.LineSummary {
@@ -253,6 +305,13 @@ fn printClusters(clusters: []const u32) void {
     }
 }
 
+fn printI32Values(values: []const i32) void {
+    for (values, 0..) |value, index| {
+        if (index != 0) std.debug.print(",", .{});
+        std.debug.print("{d}", .{value});
+    }
+}
+
 fn freeResult(allocator: std.mem.Allocator, result: runner.BenchResult) void {
     freeLineSummaries(allocator, result.line_summaries);
     allocator.free(result.line_summaries);
@@ -263,6 +322,10 @@ fn freeLineSummaries(allocator: std.mem.Allocator, summaries: []const runner.Ben
     for (summaries) |summary| {
         allocator.free(summary.glyph_ids);
         allocator.free(summary.clusters);
+        allocator.free(summary.x_advances);
+        allocator.free(summary.y_advances);
+        allocator.free(summary.x_offsets);
+        allocator.free(summary.y_offsets);
     }
 }
 

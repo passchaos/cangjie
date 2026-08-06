@@ -4865,7 +4865,9 @@ test "applies GPOS cursive positioning during shaping" {
     const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 20);
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.6), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.6), run.glyphs[0].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), run.glyphs[1].y_offset, 0.001);
 }
 

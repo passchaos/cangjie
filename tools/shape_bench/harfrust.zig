@@ -58,6 +58,10 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Option
                         .checksum = line.checksum,
                         .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, line.glyphs) else &.{},
                         .clusters = if (options.glyph_summary) try glyphClusters(allocator, line.glyphs) else &.{},
+                        .x_advances = if (options.glyph_summary) try glyphXAdvances(allocator, line.glyphs) else &.{},
+                        .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, line.glyphs) else &.{},
+                        .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, line.glyphs) else &.{},
+                        .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, line.glyphs) else &.{},
                     });
                 }
             }
@@ -237,6 +241,30 @@ fn glyphClusters(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![
     const clusters = try allocator.alloc(u32, glyphs.len);
     for (glyphs, clusters) |glyph, *cluster| cluster.* = glyph.cluster;
     return clusters;
+}
+
+fn glyphXAdvances(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = glyph.x_advance;
+    return values;
+}
+
+fn glyphYAdvances(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = glyph.y_advance;
+    return values;
+}
+
+fn glyphXOffsets(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = glyph.x_offset;
+    return values;
+}
+
+fn glyphYOffsets(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = glyph.y_offset;
+    return values;
 }
 
 fn glyphsChecksum(glyphs: []const HarfRustGlyph) u64 {

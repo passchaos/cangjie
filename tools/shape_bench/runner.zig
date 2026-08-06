@@ -11,6 +11,10 @@ pub const BenchResult = struct {
         checksum: u64,
         glyph_ids: []const u16 = &.{},
         clusters: []const u32 = &.{},
+        x_advances: []const i32 = &.{},
+        y_advances: []const i32 = &.{},
+        x_offsets: []const i32 = &.{},
+        y_offsets: []const i32 = &.{},
     };
     pub const Sample = struct {
         index: usize,
@@ -133,6 +137,10 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                         .checksum = line_checksum,
                         .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
                         .clusters = if (options.glyph_summary) try glyphClusters(allocator, glyphs) else &.{},
+                        .x_advances = if (options.glyph_summary) try glyphXAdvances(allocator, font, options.size, glyphs) else &.{},
+                        .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, font, options.size, glyphs) else &.{},
+                        .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, glyphs) else &.{},
+                        .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, font, options.size, glyphs) else &.{},
                     });
                 }
             }
@@ -184,6 +192,35 @@ fn glyphClusters(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosi
     const clusters = try allocator.alloc(u32, glyphs.len);
     for (glyphs, clusters) |glyph, *cluster| cluster.* = @intCast(glyph.cluster);
     return clusters;
+}
+
+fn glyphXAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.x_advance);
+    return values;
+}
+
+fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.y_advance);
+    return values;
+}
+
+fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.x_offset);
+    return values;
+}
+
+fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.y_offset);
+    return values;
+}
+
+fn fontUnitPosition(font: *const cangjie.Font, font_size: f32, value: f32) i32 {
+    const font_units = value * @as(f32, @floatFromInt(font.units_per_em)) / font_size;
+    return @intFromFloat(@round(font_units));
 }
 
 fn shapeOnce(

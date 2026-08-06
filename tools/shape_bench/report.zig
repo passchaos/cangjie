@@ -218,7 +218,20 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
                 std.debug.print("{d}", .{cluster});
             }
         }
+        printI32Array(" x_advances", summary.x_advances);
+        printI32Array(" y_advances", summary.y_advances);
+        printI32Array(" x_offsets", summary.x_offsets);
+        printI32Array(" y_offsets", summary.y_offsets);
         std.debug.print("\n", .{});
+    }
+}
+
+fn printI32Array(label: []const u8, values: []const i32) void {
+    if (values.len == 0) return;
+    std.debug.print("{s}=", .{label});
+    for (values, 0..) |value, index| {
+        if (index != 0) std.debug.print(",", .{});
+        std.debug.print("{d}", .{value});
     }
 }
 

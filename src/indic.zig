@@ -20,13 +20,15 @@ pub fn reorderPreBaseMatras(
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     codepoints: []const u21,
 ) void {
-    var index: usize = 1;
+    var index: usize = 0;
     while (index < glyph_source_indices.items.len) : (index += 1) {
         const source_index = glyph_source_indices.items[index];
         if (source_index >= codepoints.len) continue;
         if (!isPreBaseMatra(codepoints[source_index])) continue;
 
-        swapGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index - 1, index);
+        const syllable_start = devanagariSyllableStart(codepoints, source_index);
+        const target = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, syllable_start, source_index, index);
+        moveGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index, target);
     }
 }
 
@@ -146,11 +148,36 @@ fn devanagariSyllableEnd(codepoints: []const u21, start: usize) usize {
     return index;
 }
 
+fn devanagariSyllableStart(codepoints: []const u21, source_index: usize) usize {
+    var index: usize = 0;
+    var syllable_start: usize = 0;
+    while (index <= source_index and index < codepoints.len) {
+        if (!isDevanagariSyllableCodepoint(codepoints[index])) {
+            index += 1;
+            syllable_start = index;
+            continue;
+        }
+        syllable_start = index;
+        const syllable_end = devanagariSyllableEnd(codepoints, index);
+        if (source_index < syllable_end) return syllable_start;
+        index = syllable_end;
+    }
+    return source_index;
+}
+
 fn isFormedReph(info: gpos.LigatureComponentInfo, source_index: usize, codepoints: []const u21) bool {
     if (source_index + 1 >= codepoints.len) return false;
     if (codepoints[source_index] != 0x0930 or codepoints[source_index + 1] != 0x094d) return false;
     if (info.component_count < 2) return false;
     return info.component_sources[0] == source_index and info.component_sources[1] == source_index + 1;
+}
+
+fn preBaseMatraTargetGlyphIndex(sources: []const usize, syllable_start: usize, matra_source: usize, fallback_index: usize) usize {
+    for (sources, 0..) |source, glyph_index| {
+        if (glyph_index >= fallback_index) break;
+        if (source >= syllable_start and source < matra_source) return glyph_index;
+    }
+    return fallback_index;
 }
 
 fn rephTargetGlyphIndex(sources: []const usize, syllable_start: usize, syllable_end: usize, reph_index: usize) usize {

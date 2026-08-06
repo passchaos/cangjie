@@ -282,7 +282,7 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
     // Positioning results are appended incrementally, but OpenType lookups are
     // atomic units. Preflight supported direct subtables before collecting any
     // adjustment so malformed later subtables cannot leave partial positioning.
-    try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
+    if (!table.assume_validated) try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
     var lookup_options = options;
     if ((lookup_flag & 0x0010) != 0) {
         // UseMarkFilteringSet stores its set index after the variable-length
@@ -304,7 +304,7 @@ fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, ad
         // all-or-nothing unit. Preflight wrapped variable-length arrays before
         // collecting any adjustments so a later malformed wrapper cannot leave
         // earlier wrapper results visible to the caller.
-        try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
+        if (!table.assume_validated) try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
         if (try extensionPositionLookupType(table, lookup_offset, subtable_count)) |wrapped_type| {
             switch (wrapped_type) {
                 1 => {

@@ -51,6 +51,7 @@ pub const Options = struct {
     direction: cangjie.TextDirection = .ltr,
     script_position: cangjie.ScriptPosition = .normal,
     use_caches: bool = true,
+    use_shaped_cache: bool = false,
     profile: bool = false,
 
     pub fn fontLabel(self: Options) []const u8 {
@@ -104,6 +105,9 @@ pub fn parse(args: []const []const u8) !Options {
             options.script_position = parseScriptPosition(args[i]) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--no-caches")) {
             options.use_caches = false;
+            options.use_shaped_cache = false;
+        } else if (std.mem.eql(u8, arg, "--shaped-cache")) {
+            options.use_shaped_cache = true;
         } else if (std.mem.eql(u8, arg, "--profile")) {
             options.profile = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -154,6 +158,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --direction ltr|rtl          shaping direction, default ltr
         \\  --script-position normal|superscript|subscript
         \\  --no-caches                  bypass glyph metric and cmap caches
+        \\  --shaped-cache               cache complete shaped runs
         \\  --profile                    collect Cangjie stage timings
         \\
         \\examples:

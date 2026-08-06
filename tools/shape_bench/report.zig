@@ -13,6 +13,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\iterations={d}
         \\warmup={d}
         \\use_caches={any}
+        \\use_shaped_cache={any}
         \\profile={any}
         \\elapsed_ns={d}
         \\glyphs={d}
@@ -27,6 +28,8 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\gdef_cache_misses={d}
         \\gpos_proof_cache_hits={d}
         \\gpos_proof_cache_misses={d}
+        \\shaped_cache_hits={d}
+        \\shaped_cache_misses={d}
     , .{
         options.engine.label(),
         options.fontLabel(),
@@ -34,6 +37,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         options.iterations,
         options.warmup,
         options.use_caches,
+        options.use_shaped_cache,
         options.profile,
         result.elapsed_ns,
         result.glyph_count,
@@ -48,6 +52,8 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.gdef_cache_misses,
         result.gpos_proof_cache_hits,
         result.gpos_proof_cache_misses,
+        result.shaped_cache_hits,
+        result.shaped_cache_misses,
     });
     std.debug.print(
         \\

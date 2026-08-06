@@ -84,6 +84,7 @@ pub const LookupOptions = struct {
 
 pub const LookupAccelerator = struct {
     coverage_digest: GlyphDigest = .{},
+    coverage_groups: []const ChainingSubtableGroup = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
@@ -271,6 +272,8 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
 
 fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
     for (accelerators) |accelerator| {
+        for (accelerator.coverage_groups) |group| allocator.free(group.subtable_indices);
+        allocator.free(accelerator.coverage_groups);
         for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.chaining_groups);
         allocator.free(accelerator.chaining_subtables);
@@ -282,6 +285,8 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     const subtable_count = try readU16(table, lookup_offset + 4);
     var digest = GlyphDigest.empty();
     var accelerator = LookupAccelerator{};
+    var coverage_pairs = std.ArrayList(ChainingSubtablePair).empty;
+    errdefer coverage_pairs.deinit(allocator);
     var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
     errdefer group_pairs.deinit(allocator);
     const chaining_subtables = if (lookup_type == 8 and try chainingPositionLookupUsesCoverageOnly(table, lookup_offset, subtable_count))
@@ -294,6 +299,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
         if (try lookupSubtableCoverageOffset(table, subtable_offset, lookup_type)) |coverage_offset| {
             digest.unionWith(try coverageDigest(table, coverage_offset));
+            try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &coverage_pairs, allocator);
             if (chaining_subtables.len != 0) {
                 const parsed = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse continue;
                 chaining_subtables[subtable_i] = parsed;
@@ -306,6 +312,14 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         }
     }
     accelerator.coverage_digest = digest;
+    if (coverage_pairs.items.len != 0) {
+        accelerator.coverage_groups = try buildChainingSubtableGroups(coverage_pairs.items, allocator);
+    }
+    coverage_pairs.deinit(allocator);
+    errdefer {
+        for (accelerator.coverage_groups) |group| allocator.free(group.subtable_indices);
+        allocator.free(accelerator.coverage_groups);
+    }
     if (chaining_subtables.len != 0 and group_pairs.items.len != 0) {
         accelerator.chaining_coverage_only = true;
         accelerator.chaining_subtables = chaining_subtables;
@@ -581,6 +595,7 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         else
             glyphRunDigest(glyphs, lookup_flag, lookup_options);
         if (run_digest.isEmpty() or !accelerator.coverage_digest.mayIntersect(run_digest)) return;
+        if (accelerator.coverage_groups.len != 0 and !lookupCoverageGroupsMayMatchRun(accelerator.coverage_groups, glyphs, lookup_flag, lookup_options)) return;
     }
     if (lookup_type == 1) {
         try collectSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
@@ -644,6 +659,14 @@ fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupA
     const accelerator = &accelerators[index];
     if (accelerator.coverage_digest.isEmpty()) return null;
     return accelerator;
+}
+
+fn lookupCoverageGroupsMayMatchRun(groups: []const ChainingSubtableGroup, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) bool {
+    for (glyphs) |glyph| {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+        if (chainingSubtableGroupForGlyph(groups, glyph) != null) return true;
+    }
+    return false;
 }
 
 fn glyphRunDigest(glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {

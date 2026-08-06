@@ -79,19 +79,24 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
 
     var checksum: u64 = 0;
     var glyph_count: usize = 0;
-    const start = std.Io.Clock.now(.awake, io).nanoseconds;
-    var i: usize = 0;
-    while (i < options.iterations) : (i += 1) {
-        for (text_lines, 0..) |text, line_index| {
-            {
+    var samples = std.ArrayList(runner.BenchResult.Sample).empty;
+    errdefer samples.deinit(allocator);
+    var sample_index: usize = 0;
+    while (sample_index < options.samples) : (sample_index += 1) {
+        var sample_checksum: u64 = 0;
+        var sample_glyph_count: usize = 0;
+        const sample_start = std.Io.Clock.now(.awake, io).nanoseconds;
+        var i: usize = 0;
+        while (i < options.iterations) : (i += 1) {
+            for (text_lines, 0..) |text, line_index| {
                 const line = try createLine(text, font);
                 defer CFRelease(line);
                 const glyphs = try readLineGlyphs(allocator, line);
                 defer allocator.free(glyphs);
-                glyph_count += glyphs.len;
+                sample_glyph_count += glyphs.len;
                 const line_checksum = glyphsChecksum(glyphs);
-                checksum = updateChecksumWithLine(checksum, line_checksum);
-                if (options.line_summary and i == 0) {
+                sample_checksum = updateChecksumWithLine(sample_checksum, line_checksum);
+                if (options.line_summary and sample_index == 0 and i == 0) {
                     try line_summaries.append(allocator, .{
                         .index = line_index,
                         .text_bytes = text.len,
@@ -102,8 +107,18 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
                 }
             }
         }
+        const sample_elapsed = std.Io.Clock.now(.awake, io).nanoseconds - sample_start;
+        try samples.append(allocator, .{
+            .index = sample_index,
+            .elapsed_ns = sample_elapsed,
+            .glyph_count = sample_glyph_count,
+            .checksum = sample_checksum,
+        });
+        glyph_count += sample_glyph_count;
+        checksum = updateChecksumWithLine(checksum, sample_checksum);
     }
-    const elapsed = std.Io.Clock.now(.awake, io).nanoseconds - start;
+    var elapsed: i128 = 0;
+    for (samples.items) |sample| elapsed += sample.elapsed_ns;
 
     return .{
         .elapsed_ns = elapsed,
@@ -111,6 +126,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
         .checksum = checksum,
         .profile = cangjie.ShapeStageProfile{},
         .line_summaries = try line_summaries.toOwnedSlice(allocator),
+        .samples = try samples.toOwnedSlice(allocator),
     };
 }
 

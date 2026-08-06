@@ -11,12 +11,19 @@ pub const BenchResult = struct {
         checksum: u64,
         glyph_ids: []const u16 = &.{},
     };
+    pub const Sample = struct {
+        index: usize,
+        elapsed_ns: i128,
+        glyph_count: usize,
+        checksum: u64,
+    };
 
     elapsed_ns: i128,
     glyph_count: usize,
     checksum: u64,
     profile: cangjie.ShapeStageProfile,
     line_summaries: []LineSummary = &.{},
+    samples: []Sample = &.{},
     glyph_index_cache_hits: usize = 0,
     glyph_index_cache_misses: usize = 0,
     glyph_metrics_cache_hits: usize = 0,
@@ -102,26 +109,43 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
 
     var checksum: u64 = 0;
     var glyph_count: usize = 0;
-    const start = std.Io.Clock.now(.awake, io).nanoseconds;
-    var i: usize = 0;
-    while (i < options.iterations) : (i += 1) {
-        for (text_lines, 0..) |line, line_index| {
-            const glyphs = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, line, options, shape_options);
-            glyph_count += glyphs.len;
-            const line_checksum = glyphsChecksum(glyphs);
-            checksum = updateChecksumWithLine(checksum, line_checksum);
-            if (options.line_summary and i == 0) {
-                try line_summaries.append(allocator, .{
-                    .index = line_index,
-                    .text_bytes = line.len,
-                    .glyph_count = glyphs.len,
-                    .checksum = line_checksum,
-                    .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
-                });
+    var samples = std.ArrayList(BenchResult.Sample).empty;
+    errdefer samples.deinit(allocator);
+    var sample_index: usize = 0;
+    while (sample_index < options.samples) : (sample_index += 1) {
+        var sample_checksum: u64 = 0;
+        var sample_glyph_count: usize = 0;
+        const sample_start = std.Io.Clock.now(.awake, io).nanoseconds;
+        var i: usize = 0;
+        while (i < options.iterations) : (i += 1) {
+            for (text_lines, 0..) |line, line_index| {
+                const glyphs = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, line, options, shape_options);
+                sample_glyph_count += glyphs.len;
+                const line_checksum = glyphsChecksum(glyphs);
+                sample_checksum = updateChecksumWithLine(sample_checksum, line_checksum);
+                if (options.line_summary and sample_index == 0 and i == 0) {
+                    try line_summaries.append(allocator, .{
+                        .index = line_index,
+                        .text_bytes = line.len,
+                        .glyph_count = glyphs.len,
+                        .checksum = line_checksum,
+                        .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
+                    });
+                }
             }
         }
+        const sample_elapsed = std.Io.Clock.now(.awake, io).nanoseconds - sample_start;
+        try samples.append(allocator, .{
+            .index = sample_index,
+            .elapsed_ns = sample_elapsed,
+            .glyph_count = sample_glyph_count,
+            .checksum = sample_checksum,
+        });
+        glyph_count += sample_glyph_count;
+        checksum = updateChecksumWithLine(checksum, sample_checksum);
     }
-    const elapsed = std.Io.Clock.now(.awake, io).nanoseconds - start;
+    var elapsed: i128 = 0;
+    for (samples.items) |sample| elapsed += sample.elapsed_ns;
 
     return .{
         .elapsed_ns = elapsed,
@@ -129,6 +153,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .checksum = checksum,
         .profile = profile,
         .line_summaries = try line_summaries.toOwnedSlice(allocator),
+        .samples = try samples.toOwnedSlice(allocator),
         .glyph_index_cache_hits = glyph_index_cache.hits,
         .glyph_index_cache_misses = glyph_index_cache.misses,
         .glyph_metrics_cache_hits = metrics_cache.hits,

@@ -54,6 +54,7 @@ pub fn main(init: std.process.Init) !void {
     defer {
         for (result.line_summaries) |summary| allocator.free(summary.glyph_ids);
         allocator.free(result.line_summaries);
+        allocator.free(result.samples);
     }
     report.print(options, result);
 }

@@ -52,6 +52,7 @@ pub const Options = struct {
     size: f32 = 20,
     iterations: usize = 10_000,
     warmup: usize = 1_000,
+    samples: usize = 1,
     direction: cangjie.TextDirection = .ltr,
     reorder_bidi: bool = true,
     script_position: cangjie.ScriptPosition = .normal,
@@ -118,6 +119,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.warmup = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--samples")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.samples = try parsePositiveUsize(args[i]);
         } else if (std.mem.eql(u8, arg, "--direction")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -215,6 +220,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --size PX                    font size, default 20
         \\  --iterations N               measured iterations, default 10000
         \\  --warmup N                   unmeasured warmup iterations, default 1000
+        \\  --samples N                  independent measured samples, default 1
         \\  --direction ltr|rtl          shaping direction, default ltr
         \\  --no-bidi-reorder            keep logical glyph order after shaping
         \\  --script-position normal|superscript|subscript

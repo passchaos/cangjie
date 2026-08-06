@@ -6,6 +6,7 @@ const runner = @import("runner.zig");
 pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
     const ns_per_iter = divFloat(result.elapsed_ns, options.iterations);
     const ns_per_glyph = if (result.glyph_count == 0) 0 else divFloat(result.elapsed_ns, result.glyph_count);
+    const stats = sampleStats(result.samples);
     std.debug.print(
         \\engine={s}
         \\font={s}
@@ -13,6 +14,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\text_bytes={d}
         \\iterations={d}
         \\warmup={d}
+        \\samples={d}
         \\use_caches={any}
         \\use_shaped_cache={any}
         \\profile={any}
@@ -20,6 +22,9 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\glyphs={d}
         \\ns_per_iter={d:.3}
         \\ns_per_glyph={d:.3}
+        \\sample_min_ns_per_glyph={d:.3}
+        \\sample_median_ns_per_glyph={d:.3}
+        \\sample_max_ns_per_glyph={d:.3}
         \\checksum={x}
         \\glyph_index_cache_hits={d}
         \\glyph_index_cache_misses={d}
@@ -42,6 +47,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         options.text.len,
         options.iterations,
         options.warmup,
+        options.samples,
         options.use_caches,
         options.use_shaped_cache,
         options.profile,
@@ -49,6 +55,9 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.glyph_count,
         ns_per_iter,
         ns_per_glyph,
+        stats.min,
+        stats.median,
+        stats.max,
         result.checksum,
         result.glyph_index_cache_hits,
         result.glyph_index_cache_misses,
@@ -134,6 +143,19 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
             result.profile.arabic_stage_lookup_count[stage_index],
         });
     }
+    for (result.samples) |sample| {
+        const sample_ns_per_glyph = if (sample.glyph_count == 0) 0 else divFloat(sample.elapsed_ns, sample.glyph_count);
+        std.debug.print(
+            \\sample index={d} elapsed_ns={d} glyphs={d} ns_per_glyph={d:.3} checksum={x}
+            \\
+        , .{
+            sample.index,
+            sample.elapsed_ns,
+            sample.glyph_count,
+            sample_ns_per_glyph,
+            sample.checksum,
+        });
+    }
     for (result.line_summaries) |summary| {
         std.debug.print(
             \\line_summary index={d} text_bytes={d} glyphs={d} checksum={x}
@@ -157,4 +179,29 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
 fn divFloat(numerator: i128, denominator: usize) f64 {
     if (denominator == 0) return 0;
     return @as(f64, @floatFromInt(numerator)) / @as(f64, @floatFromInt(denominator));
+}
+
+const SampleStats = struct {
+    min: f64 = 0,
+    median: f64 = 0,
+    max: f64 = 0,
+};
+
+fn sampleStats(samples: []const runner.BenchResult.Sample) SampleStats {
+    if (samples.len == 0) return .{};
+    var values_buf: [64]f64 = undefined;
+    const count = @min(samples.len, values_buf.len);
+    for (samples[0..count], values_buf[0..count]) |sample, *value| {
+        value.* = if (sample.glyph_count == 0) 0 else divFloat(sample.elapsed_ns, sample.glyph_count);
+    }
+    std.sort.heap(f64, values_buf[0..count], {}, floatLessThan);
+    return .{
+        .min = values_buf[0],
+        .median = values_buf[count / 2],
+        .max = values_buf[count - 1],
+    };
+}
+
+fn floatLessThan(_: void, lhs: f64, rhs: f64) bool {
+    return lhs < rhs;
 }

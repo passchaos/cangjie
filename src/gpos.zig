@@ -89,6 +89,39 @@ pub const LookupAccelerator = struct {
     chaining_groups: []const ChainingSubtableGroup = &.{},
 };
 
+const max_run_digest_cache_entries = 16;
+
+const RunDigestCache = struct {
+    const Entry = struct {
+        lookup_flag: u16,
+        active_mark_filtering_set: ?u16,
+        digest: GlyphDigest,
+    };
+
+    entries: [max_run_digest_cache_entries]Entry = undefined,
+    len: usize = 0,
+
+    fn get(self: *RunDigestCache, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
+        const active_mark_filtering_set = options.active_mark_filtering_set;
+        for (self.entries[0..self.len]) |entry| {
+            if (entry.lookup_flag == lookup_flag and entry.active_mark_filtering_set == active_mark_filtering_set) {
+                return entry.digest;
+            }
+        }
+
+        const digest = glyphRunDigest(glyphs, lookup_flag, options);
+        if (self.len < self.entries.len) {
+            self.entries[self.len] = .{
+                .lookup_flag = lookup_flag,
+                .active_mark_filtering_set = active_mark_filtering_set,
+                .digest = digest,
+            };
+            self.len += 1;
+        }
+        return digest;
+    }
+};
+
 const ChainingCoverageSubtable = struct {
     subtable_offset: usize = 0,
     backtrack_offsets_pos: usize = 0,
@@ -184,16 +217,17 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     }
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
+    var run_digest_cache = RunDigestCache{};
     if (selected_lookups.len != 0) {
         for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-            try collectLookupWithIndex(table, lookup_offset, lookup_index, glyphs, adjustments, allocator, options);
+            try collectLookupWithIndex(table, lookup_offset, lookup_index, glyphs, adjustments, allocator, options, &run_digest_cache);
         }
     } else {
         for (0..lookup_count) |i| {
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
-            try collectLookupWithIndex(table, lookup_offset, @intCast(i), glyphs, adjustments, allocator, options);
+            try collectLookupWithIndex(table, lookup_offset, @intCast(i), glyphs, adjustments, allocator, options, &run_digest_cache);
         }
     }
 }
@@ -520,10 +554,10 @@ fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
 }
 
 fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    try collectLookupWithIndex(table, lookup_offset, null, glyphs, adjustments, allocator, options);
+    try collectLookupWithIndex(table, lookup_offset, null, glyphs, adjustments, allocator, options, null);
 }
 
-fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*RunDigestCache) (GposError || std.mem.Allocator.Error)!void {
     try ensurePositionLookupHeaderWithin(table, lookup_offset);
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
@@ -542,7 +576,10 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         try validateMarkFilteringSetIndex(lookup_options);
     }
     if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
-        const run_digest = glyphRunDigest(glyphs, lookup_flag, lookup_options);
+        const run_digest = if (run_digest_cache) |cache|
+            cache.get(glyphs, lookup_flag, lookup_options)
+        else
+            glyphRunDigest(glyphs, lookup_flag, lookup_options);
         if (run_digest.isEmpty() or !accelerator.coverage_digest.mayIntersect(run_digest)) return;
     }
     if (lookup_type == 1) {

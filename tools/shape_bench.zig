@@ -2,6 +2,7 @@ const std = @import("std");
 const cangjie = @import("cangjie");
 
 const coretext = @import("shape_bench/coretext.zig");
+const harfrust = @import("shape_bench/harfrust.zig");
 const options_mod = @import("shape_bench/options.zig");
 const report = @import("shape_bench/report.zig");
 const runner = @import("shape_bench/runner.zig");
@@ -48,6 +49,7 @@ pub fn main(init: std.process.Init) !void {
             break :result try runner.runCangjie(init.io, allocator, &font, options);
         },
         .coretext => try coretext.run(init.io, allocator, font_bytes, options),
+        .harfrust => try harfrust.run(init.io, allocator, options),
     };
     defer {
         for (result.line_summaries) |summary| allocator.free(summary.glyph_ids);

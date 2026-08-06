@@ -6,10 +6,12 @@ const max_feature_overrides = 16;
 pub const Engine = enum {
     cangjie,
     coretext,
+    harfrust,
 
     pub fn fromName(name: []const u8) ?Engine {
         if (std.mem.eql(u8, name, "cangjie")) return .cangjie;
         if (std.mem.eql(u8, name, "coretext")) return .coretext;
+        if (std.mem.eql(u8, name, "harfrust")) return .harfrust;
         return null;
     }
 
@@ -17,6 +19,7 @@ pub const Engine = enum {
         return switch (self) {
             .cangjie => "cangjie",
             .coretext => "coretext",
+            .harfrust => "harfrust",
         };
     }
 };
@@ -45,6 +48,7 @@ pub const BuiltinFont = enum {
 pub const Options = struct {
     engine: Engine = .cangjie,
     font_path: ?[]const u8 = null,
+    harfrust_bin: []const u8 = "/Users/bytedance/Work/harfrust/target/release/hr-shape",
     builtin_font: BuiltinFont = .script_feature,
     text: []const u8 = "A",
     text_path: ?[]const u8 = null,
@@ -104,6 +108,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.font_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--harfrust-bin")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.harfrust_bin = args[i];
         } else if (std.mem.eql(u8, arg, "--builtin")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -173,7 +181,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
 
     if (!std.math.isFinite(options.size) or options.size <= 0) return error.InvalidArguments;
-    if (options.engine == .coretext and options.font_path == null) return error.InvalidArguments;
+    if ((options.engine == .coretext or options.engine == .harfrust) and options.font_path == null) return error.InvalidArguments;
     return options;
 }
 
@@ -223,8 +231,10 @@ pub fn printUsage(args: []const []const u8) void {
         \\usage: {s} [--font font.ttf|font.ttc] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
-        \\  --engine cangjie|coretext    shaping engine, default cangjie
+        \\  --engine cangjie|coretext|harfrust
+        \\                               shaping engine, default cangjie
         \\  --font PATH                  use a real TTF/OTF/TTC font
+        \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature
         \\  --text TEXT                  input text, default "A"
         \\  --text-file PATH             read input text from a UTF-8 file
@@ -247,6 +257,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --iterations 50000
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --font /System/Library/Fonts/Supplemental/Arial.ttf --text "Hello world"
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font /System/Library/Fonts/Supplemental/Arial.ttf --text "Hello world"
+        \\  zig build shape-bench -Doptimize=ReleaseFast -- --engine harfrust --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام"
         \\
     , .{exe});
 }

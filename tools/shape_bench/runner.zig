@@ -62,10 +62,14 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .direction = options.direction,
         .script_position = options.script_position,
     };
+    const inline_text_lines = [_][]const u8{options.text};
+    const text_lines = if (options.text_lines.len != 0) options.text_lines else inline_text_lines[0..];
 
     var warmup_index: usize = 0;
     while (warmup_index < options.warmup) : (warmup_index += 1) {
-        _ = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, options, shape_options);
+        for (text_lines) |line| {
+            _ = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, line, options, shape_options);
+        }
     }
 
     var profile = cangjie.ShapeStageProfile{};
@@ -83,9 +87,11 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     const start = std.Io.Clock.now(.awake, io).nanoseconds;
     var i: usize = 0;
     while (i < options.iterations) : (i += 1) {
-        const glyphs = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, options, shape_options);
-        glyph_count += glyphs.len;
-        checksum = updateChecksum(checksum, glyphs);
+        for (text_lines) |line| {
+            const glyphs = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, line, options, shape_options);
+            glyph_count += glyphs.len;
+            checksum = updateChecksum(checksum, glyphs);
+        }
     }
     const elapsed = std.Io.Clock.now(.awake, io).nanoseconds - start;
 
@@ -116,18 +122,19 @@ fn shapeOnce(
     glyph_index_cache: *cangjie.GlyphIndexCache,
     shaped_cache: ?*cangjie.ShapedRunCache,
     layout_buffer: *cangjie.LayoutBuffer,
+    text: []const u8,
     options: options_mod.Options,
     shape_options: cangjie.ShapeOptions,
 ) ![]const cangjie.GlyphPosition {
     if (options.use_caches) {
         if (shaped_cache) |cache| {
-            const shaped = try cangjie.TextShaper.shapeUtf8CascadeWithCaches(cascade, null, metrics_cache, glyph_index_cache, cache, layout_buffer, options.text, options.size, shape_options);
+            const shaped = try cangjie.TextShaper.shapeUtf8CascadeWithCaches(cascade, null, metrics_cache, glyph_index_cache, cache, layout_buffer, text, options.size, shape_options);
             return shaped.glyphs;
         }
-        const run = try cangjie.TextShaper.shapeUtf8WithCaches(font, metrics_cache, glyph_index_cache, layout_buffer, options.text, options.size, shape_options);
+        const run = try cangjie.TextShaper.shapeUtf8WithCaches(font, metrics_cache, glyph_index_cache, layout_buffer, text, options.size, shape_options);
         return run.glyphs;
     }
-    const run = try cangjie.TextShaper.shapeUtf8WithOptions(font, layout_buffer, options.text, options.size, shape_options);
+    const run = try cangjie.TextShaper.shapeUtf8WithOptions(font, layout_buffer, text, options.size, shape_options);
     return run.glyphs;
 }
 

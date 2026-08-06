@@ -2581,6 +2581,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .language_tag = lookup_options.language_tag,
         .features = lookup_options.features,
         .apply_all_if_unselected = false,
+        .run_has_gdef_marks = runHasGdefMarks(glyph_ids.items, gdef_metadata.*),
         .glyph_source_indices = glyph_source_indices.items,
         .ligature_components = ligature_components.items,
         .shape_profile = shape_profile,
@@ -2794,6 +2795,14 @@ fn isVariationSelector(codepoint: u21) bool {
 fn glyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {
     if (cache) |glyph_cache| return try glyph_cache.glyphIndex(font, codepoint);
     return try font.glyphIndex(codepoint);
+}
+
+fn runHasGdefMarks(glyphs: []const GlyphId, metadata: GdefLookupMetadata) bool {
+    const classes = metadata.glyph_classes orelse return true;
+    for (glyphs) |glyph| {
+        if (glyph < classes.len and classes[glyph] == @intFromEnum(GlyphClass.mark)) return true;
+    }
+    return false;
 }
 
 fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId) !GlyphMetrics {

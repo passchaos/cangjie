@@ -64,11 +64,15 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
 
     const font = try createFont(font_bytes, options.size);
     defer CFRelease(font);
+    const inline_text_lines = [_][]const u8{options.text};
+    const text_lines = if (options.text_lines.len != 0) options.text_lines else inline_text_lines[0..];
 
     var warmup_index: usize = 0;
     while (warmup_index < options.warmup) : (warmup_index += 1) {
-        const line = try createLine(options.text, font);
-        CFRelease(line);
+        for (text_lines) |text| {
+            const line = try createLine(text, font);
+            CFRelease(line);
+        }
     }
 
     var checksum: u64 = 0;
@@ -76,12 +80,16 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     const start = std.Io.Clock.now(.awake, io).nanoseconds;
     var i: usize = 0;
     while (i < options.iterations) : (i += 1) {
-        const line = try createLine(options.text, font);
-        defer CFRelease(line);
-        const glyphs = try readLineGlyphs(allocator, line);
-        defer allocator.free(glyphs);
-        glyph_count += glyphs.len;
-        checksum = updateChecksum(checksum, glyphs);
+        for (text_lines) |text| {
+            {
+                const line = try createLine(text, font);
+                defer CFRelease(line);
+                const glyphs = try readLineGlyphs(allocator, line);
+                defer allocator.free(glyphs);
+                glyph_count += glyphs.len;
+                checksum = updateChecksum(checksum, glyphs);
+            }
+        }
     }
     const elapsed = std.Io.Clock.now(.awake, io).nanoseconds - start;
 

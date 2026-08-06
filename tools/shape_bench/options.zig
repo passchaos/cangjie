@@ -45,6 +45,8 @@ pub const Options = struct {
     font_path: ?[]const u8 = null,
     builtin_font: BuiltinFont = .script_feature,
     text: []const u8 = "A",
+    text_path: ?[]const u8 = null,
+    text_lines: []const []const u8 = &.{},
     size: f32 = 20,
     iterations: usize = 10_000,
     warmup: usize = 1_000,
@@ -57,6 +59,11 @@ pub const Options = struct {
     pub fn fontLabel(self: Options) []const u8 {
         if (self.font_path) |path| return path;
         return self.builtin_font.label();
+    }
+
+    pub fn textLabel(self: Options) []const u8 {
+        if (self.text_path) |path| return path;
+        return "inline";
     }
 };
 
@@ -83,6 +90,11 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.text = args[i];
+            options.text_path = null;
+        } else if (std.mem.eql(u8, arg, "--text-file")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.text_path = args[i];
         } else if (std.mem.eql(u8, arg, "--size")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -145,13 +157,14 @@ fn parseScriptPosition(text: []const u8) ?cangjie.ScriptPosition {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "shape-bench";
     std.debug.print(
-        \\usage: {s} [--font font.ttf|font.ttc] [--builtin minimal|minimal-gsub|script-feature] [--text text] [--size px] [--iterations n] [--warmup n]
+        \\usage: {s} [--font font.ttf|font.ttc] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
         \\  --engine cangjie|coretext    shaping engine, default cangjie
         \\  --font PATH                  use a real TTF/OTF/TTC font
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature
         \\  --text TEXT                  input text, default "A"
+        \\  --text-file PATH             read input text from a UTF-8 file
         \\  --size PX                    font size, default 20
         \\  --iterations N               measured iterations, default 10000
         \\  --warmup N                   unmeasured warmup iterations, default 1000

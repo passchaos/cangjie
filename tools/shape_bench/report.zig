@@ -9,6 +9,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
     std.debug.print(
         \\engine={s}
         \\font={s}
+        \\text={s}
         \\text_bytes={d}
         \\iterations={d}
         \\warmup={d}
@@ -35,6 +36,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
     , .{
         options.engine.label(),
         options.fontLabel(),
+        options.textLabel(),
         options.text.len,
         options.iterations,
         options.warmup,

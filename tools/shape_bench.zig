@@ -20,7 +20,7 @@ pub fn main(init: std.process.Init) !void {
         try args.append(allocator, arg);
     }
 
-    const options = options_mod.parse(args.items) catch |err| switch (err) {
+    var options = options_mod.parse(args.items) catch |err| switch (err) {
         error.InvalidArguments => {
             options_mod.printUsage(args.items);
             return;
@@ -30,6 +30,15 @@ pub fn main(init: std.process.Init) !void {
             return err;
         },
     };
+    const text_bytes = if (options.text_path) |path|
+        try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024))
+    else
+        null;
+    defer if (text_bytes) |bytes| allocator.free(bytes);
+    if (text_bytes) |bytes| options.text = bytes;
+    const text_lines = try splitTextLines(allocator, options.text);
+    defer allocator.free(text_lines);
+    options.text_lines = text_lines;
 
     const font_bytes = try runner.loadFontBytes(init.io, allocator, options);
     defer allocator.free(font_bytes);
@@ -43,4 +52,20 @@ pub fn main(init: std.process.Init) !void {
         .coretext => try coretext.run(init.io, allocator, font_bytes, options),
     };
     report.print(options, result);
+}
+
+fn splitTextLines(allocator: std.mem.Allocator, text: []const u8) ![]const []const u8 {
+    var lines = std.ArrayList([]const u8).empty;
+    errdefer lines.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, std.mem.trim(u8, text, "\n\r"), '\n');
+    while (it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r");
+        if (line.len == 0) continue;
+        try lines.append(allocator, line);
+    }
+    if (lines.items.len == 0 and text.len != 0) {
+        try lines.append(allocator, text);
+    }
+    return try lines.toOwnedSlice(allocator);
 }

@@ -123,6 +123,7 @@ const LookupSelectionKey = struct {
     language_tag: unicode.OpenTypeLanguageTag,
     feature_hash: u64,
     vertical: bool,
+    run_has_gdef_marks: ?bool,
 };
 
 pub const LookupSelectionCache = struct {
@@ -158,7 +159,7 @@ pub const LookupSelectionCache = struct {
     }
 
     pub fn gsubLookups(self: *LookupSelectionCache, font: *const Font, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {
-        const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical);
+        const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
         if (self.lookup(key, options.features)) |lookups| return lookups;
 
         self.misses += 1;
@@ -171,7 +172,7 @@ pub const LookupSelectionCache = struct {
     }
 
     pub fn gposLookups(self: *LookupSelectionCache, font: *const Font, options: gpos.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {
-        const key = lookupSelectionKey(font, .gpos, options.script_tag, options.language_tag, options.features, false);
+        const key = lookupSelectionKey(font, .gpos, options.script_tag, options.language_tag, options.features, false, options.run_has_gdef_marks);
         if (self.lookup(key, options.features)) |lookups| return lookups;
 
         self.misses += 1;
@@ -194,7 +195,7 @@ pub const LookupSelectionCache = struct {
     }
 };
 
-fn lookupSelectionKey(font: *const Font, table: LookupTableKind, script_tag: unicode.OpenTypeScriptTag, language_tag: unicode.OpenTypeLanguageTag, features: []const unicode.FeatureOverride, vertical: bool) LookupSelectionKey {
+fn lookupSelectionKey(font: *const Font, table: LookupTableKind, script_tag: unicode.OpenTypeScriptTag, language_tag: unicode.OpenTypeLanguageTag, features: []const unicode.FeatureOverride, vertical: bool, run_has_gdef_marks: ?bool) LookupSelectionKey {
     return .{
         .font_addr = @intFromPtr(font),
         .table = table,
@@ -202,6 +203,7 @@ fn lookupSelectionKey(font: *const Font, table: LookupTableKind, script_tag: uni
         .language_tag = language_tag,
         .feature_hash = featureOverridesHash(features),
         .vertical = vertical,
+        .run_has_gdef_marks = run_has_gdef_marks,
     };
 }
 
@@ -211,7 +213,8 @@ fn lookupSelectionKeysEqual(a: LookupSelectionKey, b: LookupSelectionKey) bool {
         a.script_tag == b.script_tag and
         a.language_tag == b.language_tag and
         a.feature_hash == b.feature_hash and
-        a.vertical == b.vertical;
+        a.vertical == b.vertical and
+        a.run_has_gdef_marks == b.run_has_gdef_marks;
 }
 
 fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {

@@ -85,10 +85,9 @@ Representative validated state near that commit:
 - Roboto `en-words`, Cangjie: about `1118 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1233 ns/glyph` median.
 - HarfRust glyph-id smoke: Amiri `"سلام"` passes `compare-harfrust`.
-- HarfRust corpus gate: Amiri `fa-words` currently fails first at line 25
-  (`صفحهٔ`), where Cangjie emits glyph ids
-  `2250,6177,4393,2190,2378` and HarfRust emits
-  `6177,2250,4393,2190,2378`.
+- HarfRust corpus gate: Amiri `fa-words` currently fails first at line 80
+  (`۱۵`), where Cangjie emits glyph ids `588,592` and HarfRust emits
+  `592,588`.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

@@ -2201,9 +2201,13 @@ fn appendRtlVisualBidiItemsByGrapheme(allocator: std.mem.Allocator, items: *std.
 fn rtlClusterNeedsCodepointOrder(items: []const BidiMapItem) bool {
     if (items.len < 2) return false;
     for (items) |item| {
-        if (isBidiFormatControl(item.codepoint)) return true;
+        if (isRtlReorderedMark(item.codepoint) or isBidiFormatControl(item.codepoint)) return true;
     }
     return false;
+}
+
+fn isRtlReorderedMark(codepoint: u21) bool {
+    return isCombiningMark(codepoint) and !isVariationSelector(codepoint);
 }
 
 fn isBidiFormatControl(codepoint: u21) bool {

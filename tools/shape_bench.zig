@@ -245,7 +245,7 @@ fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u
                 .cangjie_position_values = try allocator.alloc(i32, 0),
             };
         }
-        inline for (.{ MismatchKind.x_advance, MismatchKind.y_advance }) |kind| {
+        inline for (.{ MismatchKind.x_advance, MismatchKind.y_advance, MismatchKind.x_offset, MismatchKind.y_offset }) |kind| {
             const cangjie_values = try comparableSlice(i32, allocator, positionValues(cangjie_lines[line_index], kind), order);
             errdefer allocator.free(cangjie_values);
             if (!std.mem.eql(i32, cangjie_values, positionValues(harfrust_lines[line_index], kind))) {

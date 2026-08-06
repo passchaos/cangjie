@@ -69,6 +69,10 @@ pub const LookupOptions = struct {
     /// source position most closely precedes the mark. Without this metadata,
     /// the parser falls back to a conservative positional heuristic.
     glyph_source_indices: ?[]const usize = null,
+    /// Original Unicode scalars indexed by `glyph_source_indices`. GPOS mark
+    /// attachment searches use this to keep hidden default-ignorables
+    /// transparent after they have been mapped to visible fallback glyph ids.
+    source_codepoints: ?[]const u21 = null,
     /// Optional ligature component metadata parallel to the post-GSUB glyph
     /// stream. Entries are only meaningful for ligature glyph positions.
     ligature_components: ?[]const LigatureComponentInfo = null,
@@ -1061,6 +1065,7 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GposError
     if (options.glyph_source_indices) |sources| {
         if (sources.len != glyph_count) return error.InvalidShapingInput;
     }
+    if (options.source_codepoints != null and options.glyph_source_indices == null) return error.InvalidShapingInput;
     if (options.ligature_components) |components| {
         if (components.len != glyph_count) return error.InvalidShapingInput;
         for (components) |component_info| {
@@ -1081,6 +1086,24 @@ fn validateLigatureComponentInfo(info: LigatureComponentInfo) GposError!void {
         if (source < previous) return error.InvalidShapingInput;
         previous = source;
     }
+}
+
+fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {
+    const sources = options.glyph_source_indices orelse return glyph_index;
+    if (glyph_index >= sources.len) return glyph_index;
+    return sources[glyph_index];
+}
+
+fn sourceCodepointForGlyph(options: LookupOptions, glyph_index: usize) ?u21 {
+    const codepoints = options.source_codepoints orelse return null;
+    const source = sourceForGlyph(options, glyph_index);
+    if (source >= codepoints.len) return null;
+    return codepoints[source];
+}
+
+fn markAttachmentSearchSkipsGlyph(options: LookupOptions, glyph_index: usize) bool {
+    const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
+    return unicode.isDefaultIgnorableForShaping(codepoint);
 }
 
 fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -1268,8 +1291,13 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         if (adjustments.items[existing_i].index != index) continue;
         const existing = &adjustments.items[existing_i];
         existing.x_advance += value.x_advance;
-        existing.x_placement += value.x_placement;
-        existing.y_placement += value.y_placement;
+        if (flags.mark_attachment) {
+            existing.x_placement = value.x_placement;
+            existing.y_placement = value.y_placement;
+        } else {
+            existing.x_placement += value.x_placement;
+            existing.y_placement += value.y_placement;
+        }
         existing.y_advance += value.y_advance;
         existing.pair_positioned = existing.pair_positioned or flags.pair_positioned;
         existing.mark_attachment = existing.mark_attachment or flags.mark_attachment;
@@ -1478,19 +1506,18 @@ fn previousCoveredBaseGlyph(table: Table, mark_coverage_offset: usize, base_cove
         i -= 1;
         if (i < attached_marks.len and attached_marks[i]) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
-        if (try coverageIndex(table, base_coverage_offset, glyphs[i]) != null) return i;
+        if (markAttachmentSearchSkipsGlyph(options, i)) continue;
 
         // MarkBasePos attaches to the nearest previous participating base. A
-        // non-mark glyph that is not in BaseCoverage is a real blocker; walking
-        // past it would incorrectly attach the mark to an older base across an
-        // intervening base/ligature. Marks remain transparent for stacked-mark
+        // non-mark glyph that is not in BaseCoverage is a real blocker for
+        // this subtable; HarfBuzz records that nearest non-mark and lets the
+        // subtable fail its BaseCoverage check rather than walking back to an
+        // older covered base. Marks remain transparent for stacked-mark
         // clusters; use GDEF classes when present and fall back to this
         // subtable's MarkCoverage for minimal fonts that omit GDEF.
-        const class_is_mark = if (options.glyph_classes) |classes|
-            glyphs[i] < classes.len and classes[glyphs[i]] == 3
-        else
-            false;
-        if (!class_is_mark and try coverageIndex(table, mark_coverage_offset, glyphs[i]) == null) return null;
+        if (try coverageIndex(table, base_coverage_offset, glyphs[i]) != null) return i;
+        if (try markAttachmentSearchSkipsNonCoveredGlyph(table, mark_coverage_offset, glyphs, i, options)) continue;
+        return i;
     }
     return null;
 }
@@ -1504,6 +1531,7 @@ fn previousUnignoredCoveredGlyph(table: Table, coverage_offset: usize, glyphs: [
         // the first non-ignored glyph either matches the target coverage or
         // blocks the attachment.
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
+        if (markAttachmentSearchSkipsGlyph(options, i)) continue;
         return if (try coverageIndex(table, coverage_offset, glyphs[i]) != null) i else null;
     }
     return null;
@@ -3156,7 +3184,7 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
     if (class_count == 0 or glyphs.len < 2) return false;
 
     const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse return false;
-    const ligature_position = try previousCoveredLigatureGlyph(table, mark_coverage_offset, ligature_coverage_offset, glyphs, mark_position, lookup_flag, options) orelse return false;
+    const ligature_position = try previousCoveredLigatureGlyph(table, mark_coverage_offset, glyphs, mark_position, lookup_flag, options) orelse return false;
     const ligature_index = try coverageIndex(table, ligature_coverage_offset, glyphs[ligature_position]) orelse return false;
     const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
     const mark_class = try readU16(table, mark_record_offset);
@@ -3180,20 +3208,21 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
     return true;
 }
 
-fn previousCoveredLigatureGlyph(table: Table, mark_coverage_offset: usize, ligature_coverage_offset: usize, glyphs: []const GlyphId, mark_position: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {
+fn previousCoveredLigatureGlyph(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, mark_position: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {
     var i = mark_position;
     while (i > 0) {
         i -= 1;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
-        if (try coverageIndex(table, ligature_coverage_offset, glyphs[i]) != null) return i;
+        if (markAttachmentSearchSkipsGlyph(options, i)) continue;
 
         // MarkLigPos attaches marks to the nearest previous participating
         // ligature. Earlier marks in the same cluster must be transparent for
         // that search; otherwise only the first mark after a ligature can ever
-        // be positioned. Non-mark glyphs still block the search so we do not
-        // attach across an intervening base or ligature.
-        if (try markGlyphForLigatureSearch(table, mark_coverage_offset, glyphs[i], options)) continue;
-        return null;
+        // be positioned. Non-mark glyphs still block the search for this
+        // subtable even when they are not in LigatureCoverage, matching
+        // HarfBuzz's nearest-non-mark search followed by coverage validation.
+        if (try markAttachmentSearchSkipsNonCoveredGlyph(table, mark_coverage_offset, glyphs, i, options)) continue;
+        return i;
     }
     return null;
 }
@@ -3231,6 +3260,7 @@ fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyp
     var pos = ligature_position + 1;
     while (pos < mark_position) : (pos += 1) {
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (markAttachmentSearchSkipsGlyph(options, pos)) continue;
         // OpenType engines normally know the original GSUB ligature component
         // for each remaining mark. When the caller does not provide that
         // metadata, use the mark's order within the post-ligature covered mark
@@ -3243,11 +3273,25 @@ fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyp
     return @min(covered_marks_before_target, component_count - 1);
 }
 
-fn markGlyphForLigatureSearch(table: Table, mark_coverage_offset: usize, glyph: GlyphId, options: LookupOptions) GposError!bool {
+fn markGlyphForAttachmentSearch(table: Table, mark_coverage_offset: usize, glyph: GlyphId, options: LookupOptions) GposError!bool {
     if (options.glyph_classes) |classes| {
-        if (glyph < classes.len and classes[glyph] == 3) return true;
+        return glyph < classes.len and classes[glyph] == 3;
     }
     return try coverageIndex(table, mark_coverage_offset, glyph) != null;
+}
+
+fn markAttachmentSearchSkipsNonCoveredGlyph(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, index: usize, options: LookupOptions) GposError!bool {
+    if (try markGlyphForAttachmentSearch(table, mark_coverage_offset, glyphs[index], options)) return true;
+    return isMultipleSubstContinuationForMarkSearch(table, mark_coverage_offset, glyphs, index, options);
+}
+
+fn isMultipleSubstContinuationForMarkSearch(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, index: usize, options: LookupOptions) GposError!bool {
+    if (index == 0) return false;
+    const sources = options.glyph_source_indices orelse return false;
+    if (index >= sources.len) return false;
+    if (sources[index] != sources[index - 1]) return false;
+    if (try markGlyphForAttachmentSearch(table, mark_coverage_offset, glyphs[index - 1], options)) return false;
+    return true;
 }
 
 fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {

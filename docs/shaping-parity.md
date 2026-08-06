@@ -69,13 +69,11 @@ serialization/parsing overhead. A library runner is still needed for strict
 HarfRust/HarfBuzz timing.
 
 `compare-harfrust` runs Cangjie and HarfRust in the same invocation and compares
-per-line glyph-id, UTF-8 cluster, and font-unit x/y advance sequences in
-HarfBuzz-style buffer order. Offsets are collected and printed for diagnostics,
-but they still need an attachment-aware normalized comparison before they can be
-a pass/fail gate. When `--language` is not specified, compare mode forces
-Cangjie to `dflt` because the current `hr-shape` runner guesses script and
-direction but does not guess language. Pass `--language ara`, `--language zhs`,
-etc. to compare an explicit LangSys on both engines.
+per-line glyph-id, UTF-8 cluster, font-unit x/y advance, and x/y offset
+sequences in HarfBuzz-style buffer order. When `--language` is not specified,
+compare mode forces Cangjie to `dflt` because the current `hr-shape` runner
+guesses script and direction but does not guess language. Pass `--language ara`,
+`--language zhs`, etc. to compare an explicit LangSys on both engines.
 
 ## Current Evidence Snapshot
 
@@ -90,7 +88,7 @@ Representative performance state near that commit:
 - Roboto `en-words`, Cangjie: about `1118 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1233 ns/glyph` median.
 
-Current HarfRust glyph-id, UTF-8 cluster, and advance parity evidence:
+Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 
 - Amiri `"آیت‌الله"` passes `compare-harfrust`.
 - Amiri `"اللَّهِ"` passes `compare-harfrust`.
@@ -113,10 +111,9 @@ goal is active, not complete.
 - Expand the benchmark matrix beyond Amiri and Roboto:
   `NotoSansDevanagari-Regular.ttf`, `NotoNastaliqUrdu-Regular.ttf`,
   `SourceSerifVariable-Roman.ttf`, and the harfrust text corpus.
-- Track output parity, not only timing. `compare-harfrust` compares Cangjie
-  logical shaping order to `hr-shape`'s low-level RTL serialization by reversing
-  Cangjie glyph ids, clusters, and advances for RTL lines; offsets and feature
-  overrides still need normalized comparison.
+- Track output parity, not only timing. `compare-harfrust` now compares glyph
+  ids, clusters, advances, and offsets in HarfBuzz-style buffer order; feature
+  override and broader font/script matrices still need expansion.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups and GPOS lookups `37`, `57`, and `74`.
 - Avoid retaining optimizations that only improve a single noisy run or regress

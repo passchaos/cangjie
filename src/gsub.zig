@@ -19,6 +19,7 @@ const Table = struct {
     data: []const u8,
     offset: usize,
     length: usize,
+    assume_validated: bool = false,
     /// Optional maxp.numGlyphs bound supplied by Font.parse. Runtime GSUB
     /// application historically validates only table structure because callers
     /// may use detached GSUB data; parse-time validation attaches this bound so
@@ -54,6 +55,7 @@ pub const LookupOptions = struct {
     /// semantics.
     source_features: ?[]const u32 = null,
     active_source_feature: ?u32 = null,
+    assume_validated: bool = false,
     shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
     profile_io: ?std.Io = null,
 };
@@ -73,7 +75,7 @@ pub fn apply(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayL
 pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     try validateShapingMetadata(options, glyphs.items.len);
-    const table = Table{ .data = data, .offset = offset, .length = length };
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
     // Script/language/feature selection happens before the lookup list pass.
@@ -166,7 +168,7 @@ pub fn applyFeatureSequenceWithOptions(
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     try validateShapingMetadata(options, glyphs.items.len);
-    const table = Table{ .data = data, .offset = offset, .length = length };
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
 
@@ -294,7 +296,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
 
     const script_count = try readU16(table, script_list_offset);
-    try validateScriptRecordOrder(table, script_list_offset, script_count);
+    if (!table.assume_validated) try validateScriptRecordOrder(table, script_list_offset, script_count);
     // Prefer the requested script, then fall back to DFLT. Language selection
     // mirrors OpenType: a matching LangSys overrides the default LangSys.
     const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
@@ -305,7 +307,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     }
 
     const feature_count = try readU16(table, feature_list_offset);
-    try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
+    if (!table.assume_validated) try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
     for (feature_indices.items) |selection| {
         const feature_index = selection.index;
         if (feature_index >= feature_count) continue;
@@ -444,7 +446,7 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
     // as one unit. Validate every supported direct subtable before touching the
     // glyph run; otherwise a malformed later subtable can leak substitutions
     // already made by an earlier subtable in the same lookup.
-    try ensureSubstitutionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
+    if (!table.assume_validated) try ensureSubstitutionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
     var lookup_options = options;
     if ((lookup_flag & 0x0010) != 0) {
         // UseMarkFilteringSet stores its set index after the variable-length
@@ -471,7 +473,7 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
         // same lookup has already substituted glyphs. Preflight every wrapper
         // before choosing the optimized homogeneous path below so the lookup
         // remains all-or-nothing for truncated variable arrays.
-        try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
+        if (!table.assume_validated) try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
         switch (try extensionLookupType(table, lookup_offset, subtable_count) orelse 0) {
             1 => {
                 try applyExtensionSingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);

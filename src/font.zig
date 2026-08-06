@@ -833,6 +833,7 @@ pub const Font = struct {
         // of rewalking every lookup for every text node.
         try validateSfntTableChecksum(self.data, gsub);
         var gsub_options = options;
+        gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
         try gsub_mod.applyWithOptions(self.data, gsub.offset, gsub.length, glyphs, allocator, gsub_options);
     }
@@ -868,6 +869,7 @@ pub const Font = struct {
         const gsub = self.gsub orelse return;
         try validateSfntTableChecksum(self.data, gsub);
         var gsub_options = options;
+        gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
         try gsub_mod.applyFeatureSequenceWithOptions(self.data, gsub.offset, gsub.length, applications, glyphs, allocator, gsub_options);
     }

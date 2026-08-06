@@ -96,6 +96,7 @@ const ChainingCoverageSubtable = struct {
     backtrack_count: u16 = 0,
     input_offsets_pos: usize = 0,
     input_count: u16 = 0,
+    second_input_digest: GlyphDigest = .{},
     lookahead_offsets_pos: usize = 0,
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
@@ -528,6 +529,10 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         chaining_subtables[subtable_i] = parsed_subtable;
         const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos));
         try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
+        if (parsed_subtable.input_count > 1) {
+            const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 2));
+            chaining_subtables[subtable_i].second_input_digest = try coverageDigest(table, second_coverage_offset);
+        }
         const subtable_digest = try coverageDigest(table, coverage_offset);
         subtable_digests[subtable_i] = subtable_digest;
         digest.unionWith(subtable_digest);
@@ -1761,6 +1766,7 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
         if (accelerator) |accel| {
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
+            const second_glyph = nextUnignoredGlyph(glyphs.items, pos + 1, lookup_flag, options);
             const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, current_glyph) orelse continue;
             for (grouped_subtables) |subtable_i| {
                 const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + @as(usize, subtable_i) * 2);
@@ -1768,6 +1774,12 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
                     accel.chaining_subtables[subtable_i]
                 else
                     null;
+                if (parsed_subtable) |subtable| {
+                    if (subtable.input_count > 1) {
+                        const glyph = second_glyph orelse continue;
+                        if (!subtable.second_input_digest.mayHave(glyph)) continue;
+                    }
+                }
                 if (try applyChainingContextSubstitutionAt(table, subtable_offset, parsed_subtable, glyphs, pos, allocator, lookup_flag, options)) break;
             }
         } else {
@@ -1923,6 +1935,15 @@ fn collectForwardUnignoredGlyphs(glyphs: []const GlyphId, start: usize, lookup_f
         out_i += 1;
     }
     return out_i == out.len;
+}
+
+fn nextUnignoredGlyph(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions) ?GlyphId {
+    var glyph_i = start;
+    while (glyph_i < glyphs.len) : (glyph_i += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_i])) continue;
+        return glyphs[glyph_i];
+    }
+    return null;
 }
 
 fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_flag: u16, options: LookupOptions, out: []usize) bool {

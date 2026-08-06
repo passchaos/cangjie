@@ -405,6 +405,20 @@ fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
     return lhs < rhs;
 }
 
+fn recordGsubLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, lookup_type: u16) void {
+    const p = profile orelse return;
+    p.gsub_lookup_count += 1;
+    switch (lookup_type) {
+        1 => p.gsub_single_lookup_count += 1,
+        2 => p.gsub_multiple_lookup_count += 1,
+        3 => p.gsub_alternate_lookup_count += 1,
+        4 => p.gsub_ligature_lookup_count += 1,
+        5, 6 => p.gsub_context_lookup_count += 1,
+        7 => p.gsub_extension_lookup_count += 1,
+        else => {},
+    }
+}
+
 fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
     if (lookups.items.len < 2) return;
 
@@ -425,6 +439,7 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
+    recordGsubLookupProfile(options.shape_profile, lookup_type);
     // A GSUB lookup is an ordered list of alternative subtables and must apply
     // as one unit. Validate every supported direct subtable before touching the
     // glyph run; otherwise a malformed later subtable can leak substitutions

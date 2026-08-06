@@ -67,6 +67,13 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\profile_gpos_apply_ns={d}
         \\profile_position_ns={d}
         \\profile_glyphs={d}
+        \\profile_gsub_lookups={d}
+        \\profile_gsub_single_lookups={d}
+        \\profile_gsub_multiple_lookups={d}
+        \\profile_gsub_alternate_lookups={d}
+        \\profile_gsub_ligature_lookups={d}
+        \\profile_gsub_context_lookups={d}
+        \\profile_gsub_extension_lookups={d}
         \\profile_gpos_lookups={d}
         \\profile_gpos_single_lookups={d}
         \\profile_gpos_pair_lookups={d}
@@ -85,6 +92,13 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         result.profile.gpos_apply_ns,
         result.profile.position_ns,
         result.profile.glyph_count,
+        result.profile.gsub_lookup_count,
+        result.profile.gsub_single_lookup_count,
+        result.profile.gsub_multiple_lookup_count,
+        result.profile.gsub_alternate_lookup_count,
+        result.profile.gsub_ligature_lookup_count,
+        result.profile.gsub_context_lookup_count,
+        result.profile.gsub_extension_lookup_count,
         result.profile.gpos_lookup_count,
         result.profile.gpos_single_lookup_count,
         result.profile.gpos_pair_lookup_count,

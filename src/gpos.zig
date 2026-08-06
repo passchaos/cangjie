@@ -95,6 +95,7 @@ const ChainingCoverageSubtable = struct {
     backtrack_count: u16 = 0,
     input_offsets_pos: usize = 0,
     input_count: u16 = 0,
+    second_input_digest: GlyphDigest = .{},
     lookahead_offsets_pos: usize = 0,
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
@@ -262,6 +263,10 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
             if (chaining_subtables.len != 0) {
                 const parsed = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse continue;
                 chaining_subtables[subtable_i] = parsed;
+                if (parsed.input_count > 1) {
+                    const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed.input_offsets_pos + 2));
+                    chaining_subtables[subtable_i].second_input_digest = try coverageDigest(table, second_coverage_offset);
+                }
                 try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
             }
         }
@@ -1598,11 +1603,16 @@ fn collectChainingCoveragePositioningLookup(table: Table, lookup_offset: usize, 
     while (pos < glyphs.len) : (pos += 1) {
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         const grouped_subtables = chainingSubtableGroupForGlyph(accelerator.chaining_groups, glyphs[pos]) orelse continue;
+        const second_glyph_index = nextUnignoredGlyph(glyphs, pos + 1, lookup_flag, options);
         for (grouped_subtables) |subtable_i| {
             const parsed = if (subtable_i < accelerator.chaining_subtables.len and accelerator.chaining_subtables[subtable_i].input_count != 0)
                 accelerator.chaining_subtables[subtable_i]
             else
                 try parseChainingCoveragePositioningSubtable(table, lookup_offset + try readU16(table, lookup_offset + 6 + @as(usize, subtable_i) * 2)) orelse continue;
+            if (parsed.input_count > 1) {
+                const index = second_glyph_index orelse continue;
+                if (!parsed.second_input_digest.mayHave(glyphs[index])) continue;
+            }
             if (try collectChainingCoveragePositioningAt(table, parsed, glyphs, pos, adjustments, allocator, lookup_flag, options)) {
                 pos += parsed.input_count - 1;
                 break;
@@ -1617,6 +1627,7 @@ fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverage
     var input_indices_buf: [64]usize = undefined;
     if (subtable.input_count > input_indices_buf.len) return error.UnsupportedGpos;
     if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..subtable.input_count])) return false;
+    if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, input_indices_buf[0..subtable.input_count], subtable.input_offsets_pos)) return false;
     var backtrack_indices_buf: [64]usize = undefined;
     if (subtable.backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGpos;
     if (!collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, backtrack_indices_buf[0..subtable.backtrack_count])) return false;
@@ -1625,7 +1636,6 @@ fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverage
     if (subtable.lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGpos;
     if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable.lookahead_count])) return false;
     if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos)) return false;
-    if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, input_indices_buf[0..subtable.input_count], subtable.input_offsets_pos)) return false;
     if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos)) return false;
     try collectPositionRecordsMapped(table, subtable.records_pos, subtable.pos_count, input_indices_buf[0..subtable.input_count], glyphs, adjustments, allocator, options);
     return true;

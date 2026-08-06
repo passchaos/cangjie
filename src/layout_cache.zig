@@ -215,7 +215,7 @@ pub const LookupSelectionCache = struct {
         }
         self.gsub_accelerator_entries.clearRetainingCapacity();
         for (self.gpos_accelerator_entries.items) |entry| {
-            self.allocator.free(entry.accelerators);
+            gpos.deinitLookupAccelerators(self.allocator, entry.accelerators);
         }
         self.gpos_accelerator_entries.clearRetainingCapacity();
         for (self.gsub_feature_plan_entries.items) |*entry| {

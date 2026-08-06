@@ -719,16 +719,19 @@ fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const
             if (coverage >= pair_set_count) return false;
             const pair_set_offset = subtable_offset + try readU16(table, subtable_offset + 10 + coverage * 2);
             const pair_value_count = try readU16(table, pair_set_offset);
-            const pair_record = try ensurePairValueRecordsWithin(
-                table,
-                pair_set_offset,
-                pair_value_count,
-                value_format_1,
-                value_format_2,
-                value_size_1,
-                value_size_2,
-                glyphs[second_index],
-            ) orelse return false;
+            const pair_record = if (table.assume_validated)
+                try findValidatedPairValueRecord(table, pair_set_offset, pair_value_count, value_size_1, value_size_2, glyphs[second_index]) orelse return false
+            else
+                try ensurePairValueRecordsWithin(
+                    table,
+                    pair_set_offset,
+                    pair_value_count,
+                    value_format_1,
+                    value_format_2,
+                    value_size_1,
+                    value_size_2,
+                    glyphs[second_index],
+                ) orelse return false;
             const value_1 = try readValueRecord(table, pair_record + 2, value_format_1, pair_set_offset);
             const value_2 = try readValueRecord(table, pair_record + 2 + value_size_1, value_format_2, pair_set_offset);
             try appendAdjustment(adjustments, allocator, first_index, value_1, true);
@@ -1766,6 +1769,25 @@ fn ensurePairValueRecordsWithin(table: Table, pair_set_offset: usize, pair_value
         }
     }
     return matched_record;
+}
+
+fn findValidatedPairValueRecord(table: Table, pair_set_offset: usize, pair_value_count: u16, value_size_1: usize, value_size_2: usize, target_second_glyph: GlyphId) GposError!?usize {
+    const pair_record_size = 2 + value_size_1 + value_size_2;
+    var lo: usize = 0;
+    var hi: usize = pair_value_count;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const pair_record_offset = pair_set_offset + 2 + mid * pair_record_size;
+        const second_glyph = try readU16(table, pair_record_offset);
+        if (target_second_glyph < second_glyph) {
+            hi = mid;
+        } else if (target_second_glyph > second_glyph) {
+            lo = mid + 1;
+        } else {
+            return pair_record_offset;
+        }
+    }
+    return null;
 }
 
 fn ensureCursivePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
@@ -3646,6 +3668,23 @@ test "GPOS PairPos format 1 rejects unsorted PairValue records" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, -20), adjustments.items[0].x_advance);
+}
+
+test "GPOS validated PairSet lookup binary searches second glyph records" {
+    var bytes = [_]u8{0} ** 18;
+    const pair_set = 0;
+    writeU16Test(&bytes, pair_set + 0, 3);
+    writeU16Test(&bytes, pair_set + 2, 10);
+    writeI16Test(&bytes, pair_set + 4, -10);
+    writeU16Test(&bytes, pair_set + 6, 12);
+    writeI16Test(&bytes, pair_set + 8, -12);
+    writeU16Test(&bytes, pair_set + 10, 20);
+    writeI16Test(&bytes, pair_set + 12, -20);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
+    const hit = try findValidatedPairValueRecord(table, pair_set, 3, 2, 0, 12) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, pair_set + 6), hit);
+    try std.testing.expectEqual(@as(?usize, null), try findValidatedPairValueRecord(table, pair_set, 3, 2, 0, 11));
 }
 
 test "GPOS PairPos format 2 rejects class values outside matrix" {

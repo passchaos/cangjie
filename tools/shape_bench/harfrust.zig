@@ -13,6 +13,12 @@ const HarfRustGlyph = struct {
     y_offset: i32 = 0,
 };
 
+const ParsedLine = struct {
+    text_bytes: usize,
+    glyphs: []HarfRustGlyph,
+    checksum: u64,
+};
+
 pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options) !runner.BenchResult {
     if (options.font_path == null) return error.InvalidArguments;
     const inline_text_lines = [_][]const u8{options.text};
@@ -20,12 +26,9 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Option
     var line_summaries = std.ArrayList(runner.BenchResult.LineSummary).empty;
     errdefer line_summaries.deinit(allocator);
 
-    var warmup_index: usize = 0;
-    while (warmup_index < options.warmup) : (warmup_index += 1) {
-        for (text_lines) |text| {
-            const output = try shapeLine(io, allocator, options, text);
-            allocator.free(output);
-        }
+    if (options.warmup != 0) {
+        const output = try shapeBatch(io, allocator, options, options.warmup);
+        allocator.free(output);
     }
 
     var checksum: u64 = 0;
@@ -35,29 +38,30 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Option
     var sample_index: usize = 0;
     while (sample_index < options.samples) : (sample_index += 1) {
         var sample_checksum: u64 = 0;
-        var sample_glyph_count: usize = 0;
         const sample_start = std.Io.Clock.now(.awake, io).nanoseconds;
+        const output = try shapeBatch(io, allocator, options, options.iterations);
+        defer allocator.free(output);
+        const parsed_lines = try parseGlyphLines(allocator, output, text_lines);
+        defer freeParsedLines(allocator, parsed_lines);
+
+        var glyphs_per_iteration: usize = 0;
+        for (parsed_lines) |line| glyphs_per_iteration += line.glyphs.len;
         var i: usize = 0;
         while (i < options.iterations) : (i += 1) {
-            for (text_lines, 0..) |text, line_index| {
-                const output = try shapeLine(io, allocator, options, text);
-                defer allocator.free(output);
-                const glyphs = try parseGlyphs(allocator, output);
-                defer allocator.free(glyphs);
-                sample_glyph_count += glyphs.len;
-                const line_checksum = glyphsChecksum(glyphs);
-                sample_checksum = updateChecksumWithLine(sample_checksum, line_checksum);
+            for (parsed_lines, 0..) |line, line_index| {
+                sample_checksum = updateChecksumWithLine(sample_checksum, line.checksum);
                 if (options.line_summary and sample_index == 0 and i == 0) {
                     try line_summaries.append(allocator, .{
                         .index = line_index,
-                        .text_bytes = text.len,
-                        .glyph_count = glyphs.len,
-                        .checksum = line_checksum,
-                        .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
+                        .text_bytes = line.text_bytes,
+                        .glyph_count = line.glyphs.len,
+                        .checksum = line.checksum,
+                        .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, line.glyphs) else &.{},
                     });
                 }
             }
         }
+        const sample_glyph_count = glyphs_per_iteration * options.iterations;
         const sample_elapsed = std.Io.Clock.now(.awake, io).nanoseconds - sample_start;
         try samples.append(allocator, .{
             .index = sample_index,
@@ -81,9 +85,11 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Option
     };
 }
 
-fn shapeLine(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options, text: []const u8) ![]u8 {
+fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options, iterations: usize) ![]u8 {
     var size_buf: [32]u8 = undefined;
     const size_text = try std.fmt.bufPrint(&size_buf, "{d}", .{options.size});
+    var iterations_buf: [32]u8 = undefined;
+    const iterations_text = try std.fmt.bufPrint(&iterations_buf, "{d}", .{iterations});
     const direction_text = switch (options.direction) {
         .ltr => "ltr",
         .rtl => "rtl",
@@ -94,15 +100,20 @@ fn shapeLine(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opti
         options.harfrust_bin,
         "--font-file",
         options.font_path.?,
-        "--text",
-        text,
-        "--single-par",
         "--font-ptem",
         size_text,
         "--direction",
         direction_text,
         "--no-glyph-names",
+        "-n",
+        iterations_text,
     });
+    if (options.text_path) |path| {
+        try args.appendSlice(allocator, &.{ "--text-file", path });
+    } else {
+        try args.appendSlice(allocator, &.{ "--text", options.text });
+        if (options.text_lines.len <= 1) try args.append(allocator, "--single-par");
+    }
     for (options.featureOverrides()) |feature| {
         var tag_buf: [4]u8 = undefined;
         options_mod.writeFeatureTag(&tag_buf, feature.tag);
@@ -123,10 +134,44 @@ fn shapeLine(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opti
     };
     defer allocator.free(result.stderr);
     switch (result.term) {
-        .exited => |code| if (code != 0) return error.HarfRustFailed,
-        else => return error.HarfRustFailed,
+        .exited => |code| if (code != 0) {
+            allocator.free(result.stdout);
+            return error.HarfRustFailed;
+        },
+        else => {
+            allocator.free(result.stdout);
+            return error.HarfRustFailed;
+        },
     }
     return result.stdout;
+}
+
+fn parseGlyphLines(allocator: std.mem.Allocator, output: []const u8, text_lines: []const []const u8) ![]ParsedLine {
+    var parsed = std.ArrayList(ParsedLine).empty;
+    errdefer {
+        for (parsed.items) |line| allocator.free(line.glyphs);
+        parsed.deinit(allocator);
+    }
+    var line_it = std.mem.splitScalar(u8, output, '\n');
+    while (line_it.next()) |raw_line| {
+        const line_output = std.mem.trim(u8, raw_line, "\r");
+        if (line_output.len == 0) continue;
+        const line_index = parsed.items.len;
+        const glyphs = try parseGlyphs(allocator, line_output);
+        errdefer allocator.free(glyphs);
+        try parsed.append(allocator, .{
+            .text_bytes = if (line_index < text_lines.len) text_lines[line_index].len else 0,
+            .glyphs = glyphs,
+            .checksum = glyphsChecksum(glyphs),
+        });
+    }
+    if (text_lines.len != 0 and parsed.items.len != text_lines.len) return error.BadHarfRustOutput;
+    return try parsed.toOwnedSlice(allocator);
+}
+
+fn freeParsedLines(allocator: std.mem.Allocator, lines: []ParsedLine) void {
+    for (lines) |line| allocator.free(line.glyphs);
+    allocator.free(lines);
 }
 
 fn parseGlyphs(allocator: std.mem.Allocator, output: []const u8) ![]HarfRustGlyph {

@@ -61,9 +61,11 @@ zig build shape-bench -Doptimize=ReleaseFast -- --engine harfrust --font /Users/
 zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
 ```
 
-The `harfrust` engine currently shells out to `hr-shape` per line. Use it for
-output parity smoke tests, not final performance claims. A batch or library
-runner is still needed for fair HarfRust/HarfBuzz timing.
+The `harfrust` engine shells out to `hr-shape` once per sample and uses
+`hr-shape -n` for measured iterations. It is useful for batch output parity and
+rough timing against HarfRust, but still includes external process startup and
+serialization/parsing overhead. A library runner is still needed for strict
+HarfRust/HarfBuzz timing.
 
 ## Current Evidence Snapshot
 
@@ -83,9 +85,10 @@ goal is active, not complete.
 
 ## Near-Term Gaps
 
-- Add a batch HarfBuzz or HarfRust comparison runner so CoreText is not the only
-  external timing baseline. The current `harfrust` `shape-bench` engine is an
-  external-process output parity smoke path, not a fair performance baseline.
+- Add a library-level HarfBuzz or HarfRust comparison runner so CoreText is not
+  the only external timing baseline. The current `harfrust` `shape-bench`
+  engine is a batch external-process baseline, not a fully fair in-process
+  performance baseline.
 - Expand the benchmark matrix beyond Amiri and Roboto:
   `NotoSansDevanagari-Regular.ttf`, `NotoNastaliqUrdu-Regular.ttf`,
   `SourceSerifVariable-Roman.ttf`, and the harfrust text corpus.

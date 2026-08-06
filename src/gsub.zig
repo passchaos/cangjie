@@ -1989,6 +1989,7 @@ fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList
     var lookup_offsets: [max_fast_single_records]usize = undefined;
     var lookup_flags: [max_fast_single_records]u16 = undefined;
     var subtable_counts: [max_fast_single_records]u16 = undefined;
+    var lookup_indices: [max_fast_single_records]u16 = undefined;
 
     for (0..record_count) |record_i| {
         const record_offset = records_offset + record_i * 4;
@@ -1996,12 +1997,29 @@ fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList
         const lookup_index = try readU16(table, record_offset + 2);
         if (sequence_index >= input_indices.len) return error.BadGsub;
         if (lookup_index >= lookup_count) return error.BadGsub;
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-        if (try readU16(table, lookup_offset) != 1) return false;
+        var lookup_offset: usize = 0;
+        var lookup_flag: u16 = 0;
+        var subtable_count: u16 = 0;
+        var cached = false;
+        for (lookup_indices[0..record_i], 0..) |existing_index, existing_i| {
+            if (existing_index != lookup_index) continue;
+            lookup_offset = lookup_offsets[existing_i];
+            lookup_flag = lookup_flags[existing_i];
+            subtable_count = subtable_counts[existing_i];
+            cached = true;
+            break;
+        }
+        if (!cached) {
+            lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+            if (try readU16(table, lookup_offset) != 1) return false;
+            lookup_flag = try readU16(table, lookup_offset + 2);
+            subtable_count = try readU16(table, lookup_offset + 4);
+        }
+        lookup_indices[record_i] = lookup_index;
         target_indices[record_i] = input_indices[sequence_index];
         lookup_offsets[record_i] = lookup_offset;
-        lookup_flags[record_i] = try readU16(table, lookup_offset + 2);
-        subtable_counts[record_i] = try readU16(table, lookup_offset + 4);
+        lookup_flags[record_i] = lookup_flag;
+        subtable_counts[record_i] = subtable_count;
     }
 
     for (0..record_count) |record_i| {

@@ -3007,7 +3007,7 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u
         },
         2 => {
             const range_count = try readU16(table, class_def_offset + 2);
-            try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
+            if (!table.assume_validated) try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
             for (0..range_count) |i| {
                 const range_offset = class_def_offset + 4 + i * 6;
                 const start = try readU16(table, range_offset);
@@ -3530,6 +3530,8 @@ test "GPOS rejects malformed ClassDef format 2 ranges" {
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
     try std.testing.expectError(error.BadGpos, classValue(table, 0, 12));
+    const validated_table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
+    try std.testing.expectEqual(@as(u16, 1), try classValue(validated_table, 0, 12));
 
     writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
     try std.testing.expectError(error.BadGpos, classValue(table, 0, 18));

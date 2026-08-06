@@ -2660,16 +2660,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             }
         }
         if (indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0) {
+            try source_features.resize(buffer.allocator, codepoints.items.len);
+            const has_initial_reph = indic.markInitialRephs(source_features.items, codepoints.items);
+            if (has_initial_reph) gsub_options.source_features = source_features.items;
+
+            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
-            const applications = indic.featureApplications();
-            if (gsub_after_proof and buffer.lookup_selection_cache != null) {
-                const plan = try buffer.lookup_selection_cache.?.gsubFeatureLookupPlan(font, applications, gsub_options, gdef_metadata.*);
-                try font.applyGsubFeatureLookupPlanUsingGdefAfterProof(plan, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
-            } else if (gsub_after_proof) {
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
-            } else {
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
-            }
+            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_initial_reph), glyph_ids, gsub_options, gdef_metadata.*);
+            indic.reorderRephs(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
+            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
         }
     }
 
@@ -2808,6 +2807,23 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         previous_glyph = glyph_id;
     }
     if (shape_profile) |p| p.position_ns += shapeProfileElapsed(position_start, profile_io);
+}
+
+fn applyGsubFeatureApplicationsForShaping(
+    font: *const Font,
+    buffer: *LayoutBuffer,
+    gsub_after_proof: bool,
+    applications: []const gsub.FeatureApplication,
+    glyph_ids: *std.ArrayList(GlyphId),
+    options: gsub.LookupOptions,
+    gdef_metadata: GdefLookupMetadata,
+) !void {
+    if (applications.len == 0) return;
+    if (gsub_after_proof) {
+        try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications, glyph_ids, buffer.allocator, options, gdef_metadata);
+    } else {
+        try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyph_ids, buffer.allocator, options, gdef_metadata);
+    }
 }
 
 fn shapeProfileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {

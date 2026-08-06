@@ -1402,9 +1402,17 @@ fn ligatureComponentInfoForMatch(options: LookupOptions, glyph_index: usize, mat
     info.component_count = @intCast(component_count);
     info.component_sources[0] = sourceForGlyph(options, glyph_index);
     for (1..component_count) |component_index| {
-        info.component_sources[component_index] = sourceForGlyph(options, glyph_index + match.component_offsets[component_index]);
+        insertLigatureComponentSource(&info, component_index, sourceForGlyph(options, glyph_index + match.component_offsets[component_index]));
     }
     return info;
+}
+
+fn insertLigatureComponentSource(info: *gpos.LigatureComponentInfo, end: usize, source: usize) void {
+    var index = end;
+    while (index > 0 and source < info.component_sources[index - 1]) : (index -= 1) {
+        info.component_sources[index] = info.component_sources[index - 1];
+    }
+    info.component_sources[index] = source;
 }
 
 fn setLigatureMetadata(options: LookupOptions, glyph_index: usize, info: gpos.LigatureComponentInfo) void {

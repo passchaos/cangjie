@@ -98,9 +98,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
   lines.
-- NotoSansDevanagari parses and focused words `के`, `कि`, `की`, `का`, and
-  `श्रेणी` pass `compare-harfrust`; broader `hi-words.txt` parity is now
-  blocked later at another Indic conjunct/half-form case, `वार्ता`.
+- NotoSansDevanagari parses and focused words `के`, `कि`, `की`, `का`,
+  `श्रेणी`, `वार्ता`, `वर्षों`, `उत्तराखण्ड`, `हिन्दी`, `द्वारा`, `रूप`,
+  `फ़िल्म`, and `क्षेत्र` pass `compare-harfrust`. The broader
+  `hi-words.txt` corpus now reaches line 119 and is blocked at `स्थित`,
+  another Indic half-form/matra interaction.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -117,9 +119,9 @@ goal is active, not complete.
 - Track output parity, not only timing. `compare-harfrust` now compares glyph
   ids, clusters, advances, and offsets in HarfBuzz-style buffer order; feature
   override and broader font/script matrices still need expansion.
-- Expand the new Indic shaper slice from simple vowel-sign words to consonant
-  clusters, half forms, and conjuncts before treating `hi-words.txt` as a
-  parity corpus.
+- Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
+  `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
+  stages; `hi-words.txt` is still blocked at `स्थित`.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups and GPOS lookups `37`, `57`, and `74`.
 - Avoid retaining optimizations that only improve a single noisy run or regress

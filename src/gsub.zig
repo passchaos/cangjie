@@ -126,6 +126,14 @@ pub const FeatureApplication = struct {
     auto_zwj: bool = true,
 };
 
+pub const source_feature_mask_marker: u32 = 0x80000000;
+
+pub fn sourceFeatureMaskForTag(feature_tag: u32) ?u32 {
+    if (feature_tag == unicode.tag("rphf")) return source_feature_mask_marker | 0x1;
+    if (feature_tag == unicode.tag("half")) return source_feature_mask_marker | 0x2;
+    return null;
+}
+
 pub const FeatureLookupPlanEntry = struct {
     application: FeatureApplication,
     lookups: []u16,
@@ -1349,7 +1357,13 @@ fn sourceFeatureAllowsGlyph(options: LookupOptions, glyph_index: usize) bool {
     const active = options.active_source_feature orelse return true;
     const features = options.source_features orelse return false;
     const source = sourceForGlyph(options, glyph_index);
-    return source < features.len and features[source] == active;
+    if (source >= features.len) return false;
+    const assigned = features[source];
+    if ((assigned & source_feature_mask_marker) != 0) {
+        const active_mask = sourceFeatureMaskForTag(active) orelse return false;
+        return (assigned & active_mask) == active_mask;
+    }
+    return assigned == active;
 }
 
 fn sourceCodepointForGlyph(options: LookupOptions, glyph_index: usize) ?u21 {
@@ -1603,9 +1617,7 @@ fn applyContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.A
                 const rule_set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
                 if (rule_set_relative == 0) continue;
                 const rule_set_offset = subtable_offset + rule_set_relative;
-                if (try applyContextRuleSet(table, rule_set_offset, glyphs, pos, allocator, lookup_flag, options)) {
-                    pos += 1;
-                }
+                _ = try applyContextRuleSet(table, rule_set_offset, glyphs, pos, allocator, lookup_flag, options);
             }
         },
         2 => try applyContextClassSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
@@ -1627,9 +1639,7 @@ fn applyContextClassSubstitution(table: Table, subtable_offset: usize, glyphs: *
         if (class >= class_set_count) continue;
         const set_relative = try readU16(table, subtable_offset + 8 + @as(usize, class) * 2);
         if (set_relative == 0) continue;
-        if (try applyClassRuleSet(table, subtable_offset + set_relative, class_def_offset, glyphs, pos, allocator, lookup_flag, options)) {
-            pos += 1;
-        }
+        _ = try applyClassRuleSet(table, subtable_offset + set_relative, class_def_offset, glyphs, pos, allocator, lookup_flag, options);
     }
 }
 
@@ -1730,9 +1740,7 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
                 if (coverage >= chain_set_count) continue;
                 const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
                 if (set_relative == 0) continue;
-                if (try applyChainingRuleSet(table, subtable_offset + set_relative, glyphs, pos, allocator, lookup_flag, options)) {
-                    pos += 1;
-                }
+                _ = try applyChainingRuleSet(table, subtable_offset + set_relative, glyphs, pos, allocator, lookup_flag, options);
             }
         },
         2 => try applyChainingClassSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
@@ -1888,9 +1896,7 @@ fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: 
         if (input_class >= set_count) continue;
         const set_relative = try readU16(table, subtable_offset + 12 + @as(usize, input_class) * 2);
         if (set_relative == 0) continue;
-        if (try applyChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, allocator, lookup_flag, options)) {
-            pos += 1;
-        }
+        _ = try applyChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, allocator, lookup_flag, options);
     }
 }
 

@@ -6,6 +6,9 @@ const gsub = @import("gsub.zig");
 const unicode = @import("unicode.zig");
 
 const rphf_feature = unicode.tag("rphf");
+const half_feature = unicode.tag("half");
+const rphf_source_mask = gsub.sourceFeatureMaskForTag(rphf_feature).?;
+const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
@@ -32,7 +35,7 @@ pub fn reorderPreBaseMatras(
     }
 }
 
-pub fn markInitialRephs(source_features: []u32, codepoints: []const u21) bool {
+pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21) bool {
     @memset(source_features, 0);
     var marked = false;
 
@@ -46,7 +49,10 @@ pub fn markInitialRephs(source_features: []u32, codepoints: []const u21) bool {
         const syllable_start = index;
         const syllable_end = devanagariSyllableEnd(codepoints, syllable_start);
         if (hasInitialReph(codepoints, syllable_start, syllable_end)) {
-            source_features[syllable_start] = rphf_feature;
+            source_features[syllable_start] |= rphf_source_mask;
+            marked = true;
+        }
+        if (markHalfSources(source_features, codepoints, syllable_start, syllable_end)) {
             marked = true;
         }
         index = syllable_end;
@@ -83,14 +89,14 @@ const pre_reorder_feature_applications = [_]gsub.FeatureApplication{
 
 const basic_feature_applications_without_reph = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("rkrf") },
-    .{ .tag = unicode.tag("half") },
+    .{ .tag = half_feature, .source_scoped = true },
     .{ .tag = unicode.tag("cjct") },
 };
 
 const basic_feature_applications_with_reph = [_]gsub.FeatureApplication{
     .{ .tag = rphf_feature, .source_scoped = true },
     .{ .tag = unicode.tag("rkrf") },
-    .{ .tag = unicode.tag("half") },
+    .{ .tag = half_feature, .source_scoped = true },
     .{ .tag = unicode.tag("cjct") },
 };
 
@@ -128,6 +134,20 @@ fn hasInitialReph(codepoints: []const u21, syllable_start: usize, syllable_end: 
     if (codepoints[syllable_start] != 0x0930 or codepoints[syllable_start + 1] != 0x094d) return false;
     if (isJoiner(codepoints[syllable_start + 2])) return false;
     return hasConsonant(codepoints[syllable_start + 2 .. syllable_end]);
+}
+
+fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize) bool {
+    var marked = false;
+    var index = syllable_start;
+    while (index + 1 < syllable_end) : (index += 1) {
+        if (!isDevanagariConsonant(codepoints[index])) continue;
+        if (codepoints[index + 1] != 0x094d) continue;
+        if (!hasConsonant(codepoints[index + 2 .. syllable_end])) continue;
+
+        source_features[index] |= half_source_mask;
+        marked = true;
+    }
+    return marked;
 }
 
 fn devanagariSyllableEnd(codepoints: []const u21, start: usize) usize {

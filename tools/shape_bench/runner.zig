@@ -214,6 +214,7 @@ const IndicSyllableCluster = struct {
     byte_len: usize,
     base_cluster: usize,
     initial_reph: bool,
+    has_prebase_matra: bool,
 };
 
 fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.GraphemeCluster, indic_syllables: []const IndicSyllableCluster, byte_offset: usize, previous_cluster: ?usize) usize {
@@ -225,6 +226,7 @@ fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.Gr
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| return syllable.base_cluster;
         } else if (isDevanagariConsonant(codepoint)) {
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| {
+                if (syllable.has_prebase_matra) return syllable.byte_start;
                 if (syllable.initial_reph and byte_offset != syllable.byte_start) return syllable.byte_start;
                 return byte_offset;
             }
@@ -303,6 +305,7 @@ fn appendIndicSyllable(clusters: *std.ArrayList(IndicSyllableCluster), allocator
         .byte_len = end - start,
         .base_cluster = indicSyllableBaseCluster(text[start..end], start, initial_reph),
         .initial_reph = initial_reph,
+        .has_prebase_matra = hasPreBaseMatra(text[start..end]),
     });
 }
 
@@ -399,6 +402,15 @@ fn isDevanagariDependentMark(codepoint: u21) bool {
 
 fn isPreBaseMatra(codepoint: u21) bool {
     return codepoint == 0x093f;
+}
+
+fn hasPreBaseMatra(text: []const u8) bool {
+    var view = std.unicode.Utf8View.init(text) catch return false;
+    var it = view.iterator();
+    while (it.nextCodepoint()) |codepoint| {
+        if (isPreBaseMatra(codepoint)) return true;
+    }
+    return false;
 }
 
 fn glyphXAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {

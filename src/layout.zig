@@ -2661,12 +2661,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         if (indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0) {
             try source_features.resize(buffer.allocator, codepoints.items.len);
-            const has_initial_reph = indic.markInitialRephs(source_features.items, codepoints.items);
-            if (has_initial_reph) gsub_options.source_features = source_features.items;
+            const has_basic_source_features = indic.markBasicSourceFeatures(source_features.items, codepoints.items);
+            gsub_options.source_features = source_features.items;
 
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
-            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_initial_reph), glyph_ids, gsub_options, gdef_metadata.*);
+            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderRephs(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
         }

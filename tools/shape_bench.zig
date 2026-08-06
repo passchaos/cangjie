@@ -1,6 +1,7 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
 
+const coretext = @import("shape_bench/coretext.zig");
 const options_mod = @import("shape_bench/options.zig");
 const report = @import("shape_bench/report.zig");
 const runner = @import("shape_bench/runner.zig");
@@ -33,9 +34,13 @@ pub fn main(init: std.process.Init) !void {
     const font_bytes = try runner.loadFontBytes(init.io, allocator, options);
     defer allocator.free(font_bytes);
 
-    var font = try cangjie.Font.parse(allocator, font_bytes);
-    defer font.deinit();
-
-    const result = try runner.runCangjie(init.io, allocator, &font, options);
+    const result = switch (options.engine) {
+        .cangjie => result: {
+            var font = try cangjie.Font.parse(allocator, font_bytes);
+            defer font.deinit();
+            break :result try runner.runCangjie(init.io, allocator, &font, options);
+        },
+        .coretext => try coretext.run(init.io, allocator, font_bytes, options),
+    };
     report.print(options, result);
 }

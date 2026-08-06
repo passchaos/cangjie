@@ -7,7 +7,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
     const ns_per_iter = divFloat(result.elapsed_ns, options.iterations);
     const ns_per_glyph = if (result.glyph_count == 0) 0 else divFloat(result.elapsed_ns, result.glyph_count);
     std.debug.print(
-        \\engine=cangjie
+        \\engine={s}
         \\font={s}
         \\text_bytes={d}
         \\iterations={d}
@@ -30,6 +30,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\profile_glyphs={d}
         \\
     , .{
+        options.engine.label(),
         options.fontLabel(),
         options.text.len,
         options.iterations,

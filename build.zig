@@ -50,16 +50,23 @@ pub fn build(b: *std.Build) void {
         render_text_cmd.addArgs(args);
     }
 
+    const shape_bench_mod = b.createModule(.{
+        .root_source_file = b.path("tools/shape_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "cangjie", .module = mod },
+        },
+    });
+    if (target.result.os.tag == .macos) {
+        shape_bench_mod.linkFramework("CoreFoundation", .{});
+        shape_bench_mod.linkFramework("CoreGraphics", .{});
+        shape_bench_mod.linkFramework("CoreText", .{});
+    }
+
     const shape_bench_exe = b.addExecutable(.{
         .name = "cangjie-shape-bench",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/shape_bench.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "cangjie", .module = mod },
-            },
-        }),
+        .root_module = shape_bench_mod,
     });
 
     const shape_bench_step = b.step("shape-bench", "Benchmark Cangjie text shaping");

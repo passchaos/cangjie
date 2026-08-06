@@ -1,6 +1,24 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
 
+pub const Engine = enum {
+    cangjie,
+    coretext,
+
+    pub fn fromName(name: []const u8) ?Engine {
+        if (std.mem.eql(u8, name, "cangjie")) return .cangjie;
+        if (std.mem.eql(u8, name, "coretext")) return .coretext;
+        return null;
+    }
+
+    pub fn label(self: Engine) []const u8 {
+        return switch (self) {
+            .cangjie => "cangjie",
+            .coretext => "coretext",
+        };
+    }
+};
+
 pub const BuiltinFont = enum {
     minimal,
     minimal_gsub,
@@ -23,6 +41,7 @@ pub const BuiltinFont = enum {
 };
 
 pub const Options = struct {
+    engine: Engine = .cangjie,
     font_path: ?[]const u8 = null,
     builtin_font: BuiltinFont = .script_feature,
     text: []const u8 = "A",
@@ -45,7 +64,11 @@ pub fn parse(args: []const []const u8) !Options {
     var i: usize = 1;
     while (i < args.len) {
         const arg = args[i];
-        if (std.mem.eql(u8, arg, "--font")) {
+        if (std.mem.eql(u8, arg, "--engine")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.engine = Engine.fromName(args[i]) orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--font")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.font_path = args[i];
@@ -89,6 +112,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
 
     if (!std.math.isFinite(options.size) or options.size <= 0) return error.InvalidArguments;
+    if (options.engine == .coretext and options.font_path == null) return error.InvalidArguments;
     return options;
 }
 
@@ -117,6 +141,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\usage: {s} [--font font.ttf|font.ttc] [--builtin minimal|minimal-gsub|script-feature] [--text text] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
+        \\  --engine cangjie|coretext    shaping engine, default cangjie
         \\  --font PATH                  use a real TTF/OTF/TTC font
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature
         \\  --text TEXT                  input text, default "A"
@@ -130,6 +155,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\examples:
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --iterations 50000
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --font /System/Library/Fonts/Supplemental/Arial.ttf --text "Hello world"
+        \\  zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font /System/Library/Fonts/Supplemental/Arial.ttf --text "Hello world"
         \\
     , .{exe});
 }

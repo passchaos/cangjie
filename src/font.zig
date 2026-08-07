@@ -5,6 +5,7 @@ const glyph_mod = @import("glyph.zig");
 const gpos_mod = @import("gpos.zig");
 const gsub_mod = @import("gsub.zig");
 const cmap_iter = @import("opentype/cmap_iter.zig");
+const cmap_variation = @import("opentype/cmap_variation.zig");
 const name_mod = @import("opentype/name.zig");
 
 /// Errors intentionally preserve the table family that failed. Callers such as
@@ -167,6 +168,8 @@ pub const VariationCoordinate = struct {
     tag: [4]u8,
     value: f32,
 };
+
+pub const VariationSequenceKind = cmap_variation.SequenceKind;
 
 pub const VariationInstance = struct {
     subfamily_name_id: u16,
@@ -888,6 +891,45 @@ pub const Font = struct {
             if (subtable.format != 14) continue;
             try self.validateCmapLookupSubtable(subtable);
             if (try glyphIndexFormat14(self, subtable.offset, subtable.length, codepoint, variation_selector)) |glyph_id| return glyph_id;
+        }
+        return null;
+    }
+
+    /// Enumerate Unicode variation selectors advertised by cmap format 14.
+    pub fn variationSelectors(self: *const Font, allocator: std.mem.Allocator) FontError![]u21 {
+        const subtable = self.variationSelectorSubtable() orelse return try allocator.alloc(u21, 0);
+        try self.validateCmapLookupSubtable(subtable);
+        return try cmap_variation.selectors(allocator, self.data, subtable.offset, subtable.length);
+    }
+
+    /// Enumerate selectors that define a default or non-default sequence for a codepoint.
+    pub fn variationSelectorsForCodepoint(self: *const Font, allocator: std.mem.Allocator, codepoint: u21) FontError![]u21 {
+        try validatePublicUnicodeScalar(codepoint);
+        const subtable = self.variationSelectorSubtable() orelse return try allocator.alloc(u21, 0);
+        try self.validateCmapLookupSubtable(subtable);
+        return try cmap_variation.selectorsForCodepoint(allocator, self.data, subtable.offset, subtable.length, codepoint);
+    }
+
+    /// Enumerate base codepoints that are defined for a variation selector.
+    pub fn variationCodepointsForSelector(self: *const Font, allocator: std.mem.Allocator, variation_selector: u21) FontError![]u21 {
+        try validatePublicVariationSelector(variation_selector);
+        const subtable = self.variationSelectorSubtable() orelse return try allocator.alloc(u21, 0);
+        try self.validateCmapLookupSubtable(subtable);
+        return try cmap_variation.codepointsForSelector(allocator, self.data, subtable.offset, subtable.length, variation_selector);
+    }
+
+    /// Classify a Unicode variation sequence as default, non-default, or absent.
+    pub fn variationSequenceKind(self: *const Font, codepoint: u21, variation_selector: u21) FontError!?VariationSequenceKind {
+        try validatePublicUnicodeScalar(codepoint);
+        try validatePublicVariationSelector(variation_selector);
+        const subtable = self.variationSelectorSubtable() orelse return null;
+        try self.validateCmapLookupSubtable(subtable);
+        return try cmap_variation.sequenceKind(self.data, subtable.offset, subtable.length, codepoint, variation_selector);
+    }
+
+    fn variationSelectorSubtable(self: *const Font) ?CmapSubtable {
+        for (self.cmap_subtables) |subtable| {
+            if (subtable.format == 14) return subtable;
         }
         return null;
     }

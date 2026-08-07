@@ -129,6 +129,7 @@ pub const StatDesignAxis = @import("font.zig").StatDesignAxis;
 pub const VariationAxis = @import("font.zig").VariationAxis;
 pub const VariationCoordinate = @import("font.zig").VariationCoordinate;
 pub const VariationInstance = @import("font.zig").VariationInstance;
+pub const VariationSequenceKind = @import("font.zig").VariationSequenceKind;
 pub const VerticalMetrics = @import("font.zig").VerticalMetrics;
 pub const GlyphId = @import("glyph.zig").GlyphId;
 pub const Bounds = @import("glyph.zig").Bounds;
@@ -492,6 +493,61 @@ test "maps cmap format 14 variation selector records" {
     try std.testing.expectEqual(@as(GlyphId, 2), try font.glyphIndexWithVariation('B', 0xfe0f));
     try std.testing.expectEqual(@as(?GlyphId, null), try font.variationGlyphIndex('A', 0xfe0e));
     try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndexWithVariation('A', 0xfe0e));
+
+    const selectors = try font.variationSelectors(allocator);
+    defer allocator.free(selectors);
+    try std.testing.expectEqualSlices(u21, &.{0xfe0f}, selectors);
+
+    const selectors_for_a = try font.variationSelectorsForCodepoint(allocator, 'A');
+    defer allocator.free(selectors_for_a);
+    try std.testing.expectEqualSlices(u21, &.{0xfe0f}, selectors_for_a);
+
+    const selectors_for_b = try font.variationSelectorsForCodepoint(allocator, 'B');
+    defer allocator.free(selectors_for_b);
+    try std.testing.expectEqualSlices(u21, &.{0xfe0f}, selectors_for_b);
+
+    const selectors_for_c = try font.variationSelectorsForCodepoint(allocator, 'C');
+    defer allocator.free(selectors_for_c);
+    try std.testing.expectEqual(@as(usize, 0), selectors_for_c.len);
+
+    const codepoints = try font.variationCodepointsForSelector(allocator, 0xfe0f);
+    defer allocator.free(codepoints);
+    try std.testing.expectEqualSlices(u21, &.{ 'A', 'B' }, codepoints);
+
+    const no_codepoints = try font.variationCodepointsForSelector(allocator, 0xfe0e);
+    defer allocator.free(no_codepoints);
+    try std.testing.expectEqual(@as(usize, 0), no_codepoints.len);
+
+    try std.testing.expectEqual(VariationSequenceKind.non_default, (try font.variationSequenceKind('A', 0xfe0f)).?);
+    try std.testing.expectEqual(VariationSequenceKind.default, (try font.variationSequenceKind('B', 0xfe0f)).?);
+    try std.testing.expect((try font.variationSequenceKind('A', 0xfe0e)) == null);
+}
+
+test "lazy variation selector enumeration revalidates borrowed cmap bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const selectors = try font.variationSelectors(allocator);
+    defer allocator.free(selectors);
+    try std.testing.expectEqualSlices(u21, &.{0xfe0f}, selectors);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var cmap_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "cmap")) cmap_offset = table.offset;
+    }
+    bytes[cmap_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.variationSelectors(allocator));
+    try std.testing.expectError(error.BadSfnt, font.variationSelectorsForCodepoint(allocator, 'A'));
+    try std.testing.expectError(error.BadSfnt, font.variationCodepointsForSelector(allocator, 0xfe0f));
+    try std.testing.expectError(error.BadSfnt, font.variationSequenceKind('A', 0xfe0f));
 }
 
 test "enumerates cmap charmaps including variation selector subtables" {

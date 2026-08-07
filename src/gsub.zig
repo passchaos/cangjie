@@ -3497,6 +3497,9 @@ fn applyChainingCoverageSubstitutionAt(table: Table, subtable_info: ChainingCove
     if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable_info.lookahead_count], true, pos)) return .{};
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, backtrack_indices_buf[0..subtable_info.backtrack_count], subtable_info.backtrack_offsets_pos)) return .{};
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, lookahead_indices_buf[0..subtable_info.lookahead_count], subtable_info.lookahead_offsets_pos)) return .{};
+    if (try applyFastChainingSingleRecords(table, subtable_info, glyphs, input_indices_buf[0..subtable_info.input_count], options)) {
+        return .{ .matched = true, .next_pos = input_indices_buf[subtable_info.input_count - 1] + 1 };
+    }
     try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices_buf[0..subtable_info.input_count], allocator, options);
     return .{ .matched = true, .next_pos = input_indices_buf[subtable_info.input_count - 1] + 1 };
 }

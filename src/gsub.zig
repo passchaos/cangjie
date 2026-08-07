@@ -3554,13 +3554,21 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u
         },
         2 => {
             const range_count = try readU16(table, class_def_offset + 2);
-            try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
-            for (0..range_count) |i| {
-                const range_offset = class_def_offset + 4 + i * 6;
+            if (!table.assume_validated) try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
+            var lo: usize = 0;
+            var hi: usize = range_count;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                const range_offset = class_def_offset + 4 + mid * 6;
                 const start = try readU16(table, range_offset);
                 const end = try readU16(table, range_offset + 2);
                 const class = try readU16(table, range_offset + 4);
                 if (glyph >= start and glyph <= end) return class;
+                if (glyph < start) {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
             }
             return 0;
         },

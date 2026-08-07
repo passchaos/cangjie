@@ -67,6 +67,7 @@ pub const LookupOptions = struct {
     /// candidate glyph's syllable instead of matching across orthographic units.
     source_syllables: ?[]const u8 = null,
     match_source_syllable: bool = false,
+    match_source_syllable_lookups: ?[]const u16 = null,
     /// Original Unicode scalars indexed by `glyph_source_indices`. Contextual
     /// GSUB uses this to mirror HarfBuzz's joiner/default-ignorable skipping
     /// semantics without guessing from substituted glyph ids.
@@ -927,6 +928,7 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
         lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
         try validateMarkFilteringSetIndex(lookup_options);
     }
+    lookup_options.match_source_syllable = lookupMatchesSourceSyllable(lookup_index, options);
     if (lookup_type == 1) {
         try applySingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
         return;
@@ -997,6 +999,16 @@ fn glyphRunHash(glyphs: []const GlyphId) u64 {
         hash *%= 0x100000001b3;
     }
     return hash;
+}
+
+fn lookupMatchesSourceSyllable(lookup_index: ?u16, options: LookupOptions) bool {
+    if (options.match_source_syllable) return true;
+    const index = lookup_index orelse return false;
+    const lookups = options.match_source_syllable_lookups orelse return false;
+    for (lookups) |candidate| {
+        if (candidate == index) return true;
+    }
+    return false;
 }
 
 fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
@@ -1387,7 +1399,7 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError
             if (source >= features.len) return error.InvalidShapingInput;
         }
     }
-    if (options.match_source_syllable) {
+    if (options.match_source_syllable or options.match_source_syllable_lookups != null) {
         const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
         const syllables = options.source_syllables orelse return error.InvalidShapingInput;
         for (sources.items) |source| {
@@ -6480,6 +6492,90 @@ test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 4, 9, 5, 3 }, glyphs.items);
+}
+
+test "GSUB source syllable matching blocks reverse chaining backtrack" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 46;
+
+    writeU16Test(&bytes, 0, 8);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const reverse = 8;
+    writeU16Test(&bytes, reverse + 0, 1);
+    writeU16Test(&bytes, reverse + 2, 20);
+    writeU16Test(&bytes, reverse + 4, 1);
+    writeU16Test(&bytes, reverse + 6, 26);
+    writeU16Test(&bytes, reverse + 8, 0);
+    writeU16Test(&bytes, reverse + 10, 1);
+    writeU16Test(&bytes, reverse + 12, 9);
+    writeCoverage1(&bytes, reverse + 20, 2);
+    writeCoverage1(&bytes, reverse + 26, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1 });
+    const source_syllables = [_]u8{ 1, 2 };
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .glyph_source_indices = &sources,
+        .source_syllables = &source_syllables,
+        .match_source_syllable = true,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+
+    const same_syllable = [_]u8{ 1, 1 };
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .glyph_source_indices = &sources,
+        .source_syllables = &same_syllable,
+        .match_source_syllable = true,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 9 }, glyphs.items);
+}
+
+test "GSUB source syllable matching can target selected lookup indexes" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 46;
+
+    writeU16Test(&bytes, 0, 8);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const reverse = 8;
+    writeU16Test(&bytes, reverse + 0, 1);
+    writeU16Test(&bytes, reverse + 2, 20);
+    writeU16Test(&bytes, reverse + 4, 1);
+    writeU16Test(&bytes, reverse + 6, 26);
+    writeU16Test(&bytes, reverse + 8, 0);
+    writeU16Test(&bytes, reverse + 10, 1);
+    writeU16Test(&bytes, reverse + 12, 9);
+    writeCoverage1(&bytes, reverse + 20, 2);
+    writeCoverage1(&bytes, reverse + 26, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1 });
+    const source_syllables = [_]u8{ 1, 2 };
+    const matched_lookups = [_]u16{0};
+
+    try applyLookupWithIndex(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, 0, &glyphs, allocator, .{
+        .glyph_source_indices = &sources,
+        .source_syllables = &source_syllables,
+        .match_source_syllable_lookups = &matched_lookups,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
 }
 
 test "GSUB MarkAttachmentType uses MarkAttachClassDef without glyph classes" {

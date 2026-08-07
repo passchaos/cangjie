@@ -167,7 +167,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   GSUB now has an opt-in source-syllable matching primitive and profile output
   reports lookup-level before/after glyph hashes; this is not wired into USE
   runtime shaping yet because broad feature-stage experiments regressed the
-  focused gate.
+  focused gate. The primitive can now also target selected lookup indexes, so
+  the next USE step can pass the `rclt` feature's lookup list without changing
+  unrelated GSUB matching.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

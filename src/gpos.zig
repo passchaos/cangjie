@@ -1298,7 +1298,11 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
     // GPOS pair matches, legacy 'kern' must not be applied to that same pair
     // even if the first ValueRecord is empty and all numeric deltas live on the
     // second glyph. Keep a zero-valued record when metadata carries that fact.
-    if (!has_delta and !flags.pair_positioned and flags.attachment_type == .none) return;
+    if (!has_delta and
+        !flags.pair_positioned and
+        flags.attachment_type == .none and
+        !flags.x_advance_absolute and
+        !flags.y_advance_absolute) return;
     var existing_i = adjustments.items.len;
     while (existing_i > 0) {
         existing_i -= 1;
@@ -1332,6 +1336,19 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         .x_advance_absolute = flags.x_advance_absolute,
         .y_advance_absolute = flags.y_advance_absolute,
     });
+}
+
+test "GPOS keeps zero-valued absolute advance adjustments" {
+    const allocator = std.testing.allocator;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try appendAdjustmentEx(&adjustments, allocator, 2, .{ .index = 2, .x_advance = 0 }, .{ .x_advance_absolute = true });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_advance);
+    try std.testing.expect(adjustments.items[0].x_advance_absolute);
 }
 
 fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {

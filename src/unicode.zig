@@ -322,7 +322,7 @@ pub fn resolveJoiningForms(codepoints: []const u21, forms: []JoiningForm) error{
 
     for (codepoints, 0..) |codepoint, index| {
         const current = joiningTypeForCodepoint(codepoint);
-        if (current == .transparent or scriptForCodepoint(codepoint) != .arabic) continue;
+        if (current == .transparent or current == .non_joining or scriptForCodepoint(codepoint) != .arabic) continue;
 
         var previous: ?JoiningType = null;
         var previous_index = index;
@@ -2765,6 +2765,7 @@ test "Arabic presentation forms keep Arabic script and RTL direction" {
 }
 
 test "Arabic joining forms skip transparent marks and honor join controls" {
+    try std.testing.expectEqual(JoiningType.non_joining, joiningTypeForCodepoint(0x0621)); // hamza
     try std.testing.expectEqual(JoiningType.right, joiningTypeForCodepoint(0x0627)); // alef
     try std.testing.expectEqual(JoiningType.dual, joiningTypeForCodepoint(0x0628)); // beh
     try std.testing.expectEqual(JoiningType.transparent, joiningTypeForCodepoint(0x064E)); // fatha
@@ -2775,6 +2776,11 @@ test "Arabic joining forms skip transparent marks and honor join controls" {
     var word_forms: [word.len]JoiningForm = undefined;
     try resolveJoiningForms(&word, &word_forms);
     try std.testing.expectEqualSlices(JoiningForm, &.{ .initial, .none, .medial, .final }, &word_forms);
+
+    const hamza = [_]u21{0x0621};
+    var hamza_forms: [hamza.len]JoiningForm = undefined;
+    try resolveJoiningForms(&hamza, &hamza_forms);
+    try std.testing.expectEqualSlices(JoiningForm, &.{.none}, &hamza_forms);
 
     const with_zwnj = [_]u21{ 0x0628, 0x200C, 0x0628 };
     var zwnj_forms: [with_zwnj.len]JoiningForm = undefined;

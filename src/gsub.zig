@@ -2238,6 +2238,11 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
             if (i > 0) i -= 1;
             continue;
         }
+        if (glyph_count == 1) {
+            glyphs.items[i] = try readU16(table, sequence_offset + 2);
+            markGlyphSubstituted(options, i);
+            continue;
+        }
         const replacement = try allocator.alloc(GlyphId, glyph_count);
         defer allocator.free(replacement);
         for (replacement, 0..) |*glyph, replacement_index| {
@@ -2344,6 +2349,11 @@ fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     if (coverage >= sequence_count) return null;
     const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
     const glyph_count = try readU16(table, sequence_offset);
+    if (glyph_count == 1) {
+        glyphs.items[glyph_index] = try readU16(table, sequence_offset + 2);
+        markGlyphSubstituted(options, glyph_index);
+        return .{};
+    }
 
     const replacement = try allocator.alloc(GlyphId, glyph_count);
     defer allocator.free(replacement);

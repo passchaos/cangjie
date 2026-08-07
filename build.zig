@@ -50,12 +50,20 @@ pub fn build(b: *std.Build) void {
         render_text_cmd.addArgs(args);
     }
 
+    const harfbuzz_c = b.addTranslateC(.{
+        .root_source_file = b.path("tools/shape_bench/harfbuzz.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    harfbuzz_c.linkSystemLibrary("harfbuzz", .{});
+
     const shape_bench_mod = b.createModule(.{
         .root_source_file = b.path("tools/shape_bench.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "cangjie", .module = mod },
+            .{ .name = "harfbuzz", .module = harfbuzz_c.createModule() },
         },
     });
     if (target.result.os.tag == .macos) {

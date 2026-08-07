@@ -8,12 +8,14 @@ pub const Engine = enum {
     cangjie,
     coretext,
     harfrust,
+    harfbuzz,
     compare_harfrust,
 
     pub fn fromName(name: []const u8) ?Engine {
         if (std.mem.eql(u8, name, "cangjie")) return .cangjie;
         if (std.mem.eql(u8, name, "coretext")) return .coretext;
         if (std.mem.eql(u8, name, "harfrust")) return .harfrust;
+        if (std.mem.eql(u8, name, "harfbuzz")) return .harfbuzz;
         if (std.mem.eql(u8, name, "compare-harfrust")) return .compare_harfrust;
         return null;
     }
@@ -23,6 +25,7 @@ pub const Engine = enum {
             .cangjie => "cangjie",
             .coretext => "coretext",
             .harfrust => "harfrust",
+            .harfbuzz => "harfbuzz",
             .compare_harfrust => "compare-harfrust",
         };
     }
@@ -194,7 +197,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
 
     if (!std.math.isFinite(options.size) or options.size <= 0) return error.InvalidArguments;
-    if ((options.engine == .coretext or options.engine == .harfrust or options.engine == .compare_harfrust) and options.font_path == null) return error.InvalidArguments;
+    if ((options.engine == .coretext or options.engine == .harfrust or options.engine == .harfbuzz or options.engine == .compare_harfrust) and options.font_path == null) return error.InvalidArguments;
     return options;
 }
 
@@ -267,7 +270,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\usage: {s} [--font font.ttf|font.ttc] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
-        \\  --engine cangjie|coretext|harfrust|compare-harfrust
+        \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-harfrust
         \\                               shaping engine, default cangjie
         \\  --font PATH                  use a real TTF/OTF/TTC font
         \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup

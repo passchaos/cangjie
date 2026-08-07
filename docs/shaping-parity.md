@@ -47,6 +47,7 @@ zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/
 zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-words.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/en-words.txt --direction ltr --iterations 1 --warmup 1 --samples 2
 zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
+zig build shape-bench -Doptimize=ReleaseFast -- --engine harfbuzz --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 ```
 
 Use `--profile` for targeting only. Profile mode applies Arabic GSUB feature
@@ -68,11 +69,16 @@ Current USE corpus parity gate:
 zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font ~/Work/harfbuzz/perf/fonts/NotoSansDuployan-Regular.otf --text-file ~/Work/harfrust/harfrust/benches/texts/duployan.txt --direction ltr
 ```
 
+The `harfbuzz` engine links the system HarfBuzz C library in-process and is the
+preferred HarfBuzz timing baseline when the local development environment has
+`pkg-config harfbuzz` available. It reports glyph counts and checksums for timing
+comparability but is not yet wired into output-diff mode.
+
 The `harfrust` engine shells out to `hr-shape` once per sample and uses
 `hr-shape -n` for measured iterations. It is useful for batch output parity and
 rough timing against HarfRust, but still includes external process startup and
 serialization/parsing overhead. A library runner is still needed for strict
-HarfRust/HarfBuzz timing.
+HarfRust timing.
 
 `compare-harfrust` runs Cangjie and HarfRust in the same invocation and compares
 per-line glyph-id, UTF-8 cluster, font-unit x/y advance, and x/y offset
@@ -118,6 +124,13 @@ Current local snapshot after the Nastaliq parity work:
 - Reusing the same first-input coverage proof in accelerated GPOS chaining
   format 3 reduced Amiri GPOS profile time from about `100 ms` to `92.8 ms`;
   lookup `37` fell from about `34.0 ms` to `30.1 ms`.
+- Skipping redundant contextual Coverage validation after parse-time GPOS proof
+  reduced a later Amiri `fa-thelittleprince --no-bidi-reorder` profile from
+  about `216 ms` to `172 ms`; GPOS fell from about `65.7 ms` to `34.7 ms`, and
+  lookup `37` from about `32.7 ms` to `4.8 ms`.
+- The new in-process HarfBuzz baseline on the same Amiri workload measured
+  HarfBuzz at about `737 ns/glyph` median versus Cangjie at about
+  `2015 ns/glyph` median with `--no-bidi-reorder` in the same validation pass.
 
 Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 
@@ -171,10 +184,9 @@ goal is active, not complete.
 
 ## Near-Term Gaps
 
-- Add a library-level HarfBuzz or HarfRust comparison runner so CoreText is not
-  the only external timing baseline. The current `harfrust` `shape-bench`
-  engine is a batch external-process baseline, not a fully fair in-process
-  performance baseline.
+- Add a library-level HarfRust comparison runner. The `harfbuzz` `shape-bench`
+  engine is now in-process, but the current `harfrust` engine remains a batch
+  external-process baseline, not a fully fair in-process performance baseline.
 - Expand the benchmark matrix beyond Amiri, Roboto, SourceSerifVariable,
   NotoNastaliqUrdu, and the active Devanagari gate; broader Arabic, Urdu,
   Nastaliq, and mixed-script texts still need retained parity coverage.
@@ -188,8 +200,9 @@ goal is active, not complete.
 - Expand USE shaping parity beyond Duployan. The full local `duployan.txt`
   gate now passes, but other USE scripts/fonts and fuzz/corpus failures still
   need retained gates before this can be called broad USE parity.
-- Continue Arabic hot-path work from measured profile evidence:
-  GSUB `calt` context lookups, GPOS lookup `37`, and the remaining mark/cursive
-  paths after the shared range-search cleanup.
+- Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
+  context lookups now dominate after the GPOS lookup `37` cleanup; avoid
+  retaining speculative prefilters unless they improve both Arabic and Roboto
+  smoke runs reliably.
 - Avoid retaining optimizations that only improve a single noisy run or regress
   Roboto/word-list smoke cases.

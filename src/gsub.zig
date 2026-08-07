@@ -150,7 +150,9 @@ const ChainingCoverageSubtable = struct {
     input_offsets_pos: usize = 0,
     input_count: u16 = 0,
     second_input_digest: GlyphDigest = .{},
+    second_input_coverage_offset: usize = 0,
     third_input_digest: GlyphDigest = .{},
+    third_input_coverage_offset: usize = 0,
     lookahead_offsets_pos: usize = 0,
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
@@ -926,10 +928,12 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
         if (parsed_subtable.input_count > 1) {
             const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 2));
+            chaining_subtables[subtable_i].second_input_coverage_offset = second_coverage_offset;
             chaining_subtables[subtable_i].second_input_digest = try coverageDigest(table, second_coverage_offset);
         }
         if (parsed_subtable.input_count > 2) {
             const third_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 4));
+            chaining_subtables[subtable_i].third_input_coverage_offset = third_coverage_offset;
             chaining_subtables[subtable_i].third_input_digest = try coverageDigest(table, third_coverage_offset);
         }
         const subtable_digest = try coverageDigest(table, coverage_offset);
@@ -3531,7 +3535,20 @@ fn applyAcceleratedChainingCoverageNoContextAt(table: Table, subtable_info: Chai
         input_indices_buf[2] = third_glyph_index orelse return .{};
     }
     const input_indices = input_indices_buf[0..subtable_info.input_count];
-    if (!try coverageIndicesMatchFrom(table, subtable_info.subtable_offset, glyphs.items, input_indices, subtable_info.input_offsets_pos, 1)) return .{};
+    if (subtable_info.input_count > 1) {
+        const coverage_offset = if (subtable_info.second_input_coverage_offset != 0)
+            subtable_info.second_input_coverage_offset
+        else
+            try checkedRequiredCoverageOffset(table, subtable_info.subtable_offset, try readU16(table, subtable_info.input_offsets_pos + 2));
+        if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices[1]]) == null) return .{};
+    }
+    if (subtable_info.input_count > 2) {
+        const coverage_offset = if (subtable_info.third_input_coverage_offset != 0)
+            subtable_info.third_input_coverage_offset
+        else
+            try checkedRequiredCoverageOffset(table, subtable_info.subtable_offset, try readU16(table, subtable_info.input_offsets_pos + 4));
+        if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices[2]]) == null) return .{};
+    }
     if (try applyFastChainingSingleRecords(table, subtable_info, glyphs, input_indices, options)) {
         return .{ .matched = true, .next_pos = input_indices[input_indices.len - 1] + 1 };
     }

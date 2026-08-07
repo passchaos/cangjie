@@ -2668,8 +2668,181 @@ fn applyChainingClassSubstitutionAt(table: Table, subtable_offset: usize, glyphs
     return try applyChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, allocator, lookup_flag, options);
 }
 
+const max_chaining_class_region_glyphs = 64;
+
+const ChainingClassRuleMatchWindow = struct {
+    table: Table,
+    glyphs: []const GlyphId,
+    backtrack_class_def: usize,
+    input_class_def: usize,
+    lookahead_class_def: usize,
+    lookup_flag: u16,
+    options: LookupOptions,
+    anchor_syllable: ?u8,
+
+    input_indices: [max_chaining_class_region_glyphs]usize = undefined,
+    input_classes: [max_chaining_class_region_glyphs]u16 = undefined,
+    input_class_valid: [max_chaining_class_region_glyphs]bool = [_]bool{false} ** max_chaining_class_region_glyphs,
+    input_len: usize = 0,
+    input_scan: usize,
+    input_exhausted: bool = false,
+
+    backtrack_indices: [max_chaining_class_region_glyphs]usize = undefined,
+    backtrack_classes: [max_chaining_class_region_glyphs]u16 = undefined,
+    backtrack_class_valid: [max_chaining_class_region_glyphs]bool = [_]bool{false} ** max_chaining_class_region_glyphs,
+    backtrack_len: usize = 0,
+    backtrack_scan: usize,
+    backtrack_exhausted: bool = false,
+
+    lookahead_indices: [max_chaining_class_region_glyphs]usize = undefined,
+    lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined,
+    lookahead_class_valid: [max_chaining_class_region_glyphs]bool = [_]bool{false} ** max_chaining_class_region_glyphs,
+    lookahead_len: usize = 0,
+    lookahead_scan: usize = 0,
+    lookahead_start: usize = std.math.maxInt(usize),
+    lookahead_exhausted: bool = false,
+
+    fn init(table: Table, glyphs: []const GlyphId, pos: usize, backtrack_class_def: usize, input_class_def: usize, lookahead_class_def: usize, lookup_flag: u16, options: LookupOptions) ChainingClassRuleMatchWindow {
+        return .{
+            .table = table,
+            .glyphs = glyphs,
+            .backtrack_class_def = backtrack_class_def,
+            .input_class_def = input_class_def,
+            .lookahead_class_def = lookahead_class_def,
+            .lookup_flag = lookup_flag,
+            .options = options,
+            .anchor_syllable = sourceSyllableForGlyph(options, pos),
+            .input_scan = pos,
+            .backtrack_scan = pos,
+        };
+    }
+
+    fn inputSlice(self: *ChainingClassRuleMatchWindow, count: usize) GsubError!?[]const usize {
+        if (count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        if (!try self.ensureInputCount(count)) return null;
+        return self.input_indices[0..count];
+    }
+
+    fn inputClassAt(self: *ChainingClassRuleMatchWindow, index: usize) GsubError!?u16 {
+        if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        if (!try self.ensureInputCount(index + 1)) return null;
+        if (!self.input_class_valid[index]) {
+            self.input_classes[index] = try classValue(self.table, self.input_class_def, self.glyphs[self.input_indices[index]]);
+            self.input_class_valid[index] = true;
+        }
+        return self.input_classes[index];
+    }
+
+    fn backtrackClassAt(self: *ChainingClassRuleMatchWindow, index: usize) GsubError!?u16 {
+        if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        if (!try self.ensureBacktrackCount(index + 1)) return null;
+        if (!self.backtrack_class_valid[index]) {
+            self.backtrack_classes[index] = try classValue(self.table, self.backtrack_class_def, self.glyphs[self.backtrack_indices[index]]);
+            self.backtrack_class_valid[index] = true;
+        }
+        return self.backtrack_classes[index];
+    }
+
+    fn lookaheadClassAt(self: *ChainingClassRuleMatchWindow, input_count: usize, index: usize) GsubError!?u16 {
+        if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        if (!try self.ensureLookaheadCount(input_count, index + 1)) return null;
+        if (!self.lookahead_class_valid[index]) {
+            self.lookahead_classes[index] = try classValue(self.table, self.lookahead_class_def, self.glyphs[self.lookahead_indices[index]]);
+            self.lookahead_class_valid[index] = true;
+        }
+        return self.lookahead_classes[index];
+    }
+
+    fn ensureInputCount(self: *ChainingClassRuleMatchWindow, count: usize) GsubError!bool {
+        if (count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        while (self.input_len < count) {
+            if (self.input_exhausted) return false;
+            var found = false;
+            while (self.input_scan < self.glyphs.len) : (self.input_scan += 1) {
+                const glyph_index = self.input_scan;
+                if (contextualMaySkipGlyph(self.lookup_flag, self.options, self.glyphs, glyph_index, false)) continue;
+                if (!sourceSyllableAllowsGlyph(self.options, self.anchor_syllable, glyph_index)) {
+                    self.input_exhausted = true;
+                    return false;
+                }
+                self.input_indices[self.input_len] = glyph_index;
+                self.input_len += 1;
+                self.input_scan += 1;
+                found = true;
+                break;
+            }
+            if (!found) {
+                self.input_exhausted = true;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn ensureBacktrackCount(self: *ChainingClassRuleMatchWindow, count: usize) GsubError!bool {
+        if (count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        while (self.backtrack_len < count) {
+            if (self.backtrack_exhausted) return false;
+            var found = false;
+            while (self.backtrack_scan > 0) {
+                self.backtrack_scan -= 1;
+                if (contextualMaySkipGlyph(self.lookup_flag, self.options, self.glyphs, self.backtrack_scan, true)) continue;
+                if (!sourceSyllableAllowsGlyph(self.options, self.anchor_syllable, self.backtrack_scan)) {
+                    self.backtrack_exhausted = true;
+                    return false;
+                }
+                self.backtrack_indices[self.backtrack_len] = self.backtrack_scan;
+                self.backtrack_len += 1;
+                found = true;
+                break;
+            }
+            if (!found) {
+                self.backtrack_exhausted = true;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn ensureLookaheadCount(self: *ChainingClassRuleMatchWindow, input_count: usize, count: usize) GsubError!bool {
+        if (input_count == 0 or input_count > max_chaining_class_region_glyphs or count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        if (!try self.ensureInputCount(input_count)) return false;
+        const start = self.input_indices[input_count - 1] + 1;
+        if (self.lookahead_start != start) {
+            self.lookahead_start = start;
+            self.lookahead_scan = start;
+            self.lookahead_len = 0;
+            self.lookahead_exhausted = false;
+            @memset(&self.lookahead_class_valid, false);
+        }
+        while (self.lookahead_len < count) {
+            if (self.lookahead_exhausted) return false;
+            var found = false;
+            while (self.lookahead_scan < self.glyphs.len) : (self.lookahead_scan += 1) {
+                const glyph_index = self.lookahead_scan;
+                if (contextualMaySkipGlyph(self.lookup_flag, self.options, self.glyphs, glyph_index, true)) continue;
+                if (!sourceSyllableAllowsGlyph(self.options, self.anchor_syllable, glyph_index)) {
+                    self.lookahead_exhausted = true;
+                    return false;
+                }
+                self.lookahead_indices[self.lookahead_len] = glyph_index;
+                self.lookahead_len += 1;
+                self.lookahead_scan += 1;
+                found = true;
+                break;
+            }
+            if (!found) {
+                self.lookahead_exhausted = true;
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
 fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_def: usize, input_class_def: usize, lookahead_class_def: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
     const rule_count = try readU16(table, set_offset);
+    var window = ChainingClassRuleMatchWindow.init(table, glyphs.items, pos, backtrack_class_def, input_class_def, lookahead_class_def, lookup_flag, options);
     for (0..rule_count) |rule_i| {
         const rule_offset = set_offset + try readU16(table, set_offset + 2 + rule_i * 2);
         var cursor = rule_offset;
@@ -2678,13 +2851,14 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
         // input, input at `pos`, and lookahead after the input.
         const backtrack_count = try readU16(table, cursor);
         cursor += 2;
-        var backtrack_indices_buf: [64]usize = undefined;
-        if (backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count], true, pos)) continue;
+        if (backtrack_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
         var matched = true;
         for (0..backtrack_count) |i| {
             const expected_class = try readU16(table, cursor + i * 2);
-            const actual_class = try classValue(table, backtrack_class_def, glyphs.items[backtrack_indices_buf[i]]);
+            const actual_class = (try window.backtrackClassAt(i)) orelse {
+                matched = false;
+                break;
+            };
             if (actual_class != expected_class) {
                 matched = false;
                 break;
@@ -2696,12 +2870,14 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
         const input_count = try readU16(table, cursor);
         cursor += 2;
         if (input_count == 0) continue;
-        var input_indices_buf: [64]usize = undefined;
-        if (input_count > input_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..input_count], false, pos)) continue;
+        if (input_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        const input_indices = (try window.inputSlice(input_count)) orelse continue;
         for (1..input_count) |i| {
             const expected_class = try readU16(table, cursor + (i - 1) * 2);
-            const actual_class = try classValue(table, input_class_def, glyphs.items[input_indices_buf[i]]);
+            const actual_class = (try window.inputClassAt(i)) orelse {
+                matched = false;
+                break;
+            };
             if (actual_class != expected_class) {
                 matched = false;
                 break;
@@ -2712,13 +2888,14 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
 
         const lookahead_count = try readU16(table, cursor);
         cursor += 2;
-        const lookahead_start = input_indices_buf[input_count - 1] + 1;
-        var lookahead_indices_buf: [64]usize = undefined;
-        if (lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count], true, pos)) continue;
+        if (lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+        if (!try window.ensureLookaheadCount(input_count, lookahead_count)) continue;
         for (0..lookahead_count) |i| {
             const expected_class = try readU16(table, cursor + i * 2);
-            const actual_class = try classValue(table, lookahead_class_def, glyphs.items[lookahead_indices_buf[i]]);
+            const actual_class = (try window.lookaheadClassAt(input_count, i)) orelse {
+                matched = false;
+                break;
+            };
             if (actual_class != expected_class) {
                 matched = false;
                 break;
@@ -2729,8 +2906,8 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
 
         const subst_count = try readU16(table, cursor);
         cursor += 2;
-        try applySubstitutionRecordsMapped(table, glyphs, cursor, subst_count, input_indices_buf[0..input_count], allocator, options);
-        return .{ .matched = true, .next_pos = input_indices_buf[input_count - 1] + 1 };
+        try applySubstitutionRecordsMapped(table, glyphs, cursor, subst_count, input_indices, allocator, options);
+        return .{ .matched = true, .next_pos = input_indices[input_count - 1] + 1 };
     }
     return .{};
 }

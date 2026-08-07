@@ -2391,7 +2391,7 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
         const mark_filtering_set_pos = subtable_offsets_pos + subtable_offsets_len;
         if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGsub;
     }
-    if (lookup_type == 7) {
+    if (lookup_type == 7 and !table.assume_validated) {
         try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
     }
 }

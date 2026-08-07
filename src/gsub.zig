@@ -1430,11 +1430,12 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
 }
 
 fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    const profiling = options.shape_profile != null;
     const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
-    const glyph_count_before = glyphs.items.len;
-    const glyph_hash_before = glyphRunHash(glyphs.items);
-    const glyphs_before = if (options.shape_profile != null) try allocator.dupe(GlyphId, glyphs.items) else &.{};
-    defer if (options.shape_profile != null) allocator.free(glyphs_before);
+    const glyph_count_before = if (profiling) glyphs.items.len else 0;
+    const glyph_hash_before = if (profiling) glyphRunHash(glyphs.items) else 0;
+    const glyphs_before = if (profiling) try allocator.dupe(GlyphId, glyphs.items) else &.{};
+    defer if (profiling) allocator.free(glyphs_before);
     defer {
         if (options.shape_profile) |profile| {
             const first_diff = firstDifferentGlyphIndex(glyphs_before, glyphs.items);

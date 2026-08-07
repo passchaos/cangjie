@@ -106,7 +106,13 @@ pub fn reorderRephs(
         }
 
         const syllable_end = devanagariSyllableEnd(codepoints, source_index);
-        const target = rephTargetGlyphIndex(glyph_source_indices.items, codepoints, source_index, syllable_end, index);
+        const target = rephTargetGlyphIndex(
+            glyph_source_indices.items,
+            codepoints,
+            source_index,
+            syllable_end,
+            index,
+        );
         moveGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index, target);
         index = target + 1;
     }
@@ -254,20 +260,36 @@ fn preBaseMatraTargetGlyphIndex(sources: []const usize, syllable_start: usize, m
     return fallback_index;
 }
 
-fn rephTargetGlyphIndex(sources: []const usize, codepoints: []const u21, syllable_start: usize, syllable_end: usize, reph_index: usize) usize {
+fn rephTargetGlyphIndex(
+    sources: []const usize,
+    codepoints: []const u21,
+    syllable_start: usize,
+    syllable_end: usize,
+    reph_index: usize,
+) usize {
     var target = reph_index;
-    var saw_post_halant_consonant = false;
     for (sources, 0..) |source, glyph_index| {
         if (glyph_index == reph_index) continue;
         if (source < syllable_start or source >= syllable_end) continue;
         if (source < codepoints.len and isDevanagariSyllableModifier(codepoints[source])) break;
         if (isPostHalantConsonant(codepoints, source, syllable_start)) {
-            if (saw_post_halant_consonant) break;
-            saw_post_halant_consonant = true;
+            if (hasVisibleViramaBeforeSource(sources, glyph_index, source)) break;
         }
         target = glyph_index;
     }
     return target;
+}
+
+fn hasVisibleViramaBeforeSource(sources: []const usize, glyph_index: usize, source: usize) bool {
+    if (source == 0) return false;
+    var index = glyph_index;
+    while (index > 0) {
+        index -= 1;
+        const previous_source = sources[index];
+        if (previous_source < source - 1) return false;
+        if (previous_source == source - 1) return true;
+    }
+    return false;
 }
 
 fn isPostHalantConsonant(codepoints: []const u21, source: usize, syllable_start: usize) bool {

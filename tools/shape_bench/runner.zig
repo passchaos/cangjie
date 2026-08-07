@@ -201,10 +201,12 @@ fn glyphClusters(allocator: std.mem.Allocator, text: []const u8, glyphs: []const
     const indic_syllables = try indicSyllableClusters(allocator, text);
     defer allocator.free(indic_syllables);
     var previous_cluster: ?usize = null;
+    var previous_raw_cluster: ?usize = null;
     for (glyphs, clusters) |glyph, *cluster| {
-        const normalized = normalizedClusterStartForByte(text, graphemes, indic_syllables, glyph.cluster, previous_cluster);
+        const normalized = normalizedClusterStartForByte(text, graphemes, indic_syllables, glyph.cluster, previous_cluster, previous_raw_cluster);
         cluster.* = @intCast(normalized);
         previous_cluster = normalized;
+        previous_raw_cluster = glyph.cluster;
     }
     return clusters;
 }
@@ -217,7 +219,7 @@ const IndicSyllableCluster = struct {
     has_prebase_matra: bool,
 };
 
-fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.GraphemeCluster, indic_syllables: []const IndicSyllableCluster, byte_offset: usize, previous_cluster: ?usize) usize {
+fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.GraphemeCluster, indic_syllables: []const IndicSyllableCluster, byte_offset: usize, previous_cluster: ?usize, previous_raw_cluster: ?usize) usize {
     if (codepointAtByte(text, byte_offset)) |codepoint| {
         if (isPreBaseMatra(codepoint) or codepoint == 0x094d) {
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| return syllable.byte_start;
@@ -228,6 +230,7 @@ fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.Gr
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| {
                 if (syllable.has_prebase_matra) return syllable.byte_start;
                 if (syllable.initial_reph and byte_offset != syllable.byte_start) {
+                    if (previous_cluster == syllable.byte_start and previous_raw_cluster != syllable.byte_start and followsVirama(text, byte_offset)) return syllable.byte_start;
                     return if (isFirstPostHalantConsonant(text, syllable.byte_start, byte_offset))
                         syllable.byte_start
                     else
@@ -371,6 +374,21 @@ fn isFirstPostHalantConsonant(text: []const u8, syllable_start: usize, byte_offs
             return false;
         }
         previous_was_virama = codepoint == 0x094d;
+    }
+    return false;
+}
+
+fn followsVirama(text: []const u8, byte_offset: usize) bool {
+    var view = std.unicode.Utf8View.init(text) catch return false;
+    var it = view.iterator();
+    var cursor: usize = 0;
+    var previous: ?u21 = null;
+    while (it.nextCodepoint()) |codepoint| {
+        const byte_start = cursor;
+        cursor = it.i;
+        if (byte_start == byte_offset) return previous == 0x094d;
+        if (byte_start > byte_offset) return false;
+        previous = codepoint;
     }
     return false;
 }

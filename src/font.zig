@@ -71,6 +71,22 @@ pub const MaxProfileInfo = struct {
     max_component_depth: ?u16 = null,
 };
 
+pub const MetricHeaderInfo = struct {
+    version: u32,
+    ascender: i16,
+    descender: i16,
+    line_gap: i16,
+    advance_max: u16,
+    min_side_bearing: i16,
+    min_opposite_side_bearing: i16,
+    max_extent: i16,
+    caret_slope_rise: i16,
+    caret_slope_run: i16,
+    caret_offset: i16,
+    metric_data_format: i16,
+    long_metric_count: u16,
+};
+
 pub const CharmapInfo = struct {
     platform_id: u16,
     encoding_id: u16,
@@ -720,6 +736,30 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, self.maxp);
         try validateMaxpTable(self.data, self.maxp, self.format);
         return try readMaxProfileInfo(self.data, self.maxp);
+    }
+
+    /// Read validated metadata from the SFNT `hhea` table.
+    pub fn horizontalHeaderInfo(self: *const Font) FontError!MetricHeaderInfo {
+        try validateSfntTableChecksum(self.data, self.hhea);
+        _ = try validateHorizontalMetricsTables(self.data, self.hhea, self.hmtx, self.glyph_count);
+        return try readMetricHeaderInfo(self.data, self.hhea);
+    }
+
+    /// Read validated metadata from the optional SFNT `vhea` table.
+    ///
+    /// Fonts without vertical metrics return null; a dangling vhea/vmtx pair or
+    /// malformed borrowed table reports InvalidMetrics/BadSfnt instead of
+    /// silently falling back to horizontal metrics.
+    pub fn verticalHeaderInfo(self: *const Font) FontError!?MetricHeaderInfo {
+        const vhea = findTable(self.owned_tables, "vhea") orelse {
+            if (findTable(self.owned_tables, "vmtx") != null) return error.InvalidMetrics;
+            return null;
+        };
+        const vmtx = findTable(self.owned_tables, "vmtx") orelse return error.InvalidMetrics;
+        try validateSfntTableChecksum(self.data, vhea);
+        try validateSfntTableChecksum(self.data, vmtx);
+        _ = try validateVerticalMetricsTables(self.data, self.glyph_count, vhea, vmtx);
+        return try readMetricHeaderInfo(self.data, vhea);
     }
 
     /// Enumerate parsed cmap encoding records, similar to FreeType charmaps.
@@ -3392,6 +3432,25 @@ fn clampI16(value: i32) i16 {
     if (value < std.math.minInt(i16)) return std.math.minInt(i16);
     if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
     return @intCast(value);
+}
+
+fn readMetricHeaderInfo(data: []const u8, header: TableRecord) FontError!MetricHeaderInfo {
+    try requireTableLength(header, 36);
+    return .{
+        .version = try bin.readU32At(data, header.offset),
+        .ascender = try bin.readI16At(data, header.offset + 4),
+        .descender = try bin.readI16At(data, header.offset + 6),
+        .line_gap = try bin.readI16At(data, header.offset + 8),
+        .advance_max = try bin.readU16At(data, header.offset + 10),
+        .min_side_bearing = try bin.readI16At(data, header.offset + 12),
+        .min_opposite_side_bearing = try bin.readI16At(data, header.offset + 14),
+        .max_extent = try bin.readI16At(data, header.offset + 16),
+        .caret_slope_rise = try bin.readI16At(data, header.offset + 18),
+        .caret_slope_run = try bin.readI16At(data, header.offset + 20),
+        .caret_offset = try bin.readI16At(data, header.offset + 22),
+        .metric_data_format = try bin.readI16At(data, header.offset + 32),
+        .long_metric_count = try bin.readU16At(data, header.offset + 34),
+    };
 }
 
 fn validateHorizontalMetricsTables(data: []const u8, hhea: TableRecord, hmtx: TableRecord, glyph_count: u16) FontError!u16 {

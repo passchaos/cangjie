@@ -94,6 +94,7 @@ pub const FontFormat = @import("font.zig").FontFormat;
 pub const FontHeaderInfo = @import("font.zig").FontHeaderInfo;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
+pub const MetricHeaderInfo = @import("font.zig").MetricHeaderInfo;
 pub const GlyphClass = @import("font.zig").GlyphClass;
 pub const NameEncoding = @import("font.zig").NameEncoding;
 pub const NameId = @import("font.zig").NameId;
@@ -274,6 +275,14 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expectEqual(@as(?u16, 2), maxp.max_zones);
     try std.testing.expectEqual(@as(?u16, 0), maxp.max_component_depth);
 
+    const hhea = try font.horizontalHeaderInfo();
+    try std.testing.expectEqual(@as(u32, 0x00010000), hhea.version);
+    try std.testing.expectEqual(@as(i16, 800), hhea.ascender);
+    try std.testing.expectEqual(@as(i16, -200), hhea.descender);
+    try std.testing.expectEqual(@as(i16, 0), hhea.line_gap);
+    try std.testing.expectEqual(@as(u16, 2), hhea.long_metric_count);
+    try std.testing.expect((try font.verticalHeaderInfo()) == null);
+
     const tables = try font.tables(allocator);
     defer allocator.free(tables);
     try std.testing.expect(tables.len >= 6);
@@ -341,6 +350,23 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expect(covered > 10);
 }
 
+test "vertical header metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const vhea = (try font.verticalHeaderInfo()).?;
+    try std.testing.expectEqual(@as(u32, 0x00011000), vhea.version);
+    try std.testing.expectEqual(@as(i16, 800), vhea.ascender);
+    try std.testing.expectEqual(@as(i16, -200), vhea.descender);
+    try std.testing.expectEqual(@as(u16, 1), vhea.long_metric_count);
+}
+
 test "minimal OTF exposes compact maxp metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -379,6 +405,47 @@ test "lazy head metadata revalidates borrowed table bytes" {
     bytes[head_offset orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.headInfo());
+}
+
+test "lazy metric header metadata revalidates borrowed bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expectEqual(@as(u16, 2), (try font.horizontalHeaderInfo()).long_metric_count);
+        const tables = try font.tables(allocator);
+        defer allocator.free(tables);
+        var hhea_offset: ?usize = null;
+        for (tables) |table| {
+            if (std.mem.eql(u8, &table.tag, "hhea")) hhea_offset = table.offset;
+        }
+        bytes[hhea_offset orelse return error.MissingTable] +%= 1;
+        try std.testing.expectError(error.BadSfnt, font.horizontalHeaderInfo());
+    }
+
+    {
+        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        try std.testing.expect((try font.verticalHeaderInfo()) != null);
+        const tables = try font.tables(allocator);
+        defer allocator.free(tables);
+        var vhea_offset: ?usize = null;
+        for (tables) |table| {
+            if (std.mem.eql(u8, &table.tag, "vhea")) vhea_offset = table.offset;
+        }
+        bytes[vhea_offset orelse return error.MissingTable] +%= 1;
+        try std.testing.expectError(error.BadSfnt, font.verticalHeaderInfo());
+    }
 }
 
 test "lazy maxp metadata revalidates borrowed table bytes" {

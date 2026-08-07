@@ -3,6 +3,7 @@ const bin = @import("binary.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
+const ot_layout = @import("opentype/layout.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
 
@@ -3675,25 +3676,18 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u
         2 => {
             const range_count = try readU16(table, class_def_offset + 2);
             if (!table.assume_validated) try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
-            var lo: usize = 0;
-            var hi: usize = range_count;
-            while (lo < hi) {
-                const mid = lo + (hi - lo) / 2;
-                const range_offset = class_def_offset + 4 + mid * 6;
-                const start = try readU16(table, range_offset);
-                const end = try readU16(table, range_offset + 2);
-                const class = try readU16(table, range_offset + 4);
-                if (glyph >= start and glyph <= end) return class;
-                if (glyph < start) {
-                    hi = mid;
-                } else {
-                    lo = mid + 1;
-                }
-            }
-            return 0;
+            return if (try findSortedGlyphRangeRecord(table, class_def_offset + 4, range_count, glyph)) |record| record.value else 0;
         },
         else => return error.UnsupportedGsub,
     }
+}
+
+fn findSortedGlyphRangeRecord(table: Table, records_offset: usize, range_count: u16, glyph: GlyphId) GsubError!?ot_layout.GlyphRangeRecord {
+    if (table.offset > table.data.len or table.length > table.data.len - table.offset) return error.EndOfStream;
+    const data = table.data[table.offset .. table.offset + table.length];
+    return ot_layout.findSortedGlyphRangeRecord(data, records_offset, range_count, glyph) catch |err| switch (err) {
+        error.EndOfStream => error.EndOfStream,
+    };
 }
 
 fn validateClassDefFormat2Ranges(table: Table, class_def_offset: usize, range_count: u16) GsubError!void {

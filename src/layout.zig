@@ -9,6 +9,7 @@ const gsub = @import("gsub.zig");
 const indic = @import("indic.zig");
 const layout_cache = @import("layout_cache.zig");
 const layout_scratch = @import("layout_scratch.zig");
+const bidi = @import("text/bidi.zig");
 const unicode = @import("unicode.zig");
 const use_shaper = @import("use_shaper.zig");
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
@@ -1832,6 +1833,12 @@ fn appendScriptedRunForByteRange(buffer: *LayoutBuffer, text: []const u8, script
 
 fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection, single_font: ?*const Font) !void {
     if (buffer.glyphs.items.len == 0) return;
+    const can_reverse_in_place = single_font != null or buffer.runs.items.len <= 1;
+    if (can_reverse_in_place and bidi.visualOrderInputKind(text, direction == .rtl) == .pure_rtl) {
+        bidi.applyPureRtlVisualOrder(&buffer.glyphs, single_font);
+        recomputeRunOffsets(buffer);
+        return;
+    }
     const base_direction: unicode.BidiClass = if (direction == .rtl) .rtl else .ltr;
     var bidi_map = try unicode.buildBidiMap(buffer.allocator, text, base_direction);
     defer bidi_map.deinit();

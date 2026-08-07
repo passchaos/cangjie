@@ -1435,6 +1435,8 @@ test "reads STAT axis value metadata" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
+    try std.testing.expectEqual(@as(?u16, 2), try font.statElidedFallbackNameId(allocator));
+
     const values = try font.statAxisValues(allocator);
     defer font.freeStatAxisValues(allocator, values);
 

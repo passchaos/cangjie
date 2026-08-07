@@ -1361,6 +1361,20 @@ pub const Font = struct {
         allocator.free(instances);
     }
 
+    pub fn statElidedFallbackNameId(self: *const Font, allocator: std.mem.Allocator) FontError!?u16 {
+        const stat = self.stat orelse return null;
+        var name_index_storage: NameIdIndex = undefined;
+        const name_index: ?*const NameIdIndex = if (self.name) |name| blk: {
+            name_index_storage = try readNameIdIndex(self.data, name);
+            break :blk &name_index_storage;
+        } else null;
+        try validateSfntTableChecksum(self.data, stat);
+        if (self.fvar) |fvar| try validateSfntTableChecksum(self.data, fvar);
+        try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
+        const info = try readStatInfo(self.data, stat);
+        return if (info.minor >= 1) try bin.readU16At(self.data, stat.offset + 18) else null;
+    }
+
     pub fn statDesignAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]StatDesignAxis {
         const stat = self.stat orelse return try allocator.alloc(StatDesignAxis, 0);
         var name_index_storage: NameIdIndex = undefined;
@@ -16022,6 +16036,7 @@ test "STAT design axes public API revalidates borrowed metadata" {
         const values = try font.statAxisValues(allocator);
         defer font.freeStatAxisValues(allocator, values);
         try std.testing.expectEqual(@as(usize, 0), values.len);
+        try std.testing.expectEqual(@as(?u16, null), try font.statElidedFallbackNameId(allocator));
     }
 
     {
@@ -16048,6 +16063,7 @@ test "STAT design axes public API revalidates borrowed metadata" {
         try std.testing.expectEqual(@as(?u16, 0), values[0].axis_index);
         try std.testing.expectEqual(@as(u16, 2), values[0].name_id);
         try std.testing.expectApproxEqAbs(@as(f32, 400.0), values[0].value.?, 0.001);
+        try std.testing.expectEqual(@as(?u16, 2), try font.statElidedFallbackNameId(allocator));
     }
 
     {
@@ -16066,6 +16082,7 @@ test "STAT design axes public API revalidates borrowed metadata" {
 
         writeU16Test(bytes, name_offset + 6 + 1 * 12 + 6, 401);
         try std.testing.expectError(error.InvalidName, font.statAxisValues(allocator));
+        try std.testing.expectError(error.InvalidName, font.statElidedFallbackNameId(allocator));
     }
 
     {
@@ -16086,6 +16103,7 @@ test "STAT design axes public API revalidates borrowed metadata" {
         writeU16Test(bytes, stat_offset + 26, 2);
         try std.testing.expectError(error.BadSfnt, font.statDesignAxes(allocator));
         try std.testing.expectError(error.BadSfnt, font.statAxisValues(allocator));
+        try std.testing.expectError(error.BadSfnt, font.statElidedFallbackNameId(allocator));
     }
 
     {

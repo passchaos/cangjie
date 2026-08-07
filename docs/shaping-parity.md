@@ -8,10 +8,10 @@ the working checklist for that bar.
 
 Local references to inspect before non-trivial shaping changes:
 
-- `/Users/bytedance/Work/harfbuzz`
-- `/Users/bytedance/Work/harfrust`
-- `/Users/bytedance/Work/fontations`
-- `/Users/bytedance/Work/freetype`
+- `~/Work/harfbuzz`
+- `~/Work/harfrust`
+- `~/Work/fontations`
+- `~/Work/freetype`
 
 Use HarfBuzz as the primary shaping semantics reference. Use fontations for
 modern table parsing structure, harfrust for the benchmark corpus and Rust
@@ -43,10 +43,10 @@ Run these after shaping hot-path changes:
 
 ```sh
 zig build test
-zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
-zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/fa-words.txt --direction rtl --iterations 1 --warmup 2 --samples 5
-zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/en-words.txt --direction ltr --iterations 1 --warmup 1 --samples 2
-zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file /Users/bytedance/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
+zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
+zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-words.txt --direction rtl --iterations 1 --warmup 2 --samples 5
+zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/en-words.txt --direction ltr --iterations 1 --warmup 1 --samples 2
+zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 ```
 
 Use `--profile` for targeting only. Profile mode applies Arabic GSUB feature
@@ -56,10 +56,16 @@ feature-plan hot path.
 For output parity against HarfRust, build the local CLI once:
 
 ```sh
-(cd /Users/bytedance/Work/harfrust && cargo build --release -p hr-shape)
-zig build shape-bench -Doptimize=ReleaseFast -- --engine harfrust --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
-zig build shape-bench -Doptimize=ReleaseFast -- --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
-zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl
+(cd ~/Work/harfrust && cargo build --release -p hr-shape)
+zig build shape-bench -Doptimize=ReleaseFast -- --engine harfrust --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
+zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
+zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl
+```
+
+Current USE corpus parity gate:
+
+```sh
+zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font ~/Work/harfbuzz/perf/fonts/NotoSansDuployan-Regular.otf --text-file ~/Work/harfrust/harfrust/benches/texts/duployan.txt --direction ltr
 ```
 
 The `harfrust` engine shells out to `hr-shape` once per sample and uses
@@ -143,12 +149,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `ट्विटर`, `वैश्विक`, `श्वि`, `क्वि`, and `ट्वि` pass `compare-harfrust`.
 - NotoSansDevanagari `hi-words.txt` passes `compare-harfrust` for 10,000
   lines.
-- NotoSansDuployan still needs broad corpus validation, but the active focused
-  USE blockers now pass against HarfRust with glyph id, UTF-8 cluster, advance,
-  and offset parity:
-  - `𛰂𛱛` passes with 161 glyphs.
-  - `𛰜‌𛰂` passes with 169 glyphs.
-  - `𛰂𛱛͏͏͏𛰜‌𛰂` passes with 335 glyphs.
+- NotoSansDuployan `duployan.txt` now passes `compare-harfrust` for all 14
+  non-empty lines in the local HarfBuzz/HarfRust corpus, covering 503,948
+  glyphs with glyph id, UTF-8 cluster, advance, and offset parity
+  (`checksum=9e78013ddfed36e1`). Focused blockers `𛰂𛱛`, `𛰜‌𛰂`, and
+  `𛰂𛱛͏͏͏𛰜‌𛰂` also pass individually.
   The fixes are structural rather than sample-specialized: USE final features
   now mirror HarfBuzz/HarfRust's `abvs/blws/haln/pres/psts` stage, common
   typographic features such as `abvm`, `blwm`, `dist`, and `rclt` run in a
@@ -157,9 +162,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   stay visible to later matching and final hiding. This matches the HarfBuzz
   `_hb_glyph_info_is_default_ignorable()` contract used by HarfRust.
   Earlier focused slices also fixed extension-wrapped chaining-context lookup
-  ordering and CursivePos placement/advance chaining. The remaining Duployan
-  work is to validate the full local `duployan.txt` corpus and other USE fonts
-  before making a broader USE parity claim.
+  ordering and CursivePos placement/advance chaining. The remaining USE work is
+  to validate other USE scripts and fonts before making a broader USE parity
+  claim.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -180,10 +185,9 @@ goal is active, not complete.
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
-- Finish Duployan/USE shaping parity at corpus scale. The active short
-  Duployan gates pass, but full local `duployan.txt`, other USE scripts, and
-  fuzz/corpus failures still need retained gates before this can be called
-  broad USE parity.
+- Expand USE shaping parity beyond Duployan. The full local `duployan.txt`
+  gate now passes, but other USE scripts/fonts and fuzz/corpus failures still
+  need retained gates before this can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups, GPOS lookup `37`, and the remaining mark/cursive
   paths after the shared range-search cleanup.

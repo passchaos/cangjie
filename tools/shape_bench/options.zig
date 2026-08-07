@@ -2,6 +2,7 @@ const std = @import("std");
 const cangjie = @import("cangjie");
 
 const max_feature_overrides = 16;
+pub const default_harfrust_bin = "hr-shape";
 
 pub const Engine = enum {
     cangjie,
@@ -51,7 +52,8 @@ pub const BuiltinFont = enum {
 pub const Options = struct {
     engine: Engine = .cangjie,
     font_path: ?[]const u8 = null,
-    harfrust_bin: []const u8 = "/Users/bytedance/Work/harfrust/target/release/hr-shape",
+    harfrust_bin: []const u8 = default_harfrust_bin,
+    harfrust_bin_explicit: bool = false,
     builtin_font: BuiltinFont = .script_feature,
     text: []const u8 = "A",
     text_path: ?[]const u8 = null,
@@ -118,6 +120,7 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.harfrust_bin = args[i];
+            options.harfrust_bin_explicit = true;
         } else if (std.mem.eql(u8, arg, "--builtin")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -267,7 +270,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --engine cangjie|coretext|harfrust|compare-harfrust
         \\                               shaping engine, default cangjie
         \\  --font PATH                  use a real TTF/OTF/TTC font
-        \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust
+        \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature
         \\  --text TEXT                  input text, default "A"
         \\  --text-file PATH             read input text from a UTF-8 file
@@ -292,7 +295,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --iterations 50000
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --font /System/Library/Fonts/Supplemental/Arial.ttf --text "Hello world"
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font /System/Library/Fonts/Supplemental/Arial.ttf --text "Hello world"
-        \\  zig build shape-bench -Doptimize=ReleaseFast -- --engine harfrust --font /Users/bytedance/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام"
+        \\  zig build shape-bench -Doptimize=ReleaseFast -- --engine harfrust --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام"
         \\
     , .{exe});
 }

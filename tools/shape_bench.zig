@@ -29,6 +29,9 @@ pub fn main(init: std.process.Init) !void {
             return err;
         },
     };
+    const resolved_harfrust_bin = try resolveDefaultHarfRustBin(init.io, allocator, init.environ_map, &options);
+    defer if (resolved_harfrust_bin) |path| allocator.free(path);
+
     const text_bytes = if (options.text_path) |path|
         try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024))
     else
@@ -63,6 +66,32 @@ pub fn main(init: std.process.Init) !void {
         allocator.free(result.samples);
     }
     report.print(options, result);
+}
+
+fn resolveDefaultHarfRustBin(io: std.Io, allocator: std.mem.Allocator, environ_map: *const std.process.Environ.Map, options: *options_mod.Options) !?[]u8 {
+    if (options.engine != .harfrust and options.engine != .compare_harfrust) return null;
+    if (options.harfrust_bin_explicit or !std.mem.eql(u8, options.harfrust_bin, options_mod.default_harfrust_bin)) return null;
+
+    const home = environ_map.get("HOME") orelse return null;
+    if (home.len == 0 or !std.fs.path.isAbsolute(home)) return null;
+
+    const path = try std.fs.path.join(allocator, &.{ home, "Work/harfrust/target/release/hr-shape" });
+    errdefer allocator.free(path);
+
+    // The local reference repositories live under ~/Work in this project. Prefer
+    // that checked-out binary when it exists so documented parity gates work on
+    // the user's checkout without baking a per-machine absolute path into the
+    // command-line default. If the binary has not been built, fall back to PATH
+    // lookup for "hr-shape".
+    std.Io.Dir.accessAbsolute(io, path, .{ .execute = true }) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied, error.PermissionDenied => {
+            allocator.free(path);
+            return null;
+        },
+        else => return err,
+    };
+    options.harfrust_bin = path;
+    return path;
 }
 
 fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, base_options: options_mod.Options) !void {

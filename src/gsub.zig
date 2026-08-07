@@ -1659,6 +1659,13 @@ const BoolScratch = struct {
 };
 
 fn applyExtensionSingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    if (subtable_count == 1) {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
+        const extension_subtable = try extensionSubtablePayload(table, subtable_offset, 1);
+        try applySingleSubstitution(table, extension_subtable, glyphs, lookup_flag, options);
+        return;
+    }
+
     // ExtensionSubst only widens subtable offsets; homogeneous wrapped
     // SingleSubst subtables are still ordered alternatives within one lookup.
     // Track physical positions matched by earlier wrapped subtables so a
@@ -1775,6 +1782,12 @@ fn applyExtensionMultipleSubstitutionLookup(table: Table, lookup_offset: usize, 
 }
 
 fn applySingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    if (subtable_count == 1) {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
+        try applySingleSubstitution(table, subtable_offset, glyphs, lookup_flag, options);
+        return;
+    }
+
     // OpenType lookup subtables are ordered alternatives for a lookup. A glyph
     // that matched an earlier SingleSubst subtable must not be fed into later
     // subtables in the same lookup; otherwise fonts that split disjoint rules

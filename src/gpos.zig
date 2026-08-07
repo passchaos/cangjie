@@ -62,6 +62,12 @@ const Table = struct {
     offset: usize,
     length: usize,
     assume_validated: bool = false,
+    /// True only during Font.parse's exhaustive LookupList validation. In that
+    /// mode every lookup's payload is visited by the outer pass, so contextual
+    /// PosLookupRecords only need to prove that their indexes are in range.
+    /// Runtime shaping leaves this false because a matched context must
+    /// preflight nested lookups before appending any partial adjustments.
+    validating_full_lookup_list: bool = false,
     /// Optional maxp.numGlyphs bound supplied by Font.parse. Runtime shaping
     /// callers do not know the SFNT maxp table, so their Table values leave
     /// this null and keep the historical structural-only validation.
@@ -223,7 +229,13 @@ const max_context_preflight_depth = 16;
 /// lookups and glyph ids outside maxp are rejected.
 pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph_count: u16) GposError!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
-    const table = Table{ .data = data, .offset = offset, .length = length, .glyph_count = glyph_count };
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .validating_full_lookup_list = true,
+        .glyph_count = glyph_count,
+    };
     const major = try readU16BadGpos(table, 0);
     if (major != 1) return error.UnsupportedGpos;
 
@@ -2655,6 +2667,7 @@ fn ensurePositionRecordReferencesWithinDepth(table: Table, records_pos: usize, r
         if (sequence_index >= input_count) return error.BadGpos;
         const lookup_index = try readU16BadGpos(table, record_offset + 2);
         if (lookup_index >= lookup_count) return error.BadGpos;
+        if (table.validating_full_lookup_list) continue;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_offset_pos));
         try ensurePositionLookupHeaderAndExtensionPayloadsWithin(table, lookup_offset);

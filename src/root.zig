@@ -83,6 +83,7 @@ pub const userFontSourcesForOs = @import("database.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
 pub const CharmapInfo = @import("font.zig").CharmapInfo;
+pub const CharmapMapping = @import("font.zig").CharmapMapping;
 pub const FontDecorationMetrics = @import("font.zig").FontDecorationMetrics;
 pub const FontDecorationMetricSource = @import("font.zig").FontDecorationMetricSource;
 pub const FontScriptMetrics = @import("font.zig").FontScriptMetrics;
@@ -286,6 +287,8 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
 
     const default_charmap = (try font.defaultCharmap()).?;
     try std.testing.expectEqual(charmaps[0], default_charmap);
+    try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 'A', .glyph_id = 1 }), (try font.firstCharmapMapping(default_charmap)).?);
+    try std.testing.expect((try font.nextCharmapMapping(default_charmap, 'A')) == null);
 
     var outline = try font.glyphOutline(allocator, 1);
     defer outline.deinit();
@@ -518,6 +521,7 @@ test "enumerates cmap charmaps including variation selector subtables" {
     try std.testing.expectEqual(charmaps[0], default_charmap);
     try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndexWithCharmap(default_charmap, 'A'));
     try std.testing.expectError(error.UnsupportedCmap, font.glyphIndexWithCharmap(charmaps[1], 'A'));
+    try std.testing.expectError(error.UnsupportedCmap, font.firstCharmapMapping(charmaps[1]));
 }
 
 test "maps glyphs through explicitly selected charmaps" {
@@ -541,6 +545,58 @@ test "maps glyphs through explicitly selected charmaps" {
     stale.encoding_id = 99;
     try std.testing.expectError(error.BadSfnt, font.glyphIndexWithCharmap(stale, 0x1f600));
     try std.testing.expectError(error.InvalidCodepoint, font.glyphIndexWithCharmap(charmaps[0], 0xd800));
+}
+
+test "iterates selected charmap mappings" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    {
+        const bytes = try test_font.buildTrimmedCmapTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const charmap = (try font.defaultCharmap()).?;
+        const first = (try font.firstCharmapMapping(charmap)).?;
+        try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 'A', .glyph_id = 1 }), first);
+        const second = (try font.nextCharmapMapping(charmap, first.codepoint)).?;
+        try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 'C', .glyph_id = 3 }), second);
+        try std.testing.expect((try font.nextCharmapMapping(charmap, second.codepoint)) == null);
+    }
+
+    {
+        const bytes = try test_font.buildTrimmed32CmapTtf(allocator);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const charmap = (try font.defaultCharmap()).?;
+        const first = (try font.firstCharmapMapping(charmap)).?;
+        try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 0x1f600, .glyph_id = 1 }), first);
+        const second = (try font.nextCharmapMapping(charmap, first.codepoint)).?;
+        try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 0x1f602, .glyph_id = 3 }), second);
+        try std.testing.expect((try font.nextCharmapMapping(charmap, second.codepoint)) == null);
+    }
+}
+
+test "iterates last-resort cmap ranges without entering surrogates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const charmap = (try font.defaultCharmap()).?;
+    const first = (try font.firstCharmapMapping(charmap)).?;
+    try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 0, .glyph_id = 1 }), first);
+    const after_bmp = (try font.nextCharmapMapping(charmap, 0xd7ff)).?;
+    try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 0xe000, .glyph_id = 1 }), after_bmp);
+    try std.testing.expect((try font.nextCharmapMapping(charmap, 0x10ffff)) == null);
 }
 
 test "lazy charmap enumeration revalidates borrowed cmap bytes" {
@@ -567,6 +623,7 @@ test "lazy charmap enumeration revalidates borrowed cmap bytes" {
     try std.testing.expectError(error.BadSfnt, font.defaultCharmap());
     try std.testing.expectError(error.BadSfnt, font.charmaps(allocator));
     try std.testing.expectError(error.BadSfnt, font.glyphIndexWithCharmap(stale_charmap, 'A'));
+    try std.testing.expectError(error.BadSfnt, font.firstCharmapMapping(stale_charmap));
 }
 
 test "shapes cmap format 14 variation selectors as base glyph variants" {

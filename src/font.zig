@@ -4,6 +4,7 @@ const cff_mod = @import("cff.zig");
 const glyph_mod = @import("glyph.zig");
 const gpos_mod = @import("gpos.zig");
 const gsub_mod = @import("gsub.zig");
+const cmap_iter = @import("opentype/cmap_iter.zig");
 const name_mod = @import("opentype/name.zig");
 
 /// Errors intentionally preserve the table family that failed. Callers such as
@@ -47,6 +48,8 @@ pub const CharmapInfo = struct {
     /// null rather than inventing a platform-specific value.
     language: ?u32 = null,
 };
+
+pub const CharmapMapping = cmap_iter.Mapping;
 
 pub const NameId = name_mod.NameId;
 pub const NameEncoding = name_mod.Encoding;
@@ -697,6 +700,17 @@ pub const Font = struct {
         return try self.glyphIndexInSubtable(subtable, codepoint);
     }
 
+    /// Return the first non-missing mapping in a selected charmap.
+    pub fn firstCharmapMapping(self: *const Font, charmap: CharmapInfo) FontError!?CharmapMapping {
+        return try self.nextMappingAfter(charmap, null);
+    }
+
+    /// Return the next non-missing mapping after `codepoint` in a selected charmap.
+    pub fn nextCharmapMapping(self: *const Font, charmap: CharmapInfo, codepoint: u21) FontError!?CharmapMapping {
+        try validatePublicUnicodeScalar(codepoint);
+        return try self.nextMappingAfter(charmap, codepoint);
+    }
+
     /// Map a Unicode scalar value to a glyph id using the best supported cmap.
     ///
     /// Format 12 is preferred for precise full-Unicode coverage, which matters
@@ -709,6 +723,13 @@ pub const Font = struct {
         try validatePublicUnicodeScalar(codepoint);
         const chosen = self.selectedCmapSubtable() orelse return error.UnsupportedCmap;
         return try self.glyphIndexInSubtable(chosen, codepoint);
+    }
+
+    fn nextMappingAfter(self: *const Font, charmap: CharmapInfo, after: ?u21) FontError!?CharmapMapping {
+        const subtable = try self.subtableForCharmap(charmap);
+        if (!cmapSubtableSupportsGlyphLookup(subtable.format)) return error.UnsupportedCmap;
+        try self.validateCmapLookupSubtable(subtable);
+        return try cmap_iter.next(self.data, subtable.offset, subtable.length, subtable.format, after);
     }
 
     fn glyphIndexInSubtable(self: *const Font, subtable: CmapSubtable, codepoint: u21) FontError!glyph_mod.GlyphId {

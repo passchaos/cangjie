@@ -1718,6 +1718,12 @@ fn applyExtensionAlternateSubstitutionLookup(table: Table, lookup_offset: usize,
 }
 
 fn applyMultipleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    if (subtable_count == 1) {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
+        try applyMultipleSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options);
+        return;
+    }
+
     // MultipleSubst can change cardinality, but lookup subtables are still
     // alternatives for a single original input position. Process one target
     // position through the subtable list before advancing, so a replacement
@@ -1752,6 +1758,13 @@ fn applyMultipleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_
 }
 
 fn applyExtensionMultipleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    if (subtable_count == 1) {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
+        const extension_subtable = try extensionSubtablePayload(table, subtable_offset, 2);
+        try applyMultipleSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options);
+        return;
+    }
+
     // Homogeneous ExtensionSubst(MultipleSubst) lookups need the same
     // per-position ordering as direct MultipleSubst. Delegating each extension
     // subtable over the whole run would allow 10=>20 in subtable 0 to cascade

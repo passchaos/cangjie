@@ -28,6 +28,13 @@ pub const FontFormat = enum {
     opentype_cff,
 };
 
+pub const FontTableInfo = struct {
+    tag: [4]u8,
+    checksum: u32,
+    offset: usize,
+    length: usize,
+};
+
 pub const NameId = enum(u16) {
     copyright = 0,
     family = 1,
@@ -599,6 +606,19 @@ pub const Font = struct {
         self.allocator.free(self.cmap_subtables);
         self.allocator.free(self.owned_tables);
         self.* = undefined;
+    }
+
+    pub fn tables(self: *const Font, allocator: std.mem.Allocator) std.mem.Allocator.Error![]FontTableInfo {
+        const infos = try allocator.alloc(FontTableInfo, self.owned_tables.len);
+        for (infos, self.owned_tables) |*info, record| {
+            info.* = .{
+                .tag = record.tag,
+                .checksum = record.checksum,
+                .offset = record.offset,
+                .length = record.length,
+            };
+        }
+        return infos;
     }
 
     /// Map a Unicode scalar value to a glyph id using the best supported cmap.

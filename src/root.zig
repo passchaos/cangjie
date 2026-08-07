@@ -89,6 +89,7 @@ pub const ScaledFontDecorationMetrics = @import("font.zig").ScaledFontDecoration
 pub const ScaledFontScriptMetrics = @import("font.zig").ScaledFontScriptMetrics;
 pub const FontError = @import("font.zig").FontError;
 pub const FontFormat = @import("font.zig").FontFormat;
+pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const GlyphClass = @import("font.zig").GlyphClass;
 pub const NameId = @import("font.zig").NameId;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
@@ -248,6 +249,18 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expectEqual(FontFormat.truetype, font.format);
     try std.testing.expectEqual(@as(u16, 1000), font.units_per_em);
     try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex('A'));
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    try std.testing.expect(tables.len >= 6);
+    var saw_head = false;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "head")) {
+            saw_head = true;
+            try std.testing.expect(table.length >= 54);
+        }
+    }
+    try std.testing.expect(saw_head);
 
     var outline = try font.glyphOutline(allocator, 1);
     defer outline.deinit();

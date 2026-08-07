@@ -160,8 +160,8 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   (`checksum=8263e47a0b8deac1`); this covers nested contextual GPOS `kern`
   recursion through ExtensionPos into PairPos. Focused `"این"` also passes
   after enabling nested ExtensionSubst ContextSubst recursion to reach the
-  `ddb -> ddb.one` substitution path. `fa-words` now passes the first 100-line
-  `compare-harfbuzz` probe (`checksum=29c089105d0ea01d`), including the
+  `ddb -> ddb.one` substitution path. `fa-words` now passes the first 500-line
+  `compare-harfbuzz` probe (`checksum=e7bb0c2ef140fa4`), including the
   previously blocking `"تغییرمسیر"` reverse-chain ordering case.
 - NotoNastaliqUrdu `fa-words.txt` passes `compare-harfrust` for 10,000 lines,
   and `fa-thelittleprince.txt` passes for 771 lines; focused blockers `"سلام"`,
@@ -201,9 +201,9 @@ goal is active, not complete.
   engine is now in-process, but the current `harfrust` engine remains a batch
   external-process baseline, not a fully fair in-process performance baseline.
 - Expand the benchmark matrix beyond Amiri, Roboto, SourceSerifVariable,
-  NotoNastaliqUrdu, and the active Devanagari gate; Gulzar now passes a retained 100-line `fa-words` slice, but full broader
-  Arabic font corpora, Urdu, Nastaliq, and mixed-script texts still need
-  retained parity coverage.
+  NotoNastaliqUrdu, and the active Devanagari gate; Gulzar now passes a retained
+  500-line `fa-words` slice, but full broader Arabic font corpora, Urdu,
+  Nastaliq, and mixed-script texts still need retained parity coverage.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

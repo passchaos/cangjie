@@ -201,6 +201,7 @@ const ChainingClassSubtableAccelerator = struct {
     coverage_offset: usize = 0,
     input_class_def: usize = 0,
     lookahead_class_def: usize = 0,
+    uniform_input_count: u16 = 0,
     rules: []const class_context.Rule = &.{},
     classes: []const u16 = &.{},
     groups: []const class_context.RuleGroup = &.{},
@@ -495,14 +496,20 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
 
             const input_count = try readU16(table, cursor);
             cursor += 2;
-            if (input_count != 1) return null;
+            if (input_count == 0 or input_count > max_chaining_class_region_glyphs) return null;
+            const classes_start = classes.items.len;
+            var hash = class_context.sequenceHashEmpty();
+            for (1..input_count) |input_i| {
+                const class = try readU16(table, cursor + (input_i - 1) * 2);
+                try classes.append(allocator, class);
+                hash = class_context.sequenceHashAppend(hash, class);
+            }
+            cursor += (@as(usize, input_count) - 1) * 2;
 
             const lookahead_count = try readU16(table, cursor);
             cursor += 2;
             if (lookahead_count > max_chaining_class_region_glyphs) return null;
 
-            const classes_start = classes.items.len;
-            var hash = class_context.sequenceHashEmpty();
             for (0..lookahead_count) |lookahead_i| {
                 const class = try readU16(table, cursor + lookahead_i * 2);
                 try classes.append(allocator, class);
@@ -519,6 +526,7 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
 
             try rules.append(allocator, .{
                 .class_set = @intCast(set_i),
+                .input_count = input_count,
                 .lookahead_count = lookahead_count,
                 .hash = hash,
                 .order = order,
@@ -535,14 +543,17 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
     while (group_start < rules.items.len) {
         const class_set = rules.items[group_start].class_set;
         var group_end = group_start;
+        var max_input_count: u16 = 0;
         var max_lookahead_count: u16 = 0;
         while (group_end < rules.items.len and rules.items[group_end].class_set == class_set) : (group_end += 1) {
+            max_input_count = @max(max_input_count, rules.items[group_end].input_count);
             max_lookahead_count = @max(max_lookahead_count, rules.items[group_end].lookahead_count);
         }
         try groups.append(allocator, .{
             .class_set = class_set,
             .start = group_start,
             .len = group_end - group_start,
+            .max_input_count = max_input_count,
             .max_lookahead_count = max_lookahead_count,
         });
         group_start = group_end;
@@ -560,6 +571,7 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
         .coverage_offset = coverage_offset,
         .input_class_def = input_class_def,
         .lookahead_class_def = lookahead_class_def,
+        .uniform_input_count = if (groups_slice.len == 1) groups_slice[0].max_input_count else 0,
         .rules = rules_slice,
         .classes = classes_slice,
         .groups = groups_slice,
@@ -872,7 +884,14 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
                 // coverage-only shape handled by the homogeneous fast path
                 // below. Let the generic ExtensionPos dispatcher preserve
                 // ordering while supporting glyph/class chaining formats too.
-                8 => {},
+                8 => {
+                    if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                        if (accelerator.chaining_class_subtables.len != 0) {
+                            try collectExtensionChainingClassPositioningLookup(table, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator);
+                            return;
+                        }
+                    }
+                },
                 else => {},
             }
         }
@@ -2409,15 +2428,41 @@ fn collectNestedExtensionChainingClassPositioningAt(table: Table, subtable_count
     return false;
 }
 
+fn collectExtensionChainingClassPositioningLookup(table: Table, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!void {
+    var pos: usize = 0;
+    while (pos < glyphs.len) {
+        var next_pos = pos + 1;
+        defer pos = next_pos;
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        var subtable_i: usize = 0;
+        while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
+            const subtable = accelerator.chaining_class_subtables[subtable_i];
+            if (subtable.rules.len == 0) continue;
+            const result = try collectAcceleratedChainingClassPositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options);
+            if (result) {
+                next_pos = pos + 1;
+                break;
+            }
+        }
+    }
+}
+
 fn collectAcceleratedChainingClassPositioningAt(table: Table, subtable: ChainingClassSubtableAccelerator, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     if (try coverageIndex(table, subtable.coverage_offset, glyphs[pos]) == null) return false;
     const input_class = try classValue(table, subtable.input_class_def, glyphs[pos]);
     const group = class_context.groupForClass(subtable.groups, input_class) orelse return false;
-    if (group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGpos;
+    if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs or group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGpos;
+
+    var input_indices: [max_chaining_class_region_glyphs]usize = undefined;
+    if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices[0..group.max_input_count])) return false;
+    var input_classes: [max_chaining_class_region_glyphs]u16 = undefined;
+    for (1..group.max_input_count) |input_i| {
+        input_classes[input_i - 1] = try classValue(table, subtable.input_class_def, glyphs[input_indices[input_i]]);
+    }
 
     var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
     var lookahead_count: usize = 0;
-    var glyph_i = pos + 1;
+    var glyph_i = input_indices[group.max_input_count - 1] + 1;
     while (glyph_i < glyphs.len and lookahead_count < group.max_lookahead_count) : (glyph_i += 1) {
         if (matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
         lookahead_classes[lookahead_count] = try classValue(table, subtable.lookahead_class_def, glyphs[glyph_i]);
@@ -2426,16 +2471,21 @@ fn collectAcceleratedChainingClassPositioningAt(table: Table, subtable: Chaining
 
     const rules = subtable.rules[group.start .. group.start + group.len];
     for (rules) |rule| {
+        if (rule.input_count > group.max_input_count) return error.BadGpos;
+        if (rule.input_count == 0) continue;
+        if (rule.lookahead_count > group.max_lookahead_count) return error.BadGpos;
         if (rule.lookahead_count > lookahead_count) continue;
-        if (rule.hash != class_context.sequenceHash(lookahead_classes[0..rule.lookahead_count])) continue;
-        const expected = subtable.classes[rule.classes_start .. rule.classes_start + rule.lookahead_count];
-        if (!std.mem.eql(u16, expected, lookahead_classes[0..rule.lookahead_count])) continue;
+        const extra_input_count = @as(usize, rule.input_count) - 1;
+        var hash = class_context.sequenceHash(input_classes[0..extra_input_count]);
+        for (lookahead_classes[0..rule.lookahead_count]) |class| hash = class_context.sequenceHashAppend(hash, class);
+        if (rule.hash != hash) continue;
+        const expected_input = subtable.classes[rule.classes_start .. rule.classes_start + extra_input_count];
+        if (!std.mem.eql(u16, expected_input, input_classes[0..extra_input_count])) continue;
+        const expected_lookahead = subtable.classes[rule.classes_start + extra_input_count .. rule.classes_start + extra_input_count + rule.lookahead_count];
+        if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
 
-        // The accelerated representation is intentionally limited to the
-        // Gulzar-style shape: one input glyph and one PosLookupRecord targeting
-        // sequence index 0. That keeps nested lookup application identical to
-        // collectPositionRecordsMapped while avoiding the 1900-rule scan.
-        try collectNestedAdjustment(table, glyphs, pos, rule.lookup_index, adjustments, allocator, options);
+        const matched_inputs = input_indices[0..rule.input_count];
+        try collectNestedAdjustment(table, glyphs, matched_inputs[0], rule.lookup_index, adjustments, allocator, options);
         return true;
     }
     return false;

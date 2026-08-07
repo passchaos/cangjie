@@ -13,6 +13,7 @@ pub const ClassRole = enum {
 /// side-car class array.
 pub const Rule = struct {
     class_set: u16,
+    input_count: u16,
     lookahead_count: u16,
     hash: u64,
     order: u32,
@@ -24,6 +25,7 @@ pub const RuleGroup = struct {
     class_set: u16,
     start: usize,
     len: usize,
+    max_input_count: u16,
     max_lookahead_count: u16,
 };
 

@@ -182,14 +182,20 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   to `[7828,73,7930,223]`. In glyph names, lookup `280` rewrites
   `u1BC5B.ou` (`129`) to `u1BC5B.ou.270p270` (`223`), preventing the later
   `blwm` lookup `248` from inserting `_.pe.0.0` for the second cluster.
-  After the staged USE wiring, that `blwm` insertion happens, and the remaining
-  focused blocker is `dist`: profile output shows lookup `390` rewriting
-  second-cluster RDX path fragments from `_.rdx.3e1, _.rdx.0e2` to
-  `_.rdx.0e1, _.rdx.2e2`, followed by lookup `396` uppercasing them to the
-  final mismatching glyphs. The next slice should compare Cangjie's nested
-  chaining-context handling for lookup `390 -> 228 -> 229/230/231` against
-  HarfBuzz/HarfRust, especially backtrack matching, MarkFilteringSet handling,
-  and recursive lookup match-position bounds.
+  After the staged USE wiring, that `blwm` insertion happens. The next GSUB
+  slice fixed extension-wrapped chaining-context lookup ordering so matched
+  no-op subtables consume their input span like HarfBuzz/HarfRust. That removes
+  the two-base glyph-id mismatch: `𛰂𛱛` now has the same 161 glyph ids as
+  HarfRust. The two-base gate is still not full parity because positioning
+  differs: Cangjie still reports `x_advance=120` for `u1BC02.p` at glyph index
+  `11` and `x_advance=277` for `u1BC5B.ou.270p270` at index `88`, while
+  HarfRust reports `0` and `148`. The focused remaining blocker is CursivePos
+  and positioning finish semantics for Duployan lookup `12`; Cangjie records an
+  absolute cursive advance for index `11`, but HarfRust outputs the glyph as
+  `u1BC02.p=0@-120,0+0`.
+  The short mixed CGJ/ZWNJ sample is also not parity yet. Its first glyph-id
+  mismatch moved later to the byte-14 segment after the extension chaining fix,
+  so the second-cluster `U+1BC5B` path is no longer the first blocker.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

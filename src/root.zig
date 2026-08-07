@@ -93,6 +93,7 @@ pub const FontError = @import("font.zig").FontError;
 pub const FontFormat = @import("font.zig").FontFormat;
 pub const FontHeaderInfo = @import("font.zig").FontHeaderInfo;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
+pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const GlyphClass = @import("font.zig").GlyphClass;
 pub const NameEncoding = @import("font.zig").NameEncoding;
 pub const NameId = @import("font.zig").NameId;
@@ -265,6 +266,14 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expectEqual(@as(u16, 8), header.lowest_rec_ppem);
     try std.testing.expectEqual(@as(i16, 0), header.index_to_loc_format);
 
+    const maxp = try font.maxpInfo();
+    try std.testing.expectEqual(@as(u32, 0x00010000), maxp.version);
+    try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
+    try std.testing.expectEqual(@as(?u16, 3), maxp.max_points);
+    try std.testing.expectEqual(@as(?u16, 1), maxp.max_contours);
+    try std.testing.expectEqual(@as(?u16, 2), maxp.max_zones);
+    try std.testing.expectEqual(@as(?u16, 0), maxp.max_component_depth);
+
     const tables = try font.tables(allocator);
     defer allocator.free(tables);
     try std.testing.expect(tables.len >= 6);
@@ -332,6 +341,23 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expect(covered > 10);
 }
 
+test "minimal OTF exposes compact maxp metadata" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalOtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const maxp = try font.maxpInfo();
+    try std.testing.expectEqual(@as(u32, 0x00005000), maxp.version);
+    try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
+    try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
+    try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
 test "lazy head metadata revalidates borrowed table bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -353,6 +379,29 @@ test "lazy head metadata revalidates borrowed table bytes" {
     bytes[head_offset orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.headInfo());
+}
+
+test "lazy maxp metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(u16, 2), (try font.maxpInfo()).glyph_count);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var maxp_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "maxp")) maxp_offset = table.offset;
+    }
+    bytes[maxp_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.maxpInfo());
 }
 
 test "raw SFNT table data revalidates borrowed checksums" {

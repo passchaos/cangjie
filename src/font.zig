@@ -53,6 +53,24 @@ pub const FontHeaderInfo = struct {
     glyph_data_format: i16,
 };
 
+pub const MaxProfileInfo = struct {
+    version: u32,
+    glyph_count: u16,
+    max_points: ?u16 = null,
+    max_contours: ?u16 = null,
+    max_composite_points: ?u16 = null,
+    max_composite_contours: ?u16 = null,
+    max_zones: ?u16 = null,
+    max_twilight_points: ?u16 = null,
+    max_storage: ?u16 = null,
+    max_function_defs: ?u16 = null,
+    max_instruction_defs: ?u16 = null,
+    max_stack_elements: ?u16 = null,
+    max_size_of_instructions: ?u16 = null,
+    max_component_elements: ?u16 = null,
+    max_component_depth: ?u16 = null,
+};
+
 pub const CharmapInfo = struct {
     platform_id: u16,
     encoding_id: u16,
@@ -691,6 +709,17 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, self.head);
         try validateHeadTable(self.data, self.head, self.format);
         return try readFontHeaderInfo(self.data, self.head);
+    }
+
+    /// Read validated metadata from the SFNT `maxp` table.
+    ///
+    /// TrueType outlines expose the complete version-1.0 maximum-profile
+    /// payload; CFF-backed OpenType faces expose the version-0.5 glyph count
+    /// and leave TrueType-only maxima as null.
+    pub fn maxpInfo(self: *const Font) FontError!MaxProfileInfo {
+        try validateSfntTableChecksum(self.data, self.maxp);
+        try validateMaxpTable(self.data, self.maxp, self.format);
+        return try readMaxProfileInfo(self.data, self.maxp);
     }
 
     /// Enumerate parsed cmap encoding records, similar to FreeType charmaps.
@@ -3159,6 +3188,32 @@ fn validateHeadTable(data: []const u8, head: TableRecord, format: FontFormat) Fo
         return error.InvalidLoca;
     }
     if (glyph_data_format != 0) return error.BadSfnt;
+}
+
+fn readMaxProfileInfo(data: []const u8, maxp: TableRecord) FontError!MaxProfileInfo {
+    try requireTableLength(maxp, 6);
+    const version = try bin.readU32At(data, maxp.offset);
+    var info = MaxProfileInfo{
+        .version = version,
+        .glyph_count = try bin.readU16At(data, maxp.offset + 4),
+    };
+    if (version == 0x00010000) {
+        try requireTableLength(maxp, 32);
+        info.max_points = try bin.readU16At(data, maxp.offset + 6);
+        info.max_contours = try bin.readU16At(data, maxp.offset + 8);
+        info.max_composite_points = try bin.readU16At(data, maxp.offset + 10);
+        info.max_composite_contours = try bin.readU16At(data, maxp.offset + 12);
+        info.max_zones = try bin.readU16At(data, maxp.offset + 14);
+        info.max_twilight_points = try bin.readU16At(data, maxp.offset + 16);
+        info.max_storage = try bin.readU16At(data, maxp.offset + 18);
+        info.max_function_defs = try bin.readU16At(data, maxp.offset + 20);
+        info.max_instruction_defs = try bin.readU16At(data, maxp.offset + 22);
+        info.max_stack_elements = try bin.readU16At(data, maxp.offset + 24);
+        info.max_size_of_instructions = try bin.readU16At(data, maxp.offset + 26);
+        info.max_component_elements = try bin.readU16At(data, maxp.offset + 28);
+        info.max_component_depth = try bin.readU16At(data, maxp.offset + 30);
+    }
+    return info;
 }
 
 fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) FontError!void {

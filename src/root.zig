@@ -82,6 +82,8 @@ pub const serializeManifest = @import("database.zig").serializeManifest;
 pub const userFontSourcesForOs = @import("database.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
+pub const GaspInfo = @import("font.zig").GaspInfo;
+pub const GaspRange = @import("font.zig").GaspRange;
 pub const CharmapInfo = @import("font.zig").CharmapInfo;
 pub const CharmapMapping = @import("font.zig").CharmapMapping;
 pub const FontDecorationMetrics = @import("font.zig").FontDecorationMetrics;
@@ -384,6 +386,58 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "gasp metadata and PPEM behavior are exposed" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGaspTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.gaspInfo(allocator)).?;
+    defer font.freeGaspInfo(allocator, info);
+    try std.testing.expectEqual(@as(u16, 1), info.version);
+    try std.testing.expectEqual(@as(usize, 2), info.ranges.len);
+    try std.testing.expectEqual(GaspRange{ .max_ppem = 8, .behavior = 0x0003 }, info.ranges[0]);
+    try std.testing.expectEqual(GaspRange{ .max_ppem = 0xffff, .behavior = 0x000f }, info.ranges[1]);
+
+    try std.testing.expectEqual(@as(?u16, 0x0003), try font.gaspBehavior(8));
+    try std.testing.expectEqual(@as(?u16, 0x000f), try font.gaspBehavior(9));
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.gaspInfo(allocator)) == null);
+    try std.testing.expect((try missing.gaspBehavior(12)) == null);
+}
+
+test "lazy gasp metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGaspTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(?u16, 0x0003), try font.gaspBehavior(8));
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var gasp_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "gasp")) gasp_offset = table.offset;
+    }
+    bytes[gasp_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.gaspBehavior(8));
+    try std.testing.expectError(error.BadSfnt, font.gaspInfo(allocator));
 }
 
 test "lazy head metadata revalidates borrowed table bytes" {

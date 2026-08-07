@@ -12,6 +12,10 @@ pub fn buildMinimalTtfWithKern(allocator: std.mem.Allocator, kern: []const u8) !
     return buildSfnt(allocator, 0x00010000, try minimalTtfWithKernTables(allocator, kern));
 }
 
+pub fn buildGaspTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try gaspTtfTables(allocator));
+}
+
 pub fn buildScriptMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try scriptMetricsTtfTables(allocator));
 }
@@ -485,6 +489,21 @@ fn minimalTtfWithKernTables(allocator: std.mem.Allocator, kern: []const u8) ![]T
     initialized += 1;
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     initialized += 1;
+    return tables;
+}
+
+fn gaspTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "gasp", .data = try gaspTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -4655,6 +4674,18 @@ fn cffMaxpTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 6);
     writeU32(bytes, 0, 0x00005000);
     writeU16(bytes, 4, 2);
+    return bytes;
+}
+
+fn gaspTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 12);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 2);
+    writeU16(bytes, 4, 8);
+    writeU16(bytes, 6, 0x0003);
+    writeU16(bytes, 8, 0xffff);
+    writeU16(bytes, 10, 0x000f);
     return bytes;
 }
 

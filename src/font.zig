@@ -4,6 +4,7 @@ const cff_mod = @import("cff.zig");
 const glyph_mod = @import("glyph.zig");
 const gpos_mod = @import("gpos.zig");
 const gsub_mod = @import("gsub.zig");
+const gasp_mod = @import("opentype/gasp.zig");
 const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
 const name_mod = @import("opentype/name.zig");
@@ -99,6 +100,9 @@ pub const PostInfo = struct {
     max_mem_type1: u32,
     glyph_name_count: ?u16 = null,
 };
+
+pub const GaspRange = gasp_mod.Range;
+pub const GaspInfo = gasp_mod.Info;
 
 pub const CharmapInfo = struct {
     platform_id: u16,
@@ -491,6 +495,7 @@ pub const Font = struct {
     cmap: TableRecord,
     kern: ?TableRecord,
     os2: ?TableRecord,
+    gasp: ?TableRecord,
     gdef: ?TableRecord,
     gpos: ?TableRecord,
     gsub: ?TableRecord,
@@ -577,6 +582,7 @@ pub const Font = struct {
         const cmap = findTable(records, "cmap") orelse return error.MissingTable;
         const kern = findTable(records, "kern");
         const os2 = findTable(records, "OS/2");
+        const gasp = findTable(records, "gasp");
         const gdef = findTable(records, "GDEF");
         const gpos = findTable(records, "GPOS");
         const gsub = findTable(records, "GSUB");
@@ -634,6 +640,7 @@ pub const Font = struct {
         if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
         if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
         if (kern) |kern_table| try validateKernTable(data, kern_table, glyph_count);
+        if (gasp) |gasp_table| try validateGaspTable(data, gasp_table);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
         const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
@@ -715,6 +722,7 @@ pub const Font = struct {
             .cmap = cmap,
             .kern = kern,
             .os2 = os2,
+            .gasp = gasp,
             .gdef = gdef,
             .gpos = gpos,
             .gsub = gsub,
@@ -765,6 +773,24 @@ pub const Font = struct {
         const record = findTableByTag(self.owned_tables, tag) orelse return null;
         try validateSfntTableChecksum(self.data, record);
         return self.data[record.offset .. record.offset + record.length];
+    }
+
+    /// Read validated metadata from the optional SFNT `gasp` table.
+    pub fn gaspInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?GaspInfo {
+        const gasp = self.gasp orelse return null;
+        try validateSfntTableChecksum(self.data, gasp);
+        return try gasp_mod.info(allocator, self.data, gasp.offset, gasp.length);
+    }
+
+    pub fn freeGaspInfo(_: *const Font, allocator: std.mem.Allocator, info: GaspInfo) void {
+        allocator.free(info.ranges);
+    }
+
+    /// Return gasp behavior flags for a PPEM value, or null when no table exists.
+    pub fn gaspBehavior(self: *const Font, ppem: u16) FontError!?u16 {
+        const gasp = self.gasp orelse return null;
+        try validateSfntTableChecksum(self.data, gasp);
+        return try gasp_mod.behavior(self.data, gasp.offset, gasp.length, ppem);
     }
 
     /// Read validated metadata from the SFNT `head` table.
@@ -3365,6 +3391,10 @@ fn validateCffGlyphCount(data: []const u8, cff: TableRecord, glyph_count: u16) F
     // glyph ids that the CFF outline data can never resolve.
     const info = try cff_mod.parseInfo(data[cff.offset .. cff.offset + cff.length]);
     if (info.charstrings_count != glyph_count) return error.BadSfnt;
+}
+
+fn validateGaspTable(data: []const u8, gasp: TableRecord) FontError!void {
+    return try gasp_mod.validate(data, gasp.offset, gasp.length);
 }
 
 fn minimumOs2TableLength(version: u16) FontError!usize {
@@ -17283,6 +17313,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .os2 = null,
+        .gasp = null,
         .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = gdef_checksum, .offset = 0, .length = data.len },
         .gpos = null,
         .gsub = null,
@@ -17329,6 +17360,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .cmap = dummy_table,
         .kern = null,
         .os2 = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = os2_checksum, .offset = 0, .length = declared_length },
+        .gasp = null,
         .gdef = null,
         .gpos = null,
         .gsub = null,
@@ -17375,6 +17407,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .os2 = null,
+        .gasp = null,
         .gdef = null,
         .gpos = null,
         .gsub = null,
@@ -17432,6 +17465,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .os2 = null,
+        .gasp = null,
         .gdef = null,
         .gpos = null,
         .gsub = null,
@@ -17478,6 +17512,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .os2 = null,
+        .gasp = null,
         .gdef = null,
         .gpos = null,
         .gsub = null,
@@ -17524,6 +17559,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .os2 = null,
+        .gasp = null,
         .gdef = null,
         .gpos = null,
         .gsub = null,
@@ -17570,6 +17606,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .os2 = null,
+        .gasp = null,
         .gdef = null,
         .gpos = null,
         .gsub = null,
@@ -17636,6 +17673,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = kern_checksum, .offset = 0, .length = data.len },
         .os2 = null,
+        .gasp = null,
         .gdef = null,
         .gpos = null,
         .gsub = null,

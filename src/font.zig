@@ -168,6 +168,24 @@ pub const StatDesignAxis = struct {
     ordering: u16,
 };
 
+pub const StatAxisValue = struct {
+    format: u16,
+    flags: u16,
+    name_id: u16,
+    axis_index: ?u16 = null,
+    value: ?f32 = null,
+    linked_value: ?f32 = null,
+    nominal_value: ?f32 = null,
+    range_min_value: ?f32 = null,
+    range_max_value: ?f32 = null,
+    coordinates: []StatAxisValueCoordinate = &.{},
+};
+
+pub const StatAxisValueCoordinate = struct {
+    axis_index: u16,
+    value: f32,
+};
+
 pub const ColorLayer = struct {
     glyph_id: glyph_mod.GlyphId,
     palette_index: u16,
@@ -1363,6 +1381,39 @@ pub const Font = struct {
             };
         }
         return axes;
+    }
+
+    pub fn statAxisValues(self: *const Font, allocator: std.mem.Allocator) FontError![]StatAxisValue {
+        const stat = self.stat orelse return try allocator.alloc(StatAxisValue, 0);
+        var name_index_storage: NameIdIndex = undefined;
+        const name_index: ?*const NameIdIndex = if (self.name) |name| blk: {
+            name_index_storage = try readNameIdIndex(self.data, name);
+            break :blk &name_index_storage;
+        } else null;
+        try validateSfntTableChecksum(self.data, stat);
+        if (self.fvar) |fvar| try validateSfntTableChecksum(self.data, fvar);
+        try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
+        const info = try readStatInfo(self.data, stat);
+
+        const values = try allocator.alloc(StatAxisValue, info.axis_value_count);
+        errdefer allocator.free(values);
+        var initialized: usize = 0;
+        errdefer {
+            for (values[0..initialized]) |value| allocator.free(value.coordinates);
+        }
+
+        for (values, 0..) |*value, index| {
+            const entry_offset = stat.offset + info.axis_value_offsets_offset + index * 2;
+            const axis_value_offset = try resolveStatAxisValueOffset(self.data, stat, info.axis_value_offsets_offset, entry_offset);
+            value.* = try readStatAxisValue(allocator, self.data, stat, axis_value_offset);
+            initialized += 1;
+        }
+        return values;
+    }
+
+    pub fn freeStatAxisValues(_: *const Font, allocator: std.mem.Allocator, values: []StatAxisValue) void {
+        for (values) |value| allocator.free(value.coordinates);
+        allocator.free(values);
     }
 
     pub fn colorLayers(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError![]ColorLayer {
@@ -6578,6 +6629,56 @@ fn validateStatAxisValue(data: []const u8, stat: TableRecord, axis_value_offset:
         },
         else => return error.BadSfnt,
     }
+}
+
+fn readStatAxisValue(allocator: std.mem.Allocator, data: []const u8, stat: TableRecord, axis_value_offset: usize) FontError!StatAxisValue {
+    const absolute = stat.offset + axis_value_offset;
+    const format = try bin.readU16At(data, absolute);
+    return switch (format) {
+        1 => .{
+            .format = format,
+            .axis_index = try bin.readU16At(data, absolute + 2),
+            .flags = try bin.readU16At(data, absolute + 4),
+            .name_id = try bin.readU16At(data, absolute + 6),
+            .value = fixed16_16ToF32(try bin.readI32At(data, absolute + 8)),
+        },
+        2 => .{
+            .format = format,
+            .axis_index = try bin.readU16At(data, absolute + 2),
+            .flags = try bin.readU16At(data, absolute + 4),
+            .name_id = try bin.readU16At(data, absolute + 6),
+            .nominal_value = fixed16_16ToF32(try bin.readI32At(data, absolute + 8)),
+            .range_min_value = fixed16_16ToF32(try bin.readI32At(data, absolute + 12)),
+            .range_max_value = fixed16_16ToF32(try bin.readI32At(data, absolute + 16)),
+        },
+        3 => .{
+            .format = format,
+            .axis_index = try bin.readU16At(data, absolute + 2),
+            .flags = try bin.readU16At(data, absolute + 4),
+            .name_id = try bin.readU16At(data, absolute + 6),
+            .value = fixed16_16ToF32(try bin.readI32At(data, absolute + 8)),
+            .linked_value = fixed16_16ToF32(try bin.readI32At(data, absolute + 12)),
+        },
+        4 => value: {
+            const axis_count: usize = @intCast(try bin.readU16At(data, absolute + 2));
+            const coordinates = try allocator.alloc(StatAxisValueCoordinate, axis_count);
+            errdefer allocator.free(coordinates);
+            for (coordinates, 0..) |*coordinate, axis_record_index| {
+                const axis_record = absolute + 8 + axis_record_index * 6;
+                coordinate.* = .{
+                    .axis_index = try bin.readU16At(data, axis_record),
+                    .value = fixed16_16ToF32(try bin.readI32At(data, axis_record + 2)),
+                };
+            }
+            break :value .{
+                .format = format,
+                .flags = try bin.readU16At(data, absolute + 4),
+                .name_id = try bin.readU16At(data, absolute + 6),
+                .coordinates = coordinates,
+            };
+        },
+        else => error.BadSfnt,
+    };
 }
 
 fn validateStatAxisValueFlags(flags: u16) FontError!void {

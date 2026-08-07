@@ -114,6 +114,8 @@ pub const ColorPaint = @import("font.zig").ColorPaint;
 pub const ColorGlyphPaint = @import("render_bridge.zig").ColorGlyphPaint;
 pub const PaletteColor = @import("font.zig").PaletteColor;
 pub const SvgGlyphDocument = @import("font.zig").SvgGlyphDocument;
+pub const StatAxisValue = @import("font.zig").StatAxisValue;
+pub const StatAxisValueCoordinate = @import("font.zig").StatAxisValueCoordinate;
 pub const StatDesignAxis = @import("font.zig").StatDesignAxis;
 pub const VariationAxis = @import("font.zig").VariationAxis;
 pub const VariationCoordinate = @import("font.zig").VariationCoordinate;
@@ -1420,6 +1422,29 @@ test "reads variable font axis metadata from fvar" {
     try std.testing.expectApproxEqAbs(@as(f32, 150.0), instances[1].coordinates[1].value, 0.001);
     try std.testing.expectEqualStrings("Bold Wide", (try font.nameString(@enumFromInt(instances[1].subfamily_name_id), &name_buffer)).?);
     try std.testing.expectEqualStrings("CangjieVariable-BoldWide", (try font.nameString(@enumFromInt(instances[1].postscript_name_id.?), &name_buffer)).?);
+}
+
+test "reads STAT axis value metadata" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVariableStatTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const values = try font.statAxisValues(allocator);
+    defer font.freeStatAxisValues(allocator, values);
+
+    try std.testing.expectEqual(@as(usize, 1), values.len);
+    try std.testing.expectEqual(@as(u16, 1), values[0].format);
+    try std.testing.expectEqual(@as(?u16, 0), values[0].axis_index);
+    try std.testing.expectEqual(@as(u16, 0x0002), values[0].flags);
+    try std.testing.expectEqual(@as(u16, 2), values[0].name_id);
+    try std.testing.expectApproxEqAbs(@as(f32, 400.0), values[0].value.?, 0.001);
+    try std.testing.expectEqual(@as(?f32, null), values[0].linked_value);
+    try std.testing.expectEqual(@as(usize, 0), values[0].coordinates.len);
 }
 
 test "reads GDEF glyph classes" {

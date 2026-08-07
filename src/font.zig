@@ -684,6 +684,19 @@ pub const Font = struct {
         return try self.charmapInfoForSubtable(subtable);
     }
 
+    /// Map a Unicode scalar with a caller-selected charmap.
+    ///
+    /// This mirrors FreeType-style explicit charmap selection while preserving
+    /// Cangjie's Unicode-scalar public contract. Format 14 variation-selector
+    /// charmaps are intentionally rejected here because they are not standalone
+    /// scalar-to-glyph maps; use `variationGlyphIndex` for those records.
+    pub fn glyphIndexWithCharmap(self: *const Font, charmap: CharmapInfo, codepoint: u21) FontError!glyph_mod.GlyphId {
+        try validatePublicUnicodeScalar(codepoint);
+        const subtable = try self.subtableForCharmap(charmap);
+        if (!cmapSubtableSupportsGlyphLookup(subtable.format)) return error.UnsupportedCmap;
+        return try self.glyphIndexInSubtable(subtable, codepoint);
+    }
+
     /// Map a Unicode scalar value to a glyph id using the best supported cmap.
     ///
     /// Format 12 is preferred for precise full-Unicode coverage, which matters
@@ -695,18 +708,38 @@ pub const Font = struct {
     pub fn glyphIndex(self: *const Font, codepoint: u21) FontError!glyph_mod.GlyphId {
         try validatePublicUnicodeScalar(codepoint);
         const chosen = self.selectedCmapSubtable() orelse return error.UnsupportedCmap;
-        try self.validateCmapLookupSubtable(chosen);
-        return switch (chosen.format) {
-            0 => try glyphIndexFormat0(self.data, chosen.offset, codepoint),
-            2 => try glyphIndexFormat2(self.data, chosen.offset, chosen.length, codepoint),
-            4 => try glyphIndexFormat4(self.data, chosen.offset, codepoint),
-            6 => try glyphIndexFormat6(self.data, chosen.offset, codepoint),
-            8 => try glyphIndexFormat8(self.data, chosen.offset, chosen.length, codepoint),
-            10 => try glyphIndexFormat10(self.data, chosen.offset, chosen.length, codepoint),
-            12 => try glyphIndexFormat12(self.data, chosen.offset, chosen.length, codepoint),
-            13 => try glyphIndexFormat13(self.data, chosen.offset, chosen.length, codepoint),
+        return try self.glyphIndexInSubtable(chosen, codepoint);
+    }
+
+    fn glyphIndexInSubtable(self: *const Font, subtable: CmapSubtable, codepoint: u21) FontError!glyph_mod.GlyphId {
+        try self.validateCmapLookupSubtable(subtable);
+        return switch (subtable.format) {
+            0 => try glyphIndexFormat0(self.data, subtable.offset, codepoint),
+            2 => try glyphIndexFormat2(self.data, subtable.offset, subtable.length, codepoint),
+            4 => try glyphIndexFormat4(self.data, subtable.offset, codepoint),
+            6 => try glyphIndexFormat6(self.data, subtable.offset, codepoint),
+            8 => try glyphIndexFormat8(self.data, subtable.offset, subtable.length, codepoint),
+            10 => try glyphIndexFormat10(self.data, subtable.offset, subtable.length, codepoint),
+            12 => try glyphIndexFormat12(self.data, subtable.offset, subtable.length, codepoint),
+            13 => try glyphIndexFormat13(self.data, subtable.offset, subtable.length, codepoint),
             else => error.UnsupportedCmap,
         };
+    }
+
+    fn subtableForCharmap(self: *const Font, charmap: CharmapInfo) FontError!CmapSubtable {
+        for (self.cmap_subtables) |subtable| {
+            if (subtable.platform_id == charmap.platform_id and
+                subtable.encoding_id == charmap.encoding_id and
+                subtable.format == charmap.format and
+                subtable.offset == charmap.offset and
+                subtable.length == charmap.length)
+            {
+                const current = try self.charmapInfoForSubtable(subtable);
+                if (current.language != charmap.language) return error.BadSfnt;
+                return subtable;
+            }
+        }
+        return error.BadSfnt;
     }
 
     fn selectedCmapSubtable(self: *const Font) ?CmapSubtable {

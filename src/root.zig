@@ -516,6 +516,31 @@ test "enumerates cmap charmaps including variation selector subtables" {
 
     const default_charmap = (try font.defaultCharmap()).?;
     try std.testing.expectEqual(charmaps[0], default_charmap);
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndexWithCharmap(default_charmap, 'A'));
+    try std.testing.expectError(error.UnsupportedCmap, font.glyphIndexWithCharmap(charmaps[1], 'A'));
+}
+
+test "maps glyphs through explicitly selected charmaps" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildTrimmed32CmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const charmaps = try font.charmaps(allocator);
+    defer allocator.free(charmaps);
+    try std.testing.expectEqual(@as(usize, 1), charmaps.len);
+    try std.testing.expectEqual(@as(u16, 10), charmaps[0].format);
+
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndexWithCharmap(charmaps[0], 0x1f600));
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndexWithCharmap(charmaps[0], 'A'));
+
+    var stale = charmaps[0];
+    stale.encoding_id = 99;
+    try std.testing.expectError(error.BadSfnt, font.glyphIndexWithCharmap(stale, 0x1f600));
+    try std.testing.expectError(error.InvalidCodepoint, font.glyphIndexWithCharmap(charmaps[0], 0xd800));
 }
 
 test "lazy charmap enumeration revalidates borrowed cmap bytes" {
@@ -536,10 +561,12 @@ test "lazy charmap enumeration revalidates borrowed cmap bytes" {
     for (tables) |table| {
         if (std.mem.eql(u8, &table.tag, "cmap")) cmap_offset = table.offset;
     }
+    const stale_charmap = default_charmap;
     bytes[cmap_offset orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.defaultCharmap());
     try std.testing.expectError(error.BadSfnt, font.charmaps(allocator));
+    try std.testing.expectError(error.BadSfnt, font.glyphIndexWithCharmap(stale_charmap, 'A'));
 }
 
 test "shapes cmap format 14 variation selectors as base glyph variants" {

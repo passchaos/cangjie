@@ -3874,8 +3874,10 @@ fn contextCoverageContains(table: Table, coverage_offset: usize, glyph: GlyphId)
     if (format != 1) return (try coverageIndex(table, coverage_offset, glyph)) != null;
 
     const glyph_count = try readU16(table, coverage_offset + 2);
-    try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
-    try validateCoverageFormat1OrderMode(table, coverage_offset, glyph_count, true);
+    if (!table.assume_validated) {
+        try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
+        try validateCoverageFormat1OrderMode(table, coverage_offset, glyph_count, true);
+    }
     var lo: usize = 0;
     var hi: usize = glyph_count;
     while (lo < hi) {

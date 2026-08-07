@@ -141,7 +141,8 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - Amiri `"اللَّهِ"` passes `compare-harfrust`.
 - Amiri `"تثبیت"` passes default `compare-harfrust`; it also passes with
   `--language ara`.
-- Amiri `fa-words.txt` passes default `compare-harfrust` for 10,000 lines.
+- Amiri `fa-words.txt` passes default `compare-harfrust` for 10,000 lines and
+  `compare-harfbuzz` for 10,000 lines (`checksum=246e98435cc9c642`).
 - Roboto `en-2letters.txt` passes `compare-harfrust` for 12,391 lines and
   `compare-harfbuzz` for 12,391 lines; focused `"ffi"` also passes
   `compare-harfbuzz --disable-feature liga`.
@@ -154,7 +155,7 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - SourceSerifVariable `react-dom.txt` passes `compare-harfrust` for 24,709
   non-empty lines and 1,042,546 glyphs.
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
-  lines.
+  lines and `compare-harfbuzz` for 771 lines (`checksum=f2da7bb39eb7323a`).
 - NotoNastaliqUrdu `fa-words.txt` passes `compare-harfrust` for 10,000 lines,
   and `fa-thelittleprince.txt` passes for 771 lines; focused blockers `"سلام"`,
   `"به"`, `"ویکی‌پدیا"`, `"هجری"`, `"جزء"`, `"اللَّهِ"`, and `"اللَّهُ"` pass
@@ -193,7 +194,7 @@ goal is active, not complete.
   engine is now in-process, but the current `harfrust` engine remains a batch
   external-process baseline, not a fully fair in-process performance baseline.
 - Expand the benchmark matrix beyond Amiri, Roboto, SourceSerifVariable,
-  NotoNastaliqUrdu, and the active Devanagari gate; broader Arabic, Urdu,
+  NotoNastaliqUrdu, and the active Devanagari gate; broader Arabic fonts, Urdu,
   Nastaliq, and mixed-script texts still need retained parity coverage.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in

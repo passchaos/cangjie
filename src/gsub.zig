@@ -2728,11 +2728,6 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             var third_glyph: ?GlyphId = null;
             var third_glyph_resolved = false;
             for (grouped_subtables) |subtable_i| {
-                const raw_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + @as(usize, subtable_i) * 2);
-                const subtable_offset = if (accel.extension_lookup_type == 6)
-                    try extensionSubtablePayload(table, raw_subtable_offset, 6)
-                else
-                    raw_subtable_offset;
                 const parsed_subtable = if (subtable_i < accel.chaining_subtables.len and accel.chaining_subtables[subtable_i].input_count != 0)
                     accel.chaining_subtables[subtable_i]
                 else
@@ -2760,6 +2755,11 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
                     }
                     continue;
                 }
+                const raw_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + @as(usize, subtable_i) * 2);
+                const subtable_offset = if (accel.extension_lookup_type == 6)
+                    try extensionSubtablePayload(table, raw_subtable_offset, 6)
+                else
+                    raw_subtable_offset;
                 const result = try applyChainingContextSubstitutionAt(table, subtable_offset, parsed_subtable, glyphs, pos, allocator, lookup_flag, options);
                 if (result.matched) {
                     next_pos = @max(next_pos, result.next_pos);

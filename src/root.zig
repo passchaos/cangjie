@@ -96,7 +96,9 @@ pub const FontFormat = @import("font.zig").FontFormat;
 pub const FontHeaderInfo = @import("font.zig").FontHeaderInfo;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
+pub const HorizontalMetricInfo = @import("font.zig").HorizontalMetricInfo;
 pub const MetricHeaderInfo = @import("font.zig").MetricHeaderInfo;
+pub const VerticalMetricInfo = @import("font.zig").VerticalMetricInfo;
 pub const GlyphClass = @import("font.zig").GlyphClass;
 pub const NameEncoding = @import("font.zig").NameEncoding;
 pub const NameId = @import("font.zig").NameId;
@@ -325,6 +327,13 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 'A', .glyph_id = 1 }), (try font.firstCharmapMapping(default_charmap)).?);
     try std.testing.expect((try font.nextCharmapMapping(default_charmap, 'A')) == null);
 
+    const hmetrics = try font.horizontalMetricsTable(allocator);
+    defer allocator.free(hmetrics);
+    try std.testing.expectEqual(@as(usize, 2), hmetrics.len);
+    try std.testing.expectEqual(HorizontalMetricInfo{ .advance_width = 500, .left_side_bearing = 0 }, hmetrics[0]);
+    try std.testing.expectEqual(HorizontalMetricInfo{ .advance_width = 800, .left_side_bearing = 0 }, hmetrics[1]);
+    try std.testing.expect((try font.verticalMetricsTable(allocator)) == null);
+
     var outline = try font.glyphOutline(allocator, 1);
     defer outline.deinit();
     try std.testing.expectEqual(@as(usize, 4), outline.commands.items.len);
@@ -372,6 +381,12 @@ test "vertical header metadata is exposed when present" {
     try std.testing.expectEqual(@as(i16, 800), vhea.ascender);
     try std.testing.expectEqual(@as(i16, -200), vhea.descender);
     try std.testing.expectEqual(@as(u16, 1), vhea.long_metric_count);
+
+    const vmetrics = (try font.verticalMetricsTable(allocator)).?;
+    defer allocator.free(vmetrics);
+    try std.testing.expectEqual(@as(usize, 2), vmetrics.len);
+    try std.testing.expectEqual(VerticalMetricInfo{ .advance_height = 1000, .top_side_bearing = 0 }, vmetrics[0]);
+    try std.testing.expectEqual(VerticalMetricInfo{ .advance_height = 1000, .top_side_bearing = 0 }, vmetrics[1]);
 }
 
 test "minimal OTF exposes compact maxp metadata" {
@@ -486,6 +501,7 @@ test "lazy metric header metadata revalidates borrowed bytes" {
         }
         bytes[hhea_offset orelse return error.MissingTable] +%= 1;
         try std.testing.expectError(error.BadSfnt, font.horizontalHeaderInfo());
+        try std.testing.expectError(error.InvalidMetrics, font.horizontalMetricsTable(allocator));
     }
 
     {
@@ -504,6 +520,7 @@ test "lazy metric header metadata revalidates borrowed bytes" {
         }
         bytes[vhea_offset orelse return error.MissingTable] +%= 1;
         try std.testing.expectError(error.BadSfnt, font.verticalHeaderInfo());
+        try std.testing.expectError(error.InvalidMetrics, font.verticalMetricsTable(allocator));
     }
 }
 

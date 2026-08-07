@@ -2126,6 +2126,7 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
     if (lookup_flag == 0) return false;
     const classes = options.glyph_classes;
     const class = if (classes) |items| if (glyph < items.len) items[glyph] else 0 else 0;
+    if (lookup_flag == 0x0008) return class == 3;
 
     // UseMarkFilteringSet appends a set index after the SubTable offsets; it
     // does not consume the high-byte MarkAttachmentType bits. Apply both mark

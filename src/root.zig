@@ -105,6 +105,9 @@ pub const NameRecordInfo = @import("font.zig").NameRecordInfo;
 pub const Os2Info = @import("font.zig").Os2Info;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
+pub const KernInfo = @import("font.zig").KernInfo;
+pub const KernSubtableInfo = @import("font.zig").KernSubtableInfo;
+pub const KernTableDialect = @import("font.zig").KernTableDialect;
 pub const GdefMetadataCache = @import("layout.zig").GdefMetadataCache;
 pub const GposTableProofCache = @import("layout.zig").GposTableProofCache;
 pub const GlyphIndexCache = @import("layout.zig").GlyphIndexCache;
@@ -502,6 +505,69 @@ test "lazy metric header metadata revalidates borrowed bytes" {
         bytes[vhea_offset orelse return error.MissingTable] +%= 1;
         try std.testing.expectError(error.BadSfnt, font.verticalHeaderInfo());
     }
+}
+
+test "kern metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var kern: [24]u8 = .{0} ** 24;
+    writeU16Test(&kern, 0, 0);
+    writeU16Test(&kern, 2, 1);
+    writeKernFormat0SubtableTest(&kern, 4, 0x0001, 1, 1, -40);
+
+    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.kernInfo(allocator)).?;
+    defer font.freeKernInfo(allocator, info);
+    try std.testing.expectEqual(KernTableDialect.legacy, info.dialect);
+    try std.testing.expectEqual(@as(u32, 0), info.version);
+    try std.testing.expectEqual(@as(usize, 1), info.subtables.len);
+    try std.testing.expectEqual(@as(u16, 0), info.subtables[0].format);
+    try std.testing.expectEqual(@as(u16, 0x0001), info.subtables[0].coverage);
+    try std.testing.expect(info.subtables[0].horizontal);
+    try std.testing.expect(!info.subtables[0].minimum);
+    try std.testing.expect(!info.subtables[0].cross_stream);
+    try std.testing.expectEqual(@as(?u16, 1), info.subtables[0].pair_count);
+
+    const missing_bytes = try test_font.buildMinimalOtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.kernInfo(allocator)) == null);
+}
+
+test "lazy kern metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var kern: [24]u8 = .{0} ** 24;
+    writeU16Test(&kern, 0, 0);
+    writeU16Test(&kern, 2, 1);
+    writeKernFormat0SubtableTest(&kern, 4, 0x0001, 1, 1, -40);
+
+    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const initial = (try font.kernInfo(allocator)).?;
+    defer font.freeKernInfo(allocator, initial);
+    try std.testing.expectEqual(@as(usize, 1), initial.subtables.len);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var kern_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "kern")) kern_offset = table.offset;
+    }
+    bytes[(kern_offset orelse return error.MissingTable) + 22] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.kernInfo(allocator));
 }
 
 test "post metadata is exposed when present" {
@@ -5747,6 +5813,19 @@ test "applies GPOS glyph-based contextual positioning" {
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[1].x_offset, 0.001);
+}
+
+fn writeKernFormat0SubtableTest(bytes: []u8, offset: usize, coverage: u16, left: GlyphId, right: GlyphId, value: i16) void {
+    writeU16Test(bytes, offset + 0, 0);
+    writeU16Test(bytes, offset + 2, 20);
+    writeU16Test(bytes, offset + 4, coverage);
+    writeU16Test(bytes, offset + 6, 1);
+    writeU16Test(bytes, offset + 8, 6);
+    writeU16Test(bytes, offset + 10, 0);
+    writeU16Test(bytes, offset + 12, 0);
+    writeU16Test(bytes, offset + 14, left);
+    writeU16Test(bytes, offset + 16, right);
+    writeI16Test(bytes, offset + 18, value);
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

@@ -104,6 +104,32 @@ pub const PostInfo = struct {
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
 
+pub const KernTableDialect = enum {
+    legacy,
+    apple,
+    unsupported,
+};
+
+pub const KernSubtableInfo = struct {
+    offset: usize,
+    length: usize,
+    format: u16,
+    coverage: u16,
+    horizontal: bool,
+    minimum: bool,
+    cross_stream: bool,
+    variation: bool = false,
+    override: bool = false,
+    tuple_index: ?u16 = null,
+    pair_count: ?u16 = null,
+};
+
+pub const KernInfo = struct {
+    dialect: KernTableDialect,
+    version: u32,
+    subtables: []KernSubtableInfo,
+};
+
 pub const CharmapInfo = struct {
     platform_id: u16,
     encoding_id: u16,
@@ -1133,6 +1159,18 @@ pub const Font = struct {
         const kern = self.kern;
         if (kern) |kern_table| try validateSfntTableChecksum(self.data, kern_table);
         return .{ .font = self, .kern = kern };
+    }
+
+    /// Read validated metadata from the optional SFNT `kern` table.
+    pub fn kernInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?KernInfo {
+        const kern = self.kern orelse return null;
+        try validateSfntTableChecksum(self.data, kern);
+        try validateKernTable(self.data, kern, self.glyph_count);
+        return try readKernInfo(allocator, self.data, kern);
+    }
+
+    pub fn freeKernInfo(_: *const Font, allocator: std.mem.Allocator, info: KernInfo) void {
+        allocator.free(info.subtables);
     }
 
     fn legacyKernKerning(data: []const u8, kern: TableRecord, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
@@ -4106,6 +4144,73 @@ const post_standard_glyph_names = [_][]const u8{
     "ccaron",
     "dcroat",
 };
+
+fn readKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: TableRecord) FontError!KernInfo {
+    try requireTableLength(kern, 4);
+    const version = try bin.readU32At(data, kern.offset);
+    if (version == 0x00010000) return try readAppleKernInfo(allocator, data, kern);
+    if ((version >> 16) != 0) {
+        return .{
+            .dialect = .unsupported,
+            .version = version,
+            .subtables = try allocator.alloc(KernSubtableInfo, 0),
+        };
+    }
+    return try readLegacyKernInfo(allocator, data, kern);
+}
+
+fn readLegacyKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: TableRecord) FontError!KernInfo {
+    const table_count = try bin.readU16At(data, kern.offset + 2);
+    const subtables = try allocator.alloc(KernSubtableInfo, table_count);
+    errdefer allocator.free(subtables);
+
+    var subtable_offset = kern.offset + 4;
+    for (subtables) |*info| {
+        const length = try bin.readU16At(data, subtable_offset + 2);
+        const coverage = try bin.readU16At(data, subtable_offset + 4);
+        const format = coverage >> 8;
+        info.* = .{
+            .offset = subtable_offset,
+            .length = length,
+            .format = format,
+            .coverage = coverage,
+            .horizontal = (coverage & 0x0001) != 0,
+            .minimum = (coverage & 0x0002) != 0,
+            .cross_stream = (coverage & 0x0004) != 0,
+            .override = (coverage & 0x0008) != 0,
+            .pair_count = if (format == 0 and length >= 14) try bin.readU16At(data, subtable_offset + 6) else null,
+        };
+        subtable_offset += length;
+    }
+    return .{ .dialect = .legacy, .version = try bin.readU16At(data, kern.offset), .subtables = subtables };
+}
+
+fn readAppleKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: TableRecord) FontError!KernInfo {
+    const table_count: usize = @intCast(try bin.readU32At(data, kern.offset + 4));
+    const subtables = try allocator.alloc(KernSubtableInfo, table_count);
+    errdefer allocator.free(subtables);
+
+    var subtable_offset = kern.offset + 8;
+    for (subtables) |*info| {
+        const length: usize = @intCast(try bin.readU32At(data, subtable_offset));
+        const coverage = try bin.readU16At(data, subtable_offset + 4);
+        const format = coverage & 0x00ff;
+        info.* = .{
+            .offset = subtable_offset,
+            .length = length,
+            .format = format,
+            .coverage = coverage,
+            .horizontal = (coverage & 0x8000) == 0,
+            .minimum = false,
+            .cross_stream = (coverage & 0x4000) != 0,
+            .variation = (coverage & 0x2000) != 0,
+            .tuple_index = try bin.readU16At(data, subtable_offset + 6),
+            .pair_count = if (format == 0 and length >= 16) try bin.readU16At(data, subtable_offset + 8) else null,
+        };
+        subtable_offset += length;
+    }
+    return .{ .dialect = .apple, .version = try bin.readU32At(data, kern.offset), .subtables = subtables };
+}
 
 fn validateKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
     try requireTableLength(kern, 4);

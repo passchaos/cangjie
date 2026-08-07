@@ -137,9 +137,43 @@ pub const FeatureApplication = struct {
 pub const source_feature_mask_marker: u32 = 0x80000000;
 
 pub fn sourceFeatureMaskForTag(feature_tag: u32) ?u32 {
-    if (feature_tag == unicode.tag("rphf")) return source_feature_mask_marker | 0x1;
-    if (feature_tag == unicode.tag("half")) return source_feature_mask_marker | 0x2;
-    return null;
+    const bit: u5 = if (feature_tag == unicode.tag("rphf"))
+        0
+    else if (feature_tag == unicode.tag("half"))
+        1
+    else if (feature_tag == unicode.tag("locl"))
+        2
+    else if (feature_tag == unicode.tag("ccmp"))
+        3
+    else if (feature_tag == unicode.tag("nukt"))
+        4
+    else if (feature_tag == unicode.tag("akhn"))
+        5
+    else if (feature_tag == unicode.tag("pref"))
+        6
+    else if (feature_tag == unicode.tag("rkrf"))
+        7
+    else if (feature_tag == unicode.tag("abvf"))
+        8
+    else if (feature_tag == unicode.tag("blwf"))
+        9
+    else if (feature_tag == unicode.tag("pstf"))
+        10
+    else if (feature_tag == unicode.tag("vatu"))
+        11
+    else if (feature_tag == unicode.tag("cjct"))
+        12
+    else if (feature_tag == unicode.tag("isol"))
+        13
+    else if (feature_tag == unicode.tag("init"))
+        14
+    else if (feature_tag == unicode.tag("medi"))
+        15
+    else if (feature_tag == unicode.tag("fina"))
+        16
+    else
+        return null;
+    return source_feature_mask_marker | (@as(u32, 1) << bit);
 }
 
 pub const FeatureLookupPlanEntry = struct {

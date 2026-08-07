@@ -148,6 +148,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   The initial failure was a large no-shaping mismatch; adding Duployan script
   routing and a minimal USE-style feature sequence makes short samples expand
   close to HarfRust, but full parity still needs USE syllable/reordering work.
+  A dedicated `src/use/` scaffold now covers USE category mapping and syllable
+  segmentation tests for the active Duployan sample without changing runtime
+  shaping behavior. The short smoke remains a failing gate at Cangjie `333`
+  glyphs versus HarfRust `335`, so this is structure and test foundation only,
+  not a parity claim.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -170,7 +175,7 @@ goal is active, not complete.
   word corpus, not full HarfBuzz Indic script parity.
 - Finish Duployan/USE shaping parity. The current `dupl` script route applies
   a minimal USE feature sequence, but does not yet implement HarfBuzz/HarfRust
-  USE syllable classification, per-syllable masks, or reordering.
+  USE per-syllable masks or reordering.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups, GPOS lookup `37`, and the remaining mark/cursive
   paths after the shared range-search cleanup.

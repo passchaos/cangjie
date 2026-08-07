@@ -1,28 +1,31 @@
 const gsub = @import("gsub.zig");
 const unicode = @import("unicode.zig");
+const categories = @import("use/categories.zig");
+const syllables = @import("use/syllables.zig");
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .dupl;
 }
 
-pub const Category = enum(u8) {
-    other = 0,
-    base = 1,
-    cg_joiner = 6,
-    zwnj = 14,
-    word_joiner = 16,
-    base_other = 5,
-};
+pub const Category = categories.Category;
+pub const Syllable = syllables.Syllable;
+pub const SyllableType = syllables.SyllableType;
 
 pub fn categoryForCodepoint(codepoint: u21) Category {
-    return switch (codepoint) {
-        0x034f => .cg_joiner,
-        0x200c => .zwnj,
-        0x2060 => .word_joiner,
-        0x1bc00...0x1bc6a => .base,
-        0x1bc70...0x1bc7c => .base_other,
-        else => .other,
-    };
+    return categories.forCodepoint(codepoint);
+}
+
+pub fn findSyllables(allocator: @import("std").mem.Allocator, codepoints: []const u21) ![]Syllable {
+    return syllables.find(allocator, codepoints);
+}
+
+pub fn markSourceFeatures(
+    allocator: @import("std").mem.Allocator,
+    source_features: []u32,
+    source_syllables: []u8,
+    codepoints: []const u21,
+) !void {
+    try syllables.markSourceFeatures(allocator, source_features, source_syllables, codepoints);
 }
 
 const feature_applications = [_]gsub.FeatureApplication{
@@ -63,4 +66,8 @@ test "USE category covers Duployan sample codepoints" {
     try @import("std").testing.expectEqual(Category.cg_joiner, categoryForCodepoint(0x034f));
     try @import("std").testing.expectEqual(Category.zwnj, categoryForCodepoint(0x200c));
     try @import("std").testing.expectEqual(Category.other, categoryForCodepoint(0x002e));
+}
+
+test {
+    @import("std").testing.refAllDecls(@This());
 }

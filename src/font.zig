@@ -1537,6 +1537,31 @@ pub const Font = struct {
         return palettes;
     }
 
+    pub fn paletteEntryLabels(self: *const Font, allocator: std.mem.Allocator) FontError![]?u16 {
+        const cpal = self.cpal orelse return try allocator.alloc(?u16, 0);
+        try validateSfntTableChecksum(self.data, cpal);
+        if (cpal.length < 12) return error.BadSfnt;
+        const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
+        try validateCpalNameReferences(self.data, cpal, self.name);
+
+        const labels = try allocator.alloc(?u16, palette_entries);
+        errdefer allocator.free(labels);
+        @memset(labels, null);
+
+        const version = try bin.readU16At(self.data, cpal.offset);
+        if (version != 1) return labels;
+        const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
+        const version_0_header_len = 12 + @as(usize, palette_count) * 2;
+        const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(self.data, cpal.offset + version_0_header_len + 8));
+        if (palette_entry_labels_offset == 0) return labels;
+
+        for (labels, 0..) |*label, index| {
+            const name_id = try bin.readU16At(self.data, cpal.offset + palette_entry_labels_offset + index * 2);
+            label.* = if (name_id == 0xffff) null else name_id;
+        }
+        return labels;
+    }
+
     pub fn colorPaint(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorPaint {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const colr = self.colr orelse return null;
@@ -14215,6 +14240,46 @@ test "CPAL palette lookup revalidates borrowed label name IDs" {
     // failure.
     writeU16Test(&bytes, name_offset + 12, 257);
     try std.testing.expectError(error.InvalidName, font.paletteColor(0, 0));
+}
+
+test "CPAL palette entry labels public API revalidates borrowed names" {
+    const allocator = std.testing.allocator;
+
+    var bytes: [54]u8 = .{0} ** 54;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 1);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 1);
+    writeU32Test(&bytes, 8, 30);
+    writeU16Test(&bytes, 12, 0);
+    writeU32Test(&bytes, 14, 0);
+    writeU32Test(&bytes, 18, 0);
+    writeU32Test(&bytes, 22, 28);
+    writeU16Test(&bytes, 28, 256);
+    bytes[30] = 10;
+    bytes[31] = 20;
+    bytes[32] = 30;
+    bytes[33] = 40;
+
+    const name_offset = 34;
+    writeU16Test(&bytes, name_offset + 0, 0);
+    writeU16Test(&bytes, name_offset + 2, 1);
+    writeU16Test(&bytes, name_offset + 4, 18);
+    writeUtf16NameRecordTest(&bytes, name_offset + 6, 256, 2, 0);
+    bytes[name_offset + 19] = 'E';
+
+    var font = cpalOnlyFont(&bytes);
+    const cpal_record = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = name_offset };
+    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = try checksumSfntTable(&bytes, cpal_record), .offset = 0, .length = name_offset };
+    font.name = .{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = name_offset, .length = bytes.len - name_offset };
+
+    const labels = try font.paletteEntryLabels(allocator);
+    defer allocator.free(labels);
+    try std.testing.expectEqual(@as(usize, 1), labels.len);
+    try std.testing.expectEqual(@as(?u16, 256), labels[0]);
+
+    writeU16Test(&bytes, name_offset + 12, 257);
+    try std.testing.expectError(error.InvalidName, font.paletteEntryLabels(allocator));
 }
 
 test "CPAL palette lookup revalidates borrowed table checksum" {

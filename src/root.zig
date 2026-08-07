@@ -1528,6 +1528,12 @@ test "reads COLR layers and CPAL palette colors" {
     try std.testing.expectEqual(@as(u32, 0), palettes[0].palette_type);
     try std.testing.expectEqual(@as(?u16, null), palettes[0].label_name_id);
 
+    const entry_labels = try font.paletteEntryLabels(allocator);
+    defer allocator.free(entry_labels);
+    try std.testing.expectEqual(@as(usize, 2), entry_labels.len);
+    try std.testing.expectEqual(@as(?u16, null), entry_labels[0]);
+    try std.testing.expectEqual(@as(?u16, null), entry_labels[1]);
+
     const layers = try font.colorLayers(allocator, 1);
     defer allocator.free(layers);
     try std.testing.expectEqual(@as(usize, 2), layers.len);

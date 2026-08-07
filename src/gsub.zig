@@ -2057,6 +2057,30 @@ fn applyContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.A
     }
 }
 
+fn applyContextSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
+    if (glyph_index >= glyphs.items.len) return .{};
+    const subst_format = try readU16(table, subtable_offset);
+    switch (subst_format) {
+        1 => {
+            if (!sourceFeatureAllowsGlyph(options, glyph_index)) return .{};
+            if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) return .{};
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+            const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return .{};
+            const rule_set_count = try readU16(table, subtable_offset + 4);
+            if (coverage >= rule_set_count) return .{};
+            const rule_set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
+            if (rule_set_relative == 0) return .{};
+            return if (try applyContextRuleSet(table, subtable_offset + rule_set_relative, glyphs, glyph_index, allocator, lookup_flag, options))
+                .{ .matched = true, .next_pos = glyph_index + 1 }
+            else
+                .{};
+        },
+        2 => return try applyContextClassSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options),
+        3 => return try applyContextCoverageSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options),
+        else => return error.UnsupportedGsub,
+    }
+}
+
 fn applyContextClassSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
@@ -2072,6 +2096,24 @@ fn applyContextClassSubstitution(table: Table, subtable_offset: usize, glyphs: *
         if (set_relative == 0) continue;
         _ = try applyClassRuleSet(table, subtable_offset + set_relative, class_def_offset, glyphs, pos, allocator, lookup_flag, options);
     }
+}
+
+fn applyContextClassSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
+    if (!sourceFeatureAllowsGlyph(options, pos)) return .{};
+    if (pos >= glyphs.items.len) return .{};
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return .{};
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    if (try coverageIndex(table, coverage_offset, glyphs.items[pos]) == null) return .{};
+    const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
+    const class = try classValue(table, class_def_offset, glyphs.items[pos]);
+    const class_set_count = try readU16(table, subtable_offset + 6);
+    if (class >= class_set_count) return .{};
+    const set_relative = try readU16(table, subtable_offset + 8 + @as(usize, class) * 2);
+    if (set_relative == 0) return .{};
+    return if (try applyClassRuleSet(table, subtable_offset + set_relative, class_def_offset, glyphs, pos, allocator, lookup_flag, options))
+        .{ .matched = true, .next_pos = pos + 1 }
+    else
+        .{};
 }
 
 fn applyClassRuleSet(table: Table, rule_set_offset: usize, class_def_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
@@ -2128,6 +2170,27 @@ fn applyContextCoverageSubstitution(table: Table, subtable_offset: usize, glyphs
         try applySubstitutionRecordsMapped(table, glyphs, subst_records_pos, subst_count, input_indices_buf[0..glyph_count], allocator, options);
         pos += glyph_count - 1;
     }
+}
+
+fn applyContextCoverageSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
+    if (!sourceFeatureAllowsGlyph(options, pos)) return .{};
+    if (pos >= glyphs.items.len) return .{};
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return .{};
+    const glyph_count = try readU16(table, subtable_offset + 2);
+    if (glyph_count == 0) return .{};
+    var input_indices_buf: [64]usize = undefined;
+    if (glyph_count > input_indices_buf.len) return error.UnsupportedGsub;
+    if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..glyph_count], false, pos)) return .{};
+
+    const coverage_offsets_pos = subtable_offset + 6;
+    for (0..glyph_count) |i| {
+        const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, coverage_offsets_pos + i * 2));
+        if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices_buf[i]]) == null) return .{};
+    }
+    const subst_count = try readU16(table, subtable_offset + 4);
+    const subst_records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
+    try applySubstitutionRecordsMapped(table, glyphs, subst_records_pos, subst_count, input_indices_buf[0..glyph_count], allocator, options);
+    return .{ .matched = true, .next_pos = input_indices_buf[glyph_count - 1] + 1 };
 }
 
 fn applyContextRuleSet(table: Table, rule_set_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
@@ -3812,6 +3875,7 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
         },
         2 => return try applyMultipleSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
         4 => return try applyLigatureSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
+        5 => return if ((try applyContextSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options)).matched) .{} else null,
         6 => return if ((try applyChainingContextSubstitutionAt(table, extension_subtable, null, glyphs, glyph_index, allocator, lookup_flag, options)).matched) .{} else null,
         else => return null,
     }

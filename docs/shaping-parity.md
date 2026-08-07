@@ -158,7 +158,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   lines and `compare-harfbuzz` for 771 lines (`checksum=f2da7bb39eb7323a`).
 - Gulzar now parses and focused `"سلام"` passes default `compare-harfbuzz`
   (`checksum=8263e47a0b8deac1`); this covers nested contextual GPOS `kern`
-  recursion through ExtensionPos into PairPos.
+  recursion through ExtensionPos into PairPos. Focused `"این"` also passes
+  after enabling nested ExtensionSubst ContextSubst recursion to reach the
+  `ddb -> ddb.one` substitution path. The 100-line `fa-words` probe now reaches
+  a later blocker at `"تغییرمسیر"`.
 - NotoNastaliqUrdu `fa-words.txt` passes `compare-harfrust` for 10,000 lines,
   and `fa-thelittleprince.txt` passes for 771 lines; focused blockers `"سلام"`,
   `"به"`, `"ویکی‌پدیا"`, `"هجری"`, `"جزء"`, `"اللَّهِ"`, and `"اللَّهُ"` pass

@@ -2775,7 +2775,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
         const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint);
         const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
-        const base_advance = if (hide_default_ignorable or (glyph_class == .mark and !adjustment.mark_attachment)) 0 else metrics.advance_width;
+        const zero_mark_advance = glyph_class == .mark and
+            !adjustment.mark_attachment and
+            !unicode.isSpacingMarkCodepoint(source_codepoint);
+        const base_advance = if (hide_default_ignorable or zero_mark_advance) 0 else metrics.advance_width;
         const horizontal_advance = if (hide_default_ignorable)
             0
         else

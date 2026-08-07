@@ -130,6 +130,7 @@ pub const LookupAccelerator = struct {
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
+    chaining_class_subtables: []const ChainingClassSubtableAccelerator = &.{},
 };
 
 const SinglePosSubtable = struct {
@@ -187,6 +188,16 @@ const ChainingCoverageSubtable = struct {
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
     pos_count: u16 = 0,
+};
+
+const ChainingClassSubtableAccelerator = struct {
+    subtable_offset: usize = 0,
+    coverage_offset: usize = 0,
+    input_class_def: usize = 0,
+    lookahead_class_def: usize = 0,
+    rules: []const class_context.Rule = &.{},
+    classes: []const u16 = &.{},
+    groups: []const class_context.RuleGroup = &.{},
 };
 
 const ChainingSubtableGroup = struct {
@@ -331,6 +342,20 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
         for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.chaining_groups);
         allocator.free(accelerator.chaining_subtables);
+        deinitChainingClassSubtableAccelerators(allocator, accelerator.chaining_class_subtables);
+    }
+}
+
+fn deinitChainingClassSubtableAccelerators(allocator: std.mem.Allocator, subtables: []const ChainingClassSubtableAccelerator) void {
+    deinitChainingClassSubtableAcceleratorContents(allocator, subtables);
+    allocator.free(subtables);
+}
+
+fn deinitChainingClassSubtableAcceleratorContents(allocator: std.mem.Allocator, subtables: []const ChainingClassSubtableAccelerator) void {
+    for (subtables) |subtable| {
+        allocator.free(subtable.rules);
+        allocator.free(subtable.classes);
+        allocator.free(subtable.groups);
     }
 }
 
@@ -388,9 +413,145 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         accelerator.chaining_coverage_only = true;
         accelerator.chaining_subtables = chaining_subtables;
         accelerator.chaining_groups = try buildChainingSubtableGroups(group_pairs.items, allocator);
+        errdefer {
+            for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
+            allocator.free(accelerator.chaining_groups);
+        }
     }
     group_pairs.deinit(allocator);
+    accelerator.chaining_class_subtables = try buildExtensionChainingClassSubtableAccelerators(table, lookup_offset, lookup_type, subtable_count, allocator);
     return accelerator;
+}
+
+fn buildExtensionChainingClassSubtableAccelerators(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)![]ChainingClassSubtableAccelerator {
+    if (lookup_type != 9) return try allocator.alloc(ChainingClassSubtableAccelerator, 0);
+    if ((try extensionPositionLookupType(table, lookup_offset, subtable_count)) != 8) return try allocator.alloc(ChainingClassSubtableAccelerator, 0);
+
+    const subtables = try allocator.alloc(ChainingClassSubtableAccelerator, subtable_count);
+    @memset(subtables, .{});
+    var built_count: usize = 0;
+    errdefer {
+        deinitChainingClassSubtableAcceleratorContents(allocator, subtables[0..built_count]);
+        allocator.free(subtables);
+    }
+
+    for (0..subtable_count) |subtable_i| {
+        const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const payload_offset = try extensionPositionSubtablePayload(table, wrapper_offset, 8);
+        const parsed = try buildChainingClassSubtableAccelerator(table, payload_offset, allocator) orelse {
+            deinitChainingClassSubtableAcceleratorContents(allocator, subtables[0..built_count]);
+            allocator.free(subtables);
+            return try allocator.alloc(ChainingClassSubtableAccelerator, 0);
+        };
+        subtables[subtable_i] = parsed;
+        built_count += 1;
+    }
+    return subtables;
+}
+
+fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!?ChainingClassSubtableAccelerator {
+    if (try readU16(table, subtable_offset) != 2) return null;
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    _ = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
+    const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
+    const lookahead_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+    const set_count = try readU16(table, subtable_offset + 10);
+
+    var rules = std.ArrayList(class_context.Rule).empty;
+    var classes = std.ArrayList(u16).empty;
+    var groups = std.ArrayList(class_context.RuleGroup).empty;
+    var success = false;
+    defer if (!success) {
+        rules.deinit(allocator);
+        classes.deinit(allocator);
+        groups.deinit(allocator);
+    };
+
+    var order: u32 = 0;
+    for (0..set_count) |set_i| {
+        const set_relative = try readU16(table, subtable_offset + 12 + set_i * 2);
+        if (set_relative == 0) continue;
+        const set_offset = subtable_offset + set_relative;
+        const rule_count = try readU16(table, set_offset);
+        for (0..rule_count) |rule_i| {
+            const rule_offset = set_offset + try readU16(table, set_offset + 2 + rule_i * 2);
+            var cursor = rule_offset;
+
+            const backtrack_count = try readU16(table, cursor);
+            cursor += 2 + @as(usize, backtrack_count) * 2;
+            if (backtrack_count != 0) return null;
+
+            const input_count = try readU16(table, cursor);
+            cursor += 2;
+            if (input_count != 1) return null;
+
+            const lookahead_count = try readU16(table, cursor);
+            cursor += 2;
+            if (lookahead_count > max_chaining_class_region_glyphs) return null;
+
+            const classes_start = classes.items.len;
+            var hash = class_context.sequenceHashEmpty();
+            for (0..lookahead_count) |lookahead_i| {
+                const class = try readU16(table, cursor + lookahead_i * 2);
+                try classes.append(allocator, class);
+                hash = class_context.sequenceHashAppend(hash, class);
+            }
+            cursor += @as(usize, lookahead_count) * 2;
+
+            const pos_count = try readU16(table, cursor);
+            cursor += 2;
+            if (pos_count != 1) return null;
+            const sequence_index = try readU16(table, cursor);
+            if (sequence_index != 0) return null;
+            const nested_lookup_index = try readU16(table, cursor + 2);
+
+            try rules.append(allocator, .{
+                .class_set = @intCast(set_i),
+                .lookahead_count = lookahead_count,
+                .hash = hash,
+                .order = order,
+                .lookup_index = nested_lookup_index,
+                .classes_start = @intCast(classes_start),
+            });
+            order += 1;
+        }
+    }
+    if (rules.items.len == 0) return null;
+
+    std.sort.heap(class_context.Rule, rules.items, {}, class_context.ruleLessThan);
+    var group_start: usize = 0;
+    while (group_start < rules.items.len) {
+        const class_set = rules.items[group_start].class_set;
+        var group_end = group_start;
+        var max_lookahead_count: u16 = 0;
+        while (group_end < rules.items.len and rules.items[group_end].class_set == class_set) : (group_end += 1) {
+            max_lookahead_count = @max(max_lookahead_count, rules.items[group_end].lookahead_count);
+        }
+        try groups.append(allocator, .{
+            .class_set = class_set,
+            .start = group_start,
+            .len = group_end - group_start,
+            .max_lookahead_count = max_lookahead_count,
+        });
+        group_start = group_end;
+    }
+
+    const rules_slice = try rules.toOwnedSlice(allocator);
+    errdefer allocator.free(rules_slice);
+    const classes_slice = try classes.toOwnedSlice(allocator);
+    errdefer allocator.free(classes_slice);
+    const groups_slice = try groups.toOwnedSlice(allocator);
+    success = true;
+
+    return .{
+        .subtable_offset = subtable_offset,
+        .coverage_offset = coverage_offset,
+        .input_class_def = input_class_def,
+        .lookahead_class_def = lookahead_class_def,
+        .rules = rules_slice,
+        .classes = classes_slice,
+        .groups = groups_slice,
+    };
 }
 
 fn chainingPositionLookupUsesCoverageOnly(table: Table, lookup_offset: usize, subtable_count: u16) GposError!bool {
@@ -2225,6 +2386,49 @@ fn collectNestedChainingCoveragePositioningAt(table: Table, lookup_offset: usize
     return false;
 }
 
+fn collectNestedExtensionChainingClassPositioningAt(table: Table, subtable_count: u16, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!bool {
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    var subtable_i: usize = 0;
+    while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
+        const subtable = accelerator.chaining_class_subtables[subtable_i];
+        if (subtable.rules.len == 0) continue;
+        if (try collectAcceleratedChainingClassPositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options)) return true;
+    }
+    return false;
+}
+
+fn collectAcceleratedChainingClassPositioningAt(table: Table, subtable: ChainingClassSubtableAccelerator, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (try coverageIndex(table, subtable.coverage_offset, glyphs[pos]) == null) return false;
+    const input_class = try classValue(table, subtable.input_class_def, glyphs[pos]);
+    const group = class_context.groupForClass(subtable.groups, input_class) orelse return false;
+    if (group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGpos;
+
+    var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
+    var lookahead_count: usize = 0;
+    var glyph_i = pos + 1;
+    while (glyph_i < glyphs.len and lookahead_count < group.max_lookahead_count) : (glyph_i += 1) {
+        if (matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
+        lookahead_classes[lookahead_count] = try classValue(table, subtable.lookahead_class_def, glyphs[glyph_i]);
+        lookahead_count += 1;
+    }
+
+    const rules = subtable.rules[group.start .. group.start + group.len];
+    for (rules) |rule| {
+        if (rule.lookahead_count > lookahead_count) continue;
+        if (rule.hash != class_context.sequenceHash(lookahead_classes[0..rule.lookahead_count])) continue;
+        const expected = subtable.classes[rule.classes_start .. rule.classes_start + rule.lookahead_count];
+        if (!std.mem.eql(u16, expected, lookahead_classes[0..rule.lookahead_count])) continue;
+
+        // The accelerated representation is intentionally limited to the
+        // Gulzar-style shape: one input glyph and one PosLookupRecord targeting
+        // sequence index 0. That keeps nested lookup application identical to
+        // collectPositionRecordsMapped while avoiding the 1900-rule scan.
+        try collectNestedAdjustment(table, glyphs, pos, rule.lookup_index, adjustments, allocator, options);
+        return true;
+    }
+    return false;
+}
+
 fn collectExtensionChainingCoveragePositioningLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     var pos: usize = 0;
     while (pos < glyphs.len) {
@@ -3504,6 +3708,14 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.chaining_coverage_only) {
                 _ = try collectNestedChainingCoveragePositioningAt(table, lookup_offset, subtable_count, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, accelerator);
+                return;
+            }
+        }
+    }
+    if (lookup_type == 9) {
+        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            if (accelerator.chaining_class_subtables.len != 0) {
+                _ = try collectNestedExtensionChainingClassPositioningAt(table, subtable_count, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, accelerator);
                 return;
             }
         }
@@ -6582,6 +6794,88 @@ test "GPOS context nested lookup can apply extension positioning" {
     try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_advance);
 }
 
+test "GPOS accelerates nested extension chaining class positioning" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 142;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // Empty ScriptList.
+    writeU16Test(&bytes, 6, 12); // Empty FeatureList.
+    writeU16Test(&bytes, 8, 14); // LookupList.
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 6); // Lookup 0.
+    writeU16Test(&bytes, 18, 106); // Lookup 1.
+
+    const extension_lookup = 20;
+    writeU16Test(&bytes, extension_lookup + 0, 9); // ExtensionPos.
+    writeU16Test(&bytes, extension_lookup + 2, 0);
+    writeU16Test(&bytes, extension_lookup + 4, 1);
+    writeU16Test(&bytes, extension_lookup + 6, 8);
+
+    const extension = 28;
+    writeU16Test(&bytes, extension + 0, 1);
+    writeU16Test(&bytes, extension + 2, 8); // ChainContextPos.
+    writeU32Test(&bytes, extension + 4, 8);
+
+    const chain = 36;
+    writeU16Test(&bytes, chain + 0, 2); // Chaining class format.
+    writeU16Test(&bytes, chain + 2, 50); // Coverage.
+    writeU16Test(&bytes, chain + 4, 56); // Empty backtrack ClassDef.
+    writeU16Test(&bytes, chain + 6, 62); // Input ClassDef.
+    writeU16Test(&bytes, chain + 8, 70); // Lookahead ClassDef.
+    writeU16Test(&bytes, chain + 10, 2);
+    writeU16Test(&bytes, chain + 12, 0);
+    writeU16Test(&bytes, chain + 14, 16); // Class 1 rule set.
+
+    const set = chain + 16;
+    writeU16Test(&bytes, set + 0, 2);
+    writeU16Test(&bytes, set + 2, 6);
+    writeU16Test(&bytes, set + 4, 20);
+    const first_rule = set + 6;
+    writeU16Test(&bytes, first_rule + 0, 0); // BacktrackCount.
+    writeU16Test(&bytes, first_rule + 2, 1); // InputCount.
+    writeU16Test(&bytes, first_rule + 4, 1); // LookaheadCount.
+    writeU16Test(&bytes, first_rule + 6, 3); // Non-matching lookahead class.
+    writeU16Test(&bytes, first_rule + 8, 1);
+    writeU16Test(&bytes, first_rule + 10, 0);
+    writeU16Test(&bytes, first_rule + 12, 1);
+    const second_rule = set + 20;
+    writeU16Test(&bytes, second_rule + 0, 0);
+    writeU16Test(&bytes, second_rule + 2, 1);
+    writeU16Test(&bytes, second_rule + 4, 1);
+    writeU16Test(&bytes, second_rule + 6, 2); // Matching lookahead class.
+    writeU16Test(&bytes, second_rule + 8, 1);
+    writeU16Test(&bytes, second_rule + 10, 0);
+    writeU16Test(&bytes, second_rule + 12, 1);
+
+    writeCoverage1Test(&bytes, chain + 50, 10);
+    writeU16Test(&bytes, chain + 56, 1); // Empty ClassDef format 1.
+    writeU16Test(&bytes, chain + 58, 0);
+    writeU16Test(&bytes, chain + 60, 0);
+    writeClassDef1Test(&bytes, chain + 62, 10, 1);
+    writeClassDef1Test(&bytes, chain + 70, 20, 2);
+
+    writeSinglePositionLookup(&bytes, 120, 10, 0, 50);
+
+    const glyphs = [_]GlyphId{ 10, 20 };
+    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    defer deinitLookupAccelerators(allocator, accelerators);
+    try std.testing.expect(accelerators[0].chaining_class_subtables.len != 0);
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try collectNestedAdjustment(.{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true }, &glyphs, 0, 0, &adjustments, allocator, .{
+        .lookup_accelerators = accelerators,
+        .assume_validated = true,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 50), adjustments.items[0].x_placement);
+}
+
 test "GPOS chaining coverage nested ExtensionPos SinglePos respects alternatives" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 140;
@@ -7503,6 +7797,13 @@ fn writeCoverage1ListTest(bytes: []u8, offset: usize, glyphs: []const GlyphId) v
     for (glyphs, 0..) |glyph, i| {
         writeU16Test(bytes, offset + 4 + i * 2, glyph);
     }
+}
+
+fn writeClassDef1Test(bytes: []u8, offset: usize, start: GlyphId, class: u16) void {
+    writeU16Test(bytes, offset + 0, 1);
+    writeU16Test(bytes, offset + 2, start);
+    writeU16Test(bytes, offset + 4, 1);
+    writeU16Test(bytes, offset + 6, class);
 }
 
 fn writeAnchor1Test(bytes: []u8, offset: usize, x: i16, y: i16) void {

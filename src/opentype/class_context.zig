@@ -7,6 +7,62 @@ pub const ClassRole = enum {
     lookahead,
 };
 
+/// Compact representation of a chaining class rule whose backtrack/input shape
+/// has already been proven by the table-specific builder. `classes_start` and
+/// `lookahead_count` select the expected lookahead class sequence from a
+/// side-car class array.
+pub const Rule = struct {
+    class_set: u16,
+    lookahead_count: u16,
+    hash: u64,
+    order: u32,
+    lookup_index: u16,
+    classes_start: u32,
+};
+
+pub const RuleGroup = struct {
+    class_set: u16,
+    start: usize,
+    len: usize,
+    max_lookahead_count: u16,
+};
+
+pub fn sequenceHashEmpty() u64 {
+    return 0xcbf29ce484222325;
+}
+
+pub fn sequenceHash(classes: []const u16) u64 {
+    var hash = sequenceHashEmpty();
+    for (classes) |class| hash = sequenceHashAppend(hash, class);
+    return hash;
+}
+
+pub fn sequenceHashAppend(hash: u64, class: u16) u64 {
+    return (hash ^ @as(u64, class)) *% 0x100000001b3;
+}
+
+pub fn ruleLessThan(_: void, lhs: Rule, rhs: Rule) bool {
+    if (lhs.class_set != rhs.class_set) return lhs.class_set < rhs.class_set;
+    return lhs.order < rhs.order;
+}
+
+pub fn groupForClass(groups: []const RuleGroup, class_set: u16) ?RuleGroup {
+    var lo: usize = 0;
+    var hi: usize = groups.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = groups[mid].class_set;
+        if (class_set < candidate) {
+            hi = mid;
+        } else if (class_set > candidate) {
+            lo = mid + 1;
+        } else {
+            return groups[mid];
+        }
+    }
+    return null;
+}
+
 /// Builds a small, stack-backed cache for OpenType chaining class-context
 /// matching. Format-2 chaining subtables frequently contain many candidate
 /// rules for the same first glyph; those rules share the same backtrack/input/

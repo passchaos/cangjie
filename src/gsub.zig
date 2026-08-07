@@ -1878,9 +1878,25 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
 fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, parsed_subtable: ?ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
     const subst_format = try readU16(table, subtable_offset);
     return switch (subst_format) {
+        1 => try applyChainingGlyphSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options),
+        2 => try applyChainingClassSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options),
         3 => try applyChainingCoverageSubstitutionAt(table, parsed_subtable orelse (try parseChainingCoverageSubtable(table, subtable_offset) orelse return false), glyphs, pos, allocator, lookup_flag, options),
         else => false,
     };
+}
+
+fn applyChainingGlyphSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
+    if (!sourceFeatureAllowsGlyph(options, pos)) return false;
+    if (pos >= glyphs.items.len) return false;
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return false;
+
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    const chain_set_count = try readU16(table, subtable_offset + 4);
+    const coverage = try coverageIndex(table, coverage_offset, glyphs.items[pos]) orelse return false;
+    if (coverage >= chain_set_count) return false;
+    const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
+    if (set_relative == 0) return false;
+    return try applyChainingRuleSet(table, subtable_offset + set_relative, glyphs, pos, allocator, lookup_flag, options);
 }
 
 fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -1900,6 +1916,24 @@ fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: 
         if (set_relative == 0) continue;
         _ = try applyChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, allocator, lookup_flag, options);
     }
+}
+
+fn applyChainingClassSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
+    if (!sourceFeatureAllowsGlyph(options, pos)) return false;
+    if (pos >= glyphs.items.len) return false;
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return false;
+
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    const backtrack_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
+    const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
+    const lookahead_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+    const set_count = try readU16(table, subtable_offset + 10);
+    if (try coverageIndex(table, coverage_offset, glyphs.items[pos]) == null) return false;
+    const input_class = try classValue(table, input_class_def, glyphs.items[pos]);
+    if (input_class >= set_count) return false;
+    const set_relative = try readU16(table, subtable_offset + 12 + @as(usize, input_class) * 2);
+    if (set_relative == 0) return false;
+    return try applyChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, allocator, lookup_flag, options);
 }
 
 fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_def: usize, input_class_def: usize, lookahead_class_def: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
@@ -3257,8 +3291,13 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
     // wrapped cardinality-changing subtables at that real target so the caller
     // can remap later records from the actual removal/insertion shape.
     switch (extension_lookup_type) {
+        1 => {
+            if (try applySingleSubstitutionAt(table, extension_subtable, glyphs, glyph_index, lookup_flag, options)) return .{};
+            return null;
+        },
         2 => return try applyMultipleSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
         4 => return try applyLigatureSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
+        6 => return if (try applyChainingContextSubstitutionAt(table, extension_subtable, null, glyphs, glyph_index, allocator, lookup_flag, options)) .{} else null,
         else => return null,
     }
 }

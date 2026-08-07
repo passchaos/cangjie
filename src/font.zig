@@ -98,6 +98,13 @@ pub const VerticalMetricInfo = struct {
     top_side_bearing: i16,
 };
 
+pub const GlyphLocationInfo = struct {
+    glyph_id: glyph_mod.GlyphId,
+    offset: usize,
+    length: usize,
+    empty: bool,
+};
+
 pub const PostInfo = struct {
     format: u32,
     italic_angle: f32,
@@ -2141,6 +2148,31 @@ pub const Font = struct {
         // they merely selected an absent runtime palette.
         if (self.cpal == null) return error.BadSfnt;
         _ = (try self.paletteColor(0, color_index)) orelse return error.BadSfnt;
+    }
+
+    /// Expand the TrueType `loca` table into one glyf byte range per glyph.
+    pub fn glyphLocations(self: *const Font, allocator: std.mem.Allocator) FontError![]GlyphLocationInfo {
+        const loca = self.loca orelse return error.MissingTable;
+        const glyf = self.glyf orelse return error.MissingTable;
+        try validateSfntTableChecksum(self.data, self.maxp);
+        try validateSfntTableChecksum(self.data, loca);
+        try validateSfntTableChecksum(self.data, glyf);
+        try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
+
+        const locations = try allocator.alloc(GlyphLocationInfo, self.glyph_count);
+        errdefer allocator.free(locations);
+        for (locations, 0..) |*location, glyph_index| {
+            const start = try glyfOffsetFromLoca(self.data, loca, self.index_to_loc_format, glyph_index);
+            const end = try glyfOffsetFromLoca(self.data, loca, self.index_to_loc_format, glyph_index + 1);
+            if (end < start or end > glyf.length) return error.InvalidLoca;
+            location.* = .{
+                .glyph_id = @intCast(glyph_index),
+                .offset = glyf.offset + start,
+                .length = end - start,
+                .empty = end == start,
+            };
+        }
+        return locations;
     }
 
     pub fn colorPaintLayer(self: *const Font, layer_index: u32) FontError!?ColorPaint {

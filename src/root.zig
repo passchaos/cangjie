@@ -144,6 +144,7 @@ pub const VariationInstance = @import("font.zig").VariationInstance;
 pub const VariationSequenceKind = @import("font.zig").VariationSequenceKind;
 pub const VerticalMetrics = @import("font.zig").VerticalMetrics;
 pub const GlyphId = @import("glyph.zig").GlyphId;
+pub const GlyphLocationInfo = @import("font.zig").GlyphLocationInfo;
 pub const Bounds = @import("glyph.zig").Bounds;
 pub const GlyphOutline = @import("glyph.zig").GlyphOutline;
 pub const OutlineBuilder = @import("glyph.zig").OutlineBuilder;
@@ -333,6 +334,16 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expectEqual(HorizontalMetricInfo{ .advance_width = 500, .left_side_bearing = 0 }, hmetrics[0]);
     try std.testing.expectEqual(HorizontalMetricInfo{ .advance_width = 800, .left_side_bearing = 0 }, hmetrics[1]);
     try std.testing.expect((try font.verticalMetricsTable(allocator)) == null);
+
+    const locations = try font.glyphLocations(allocator);
+    defer allocator.free(locations);
+    try std.testing.expectEqual(@as(usize, 2), locations.len);
+    try std.testing.expectEqual(@as(GlyphId, 0), locations[0].glyph_id);
+    try std.testing.expect(locations[0].length > 0);
+    try std.testing.expect(!locations[0].empty);
+    try std.testing.expectEqual(@as(GlyphId, 1), locations[1].glyph_id);
+    try std.testing.expect(locations[1].length > 0);
+    try std.testing.expect(!locations[1].empty);
 
     var outline = try font.glyphOutline(allocator, 1);
     defer outline.deinit();
@@ -674,6 +685,31 @@ test "lazy maxp metadata revalidates borrowed table bytes" {
     bytes[maxp_offset orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.maxpInfo());
+}
+
+test "lazy glyph locations revalidate borrowed loca bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const locations = try font.glyphLocations(allocator);
+    defer allocator.free(locations);
+    try std.testing.expectEqual(@as(usize, 2), locations.len);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var loca_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "loca")) loca_offset = table.offset;
+    }
+    bytes[loca_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.glyphLocations(allocator));
 }
 
 test "raw SFNT table data revalidates borrowed checksums" {

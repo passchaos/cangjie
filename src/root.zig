@@ -91,7 +91,9 @@ pub const FontError = @import("font.zig").FontError;
 pub const FontFormat = @import("font.zig").FontFormat;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const GlyphClass = @import("font.zig").GlyphClass;
+pub const NameEncoding = @import("font.zig").NameEncoding;
 pub const NameId = @import("font.zig").NameId;
+pub const NameRecordInfo = @import("font.zig").NameRecordInfo;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
 pub const GdefMetadataCache = @import("layout.zig").GdefMetadataCache;
@@ -1374,6 +1376,42 @@ test "reads font family style and full names from the name table" {
     try std.testing.expectEqualStrings("Cangjie Sans Regular", (try font.fullName(&buffer)).?);
     try std.testing.expectEqualStrings("Cangjie Sans", (try font.nameString(.typographic_family, &buffer)).?);
     try std.testing.expectEqualStrings("CangjieSans-Regular", (try font.nameString(.postscript_name, &buffer)).?);
+}
+
+test "enumerates raw SFNT name records" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const records = try font.nameRecords(allocator);
+    defer allocator.free(records);
+
+    try std.testing.expectEqual(@as(usize, 6), records.len);
+    try std.testing.expectEqual(@as(u16, 3), records[0].platform_id);
+    try std.testing.expectEqual(@as(u16, 1), records[0].encoding_id);
+    try std.testing.expectEqual(@as(u16, 0x0409), records[0].language_id);
+    try std.testing.expectEqual(@as(u16, @intFromEnum(NameId.family)), records[0].name_id);
+    try std.testing.expectEqual(NameEncoding.utf16_be, records[0].encoding);
+    try std.testing.expectEqual(@as(usize, "Cangjie Sans".len * 2), records[0].string.len);
+
+    var decoded: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("Cangjie Sans", try records[0].decodeUtf8(&decoded));
+    try std.testing.expectEqual(@as(u16, @intFromEnum(NameId.postscript_name)), records[3].name_id);
+    try std.testing.expectEqualStrings("CangjieSans-Regular", try records[3].decodeUtf8(&decoded));
+
+    const minimal_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(minimal_bytes);
+    var minimal = try Font.parse(allocator, minimal_bytes);
+    defer minimal.deinit();
+
+    const empty = try minimal.nameRecords(allocator);
+    defer allocator.free(empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
 }
 
 test "reads variable font axis metadata from fvar" {

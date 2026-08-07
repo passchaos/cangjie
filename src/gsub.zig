@@ -904,10 +904,12 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
     const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
     const glyph_count_before = glyphs.items.len;
     const glyph_hash_before = glyphRunHash(glyphs.items);
+    const glyphs_before = if (options.shape_profile != null) try allocator.dupe(GlyphId, glyphs.items) else &.{};
+    defer if (options.shape_profile != null) allocator.free(glyphs_before);
     defer {
         if (options.shape_profile) |profile| {
             profile.recordGsubLookupTime(lookup_index, shapeProfileElapsed(lookup_start, options.profile_io));
-            profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, glyphRunHash(glyphs.items));
+            profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, glyphRunHash(glyphs.items), firstDifferentGlyphIndex(glyphs_before, glyphs.items));
         }
     }
     try ensureLookupHeaderWithin(table, lookup_offset);
@@ -999,6 +1001,14 @@ fn glyphRunHash(glyphs: []const GlyphId) u64 {
         hash *%= 0x100000001b3;
     }
     return hash;
+}
+
+fn firstDifferentGlyphIndex(before: []const GlyphId, after: []const GlyphId) usize {
+    const len = @min(before.len, after.len);
+    for (0..len) |index| {
+        if (before[index] != after[index]) return index;
+    }
+    return len;
 }
 
 fn lookupMatchesSourceSyllable(lookup_index: ?u16, options: LookupOptions) bool {

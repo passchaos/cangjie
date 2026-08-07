@@ -62,6 +62,7 @@ pub const LookupOptions = struct {
     /// semantics.
     source_features: ?[]const u32 = null,
     active_source_feature: ?u32 = null,
+    active_source_feature_mask: u32 = 0,
     /// Optional source-level syllable id parallel to original source codepoints.
     /// When `match_source_syllable` is true, contextual matching stops at the
     /// candidate glyph's syllable instead of matching across orthographic units.
@@ -136,6 +137,7 @@ const ChainingSubtablePair = struct {
 pub const FeatureApplication = struct {
     tag: u32,
     source_scoped: bool = false,
+    match_source_syllable: bool = false,
     auto_zwnj: bool = true,
     auto_zwj: bool = true,
 };
@@ -177,6 +179,32 @@ pub fn sourceFeatureMaskForTag(feature_tag: u32) ?u32 {
         15
     else if (feature_tag == unicode.tag("fina"))
         16
+    else if (feature_tag == unicode.tag("blwm"))
+        17
+    else if (feature_tag == unicode.tag("abvm"))
+        18
+    else if (feature_tag == unicode.tag("abvs"))
+        19
+    else if (feature_tag == unicode.tag("blws"))
+        20
+    else if (feature_tag == unicode.tag("haln"))
+        21
+    else if (feature_tag == unicode.tag("pres"))
+        22
+    else if (feature_tag == unicode.tag("psts"))
+        23
+    else if (feature_tag == unicode.tag("dist"))
+        24
+    else if (feature_tag == unicode.tag("rlig"))
+        25
+    else if (feature_tag == unicode.tag("liga"))
+        26
+    else if (feature_tag == unicode.tag("clig"))
+        27
+    else if (feature_tag == unicode.tag("calt"))
+        28
+    else if (feature_tag == unicode.tag("rclt"))
+        29
     else
         return null;
     return source_feature_mask_marker | (@as(u32, 1) << bit);
@@ -186,6 +214,25 @@ pub const FeatureLookupPlanEntry = struct {
     application: FeatureApplication,
     lookups: []u16,
     lookup_offsets: []usize,
+};
+
+pub const MergedFeatureLookup = struct {
+    lookup: u16,
+    source_mask: u32 = 0,
+    auto_zwnj: bool = true,
+    auto_zwj: bool = true,
+    match_source_syllable: bool = false,
+};
+
+pub const MergedFeatureLookupPlan = struct {
+    lookups: []MergedFeatureLookup,
+    lookup_offsets: []usize,
+
+    pub fn deinit(self: *MergedFeatureLookupPlan, allocator: std.mem.Allocator) void {
+        allocator.free(self.lookup_offsets);
+        allocator.free(self.lookups);
+        self.* = .{ .lookups = &.{}, .lookup_offsets = &.{} };
+    }
 };
 
 pub const FeatureLookupPlan = struct {
@@ -350,6 +397,7 @@ pub fn applyFeatureSequenceWithOptions(
     for (applications) |application| {
         var selected_options = options;
         selected_options.active_source_feature = if (application.source_scoped) application.tag else null;
+        selected_options.match_source_syllable = application.match_source_syllable;
         selected_options.active_auto_zwnj = application.auto_zwnj;
         selected_options.active_auto_zwj = application.auto_zwj;
         try validateShapingMetadata(selected_options, glyphs.items.len);
@@ -417,6 +465,61 @@ pub fn buildFeatureLookupPlan(
     return .{ .entries = try entries.toOwnedSlice(allocator) };
 }
 
+pub fn buildMergedFeatureLookupPlan(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    applications: []const FeatureApplication,
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!MergedFeatureLookupPlan {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+
+    var feature_indices = std.ArrayList(FeatureSelection).empty;
+    defer feature_indices.deinit(allocator);
+    const script_list_offset = try checkedRequiredScriptListOffset(table);
+    const script_count = try readU16(table, script_list_offset);
+    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
+        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
+        0;
+    if (script_offset != 0) try collectScriptFeatures(table, script_offset, options.language_tag, &feature_indices, allocator);
+    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
+    const feature_count = try readU16(table, feature_list_offset);
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+
+    var lookups = std.ArrayList(MergedFeatureLookup).empty;
+    errdefer lookups.deinit(allocator);
+    for (feature_indices.items) |selection| {
+        if (!selection.required or selection.index >= feature_count) continue;
+        const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
+        const required_tag = try readU32(table, feature_record);
+        if (featurePlanContains(applications, required_tag)) continue;
+        const selected = try selectedFeatureLookupsFromPlanOwned(table, required_tag, feature_indices.items, feature_list_offset, feature_count, lookup_count, allocator);
+        defer allocator.free(selected);
+        try appendMergedFeatureLookups(&lookups, allocator, selected, .{ .tag = required_tag });
+    }
+    for (applications) |application| {
+        const selected = try selectedFeatureLookupsFromPlanOwned(table, application.tag, feature_indices.items, feature_list_offset, feature_count, lookup_count, allocator);
+        defer allocator.free(selected);
+        try appendMergedFeatureLookups(&lookups, allocator, selected, application);
+    }
+
+    sortMergeFeatureLookups(&lookups);
+    const owned_lookups = try lookups.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_lookups);
+    const selected_lookup_indices = try allocator.alloc(u16, owned_lookups.len);
+    defer allocator.free(selected_lookup_indices);
+    for (owned_lookups, selected_lookup_indices) |lookup, *selected_lookup_index| {
+        selected_lookup_index.* = lookup.lookup;
+    }
+    const lookup_offsets = try lookupOffsetsForIndices(table, lookup_list_offset, selected_lookup_indices, allocator);
+    return .{ .lookups = owned_lookups, .lookup_offsets = lookup_offsets };
+}
+
 pub fn applyFeatureLookupPlanWithOptions(
     data: []const u8,
     offset: usize,
@@ -437,10 +540,42 @@ pub fn applyFeatureLookupPlanWithOptions(
     for (plan.entries) |entry| {
         var selected_options = options;
         selected_options.active_source_feature = if (entry.application.source_scoped) entry.application.tag else null;
+        selected_options.match_source_syllable = entry.application.match_source_syllable;
         selected_options.active_auto_zwnj = entry.application.auto_zwnj;
         selected_options.active_auto_zwj = entry.application.auto_zwj;
         try validateShapingMetadata(selected_options, glyphs.items.len);
         try applyLookupPlanEntry(table, lookup_count, entry, glyphs, allocator, selected_options);
+    }
+}
+
+pub fn applyMergedFeatureLookupPlanWithOptions(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    plan: MergedFeatureLookupPlan,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    try validateShapingMetadata(options, glyphs.items.len);
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+    if (plan.lookups.len != plan.lookup_offsets.len) return error.BadGsub;
+    for (plan.lookups, plan.lookup_offsets) |lookup, lookup_offset| {
+        if (lookup.lookup >= lookup_count) return error.BadGsub;
+        var selected_options = options;
+        selected_options.active_source_feature = null;
+        selected_options.active_source_feature_mask = lookup.source_mask;
+        selected_options.active_auto_zwnj = lookup.auto_zwnj;
+        selected_options.active_auto_zwj = lookup.auto_zwj;
+        selected_options.match_source_syllable = lookup.match_source_syllable;
+        try validateShapingMetadata(selected_options, glyphs.items.len);
+        try applyLookupWithIndex(table, lookup_offset, lookup.lookup, glyphs, allocator, selected_options);
     }
 }
 
@@ -862,6 +997,10 @@ fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
     return lhs < rhs;
 }
 
+fn mergedFeatureLookupLessThan(_: void, lhs: MergedFeatureLookup, rhs: MergedFeatureLookup) bool {
+    return lhs.lookup < rhs.lookup;
+}
+
 fn chainingSubtablePairLessThan(_: void, lhs: ChainingSubtablePair, rhs: ChainingSubtablePair) bool {
     if (lhs.glyph != rhs.glyph) return lhs.glyph < rhs.glyph;
     return lhs.subtable_index < rhs.subtable_index;
@@ -892,6 +1031,48 @@ fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
         lookups.items[write] = lookup_index;
         write += 1;
         previous = lookup_index;
+    }
+    lookups.shrinkRetainingCapacity(write);
+}
+
+fn appendMergedFeatureLookups(
+    lookups: *std.ArrayList(MergedFeatureLookup),
+    allocator: std.mem.Allocator,
+    selected_lookups: []const u16,
+    application: FeatureApplication,
+) std.mem.Allocator.Error!void {
+    const source_mask = if (application.source_scoped)
+        sourceFeatureMaskForTag(application.tag) orelse 0
+    else
+        0;
+    for (selected_lookups) |lookup| {
+        try lookups.append(allocator, .{
+            .lookup = lookup,
+            .source_mask = source_mask,
+            .auto_zwnj = application.auto_zwnj,
+            .auto_zwj = application.auto_zwj,
+            .match_source_syllable = application.match_source_syllable,
+        });
+    }
+}
+
+fn sortMergeFeatureLookups(lookups: *std.ArrayList(MergedFeatureLookup)) void {
+    if (lookups.items.len < 2) return;
+
+    std.sort.heap(MergedFeatureLookup, lookups.items, {}, mergedFeatureLookupLessThan);
+    var write: usize = 1;
+    var previous = lookups.items[0];
+    for (lookups.items[1..]) |lookup| {
+        if (lookup.lookup == previous.lookup) {
+            lookups.items[write - 1].source_mask |= lookup.source_mask;
+            lookups.items[write - 1].auto_zwnj = lookups.items[write - 1].auto_zwnj and lookup.auto_zwnj;
+            lookups.items[write - 1].auto_zwj = lookups.items[write - 1].auto_zwj and lookup.auto_zwj;
+            lookups.items[write - 1].match_source_syllable = lookups.items[write - 1].match_source_syllable or lookup.match_source_syllable;
+        } else {
+            lookups.items[write] = lookup;
+            write += 1;
+            previous = lookup;
+        }
     }
     lookups.shrinkRetainingCapacity(write);
 }
@@ -1430,7 +1611,7 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError
             try validateLigatureComponentInfo(component_info);
         }
     }
-    if (options.active_source_feature != null) {
+    if (options.active_source_feature != null or options.active_source_feature_mask != 0) {
         const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
         const features = options.source_features orelse return error.InvalidShapingInput;
         for (sources.items) |source| {
@@ -1479,15 +1660,19 @@ fn clusterForGlyph(options: LookupOptions, glyph_index: usize) usize {
 }
 
 fn sourceFeatureAllowsGlyph(options: LookupOptions, glyph_index: usize) bool {
-    const active = options.active_source_feature orelse return true;
+    if (options.active_source_feature_mask == 0 and options.active_source_feature == null) return true;
     const features = options.source_features orelse return false;
     const source = sourceForGlyph(options, glyph_index);
     if (source >= features.len) return false;
     const assigned = features[source];
     if ((assigned & source_feature_mask_marker) != 0) {
-        const active_mask = sourceFeatureMaskForTag(active) orelse return false;
-        return (assigned & active_mask) == active_mask;
+        const active_mask = if (options.active_source_feature_mask != 0)
+            options.active_source_feature_mask
+        else
+            sourceFeatureMaskForTag(options.active_source_feature.?) orelse return false;
+        return (assigned & active_mask) != 0;
     }
+    const active = options.active_source_feature orelse return false;
     return assigned == active;
 }
 
@@ -3510,6 +3695,7 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     scratch_options.ligature_components = null;
     scratch_options.source_features = null;
     scratch_options.active_source_feature = null;
+    scratch_options.active_source_feature_mask = 0;
     try applyLookup(table, nested_lookup_offset, &slice, allocator, scratch_options);
     try glyphs.replaceRange(allocator, glyph_index, 1, slice.items);
     if (slice.items.len != 1) {

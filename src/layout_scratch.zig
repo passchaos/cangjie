@@ -14,12 +14,14 @@ pub const ShapeScratch = struct {
     ligature_components: std.ArrayList(gpos.LigatureComponentInfo) = .empty,
     joining_forms: std.ArrayList(unicode.JoiningForm) = .empty,
     source_features: std.ArrayList(u32) = .empty,
+    source_syllables: std.ArrayList(u8) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
     attachment_links: std.ArrayList(@import("attachment.zig").Link) = .empty,
 
     pub fn deinit(self: *ShapeScratch, allocator: std.mem.Allocator) void {
         self.attachment_links.deinit(allocator);
         self.gpos_adjustments.deinit(allocator);
+        self.source_syllables.deinit(allocator);
         self.source_features.deinit(allocator);
         self.joining_forms.deinit(allocator);
         self.ligature_components.deinit(allocator);
@@ -42,6 +44,7 @@ pub const ShapeScratch = struct {
         self.ligature_components.clearRetainingCapacity();
         self.joining_forms.clearRetainingCapacity();
         self.source_features.clearRetainingCapacity();
+        self.source_syllables.clearRetainingCapacity();
         self.gpos_adjustments.clearRetainingCapacity();
         self.attachment_links.clearRetainingCapacity();
     }

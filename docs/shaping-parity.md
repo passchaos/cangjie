@@ -153,23 +153,24 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   shaping behavior. The short smoke remains a failing gate at Cangjie `333`
   glyphs versus HarfRust `335`, so this is structure and test foundation only,
   not a parity claim.
-  Focused diagnosis has narrowed the first short-smoke glyph-id mismatch to the
+  Focused diagnosis narrowed the first short-smoke glyph-id mismatch to the
   two-base input `"𛰂𛱛"`: the first differing glyph is in the second source
-  cluster at byte offset `4` (`U+1BC5B`), where HarfRust keeps an initial
-  `7828` glyph that Cangjie omits. Disabling Cangjie `rclt` makes that glyph
-  reappear but regresses the sequence length, so the next implementation slice
-  should model HarfBuzz/HarfRust USE per-syllable `rclt`/common-feature
-  matching instead of globally disabling `rclt`.
+  cluster at byte offset `4` (`U+1BC5B`). Wiring USE source syllables and a
+  HarfBuzz-style merged final GSUB stage now applies `blwm` before the relevant
+  `rclt`/`dist` lookups in LookupList order, so the two-base gate reaches
+  `161` glyphs on both Cangjie and HarfRust. This is still not parity: the
+  first glyph-id mismatch moved to index `104`, where Cangjie emits
+  `_.RDX.0E1, _.RDX.2E2` (`11465,11479`) and HarfRust emits
+  `_.RDX.3E1, _.RDX.0E2` (`11468,11477`).
   Profile lookup deltas for `"𛰂𛱛"` identify `rclt` lookup `279` as the first
   count-changing GSUB step (`2 -> 4` glyphs); later `dist` lookups expand that
   intermediate stream to Cangjie's `160` glyphs. Use that lookup as the first
   focused gate for implementing USE per-syllable common-feature matching.
-  GSUB now has an opt-in source-syllable matching primitive and profile output
-  reports lookup-level before/after glyph hashes; this is not wired into USE
-  runtime shaping yet because broad feature-stage experiments regressed the
-  focused gate. The primitive can now also target selected lookup indexes, so
-  the next USE step can pass the `rclt` feature's lookup list without changing
-  unrelated GSUB matching.
+  GSUB now has opt-in source-syllable matching plus a merged feature lookup
+  plan for HarfBuzz-style stage execution. USE runtime shaping uses the source
+  syllable metadata for its per-syllable stages and uses the merged final stage
+  for `abvs/blws/haln/pres/psts` plus common/horizontal features such as
+  `abvm`, `blwm`, `dist`, and `rclt`.
   Additional profile tracing reports the first changed glyph index per lookup:
   on `"𛰂𛱛"`, lookup `279` first changes index `1`, lookup `280` first changes
   index `2`, and lookup `248` first changes index `0`. The next implementation
@@ -181,6 +182,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   to `[7828,73,7930,223]`. In glyph names, lookup `280` rewrites
   `u1BC5B.ou` (`129`) to `u1BC5B.ou.270p270` (`223`), preventing the later
   `blwm` lookup `248` from inserting `_.pe.0.0` for the second cluster.
+  After the staged USE wiring, that `blwm` insertion happens, and the remaining
+  focused blocker is `dist`: profile output shows lookup `390` rewriting
+  second-cluster RDX path fragments from `_.rdx.3e1, _.rdx.0e2` to
+  `_.rdx.0e1, _.rdx.2e2`, followed by lookup `396` uppercasing them to the
+  final mismatching glyphs. The next slice should compare Cangjie's nested
+  chaining-context handling for lookup `390 -> 228 -> 229/230/231` against
+  HarfBuzz/HarfRust, especially backtrack matching, MarkFilteringSet handling,
+  and recursive lookup match-position bounds.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

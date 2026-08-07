@@ -29,23 +29,23 @@ pub fn markSourceFeatures(
 }
 
 const feature_applications = [_]gsub.FeatureApplication{
-    .{ .tag = unicode.tag("locl") },
-    .{ .tag = unicode.tag("ccmp") },
-    .{ .tag = unicode.tag("nukt") },
-    .{ .tag = unicode.tag("akhn"), .auto_zwj = false },
-    .{ .tag = unicode.tag("rphf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("pref"), .auto_zwj = false },
-    .{ .tag = unicode.tag("rkrf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("abvf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("blwf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("half"), .auto_zwj = false },
-    .{ .tag = unicode.tag("pstf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("vatu"), .auto_zwj = false },
-    .{ .tag = unicode.tag("cjct"), .auto_zwj = false },
-    .{ .tag = unicode.tag("isol") },
-    .{ .tag = unicode.tag("init") },
-    .{ .tag = unicode.tag("medi") },
-    .{ .tag = unicode.tag("fina") },
+    .{ .tag = unicode.tag("locl"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("ccmp"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("nukt"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("akhn"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("rphf"), .source_scoped = true, .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("pref"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("rkrf"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("abvf"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("blwf"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("half"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("pstf"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("vatu"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("cjct"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("isol"), .source_scoped = true },
+    .{ .tag = unicode.tag("init"), .source_scoped = true },
+    .{ .tag = unicode.tag("medi"), .source_scoped = true },
+    .{ .tag = unicode.tag("fina"), .source_scoped = true },
     .{ .tag = unicode.tag("abvm"), .auto_zwj = false },
     .{ .tag = unicode.tag("abvs"), .auto_zwj = false },
     .{ .tag = unicode.tag("blwm"), .auto_zwj = false },
@@ -54,10 +54,87 @@ const feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("haln"), .auto_zwj = false },
     .{ .tag = unicode.tag("pres"), .auto_zwj = false },
     .{ .tag = unicode.tag("psts"), .auto_zwj = false },
+    .{ .tag = unicode.tag("rlig") },
+    .{ .tag = unicode.tag("calt") },
+    .{ .tag = unicode.tag("clig") },
+    .{ .tag = unicode.tag("liga") },
+    .{ .tag = unicode.tag("rclt") },
+};
+
+const default_preprocessing_applications = [_]gsub.FeatureApplication{
+    .{ .tag = unicode.tag("locl"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("ccmp"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("nukt"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("akhn"), .match_source_syllable = true, .auto_zwj = false },
+};
+
+const rphf_applications = [_]gsub.FeatureApplication{
+    .{ .tag = unicode.tag("rphf"), .source_scoped = true, .match_source_syllable = true, .auto_zwj = false },
+};
+
+const pref_applications = [_]gsub.FeatureApplication{
+    .{ .tag = unicode.tag("pref"), .match_source_syllable = true, .auto_zwj = false },
+};
+
+const basic_applications = [_]gsub.FeatureApplication{
+    .{ .tag = unicode.tag("rkrf"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("abvf"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("blwf"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("half"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("pstf"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("vatu"), .match_source_syllable = true, .auto_zwj = false },
+    .{ .tag = unicode.tag("cjct"), .match_source_syllable = true, .auto_zwj = false },
+};
+
+const topographical_applications = [_]gsub.FeatureApplication{
+    .{ .tag = unicode.tag("isol"), .source_scoped = true },
+    .{ .tag = unicode.tag("init"), .source_scoped = true },
+    .{ .tag = unicode.tag("medi"), .source_scoped = true },
+    .{ .tag = unicode.tag("fina"), .source_scoped = true },
+};
+
+const final_applications = [_]gsub.FeatureApplication{
+    .{ .tag = unicode.tag("abvs"), .auto_zwj = false },
+    .{ .tag = unicode.tag("blws"), .auto_zwj = false },
+    .{ .tag = unicode.tag("haln"), .auto_zwj = false },
+    .{ .tag = unicode.tag("pres"), .auto_zwj = false },
+    .{ .tag = unicode.tag("psts"), .auto_zwj = false },
+    .{ .tag = unicode.tag("abvm") },
+    .{ .tag = unicode.tag("blwm") },
+    .{ .tag = unicode.tag("rlig") },
+    .{ .tag = unicode.tag("calt") },
+    .{ .tag = unicode.tag("clig") },
+    .{ .tag = unicode.tag("dist") },
+    .{ .tag = unicode.tag("liga") },
+    .{ .tag = unicode.tag("rclt") },
 };
 
 pub fn featureApplications() []const gsub.FeatureApplication {
     return &feature_applications;
+}
+
+pub fn defaultPreprocessingFeatureApplications() []const gsub.FeatureApplication {
+    return &default_preprocessing_applications;
+}
+
+pub fn rphfFeatureApplications() []const gsub.FeatureApplication {
+    return &rphf_applications;
+}
+
+pub fn prefFeatureApplications() []const gsub.FeatureApplication {
+    return &pref_applications;
+}
+
+pub fn basicFeatureApplications() []const gsub.FeatureApplication {
+    return &basic_applications;
+}
+
+pub fn topographicalFeatureApplications() []const gsub.FeatureApplication {
+    return &topographical_applications;
+}
+
+pub fn finalFeatureApplications() []const gsub.FeatureApplication {
+    return &final_applications;
 }
 
 test "USE category covers Duployan sample codepoints" {

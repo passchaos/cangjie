@@ -134,6 +134,17 @@ Current local snapshot after the Nastaliq parity work:
 - The new in-process HarfBuzz baseline on the same Amiri workload measured
   HarfBuzz at about `737 ns/glyph` median versus Cangjie at about
   `2015 ns/glyph` median with `--no-bidi-reorder` in the same validation pass.
+- After the retained pure-RTL bidi, GSUB/GPOS accelerator, CPAL/STAT metadata,
+  and chaining-record work through `eaf4908`, the same in-process HarfBuzz
+  baseline still measures Amiri `fa-thelittleprince` at about `738 ns/glyph`
+  median while Cangjie is about `1790 ns/glyph` median on the default RTL
+  visual-order path.  This is a meaningful improvement from the older
+  `~2.0 µs/glyph` Amiri state, but Cangjie is still roughly `2.4x` slower than
+  HarfBuzz on this workload.
+- The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
+  current medians are about `9733 ns/glyph` for Cangjie versus
+  `12230 ns/glyph` for in-process HarfBuzz, with the same
+  `compare-harfbuzz` parity checksum `b30b30028735cdb5`.
 
 Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 
@@ -195,7 +206,8 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   to validate other USE scripts and fonts before making a broader USE parity
   claim.
 
-Conclusion: Arabic long text still trails CoreText substantially. The broad
+Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
+ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
 goal is active, not complete.
 
 ## Near-Term Gaps

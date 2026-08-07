@@ -154,8 +154,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - SourceSerifVariable `en-thelittleprince.txt` passes `compare-harfrust` for
   1,172 lines and `compare-harfbuzz` for 1,172 lines
   (`checksum=6b0306bd714da380`).
-- SourceSerifVariable `react-dom.txt` passes `compare-harfrust` for 24,709
-  non-empty lines and 1,042,546 glyphs.
+- SourceSerifVariable `react-dom.txt` passes `compare-harfrust` and
+  `compare-harfbuzz` for 24,709 non-empty lines and 1,042,546 glyphs
+  (`checksum=70fbecf4b19785ef` for HarfBuzz).
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
   lines and `compare-harfbuzz` for 771 lines (`checksum=f2da7bb39eb7323a`).
 - Gulzar now parses and focused `"سلام"` passes default `compare-harfbuzz`

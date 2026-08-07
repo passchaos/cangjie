@@ -126,6 +126,7 @@ pub const ColorPaint = @import("font.zig").ColorPaint;
 pub const ColorGlyphPaint = @import("render_bridge.zig").ColorGlyphPaint;
 pub const PaletteColor = @import("font.zig").PaletteColor;
 pub const PaletteInfo = @import("font.zig").PaletteInfo;
+pub const PostInfo = @import("font.zig").PostInfo;
 pub const SvgGlyphDocument = @import("font.zig").SvgGlyphDocument;
 pub const StatAxisValue = @import("font.zig").StatAxisValue;
 pub const StatAxisValueCoordinate = @import("font.zig").StatAxisValueCoordinate;
@@ -447,6 +448,72 @@ test "lazy metric header metadata revalidates borrowed bytes" {
         bytes[vhea_offset orelse return error.MissingTable] +%= 1;
         try std.testing.expectError(error.BadSfnt, font.verticalHeaderInfo());
     }
+}
+
+test "post metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    var post: [44]u8 = .{0} ** 44;
+    writeU32Test(&post, 0, 0x00020000);
+    writeI32Test(&post, 4, 0x00008000); // 0.5 degree italic angle.
+    writeI16Test(&post, 8, -75);
+    writeI16Test(&post, 10, 25);
+    writeU32Test(&post, 12, 1);
+    writeU32Test(&post, 16, 2);
+    writeU32Test(&post, 20, 3);
+    writeU32Test(&post, 24, 4);
+    writeU32Test(&post, 28, 5);
+    writeU16Test(&post, 32, 2);
+    writeU16Test(&post, 34, 0);
+    writeU16Test(&post, 36, 258);
+    post[38] = 5;
+    @memcpy(post[39..44], "A.alt");
+
+    const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.postInfo()).?;
+    try std.testing.expectEqual(@as(u32, 0x00020000), info.format);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), info.italic_angle, 0.001);
+    try std.testing.expectEqual(@as(i16, -75), info.underline_position);
+    try std.testing.expectEqual(@as(i16, 25), info.underline_thickness);
+    try std.testing.expect(info.is_fixed_pitch);
+    try std.testing.expectEqual(@as(u32, 2), info.min_mem_type42);
+    try std.testing.expectEqual(@as(u32, 5), info.max_mem_type1);
+    try std.testing.expectEqual(@as(?u16, 2), info.glyph_name_count);
+}
+
+test "post metadata handles missing and borrowed mutated tables" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.postInfo()) == null);
+
+    var post: [32]u8 = .{0} ** 32;
+    writeU32Test(&post, 0, 0x00030000);
+    const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expectEqual(@as(u32, 0x00030000), (try font.postInfo()).?.format);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var post_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "post")) post_offset = table.offset;
+    }
+    bytes[post_offset orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.postInfo());
 }
 
 test "lazy maxp metadata revalidates borrowed table bytes" {
@@ -5626,6 +5693,22 @@ test "applies GPOS glyph-based contextual positioning" {
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[1].x_offset, 0.001);
+}
+
+fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
+    std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {
+    writeU16Test(bytes, offset, @bitCast(value));
+}
+
+fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
+    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
+}
+
+fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
+    writeU32Test(bytes, offset, @bitCast(value));
 }
 
 test {

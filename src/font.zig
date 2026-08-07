@@ -87,6 +87,19 @@ pub const MetricHeaderInfo = struct {
     long_metric_count: u16,
 };
 
+pub const PostInfo = struct {
+    format: u32,
+    italic_angle: f32,
+    underline_position: i16,
+    underline_thickness: i16,
+    is_fixed_pitch: bool,
+    min_mem_type42: u32,
+    max_mem_type42: u32,
+    min_mem_type1: u32,
+    max_mem_type1: u32,
+    glyph_name_count: ?u16 = null,
+};
+
 pub const CharmapInfo = struct {
     platform_id: u16,
     encoding_id: u16,
@@ -1479,6 +1492,14 @@ pub const Font = struct {
 
     pub fn fullName(self: *const Font, out: []u8) FontError!?[]const u8 {
         return try self.nameString(.full_name, out);
+    }
+
+    /// Read validated metadata from the optional SFNT `post` table.
+    pub fn postInfo(self: *const Font) FontError!?PostInfo {
+        const post = self.post orelse return null;
+        try validateSfntTableChecksum(self.data, post);
+        try validatePostTable(self.data, post, self.glyph_count, .{});
+        return try readPostInfo(self.data, post);
     }
 
     /// Return the PostScript glyph name advertised by the optional `post` table.
@@ -3631,6 +3652,28 @@ fn validateMetricHeaderReservedFields(data: []const u8, header: TableRecord) Fon
     for (0..5) |index| {
         if (try bin.readU16At(data, header.offset + 24 + index * 2) != 0) return error.InvalidMetrics;
     }
+}
+
+fn readPostInfo(data: []const u8, post: TableRecord) FontError!PostInfo {
+    try requireTableLength(post, 32);
+    const format = try bin.readU32At(data, post.offset);
+    const glyph_name_count: ?u16 = switch (format) {
+        0x00020000, 0x00025000 => try bin.readU16At(data, post.offset + 32),
+        0x00040000 => @intCast((post.length - 32) / 2),
+        else => null,
+    };
+    return .{
+        .format = format,
+        .italic_angle = fixed16_16ToF32(try bin.readI32At(data, post.offset + 4)),
+        .underline_position = try bin.readI16At(data, post.offset + 8),
+        .underline_thickness = try bin.readI16At(data, post.offset + 10),
+        .is_fixed_pitch = (try bin.readU32At(data, post.offset + 12)) != 0,
+        .min_mem_type42 = try bin.readU32At(data, post.offset + 16),
+        .max_mem_type42 = try bin.readU32At(data, post.offset + 20),
+        .min_mem_type1 = try bin.readU32At(data, post.offset + 24),
+        .max_mem_type1 = try bin.readU32At(data, post.offset + 28),
+        .glyph_name_count = glyph_name_count,
+    };
 }
 
 const PostValidationOptions = struct {

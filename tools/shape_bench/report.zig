@@ -164,12 +164,15 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
     }
     for (result.profile.gsub_lookup_entries[0..result.profile.gsub_lookup_entry_count]) |entry| {
         std.debug.print(
-            \\profile_gsub_lookup index={d} ns={d} count={d}
+            \\profile_gsub_lookup index={d} ns={d} count={d} glyphs_before={d} glyphs_after={d} last_delta={d}
             \\
         , .{
             entry.lookup_index,
             entry.elapsed_ns,
             entry.count,
+            entry.glyphs_before_sum,
+            entry.glyphs_after_sum,
+            entry.last_glyph_delta,
         });
     }
     for (result.profile.gpos_lookup_entries[0..result.profile.gpos_lookup_entry_count]) |entry| {

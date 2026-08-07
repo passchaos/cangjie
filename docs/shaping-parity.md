@@ -160,6 +160,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   reappear but regresses the sequence length, so the next implementation slice
   should model HarfBuzz/HarfRust USE per-syllable `rclt`/common-feature
   matching instead of globally disabling `rclt`.
+  Profile lookup deltas for `"𛰂𛱛"` identify `rclt` lookup `279` as the first
+  count-changing GSUB step (`2 -> 4` glyphs); later `dist` lookups expand that
+  intermediate stream to Cangjie's `160` glyphs. Use that lookup as the first
+  focused gate for implementing USE per-syllable common-feature matching.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

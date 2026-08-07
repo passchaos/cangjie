@@ -1,10 +1,13 @@
 pub const ShapeStageProfile = struct {
-    pub const max_lookup_entries = 32;
+    pub const max_lookup_entries = 128;
 
     pub const LookupEntry = struct {
         lookup_index: u16 = 0,
         elapsed_ns: i128 = 0,
         count: usize = 0,
+        glyphs_before_sum: usize = 0,
+        glyphs_after_sum: usize = 0,
+        last_glyph_delta: isize = 0,
     };
 
     total_ns: i128 = 0,
@@ -46,6 +49,10 @@ pub const ShapeStageProfile = struct {
         self.recordLookupTime(&self.gsub_lookup_entries, &self.gsub_lookup_entry_count, lookup_index, elapsed_ns);
     }
 
+    pub fn recordGsubLookupGlyphs(self: *ShapeStageProfile, lookup_index: ?u16, before: usize, after: usize) void {
+        self.recordLookupGlyphs(&self.gsub_lookup_entries, self.gsub_lookup_entry_count, lookup_index, before, after);
+    }
+
     pub fn recordGposLookupTime(self: *ShapeStageProfile, lookup_index: ?u16, elapsed_ns: i128) void {
         self.recordLookupTime(&self.gpos_lookup_entries, &self.gpos_lookup_entry_count, lookup_index, elapsed_ns);
     }
@@ -66,5 +73,17 @@ pub const ShapeStageProfile = struct {
             .count = 1,
         };
         entry_count.* += 1;
+    }
+
+    fn recordLookupGlyphs(self: *ShapeStageProfile, entries: *[max_lookup_entries]LookupEntry, entry_count: usize, lookup_index: ?u16, before: usize, after: usize) void {
+        _ = self;
+        const index = lookup_index orelse return;
+        for (entries[0..entry_count]) |*entry| {
+            if (entry.lookup_index != index) continue;
+            entry.glyphs_before_sum += before;
+            entry.glyphs_after_sum += after;
+            entry.last_glyph_delta = @as(isize, @intCast(after)) - @as(isize, @intCast(before));
+            return;
+        }
     }
 };

@@ -896,9 +896,11 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
 
 fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
+    const glyph_count_before = glyphs.items.len;
     defer {
         if (options.shape_profile) |profile| {
             profile.recordGsubLookupTime(lookup_index, shapeProfileElapsed(lookup_start, options.profile_io));
+            profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len);
         }
     }
     try ensureLookupHeaderWithin(table, lookup_offset);

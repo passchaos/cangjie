@@ -10,6 +10,7 @@ const indic = @import("indic.zig");
 const layout_cache = @import("layout_cache.zig");
 const layout_scratch = @import("layout_scratch.zig");
 const unicode = @import("unicode.zig");
+const use_shaper = @import("use_shaper.zig");
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
 pub const GdefMetadataCache = layout_cache.GdefMetadataCache;
 pub const GlyphIndexCache = layout_cache.GlyphIndexCache;
@@ -2711,8 +2712,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
             }
         }
-        if (lookup_options.script_tag == .dupl and codepoints.items.len != 0) {
-            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, useFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+        if (use_shaper.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0) {
+            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.featureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
         }
         if (indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0) {
             const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
@@ -2887,38 +2888,6 @@ fn applyGsubFeatureApplicationsForShaping(
     } else {
         try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyph_ids, buffer.allocator, options, gdef_metadata);
     }
-}
-
-const use_feature_applications = [_]gsub.FeatureApplication{
-    .{ .tag = unicode.tag("locl") },
-    .{ .tag = unicode.tag("ccmp") },
-    .{ .tag = unicode.tag("nukt") },
-    .{ .tag = unicode.tag("akhn"), .auto_zwj = false },
-    .{ .tag = unicode.tag("rphf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("pref"), .auto_zwj = false },
-    .{ .tag = unicode.tag("rkrf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("abvf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("blwf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("half"), .auto_zwj = false },
-    .{ .tag = unicode.tag("pstf"), .auto_zwj = false },
-    .{ .tag = unicode.tag("vatu"), .auto_zwj = false },
-    .{ .tag = unicode.tag("cjct"), .auto_zwj = false },
-    .{ .tag = unicode.tag("isol") },
-    .{ .tag = unicode.tag("init") },
-    .{ .tag = unicode.tag("medi") },
-    .{ .tag = unicode.tag("fina") },
-    .{ .tag = unicode.tag("abvm"), .auto_zwj = false },
-    .{ .tag = unicode.tag("abvs"), .auto_zwj = false },
-    .{ .tag = unicode.tag("blwm"), .auto_zwj = false },
-    .{ .tag = unicode.tag("blws"), .auto_zwj = false },
-    .{ .tag = unicode.tag("dist"), .auto_zwj = false },
-    .{ .tag = unicode.tag("haln"), .auto_zwj = false },
-    .{ .tag = unicode.tag("pres"), .auto_zwj = false },
-    .{ .tag = unicode.tag("psts"), .auto_zwj = false },
-};
-
-fn useFeatureApplications() []const gsub.FeatureApplication {
-    return &use_feature_applications;
 }
 
 fn shapeProfileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {

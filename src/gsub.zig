@@ -96,6 +96,7 @@ pub const LookupOptions = struct {
 pub const LookupAccelerator = struct {
     extension_lookup_type: ?u16 = null,
     single_subst: SingleSubstAccelerator = .{},
+    multiple_subst: MultipleSubstAccelerator = .{},
     ligature_subst: LigatureSubstAccelerator = .{},
     chaining_coverage_only: bool = false,
     chaining_input_digest: GlyphDigest = .{},
@@ -117,6 +118,17 @@ const SingleSubstAccelerator = struct {
     substitutes_pos: usize = 0,
     single_mapping: bool = false,
     single_from: GlyphId = 0,
+    single_to: GlyphId = 0,
+};
+
+const MultipleSubstAccelerator = struct {
+    entries: []const MultipleSubstEntry = &.{},
+};
+
+const MultipleSubstEntry = struct {
+    glyph: GlyphId,
+    sequence_offset: usize,
+    glyph_count: u16,
     single_to: GlyphId = 0,
 };
 
@@ -776,6 +788,7 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
 
 fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
     for (accelerators) |accelerator| {
+        allocator.free(accelerator.multiple_subst.entries);
         allocator.free(accelerator.ligature_subst.sets);
         allocator.free(accelerator.chaining_subtable_digests);
         allocator.free(accelerator.chaining_subtables);
@@ -814,6 +827,10 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     if (lookup_type == 1 and lookup_flag == 0 and subtable_count == 1) {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
         accelerator.single_subst = try buildSingleSubstAccelerator(table, subtable_offset);
+    }
+    if (lookup_type == 2 and subtable_count == 1) {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
+        accelerator.multiple_subst = try buildMultipleSubstAccelerator(table, subtable_offset, allocator);
     }
     if (lookup_type == 4 and subtable_count == 1) {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
@@ -1137,6 +1154,36 @@ fn fillSingleMapping(table: Table, coverage_offset: usize, delta: i16, substitut
         try readU16(table, pos)
     else
         @bitCast(@as(i16, @bitCast(glyph)) +% delta);
+}
+
+fn buildMultipleSubstAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!MultipleSubstAccelerator {
+    if (try readU16(table, subtable_offset) != 1) return .{};
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    const sequence_count = try readU16(table, subtable_offset + 4);
+    const entries = try allocator.alloc(MultipleSubstEntry, sequence_count);
+    errdefer allocator.free(entries);
+
+    var sequence_i: usize = 0;
+    while (sequence_i < sequence_count) : (sequence_i += 1) {
+        const glyph = (try coverageGlyphAt(table, coverage_offset, sequence_i)) orelse {
+            allocator.free(entries);
+            return .{};
+        };
+        const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + sequence_i * 2));
+        const glyph_count = try readU16(table, sequence_offset);
+        entries[sequence_i] = .{
+            .glyph = glyph,
+            .sequence_offset = sequence_offset,
+            .glyph_count = glyph_count,
+            .single_to = if (glyph_count == 1) try readU16(table, sequence_offset + 2) else 0,
+        };
+    }
+    std.sort.heap(MultipleSubstEntry, entries, {}, multipleSubstEntryLessThan);
+    return .{ .entries = entries };
+}
+
+fn multipleSubstEntryLessThan(_: void, lhs: MultipleSubstEntry, rhs: MultipleSubstEntry) bool {
+    return lhs.glyph < rhs.glyph;
 }
 
 fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LigatureSubstAccelerator {
@@ -1536,6 +1583,10 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
         return;
     }
     if (lookup_type == 2) {
+        if (multipleLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            try applyMultipleSubstitutionAccelerated(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
+            return;
+        }
         try applyMultipleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
         return;
     }
@@ -1663,6 +1714,15 @@ fn reverseChainingLookupAccelerator(lookup_index: ?u16, options: LookupOptions) 
     if (index >= accelerators.len) return null;
     const accelerator = &accelerators[index];
     if (accelerator.reverse_chaining_subtables.len == 0 or accelerator.reverse_chaining_groups.len == 0) return null;
+    return accelerator;
+}
+
+fn multipleLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const MultipleSubstAccelerator {
+    const accelerators = options.lookup_accelerators orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const accelerator = &accelerators[index].multiple_subst;
+    if (accelerator.entries.len == 0) return null;
     return accelerator;
 }
 
@@ -2369,6 +2429,51 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         }
         i += glyph_count - 1;
     }
+}
+
+fn applyMultipleSubstitutionAccelerated(table: Table, accelerator: MultipleSubstAccelerator, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    var i: usize = 0;
+    while (i < glyphs.items.len) : (i += 1) {
+        if (!sourceFeatureAllowsGlyph(options, i)) continue;
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[i])) continue;
+        const entry = multipleSubstEntryForGlyph(accelerator.entries, glyphs.items[i]) orelse continue;
+        if (entry.glyph_count == 0) {
+            try glyphs.replaceRange(allocator, i, 1, &.{});
+            try replaceSourceMetadata(allocator, options, i, 1, 0, 0);
+            if (i > 0) i -= 1;
+            continue;
+        }
+        if (entry.glyph_count == 1) {
+            glyphs.items[i] = entry.single_to;
+            markGlyphSubstituted(options, i);
+            continue;
+        }
+        const replacement = try allocator.alloc(GlyphId, entry.glyph_count);
+        defer allocator.free(replacement);
+        for (replacement, 0..) |*glyph, replacement_index| {
+            glyph.* = try readU16(table, entry.sequence_offset + 2 + replacement_index * 2);
+        }
+        try glyphs.replaceRange(allocator, i, 1, replacement);
+        try replaceSourceMetadata(allocator, options, i, 1, replacement.len, sourceForGlyph(options, i));
+        i += replacement.len - 1;
+    }
+}
+
+fn multipleSubstEntryForGlyph(entries: []const MultipleSubstEntry, glyph: GlyphId) ?MultipleSubstEntry {
+    var lo: usize = 0;
+    var hi: usize = entries.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = entries[mid].glyph;
+        if (glyph < candidate) {
+            hi = mid;
+        } else if (glyph > candidate) {
+            lo = mid + 1;
+        } else {
+            return entries[mid];
+        }
+    }
+    return null;
 }
 
 fn applyAlternateSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) GsubError!void {

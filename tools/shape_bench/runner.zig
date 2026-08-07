@@ -268,7 +268,7 @@ fn indicSyllableClusters(allocator: std.mem.Allocator, text: []const u8) ![]cons
             continue;
         }
 
-        if (syllable_start != null and isDevanagariConsonant(codepoint) and !saw_virama and byte_start != syllable_start.?) {
+        if (syllable_start != null and isDevanagariBase(codepoint) and !saw_virama and byte_start != syllable_start.?) {
             try appendIndicSyllable(&clusters, allocator, text, syllable_start.?, syllable_end);
             syllable_start = byte_start;
             saw_virama = false;
@@ -382,11 +382,15 @@ fn indicSyllableBaseCluster(text: []const u8, byte_base: usize, initial_reph: bo
 }
 
 fn isIndicSyllableCodepoint(codepoint: u21) bool {
-    return isDevanagariConsonant(codepoint) or
+    return isDevanagariBase(codepoint) or
         isDevanagariDependentMark(codepoint) or
         codepoint == 0x094d or
         codepoint == 0x200c or
         codepoint == 0x200d;
+}
+
+fn isDevanagariBase(codepoint: u21) bool {
+    return isDevanagariConsonant(codepoint) or isDevanagariIndependentVowel(codepoint);
 }
 
 fn isDevanagariConsonant(codepoint: u21) bool {
@@ -394,8 +398,15 @@ fn isDevanagariConsonant(codepoint: u21) bool {
         (codepoint >= 0x0958 and codepoint <= 0x095f);
 }
 
+fn isDevanagariIndependentVowel(codepoint: u21) bool {
+    return (codepoint >= 0x0904 and codepoint <= 0x0914) or
+        codepoint == 0x0960 or
+        codepoint == 0x0961;
+}
+
 fn isDevanagariDependentMark(codepoint: u21) bool {
-    return (codepoint >= 0x093a and codepoint <= 0x094c) or
+    return (codepoint >= 0x0900 and codepoint <= 0x0903) or
+        (codepoint >= 0x093a and codepoint <= 0x094c) or
         (codepoint >= 0x094e and codepoint <= 0x094f) or
         (codepoint >= 0x0951 and codepoint <= 0x0957);
 }

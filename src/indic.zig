@@ -35,6 +35,35 @@ pub fn reorderPreBaseMatras(
     }
 }
 
+pub fn insertDottedCirclesForBrokenClusters(
+    allocator: std.mem.Allocator,
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    codepoints: []const u21,
+    dotted_circle_glyph: GlyphId,
+) !void {
+    if (dotted_circle_glyph == 0) return;
+
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source_index = glyph_source_indices.items[glyph_index];
+        if (source_index >= codepoints.len) continue;
+        if (!startsBrokenCluster(codepoints, source_index)) continue;
+
+        try insertGlyphMetadata(
+            allocator,
+            glyph_ids,
+            glyph_source_indices,
+            ligature_components,
+            glyph_index,
+            dotted_circle_glyph,
+            source_index,
+        );
+        glyph_index += 1;
+    }
+}
+
 pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21) bool {
     @memset(source_features, 0);
     var marked = false;
@@ -76,7 +105,7 @@ pub fn reorderRephs(
         }
 
         const syllable_end = devanagariSyllableEnd(codepoints, source_index);
-        const target = rephTargetGlyphIndex(glyph_source_indices.items, source_index, syllable_end, index);
+        const target = rephTargetGlyphIndex(glyph_source_indices.items, codepoints, source_index, syllable_end, index);
         moveGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index, target);
         index = target + 1;
     }
@@ -129,6 +158,14 @@ fn isPreBaseMatra(codepoint: u21) bool {
     };
 }
 
+fn startsBrokenCluster(codepoints: []const u21, source_index: usize) bool {
+    if (source_index != 0 and isDevanagariSyllableCodepoint(codepoints[source_index - 1])) return false;
+    if (isDevanagariConsonant(codepoints[source_index]) or isDevanagariIndependentVowel(codepoints[source_index])) return false;
+    const syllable_end = devanagariSyllableEnd(codepoints, source_index);
+    if (syllable_end <= source_index) return false;
+    return !hasConsonant(codepoints[source_index..syllable_end]);
+}
+
 fn hasInitialReph(codepoints: []const u21, syllable_start: usize, syllable_end: usize) bool {
     if (syllable_start + 2 >= syllable_end) return false;
     if (codepoints[syllable_start] != 0x0930 or codepoints[syllable_start + 1] != 0x094d) return false;
@@ -156,7 +193,7 @@ fn devanagariSyllableEnd(codepoints: []const u21, start: usize) usize {
     while (index < codepoints.len) : (index += 1) {
         const codepoint = codepoints[index];
         if (!isDevanagariSyllableCodepoint(codepoint)) break;
-        if (index != start and isDevanagariConsonant(codepoint) and !saw_virama) break;
+        if (index != start and isDevanagariBase(codepoint) and !saw_virama) break;
 
         saw_virama = if (codepoint == 0x094d)
             true
@@ -200,14 +237,19 @@ fn preBaseMatraTargetGlyphIndex(sources: []const usize, syllable_start: usize, m
     return fallback_index;
 }
 
-fn rephTargetGlyphIndex(sources: []const usize, syllable_start: usize, syllable_end: usize, reph_index: usize) usize {
+fn rephTargetGlyphIndex(sources: []const usize, codepoints: []const u21, syllable_start: usize, syllable_end: usize, reph_index: usize) usize {
     var target = reph_index;
     for (sources, 0..) |source, glyph_index| {
         if (glyph_index == reph_index) continue;
         if (source < syllable_start or source >= syllable_end) continue;
+        if (source < codepoints.len and isDevanagariSyllableModifier(codepoints[source])) break;
         target = glyph_index;
     }
     return target;
+}
+
+fn isDevanagariSyllableModifier(codepoint: u21) bool {
+    return codepoint >= 0x0900 and codepoint <= 0x0903;
 }
 
 fn hasConsonant(codepoints: []const u21) bool {
@@ -218,10 +260,14 @@ fn hasConsonant(codepoints: []const u21) bool {
 }
 
 fn isDevanagariSyllableCodepoint(codepoint: u21) bool {
-    return isDevanagariConsonant(codepoint) or
+    return isDevanagariBase(codepoint) or
         isDevanagariDependentMark(codepoint) or
         codepoint == 0x094d or
         isJoiner(codepoint);
+}
+
+fn isDevanagariBase(codepoint: u21) bool {
+    return isDevanagariConsonant(codepoint) or isDevanagariIndependentVowel(codepoint);
 }
 
 fn isDevanagariConsonant(codepoint: u21) bool {
@@ -229,8 +275,15 @@ fn isDevanagariConsonant(codepoint: u21) bool {
         (codepoint >= 0x0958 and codepoint <= 0x095f);
 }
 
+fn isDevanagariIndependentVowel(codepoint: u21) bool {
+    return (codepoint >= 0x0904 and codepoint <= 0x0914) or
+        codepoint == 0x0960 or
+        codepoint == 0x0961;
+}
+
 fn isDevanagariDependentMark(codepoint: u21) bool {
-    return (codepoint >= 0x093a and codepoint <= 0x094c) or
+    return (codepoint >= 0x0900 and codepoint <= 0x0903) or
+        (codepoint >= 0x093a and codepoint <= 0x094c) or
         (codepoint >= 0x094e and codepoint <= 0x094f) or
         (codepoint >= 0x0951 and codepoint <= 0x0957);
 }
@@ -271,4 +324,29 @@ fn moveGlyphMetadata(
             index -= 1;
         }
     }
+}
+
+fn insertGlyphMetadata(
+    allocator: std.mem.Allocator,
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    index: usize,
+    glyph_id: GlyphId,
+    source_index: usize,
+) !void {
+    try glyph_ids.replaceRange(allocator, index, 0, &.{glyph_id});
+    errdefer _ = glyph_ids.orderedRemove(index);
+
+    try glyph_source_indices.replaceRange(allocator, index, 0, &.{source_index});
+    errdefer _ = glyph_source_indices.orderedRemove(index);
+
+    const component_info = defaultLigatureComponentInfo(source_index);
+    try ligature_components.replaceRange(allocator, index, 0, &.{component_info});
+}
+
+fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
+    var info = gpos.LigatureComponentInfo{};
+    info.component_sources[0] = source;
+    return info;
 }

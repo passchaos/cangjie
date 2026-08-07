@@ -99,6 +99,8 @@ pub const LookupAccelerator = struct {
     chaining_subtable_digests: []const GlyphDigest = &.{},
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
+    reverse_chaining_subtables: []const ReverseChainingSingleSubtable = &.{},
+    reverse_chaining_groups: []const ChainingSubtableGroup = &.{},
 };
 
 const SingleSubstAccelerator = struct {
@@ -124,6 +126,17 @@ const ChainingCoverageSubtable = struct {
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
     subst_count: u16 = 0,
+};
+
+const ReverseChainingSingleSubtable = struct {
+    subtable_offset: usize = 0,
+    coverage_offset: usize = 0,
+    backtrack_offsets_pos: usize = 0,
+    backtrack_count: u16 = 0,
+    lookahead_offsets_pos: usize = 0,
+    lookahead_count: u16 = 0,
+    glyph_count: u16 = 0,
+    substitutes_pos: usize = 0,
 };
 
 const empty_class_def_offset = std.math.maxInt(usize);
@@ -731,6 +744,11 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
             allocator.free(group.subtable_indices);
         }
         allocator.free(accelerator.chaining_groups);
+        allocator.free(accelerator.reverse_chaining_subtables);
+        for (accelerator.reverse_chaining_groups) |group| {
+            allocator.free(group.subtable_indices);
+        }
+        allocator.free(accelerator.reverse_chaining_groups);
     }
 }
 
@@ -742,6 +760,36 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     if (lookup_type == 1 and lookup_flag == 0 and subtable_count == 1) {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
         accelerator.single_subst = try buildSingleSubstAccelerator(table, subtable_offset);
+    }
+    if (lookup_type == 7) {
+        if (try extensionLookupType(table, lookup_offset, subtable_count)) |wrapped_type| {
+            if (wrapped_type == 8) {
+                const reverse_subtables = try allocator.alloc(ReverseChainingSingleSubtable, subtable_count);
+                errdefer allocator.free(reverse_subtables);
+                @memset(reverse_subtables, .{});
+                var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
+                errdefer group_pairs.deinit(allocator);
+                var saw_coverage = false;
+                for (0..subtable_count) |subtable_i| {
+                    const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+                    const subtable_offset = try extensionSubtablePayload(table, wrapper_offset, 8);
+                    const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
+                    reverse_subtables[subtable_i] = parsed;
+                    try appendChainingSubtablePairs(table, parsed.coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
+                    saw_coverage = true;
+                }
+                if (!saw_coverage or group_pairs.items.len == 0) {
+                    group_pairs.deinit(allocator);
+                    allocator.free(reverse_subtables);
+                    return accelerator;
+                }
+                const reverse_groups = try buildChainingSubtableGroups(group_pairs.items, allocator);
+                group_pairs.deinit(allocator);
+                accelerator.reverse_chaining_subtables = reverse_subtables;
+                accelerator.reverse_chaining_groups = reverse_groups;
+                return accelerator;
+            }
+        }
     }
     if (lookup_type != 6 or !try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) return accelerator;
 
@@ -1157,7 +1205,7 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
                 return;
             },
             8 => {
-                try applyExtensionReverseChainingSingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, lookup_flag, lookup_options);
+                try applyExtensionReverseChainingSingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, lookup_flag, lookup_options, reverseChainingLookupAccelerator(lookup_index, lookup_options));
                 return;
             },
             else => {},
@@ -1227,6 +1275,15 @@ fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupA
     if (index >= accelerators.len) return null;
     const accelerator = &accelerators[index];
     if (!accelerator.chaining_coverage_only) return null;
+    return accelerator;
+}
+
+fn reverseChainingLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
+    const accelerators = options.lookup_accelerators orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const accelerator = &accelerators[index];
+    if (accelerator.reverse_chaining_subtables.len == 0 or accelerator.reverse_chaining_groups.len == 0) return null;
     return accelerator;
 }
 
@@ -2400,11 +2457,22 @@ fn applyReverseChainingSingleSubstitutionLookup(table: Table, lookup_offset: usi
     }
 }
 
-fn applyExtensionReverseChainingSingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) GsubError!void {
+fn applyExtensionReverseChainingSingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions, accelerator: ?*const LookupAccelerator) GsubError!void {
     if (glyphs.items.len == 0) return;
     var pos = glyphs.items.len;
     while (pos > 0) {
         pos -= 1;
+        if (accelerator) |accel| {
+            const glyph = glyphs.items[pos];
+            if (!sourceFeatureAllowsGlyph(options, pos)) continue;
+            if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+            const grouped_subtables = chainingSubtableGroupForGlyph(accel.reverse_chaining_groups, glyph) orelse continue;
+            for (grouped_subtables) |subtable_i| {
+                if (subtable_i >= accel.reverse_chaining_subtables.len) return error.BadGsub;
+                if (try applyParsedReverseChainingSingleSubstitutionAt(table, accel.reverse_chaining_subtables[subtable_i], glyphs, pos, lookup_flag, options)) break;
+            }
+            continue;
+        }
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
             const extension_subtable = try extensionSubtablePayload(table, subtable_offset, 8);
@@ -3890,24 +3958,7 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
 }
 
 fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions, matched: ?[]bool) GsubError!void {
-    const subst_format = try readU16(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    var cursor = subtable_offset + 4;
-
-    const backtrack_count = try readU16(table, cursor);
-    cursor += 2;
-    const backtrack_offsets_pos = cursor;
-    cursor += backtrack_count * 2;
-
-    const lookahead_count = try readU16(table, cursor);
-    cursor += 2;
-    const lookahead_offsets_pos = cursor;
-    cursor += lookahead_count * 2;
-
-    const glyph_count = try readU16(table, cursor);
-    cursor += 2;
-    const substitutes_pos = cursor;
+    const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
 
     if (glyphs.items.len == 0) return;
     // Reverse chaining scans backward so earlier replacements cannot influence
@@ -3918,29 +3969,21 @@ fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, 
         if (matched) |items| {
             if (items[pos]) continue;
         }
-        if (!sourceFeatureAllowsGlyph(options, pos)) continue;
-        const glyph = glyphs.items[pos];
-        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        const coverage = try coverageIndex(table, coverage_offset, glyph) orelse continue;
-        if (coverage >= glyph_count) continue;
-        if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, backtrack_offsets_pos, backtrack_count, true, lookup_flag, options)) continue;
-        if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, lookahead_offsets_pos, lookahead_count, false, lookup_flag, options)) continue;
-        glyphs.items[pos] = try readU16(table, substitutes_pos + coverage * 2);
-        markGlyphSubstituted(options, pos);
-        if (matched) |items| items[pos] = true;
+        if (try applyParsedReverseChainingSingleSubstitutionAt(table, parsed, glyphs, pos, lookup_flag, options)) {
+            if (matched) |items| items[pos] = true;
+        }
     }
 }
 
 fn applyReverseChainingSingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
-    if (pos >= glyphs.items.len) return false;
+    const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
+    return try applyParsedReverseChainingSingleSubstitutionAt(table, parsed, glyphs, pos, lookup_flag, options);
+}
+
+fn parseReverseChainingSingleSubtable(table: Table, subtable_offset: usize) GsubError!ReverseChainingSingleSubtable {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
-    if (!sourceFeatureAllowsGlyph(options, pos)) return false;
-    const glyph = glyphs.items[pos];
-    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
-
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const coverage = try coverageIndex(table, coverage_offset, glyph) orelse return false;
     var cursor = subtable_offset + 4;
 
     const backtrack_count = try readU16(table, cursor);
@@ -3955,11 +3998,30 @@ fn applyReverseChainingSingleSubstitutionAt(table: Table, subtable_offset: usize
 
     const glyph_count = try readU16(table, cursor);
     cursor += 2;
-    if (coverage >= glyph_count) return false;
-    if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, backtrack_offsets_pos, backtrack_count, true, lookup_flag, options)) return false;
-    if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, lookahead_offsets_pos, lookahead_count, false, lookup_flag, options)) return false;
+    return .{
+        .subtable_offset = subtable_offset,
+        .coverage_offset = coverage_offset,
+        .backtrack_offsets_pos = backtrack_offsets_pos,
+        .backtrack_count = backtrack_count,
+        .lookahead_offsets_pos = lookahead_offsets_pos,
+        .lookahead_count = lookahead_count,
+        .glyph_count = glyph_count,
+        .substitutes_pos = cursor,
+    };
+}
 
-    glyphs.items[pos] = try readU16(table, cursor + coverage * 2);
+fn applyParsedReverseChainingSingleSubstitutionAt(table: Table, subtable: ReverseChainingSingleSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
+    if (pos >= glyphs.items.len) return false;
+    if (!sourceFeatureAllowsGlyph(options, pos)) return false;
+    const glyph = glyphs.items[pos];
+    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+
+    const coverage = try coverageIndex(table, subtable.coverage_offset, glyph) orelse return false;
+    if (coverage >= subtable.glyph_count) return false;
+    if (!try reverseCoverageMatches(table, subtable.subtable_offset, glyphs.items, pos, subtable.backtrack_offsets_pos, subtable.backtrack_count, true, lookup_flag, options)) return false;
+    if (!try reverseCoverageMatches(table, subtable.subtable_offset, glyphs.items, pos, subtable.lookahead_offsets_pos, subtable.lookahead_count, false, lookup_flag, options)) return false;
+
+    glyphs.items[pos] = try readU16(table, subtable.substitutes_pos + coverage * 2);
     markGlyphSubstituted(options, pos);
     return true;
 }
@@ -6998,6 +7060,65 @@ test "GSUB reverse chaining subtables do not cascade within lookup" {
     // The middle subtable also proves a replacement is not fed through later
     // subtables for the same original position.
     try std.testing.expectEqualSlices(GlyphId, &.{ 5, 3 }, glyphs.items);
+}
+
+test "GSUB accelerates extension reverse chaining without changing subtable order" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 72;
+
+    writeU16Test(&bytes, 0, 7); // ExtensionSubst lookup.
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10); // Wrapper 0.
+    writeU16Test(&bytes, 8, 44); // Wrapper 1.
+
+    const wrapper0 = 10;
+    writeU16Test(&bytes, wrapper0 + 0, 1);
+    writeU16Test(&bytes, wrapper0 + 2, 8); // ReverseChainSingleSubst.
+    writeU32Test(&bytes, wrapper0 + 4, 8);
+    const reverse0 = wrapper0 + 8;
+    writeU16Test(&bytes, reverse0 + 0, 1);
+    writeU16Test(&bytes, reverse0 + 2, 14); // Coverage.
+    writeU16Test(&bytes, reverse0 + 4, 0); // BacktrackGlyphCount.
+    writeU16Test(&bytes, reverse0 + 6, 1); // LookaheadGlyphCount.
+    writeU16Test(&bytes, reverse0 + 8, 20);
+    writeU16Test(&bytes, reverse0 + 10, 1); // GlyphCount.
+    writeU16Test(&bytes, reverse0 + 12, 9); // Substitute glyph.
+    writeCoverage1(&bytes, reverse0 + 14, 2);
+    writeCoverage1(&bytes, reverse0 + 20, 3);
+
+    const wrapper1 = 44;
+    writeU16Test(&bytes, wrapper1 + 0, 1);
+    writeU16Test(&bytes, wrapper1 + 2, 8);
+    writeU32Test(&bytes, wrapper1 + 4, 8);
+    const reverse1 = wrapper1 + 8;
+    writeU16Test(&bytes, reverse1 + 0, 1);
+    writeU16Test(&bytes, reverse1 + 2, 12);
+    writeU16Test(&bytes, reverse1 + 4, 0);
+    writeU16Test(&bytes, reverse1 + 6, 0);
+    writeU16Test(&bytes, reverse1 + 8, 1);
+    writeU16Test(&bytes, reverse1 + 10, 10);
+    writeCoverage1(&bytes, reverse1 + 12, 2);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
+    const accelerator = try buildLookupAccelerator(table, 0, allocator);
+    defer {
+        var accelerators = [_]LookupAccelerator{accelerator};
+        deinitLookupAcceleratorContents(allocator, accelerators[0..]);
+    }
+    try std.testing.expect(accelerator.reverse_chaining_groups.len != 0);
+
+    var first = std.ArrayList(GlyphId).empty;
+    defer first.deinit(allocator);
+    try first.appendSlice(allocator, &.{ 2, 3 });
+    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &first, 0, .{}, &accelerator);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 9, 3 }, first.items);
+
+    var second = std.ArrayList(GlyphId).empty;
+    defer second.deinit(allocator);
+    try second.appendSlice(allocator, &.{ 2, 4 });
+    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &second, 0, .{}, &accelerator);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 4 }, second.items);
 }
 
 test "GSUB source syllable matching blocks reverse chaining backtrack" {

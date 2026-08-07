@@ -125,6 +125,8 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   lines.
 - SourceSerifVariable `en-thelittleprince.txt` passes `compare-harfrust` for
   1,172 lines.
+- SourceSerifVariable `react-dom.txt` passes `compare-harfrust` for 24,709
+  non-empty lines and 1,042,546 glyphs.
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
   lines.
 - NotoNastaliqUrdu `fa-words.txt` passes `compare-harfrust` for 10,000 lines,

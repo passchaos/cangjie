@@ -43,17 +43,23 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     if (options.font_path == null) return error.InvalidArguments;
     const hb_font = try HarfBuzzFont.init(font_bytes, options.size);
     defer hb_font.deinit();
+    const features = try harfBuzzFeatures(allocator, options);
+    defer allocator.free(features);
 
     const inline_text_lines = [_][]const u8{options.text};
     const text_lines = if (options.text_lines.len != 0) options.text_lines else inline_text_lines[0..];
 
     var line_summaries = std.ArrayList(runner.BenchResult.LineSummary).empty;
-    errdefer line_summaries.deinit(allocator);
+    errdefer {
+        freeLineSummaries(allocator, line_summaries.items);
+        line_summaries.deinit(allocator);
+    }
 
     var warmup_index: usize = 0;
     while (warmup_index < options.warmup) : (warmup_index += 1) {
         for (text_lines) |line| {
-            _ = try shapeLine(hb_font.font, line, options);
+            var shaped = try shapeLine(allocator, hb_font.font, line, options, features, false);
+            shaped.deinit(allocator);
         }
     }
 
@@ -69,7 +75,8 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
         var i: usize = 0;
         while (i < options.iterations) : (i += 1) {
             for (text_lines, 0..) |line, line_index| {
-                const shaped = try shapeLine(hb_font.font, line, options);
+                var shaped = try shapeLine(allocator, hb_font.font, line, options, features, options.glyph_summary and sample_index == 0 and i == 0);
+                defer shaped.deinit(allocator);
                 sample_glyph_count += shaped.glyph_count;
                 sample_checksum = updateChecksumWithLine(sample_checksum, shaped.checksum);
                 if (options.line_summary and sample_index == 0 and i == 0) {
@@ -78,7 +85,14 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
                         .text_bytes = line.len,
                         .glyph_count = shaped.glyph_count,
                         .checksum = shaped.checksum,
+                        .glyph_ids = shaped.glyph_ids,
+                        .clusters = shaped.clusters,
+                        .x_advances = shaped.x_advances,
+                        .y_advances = shaped.y_advances,
+                        .x_offsets = shaped.x_offsets,
+                        .y_offsets = shaped.y_offsets,
                     });
+                    shaped.transferred_summary_storage = true;
                 }
             }
         }
@@ -108,9 +122,26 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
 const ShapedLine = struct {
     glyph_count: usize,
     checksum: u64,
+    glyph_ids: []u16 = &.{},
+    clusters: []u32 = &.{},
+    x_advances: []i32 = &.{},
+    y_advances: []i32 = &.{},
+    x_offsets: []i32 = &.{},
+    y_offsets: []i32 = &.{},
+    transferred_summary_storage: bool = false,
+
+    fn deinit(self: *ShapedLine, allocator: std.mem.Allocator) void {
+        if (self.transferred_summary_storage) return;
+        allocator.free(self.glyph_ids);
+        allocator.free(self.clusters);
+        allocator.free(self.x_advances);
+        allocator.free(self.y_advances);
+        allocator.free(self.x_offsets);
+        allocator.free(self.y_offsets);
+    }
 };
 
-fn shapeLine(font: *hb.hb_font_t, line: []const u8, options: options_mod.Options) !ShapedLine {
+fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8, options: options_mod.Options, features: []const hb.hb_feature_t, capture_summary: bool) !ShapedLine {
     if (line.len > std.math.maxInt(c_int)) return error.InvalidArguments;
     const buffer = hb.hb_buffer_create() orelse return error.HarfBuzzFailed;
     defer hb.hb_buffer_destroy(buffer);
@@ -128,7 +159,7 @@ fn shapeLine(font: *hb.hb_font_t, line: []const u8, options: options_mod.Options
         }
     }
     hb.hb_buffer_add_utf8(buffer, @ptrCast(line.ptr), @intCast(line.len), 0, @intCast(line.len));
-    hb.hb_shape(font, buffer, null, 0);
+    hb.hb_shape(font, buffer, if (features.len == 0) null else features.ptr, @intCast(features.len));
 
     var length: c_uint = 0;
     const infos = hb.hb_buffer_get_glyph_infos(buffer, &length);
@@ -136,10 +167,32 @@ fn shapeLine(font: *hb.hb_font_t, line: []const u8, options: options_mod.Options
     if (infos == null or positions == null) return error.HarfBuzzFailed;
     const glyph_count: usize = @intCast(length);
 
+    var shaped = ShapedLine{
+        .glyph_count = glyph_count,
+        .checksum = 0,
+    };
+    errdefer shaped.deinit(allocator);
+    if (capture_summary) {
+        shaped.glyph_ids = try allocator.alloc(u16, glyph_count);
+        shaped.clusters = try allocator.alloc(u32, glyph_count);
+        shaped.x_advances = try allocator.alloc(i32, glyph_count);
+        shaped.y_advances = try allocator.alloc(i32, glyph_count);
+        shaped.x_offsets = try allocator.alloc(i32, glyph_count);
+        shaped.y_offsets = try allocator.alloc(i32, glyph_count);
+    }
+
     var hasher = std.hash.Wyhash.init(0);
     for (0..glyph_count) |index| {
         const info = infos[index];
         const position = positions[index];
+        if (capture_summary) {
+            shaped.glyph_ids[index] = @intCast(info.codepoint);
+            shaped.clusters[index] = info.cluster;
+            shaped.x_advances[index] = position.x_advance;
+            shaped.y_advances[index] = position.y_advance;
+            shaped.x_offsets[index] = position.x_offset;
+            shaped.y_offsets[index] = position.y_offset;
+        }
         hasher.update(std.mem.asBytes(&info.codepoint));
         hasher.update(std.mem.asBytes(&info.cluster));
         hasher.update(std.mem.asBytes(&position.x_advance));
@@ -147,7 +200,33 @@ fn shapeLine(font: *hb.hb_font_t, line: []const u8, options: options_mod.Options
         hasher.update(std.mem.asBytes(&position.x_offset));
         hasher.update(std.mem.asBytes(&position.y_offset));
     }
-    return .{ .glyph_count = glyph_count, .checksum = hasher.final() };
+    shaped.checksum = hasher.final();
+    return shaped;
+}
+
+fn freeLineSummaries(allocator: std.mem.Allocator, summaries: []const runner.BenchResult.LineSummary) void {
+    for (summaries) |summary| {
+        allocator.free(summary.glyph_ids);
+        allocator.free(summary.clusters);
+        allocator.free(summary.x_advances);
+        allocator.free(summary.y_advances);
+        allocator.free(summary.x_offsets);
+        allocator.free(summary.y_offsets);
+    }
+}
+
+fn harfBuzzFeatures(allocator: std.mem.Allocator, options: options_mod.Options) ![]hb.hb_feature_t {
+    const overrides = options.featureOverrides();
+    const features = try allocator.alloc(hb.hb_feature_t, overrides.len);
+    for (overrides, features) |feature, *hb_feature| {
+        hb_feature.* = .{
+            .tag = feature.tag,
+            .value = @intFromBool(feature.enabled),
+            .start = 0,
+            .end = std.math.maxInt(c_uint),
+        };
+    }
+    return features;
 }
 
 fn scriptTagForText(text: []const u8) ?c_uint {

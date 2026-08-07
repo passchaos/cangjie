@@ -71,8 +71,10 @@ zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font
 
 The `harfbuzz` engine links the system HarfBuzz C library in-process and is the
 preferred HarfBuzz timing baseline when the local development environment has
-`pkg-config harfbuzz` available. It reports glyph counts and checksums for timing
-comparability but is not yet wired into output-diff mode.
+`pkg-config harfbuzz` available. It supports the shared `--enable-feature` /
+`--disable-feature` overrides and `--glyph-summary` output, so focused
+HarfBuzz/Cangjie feature-diff fixtures can be built without shelling out to
+`hb-shape`.
 
 The `harfrust` engine shells out to `hr-shape` once per sample and uses
 `hr-shape -n` for measured iterations. It is useful for batch output parity and
@@ -191,8 +193,9 @@ goal is active, not complete.
   NotoNastaliqUrdu, and the active Devanagari gate; broader Arabic, Urdu,
   Nastaliq, and mixed-script texts still need retained parity coverage.
 - Track output parity, not only timing. `compare-harfrust` now compares glyph
-  ids, clusters, advances, and offsets in HarfBuzz-style buffer order; feature
-  override and broader font/script matrices still need expansion.
+  ids, clusters, advances, and offsets in HarfBuzz-style buffer order;
+  `--engine harfbuzz --glyph-summary` covers focused in-process HarfBuzz
+  feature checks, but broader font/script matrices still need expansion.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

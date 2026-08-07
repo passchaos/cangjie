@@ -91,11 +91,10 @@ Representative performance state near that commit:
 Current local snapshot after the Nastaliq parity work:
 
 - Amiri `fa-thelittleprince`, Cangjie default visual-order path: about
-  `2084 ns/glyph` median after reusing GPOS range-search helpers and skipping
-  repeated first-input coverage checks in accelerated GSUB chaining format 3
-  subtables.
+  `2079 ns/glyph` median after reusing GPOS/GSUB accelerator proofs to skip
+  repeated first-input coverage checks in chaining format 3 subtables.
 - Amiri `fa-thelittleprince`, Cangjie with `--no-bidi-reorder`: about
-  `1585 ns/glyph` median.
+  `1496 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1263 ns/glyph` median.
 - HarfRust Criterion in-process reference for Amiri `fa-thelittleprince`:
   about `48.2 ms` per full text for HarfRust and `54.9 ms` for HarfBuzz
@@ -110,6 +109,9 @@ Current local snapshot after the Nastaliq parity work:
   reduced Amiri `fa-thelittleprince` GSUB profile time from about `308 ms` to
   about `257 ms`; the Arabic `calt` stage fell from about `207 ms` to
   `172 ms`.
+- Reusing the same first-input coverage proof in accelerated GPOS chaining
+  format 3 reduced Amiri GPOS profile time from about `100 ms` to `92.8 ms`;
+  lookup `37` fell from about `34.0 ms` to `30.1 ms`.
 
 Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 

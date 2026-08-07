@@ -125,6 +125,7 @@ pub const VariationCoordinate = @import("font.zig").VariationCoordinate;
 pub const VariationInstance = @import("font.zig").VariationInstance;
 pub const VerticalMetrics = @import("font.zig").VerticalMetrics;
 pub const GlyphId = @import("glyph.zig").GlyphId;
+pub const Bounds = @import("glyph.zig").Bounds;
 pub const GlyphOutline = @import("glyph.zig").GlyphOutline;
 pub const OutlineBuilder = @import("glyph.zig").OutlineBuilder;
 pub const BaselineMetrics = @import("layout.zig").BaselineMetrics;
@@ -252,6 +253,8 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     defer outline.deinit();
     try std.testing.expectEqual(@as(usize, 4), outline.commands.items.len);
     try std.testing.expectEqual(@as(u16, 800), outline.advance_width);
+    const bounds = try font.glyphBounds(1);
+    try std.testing.expectEqual(outline.bounds, bounds);
 
     var layout_buffer = LayoutBuffer.init(allocator);
     defer layout_buffer.deinit();

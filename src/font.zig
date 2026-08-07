@@ -1846,6 +1846,18 @@ pub const Font = struct {
         return null;
     }
 
+    pub fn glyphBounds(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        if (self.format != .truetype) return error.UnsupportedGlyph;
+        const loca = self.loca orelse return error.MissingTable;
+        const glyf = self.glyf orelse return error.MissingTable;
+        try validateSfntTableChecksum(self.data, self.maxp);
+        try validateSfntTableChecksum(self.data, loca);
+        try validateSfntTableChecksum(self.data, glyf);
+        try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
+        return try self.glyphBoundsFromParsedTables(glyph_id);
+    }
+
     pub fn glyphOutline(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         if (self.format == .truetype) {
@@ -1894,7 +1906,7 @@ pub const Font = struct {
     fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
         const metrics = try self.horizontalMetrics(glyph_id);
         const bounds = if (self.format == .truetype)
-            try self.glyphBounds(glyph_id)
+            try self.glyphBoundsFromParsedTables(glyph_id)
         else
             glyph_mod.Bounds{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, bounds, metrics.advance_width, metrics.left_side_bearing);
@@ -1915,7 +1927,7 @@ pub const Font = struct {
         return outline;
     }
 
-    fn glyphBounds(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
+    fn glyphBoundsFromParsedTables(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
         const slice = try self.glyphData(glyph_id);
         if (slice.len == 0) return .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
         return .{

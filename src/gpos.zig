@@ -686,10 +686,11 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
                     try collectExtensionPairAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
                     return;
                 },
-                8 => {
-                    try collectExtensionChainingCoveragePositioningLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
-                    return;
-                },
+                // Wrapped ChainContextPos subtables are not always the format-3
+                // coverage-only shape handled by the homogeneous fast path
+                // below. Let the generic ExtensionPos dispatcher preserve
+                // ordering while supporting glyph/class chaining formats too.
+                8 => {},
                 else => {},
             }
         }

@@ -3361,7 +3361,7 @@ fn validateKernFormat0SearchParameters(data: []const u8, pair_count: u16) FontEr
 
 fn isPostGlyphName(name: []const u8) bool {
     for (name) |byte| {
-        if (std.ascii.isAlphanumeric(byte) or byte == '.' or byte == '_') continue;
+        if (std.ascii.isAlphanumeric(byte) or byte == '.' or byte == '_' or byte == '-') continue;
         return false;
     }
     return true;
@@ -12733,17 +12733,33 @@ test "post table structural contracts are validated at parse time" {
     }
 
     {
-        var post: [43]u8 = .{0} ** 43;
+        var post: [44]u8 = .{0} ** 44;
         writePostHeaderTest(&post, 0x00020000);
         writeU16Test(&post, 32, 2);
         writeU16Test(&post, 34, 0);
         writeU16Test(&post, 36, 258);
-        post[38] = 4;
-        @memcpy(post[39..43], "bad-"); // Hyphen is not valid in `post` glyph names.
+        post[38] = 5;
+        @memcpy(post[39..44], "bad/-"); // Slash is not valid in `post` glyph names.
         const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
         defer allocator.free(bytes);
 
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        var post: [44]u8 = .{0} ** 44;
+        writePostHeaderTest(&post, 0x00020000);
+        writeU16Test(&post, 32, 2);
+        writeU16Test(&post, 34, 0);
+        writeU16Test(&post, 36, 258);
+        post[38] = 5;
+        @memcpy(post[39..44], "ae-ar"); // Production Arabic fonts use hyphenated glyph names.
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectEqualStrings("ae-ar", (try font.glyphName(1)).?);
     }
 
     {
@@ -12859,7 +12875,7 @@ test "post glyph names are exposed and revalidated from borrowed bytes" {
     try std.testing.expectError(error.InvalidGlyph, font.glyphName(2));
 
     const post_offset = try sfntTableOffset(bytes, "post");
-    bytes[post_offset + 43] = '-';
+    bytes[post_offset + 43] = '/';
     // `post` custom names are borrowed from the original SFNT buffer. A caller
     // mutating that buffer after Font.parse must not make the public API return
     // a name that the parser would reject if it saw the bytes now.

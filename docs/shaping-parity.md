@@ -156,6 +156,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   non-empty lines and 1,042,546 glyphs.
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
   lines and `compare-harfbuzz` for 771 lines (`checksum=f2da7bb39eb7323a`).
+- Gulzar now parses and focused `"سلام"` passes `compare-harfbuzz` when
+  `kern` is disabled; default `kern` still exposes a focused x-advance mismatch
+  and remains an active broader-Arabic parity blocker.
 - NotoNastaliqUrdu `fa-words.txt` passes `compare-harfrust` for 10,000 lines,
   and `fa-thelittleprince.txt` passes for 771 lines; focused blockers `"سلام"`,
   `"به"`, `"ویکی‌پدیا"`, `"هجری"`, `"جزء"`, `"اللَّهِ"`, and `"اللَّهُ"` pass
@@ -194,8 +197,9 @@ goal is active, not complete.
   engine is now in-process, but the current `harfrust` engine remains a batch
   external-process baseline, not a fully fair in-process performance baseline.
 - Expand the benchmark matrix beyond Amiri, Roboto, SourceSerifVariable,
-  NotoNastaliqUrdu, and the active Devanagari gate; broader Arabic fonts, Urdu,
-  Nastaliq, and mixed-script texts still need retained parity coverage.
+  NotoNastaliqUrdu, and the active Devanagari gate; broader Arabic fonts such
+  as Gulzar still need default-`kern` parity, and Urdu, Nastaliq, and
+  mixed-script texts still need retained parity coverage.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

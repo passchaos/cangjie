@@ -170,6 +170,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   focused gate. The primitive can now also target selected lookup indexes, so
   the next USE step can pass the `rclt` feature's lookup list without changing
   unrelated GSUB matching.
+  Additional profile tracing reports the first changed glyph index per lookup:
+  on `"𛰂𛱛"`, lookup `279` first changes index `1`, lookup `280` first changes
+  index `2`, and lookup `248` first changes index `0`. The next implementation
+  should use these lookup-local windows to avoid moving the first-cluster
+  output while repairing the second-cluster `U+1BC5B` mismatch.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

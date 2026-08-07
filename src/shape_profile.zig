@@ -10,6 +10,7 @@ pub const ShapeStageProfile = struct {
         last_glyph_delta: isize = 0,
         last_hash_before: u64 = 0,
         last_hash_after: u64 = 0,
+        last_first_diff: usize = 0,
     };
 
     total_ns: i128 = 0,
@@ -51,8 +52,8 @@ pub const ShapeStageProfile = struct {
         self.recordLookupTime(&self.gsub_lookup_entries, &self.gsub_lookup_entry_count, lookup_index, elapsed_ns);
     }
 
-    pub fn recordGsubLookupGlyphs(self: *ShapeStageProfile, lookup_index: ?u16, before: usize, after: usize, hash_before: u64, hash_after: u64) void {
-        self.recordLookupGlyphs(&self.gsub_lookup_entries, self.gsub_lookup_entry_count, lookup_index, before, after, hash_before, hash_after);
+    pub fn recordGsubLookupGlyphs(self: *ShapeStageProfile, lookup_index: ?u16, before: usize, after: usize, hash_before: u64, hash_after: u64, first_diff: usize) void {
+        self.recordLookupGlyphs(&self.gsub_lookup_entries, self.gsub_lookup_entry_count, lookup_index, before, after, hash_before, hash_after, first_diff);
     }
 
     pub fn recordGposLookupTime(self: *ShapeStageProfile, lookup_index: ?u16, elapsed_ns: i128) void {
@@ -77,7 +78,7 @@ pub const ShapeStageProfile = struct {
         entry_count.* += 1;
     }
 
-    fn recordLookupGlyphs(self: *ShapeStageProfile, entries: *[max_lookup_entries]LookupEntry, entry_count: usize, lookup_index: ?u16, before: usize, after: usize, hash_before: u64, hash_after: u64) void {
+    fn recordLookupGlyphs(self: *ShapeStageProfile, entries: *[max_lookup_entries]LookupEntry, entry_count: usize, lookup_index: ?u16, before: usize, after: usize, hash_before: u64, hash_after: u64, first_diff: usize) void {
         _ = self;
         const index = lookup_index orelse return;
         for (entries[0..entry_count]) |*entry| {
@@ -87,6 +88,7 @@ pub const ShapeStageProfile = struct {
             entry.last_glyph_delta = @as(isize, @intCast(after)) - @as(isize, @intCast(before));
             entry.last_hash_before = hash_before;
             entry.last_hash_after = hash_after;
+            entry.last_first_diff = first_diff;
             return;
         }
     }

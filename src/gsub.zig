@@ -126,6 +126,7 @@ const ChainingCoverageSubtable = struct {
     input_offsets_pos: usize = 0,
     input_count: u16 = 0,
     second_input_digest: GlyphDigest = .{},
+    third_input_digest: GlyphDigest = .{},
     lookahead_offsets_pos: usize = 0,
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
@@ -884,6 +885,10 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         if (parsed_subtable.input_count > 1) {
             const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 2));
             chaining_subtables[subtable_i].second_input_digest = try coverageDigest(table, second_coverage_offset);
+        }
+        if (parsed_subtable.input_count > 2) {
+            const third_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 4));
+            chaining_subtables[subtable_i].third_input_digest = try coverageDigest(table, third_coverage_offset);
         }
         const subtable_digest = try coverageDigest(table, coverage_offset);
         subtable_digests[subtable_i] = subtable_digest;
@@ -2718,7 +2723,10 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
             const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, current_glyph) orelse continue;
-            const second_glyph = nextUnignoredGlyph(glyphs.items, pos + 1, lookup_flag, options, false, pos);
+            const second_glyph_index = nextUnignoredGlyphIndex(glyphs.items, pos + 1, lookup_flag, options, false, pos);
+            const second_glyph = if (second_glyph_index) |index| glyphs.items[index] else null;
+            var third_glyph: ?GlyphId = null;
+            var third_glyph_resolved = false;
             for (grouped_subtables) |subtable_i| {
                 const raw_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + @as(usize, subtable_i) * 2);
                 const subtable_offset = if (accel.extension_lookup_type == 6)
@@ -2733,6 +2741,17 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
                     if (subtable.input_count > 1) {
                         const glyph = second_glyph orelse continue;
                         if (!subtable.second_input_digest.mayHave(glyph)) continue;
+                    }
+                    if (subtable.input_count > 2) {
+                        if (!third_glyph_resolved) {
+                            third_glyph = if (second_glyph_index) |index|
+                                nextUnignoredGlyph(glyphs.items, index + 1, lookup_flag, options, false, pos)
+                            else
+                                null;
+                            third_glyph_resolved = true;
+                        }
+                        const glyph = third_glyph orelse continue;
+                        if (!subtable.third_input_digest.mayHave(glyph)) continue;
                     }
                     const result = try applyAcceleratedChainingCoverageSubstitutionAt(table, subtable, glyphs, pos, allocator, lookup_flag, options);
                     if (result.matched) {
@@ -3230,12 +3249,17 @@ fn collectForwardUnignoredGlyphs(glyphs: []const GlyphId, start: usize, lookup_f
 }
 
 fn nextUnignoredGlyph(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, context_match: bool, anchor_index: usize) ?GlyphId {
+    const index = nextUnignoredGlyphIndex(glyphs, start, lookup_flag, options, context_match, anchor_index) orelse return null;
+    return glyphs[index];
+}
+
+fn nextUnignoredGlyphIndex(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, context_match: bool, anchor_index: usize) ?usize {
     var glyph_i = start;
     const anchor_syllable = sourceSyllableForGlyph(options, anchor_index);
     while (glyph_i < glyphs.len) : (glyph_i += 1) {
         if (contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
         if (!sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) return null;
-        return glyphs[glyph_i];
+        return glyph_i;
     }
     return null;
 }

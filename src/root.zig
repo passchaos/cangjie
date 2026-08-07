@@ -109,6 +109,8 @@ pub const VisibleByteRange = @import("buffer.zig").VisibleByteRange;
 pub const VisibleLineRange = @import("buffer.zig").VisibleLineRange;
 pub const TextBuffer = @import("buffer.zig").TextBuffer;
 pub const TextEditor = @import("editor.zig").TextEditor;
+pub const BitmapStrikeInfo = @import("font.zig").BitmapStrikeInfo;
+pub const BitmapStrikeSource = @import("font.zig").BitmapStrikeSource;
 pub const ColorLayer = @import("font.zig").ColorLayer;
 pub const ColorPaint = @import("font.zig").ColorPaint;
 pub const ColorGlyphPaint = @import("render_bridge.zig").ColorGlyphPaint;
@@ -307,6 +309,14 @@ test "parses CBDT CBLC PNG bitmap glyphs" {
 
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
+
+    const strikes = try font.bitmapStrikes(allocator);
+    defer allocator.free(strikes);
+    try std.testing.expectEqual(@as(usize, 1), strikes.len);
+    try std.testing.expectEqual(BitmapStrikeSource.cblc_cbdt, strikes[0].source);
+    try std.testing.expectEqual(@as(u16, 16), strikes[0].ppem);
+    try std.testing.expectEqual(@as(GlyphId, 1), strikes[0].start_glyph);
+    try std.testing.expectEqual(@as(GlyphId, 1), strikes[0].end_glyph);
 
     const glyph_id = try font.glyphIndex('A');
     const bitmap = (try font.bitmapGlyphPng(glyph_id, 16)) orelse return error.MissingBitmapGlyph;

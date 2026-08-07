@@ -242,6 +242,19 @@ pub const BitmapGlyphPng = struct {
     data: []const u8,
 };
 
+pub const BitmapStrikeSource = enum {
+    sbix,
+    cblc_cbdt,
+};
+
+pub const BitmapStrikeInfo = struct {
+    source: BitmapStrikeSource,
+    ppem: u16,
+    ppi: u16,
+    start_glyph: glyph_mod.GlyphId = 0,
+    end_glyph: glyph_mod.GlyphId = 0,
+};
+
 pub const GlyphClass = enum(u16) {
     unclassified = 0,
     base = 1,
@@ -1713,6 +1726,50 @@ pub const Font = struct {
     pub fn svgDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
         const document = try self.svgGlyphDocument(glyph_id);
         return if (document) |value| value.data else null;
+    }
+
+    pub fn bitmapStrikes(self: *const Font, allocator: std.mem.Allocator) FontError![]BitmapStrikeInfo {
+        var strikes = std.ArrayList(BitmapStrikeInfo).empty;
+        errdefer strikes.deinit(allocator);
+
+        if (self.sbix) |sbix| {
+            try validateSfntTableChecksum(self.data, sbix);
+            try validateSbixTable(self.data, sbix, self.glyph_count);
+            const strike_count = try sbixStrikeCount(self.data, sbix);
+            try strikes.ensureUnusedCapacity(allocator, strike_count);
+            for (0..strike_count) |strike_index| {
+                const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
+                strikes.appendAssumeCapacity(.{
+                    .source = .sbix,
+                    .ppem = strike.ppem,
+                    .ppi = strike.ppi,
+                    .start_glyph = 0,
+                    .end_glyph = if (self.glyph_count == 0) 0 else self.glyph_count - 1,
+                });
+            }
+        }
+
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try validateSfntTableChecksum(self.data, cblc);
+            try validateSfntTableChecksum(self.data, cbdt);
+            try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
+            const strike_count = try cblcStrikeCount(self.data, cblc);
+            try strikes.ensureUnusedCapacity(allocator, strike_count);
+            for (0..strike_count) |strike_index| {
+                const strike = try cblcStrike(self.data, cblc, self.glyph_count, strike_index);
+                strikes.appendAssumeCapacity(.{
+                    .source = .cblc_cbdt,
+                    .ppem = strike.ppem,
+                    .ppi = strike.ppi,
+                    .start_glyph = strike.start_glyph,
+                    .end_glyph = strike.end_glyph,
+                });
+            }
+        }
+
+        return try strikes.toOwnedSlice(allocator);
     }
 
     pub fn bestBitmapStrikePpem(self: *const Font, size_px: f32) FontError!?u16 {

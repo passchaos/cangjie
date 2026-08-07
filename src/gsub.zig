@@ -3,6 +3,7 @@ const bin = @import("binary.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
+const class_context = @import("opentype/class_context.zig");
 const ot_layout = @import("opentype/layout.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
@@ -100,6 +101,7 @@ pub const LookupAccelerator = struct {
     chaining_subtable_digests: []const GlyphDigest = &.{},
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
+    chaining_class_subtables: []const ChainingClassSubtableAccelerator = &.{},
     reverse_chaining_subtables: []const ReverseChainingSingleSubtable = &.{},
     reverse_chaining_groups: []const ChainingSubtableGroup = &.{},
     reverse_chaining_exact_contexts: []const ReverseChainingContextEntry = &.{},
@@ -128,6 +130,16 @@ const ChainingCoverageSubtable = struct {
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
     subst_count: u16 = 0,
+};
+
+const ChainingClassSubtableAccelerator = struct {
+    subtable_offset: usize = 0,
+    coverage_offset: usize = 0,
+    input_class_def: usize = 0,
+    lookahead_class_def: usize = 0,
+    rules: []const class_context.Rule = &.{},
+    classes: []const u16 = &.{},
+    groups: []const class_context.RuleGroup = &.{},
 };
 
 const ReverseChainingSingleSubtable = struct {
@@ -759,12 +771,26 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
             allocator.free(group.subtable_indices);
         }
         allocator.free(accelerator.chaining_groups);
+        deinitChainingClassSubtableAccelerators(allocator, accelerator.chaining_class_subtables);
         allocator.free(accelerator.reverse_chaining_subtables);
         allocator.free(accelerator.reverse_chaining_exact_contexts);
         for (accelerator.reverse_chaining_groups) |group| {
             allocator.free(group.subtable_indices);
         }
         allocator.free(accelerator.reverse_chaining_groups);
+    }
+}
+
+fn deinitChainingClassSubtableAccelerators(allocator: std.mem.Allocator, subtables: []const ChainingClassSubtableAccelerator) void {
+    deinitChainingClassSubtableAcceleratorContents(allocator, subtables);
+    allocator.free(subtables);
+}
+
+fn deinitChainingClassSubtableAcceleratorContents(allocator: std.mem.Allocator, subtables: []const ChainingClassSubtableAccelerator) void {
+    for (subtables) |subtable| {
+        allocator.free(subtable.rules);
+        allocator.free(subtable.classes);
+        allocator.free(subtable.groups);
     }
 }
 
@@ -782,6 +808,10 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         if (accelerator.extension_lookup_type) |wrapped_type| {
             if (wrapped_type == 6 and try extensionChainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
                 return try buildChainingCoverageLookupAccelerator(table, lookup_offset, subtable_count, true, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
+            }
+            if (wrapped_type == 6) {
+                accelerator.chaining_class_subtables = try buildExtensionChainingClassSubtableAccelerators(table, lookup_offset, subtable_count, allocator);
+                if (accelerator.chaining_class_subtables.len != 0) return accelerator;
             }
             if (wrapped_type == 8) {
                 const reverse_subtables = try allocator.alloc(ReverseChainingSingleSubtable, subtable_count);
@@ -890,6 +920,144 @@ fn extensionChainingLookupUsesCoverageOnly(table: Table, lookup_offset: usize, s
         if (try readU16(table, subtable_offset) != 3) return false;
     }
     return true;
+}
+
+fn buildExtensionChainingClassSubtableAccelerators(table: Table, lookup_offset: usize, subtable_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]ChainingClassSubtableAccelerator {
+    const subtables = try allocator.alloc(ChainingClassSubtableAccelerator, subtable_count);
+    @memset(subtables, .{});
+    var built_count: usize = 0;
+    errdefer {
+        deinitChainingClassSubtableAcceleratorContents(allocator, subtables[0..built_count]);
+        allocator.free(subtables);
+    }
+
+    for (0..subtable_count) |subtable_i| {
+        const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const subtable_offset = try extensionSubtablePayload(table, wrapper_offset, 6);
+        const parsed = try buildChainingClassSubtableAccelerator(table, subtable_offset, allocator) orelse {
+            deinitChainingClassSubtableAcceleratorContents(allocator, subtables[0..built_count]);
+            allocator.free(subtables);
+            return try allocator.alloc(ChainingClassSubtableAccelerator, 0);
+        };
+        subtables[subtable_i] = parsed;
+        built_count += 1;
+    }
+    return subtables;
+}
+
+fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!?ChainingClassSubtableAccelerator {
+    if (try readU16(table, subtable_offset) != 2) return null;
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    const backtrack_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
+    const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
+    const lookahead_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+    const set_count = try readU16(table, subtable_offset + 10);
+
+    var rules = std.ArrayList(class_context.Rule).empty;
+    var classes = std.ArrayList(u16).empty;
+    var groups = std.ArrayList(class_context.RuleGroup).empty;
+    var success = false;
+    defer if (!success) {
+        rules.deinit(allocator);
+        classes.deinit(allocator);
+        groups.deinit(allocator);
+    };
+
+    var order: u32 = 0;
+    for (0..set_count) |set_i| {
+        const set_relative = try readU16(table, subtable_offset + 12 + set_i * 2);
+        if (set_relative == 0) continue;
+        const set_offset = subtable_offset + set_relative;
+        const rule_count = try readU16(table, set_offset);
+        for (0..rule_count) |rule_i| {
+            const rule_offset = set_offset + try readU16(table, set_offset + 2 + rule_i * 2);
+            var cursor = rule_offset;
+
+            const backtrack_count = try readU16(table, cursor);
+            cursor += 2 + @as(usize, backtrack_count) * 2;
+            if (backtrack_count != 0) return null;
+
+            const input_count = try readU16(table, cursor);
+            cursor += 2;
+            if (input_count == 0 or input_count > max_chaining_class_region_glyphs) return null;
+            const classes_start = classes.items.len;
+            var hash = class_context.sequenceHashEmpty();
+            for (1..input_count) |input_i| {
+                const class = try readU16(table, cursor + (input_i - 1) * 2);
+                try classes.append(allocator, class);
+                hash = class_context.sequenceHashAppend(hash, class);
+            }
+            cursor += (@as(usize, input_count) - 1) * 2;
+
+            const lookahead_count = try readU16(table, cursor);
+            cursor += 2;
+            if (lookahead_count > max_chaining_class_region_glyphs) return null;
+            for (0..lookahead_count) |lookahead_i| {
+                const class = try readU16(table, cursor + lookahead_i * 2);
+                try classes.append(allocator, class);
+                hash = class_context.sequenceHashAppend(hash, class);
+            }
+            cursor += @as(usize, lookahead_count) * 2;
+
+            const subst_count = try readU16(table, cursor);
+            cursor += 2;
+            if (subst_count != 1) return null;
+            const sequence_index = try readU16(table, cursor);
+            if (sequence_index != 0) return null;
+            const nested_lookup_index = try readU16(table, cursor + 2);
+
+            _ = backtrack_class_def;
+            try rules.append(allocator, .{
+                .class_set = @intCast(set_i),
+                .input_count = input_count,
+                .lookahead_count = lookahead_count,
+                .hash = hash,
+                .order = order,
+                .lookup_index = nested_lookup_index,
+                .classes_start = @intCast(classes_start),
+            });
+            order += 1;
+        }
+    }
+    if (rules.items.len == 0) return null;
+
+    std.sort.heap(class_context.Rule, rules.items, {}, class_context.ruleLessThan);
+    var group_start: usize = 0;
+    while (group_start < rules.items.len) {
+        const class_set = rules.items[group_start].class_set;
+        var group_end = group_start;
+        var max_input_count: u16 = 0;
+        var max_lookahead_count: u16 = 0;
+        while (group_end < rules.items.len and rules.items[group_end].class_set == class_set) : (group_end += 1) {
+            max_input_count = @max(max_input_count, rules.items[group_end].input_count);
+            max_lookahead_count = @max(max_lookahead_count, rules.items[group_end].lookahead_count);
+        }
+        try groups.append(allocator, .{
+            .class_set = class_set,
+            .start = group_start,
+            .len = group_end - group_start,
+            .max_input_count = max_input_count,
+            .max_lookahead_count = max_lookahead_count,
+        });
+        group_start = group_end;
+    }
+
+    const rules_slice = try rules.toOwnedSlice(allocator);
+    errdefer allocator.free(rules_slice);
+    const classes_slice = try classes.toOwnedSlice(allocator);
+    errdefer allocator.free(classes_slice);
+    const groups_slice = try groups.toOwnedSlice(allocator);
+    success = true;
+
+    return .{
+        .subtable_offset = subtable_offset,
+        .coverage_offset = coverage_offset,
+        .input_class_def = input_class_def,
+        .lookahead_class_def = lookahead_class_def,
+        .rules = rules_slice,
+        .classes = classes_slice,
+        .groups = groups_slice,
+    };
 }
 
 fn buildSingleSubstAccelerator(table: Table, subtable_offset: usize) GsubError!SingleSubstAccelerator {
@@ -1328,7 +1496,9 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
                 return;
             },
             6 => {
-                if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                if (chainingClassLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                    try applyExtensionChainingClassSubstitutionLookupAccelerated(table, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
+                } else if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
                     try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
                 } else {
                     try applyExtensionChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
@@ -1415,6 +1585,15 @@ fn reverseChainingLookupAccelerator(lookup_index: ?u16, options: LookupOptions) 
     if (index >= accelerators.len) return null;
     const accelerator = &accelerators[index];
     if (accelerator.reverse_chaining_subtables.len == 0 or accelerator.reverse_chaining_groups.len == 0) return null;
+    return accelerator;
+}
+
+fn chainingClassLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
+    const accelerators = options.lookup_accelerators orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const accelerator = &accelerators[index];
+    if (accelerator.chaining_class_subtables.len == 0) return null;
     return accelerator;
 }
 
@@ -2581,6 +2760,26 @@ fn applyExtensionChainingContextSubstitutionLookup(table: Table, lookup_offset: 
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
             const extension_subtable = try extensionSubtablePayload(table, subtable_offset, 6);
             const result = try applyChainingContextSubstitutionAt(table, extension_subtable, null, glyphs, pos, allocator, lookup_flag, options);
+            if (result.matched) {
+                next_pos = @max(next_pos, result.next_pos);
+                break;
+            }
+        }
+    }
+}
+
+fn applyExtensionChainingClassSubstitutionLookupAccelerated(table: Table, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
+    var pos: usize = 0;
+    while (pos < glyphs.items.len) {
+        var next_pos = pos + 1;
+        defer pos = next_pos;
+        if (!sourceFeatureAllowsGlyph(options, pos)) continue;
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
+        var subtable_i: usize = 0;
+        while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
+            const subtable = accelerator.chaining_class_subtables[subtable_i];
+            if (subtable.rules.len == 0) continue;
+            const result = try applyAcceleratedChainingClassSubstitutionAt(table, subtable, glyphs, pos, allocator, lookup_flag, options);
             if (result.matched) {
                 next_pos = @max(next_pos, result.next_pos);
                 break;
@@ -4301,6 +4500,51 @@ fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, 
             if (matched) |items| items[pos] = true;
         }
     }
+}
+
+fn applyAcceleratedChainingClassSubstitutionAt(table: Table, subtable: ChainingClassSubtableAccelerator, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
+    if (try coverageIndex(table, subtable.coverage_offset, glyphs.items[pos]) == null) return .{};
+    const input_class = try classValue(table, subtable.input_class_def, glyphs.items[pos]);
+    const group = class_context.groupForClass(subtable.groups, input_class) orelse return .{};
+    if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs or group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+
+    var window = ChainingClassRuleMatchWindow.init(table, glyphs.items, pos, empty_class_def_offset, subtable.input_class_def, subtable.lookahead_class_def, lookup_flag, options);
+    const input_indices = (try window.inputSlice(group.max_input_count)) orelse return .{};
+    var input_classes: [max_chaining_class_region_glyphs]u16 = undefined;
+    for (1..group.max_input_count) |input_i| {
+        input_classes[input_i - 1] = (try window.inputClassAt(input_i)) orelse return .{};
+    }
+
+    var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
+    for (0..group.max_lookahead_count) |lookahead_i| {
+        lookahead_classes[lookahead_i] = (try window.lookaheadClassAt(group.max_input_count, lookahead_i)) orelse break;
+    }
+
+    const rules = subtable.rules[group.start .. group.start + group.len];
+    for (rules) |rule| {
+        if (rule.input_count == 0 or rule.input_count > group.max_input_count) continue;
+        if (rule.lookahead_count > group.max_lookahead_count) continue;
+        if (!try window.ensureLookaheadCount(rule.input_count, rule.lookahead_count)) continue;
+        const extra_input_count = @as(usize, rule.input_count) - 1;
+        var hash = class_context.sequenceHash(input_classes[0..extra_input_count]);
+        for (0..rule.lookahead_count) |lookahead_i| {
+            const class = (try window.lookaheadClassAt(rule.input_count, lookahead_i)) orelse {
+                hash = 0;
+                break;
+            };
+            lookahead_classes[lookahead_i] = class;
+            hash = class_context.sequenceHashAppend(hash, class);
+        }
+        if (rule.hash != hash) continue;
+        const expected_input = subtable.classes[rule.classes_start .. rule.classes_start + extra_input_count];
+        if (!std.mem.eql(u16, expected_input, input_classes[0..extra_input_count])) continue;
+        const expected_lookahead = subtable.classes[rule.classes_start + extra_input_count .. rule.classes_start + extra_input_count + rule.lookahead_count];
+        if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
+
+        _ = try applyNestedGlyphLookup(table, glyphs, input_indices[0], rule.lookup_index, allocator, options);
+        return .{ .matched = true, .next_pos = input_indices[rule.input_count - 1] + 1 };
+    }
+    return .{};
 }
 
 fn applyReverseChainingSingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {

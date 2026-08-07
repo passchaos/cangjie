@@ -238,7 +238,10 @@ fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.Gr
                 }
                 return byte_offset;
             }
-        } else if (codepoint == 0x200c or codepoint == 0x200d) {
+        } else if (codepoint == 0x200d) {
+            if (previous_cluster) |cluster| return cluster;
+            return byte_offset;
+        } else if (codepoint == 0x200c) {
             return byte_offset;
         }
     }

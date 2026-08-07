@@ -177,6 +177,7 @@ fn startsBrokenCluster(codepoints: []const u21, source_index: usize) bool {
     if (isDevanagariConsonant(codepoints[source_index]) or isDevanagariIndependentVowel(codepoints[source_index])) return false;
     const syllable_end = devanagariSyllableEnd(codepoints, source_index);
     if (syllable_end <= source_index) return false;
+    if (codepoints[source_index] == 0x094d) return true;
     return !hasConsonant(codepoints[source_index..syllable_end]);
 }
 

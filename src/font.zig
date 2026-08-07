@@ -1498,6 +1498,33 @@ pub const Font = struct {
         };
     }
 
+    pub fn paletteColors(self: *const Font, allocator: std.mem.Allocator, palette_index: u16) FontError![]PaletteColor {
+        const cpal = self.cpal orelse return try allocator.alloc(PaletteColor, 0);
+        try validateSfntTableChecksum(self.data, cpal);
+        if (cpal.length < 12) return error.BadSfnt;
+        const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
+        try validateCpalNameReferences(self.data, cpal, self.name);
+        const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
+        const color_records_offset: usize = @intCast(try bin.readU32At(self.data, cpal.offset + 8));
+        if (palette_index >= palette_count) return try allocator.alloc(PaletteColor, 0);
+
+        const colors = try allocator.alloc(PaletteColor, palette_entries);
+        errdefer allocator.free(colors);
+        const palette_start_offset = cpal.offset + 12 + @as(usize, palette_index) * 2;
+        const first_color_index = try bin.readU16At(self.data, palette_start_offset);
+        for (colors, 0..) |*color, color_index| {
+            const record_index = @as(usize, first_color_index) + color_index;
+            const record = cpal.offset + color_records_offset + record_index * 4;
+            color.* = .{
+                .blue = self.data[record],
+                .green = self.data[record + 1],
+                .red = self.data[record + 2],
+                .alpha = self.data[record + 3],
+            };
+        }
+        return colors;
+    }
+
     pub fn colorPalettes(self: *const Font, allocator: std.mem.Allocator) FontError![]PaletteInfo {
         const cpal = self.cpal orelse return try allocator.alloc(PaletteInfo, 0);
         try validateSfntTableChecksum(self.data, cpal);

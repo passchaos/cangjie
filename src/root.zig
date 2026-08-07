@@ -1542,6 +1542,17 @@ test "reads COLR layers and CPAL palette colors" {
     try std.testing.expectEqual(@as(GlyphId, 1), layers[1].glyph_id);
     try std.testing.expectEqual(@as(u16, 1), layers[1].palette_index);
 
+    const palette_colors = try font.paletteColors(allocator, 0);
+    defer allocator.free(palette_colors);
+    try std.testing.expectEqual(@as(usize, 2), palette_colors.len);
+    try std.testing.expectEqual(@as(u8, 255), palette_colors[0].red);
+    try std.testing.expectEqual(@as(u8, 0), palette_colors[0].green);
+    try std.testing.expectEqual(@as(u8, 0), palette_colors[0].blue);
+    try std.testing.expectEqual(@as(u8, 255), palette_colors[1].blue);
+    const missing_palette_colors = try font.paletteColors(allocator, 1);
+    defer allocator.free(missing_palette_colors);
+    try std.testing.expectEqual(@as(usize, 0), missing_palette_colors.len);
+
     const red = (try font.paletteColor(0, layers[0].palette_index)).?;
     try std.testing.expectEqual(@as(u8, 255), red.red);
     try std.testing.expectEqual(@as(u8, 0), red.green);

@@ -76,6 +76,7 @@ pub const Script = enum {
     runic,
     coptic,
     ogham,
+    duployan,
     unknown,
 };
 
@@ -535,6 +536,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     runr = tag("runr"),
     copt = tag("copt"),
     ogam = tag("ogam"),
+    dupl = tag("dupl"),
 };
 
 pub const OpenTypeLanguageTag = enum(u32) {
@@ -625,6 +627,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .runic => .runr,
         .coptic => .copt,
         .ogham => .ogam,
+        .duployan => .dupl,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -764,6 +767,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isNushuScriptCodepoint(codepoint)) return .nushu;
     if (isRunicScriptCodepoint(codepoint)) return .runic;
     if (isOghamScriptCodepoint(codepoint)) return .ogham;
+    if (isDuployanScriptCodepoint(codepoint)) return .duployan;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
     // Katakana is also encoded in phonetic-extension and halfwidth forms.
@@ -1074,6 +1078,19 @@ fn isOghamWordCodepoint(codepoint: u21) bool {
     // not word letters. The twenty-five letter names form normal unspaced word
     // spans for caret movement and selection.
     return codepoint >= 0x1681 and codepoint <= 0x169a;
+}
+
+fn isDuployanScriptCodepoint(codepoint: u21) bool {
+    // Duployan shorthand fonts expose script-specific substitutions and
+    // positioning under the registered `dupl` ScriptList entry. Keep the
+    // shorthand block in one LTR shaping run instead of falling through DFLT.
+    return codepoint >= 0x1bc00 and codepoint <= 0x1bc9f;
+}
+
+fn isDuployanWordCodepoint(codepoint: u21) bool {
+    // Anchor word spans on Duployan shorthand letters and affixes. Format
+    // controls such as shorthand overlap marks attach through isWordExtender().
+    return isDuployanScriptCodepoint(codepoint);
 }
 
 fn isPhoenicianScriptCodepoint(codepoint: u21) bool {
@@ -1681,7 +1698,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
@@ -4552,6 +4569,29 @@ test "Ogham text selects Ogham script and excludes native separators from words"
     try std.testing.expectEqualStrings("\u{169a}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
+test "Duployan text selects Duployan script primitives" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{1bc02}\u{1bc5b}\u{034f}\u{034f}\u{034f}\u{1bc1c}\u{200c}\u{1bc02}";
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.duployan, runs[0].script);
+    try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
+    try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
+    try std.testing.expectEqual(OpenTypeScriptTag.dupl, openTypeScriptTag(scriptForCodepoint(0x1bc02)));
+    try std.testing.expectEqual(OpenTypeScriptTag.dupl, openTypeScriptTag(scriptForCodepoint(0x1bc9f)));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x1bca0));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1bc02));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+
+    try std.testing.expectEqual(@as(usize, 1), words.len);
+    try std.testing.expectEqualStrings(text, text[words[0].byte_start..][0..words[0].byte_len]);
+}
+
 test "Myanmar text selects Myanmar v2 script primitives across extensions" {
     const allocator = std.testing.allocator;
 
@@ -4646,6 +4686,7 @@ const WordKind = enum {
     runic,
     coptic,
     ogham,
+    duployan,
 };
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
@@ -4802,6 +4843,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isRunicWordCodepoint(codepoint)) return .runic;
     if (isCopticWordCodepoint(codepoint)) return .coptic;
     if (isOghamWordCodepoint(codepoint)) return .ogham;
+    if (isDuployanWordCodepoint(codepoint)) return .duployan;
     if (isBatakWordCodepoint(codepoint)) return .batak;
     if (isTifinaghWordCodepoint(codepoint)) return .tifinagh;
     if (isGlagoliticWordCodepoint(codepoint)) return .glagolitic;

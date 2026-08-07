@@ -93,6 +93,7 @@ pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const GlyphClass = @import("font.zig").GlyphClass;
 pub const NameEncoding = @import("font.zig").NameEncoding;
 pub const NameId = @import("font.zig").NameId;
+pub const NameLanguageTagInfo = @import("font.zig").NameLanguageTagInfo;
 pub const NameRecordInfo = @import("font.zig").NameRecordInfo;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
@@ -1446,6 +1447,68 @@ test "enumerates raw SFNT name records" {
     const empty = try minimal.nameRecords(allocator);
     defer allocator.free(empty);
     try std.testing.expectEqual(@as(usize, 0), empty.len);
+}
+
+test "enumerates SFNT name language tags" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNameLanguageTagTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const records = try font.nameRecords(allocator);
+    defer allocator.free(records);
+    try std.testing.expectEqual(@as(usize, 1), records.len);
+    try std.testing.expectEqual(@as(u16, 0x8000), records[0].language_id);
+
+    const tags = try font.nameLanguageTags(allocator);
+    defer allocator.free(tags);
+    try std.testing.expectEqual(@as(usize, 1), tags.len);
+    try std.testing.expectEqual(@as(u16, 0x8000), tags[0].language_id);
+
+    var out: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("fr-CA", try tags[0].decodeUtf8(&out));
+    try std.testing.expectEqualStrings("fr-CA", (try font.nameLanguageTag(0x8000, &out)).?);
+    try std.testing.expect((try font.nameLanguageTag(0x0409, &out)) == null);
+    try std.testing.expect((try font.nameLanguageTag(0x8001, &out)) == null);
+
+    const named_bytes = try test_font.buildNamedTtf(allocator);
+    defer allocator.free(named_bytes);
+    var named = try Font.parse(allocator, named_bytes);
+    defer named.deinit();
+
+    const empty = try named.nameLanguageTags(allocator);
+    defer allocator.free(empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+    try std.testing.expect((try named.nameLanguageTag(0x8000, &out)) == null);
+}
+
+test "lazy SFNT language tag lookup revalidates borrowed bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNameLanguageTagTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var out: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("fr-CA", (try font.nameLanguageTag(0x8000, &out)).?);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var name_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "name")) name_offset = table.offset;
+    }
+    bytes[name_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.nameLanguageTag(0x8000, &out));
+    try std.testing.expectError(error.BadSfnt, font.nameLanguageTags(allocator));
 }
 
 test "reads variable font axis metadata from fvar" {

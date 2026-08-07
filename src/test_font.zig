@@ -36,6 +36,10 @@ pub fn buildNamedTtfWithPostScript(allocator: std.mem.Allocator, family: []const
     return buildSfnt(allocator, 0x00010000, try namedPostScriptTtfTables(allocator, family, subfamily, full_name, postscript_name));
 }
 
+pub fn buildNameLanguageTagTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try nameLanguageTagTtfTables(allocator));
+}
+
 pub fn buildNamedTtfWithStyle(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8, weight: u16, width: u16, italic: bool, bold: bool) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try styledTtfTables(allocator, family, subfamily, full_name, weight, width, italic, bold));
 }
@@ -540,6 +544,21 @@ fn namedPostScriptTtfTables(allocator: std.mem.Allocator, family: []const u8, su
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "name", .data = try nameTableWithPostScript(allocator, family, subfamily, full_name, postscript_name) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn nameLanguageTagTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "name", .data = try nameTableWithLanguageTag(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
@@ -2113,6 +2132,38 @@ fn nameTableWithPostScript(allocator: std.mem.Allocator, family: []const u8, sub
         }
         storage_offset += record.value.len * 2;
     }
+    return bytes;
+}
+
+fn nameTableWithLanguageTag(allocator: std.mem.Allocator) ![]u8 {
+    const family = "Nom";
+    const language_tag = "fr-CA";
+    const name_record_count = 1;
+    const lang_tag_count = 1;
+    const header_len = 6 + name_record_count * 12 + 2 + lang_tag_count * 4;
+    const family_bytes = family.len * 2;
+    const language_bytes = language_tag.len * 2;
+
+    const bytes = try allocator.alloc(u8, header_len + family_bytes + language_bytes);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, name_record_count);
+    writeU16(bytes, 4, header_len);
+
+    writeU16(bytes, 6, 3);
+    writeU16(bytes, 8, 1);
+    writeU16(bytes, 10, 0x8000);
+    writeU16(bytes, 12, 1);
+    writeU16(bytes, 14, @intCast(family_bytes));
+    writeU16(bytes, 16, 0);
+
+    const lang_tag_count_offset = 6 + name_record_count * 12;
+    writeU16(bytes, lang_tag_count_offset, lang_tag_count);
+    writeU16(bytes, lang_tag_count_offset + 2, @intCast(language_bytes));
+    writeU16(bytes, lang_tag_count_offset + 4, @intCast(family_bytes));
+
+    writeAsciiUtf16Be(bytes, header_len, family);
+    writeAsciiUtf16Be(bytes, header_len + family_bytes, language_tag);
     return bytes;
 }
 
@@ -4701,6 +4752,13 @@ fn checksum(data: []const u8) u32 {
         sum +%= word;
     }
     return sum;
+}
+
+fn writeAsciiUtf16Be(bytes: []u8, offset: usize, value: []const u8) void {
+    for (value, 0..) |byte, index| {
+        bytes[offset + index * 2] = 0;
+        bytes[offset + index * 2 + 1] = byte;
+    }
 }
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {

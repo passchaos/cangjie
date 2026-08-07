@@ -48,6 +48,16 @@ pub const RecordInfo = struct {
     }
 };
 
+pub const LanguageTagInfo = struct {
+    language_id: u16,
+    storage_offset: usize,
+    string: []const u8,
+
+    pub fn decodeUtf8(self: LanguageTagInfo, out: []u8) Error![]const u8 {
+        return try decodeUtf16BeName(self.string, out);
+    }
+};
+
 const NameRecord = struct {
     platform_id: u16,
     encoding_id: u16,
@@ -129,6 +139,43 @@ pub fn records(allocator: std.mem.Allocator, data: []const u8, name: Table) Erro
         };
     }
     return infos;
+}
+
+pub fn languageTags(allocator: std.mem.Allocator, data: []const u8, name: Table) Error![]LanguageTagInfo {
+    // LangTagRecord payloads are part of the same name-table trust boundary as
+    // normal name records. Revalidate the complete table first so callers never
+    // receive language metadata from a table whose record directory would be
+    // rejected by `records` or `readString`.
+    try validate(data, name);
+
+    const table = try nameTableSlice(data, name);
+    const layout = try readNameTableLayout(table);
+    if (layout.format != 1) return try allocator.alloc(LanguageTagInfo, 0);
+
+    const infos = try allocator.alloc(LanguageTagInfo, layout.lang_tag_count);
+    errdefer allocator.free(infos);
+    for (infos, 0..) |*info, index| {
+        const string_data = try languageTagString(table, layout, index);
+        info.* = .{
+            .language_id = languageIdForTagIndex(index),
+            .storage_offset = try languageTagStorageOffset(table, layout, index),
+            .string = string_data,
+        };
+    }
+    return infos;
+}
+
+pub fn languageTag(data: []const u8, name: Table, language_id: u16, out: []u8) Error!?[]const u8 {
+    if (language_id < 0x8000) return null;
+    try validate(data, name);
+
+    const table = try nameTableSlice(data, name);
+    const layout = try readNameTableLayout(table);
+    if (layout.format != 1) return null;
+
+    const index: usize = @intCast(language_id & 0x7fff);
+    if (index >= layout.lang_tag_count) return null;
+    return try decodeUtf16BeName(try languageTagString(table, layout, index), out);
 }
 
 /// Compact index of name IDs that have at least one structurally valid string.
@@ -220,6 +267,10 @@ fn readNameTableLayout(table: []const u8) Error!NameTableLayout {
     if (format == 1) {
         if (records_end + 2 > table.len) return error.BadSfnt;
         const lang_tag_count: usize = @intCast(try bin.readU16At(table, records_end));
+        // Language IDs encode LangTagRecord indexes as 0x8000 + index, leaving
+        // exactly 15 bits for the index. Reject unreachable trailing records so
+        // enumeration cannot synthesize duplicate or wrapped language IDs.
+        if (lang_tag_count > 0x8000) return error.BadSfnt;
         const lang_tag_records_start = records_end + 2;
         if (lang_tag_count > (table.len - lang_tag_records_start) / lang_tag_record_size) return error.BadSfnt;
         minimum_storage_offset = lang_tag_records_start + lang_tag_count * lang_tag_record_size;
@@ -234,13 +285,26 @@ fn readNameTableLayout(table: []const u8) Error!NameTableLayout {
 fn validateNameLanguageTags(table: []const u8, layout: NameTableLayout) Error!void {
     if (layout.format != 1) return;
     for (0..layout.lang_tag_count) |index| {
-        const record_offset = layout.lang_tag_records_start + index * lang_tag_record_size;
-        const length: usize = @intCast(try bin.readU16At(table, record_offset));
-        const offset: usize = @intCast(try bin.readU16At(table, record_offset + 2));
-        const tag_data = try nameStorageString(table, layout, offset, length);
+        const tag_data = try languageTagString(table, layout, index);
         try validateUtf16BeNameData(tag_data);
         try validateNameLanguageTagSyntax(tag_data);
     }
+}
+
+fn languageTagString(table: []const u8, layout: NameTableLayout, index: usize) Error![]const u8 {
+    const record_offset = layout.lang_tag_records_start + index * lang_tag_record_size;
+    const length: usize = @intCast(try bin.readU16At(table, record_offset));
+    const offset = try languageTagStorageOffset(table, layout, index);
+    return try nameStorageString(table, layout, offset, length);
+}
+
+fn languageTagStorageOffset(table: []const u8, layout: NameTableLayout, index: usize) Error!usize {
+    const record_offset = layout.lang_tag_records_start + index * lang_tag_record_size;
+    return @intCast(try bin.readU16At(table, record_offset + 2));
+}
+
+fn languageIdForTagIndex(index: usize) u16 {
+    return 0x8000 | @as(u16, @intCast(index));
 }
 
 fn validateNameLanguageTagSyntax(data: []const u8) Error!void {

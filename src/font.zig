@@ -38,6 +38,7 @@ pub const FontTableInfo = struct {
 
 pub const NameId = name_mod.NameId;
 pub const NameEncoding = name_mod.Encoding;
+pub const NameLanguageTagInfo = name_mod.LanguageTagInfo;
 pub const NameRecordInfo = name_mod.RecordInfo;
 
 pub const StyleAttributes = struct {
@@ -1166,6 +1167,25 @@ pub const Font = struct {
         const name = self.name orelse return try allocator.alloc(NameRecordInfo, 0);
         try validateSfntTableChecksum(self.data, name);
         return try name_mod.records(allocator, self.data, nameTableView(name));
+    }
+
+    /// Enumerate OpenType 1.6+ language-tag records from a format-1 name table.
+    ///
+    /// Returned slices borrow from this Font's backing bytes and are UTF-16BE,
+    /// matching FreeType's FT_SfntLangTag contract. Use
+    /// `NameLanguageTagInfo.decodeUtf8` for a UTF-8 BCP 47 string. Format-0
+    /// name tables and fonts without a name table return an empty array.
+    pub fn nameLanguageTags(self: *const Font, allocator: std.mem.Allocator) FontError![]NameLanguageTagInfo {
+        const name = self.name orelse return try allocator.alloc(NameLanguageTagInfo, 0);
+        try validateSfntTableChecksum(self.data, name);
+        return try name_mod.languageTags(allocator, self.data, nameTableView(name));
+    }
+
+    /// Decode the BCP 47 language tag associated with a format-1 name language ID.
+    pub fn nameLanguageTag(self: *const Font, language_id: u16, out: []u8) FontError!?[]const u8 {
+        const name = self.name orelse return null;
+        try validateSfntTableChecksum(self.data, name);
+        return try name_mod.languageTag(self.data, nameTableView(name), language_id, out);
     }
 
     pub fn familyName(self: *const Font, out: []u8) FontError!?[]const u8 {

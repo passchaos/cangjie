@@ -133,6 +133,16 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
         printGlyphIds(m.cangjie_glyph_ids);
         std.debug.print("\nharfrust_glyph_ids=", .{});
         printGlyphIds(m.harfrust.glyph_ids);
+        if (m.kind == .glyph_id) {
+            const diff_index = firstDifferentGlyphIndex(m.cangjie_glyph_ids, m.harfrust.glyph_ids);
+            std.debug.print("\nfirst_glyph_diff_index={d}", .{diff_index});
+            std.debug.print("\nsource_codepoints=", .{});
+            printSourceCodepoints(mismatch_text);
+            std.debug.print("\ncangjie_glyph_window=", .{});
+            try printGlyphWindow(&font, m.cangjie_glyph_ids, m.cangjie_clusters, diff_index);
+            std.debug.print("\nharfrust_glyph_window=", .{});
+            try printGlyphWindow(&font, m.harfrust.glyph_ids, m.harfrust.clusters, diff_index);
+        }
         if (m.kind == .cluster) {
             std.debug.print("\ncangjie_clusters=", .{});
             printClusters(m.cangjie_clusters);
@@ -321,6 +331,40 @@ fn printGlyphIds(glyph_ids: []const u16) void {
     for (glyph_ids, 0..) |glyph_id, index| {
         if (index != 0) std.debug.print(",", .{});
         std.debug.print("{d}", .{glyph_id});
+    }
+}
+
+fn firstDifferentGlyphIndex(lhs: []const u16, rhs: []const u16) usize {
+    const shared_len = @min(lhs.len, rhs.len);
+    for (0..shared_len) |index| {
+        if (lhs[index] != rhs[index]) return index;
+    }
+    return shared_len;
+}
+
+fn printGlyphWindow(font: *const cangjie.Font, glyph_ids: []const u16, clusters: []const u32, center: usize) !void {
+    const start = center -| 8;
+    const end = @min(glyph_ids.len, center + 9);
+    for (glyph_ids[start..end], start..) |glyph_id, index| {
+        if (index != start) std.debug.print(",", .{});
+        const cluster = if (index < clusters.len) clusters[index] else 0;
+        if (try font.glyphName(glyph_id)) |name| {
+            std.debug.print("{d}@{d}:{s}", .{ glyph_id, cluster, name });
+        } else {
+            std.debug.print("{d}@{d}", .{ glyph_id, cluster });
+        }
+    }
+}
+
+fn printSourceCodepoints(text: []const u8) void {
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    var first = true;
+    while (it.i < text.len) {
+        const offset = it.i;
+        const codepoint = it.nextCodepoint() orelse break;
+        if (!first) std.debug.print(",", .{});
+        first = false;
+        std.debug.print("{d}:U+{X}", .{ offset, codepoint });
     }
 }
 

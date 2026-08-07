@@ -153,6 +153,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   shaping behavior. The short smoke remains a failing gate at Cangjie `333`
   glyphs versus HarfRust `335`, so this is structure and test foundation only,
   not a parity claim.
+  Focused diagnosis has narrowed the first short-smoke glyph-id mismatch to the
+  two-base input `"𛰂𛱛"`: the first differing glyph is in the second source
+  cluster at byte offset `4` (`U+1BC5B`), where HarfRust keeps an initial
+  `7828` glyph that Cangjie omits. Disabling Cangjie `rclt` makes that glyph
+  reappear but regresses the sequence length, so the next implementation slice
+  should model HarfBuzz/HarfRust USE per-syllable `rclt`/common-feature
+  matching instead of globally disabling `rclt`.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

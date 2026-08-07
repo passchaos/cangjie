@@ -20,6 +20,7 @@ pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
 pub fn reorderPreBaseMatras(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     codepoints: []const u21,
 ) void {
@@ -31,7 +32,7 @@ pub fn reorderPreBaseMatras(
 
         const syllable_start = devanagariSyllableStart(codepoints, source_index);
         const target = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, codepoints, syllable_start, source_index, index);
-        moveGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index, target);
+        moveGlyphMetadata(glyph_ids, glyph_source_indices, glyph_substituted, ligature_components, index, target);
     }
 }
 
@@ -39,6 +40,7 @@ pub fn insertDottedCirclesForBrokenClusters(
     allocator: std.mem.Allocator,
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     codepoints: []const u21,
     dotted_circle_glyph: GlyphId,
@@ -56,6 +58,7 @@ pub fn insertDottedCirclesForBrokenClusters(
             allocator,
             glyph_ids,
             glyph_source_indices,
+            glyph_substituted,
             ligature_components,
             insert_index,
             dotted_circle_glyph,
@@ -94,6 +97,7 @@ pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21) 
 pub fn reorderRephs(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     codepoints: []const u21,
 ) void {
@@ -113,7 +117,7 @@ pub fn reorderRephs(
             syllable_end,
             index,
         );
-        moveGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index, target);
+        moveGlyphMetadata(glyph_ids, glyph_source_indices, glyph_substituted, ligature_components, index, target);
         index = target + 1;
     }
 }
@@ -387,18 +391,21 @@ fn isJoiner(codepoint: u21) bool {
 fn swapGlyphMetadata(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     a: usize,
     b: usize,
 ) void {
     std.mem.swap(GlyphId, &glyph_ids.items[a], &glyph_ids.items[b]);
     std.mem.swap(usize, &glyph_source_indices.items[a], &glyph_source_indices.items[b]);
+    std.mem.swap(bool, &glyph_substituted.items[a], &glyph_substituted.items[b]);
     std.mem.swap(gpos.LigatureComponentInfo, &ligature_components.items[a], &ligature_components.items[b]);
 }
 
 fn moveGlyphMetadata(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     from: usize,
     to: usize,
@@ -407,12 +414,12 @@ fn moveGlyphMetadata(
     if (from < to) {
         var index = from;
         while (index < to) : (index += 1) {
-            swapGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index, index + 1);
+            swapGlyphMetadata(glyph_ids, glyph_source_indices, glyph_substituted, ligature_components, index, index + 1);
         }
     } else {
         var index = from;
         while (index > to) {
-            swapGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index, index - 1);
+            swapGlyphMetadata(glyph_ids, glyph_source_indices, glyph_substituted, ligature_components, index, index - 1);
             index -= 1;
         }
     }
@@ -422,6 +429,7 @@ fn insertGlyphMetadata(
     allocator: std.mem.Allocator,
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     index: usize,
     glyph_id: GlyphId,
@@ -432,6 +440,9 @@ fn insertGlyphMetadata(
 
     try glyph_source_indices.replaceRange(allocator, index, 0, &.{source_index});
     errdefer _ = glyph_source_indices.orderedRemove(index);
+
+    try glyph_substituted.replaceRange(allocator, index, 0, &.{false});
+    errdefer _ = glyph_substituted.orderedRemove(index);
 
     const component_info = defaultLigatureComponentInfo(source_index);
     try ligature_components.replaceRange(allocator, index, 0, &.{component_info});

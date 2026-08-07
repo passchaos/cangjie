@@ -54,6 +54,10 @@ pub const LookupOptions = struct {
     /// source ownership, while HarfBuzz-style output clusters merge across
     /// ligature components and deleted glyphs.
     glyph_cluster_indices: ?*std.ArrayList(usize) = null,
+    /// Optional GSUB substitution state parallel to `glyphs`. HarfBuzz keeps
+    /// default-ignorables visible to contextual matching once GSUB has touched
+    /// them, even if their glyph id later returns to the original glyph.
+    glyph_substituted: ?*std.ArrayList(bool) = null,
     ligature_components: ?*std.ArrayList(gpos.LigatureComponentInfo) = null,
     /// Optional source-level feature assignment. `active_source_feature` gates
     /// a lookup to glyphs whose original source index carries that tag. Context
@@ -1434,6 +1438,7 @@ fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs:
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph.*) != null) {
                     glyph.* = @bitCast(@as(i16, @bitCast(glyph.*)) +% delta);
+                    markGlyphSubstituted(options, glyph_index);
                     matched[glyph_index] = true;
                 }
             }
@@ -1447,6 +1452,7 @@ fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs:
                 if (try coverageIndex(table, coverage_offset, glyph.*)) |index| {
                     if (index < glyph_count) {
                         glyph.* = try readU16(table, subtable_offset + 6 + index * 2);
+                        markGlyphSubstituted(options, glyph_index);
                         matched[glyph_index] = true;
                     }
                 }
@@ -1467,6 +1473,7 @@ fn applySingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.Ar
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph.*) != null) {
                     glyph.* = @bitCast(@as(i16, @bitCast(glyph.*)) +% delta);
+                    markGlyphSubstituted(options, glyph_index);
                 }
             }
         },
@@ -1476,7 +1483,10 @@ fn applySingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.Ar
                 if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
                 if (try coverageIndex(table, coverage_offset, glyph.*)) |index| {
-                    if (index < glyph_count) glyph.* = try readU16(table, subtable_offset + 6 + index * 2);
+                    if (index < glyph_count) {
+                        glyph.* = try readU16(table, subtable_offset + 6 + index * 2);
+                        markGlyphSubstituted(options, glyph_index);
+                    }
                 }
             }
         },
@@ -1494,6 +1504,7 @@ fn applySingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.
             const delta = try readI16(table, subtable_offset + 4);
             if (try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) == null) return false;
             glyphs.items[glyph_index] = @bitCast(@as(i16, @bitCast(glyphs.items[glyph_index])) +% delta);
+            markGlyphSubstituted(options, glyph_index);
             return true;
         },
         2 => {
@@ -1501,6 +1512,7 @@ fn applySingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.
             const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return false;
             if (coverage >= glyph_count) return false;
             glyphs.items[glyph_index] = try readU16(table, subtable_offset + 6 + coverage * 2);
+            markGlyphSubstituted(options, glyph_index);
             return true;
         },
         else => return error.UnsupportedGsub,
@@ -1514,18 +1526,21 @@ fn applySingleSubstitutionAccelerated(table: Table, accelerator: SingleSubstAcce
     if (accelerator.single_mapping) {
         if (glyphs.items[glyph_index] != accelerator.single_from) return false;
         glyphs.items[glyph_index] = accelerator.single_to;
+        markGlyphSubstituted(options, glyph_index);
         return true;
     }
     switch (accelerator.subst_format) {
         1 => {
             if (try coverageIndex(table, accelerator.coverage_offset, glyphs.items[glyph_index]) == null) return false;
             glyphs.items[glyph_index] = @bitCast(@as(i16, @bitCast(glyphs.items[glyph_index])) +% accelerator.delta);
+            markGlyphSubstituted(options, glyph_index);
             return true;
         },
         2 => {
             const coverage = try coverageIndex(table, accelerator.coverage_offset, glyphs.items[glyph_index]) orelse return false;
             if (coverage >= accelerator.glyph_count) return false;
             glyphs.items[glyph_index] = try readU16(table, accelerator.substitutes_pos + coverage * 2);
+            markGlyphSubstituted(options, glyph_index);
             return true;
         },
         else => return false,
@@ -1545,7 +1560,7 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
         const mark_sets = options.mark_filtering_sets orelse return class == 3;
         if (mark_filtering_set_index >= mark_sets.len) return class == 3;
         const in_selected_set = glyphInMarkFilteringSet(mark_sets[mark_filtering_set_index], glyph);
-        const is_mark = class == 3 or glyphInAnyMarkFilteringSet(mark_sets, glyph);
+        const is_mark = class == 3;
         if (is_mark and !in_selected_set) return true;
     }
 
@@ -1566,13 +1581,6 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
         const is_mark = class == 3 or (class == 0 and attach_class != 0);
         if (!is_mark) return false;
         return attach_class != mark_attachment_type;
-    }
-    return false;
-}
-
-fn glyphInAnyMarkFilteringSet(mark_sets: []const []const GlyphId, glyph: GlyphId) bool {
-    for (mark_sets) |set| {
-        if (glyphInMarkFilteringSet(set, glyph)) return true;
     }
     return false;
 }
@@ -1608,6 +1616,9 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError
     }
     if (options.glyph_cluster_indices) |clusters| {
         if (clusters.items.len != glyph_count) return error.InvalidShapingInput;
+    }
+    if (options.glyph_substituted) |substituted| {
+        if (substituted.items.len != glyph_count) return error.InvalidShapingInput;
     }
     if (options.ligature_components) |components| {
         if (components.items.len != glyph_count) return error.InvalidShapingInput;
@@ -1700,9 +1711,20 @@ fn sourceSyllableAllowsGlyph(options: LookupOptions, anchor_syllable: ?u8, glyph
     return sourceSyllableForGlyph(options, glyph_index) == anchor;
 }
 
+fn glyphWasSubstituted(options: LookupOptions, glyph_index: usize) bool {
+    const substituted = options.glyph_substituted orelse return false;
+    return glyph_index < substituted.items.len and substituted.items[glyph_index];
+}
+
+fn markGlyphSubstituted(options: LookupOptions, glyph_index: usize) void {
+    const substituted = options.glyph_substituted orelse return;
+    if (glyph_index < substituted.items.len) substituted.items[glyph_index] = true;
+}
+
 fn contextualMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []const GlyphId, glyph_index: usize, context_match: bool) bool {
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_index])) return true;
     if (!context_match) return false;
+    if (glyphWasSubstituted(options, glyph_index)) return false;
     const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
     if (!unicode.isDefaultIgnorableForShaping(codepoint)) return false;
     if (codepoint == 0x200c and !options.active_auto_zwnj) return false;
@@ -1734,6 +1756,15 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
             defer allocator.free(replacements);
             @memset(replacements, cluster);
             try clusters.replaceRange(allocator, glyph_index, remove_count, replacements);
+        }
+    }
+    if (options.glyph_substituted) |substituted| {
+        if (glyph_index <= substituted.items.len) {
+            const remove_count = @min(removed_len, substituted.items.len - glyph_index);
+            const replacements = try allocator.alloc(bool, inserted_len);
+            defer allocator.free(replacements);
+            @memset(replacements, true);
+            try substituted.replaceRange(allocator, glyph_index, remove_count, replacements);
         }
     }
     if (options.ligature_components) |components| {
@@ -1853,7 +1884,9 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
             glyph.* = try readU16(table, sequence_offset + 2 + replacement_index * 2);
         }
         try glyphs.replaceRange(allocator, i, 1, replacement);
-        if (replacement.len != 1) {
+        if (replacement.len == 1) {
+            markGlyphSubstituted(options, i);
+        } else {
             try replaceSourceMetadata(allocator, options, i, 1, replacement.len, sourceForGlyph(options, i));
         }
         i += glyph_count - 1;
@@ -1882,6 +1915,7 @@ fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyp
         const glyph_count = try readU16(table, alternate_set_offset);
         if (glyph_count == 0) continue;
         glyph.* = try readU16(table, alternate_set_offset + 2);
+        markGlyphSubstituted(options, glyph_index);
         if (matched) |items| items[glyph_index] = true;
     }
 }
@@ -1924,6 +1958,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
             const component_info = ligatureComponentInfoForMatch(options, i, match);
             mergeLigatureClusterMetadata(options, i, match);
             glyphs.items[i] = match.ligature;
+            markGlyphSubstituted(options, i);
             setLigatureMetadata(options, i, component_info);
             if (match.component_count > 1) {
                 var component_index = match.component_count;
@@ -1957,7 +1992,9 @@ fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     }
 
     try glyphs.replaceRange(allocator, glyph_index, 1, replacement);
-    if (replacement.len != 1) {
+    if (replacement.len == 1) {
+        markGlyphSubstituted(options, glyph_index);
+    } else {
         try replaceSourceMetadata(allocator, options, glyph_index, 1, replacement.len, sourceForGlyph(options, glyph_index));
     }
     return .{ .removed_len = 1, .inserted_len = replacement.len };
@@ -1978,6 +2015,7 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     const component_info = ligatureComponentInfoForMatch(options, glyph_index, match);
     mergeLigatureClusterMetadata(options, glyph_index, match);
     glyphs.items[glyph_index] = match.ligature;
+    markGlyphSubstituted(options, glyph_index);
     setLigatureMetadata(options, glyph_index, component_info);
     if (match.component_count > 1) {
         var component_index = match.component_count;
@@ -3741,13 +3779,16 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     try slice.append(allocator, glyphs.items[glyph_index]);
     var scratch_options = options;
     scratch_options.glyph_source_indices = null;
+    scratch_options.glyph_substituted = null;
     scratch_options.ligature_components = null;
     scratch_options.source_features = null;
     scratch_options.active_source_feature = null;
     scratch_options.active_source_feature_mask = 0;
     try applyLookup(table, nested_lookup_offset, &slice, allocator, scratch_options);
     try glyphs.replaceRange(allocator, glyph_index, 1, slice.items);
-    if (slice.items.len != 1) {
+    if (slice.items.len == 1) {
+        markGlyphSubstituted(options, glyph_index);
+    } else {
         try replaceSourceMetadata(allocator, options, glyph_index, 1, slice.items.len, sourceForGlyph(options, glyph_index));
     }
     return .{ .removed_len = 1, .inserted_len = slice.items.len };
@@ -3813,6 +3854,7 @@ fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, 
         if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, backtrack_offsets_pos, backtrack_count, true, lookup_flag, options)) continue;
         if (!try reverseCoverageMatches(table, subtable_offset, glyphs.items, pos, lookahead_offsets_pos, lookahead_count, false, lookup_flag, options)) continue;
         glyphs.items[pos] = try readU16(table, substitutes_pos + coverage * 2);
+        markGlyphSubstituted(options, pos);
         if (matched) |items| items[pos] = true;
     }
 }

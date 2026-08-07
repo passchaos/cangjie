@@ -2543,6 +2543,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const source_ends = &scratch.source_ends;
     const glyph_source_indices = &scratch.glyph_source_indices;
     const glyph_cluster_indices = &scratch.glyph_cluster_indices;
+    const glyph_substituted = &scratch.glyph_substituted;
     const ligature_components = &scratch.ligature_components;
     const joining_forms = &scratch.joining_forms;
     const source_features = &scratch.source_features;
@@ -2591,6 +2592,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         else
             glyph_cluster_indices.items.len;
         try glyph_cluster_indices.append(buffer.allocator, cluster_owner_index);
+        try glyph_substituted.append(buffer.allocator, false);
         try ligature_components.append(buffer.allocator, defaultLigatureComponentInfo(glyph_source_indices.items.len - 1));
     }
     if (shape_profile) |p| {
@@ -2620,6 +2622,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .apply_all_if_unselected = false,
         .glyph_source_indices = glyph_source_indices,
         .glyph_cluster_indices = glyph_cluster_indices,
+        .glyph_substituted = glyph_substituted,
         .ligature_components = ligature_components,
         .source_codepoints = codepoints.items,
         .shape_profile = shape_profile,
@@ -2635,7 +2638,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     }
     const use_shape = use_shaper.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
     if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
-        reorderArabicMarksForShaping(glyph_ids, glyph_source_indices, glyph_cluster_indices, ligature_components, codepoints.items);
+        reorderArabicMarksForShaping(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
         try joining_forms.resize(buffer.allocator, codepoints.items.len);
         try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
         try source_features.resize(buffer.allocator, joining_forms.items.len);
@@ -2712,6 +2715,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.topographicalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyMergedGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try applyMergedGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
     } else {
         if (buffer.lookup_selection_cache) |selection_cache| {
             gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
@@ -2734,6 +2738,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 buffer.allocator,
                 glyph_ids,
                 glyph_source_indices,
+                glyph_substituted,
                 ligature_components,
                 codepoints.items,
                 dotted_circle_glyph,
@@ -2745,9 +2750,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
-            indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
+            indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_substituted, ligature_components, codepoints.items);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
-            indic.reorderRephs(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
+            indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_substituted, ligature_components, codepoints.items);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
         }
     }
@@ -2765,6 +2770,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .run_has_gdef_marks = runHasGdefMarks(glyph_ids.items, gdef_metadata.*),
         .glyph_source_indices = glyph_source_indices.items,
         .source_codepoints = codepoints.items,
+        .glyph_substituted = glyph_substituted.items,
         .ligature_components = ligature_components.items,
         .shape_profile = shape_profile,
         .profile_io = profile_io,
@@ -2834,7 +2840,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             adjustment_x_advance = -@as(f32, @floatFromInt(metrics.advance_width));
         }
         const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
-        const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint);
+        const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
+        const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint) and !was_substituted;
         const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
         const zero_mark_advance = glyph_class == .mark and
             !mark_attachment and
@@ -3002,6 +3009,7 @@ fn swapScratchGlyphs(scratch: *layout_scratch.ShapeScratch, a: usize, b: usize) 
     std.mem.swap(GlyphId, &scratch.glyph_ids.items[a], &scratch.glyph_ids.items[b]);
     std.mem.swap(usize, &scratch.glyph_source_indices.items[a], &scratch.glyph_source_indices.items[b]);
     std.mem.swap(usize, &scratch.glyph_cluster_indices.items[a], &scratch.glyph_cluster_indices.items[b]);
+    std.mem.swap(bool, &scratch.glyph_substituted.items[a], &scratch.glyph_substituted.items[b]);
     std.mem.swap(gpos.LigatureComponentInfo, &scratch.ligature_components.items[a], &scratch.ligature_components.items[b]);
 }
 
@@ -3097,21 +3105,21 @@ fn mirroredCodepointForRtlShaping(font: *const Font, glyph_index_cache: ?*GlyphI
     return if (try glyphIndexWithOptionalCache(font, glyph_index_cache, mirrored) != 0) mirrored else codepoint;
 }
 
-fn reorderArabicMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21) void {
+fn reorderArabicMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21) void {
     var run_start: ?usize = null;
     for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
         const modified_class = arabicMarkSortClass(source_index, codepoints);
         if (modified_class == 0) {
-            if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, ligature_components, codepoints, start, glyph_index);
+            if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_index);
             run_start = null;
             continue;
         }
         if (run_start == null) run_start = glyph_index;
     }
-    if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, ligature_components, codepoints, start, glyph_source_indices.items.len);
+    if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_source_indices.items.len);
 }
 
-fn reorderArabicMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21, start: usize, end: usize) void {
+fn reorderArabicMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21, start: usize, end: usize) void {
     var i = start + 1;
     while (i < end) : (i += 1) {
         var j = i;
@@ -3119,6 +3127,7 @@ fn reorderArabicMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices
             std.mem.swap(GlyphId, &glyph_ids.items[j - 1], &glyph_ids.items[j]);
             std.mem.swap(usize, &glyph_source_indices.items[j - 1], &glyph_source_indices.items[j]);
             std.mem.swap(usize, &glyph_cluster_indices.items[j - 1], &glyph_cluster_indices.items[j]);
+            std.mem.swap(bool, &glyph_substituted.items[j - 1], &glyph_substituted.items[j]);
             std.mem.swap(gpos.LigatureComponentInfo, &ligature_components.items[j - 1], &ligature_components.items[j]);
         }
     }

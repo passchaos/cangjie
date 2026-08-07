@@ -11,6 +11,7 @@ pub const ShapeScratch = struct {
     source_ends: std.ArrayList(usize) = .empty,
     glyph_source_indices: std.ArrayList(usize) = .empty,
     glyph_cluster_indices: std.ArrayList(usize) = .empty,
+    glyph_substituted: std.ArrayList(bool) = .empty,
     ligature_components: std.ArrayList(gpos.LigatureComponentInfo) = .empty,
     joining_forms: std.ArrayList(unicode.JoiningForm) = .empty,
     source_features: std.ArrayList(u32) = .empty,
@@ -25,6 +26,7 @@ pub const ShapeScratch = struct {
         self.source_features.deinit(allocator);
         self.joining_forms.deinit(allocator);
         self.ligature_components.deinit(allocator);
+        self.glyph_substituted.deinit(allocator);
         self.glyph_cluster_indices.deinit(allocator);
         self.glyph_source_indices.deinit(allocator);
         self.source_ends.deinit(allocator);
@@ -41,6 +43,7 @@ pub const ShapeScratch = struct {
         self.source_ends.clearRetainingCapacity();
         self.glyph_source_indices.clearRetainingCapacity();
         self.glyph_cluster_indices.clearRetainingCapacity();
+        self.glyph_substituted.clearRetainingCapacity();
         self.ligature_components.clearRetainingCapacity();
         self.joining_forms.clearRetainingCapacity();
         self.source_features.clearRetainingCapacity();

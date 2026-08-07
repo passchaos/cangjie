@@ -46,17 +46,17 @@ const feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("init"), .source_scoped = true },
     .{ .tag = unicode.tag("medi"), .source_scoped = true },
     .{ .tag = unicode.tag("fina"), .source_scoped = true },
-    .{ .tag = unicode.tag("abvm"), .auto_zwj = false },
     .{ .tag = unicode.tag("abvs"), .auto_zwj = false },
-    .{ .tag = unicode.tag("blwm"), .auto_zwj = false },
     .{ .tag = unicode.tag("blws"), .auto_zwj = false },
-    .{ .tag = unicode.tag("dist"), .auto_zwj = false },
     .{ .tag = unicode.tag("haln"), .auto_zwj = false },
     .{ .tag = unicode.tag("pres"), .auto_zwj = false },
     .{ .tag = unicode.tag("psts"), .auto_zwj = false },
+    .{ .tag = unicode.tag("abvm") },
+    .{ .tag = unicode.tag("blwm") },
     .{ .tag = unicode.tag("rlig") },
     .{ .tag = unicode.tag("calt") },
     .{ .tag = unicode.tag("clig") },
+    .{ .tag = unicode.tag("dist") },
     .{ .tag = unicode.tag("liga") },
     .{ .tag = unicode.tag("rclt") },
 };
@@ -99,6 +99,9 @@ const final_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("haln"), .auto_zwj = false },
     .{ .tag = unicode.tag("pres"), .auto_zwj = false },
     .{ .tag = unicode.tag("psts"), .auto_zwj = false },
+};
+
+const typographic_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("abvm") },
     .{ .tag = unicode.tag("blwm") },
     .{ .tag = unicode.tag("rlig") },
@@ -135,6 +138,10 @@ pub fn topographicalFeatureApplications() []const gsub.FeatureApplication {
 
 pub fn finalFeatureApplications() []const gsub.FeatureApplication {
     return &final_applications;
+}
+
+pub fn typographicFeatureApplications() []const gsub.FeatureApplication {
+    return &typographic_applications;
 }
 
 test "USE category covers Duployan sample codepoints" {

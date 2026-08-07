@@ -95,6 +95,10 @@ Current local snapshot after the Nastaliq parity work:
 - Amiri `fa-thelittleprince`, Cangjie with `--no-bidi-reorder`: about
   `1863 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1263 ns/glyph` median.
+- HarfRust Criterion in-process reference for Amiri `fa-thelittleprince`:
+  about `48.2 ms` per full text for HarfRust and `54.9 ms` for HarfBuzz
+  through `harfbuzz_rs`; Cangjie remains multiple times slower on the same
+  workload, so the performance goal is not close to complete.
 
 Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 

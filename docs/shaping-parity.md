@@ -164,6 +164,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   count-changing GSUB step (`2 -> 4` glyphs); later `dist` lookups expand that
   intermediate stream to Cangjie's `160` glyphs. Use that lookup as the first
   focused gate for implementing USE per-syllable common-feature matching.
+  GSUB now has an opt-in source-syllable matching primitive and profile output
+  reports lookup-level before/after glyph hashes; this is not wired into USE
+  runtime shaping yet because broad feature-stage experiments regressed the
+  focused gate.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

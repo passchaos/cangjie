@@ -8,6 +8,8 @@ pub const ShapeStageProfile = struct {
         glyphs_before_sum: usize = 0,
         glyphs_after_sum: usize = 0,
         last_glyph_delta: isize = 0,
+        last_hash_before: u64 = 0,
+        last_hash_after: u64 = 0,
     };
 
     total_ns: i128 = 0,
@@ -49,8 +51,8 @@ pub const ShapeStageProfile = struct {
         self.recordLookupTime(&self.gsub_lookup_entries, &self.gsub_lookup_entry_count, lookup_index, elapsed_ns);
     }
 
-    pub fn recordGsubLookupGlyphs(self: *ShapeStageProfile, lookup_index: ?u16, before: usize, after: usize) void {
-        self.recordLookupGlyphs(&self.gsub_lookup_entries, self.gsub_lookup_entry_count, lookup_index, before, after);
+    pub fn recordGsubLookupGlyphs(self: *ShapeStageProfile, lookup_index: ?u16, before: usize, after: usize, hash_before: u64, hash_after: u64) void {
+        self.recordLookupGlyphs(&self.gsub_lookup_entries, self.gsub_lookup_entry_count, lookup_index, before, after, hash_before, hash_after);
     }
 
     pub fn recordGposLookupTime(self: *ShapeStageProfile, lookup_index: ?u16, elapsed_ns: i128) void {
@@ -75,7 +77,7 @@ pub const ShapeStageProfile = struct {
         entry_count.* += 1;
     }
 
-    fn recordLookupGlyphs(self: *ShapeStageProfile, entries: *[max_lookup_entries]LookupEntry, entry_count: usize, lookup_index: ?u16, before: usize, after: usize) void {
+    fn recordLookupGlyphs(self: *ShapeStageProfile, entries: *[max_lookup_entries]LookupEntry, entry_count: usize, lookup_index: ?u16, before: usize, after: usize, hash_before: u64, hash_after: u64) void {
         _ = self;
         const index = lookup_index orelse return;
         for (entries[0..entry_count]) |*entry| {
@@ -83,6 +85,8 @@ pub const ShapeStageProfile = struct {
             entry.glyphs_before_sum += before;
             entry.glyphs_after_sum += after;
             entry.last_glyph_delta = @as(isize, @intCast(after)) - @as(isize, @intCast(before));
+            entry.last_hash_before = hash_before;
+            entry.last_hash_after = hash_after;
             return;
         }
     }

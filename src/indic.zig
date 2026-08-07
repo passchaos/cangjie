@@ -211,7 +211,7 @@ fn halfBaseSource(codepoints: []const u21, syllable_start: usize, syllable_end: 
     while (index < syllable_end) : (index += 1) {
         const codepoint = codepoints[index];
         if (!isDevanagariConsonant(codepoint)) continue;
-        if (has_prebase_matra and index > syllable_start and codepoints[index - 1] == 0x094d and isPostBaseConsonant(codepoint)) {
+        if (has_prebase_matra and index > syllable_start and codepoints[index - 1] == 0x094d and isPostBaseRa(codepoint)) {
             return previousConsonantSource(codepoints, syllable_start, index - 1) orelse base;
         }
         base = index;
@@ -235,8 +235,8 @@ fn previousConsonantSource(codepoints: []const u21, syllable_start: usize, befor
     return null;
 }
 
-fn isPostBaseConsonant(codepoint: u21) bool {
-    return codepoint == 0x0930 or codepoint == 0x0935;
+fn isPostBaseRa(codepoint: u21) bool {
+    return codepoint == 0x0930;
 }
 
 fn halfViramaIndex(codepoints: []const u21, consonant_index: usize, syllable_end: usize) ?usize {

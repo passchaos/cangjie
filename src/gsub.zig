@@ -101,6 +101,7 @@ pub const LookupAccelerator = struct {
     chaining_groups: []const ChainingSubtableGroup = &.{},
     reverse_chaining_subtables: []const ReverseChainingSingleSubtable = &.{},
     reverse_chaining_groups: []const ChainingSubtableGroup = &.{},
+    reverse_chaining_exact_contexts: []const ReverseChainingContextEntry = &.{},
 };
 
 const SingleSubstAccelerator = struct {
@@ -137,6 +138,19 @@ const ReverseChainingSingleSubtable = struct {
     lookahead_count: u16 = 0,
     glyph_count: u16 = 0,
     substitutes_pos: usize = 0,
+};
+
+const ReverseChainingContextKey = struct {
+    target: GlyphId,
+    backtrack: GlyphId,
+    lookahead_0: GlyphId,
+    lookahead_1: GlyphId,
+};
+
+const ReverseChainingContextEntry = struct {
+    key: ReverseChainingContextKey,
+    subtable_index: u16,
+    substitute: GlyphId,
 };
 
 const empty_class_def_offset = std.math.maxInt(usize);
@@ -745,6 +759,7 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
         }
         allocator.free(accelerator.chaining_groups);
         allocator.free(accelerator.reverse_chaining_subtables);
+        allocator.free(accelerator.reverse_chaining_exact_contexts);
         for (accelerator.reverse_chaining_groups) |group| {
             allocator.free(group.subtable_indices);
         }
@@ -769,6 +784,8 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                 @memset(reverse_subtables, .{});
                 var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
                 errdefer group_pairs.deinit(allocator);
+                var exact_contexts = std.ArrayList(ReverseChainingContextEntry).empty;
+                errdefer exact_contexts.deinit(allocator);
                 var saw_coverage = false;
                 for (0..subtable_count) |subtable_i| {
                     const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
@@ -776,17 +793,29 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                     const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
                     reverse_subtables[subtable_i] = parsed;
                     try appendChainingSubtablePairs(table, parsed.coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
+                    try appendReverseChainingExactContext(table, parsed, @intCast(subtable_i), &exact_contexts, allocator);
                     saw_coverage = true;
                 }
                 if (!saw_coverage or group_pairs.items.len == 0) {
                     group_pairs.deinit(allocator);
+                    exact_contexts.deinit(allocator);
                     allocator.free(reverse_subtables);
                     return accelerator;
                 }
                 const reverse_groups = try buildChainingSubtableGroups(group_pairs.items, allocator);
                 group_pairs.deinit(allocator);
+                errdefer {
+                    for (reverse_groups) |group| allocator.free(group.subtable_indices);
+                    allocator.free(reverse_groups);
+                }
+                const exact_contexts_slice = if (exact_contexts.items.len == subtable_count)
+                    try buildReverseChainingExactContexts(exact_contexts.items, allocator)
+                else
+                    try allocator.alloc(ReverseChainingContextEntry, 0);
+                exact_contexts.deinit(allocator);
                 accelerator.reverse_chaining_subtables = reverse_subtables;
                 accelerator.reverse_chaining_groups = reverse_groups;
+                accelerator.reverse_chaining_exact_contexts = exact_contexts_slice;
                 return accelerator;
             }
         }
@@ -897,6 +926,77 @@ fn fillSingleMapping(table: Table, coverage_offset: usize, delta: i16, substitut
         try readU16(table, pos)
     else
         @bitCast(@as(i16, @bitCast(glyph)) +% delta);
+}
+
+fn appendReverseChainingExactContext(table: Table, subtable: ReverseChainingSingleSubtable, subtable_index: u16, contexts: *std.ArrayList(ReverseChainingContextEntry), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
+    // Gulzar's large hamza-positioning reverse-chain lookup is made of
+    // singleton target/backtrack/lookahead coverages. Encode those subtables as
+    // exact context keys so shaping can jump directly to the one candidate for
+    // most positions. If any subtable in the lookup is not this restricted
+    // shape, the builder leaves the exact table empty and shaping falls back to
+    // the generic coverage-group path.
+    if (subtable.backtrack_count != 1 or subtable.lookahead_count != 2 or subtable.glyph_count != 1) return;
+    const target = try singletonCoverageGlyph(table, subtable.coverage_offset) orelse return;
+    const backtrack_coverage = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.backtrack_offsets_pos));
+    const backtrack = try singletonCoverageGlyph(table, backtrack_coverage) orelse return;
+    const lookahead_0_coverage = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.lookahead_offsets_pos));
+    const lookahead_0 = try singletonCoverageGlyph(table, lookahead_0_coverage) orelse return;
+    const lookahead_1_coverage = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.lookahead_offsets_pos + 2));
+    const lookahead_1 = try singletonCoverageGlyph(table, lookahead_1_coverage) orelse return;
+    try contexts.append(allocator, .{
+        .key = .{
+            .target = target,
+            .backtrack = backtrack,
+            .lookahead_0 = lookahead_0,
+            .lookahead_1 = lookahead_1,
+        },
+        .subtable_index = subtable_index,
+        .substitute = try readU16(table, subtable.substitutes_pos),
+    });
+}
+
+fn buildReverseChainingExactContexts(contexts: []ReverseChainingContextEntry, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ReverseChainingContextEntry {
+    if (contexts.len == 0) return try allocator.alloc(ReverseChainingContextEntry, 0);
+    std.sort.heap(ReverseChainingContextEntry, contexts, {}, reverseChainingContextLessThan);
+    return try allocator.dupe(ReverseChainingContextEntry, contexts);
+}
+
+fn singletonCoverageGlyph(table: Table, coverage_offset: usize) GsubError!?GlyphId {
+    const format = try readU16(table, coverage_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16(table, coverage_offset + 2);
+            if (glyph_count != 1) return null;
+            return try readU16(table, coverage_offset + 4);
+        },
+        2 => {
+            const range_count = try readU16(table, coverage_offset + 2);
+            if (range_count != 1) return null;
+            const start = try readU16(table, coverage_offset + 4);
+            const end = try readU16(table, coverage_offset + 6);
+            if (start != end) return null;
+            return start;
+        },
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn reverseChainingContextLessThan(_: void, lhs: ReverseChainingContextEntry, rhs: ReverseChainingContextEntry) bool {
+    return reverseChainingContextKeyLessThan(lhs.key, rhs.key) or (reverseChainingContextKeysEqual(lhs.key, rhs.key) and lhs.subtable_index < rhs.subtable_index);
+}
+
+fn reverseChainingContextKeyLessThan(lhs: ReverseChainingContextKey, rhs: ReverseChainingContextKey) bool {
+    if (lhs.target != rhs.target) return lhs.target < rhs.target;
+    if (lhs.backtrack != rhs.backtrack) return lhs.backtrack < rhs.backtrack;
+    if (lhs.lookahead_0 != rhs.lookahead_0) return lhs.lookahead_0 < rhs.lookahead_0;
+    return lhs.lookahead_1 < rhs.lookahead_1;
+}
+
+fn reverseChainingContextKeysEqual(lhs: ReverseChainingContextKey, rhs: ReverseChainingContextKey) bool {
+    return lhs.target == rhs.target and
+        lhs.backtrack == rhs.backtrack and
+        lhs.lookahead_0 == rhs.lookahead_0 and
+        lhs.lookahead_1 == rhs.lookahead_1;
 }
 
 /// Validate GSUB glyph references that are meaningful at font-load time.
@@ -2466,6 +2566,13 @@ fn applyExtensionReverseChainingSingleSubstitutionLookup(table: Table, lookup_of
             const glyph = glyphs.items[pos];
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+            if (accel.reverse_chaining_exact_contexts.len != 0) {
+                const key = reverseChainingContextKeyForPosition(glyphs.items, pos, glyph, lookup_flag, options) orelse continue;
+                const entry = reverseChainingExactContextForKey(accel.reverse_chaining_exact_contexts, key) orelse continue;
+                glyphs.items[pos] = entry.substitute;
+                markGlyphSubstituted(options, pos);
+                continue;
+            }
             const grouped_subtables = chainingSubtableGroupForGlyph(accel.reverse_chaining_groups, glyph) orelse continue;
             for (grouped_subtables) |subtable_i| {
                 if (subtable_i >= accel.reverse_chaining_subtables.len) return error.BadGsub;
@@ -3978,6 +4085,55 @@ fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, 
 fn applyReverseChainingSingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
     const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
     return try applyParsedReverseChainingSingleSubstitutionAt(table, parsed, glyphs, pos, lookup_flag, options);
+}
+
+fn reverseChainingContextKeyForPosition(glyphs: []const GlyphId, pos: usize, target: GlyphId, lookup_flag: u16, options: LookupOptions) ?ReverseChainingContextKey {
+    const backtrack = previousUnignoredGlyph(glyphs, pos, lookup_flag, options, true, pos) orelse return null;
+    var lookahead: [2]GlyphId = undefined;
+    var lookahead_i: usize = 0;
+    var glyph_i = pos + 1;
+    const anchor_syllable = sourceSyllableForGlyph(options, pos);
+    while (glyph_i < glyphs.len and lookahead_i < lookahead.len) : (glyph_i += 1) {
+        if (contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, true)) continue;
+        if (!sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) return null;
+        lookahead[lookahead_i] = glyphs[glyph_i];
+        lookahead_i += 1;
+    }
+    if (lookahead_i != lookahead.len) return null;
+    return .{
+        .target = target,
+        .backtrack = backtrack,
+        .lookahead_0 = lookahead[0],
+        .lookahead_1 = lookahead[1],
+    };
+}
+
+fn previousUnignoredGlyph(glyphs: []const GlyphId, pos: usize, lookup_flag: u16, options: LookupOptions, context_match: bool, anchor_index: usize) ?GlyphId {
+    var glyph_i = pos;
+    const anchor_syllable = sourceSyllableForGlyph(options, anchor_index);
+    while (glyph_i > 0) {
+        glyph_i -= 1;
+        if (contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
+        if (!sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) return null;
+        return glyphs[glyph_i];
+    }
+    return null;
+}
+
+fn reverseChainingExactContextForKey(entries: []const ReverseChainingContextEntry, key: ReverseChainingContextKey) ?ReverseChainingContextEntry {
+    var lo: usize = 0;
+    var hi: usize = entries.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = entries[mid].key;
+        if (!reverseChainingContextKeyLessThan(candidate, key)) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    if (lo < entries.len and reverseChainingContextKeysEqual(entries[lo].key, key)) return entries[lo];
+    return null;
 }
 
 fn parseReverseChainingSingleSubtable(table: Table, subtable_offset: usize) GsubError!ReverseChainingSingleSubtable {
@@ -7119,6 +7275,81 @@ test "GSUB accelerates extension reverse chaining without changing subtable orde
     try second.appendSlice(allocator, &.{ 2, 4 });
     try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &second, 0, .{}, &accelerator);
     try std.testing.expectEqualSlices(GlyphId, &.{ 10, 4 }, second.items);
+}
+
+test "GSUB exact extension reverse chaining context accelerator" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 110;
+
+    writeU16Test(&bytes, 0, 7); // ExtensionSubst lookup.
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10); // Wrapper 0.
+    writeU16Test(&bytes, 8, 60); // Wrapper 1.
+
+    const first_wrapper = 10;
+    writeU16Test(&bytes, first_wrapper + 0, 1);
+    writeU16Test(&bytes, first_wrapper + 2, 8); // ReverseChainSingleSubst.
+    writeU32Test(&bytes, first_wrapper + 4, 8);
+    const first_reverse = first_wrapper + 8;
+    writeU16Test(&bytes, first_reverse + 0, 1);
+    writeU16Test(&bytes, first_reverse + 2, 18); // Target coverage.
+    writeU16Test(&bytes, first_reverse + 4, 1); // BacktrackGlyphCount.
+    writeU16Test(&bytes, first_reverse + 6, 24);
+    writeU16Test(&bytes, first_reverse + 8, 2); // LookaheadGlyphCount.
+    writeU16Test(&bytes, first_reverse + 10, 30);
+    writeU16Test(&bytes, first_reverse + 12, 36);
+    writeU16Test(&bytes, first_reverse + 14, 1); // GlyphCount.
+    writeU16Test(&bytes, first_reverse + 16, 9);
+    writeCoverage1(&bytes, first_reverse + 18, 2);
+    writeCoverage1(&bytes, first_reverse + 24, 1);
+    writeCoverage1(&bytes, first_reverse + 30, 3);
+    writeCoverage1(&bytes, first_reverse + 36, 4);
+
+    const second_wrapper = 60;
+    writeU16Test(&bytes, second_wrapper + 0, 1);
+    writeU16Test(&bytes, second_wrapper + 2, 8);
+    writeU32Test(&bytes, second_wrapper + 4, 8);
+    const second_reverse = second_wrapper + 8;
+    writeU16Test(&bytes, second_reverse + 0, 1);
+    writeU16Test(&bytes, second_reverse + 2, 18);
+    writeU16Test(&bytes, second_reverse + 4, 1);
+    writeU16Test(&bytes, second_reverse + 6, 24);
+    writeU16Test(&bytes, second_reverse + 8, 2);
+    writeU16Test(&bytes, second_reverse + 10, 30);
+    writeU16Test(&bytes, second_reverse + 12, 36);
+    writeU16Test(&bytes, second_reverse + 14, 1);
+    writeU16Test(&bytes, second_reverse + 16, 10);
+    writeCoverage1(&bytes, second_reverse + 18, 2);
+    writeCoverage1(&bytes, second_reverse + 24, 1);
+    writeCoverage1(&bytes, second_reverse + 30, 3);
+    writeCoverage1(&bytes, second_reverse + 36, 5);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
+    const accelerator = try buildLookupAccelerator(table, 0, allocator);
+    defer {
+        var accelerators = [_]LookupAccelerator{accelerator};
+        deinitLookupAcceleratorContents(allocator, accelerators[0..]);
+    }
+    try std.testing.expectEqual(@as(usize, 2), accelerator.reverse_chaining_exact_contexts.len);
+
+    var first = std.ArrayList(GlyphId).empty;
+    defer first.deinit(allocator);
+    try first.appendSlice(allocator, &.{ 1, 2, 3, 4 });
+    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &first, 0, .{}, &accelerator);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 9, 3, 4 }, first.items);
+
+    var second = std.ArrayList(GlyphId).empty;
+    defer second.deinit(allocator);
+    try second.appendSlice(allocator, &.{ 1, 2, 3, 5 });
+    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &second, 0, .{}, &accelerator);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 10, 3, 5 }, second.items);
+
+    var miss = std.ArrayList(GlyphId).empty;
+    defer miss.deinit(allocator);
+    try miss.appendSlice(allocator, &.{ 1, 2, 3, 6 });
+    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &miss, 0, .{}, &accelerator);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 3, 6 }, miss.items);
 }
 
 test "GSUB source syllable matching blocks reverse chaining backtrack" {

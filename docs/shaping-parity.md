@@ -120,6 +120,7 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - Amiri `"تثبیت"` passes default `compare-harfrust`; it also passes with
   `--language ara`.
 - Amiri `fa-words.txt` passes default `compare-harfrust` for 10,000 lines.
+- Roboto `en-2letters.txt` passes `compare-harfrust` for 12,391 lines.
 - Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
 - Roboto `en-thelittleprince.txt` passes `compare-harfrust` for 1,172 lines.
 - SourceSerifVariable `en-words.txt` passes `compare-harfrust` for 12,391

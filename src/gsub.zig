@@ -93,6 +93,7 @@ pub const LookupOptions = struct {
 };
 
 pub const LookupAccelerator = struct {
+    extension_lookup_type: ?u16 = null,
     single_subst: SingleSubstAccelerator = .{},
     chaining_coverage_only: bool = false,
     chaining_input_digest: GlyphDigest = .{},
@@ -777,7 +778,8 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         accelerator.single_subst = try buildSingleSubstAccelerator(table, subtable_offset);
     }
     if (lookup_type == 7) {
-        if (try extensionLookupType(table, lookup_offset, subtable_count)) |wrapped_type| {
+        accelerator.extension_lookup_type = try extensionLookupType(table, lookup_offset, subtable_count);
+        if (accelerator.extension_lookup_type) |wrapped_type| {
             if (wrapped_type == 8) {
                 const reverse_subtables = try allocator.alloc(ReverseChainingSingleSubtable, subtable_count);
                 errdefer allocator.free(reverse_subtables);
@@ -861,6 +863,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     }
     return .{
         .single_subst = accelerator.single_subst,
+        .extension_lookup_type = accelerator.extension_lookup_type,
         .chaining_coverage_only = true,
         .chaining_input_digest = digest,
         .chaining_subtable_digests = subtable_digests,
@@ -1287,7 +1290,11 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
         // before choosing the optimized homogeneous path below so the lookup
         // remains all-or-nothing for truncated variable arrays.
         if (!table.assume_validated) try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
-        switch (try extensionLookupType(table, lookup_offset, subtable_count) orelse 0) {
+        const wrapped_type = if (extensionLookupTypeAccelerator(lookup_index, lookup_options)) |accelerator|
+            accelerator.extension_lookup_type orelse 0
+        else
+            try extensionLookupType(table, lookup_offset, subtable_count) orelse 0;
+        switch (wrapped_type) {
             1 => {
                 try applyExtensionSingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
                 return;
@@ -1384,6 +1391,15 @@ fn reverseChainingLookupAccelerator(lookup_index: ?u16, options: LookupOptions) 
     if (index >= accelerators.len) return null;
     const accelerator = &accelerators[index];
     if (accelerator.reverse_chaining_subtables.len == 0 or accelerator.reverse_chaining_groups.len == 0) return null;
+    return accelerator;
+}
+
+fn extensionLookupTypeAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
+    const accelerators = options.lookup_accelerators orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const accelerator = &accelerators[index];
+    if (accelerator.extension_lookup_type == null) return null;
     return accelerator;
 }
 

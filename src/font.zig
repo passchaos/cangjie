@@ -12139,6 +12139,7 @@ test "glyph outline API revalidates borrowed loca and glyf bytes" {
 
         const loca_offset: usize = @intCast(try sfntTableOffset(bytes, "loca"));
         writeU16Test(bytes, loca_offset, 7); // Makes glyph 0's loca entry decrease before glyph 1.
+        try std.testing.expectError(error.BadSfnt, font.glyphBounds(1));
         try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
     }
 
@@ -12153,6 +12154,7 @@ test "glyph outline API revalidates borrowed loca and glyf bytes" {
         // parsing must still be rejected before returning any glyph outline,
         // because the Font object no longer owns an immutable glyf snapshot.
         writeI16Test(bytes, glyf_offset, 1);
+        try std.testing.expectError(error.BadSfnt, font.glyphBounds(1));
         try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
     }
 }
@@ -12175,6 +12177,7 @@ test "glyph outline API revalidates borrowed glyf checksum" {
     // box after parse. Lazy outline loading must reject the glyf table because
     // it no longer matches the SFNT checksum that Font.parse accepted.
     writeI16Test(bytes, glyph_one + 6, 600);
+    try std.testing.expectError(error.BadSfnt, font.glyphBounds(1));
     try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
 }
 

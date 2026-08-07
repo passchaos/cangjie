@@ -130,8 +130,11 @@ const basic_feature_applications_with_reph = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("cjct") },
 };
 
-const final_feature_applications = [_]gsub.FeatureApplication{
+const pre_reph_feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("pres") },
+};
+
+const final_feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("abvs") },
     .{ .tag = unicode.tag("blws") },
     .{ .tag = unicode.tag("psts") },
@@ -146,6 +149,10 @@ pub fn basicFeatureApplications(has_initial_reph: bool) []const gsub.FeatureAppl
         &basic_feature_applications_with_reph
     else
         &basic_feature_applications_without_reph;
+}
+
+pub fn preRephFeatureApplications() []const gsub.FeatureApplication {
+    return &pre_reph_feature_applications;
 }
 
 pub fn finalFeatureApplications() []const gsub.FeatureApplication {

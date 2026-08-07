@@ -2677,6 +2677,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
+            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderRephs(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
         }

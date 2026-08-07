@@ -101,9 +101,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - NotoSansDevanagari parses and focused words `के`, `कि`, `की`, `का`,
   `श्रेणी`, `वार्ता`, `वर्षों`, `उत्तराखण्ड`, `हिन्दी`, `द्वारा`, `रूप`,
   `फ़िल्म`, `क्षेत्र`, `स्थित`, `एक्स्प्रेस`, `सन्`, `व्यक्ति`, `ा`,
-  `अंग्रेज़ी`, `सिद्धांत`, `पुनः`, `ज़्यादा`, `सन्‌`, `ि`, and `अवार्ड्स`
-  pass `compare-harfrust`. The broader `hi-words.txt` corpus now reaches line
-  1128 and is blocked at `वर्ल्ड`, a conjunct plus final reph interaction.
+  `अंग्रेज़ी`, `सिद्धांत`, `पुनः`, `ज़्यादा`, `सन्‌`, `ि`, `अवार्ड्स`, and
+  `वर्ल्ड` pass `compare-harfrust`. The broader `hi-words.txt` corpus now
+  reaches line 2016 and is blocked at `चार्ल्स`, another final reph ordering
+  case.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -122,7 +123,7 @@ goal is active, not complete.
   override and broader font/script matrices still need expansion.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
-  stages; `hi-words.txt` is still blocked at `वर्ल्ड`.
+  stages; `hi-words.txt` is still blocked at `चार्ल्स`.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups and GPOS lookups `37`, `57`, and `74`.
 - Avoid retaining optimizations that only improve a single noisy run or regress

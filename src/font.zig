@@ -36,6 +36,18 @@ pub const FontTableInfo = struct {
     length: usize,
 };
 
+pub const CharmapInfo = struct {
+    platform_id: u16,
+    encoding_id: u16,
+    format: u16,
+    offset: usize,
+    length: usize,
+    /// Format 0/2/4/6 use a 16-bit language field; formats 8/10/12/13 use
+    /// a 32-bit field. Format 14 and any future language-less formats report
+    /// null rather than inventing a platform-specific value.
+    language: ?u32 = null,
+};
+
 pub const NameId = name_mod.NameId;
 pub const NameEncoding = name_mod.Encoding;
 pub const NameLanguageTagInfo = name_mod.LanguageTagInfo;
@@ -649,6 +661,29 @@ pub const Font = struct {
         return self.data[record.offset .. record.offset + record.length];
     }
 
+    /// Enumerate parsed cmap encoding records, similar to FreeType charmaps.
+    ///
+    /// The array is caller-owned. Each entry describes a validated cmap subtable
+    /// using absolute offsets into the borrowed font bytes, matching `tables()`
+    /// and `tableData()` rather than table-relative child offsets.
+    pub fn charmaps(self: *const Font, allocator: std.mem.Allocator) FontError![]CharmapInfo {
+        for (self.cmap_subtables) |subtable| try self.validateCmapLookupSubtable(subtable);
+
+        const infos = try allocator.alloc(CharmapInfo, self.cmap_subtables.len);
+        errdefer allocator.free(infos);
+        for (infos, self.cmap_subtables) |*info, subtable| {
+            info.* = try self.charmapInfoForSubtable(subtable);
+        }
+        return infos;
+    }
+
+    /// Return the cmap Cangjie will use for `glyphIndex`, after lazy validation.
+    pub fn defaultCharmap(self: *const Font) FontError!?CharmapInfo {
+        const subtable = self.selectedCmapSubtable() orelse return null;
+        try self.validateCmapLookupSubtable(subtable);
+        return try self.charmapInfoForSubtable(subtable);
+    }
+
     /// Map a Unicode scalar value to a glyph id using the best supported cmap.
     ///
     /// Format 12 is preferred for precise full-Unicode coverage, which matters
@@ -659,12 +694,7 @@ pub const Font = struct {
     /// still materially better than reporting UnsupportedCmap.
     pub fn glyphIndex(self: *const Font, codepoint: u21) FontError!glyph_mod.GlyphId {
         try validatePublicUnicodeScalar(codepoint);
-        var best: ?CmapSubtable = null;
-        for (self.cmap_subtables) |subtable| {
-            if (subtable.format != 0 and subtable.format != 2 and subtable.format != 4 and subtable.format != 6 and subtable.format != 8 and subtable.format != 10 and subtable.format != 12 and subtable.format != 13) continue;
-            if (best == null or scoreCmap(subtable) > scoreCmap(best.?)) best = subtable;
-        }
-        const chosen = best orelse return error.UnsupportedCmap;
+        const chosen = self.selectedCmapSubtable() orelse return error.UnsupportedCmap;
         try self.validateCmapLookupSubtable(chosen);
         return switch (chosen.format) {
             0 => try glyphIndexFormat0(self.data, chosen.offset, codepoint),
@@ -676,6 +706,26 @@ pub const Font = struct {
             12 => try glyphIndexFormat12(self.data, chosen.offset, chosen.length, codepoint),
             13 => try glyphIndexFormat13(self.data, chosen.offset, chosen.length, codepoint),
             else => error.UnsupportedCmap,
+        };
+    }
+
+    fn selectedCmapSubtable(self: *const Font) ?CmapSubtable {
+        var best: ?CmapSubtable = null;
+        for (self.cmap_subtables) |subtable| {
+            if (!cmapSubtableSupportsGlyphLookup(subtable.format)) continue;
+            if (best == null or scoreCmap(subtable) > scoreCmap(best.?)) best = subtable;
+        }
+        return best;
+    }
+
+    fn charmapInfoForSubtable(self: *const Font, subtable: CmapSubtable) FontError!CharmapInfo {
+        return .{
+            .platform_id = subtable.platform_id,
+            .encoding_id = subtable.encoding_id,
+            .format = subtable.format,
+            .offset = subtable.offset,
+            .length = subtable.length,
+            .language = try readCmapLanguage(self.data, subtable.offset, subtable.length, subtable.format),
         };
     }
 
@@ -5676,6 +5726,27 @@ fn coverageGlyphs(allocator: std.mem.Allocator, data: []const u8, offset: usize)
 fn freeMarkFilteringSets(allocator: std.mem.Allocator, sets: [][]glyph_mod.GlyphId) void {
     for (sets) |set| allocator.free(set);
     allocator.free(sets);
+}
+
+fn cmapSubtableSupportsGlyphLookup(format: u16) bool {
+    return switch (format) {
+        0, 2, 4, 6, 8, 10, 12, 13 => true,
+        else => false,
+    };
+}
+
+fn readCmapLanguage(data: []const u8, offset: usize, length: usize, format: u16) FontError!?u32 {
+    return switch (format) {
+        0, 2, 4, 6 => blk: {
+            if (length < 6) return error.BadSfnt;
+            break :blk @as(u32, try bin.readU16At(data, offset + 4));
+        },
+        8, 10, 12, 13 => blk: {
+            if (length < 12) return error.BadSfnt;
+            break :blk try bin.readU32At(data, offset + 8);
+        },
+        else => null,
+    };
 }
 
 fn scoreCmap(subtable: CmapSubtable) u8 {

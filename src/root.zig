@@ -82,6 +82,7 @@ pub const serializeManifest = @import("database.zig").serializeManifest;
 pub const userFontSourcesForOs = @import("database.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
+pub const CharmapInfo = @import("font.zig").CharmapInfo;
 pub const FontDecorationMetrics = @import("font.zig").FontDecorationMetrics;
 pub const FontDecorationMetricSource = @import("font.zig").FontDecorationMetricSource;
 pub const FontScriptMetrics = @import("font.zig").FontScriptMetrics;
@@ -274,6 +275,17 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expectEqual(hhea_record.length, hhea_data.len);
     try std.testing.expectEqualSlices(u8, bytes[hhea_record.offset .. hhea_record.offset + hhea_record.length], hhea_data);
     try std.testing.expect((try font.tableData(.{ 'N', 'O', 'P', 'E' })) == null);
+
+    const charmaps = try font.charmaps(allocator);
+    defer allocator.free(charmaps);
+    try std.testing.expectEqual(@as(usize, 1), charmaps.len);
+    try std.testing.expectEqual(@as(u16, 3), charmaps[0].platform_id);
+    try std.testing.expectEqual(@as(u16, 1), charmaps[0].encoding_id);
+    try std.testing.expectEqual(@as(u16, 4), charmaps[0].format);
+    try std.testing.expectEqual(@as(?u32, 0), charmaps[0].language);
+
+    const default_charmap = (try font.defaultCharmap()).?;
+    try std.testing.expectEqual(charmaps[0], default_charmap);
 
     var outline = try font.glyphOutline(allocator, 1);
     defer outline.deinit();
@@ -477,6 +489,57 @@ test "maps cmap format 14 variation selector records" {
     try std.testing.expectEqual(@as(GlyphId, 2), try font.glyphIndexWithVariation('B', 0xfe0f));
     try std.testing.expectEqual(@as(?GlyphId, null), try font.variationGlyphIndex('A', 0xfe0e));
     try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndexWithVariation('A', 0xfe0e));
+}
+
+test "enumerates cmap charmaps including variation selector subtables" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const charmaps = try font.charmaps(allocator);
+    defer allocator.free(charmaps);
+    try std.testing.expectEqual(@as(usize, 2), charmaps.len);
+
+    try std.testing.expectEqual(@as(u16, 0), charmaps[0].platform_id);
+    try std.testing.expectEqual(@as(u16, 3), charmaps[0].encoding_id);
+    try std.testing.expectEqual(@as(u16, 6), charmaps[0].format);
+    try std.testing.expectEqual(@as(?u32, 0), charmaps[0].language);
+
+    try std.testing.expectEqual(@as(u16, 0), charmaps[1].platform_id);
+    try std.testing.expectEqual(@as(u16, 5), charmaps[1].encoding_id);
+    try std.testing.expectEqual(@as(u16, 14), charmaps[1].format);
+    try std.testing.expectEqual(@as(?u32, null), charmaps[1].language);
+
+    const default_charmap = (try font.defaultCharmap()).?;
+    try std.testing.expectEqual(charmaps[0], default_charmap);
+}
+
+test "lazy charmap enumeration revalidates borrowed cmap bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const default_charmap = (try font.defaultCharmap()).?;
+    try std.testing.expectEqual(@as(u16, 4), default_charmap.format);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var cmap_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "cmap")) cmap_offset = table.offset;
+    }
+    bytes[cmap_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.defaultCharmap());
+    try std.testing.expectError(error.BadSfnt, font.charmaps(allocator));
 }
 
 test "shapes cmap format 14 variation selectors as base glyph variants" {

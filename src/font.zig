@@ -10437,12 +10437,16 @@ test "sbix public bitmap APIs revalidate borrowed strike offsets" {
 
     const font = sbixOnlyFont(&bytes);
     try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
+    const strikes = try font.bitmapStrikes(std.testing.allocator);
+    defer std.testing.allocator.free(strikes);
+    try std.testing.expectEqual(@as(usize, 1), strikes.len);
     try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try font.bitmapGlyphPng(0, 16));
 
     // Mutate an unrequested glyph boundary after constructing the borrowed
     // Font. Both public APIs must reject the whole sbix strike rather than
     // returning metadata or glyph 0 results from a now-corrupt table.
     writeU32Test(&bytes, 24, 12);
+    try std.testing.expectError(error.BadSfnt, font.bitmapStrikes(std.testing.allocator));
     try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
     try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(0, 16));
 }
@@ -10731,11 +10735,15 @@ test "CBLC public bitmap APIs revalidate borrowed CBDT payloads" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
+    const strikes = try font.bitmapStrikes(allocator);
+    defer allocator.free(strikes);
+    try std.testing.expectEqual(@as(usize, 1), strikes.len);
     try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
     try std.testing.expect((try font.bitmapGlyphPng(1, 16)) != null);
 
     const cbdt_offset = try sfntTableOffset(bytes, "CBDT");
     writeU32Test(bytes, cbdt_offset + 9, 0xffff_ffff);
+    try std.testing.expectError(error.BadSfnt, font.bitmapStrikes(allocator));
     try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
     try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(1, 16));
 }

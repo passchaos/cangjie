@@ -73,8 +73,14 @@ const FeatureSelection = struct {
 };
 
 pub const LookupOptions = struct {
+    pub const Direction = enum {
+        ltr,
+        rtl,
+    };
+
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
+    direction: Direction = .ltr,
     features: []const unicode.FeatureOverride = &.{},
     apply_all_if_unselected: bool = true,
     glyph_classes: ?[]const u16 = null,
@@ -1019,7 +1025,7 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
         const mark_sets = options.mark_filtering_sets orelse return class == 3;
         if (mark_filtering_set_index >= mark_sets.len) return class == 3;
         const in_selected_set = glyphInMarkFilteringSet(mark_sets[mark_filtering_set_index], glyph);
-        const is_mark = class == 3 or glyphInAnyMarkFilteringSet(mark_sets, glyph);
+        const is_mark = class == 3;
         if (is_mark and !in_selected_set) return true;
     }
 
@@ -1296,6 +1302,8 @@ const AdjustmentFlags = struct {
     pair_positioned: bool = false,
     attachment_type: AttachmentType = .none,
     attachment_parent_index: ?usize = null,
+    x_placement_absolute: bool = false,
+    y_placement_absolute: bool = false,
     x_advance_absolute: bool = false,
     y_advance_absolute: bool = false,
 };
@@ -1323,11 +1331,14 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         } else {
             existing.x_advance += value.x_advance;
         }
-        if (flags.attachment_type == .mark) {
+        if (flags.attachment_type == .mark or flags.x_placement_absolute) {
             existing.x_placement = value.x_placement;
-            existing.y_placement = value.y_placement;
         } else {
             existing.x_placement += value.x_placement;
+        }
+        if (flags.attachment_type == .mark or flags.y_placement_absolute) {
+            existing.y_placement = value.y_placement;
+        } else {
             existing.y_placement += value.y_placement;
         }
         if (flags.y_advance_absolute) {
@@ -1382,6 +1393,25 @@ test "GPOS absolute advance adjustments replace previous advance" {
     try std.testing.expect(adjustments.items[0].x_advance_absolute);
 }
 
+test "GPOS cursive positioning uses previous placement for overlapping joins" {
+    const allocator = std.testing.allocator;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try appendCursiveAdjustments(&adjustments, allocator, 0, 1, .{ .x = 120, .y = 35 }, .{ .x = 120, .y = 185 }, 0, .ltr);
+    try appendCursiveAdjustments(&adjustments, allocator, 1, 2, .{ .x = 268, .y = 139 }, .{ .x = 0, .y = 0 }, 0, .ltr);
+
+    var found = false;
+    for (adjustments.items) |adjustment| {
+        if (adjustment.index != 1) continue;
+        found = true;
+        try std.testing.expectEqual(@as(i16, 148), adjustment.x_advance);
+        try std.testing.expectEqual(@as(i16, -120), adjustment.x_placement);
+        try std.testing.expect(adjustment.x_advance_absolute);
+    }
+    try std.testing.expect(found);
+}
+
 fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const parsed = try parseCursivePositionSubtable(table, subtable_offset);
     try collectCursiveAdjustmentParsed(table, parsed, glyphs, adjustments, allocator, lookup_flag, options);
@@ -1429,7 +1459,7 @@ fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable,
             if (entry_relative != 0 and exit_relative != 0) {
                 const entry = try readAnchor(table, parsed.subtable_offset + entry_relative);
                 const exit = try readAnchor(table, parsed.subtable_offset + exit_relative);
-                try appendCursiveAdjustments(adjustments, allocator, previous_position, i, exit, entry, lookup_flag);
+                try appendCursiveAdjustments(adjustments, allocator, previous_position, i, exit, entry, lookup_flag, options.direction);
             }
         }
         previous_covered_position = i;
@@ -1463,35 +1493,74 @@ fn collectCursiveAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []co
 
     const entry = try readAnchor(table, subtable_offset + entry_relative);
     const exit = try readAnchor(table, subtable_offset + exit_relative);
-    try appendCursiveAdjustments(adjustments, allocator, previous_position, target_index, exit, entry, lookup_flag);
+    try appendCursiveAdjustments(adjustments, allocator, previous_position, target_index, exit, entry, lookup_flag, options.direction);
     return true;
 }
 
-fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, previous_position: usize, current_position: usize, exit: Anchor, entry: Anchor, lookup_flag: u16) std.mem.Allocator.Error!void {
+fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, previous_position: usize, current_position: usize, exit: Anchor, entry: Anchor, lookup_flag: u16, direction: LookupOptions.Direction) std.mem.Allocator.Error!void {
+    const previous_placement = currentAdjustmentPlacement(adjustments.items, previous_position);
+    const current_placement = currentAdjustmentPlacement(adjustments.items, current_position);
     const right_to_left = (lookup_flag & 0x0001) != 0;
-    if (right_to_left) {
+    if (direction == .rtl) {
+        const previous_x_delta = -exit.x - previous_placement.x;
         try appendAdjustmentEx(adjustments, allocator, previous_position, .{
             .index = previous_position,
-            .x_advance = -exit.x,
+            .x_advance = previous_x_delta,
             .x_placement = -exit.x,
-            .y_placement = entry.y - exit.y,
-        }, .{ .attachment_type = .cursive, .attachment_parent_index = current_position });
+        }, .{
+            .attachment_type = if (right_to_left) .cursive else .none,
+            .attachment_parent_index = if (right_to_left) current_position else null,
+            .x_placement_absolute = true,
+        });
         try appendAdjustmentEx(adjustments, allocator, current_position, .{
             .index = current_position,
-            .x_advance = entry.x,
+            .x_advance = entry.x + current_placement.x,
         }, .{ .x_advance_absolute = true });
     } else {
         try appendAdjustmentEx(adjustments, allocator, previous_position, .{
             .index = previous_position,
-            .x_advance = exit.x,
+            .x_advance = exit.x + previous_placement.x,
         }, .{ .x_advance_absolute = true });
+        const current_x_delta = -entry.x - current_placement.x;
         try appendAdjustmentEx(adjustments, allocator, current_position, .{
             .index = current_position,
-            .x_advance = -entry.x,
+            .x_advance = current_x_delta,
             .x_placement = -entry.x,
-            .y_placement = exit.y - entry.y,
-        }, .{ .attachment_type = .cursive, .attachment_parent_index = previous_position });
+        }, .{
+            .attachment_type = if (right_to_left) .none else .cursive,
+            .attachment_parent_index = if (right_to_left) null else previous_position,
+            .x_placement_absolute = true,
+        });
     }
+
+    if (right_to_left) {
+        try appendAdjustmentEx(adjustments, allocator, previous_position, .{
+            .index = previous_position,
+            .y_placement = entry.y - exit.y,
+        }, .{ .attachment_type = .cursive, .attachment_parent_index = current_position, .y_placement_absolute = true });
+    } else {
+        try appendAdjustmentEx(adjustments, allocator, current_position, .{
+            .index = current_position,
+            .y_placement = exit.y - entry.y,
+        }, .{ .attachment_type = .cursive, .attachment_parent_index = previous_position, .y_placement_absolute = true });
+    }
+}
+
+const AdjustmentPlacement = struct {
+    x: i16 = 0,
+    y: i16 = 0,
+};
+
+fn currentAdjustmentPlacement(adjustments: []const Adjustment, index: usize) AdjustmentPlacement {
+    var i = adjustments.len;
+    while (i > 0) {
+        i -= 1;
+        if (adjustments[i].index == index) return .{
+            .x = adjustments[i].x_placement,
+            .y = adjustments[i].y_placement,
+        };
+    }
+    return .{};
 }
 
 fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, target_index: usize, entry_exit_count: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {

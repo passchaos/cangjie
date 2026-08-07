@@ -2759,6 +2759,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     var gpos_options = gpos.LookupOptions{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
+        .direction = if (shapingDirectionForGpos(lookup_options) == .rtl) .rtl else .ltr,
         .features = lookup_options.features,
         .apply_all_if_unselected = false,
         .run_has_gdef_marks = runHasGdefMarks(glyph_ids.items, gdef_metadata.*),

@@ -230,6 +230,8 @@ fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.Gr
                 if (syllable.initial_reph and byte_offset != syllable.byte_start) return syllable.byte_start;
                 return byte_offset;
             }
+        } else if (codepoint == 0x200c or codepoint == 0x200d) {
+            return byte_offset;
         }
     }
     return graphemeClusterStartForByte(graphemes, byte_offset);

@@ -50,13 +50,14 @@ pub fn insertDottedCirclesForBrokenClusters(
         const source_index = glyph_source_indices.items[glyph_index];
         if (source_index >= codepoints.len) continue;
         if (!startsBrokenCluster(codepoints, source_index)) continue;
+        const insert_index = if (isPreBaseMatra(codepoints[source_index])) glyph_index + 1 else glyph_index;
 
         try insertGlyphMetadata(
             allocator,
             glyph_ids,
             glyph_source_indices,
             ligature_components,
-            glyph_index,
+            insert_index,
             dotted_circle_glyph,
             source_index,
         );
@@ -178,13 +179,22 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
     var index = syllable_start;
     while (index + 1 < syllable_end) : (index += 1) {
         if (!isDevanagariConsonant(codepoints[index])) continue;
-        if (codepoints[index + 1] != 0x094d) continue;
-        if (!hasConsonant(codepoints[index + 2 .. syllable_end])) continue;
+        const virama_index = halfViramaIndex(codepoints, index, syllable_end) orelse continue;
+        if (!hasConsonant(codepoints[virama_index + 1 .. syllable_end])) continue;
 
         source_features[index] |= half_source_mask;
         marked = true;
     }
     return marked;
+}
+
+fn halfViramaIndex(codepoints: []const u21, consonant_index: usize, syllable_end: usize) ?usize {
+    if (consonant_index + 1 >= syllable_end) return null;
+    if (codepoints[consonant_index + 1] == 0x094d) return consonant_index + 1;
+    if (consonant_index + 2 < syllable_end and codepoints[consonant_index + 1] == 0x093c and codepoints[consonant_index + 2] == 0x094d) {
+        return consonant_index + 2;
+    }
+    return null;
 }
 
 fn devanagariSyllableEnd(codepoints: []const u21, start: usize) usize {

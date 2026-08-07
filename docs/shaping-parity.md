@@ -102,9 +102,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `श्रेणी`, `वार्ता`, `वर्षों`, `उत्तराखण्ड`, `हिन्दी`, `द्वारा`, `रूप`,
   `फ़िल्म`, `क्षेत्र`, `स्थित`, `एक्स्प्रेस`, `सन्`, `व्यक्ति`, `ा`,
   `अंग्रेज़ी`, `सिद्धांत`, `पुनः`, `ज़्यादा`, `सन्‌`, `ि`, `अवार्ड्स`,
-  `वर्ल्ड`, `चार्ल्स`, `्य`, and `स्‍थान` pass `compare-harfrust`. The broader
-  `hi-words.txt` corpus now reaches line 6819 and is blocked at `ट्विटर`, an
-  explicit-joiner pre-base matra case.
+  `वर्ल्ड`, `चार्ल्स`, `्य`, `स्‍थान`, `ब्रिटिश`, `स्वागत`, `द्वितीय`, and
+  `ट्विटर` pass `compare-harfrust`. The broader `hi-words.txt` corpus now
+  reaches line 1658 and is blocked at `वैश्विक`, a `श्वि` conjunct/pre-base
+  matra case.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -123,7 +124,7 @@ goal is active, not complete.
   override and broader font/script matrices still need expansion.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
-  stages; `hi-words.txt` is still blocked at `ट्विटर`.
+  stages; `hi-words.txt` is still blocked at `वैश्विक`.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups and GPOS lookups `37`, `57`, and `74`.
 - Avoid retaining optimizations that only improve a single noisy run or regress

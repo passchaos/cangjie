@@ -202,8 +202,11 @@ fn glyphClusters(allocator: std.mem.Allocator, text: []const u8, glyphs: []const
     defer allocator.free(indic_syllables);
     var previous_cluster: ?usize = null;
     var previous_raw_cluster: ?usize = null;
-    for (glyphs, clusters) |glyph, *cluster| {
-        const normalized = normalizedClusterStartForByte(text, graphemes, indic_syllables, glyph.cluster, previous_cluster, previous_raw_cluster);
+    for (glyphs, clusters, 0..) |glyph, *cluster, glyph_index| {
+        const normalized = if (isPreBaseMatraCluster(text, glyph.cluster))
+            normalizedPreBaseMatraClusterFromRun(indic_syllables, glyphs, glyph_index)
+        else
+            normalizedClusterStartForByte(text, graphemes, indic_syllables, glyph.cluster, previous_cluster, previous_raw_cluster);
         cluster.* = @intCast(normalized);
         previous_cluster = normalized;
         previous_raw_cluster = glyph.cluster;
@@ -221,14 +224,22 @@ const IndicSyllableCluster = struct {
 
 fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.GraphemeCluster, indic_syllables: []const IndicSyllableCluster, byte_offset: usize, previous_cluster: ?usize, previous_raw_cluster: ?usize) usize {
     if (codepointAtByte(text, byte_offset)) |codepoint| {
-        if (isPreBaseMatra(codepoint) or codepoint == 0x094d) {
+        if (isPreBaseMatra(codepoint)) {
+            if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| return syllable.base_cluster;
+        } else if (codepoint == 0x094d) {
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| return syllable.byte_start;
         } else if (isDevanagariDependentMark(codepoint)) {
             if (previous_cluster) |cluster| return cluster;
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| return syllable.base_cluster;
         } else if (isDevanagariConsonant(codepoint)) {
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| {
-                if (syllable.has_prebase_matra) return syllable.byte_start;
+                if (syllable.has_prebase_matra) return if (byte_offset >= syllable.base_cluster)
+                    if (previous_cluster) |cluster|
+                        if (cluster >= syllable.byte_start and cluster < byte_offset) cluster else byte_offset
+                    else
+                        byte_offset
+                else
+                    syllable.byte_start;
                 if (syllable.initial_reph and byte_offset != syllable.byte_start) {
                     if (previous_cluster == syllable.byte_start and previous_raw_cluster != syllable.byte_start and followsVirama(text, byte_offset)) return syllable.byte_start;
                     return if (isFirstPostHalantConsonant(text, syllable.byte_start, byte_offset))
@@ -253,6 +264,26 @@ fn graphemeClusterStartForByte(graphemes: []const cangjie.GraphemeCluster, byte_
         if (byte_offset >= current.byte_start and byte_offset < current.byte_start + current.byte_len) return current.byte_start;
     }
     return byte_offset;
+}
+
+fn isPreBaseMatraCluster(text: []const u8, byte_offset: usize) bool {
+    const codepoint = codepointAtByte(text, byte_offset) orelse return false;
+    return isPreBaseMatra(codepoint);
+}
+
+fn normalizedPreBaseMatraClusterFromRun(indic_syllables: []const IndicSyllableCluster, glyphs: []const cangjie.GlyphPosition, glyph_index: usize) usize {
+    const matra_cluster = glyphs[glyph_index].cluster;
+    const syllable = indicSyllableContainingByte(indic_syllables, matra_cluster) orelse return matra_cluster;
+    if (syllable.initial_reph) return syllable.byte_start;
+    var best: ?usize = null;
+    for (glyphs[glyph_index + 1 ..]) |candidate| {
+        const candidate_cluster = candidate.cluster;
+        if (candidate_cluster < syllable.byte_start or candidate_cluster >= syllable.byte_start + syllable.byte_len) continue;
+        if (candidate_cluster >= matra_cluster) continue;
+        best = candidate_cluster;
+        break;
+    }
+    return best orelse syllable.base_cluster;
 }
 
 fn indicSyllableClusters(allocator: std.mem.Allocator, text: []const u8) ![]const IndicSyllableCluster {

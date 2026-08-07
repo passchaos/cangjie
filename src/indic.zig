@@ -30,7 +30,7 @@ pub fn reorderPreBaseMatras(
         if (!isPreBaseMatra(codepoints[source_index])) continue;
 
         const syllable_start = devanagariSyllableStart(codepoints, source_index);
-        const target = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, syllable_start, source_index, index);
+        const target = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, codepoints, syllable_start, source_index, index);
         moveGlyphMetadata(glyph_ids, glyph_source_indices, ligature_components, index, target);
     }
 }
@@ -190,9 +190,11 @@ fn hasInitialReph(codepoints: []const u21, syllable_start: usize, syllable_end: 
 
 fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize) bool {
     var marked = false;
+    const base_source = halfBaseSource(codepoints, syllable_start, syllable_end);
     var index = syllable_start;
     while (index + 1 < syllable_end) : (index += 1) {
         if (!isDevanagariConsonant(codepoints[index])) continue;
+        if (index >= base_source) continue;
         const virama_index = halfViramaIndex(codepoints, index, syllable_end) orelse continue;
         if (!hasConsonant(codepoints[virama_index + 1 .. syllable_end])) continue;
 
@@ -200,6 +202,41 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         marked = true;
     }
     return marked;
+}
+
+fn halfBaseSource(codepoints: []const u21, syllable_start: usize, syllable_end: usize) usize {
+    const has_prebase_matra = hasPreBaseMatraInRange(codepoints, syllable_start, syllable_end);
+    var base = syllable_start;
+    var index = syllable_start;
+    while (index < syllable_end) : (index += 1) {
+        const codepoint = codepoints[index];
+        if (!isDevanagariConsonant(codepoint)) continue;
+        if (has_prebase_matra and index > syllable_start and codepoints[index - 1] == 0x094d and isPostBaseConsonant(codepoint)) {
+            return previousConsonantSource(codepoints, syllable_start, index - 1) orelse base;
+        }
+        base = index;
+    }
+    return base;
+}
+
+fn hasPreBaseMatraInRange(codepoints: []const u21, syllable_start: usize, syllable_end: usize) bool {
+    for (codepoints[syllable_start..syllable_end]) |codepoint| {
+        if (isPreBaseMatra(codepoint)) return true;
+    }
+    return false;
+}
+
+fn previousConsonantSource(codepoints: []const u21, syllable_start: usize, before: usize) ?usize {
+    var index = before;
+    while (index > syllable_start) {
+        index -= 1;
+        if (isDevanagariConsonant(codepoints[index])) return index;
+    }
+    return null;
+}
+
+fn isPostBaseConsonant(codepoint: u21) bool {
+    return codepoint == 0x0930 or codepoint == 0x0935;
 }
 
 fn halfViramaIndex(codepoints: []const u21, consonant_index: usize, syllable_end: usize) ?usize {
@@ -253,12 +290,15 @@ fn isFormedReph(info: gpos.LigatureComponentInfo, source_index: usize, codepoint
     return info.component_sources[0] == source_index and info.component_sources[1] == source_index + 1;
 }
 
-fn preBaseMatraTargetGlyphIndex(sources: []const usize, syllable_start: usize, matra_source: usize, fallback_index: usize) usize {
+fn preBaseMatraTargetGlyphIndex(sources: []const usize, codepoints: []const u21, syllable_start: usize, matra_source: usize, fallback_index: usize) usize {
+    var fallback_target = fallback_index;
     for (sources, 0..) |source, glyph_index| {
         if (glyph_index >= fallback_index) break;
-        if (source >= syllable_start and source < matra_source) return glyph_index;
+        if (source < syllable_start or source >= matra_source) continue;
+        if (fallback_target == fallback_index) fallback_target = glyph_index;
+        if (source + 1 < codepoints.len and codepoints[source] == 0x094d and codepoints[source + 1] == 0x0935) return @min(glyph_index + 1, fallback_index);
     }
-    return fallback_index;
+    return fallback_target;
 }
 
 fn rephTargetGlyphIndex(

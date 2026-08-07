@@ -117,6 +117,7 @@ pub const SvgGlyphDocument = @import("font.zig").SvgGlyphDocument;
 pub const StatDesignAxis = @import("font.zig").StatDesignAxis;
 pub const VariationAxis = @import("font.zig").VariationAxis;
 pub const VariationCoordinate = @import("font.zig").VariationCoordinate;
+pub const VariationInstance = @import("font.zig").VariationInstance;
 pub const VerticalMetrics = @import("font.zig").VerticalMetrics;
 pub const GlyphId = @import("glyph.zig").GlyphId;
 pub const GlyphOutline = @import("glyph.zig").GlyphOutline;
@@ -1402,6 +1403,23 @@ test "reads variable font axis metadata from fvar" {
     var name_buffer: [64]u8 = undefined;
     try std.testing.expectEqualStrings("Weight", (try font.nameString(@enumFromInt(axes[0].name_id), &name_buffer)).?);
     try std.testing.expectEqualStrings("Width", (try font.nameString(@enumFromInt(axes[1].name_id), &name_buffer)).?);
+
+    const instances = try font.variationInstances(allocator);
+    defer font.freeVariationInstances(allocator, instances);
+    try std.testing.expectEqual(@as(usize, 2), instances.len);
+    try std.testing.expectEqual(@as(u16, 258), instances[0].subfamily_name_id);
+    try std.testing.expectEqual(@as(?u16, 259), instances[0].postscript_name_id);
+    try std.testing.expectEqual(@as(usize, 2), instances[0].coordinates.len);
+    try std.testing.expectEqualStrings("wght", &instances[0].coordinates[0].tag);
+    try std.testing.expectApproxEqAbs(@as(f32, 400.0), instances[0].coordinates[0].value, 0.001);
+    try std.testing.expectEqualStrings("wdth", &instances[0].coordinates[1].tag);
+    try std.testing.expectApproxEqAbs(@as(f32, 100.0), instances[0].coordinates[1].value, 0.001);
+    try std.testing.expectEqual(@as(u16, 260), instances[1].subfamily_name_id);
+    try std.testing.expectEqual(@as(?u16, 261), instances[1].postscript_name_id);
+    try std.testing.expectApproxEqAbs(@as(f32, 700.0), instances[1].coordinates[0].value, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 150.0), instances[1].coordinates[1].value, 0.001);
+    try std.testing.expectEqualStrings("Bold Wide", (try font.nameString(@enumFromInt(instances[1].subfamily_name_id), &name_buffer)).?);
+    try std.testing.expectEqualStrings("CangjieVariable-BoldWide", (try font.nameString(@enumFromInt(instances[1].postscript_name_id.?), &name_buffer)).?);
 }
 
 test "reads GDEF glyph classes" {

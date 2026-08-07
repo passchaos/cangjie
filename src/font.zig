@@ -155,6 +155,13 @@ pub const VariationCoordinate = struct {
     value: f32,
 };
 
+pub const VariationInstance = struct {
+    subfamily_name_id: u16,
+    flags: u16,
+    postscript_name_id: ?u16 = null,
+    coordinates: []VariationCoordinate,
+};
+
 pub const StatDesignAxis = struct {
     tag: [4]u8,
     name_id: u16,
@@ -1280,6 +1287,53 @@ pub const Font = struct {
             normalized[index] = try self.mapVariationCoordinate(index, axis.normalize(user_value));
         }
         return normalized;
+    }
+
+    pub fn variationInstances(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationInstance {
+        const fvar = self.fvar orelse return try allocator.alloc(VariationInstance, 0);
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        if (self.name) |name| {
+            const name_index = try readNameIdIndex(self.data, name);
+            try validateFvarNameReferences(self.data, fvar, &name_index);
+        }
+        const info = try readFvarInfo(self.data, fvar);
+
+        const instances = try allocator.alloc(VariationInstance, info.instance_count);
+        errdefer allocator.free(instances);
+        var initialized: usize = 0;
+        errdefer {
+            for (instances[0..initialized]) |instance| allocator.free(instance.coordinates);
+        }
+
+        for (instances, 0..) |*instance, instance_index| {
+            const instance_offset = fvarInstanceOffset(fvar, info, instance_index);
+            const coordinates = try allocator.alloc(VariationCoordinate, info.axis_count);
+            errdefer allocator.free(coordinates);
+            for (coordinates, 0..) |*coordinate, axis_index| {
+                const axis_offset = fvarAxisOffset(fvar, info, axis_index);
+                coordinate.* = .{
+                    .tag = try bin.readTagAt(self.data, axis_offset),
+                    .value = fixed16_16ToF32(try bin.readI32At(self.data, instance_offset + 4 + axis_index * 4)),
+                };
+            }
+            instance.* = .{
+                .subfamily_name_id = try bin.readU16At(self.data, instance_offset),
+                .flags = try bin.readU16At(self.data, instance_offset + 2),
+                .postscript_name_id = if (info.has_postscript_name_id) id: {
+                    const value = try bin.readU16At(self.data, instance_offset + info.postscript_name_id_offset);
+                    break :id if (value == 0xffff) null else value;
+                } else null,
+                .coordinates = coordinates,
+            };
+            initialized += 1;
+        }
+        return instances;
+    }
+
+    pub fn freeVariationInstances(_: *const Font, allocator: std.mem.Allocator, instances: []VariationInstance) void {
+        for (instances) |instance| allocator.free(instance.coordinates);
+        allocator.free(instances);
     }
 
     pub fn statDesignAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]StatDesignAxis {

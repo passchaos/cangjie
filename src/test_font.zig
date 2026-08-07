@@ -2125,6 +2125,10 @@ fn variableNameTable(allocator: std.mem.Allocator) ![]u8 {
         .{ .id = 17, .value = "Regular" },
         .{ .id = 256, .value = "Weight" },
         .{ .id = 257, .value = "Width" },
+        .{ .id = 258, .value = "Regular" },
+        .{ .id = 259, .value = "CangjieVariable-Regular" },
+        .{ .id = 260, .value = "Bold Wide" },
+        .{ .id = 261, .value = "CangjieVariable-BoldWide" },
     };
     var storage_len: usize = 0;
     for (records) |record| storage_len += record.value.len * 2;
@@ -2192,15 +2196,15 @@ fn writeScriptMetricsDefaults(bytes: []u8) void {
 }
 
 fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 56);
+    const bytes = try allocator.alloc(u8, 84);
     @memset(bytes, 0);
     writeU32(bytes, 0, 0x00010000);
     writeU16(bytes, 4, 16);
     writeU16(bytes, 6, 2);
     writeU16(bytes, 8, 2);
     writeU16(bytes, 10, 20);
-    writeU16(bytes, 12, 0);
-    writeU16(bytes, 14, 0);
+    writeU16(bytes, 12, 2);
+    writeU16(bytes, 14, 14);
     writeTag(bytes, 16, "wght");
     writeF16Dot16(bytes, 20, 100.0);
     writeF16Dot16(bytes, 24, 400.0);
@@ -2213,6 +2217,16 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 48, 200.0);
     writeU16(bytes, 52, 0);
     writeU16(bytes, 54, 257);
+    writeU16(bytes, 56, 258);
+    writeU16(bytes, 58, 0);
+    writeF16Dot16(bytes, 60, 400.0);
+    writeF16Dot16(bytes, 64, 100.0);
+    writeU16(bytes, 68, 259);
+    writeU16(bytes, 70, 260);
+    writeU16(bytes, 72, 0);
+    writeF16Dot16(bytes, 74, 700.0);
+    writeF16Dot16(bytes, 78, 150.0);
+    writeU16(bytes, 82, 261);
     return bytes;
 }
 

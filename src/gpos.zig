@@ -116,6 +116,10 @@ pub const LookupOptions = struct {
     assume_validated: bool = false,
     shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
     profile_io: ?std.Io = null,
+    /// PosLookupRecord recursion depth for contextual lookups. Public callers
+    /// leave this at zero; nested contextual dispatch increments it so cyclic
+    /// lookup graphs are rejected instead of recursing indefinitely.
+    context_depth: usize = 0,
 };
 
 pub const LookupAccelerator = struct {
@@ -1760,6 +1764,26 @@ fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
     }
 }
 
+fn collectContextAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (pos >= glyphs.len) return false;
+    const pos_format = try readU16(table, subtable_offset);
+    switch (pos_format) {
+        1 => {
+            if (matchSkipsGlyph(lookup_flag, options, glyphs, pos)) return false;
+            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+            const coverage = try coverageIndex(table, coverage_offset, glyphs[pos]) orelse return false;
+            const rule_set_count = try readU16(table, subtable_offset + 4);
+            if (coverage >= rule_set_count) return false;
+            const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
+            if (set_relative == 0) return false;
+            return try collectPositionRuleSet(table, subtable_offset + set_relative, glyphs, pos, adjustments, allocator, lookup_flag, options);
+        },
+        2 => return try collectClassPositioningAt(table, subtable_offset, glyphs, pos, adjustments, allocator, lookup_flag, options),
+        3 => return try collectCoveragePositioningAt(table, subtable_offset, glyphs, pos, adjustments, allocator, lookup_flag, options),
+        else => return error.UnsupportedGpos,
+    }
+}
+
 fn collectClassPositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
@@ -1776,6 +1800,20 @@ fn collectClassPositioning(table: Table, subtable_offset: usize, glyphs: []const
             pos += 1;
         }
     }
+}
+
+fn collectClassPositioningAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (pos >= glyphs.len) return false;
+    if (matchSkipsGlyph(lookup_flag, options, glyphs, pos)) return false;
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    if (try coverageIndex(table, coverage_offset, glyphs[pos]) == null) return false;
+    const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
+    const class_set_count = try readU16(table, subtable_offset + 6);
+    const class = try classValue(table, class_def_offset, glyphs[pos]);
+    if (class >= class_set_count) return false;
+    const set_relative = try readU16(table, subtable_offset + 8 + @as(usize, class) * 2);
+    if (set_relative == 0) return false;
+    return try collectClassPositionRuleSet(table, subtable_offset + set_relative, class_def_offset, glyphs, pos, adjustments, allocator, lookup_flag, options);
 }
 
 fn collectCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -1804,12 +1842,46 @@ fn collectCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []co
     }
 }
 
+fn collectCoveragePositioningAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (pos >= glyphs.len) return false;
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    const glyph_count = try readU16(table, subtable_offset + 2);
+    if (glyph_count == 0) return false;
+    var input_indices_buf: [64]usize = undefined;
+    if (glyph_count > input_indices_buf.len) return error.UnsupportedGpos;
+    if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) return false;
+
+    const coverage_offsets_pos = subtable_offset + 6;
+    for (0..glyph_count) |i| {
+        const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, coverage_offsets_pos + i * 2));
+        if (!try contextCoverageContains(table, coverage_offset, glyphs[input_indices_buf[i]])) return false;
+    }
+    const pos_count = try readU16(table, subtable_offset + 4);
+    const records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
+    try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator, options);
+    return true;
+}
+
 fn collectChainingContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const pos_format = try readU16(table, subtable_offset);
     switch (pos_format) {
         1 => try collectChainingGlyphPositioning(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
         2 => try collectChainingClassPositioning(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
         3 => try collectChainingCoveragePositioning(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options),
+        else => return error.UnsupportedGpos,
+    }
+}
+
+fn collectChainingContextAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (pos >= glyphs.len) return false;
+    const pos_format = try readU16(table, subtable_offset);
+    switch (pos_format) {
+        1 => return try collectChainingGlyphPositioningAt(table, subtable_offset, glyphs, pos, adjustments, allocator, lookup_flag, options),
+        2 => return try collectChainingClassPositioningAt(table, subtable_offset, glyphs, pos, adjustments, allocator, lookup_flag, options),
+        3 => {
+            const parsed = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse return false;
+            return (try collectChainingCoveragePositioningAt(table, parsed, glyphs, pos, adjustments, allocator, lookup_flag, options)).matched;
+        },
         else => return error.UnsupportedGpos,
     }
 }
@@ -1862,6 +1934,18 @@ fn collectChainingGlyphPositioning(table: Table, subtable_offset: usize, glyphs:
             pos += 1;
         }
     }
+}
+
+fn collectChainingGlyphPositioningAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (pos >= glyphs.len) return false;
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    const coverage = try coverageIndex(table, coverage_offset, glyphs[pos]) orelse return false;
+    const chain_set_count = try readU16(table, subtable_offset + 4);
+    if (coverage >= chain_set_count) return false;
+    const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
+    if (set_relative == 0) return false;
+    return try collectChainingGlyphRuleSet(table, subtable_offset + set_relative, glyphs, pos, adjustments, allocator, lookup_flag, options);
 }
 
 fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
@@ -1943,6 +2027,22 @@ fn collectChainingClassPositioning(table: Table, subtable_offset: usize, glyphs:
             pos += 1;
         }
     }
+}
+
+fn collectChainingClassPositioningAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (pos >= glyphs.len) return false;
+    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    if (try coverageIndex(table, coverage_offset, glyphs[pos]) == null) return false;
+    const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
+    const input_class = try classValue(table, input_class_def, glyphs[pos]);
+    const set_count = try readU16(table, subtable_offset + 10);
+    if (input_class >= set_count) return false;
+    const set_relative = try readU16(table, subtable_offset + 12 + @as(usize, input_class) * 2);
+    if (set_relative == 0) return false;
+    const backtrack_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
+    const lookahead_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
+    return try collectChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, adjustments, allocator, lookup_flag, options);
 }
 
 fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_def: usize, input_class_def: usize, lookahead_class_def: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
@@ -3296,6 +3396,7 @@ fn readU32BadGpos(table: Table, relative: usize) GposError!u32 {
 }
 
 fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: usize, lookup_index: u16, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    if (options.context_depth > max_context_preflight_depth) return error.UnsupportedGpos;
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (lookup_index >= lookup_count) return error.BadGpos;
@@ -3308,6 +3409,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
         try validateMarkFilteringSetIndex(lookup_options);
     }
+    lookup_options.context_depth = options.context_depth + 1;
     if (lookup_type == 1) {
         if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.single_pos_subtables.len != 0) {
@@ -3325,6 +3427,8 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
             4 => _ = try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, &.{}),
             5 => _ = try collectMarkToLigatureAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             6 => _ = try collectMarkToMarkAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
+            7 => if (try collectContextAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
+            8 => if (try collectChainingContextAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             9 => if (try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             else => {},
         }
@@ -3356,6 +3460,8 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
         4 => _ = try collectMarkToBaseAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, &.{}),
         5 => _ = try collectMarkToLigatureAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         6 => _ = try collectMarkToMarkAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+        7 => return try collectContextAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+        8 => return try collectChainingContextAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         else => {},
     }
     return false;
@@ -6551,6 +6657,102 @@ test "GPOS context nested ExtensionPos PairPos respects alternatives with mark f
     // subtable matches that filtered pair, the second wrapper in the same
     // lookup must remain an alternative rather than adding another adjustment.
     try std.testing.expectEqual(@as(i16, -30), adjustments.items[0].x_advance);
+}
+
+test "GPOS nested chaining context can recurse into PairPos" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 220;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 4);
+    writeU16Test(&bytes, 12, 10); // Lookup 0: outer ChainContextPos.
+    writeU16Test(&bytes, 14, 50); // Lookup 1: ExtensionPos(ChainContextPos).
+    writeU16Test(&bytes, 16, 110); // Lookup 2: ChainContextPos.
+    writeU16Test(&bytes, 18, 160); // Lookup 3: PairPos.
+
+    writeU16Test(&bytes, 20, 8);
+    writeU16Test(&bytes, 22, 0);
+    writeU16Test(&bytes, 24, 1);
+    writeU16Test(&bytes, 26, 8);
+    const outer = 28;
+    writeU16Test(&bytes, outer + 0, 3);
+    writeU16Test(&bytes, outer + 2, 0); // BacktrackCount.
+    writeU16Test(&bytes, outer + 4, 1); // InputGlyphCount.
+    writeU16Test(&bytes, outer + 6, 18);
+    writeU16Test(&bytes, outer + 8, 0); // LookAheadCount.
+    writeU16Test(&bytes, outer + 10, 1); // PosCount.
+    writeU16Test(&bytes, outer + 12, 0); // SequenceIndex 0.
+    writeU16Test(&bytes, outer + 14, 1); // Lookup 1.
+    writeCoverage1Test(&bytes, outer + 18, 10);
+
+    writeU16Test(&bytes, 60, 9);
+    writeU16Test(&bytes, 62, 0);
+    writeU16Test(&bytes, 64, 1);
+    writeU16Test(&bytes, 66, 8);
+    const extension = 68;
+    writeU16Test(&bytes, extension + 0, 1);
+    writeU16Test(&bytes, extension + 2, 8);
+    writeU32Test(&bytes, extension + 4, 8);
+    const middle = extension + 8;
+    writeU16Test(&bytes, middle + 0, 3);
+    writeU16Test(&bytes, middle + 2, 0);
+    writeU16Test(&bytes, middle + 4, 2);
+    writeU16Test(&bytes, middle + 6, 22);
+    writeU16Test(&bytes, middle + 8, 28);
+    writeU16Test(&bytes, middle + 10, 0);
+    writeU16Test(&bytes, middle + 12, 1);
+    writeU16Test(&bytes, middle + 14, 0);
+    writeU16Test(&bytes, middle + 16, 2);
+    writeCoverage1Test(&bytes, middle + 22, 10);
+    writeCoverage1Test(&bytes, middle + 28, 11);
+
+    writeU16Test(&bytes, 120, 8);
+    writeU16Test(&bytes, 122, 0);
+    writeU16Test(&bytes, 124, 1);
+    writeU16Test(&bytes, 126, 8);
+    const inner = 128;
+    writeU16Test(&bytes, inner + 0, 3);
+    writeU16Test(&bytes, inner + 2, 0);
+    writeU16Test(&bytes, inner + 4, 1);
+    writeU16Test(&bytes, inner + 6, 18);
+    writeU16Test(&bytes, inner + 8, 1);
+    writeU16Test(&bytes, inner + 10, 24);
+    writeU16Test(&bytes, inner + 12, 1);
+    writeU16Test(&bytes, inner + 14, 0);
+    writeU16Test(&bytes, inner + 16, 3);
+    writeCoverage1Test(&bytes, inner + 18, 10);
+    writeCoverage1Test(&bytes, inner + 24, 11);
+
+    writeU16Test(&bytes, 170, 2);
+    writeU16Test(&bytes, 172, 0);
+    writeU16Test(&bytes, 174, 1);
+    writeU16Test(&bytes, 176, 8);
+    const pair = 178;
+    writeU16Test(&bytes, pair + 0, 1);
+    writeU16Test(&bytes, pair + 2, 22);
+    writeU16Test(&bytes, pair + 4, 0);
+    writeU16Test(&bytes, pair + 6, 0x0004);
+    writeU16Test(&bytes, pair + 8, 1);
+    writeU16Test(&bytes, pair + 10, 28);
+    writeCoverage1Test(&bytes, pair + 22, 10);
+    const pair_set = pair + 28;
+    writeU16Test(&bytes, pair_set + 0, 1);
+    writeU16Test(&bytes, pair_set + 2, 11);
+    writeI16Test(&bytes, pair_set + 4, -70);
+
+    const glyphs = [_]GlyphId{ 10, 11 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 20, &glyphs, &adjustments, allocator, .{});
+
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expect(adjustments.items[0].pair_positioned);
+    try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_advance);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[1].index);
+    try std.testing.expectEqual(@as(i16, -70), adjustments.items[1].x_advance);
 }
 
 test "GPOS context nested lookup can apply MarkBasePos" {

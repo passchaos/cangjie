@@ -91,6 +91,7 @@ pub const ScaledFontDecorationMetrics = @import("font.zig").ScaledFontDecoration
 pub const ScaledFontScriptMetrics = @import("font.zig").ScaledFontScriptMetrics;
 pub const FontError = @import("font.zig").FontError;
 pub const FontFormat = @import("font.zig").FontFormat;
+pub const FontHeaderInfo = @import("font.zig").FontHeaderInfo;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const GlyphClass = @import("font.zig").GlyphClass;
 pub const NameEncoding = @import("font.zig").NameEncoding;
@@ -256,6 +257,14 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     try std.testing.expectEqual(@as(u16, 1000), font.units_per_em);
     try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex('A'));
 
+    const header = try font.headInfo();
+    try std.testing.expectEqual(@as(u32, 0x00010000), header.table_version);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), header.font_revision, 0.001);
+    try std.testing.expectEqual(@as(u16, 1000), header.units_per_em);
+    try std.testing.expectEqual(Bounds{ .x_min = 0, .y_min = 0, .x_max = 700, .y_max = 700 }, header.bounds);
+    try std.testing.expectEqual(@as(u16, 8), header.lowest_rec_ppem);
+    try std.testing.expectEqual(@as(i16, 0), header.index_to_loc_format);
+
     const tables = try font.tables(allocator);
     defer allocator.free(tables);
     try std.testing.expect(tables.len >= 6);
@@ -321,6 +330,29 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
         if (pixel > 0) covered += 1;
     }
     try std.testing.expect(covered > 10);
+}
+
+test "lazy head metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(u16, 1000), (try font.headInfo()).units_per_em);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var head_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "head")) head_offset = table.offset;
+    }
+    bytes[head_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.headInfo());
 }
 
 test "raw SFNT table data revalidates borrowed checksums" {

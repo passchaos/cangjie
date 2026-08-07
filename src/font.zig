@@ -38,6 +38,21 @@ pub const FontTableInfo = struct {
     length: usize,
 };
 
+pub const FontHeaderInfo = struct {
+    table_version: u32,
+    font_revision: f32,
+    flags: u16,
+    units_per_em: u16,
+    created: i64,
+    modified: i64,
+    bounds: glyph_mod.Bounds,
+    mac_style: u16,
+    lowest_rec_ppem: u16,
+    font_direction_hint: i16,
+    index_to_loc_format: i16,
+    glyph_data_format: i16,
+};
+
 pub const CharmapInfo = struct {
     platform_id: u16,
     encoding_id: u16,
@@ -665,6 +680,17 @@ pub const Font = struct {
         const record = findTableByTag(self.owned_tables, tag) orelse return null;
         try validateSfntTableChecksum(self.data, record);
         return self.data[record.offset .. record.offset + record.length];
+    }
+
+    /// Read validated metadata from the SFNT `head` table.
+    ///
+    /// This mirrors FreeType/fontations header inspection without requiring
+    /// callers to parse raw table bytes. The returned data is copied into a
+    /// value type after the borrowed `head` bytes have been revalidated.
+    pub fn headInfo(self: *const Font) FontError!FontHeaderInfo {
+        try validateSfntTableChecksum(self.data, self.head);
+        try validateHeadTable(self.data, self.head, self.format);
+        return try readFontHeaderInfo(self.data, self.head);
     }
 
     /// Enumerate parsed cmap encoding records, similar to FreeType charmaps.
@@ -3061,6 +3087,35 @@ fn rangesOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) boo
 
 fn requireTableLength(record: TableRecord, minimum_length: usize) FontError!void {
     if (record.length < minimum_length) return error.BadSfnt;
+}
+
+fn readFontHeaderInfo(data: []const u8, head: TableRecord) FontError!FontHeaderInfo {
+    try requireTableLength(head, 54);
+    return .{
+        .table_version = try bin.readU32At(data, head.offset),
+        .font_revision = fixed16_16ToF32(try bin.readI32At(data, head.offset + 4)),
+        .flags = try bin.readU16At(data, head.offset + 16),
+        .units_per_em = try bin.readU16At(data, head.offset + 18),
+        .created = try readI64At(data, head.offset + 20),
+        .modified = try readI64At(data, head.offset + 28),
+        .bounds = .{
+            .x_min = try bin.readI16At(data, head.offset + 36),
+            .y_min = try bin.readI16At(data, head.offset + 38),
+            .x_max = try bin.readI16At(data, head.offset + 40),
+            .y_max = try bin.readI16At(data, head.offset + 42),
+        },
+        .mac_style = try bin.readU16At(data, head.offset + 44),
+        .lowest_rec_ppem = try bin.readU16At(data, head.offset + 46),
+        .font_direction_hint = try bin.readI16At(data, head.offset + 48),
+        .index_to_loc_format = try bin.readI16At(data, head.offset + 50),
+        .glyph_data_format = try bin.readI16At(data, head.offset + 52),
+    };
+}
+
+fn readI64At(data: []const u8, offset: usize) FontError!i64 {
+    const high = try bin.readU32At(data, offset);
+    const low = try bin.readU32At(data, offset + 4);
+    return @bitCast((@as(u64, high) << 32) | low);
 }
 
 fn validateHeadTable(data: []const u8, head: TableRecord, format: FontFormat) FontError!void {

@@ -227,7 +227,12 @@ fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.Gr
         } else if (isDevanagariConsonant(codepoint)) {
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| {
                 if (syllable.has_prebase_matra) return syllable.byte_start;
-                if (syllable.initial_reph and byte_offset != syllable.byte_start) return syllable.byte_start;
+                if (syllable.initial_reph and byte_offset != syllable.byte_start) {
+                    return if (isFirstPostHalantConsonant(text, syllable.byte_start, byte_offset))
+                        syllable.byte_start
+                    else
+                        byte_offset;
+                }
                 return byte_offset;
             }
         } else if (codepoint == 0x200c or codepoint == 0x200d) {
@@ -342,6 +347,30 @@ fn startsWithInitialReph(text: []const u8) bool {
     if (isDevanagariConsonant(third)) return true;
     while (it.nextCodepoint()) |codepoint| {
         if (isDevanagariConsonant(codepoint)) return true;
+    }
+    return false;
+}
+
+fn isFirstPostHalantConsonant(text: []const u8, syllable_start: usize, byte_offset: usize) bool {
+    var view = std.unicode.Utf8View.init(text) catch return false;
+    var it = view.iterator();
+    var cursor: usize = 0;
+    var previous_was_virama = false;
+    var seen_post_halant_consonant = false;
+    while (it.nextCodepoint()) |codepoint| {
+        const byte_start = cursor;
+        cursor = it.i;
+        if (byte_start < syllable_start) continue;
+        if (byte_start > byte_offset) return false;
+
+        const is_target = byte_start == byte_offset;
+        if (previous_was_virama and isDevanagariConsonant(codepoint)) {
+            if (is_target) return !seen_post_halant_consonant;
+            seen_post_halant_consonant = true;
+        } else if (is_target) {
+            return false;
+        }
+        previous_was_virama = codepoint == 0x094d;
     }
     return false;
 }

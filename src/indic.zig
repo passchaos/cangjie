@@ -249,13 +249,25 @@ fn preBaseMatraTargetGlyphIndex(sources: []const usize, syllable_start: usize, m
 
 fn rephTargetGlyphIndex(sources: []const usize, codepoints: []const u21, syllable_start: usize, syllable_end: usize, reph_index: usize) usize {
     var target = reph_index;
+    var saw_post_halant_consonant = false;
     for (sources, 0..) |source, glyph_index| {
         if (glyph_index == reph_index) continue;
         if (source < syllable_start or source >= syllable_end) continue;
         if (source < codepoints.len and isDevanagariSyllableModifier(codepoints[source])) break;
+        if (isPostHalantConsonant(codepoints, source, syllable_start)) {
+            if (saw_post_halant_consonant) break;
+            saw_post_halant_consonant = true;
+        }
         target = glyph_index;
     }
     return target;
+}
+
+fn isPostHalantConsonant(codepoints: []const u21, source: usize, syllable_start: usize) bool {
+    return source > syllable_start and
+        source < codepoints.len and
+        isDevanagariConsonant(codepoints[source]) and
+        codepoints[source - 1] == 0x094d;
 }
 
 fn isDevanagariSyllableModifier(codepoint: u21) bool {

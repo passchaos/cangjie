@@ -184,6 +184,8 @@ const RunDigestCache = struct {
 };
 
 const ChainingCoverageSubtable = struct {
+    const max_fast_records = 4;
+
     subtable_offset: usize = 0,
     backtrack_offsets_pos: usize = 0,
     backtrack_count: u16 = 0,
@@ -194,6 +196,14 @@ const ChainingCoverageSubtable = struct {
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
     pos_count: u16 = 0,
+    fast_record_count: u16 = 0,
+    fast_records: [max_fast_records]FastSinglePosRecord = [_]FastSinglePosRecord{.{}} ** max_fast_records,
+};
+
+const FastSinglePosRecord = struct {
+    sequence_index: u16 = 0,
+    lookup_index: u16 = 0,
+    lookup_flag: u16 = 0,
 };
 
 const ChainingClassSubtableAccelerator = struct {
@@ -404,6 +414,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
             if (chaining_subtables.len != 0) {
                 const parsed = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse continue;
                 chaining_subtables[subtable_i] = parsed;
+                try fillFastChainingSinglePosRecords(table, &chaining_subtables[subtable_i]);
                 if (parsed.input_count > 1) {
                     const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed.input_offsets_pos + 2));
                     chaining_subtables[subtable_i].second_input_digest = try coverageDigest(table, second_coverage_offset);
@@ -434,6 +445,34 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     group_pairs.deinit(allocator);
     accelerator.chaining_class_subtables = try buildExtensionChainingClassSubtableAccelerators(table, lookup_offset, lookup_type, subtable_count, allocator);
     return accelerator;
+}
+
+fn fillFastChainingSinglePosRecords(table: Table, subtable: *ChainingCoverageSubtable) GposError!void {
+    if (subtable.pos_count == 0 or subtable.pos_count > ChainingCoverageSubtable.max_fast_records) return;
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+
+    var records: [ChainingCoverageSubtable.max_fast_records]FastSinglePosRecord = [_]FastSinglePosRecord{.{}} ** ChainingCoverageSubtable.max_fast_records;
+    for (0..subtable.pos_count) |record_i| {
+        const record_offset = subtable.records_pos + record_i * 4;
+        const sequence_index = try readU16(table, record_offset);
+        if (sequence_index >= subtable.input_count) return;
+        const lookup_index = try readU16(table, record_offset + 2);
+        if (lookup_index >= lookup_count) return;
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+        if (try readU16(table, lookup_offset) != 1) return;
+        const lookup_flag = try readU16(table, lookup_offset + 2);
+        if ((lookup_flag & 0x0010) != 0) return;
+        const subtable_count = try readU16(table, lookup_offset + 4);
+        if (subtable_count == 0) return;
+        records[record_i] = .{
+            .sequence_index = sequence_index,
+            .lookup_index = lookup_index,
+            .lookup_flag = lookup_flag,
+        };
+    }
+    subtable.fast_record_count = subtable.pos_count;
+    subtable.fast_records = records;
 }
 
 fn buildExtensionChainingClassSubtableAccelerators(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)![]ChainingClassSubtableAccelerator {
@@ -2529,6 +2568,9 @@ fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverage
     if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable.lookahead_count])) return .{};
     if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos)) return .{};
     if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos)) return .{};
+    if (try collectFastChainingSinglePosRecords(table, subtable, glyphs, input_indices_buf[0..subtable.input_count], adjustments, allocator, options)) {
+        return .{ .matched = true, .next_pos = input_indices_buf[subtable.input_count - 1] + 1 };
+    }
     try collectPositionRecordsMapped(table, subtable.records_pos, subtable.pos_count, input_indices_buf[0..subtable.input_count], glyphs, adjustments, allocator, options);
     return .{ .matched = true, .next_pos = input_indices_buf[subtable.input_count - 1] + 1 };
 }
@@ -2555,8 +2597,28 @@ fn collectAcceleratedChainingCoveragePositioningAt(table: Table, subtable: Chain
     if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable.lookahead_count])) return .{};
     if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos)) return .{};
     if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos)) return .{};
+    if (try collectFastChainingSinglePosRecords(table, subtable, glyphs, input_indices_buf[0..subtable.input_count], adjustments, allocator, options)) {
+        return .{ .matched = true, .next_pos = input_indices_buf[subtable.input_count - 1] + 1 };
+    }
     try collectPositionRecordsMapped(table, subtable.records_pos, subtable.pos_count, input_indices_buf[0..subtable.input_count], glyphs, adjustments, allocator, options);
     return .{ .matched = true, .next_pos = input_indices_buf[subtable.input_count - 1] + 1 };
+}
+
+fn collectFastChainingSinglePosRecords(table: Table, subtable: ChainingCoverageSubtable, glyphs: []const GlyphId, input_indices: []const usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
+    if (subtable.fast_record_count == 0) return false;
+    const accelerators = options.lookup_accelerators orelse return false;
+    for (subtable.fast_records[0..subtable.fast_record_count]) |record| {
+        if (record.sequence_index >= input_indices.len) return false;
+        if (record.lookup_index >= accelerators.len) return false;
+        const target_index = input_indices[record.sequence_index];
+        if (target_index >= glyphs.len) continue;
+        const nested = accelerators[record.lookup_index];
+        if (nested.single_pos_subtables.len == 0) return false;
+        var lookup_options = options;
+        lookup_options.context_depth = options.context_depth + 1;
+        if (try collectSingleAdjustmentAtAccelerated(table, nested.single_pos_subtables, glyphs[target_index], target_index, adjustments, allocator, record.lookup_flag, lookup_options)) continue;
+    }
+    return true;
 }
 
 fn collectSimpleChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverageSubtable, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {

@@ -14,8 +14,10 @@ pub const ShapeScratch = struct {
     joining_forms: std.ArrayList(unicode.JoiningForm) = .empty,
     source_features: std.ArrayList(u32) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
+    attachment_links: std.ArrayList(@import("attachment.zig").Link) = .empty,
 
     pub fn deinit(self: *ShapeScratch, allocator: std.mem.Allocator) void {
+        self.attachment_links.deinit(allocator);
         self.gpos_adjustments.deinit(allocator);
         self.source_features.deinit(allocator);
         self.joining_forms.deinit(allocator);
@@ -38,5 +40,6 @@ pub const ShapeScratch = struct {
         self.joining_forms.clearRetainingCapacity();
         self.source_features.clearRetainingCapacity();
         self.gpos_adjustments.clearRetainingCapacity();
+        self.attachment_links.clearRetainingCapacity();
     }
 };

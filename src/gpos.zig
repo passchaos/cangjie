@@ -30,10 +30,24 @@ pub const Adjustment = struct {
     y_placement: i16 = 0,
     y_advance: i16 = 0,
     pair_positioned: bool = false,
-    mark_attachment: bool = false,
-    mark_base_index: ?usize = null,
+    attachment_type: AttachmentType = .none,
+    attachment_parent_index: ?usize = null,
     x_advance_absolute: bool = false,
     y_advance_absolute: bool = false,
+
+    pub fn markAttachment(self: Adjustment) bool {
+        return self.attachment_type == .mark;
+    }
+
+    pub fn attachmentParentIndex(self: Adjustment) ?usize {
+        return self.attachment_parent_index;
+    }
+};
+
+pub const AttachmentType = enum {
+    none,
+    mark,
+    cursive,
 };
 
 const Table = struct {
@@ -1270,8 +1284,8 @@ fn appendAdjustment(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.
 
 const AdjustmentFlags = struct {
     pair_positioned: bool = false,
-    mark_attachment: bool = false,
-    mark_base_index: ?usize = null,
+    attachment_type: AttachmentType = .none,
+    attachment_parent_index: ?usize = null,
     x_advance_absolute: bool = false,
     y_advance_absolute: bool = false,
 };
@@ -1284,14 +1298,14 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
     // GPOS pair matches, legacy 'kern' must not be applied to that same pair
     // even if the first ValueRecord is empty and all numeric deltas live on the
     // second glyph. Keep a zero-valued record when metadata carries that fact.
-    if (!has_delta and !flags.pair_positioned and !flags.mark_attachment) return;
+    if (!has_delta and !flags.pair_positioned and flags.attachment_type == .none) return;
     var existing_i = adjustments.items.len;
     while (existing_i > 0) {
         existing_i -= 1;
         if (adjustments.items[existing_i].index != index) continue;
         const existing = &adjustments.items[existing_i];
         existing.x_advance += value.x_advance;
-        if (flags.mark_attachment) {
+        if (flags.attachment_type == .mark) {
             existing.x_placement = value.x_placement;
             existing.y_placement = value.y_placement;
         } else {
@@ -1300,10 +1314,10 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         }
         existing.y_advance += value.y_advance;
         existing.pair_positioned = existing.pair_positioned or flags.pair_positioned;
-        existing.mark_attachment = existing.mark_attachment or flags.mark_attachment;
         existing.x_advance_absolute = existing.x_advance_absolute or flags.x_advance_absolute;
         existing.y_advance_absolute = existing.y_advance_absolute or flags.y_advance_absolute;
-        if (flags.mark_base_index) |base_index| existing.mark_base_index = base_index;
+        if (flags.attachment_type != .none) existing.attachment_type = flags.attachment_type;
+        if (flags.attachment_parent_index) |parent_index| existing.attachment_parent_index = parent_index;
         return;
     }
     try adjustments.append(allocator, .{
@@ -1313,8 +1327,8 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         .y_placement = value.y_placement,
         .y_advance = value.y_advance,
         .pair_positioned = flags.pair_positioned,
-        .mark_attachment = flags.mark_attachment,
-        .mark_base_index = flags.mark_base_index,
+        .attachment_type = flags.attachment_type,
+        .attachment_parent_index = flags.attachment_parent_index,
         .x_advance_absolute = flags.x_advance_absolute,
         .y_advance_absolute = flags.y_advance_absolute,
     });
@@ -1408,12 +1422,12 @@ fn collectCursiveAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []co
 fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, previous_position: usize, current_position: usize, exit: Anchor, entry: Anchor, lookup_flag: u16) std.mem.Allocator.Error!void {
     const right_to_left = (lookup_flag & 0x0001) != 0;
     if (right_to_left) {
-        try appendAdjustment(adjustments, allocator, previous_position, .{
+        try appendAdjustmentEx(adjustments, allocator, previous_position, .{
             .index = previous_position,
             .x_advance = -exit.x,
             .x_placement = -exit.x,
             .y_placement = entry.y - exit.y,
-        }, false);
+        }, .{ .attachment_type = .cursive, .attachment_parent_index = current_position });
         try appendAdjustmentEx(adjustments, allocator, current_position, .{
             .index = current_position,
             .x_advance = entry.x,
@@ -1423,12 +1437,12 @@ fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: 
             .index = previous_position,
             .x_advance = exit.x,
         }, .{ .x_advance_absolute = true });
-        try appendAdjustment(adjustments, allocator, current_position, .{
+        try appendAdjustmentEx(adjustments, allocator, current_position, .{
             .index = current_position,
             .x_advance = -entry.x,
             .x_placement = -entry.x,
             .y_placement = exit.y - entry.y,
-        }, false);
+        }, .{ .attachment_type = .cursive, .attachment_parent_index = previous_position });
     }
 }
 
@@ -1496,7 +1510,7 @@ fn collectMarkToBaseAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
         .index = mark_position,
         .x_placement = base_anchor.x - mark_anchor.x,
         .y_placement = base_anchor.y - mark_anchor.y,
-    }, .{ .mark_attachment = true, .mark_base_index = base_position });
+    }, .{ .attachment_type = .mark, .attachment_parent_index = base_position });
     return true;
 }
 
@@ -3204,7 +3218,7 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
         .index = mark_position,
         .x_placement = ligature_anchor.x - mark_anchor.x,
         .y_placement = ligature_anchor.y - mark_anchor.y,
-    }, .{ .mark_attachment = true, .mark_base_index = ligature_position });
+    }, .{ .attachment_type = .mark, .attachment_parent_index = ligature_position });
     return true;
 }
 
@@ -3340,7 +3354,7 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
         .index = mark_1_position,
         .x_placement = mark_2_anchor.x - mark_1_anchor.x,
         .y_placement = mark_2_anchor.y - mark_1_anchor.y,
-    }, .{ .mark_attachment = true, .mark_base_index = mark_2_position });
+    }, .{ .attachment_type = .mark, .attachment_parent_index = mark_2_position });
     return true;
 }
 
@@ -6297,8 +6311,8 @@ test "GPOS context nested lookup can apply MarkBasePos" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
-    try std.testing.expect(adjustments.items[0].mark_attachment);
-    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+    try std.testing.expect(adjustments.items[0].markAttachment());
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
 }
 
 test "GPOS context nested lookup applies MarkLigPos only at sequence index" {
@@ -6382,8 +6396,8 @@ test "GPOS context nested lookup applies MarkLigPos only at sequence index" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
-    try std.testing.expect(adjustments.items[0].mark_attachment);
-    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+    try std.testing.expect(adjustments.items[0].markAttachment());
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
 }
 
 test "GPOS context nested lookup applies MarkToMarkPos only at sequence index" {
@@ -6459,8 +6473,8 @@ test "GPOS context nested lookup applies MarkToMarkPos only at sequence index" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
-    try std.testing.expect(adjustments.items[0].mark_attachment);
-    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+    try std.testing.expect(adjustments.items[0].markAttachment());
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
 }
 
 test "GPOS ExtensionPos single positioning subtables respect mark filtering ordering" {
@@ -6691,7 +6705,7 @@ test "GPOS mark-to-ligature uses source metadata for component choice" {
     // must use component 1.
     try std.testing.expectEqual(@as(i16, 250), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 285), adjustments.items[0].y_placement);
-    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
 }
 
 test "GPOS mark-to-ligature attachment skips lookup-flag ignored glyphs" {
@@ -6744,7 +6758,7 @@ test "GPOS mark-to-ligature attachment skips lookup-flag ignored glyphs" {
     try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 100), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 120), adjustments.items[0].y_placement);
-    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
 }
 
 test "GPOS mark-to-ligature selects component anchors from mark order" {
@@ -6802,11 +6816,11 @@ test "GPOS mark-to-ligature selects component anchors from mark order" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 100), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 110), adjustments.items[0].y_placement);
-    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
     try std.testing.expectEqual(@as(usize, 2), adjustments.items[1].index);
     try std.testing.expectEqual(@as(i16, 300), adjustments.items[1].x_placement);
     try std.testing.expectEqual(@as(i16, 330), adjustments.items[1].y_placement);
-    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[1].mark_base_index);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[1].attachment_parent_index);
 }
 
 test "GPOS mark-to-mark attachment skips lookup-flag ignored glyphs" {
@@ -6856,7 +6870,7 @@ test "GPOS mark-to-mark attachment skips lookup-flag ignored glyphs" {
     try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 50), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 70), adjustments.items[0].y_placement);
-    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].mark_base_index);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
 }
 
 fn writeSinglePositionLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, lookup_flag: u16, x_placement: i16) void {

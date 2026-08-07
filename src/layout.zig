@@ -1,4 +1,5 @@
 const std = @import("std");
+const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
 const GlyphClass = @import("font.zig").GlyphClass;
@@ -2725,6 +2726,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ')
     else
         0;
+    const segment_glyph_start = buffer.glyphs.items.len;
+    const attachment_links = &scratch.attachment_links;
+    try attachment_links.resize(buffer.allocator, glyph_ids.items.len);
+    @memset(attachment_links.items, .{});
     for (glyph_ids.items, 0..) |glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
@@ -2750,34 +2755,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
         else
             @as(f32, @floatFromInt(adjustment.x_advance));
-        var x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
-        if (adjustment.mark_attachment) {
-            const shaping_direction = shapingDirectionForGpos(lookup_options);
-            const advance_to_base = if (adjustment.mark_base_index) |base_index|
-                markAttachmentAdvance(buffer.glyphs.items, base_index, index, shaping_direction)
-            else if (buffer.glyphs.items.len > 0)
-                buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance
-            else
-                0.0;
-            // The accumulated advance between base and mark is already in
-            // user-space units. Apply it after scaling the font-unit GPOS
-            // placement instead of converting the combined value back to i16
-            // font units; long runs can legitimately exceed the i16 placement
-            // range even though the final f32 offset is perfectly usable.
-            x_offset = markAttachmentXOffset(adjustment.x_placement, advance_to_base, scale, shaping_direction);
-            if (adjustment.mark_base_index) |base_index| {
-                if (base_index < buffer.glyphs.items.len) {
-                    const base = buffer.glyphs.items[base_index];
-                    x_offset += base.x_offset;
-                }
-            }
+        const x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
+        const mark_attachment = adjustment.attachment_type == .mark;
+        if (mark_attachment) {
             adjustment_x_advance = -@as(f32, @floatFromInt(metrics.advance_width));
         }
         const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
         const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint);
         const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
         const zero_mark_advance = glyph_class == .mark and
-            !adjustment.mark_attachment and
+            !mark_attachment and
             !unicode.isSpacingMarkCodepoint(source_codepoint);
         const base_advance = if (hide_default_ignorable or zero_mark_advance) 0 else metrics.advance_width;
         const horizontal_advance = if (hide_default_ignorable)
@@ -2815,11 +2802,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .x_advance = if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
             .y_advance = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
             .x_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_x_offset + @as(f32, @floatFromInt(adjustment.x_placement)) * scale else x_offset,
-            .y_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale else markAttachmentYOffset(adjustment, buffer.glyphs.items, scale),
+            .y_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale else @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
+        if (!hide_default_ignorable) {
+            attachment_links.items[index] = attachmentLinkForAdjustment(adjustment);
+        }
         previous_glyph = glyph_id;
     }
+    propagateGlyphAttachmentOffsets(buffer.glyphs.items[segment_glyph_start..], attachment_links.items, lookup_options);
     if (shape_profile) |p| p.position_ns += shapeProfileElapsed(position_start, profile_io);
 }
 
@@ -2959,47 +2950,21 @@ fn defaultLigatureComponentInfo(source_index: usize) gpos.LigatureComponentInfo 
     return info;
 }
 
-fn advanceBetweenGlyphs(glyphs: []const GlyphPosition, base_index: usize, mark_index: usize) f32 {
-    if (mark_index <= base_index or base_index >= glyphs.len) return 0.0;
-    const end = @min(mark_index, glyphs.len);
-    var advance: f32 = 0.0;
-    for (glyphs[base_index..end]) |glyph| {
-        advance += glyph.x_advance;
-    }
-    return advance;
-}
-
-fn advanceAfterBaseBeforeMark(glyphs: []const GlyphPosition, base_index: usize, mark_index: usize) f32 {
-    if (mark_index <= base_index + 1 or base_index + 1 >= glyphs.len) return 0.0;
-    const end = @min(mark_index, glyphs.len);
-    var advance: f32 = 0.0;
-    for (glyphs[base_index + 1 .. end]) |glyph| {
-        advance += glyph.x_advance;
-    }
-    return advance;
-}
-
-fn markAttachmentAdvance(glyphs: []const GlyphPosition, base_index: usize, mark_index: usize, shaping_direction: TextDirection) f32 {
-    return switch (shaping_direction) {
-        .ltr => advanceBetweenGlyphs(glyphs, base_index, mark_index),
-        .rtl => advanceAfterBaseBeforeMark(glyphs, base_index, mark_index),
+fn attachmentLinkForAdjustment(adjustment: gpos.Adjustment) attachment.Link {
+    return switch (adjustment.attachment_type) {
+        .none => .{},
+        .mark => .{ .kind = .mark, .parent_index = adjustment.attachment_parent_index },
+        .cursive => .{ .kind = .cursive, .parent_index = adjustment.attachment_parent_index },
     };
 }
 
-fn markAttachmentXOffset(x_placement_font_units: i16, advance_to_base: f32, scale: f32, shaping_direction: TextDirection) f32 {
-    const placement = @as(f32, @floatFromInt(x_placement_font_units)) * scale;
-    return switch (shaping_direction) {
-        .ltr => placement - advance_to_base,
-        .rtl => placement + advance_to_base,
+fn propagateGlyphAttachmentOffsets(glyphs: []GlyphPosition, links: []attachment.Link, options: LookupOptions) void {
+    const direction: attachment.Direction = switch (shapingDirectionForGpos(options)) {
+        .ltr => .forward,
+        .rtl => .backward,
     };
-}
-
-fn markAttachmentYOffset(adjustment: gpos.Adjustment, glyphs: []const GlyphPosition, scale: f32) f32 {
-    const y_offset = @as(f32, @floatFromInt(adjustment.y_placement)) * scale;
-    if (!adjustment.mark_attachment) return y_offset;
-    const base_index = adjustment.mark_base_index orelse return y_offset;
-    if (base_index >= glyphs.len) return y_offset;
-    return y_offset + glyphs[base_index].y_offset;
+    const axis: attachment.Axis = if (options.writing_mode.isVertical()) .vertical else .horizontal;
+    attachment.propagateOffsets(GlyphPosition, glyphs, links, direction, axis);
 }
 
 fn shapingDirectionForGpos(options: LookupOptions) TextDirection {
@@ -3502,34 +3467,20 @@ test "sorted adjustment cursor finds sparse GPOS entries in linear order" {
     try std.testing.expect(found_3.pair_positioned);
 }
 
-test "mark attachment offsets stay in user space for long advances" {
-    const scale: f32 = 12.0 / 1000.0;
+test "mark attachment propagation keeps long advances in user space" {
+    var glyphs = [_]GlyphPosition{
+        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 50000 },
+        .{ .glyph_id = 2, .codepoint = 'A', .cluster = 1, .x_advance = 0, .x_offset = 12 },
+    };
+    var links = [_]attachment.Link{
+        .{},
+        .{ .kind = .mark, .parent_index = 0 },
+    };
 
-    try std.testing.expectApproxEqAbs(
-        @as(f32, 24.0 - 48.0),
-        markAttachmentXOffset(2000, 48.0, scale, .ltr),
-        0.0001,
-    );
-
-    try std.testing.expectApproxEqAbs(
-        @as(f32, 24.0),
-        markAttachmentXOffset(2000, 0.0, scale, .rtl),
-        0.0001,
-    );
-
-    try std.testing.expectApproxEqAbs(
-        @as(f32, 24.0 + 12.0),
-        markAttachmentXOffset(2000, 12.0, scale, .rtl),
-        0.0001,
-    );
+    attachment.propagateOffsets(GlyphPosition, &glyphs, &links, .forward, .horizontal);
 
     // Large paragraphs can place a mark many glyph advances after its base
     // before MarkBase/MarkLig positioning pulls it back. This offset is well
-    // within f32 layout range but outside the i16 font-unit storage used by
-    // raw GPOS records; it must not be converted back through i16.
-    try std.testing.expectApproxEqAbs(
-        @as(f32, 12.0 - 50000.0),
-        markAttachmentXOffset(1000, 50000.0, scale, .ltr),
-        0.01,
-    );
+    // within f32 layout range and must not be converted back through i16.
+    try std.testing.expectApproxEqAbs(@as(f32, 12.0 - 50000.0), glyphs[1].x_offset, 0.01);
 }

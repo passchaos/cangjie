@@ -1219,6 +1219,7 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
 }
 
 fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) bool {
+    if (lookup_flag == 0) return false;
     const classes = options.glyph_classes;
     const class = if (classes) |items| if (glyph < items.len) items[glyph] else 0 else 0;
 

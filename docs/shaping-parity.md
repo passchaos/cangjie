@@ -91,14 +91,20 @@ Representative performance state near that commit:
 Current local snapshot after the Nastaliq parity work:
 
 - Amiri `fa-thelittleprince`, Cangjie default visual-order path: about
-  `2254 ns/glyph` median.
+  `2262 ns/glyph` median after moving GPOS Coverage format 2 and ClassDef
+  format 2 range searches to a shared binary-search helper.
 - Amiri `fa-thelittleprince`, Cangjie with `--no-bidi-reorder`: about
-  `1863 ns/glyph` median.
+  `1789 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1263 ns/glyph` median.
 - HarfRust Criterion in-process reference for Amiri `fa-thelittleprince`:
   about `48.2 ms` per full text for HarfRust and `54.9 ms` for HarfBuzz
   through `harfbuzz_rs`; Cangjie remains multiple times slower on the same
   workload, so the performance goal is not close to complete.
+- A profile run after the GPOS range-search change reduced Amiri
+  `fa-thelittleprince` GPOS time from about `155 ms` to about `111 ms`; lookup
+  `74` fell from about `24.4 ms` to `5.7 ms`, and lookup `57` from about
+  `21.0 ms` to `6.1 ms`. The host was not fully idle, so use this as hotspot
+  direction rather than a final headline benchmark.
 
 Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 
@@ -147,6 +153,7 @@ goal is active, not complete.
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
 - Continue Arabic hot-path work from measured profile evidence:
-  GSUB `calt` context lookups and GPOS lookups `37`, `57`, and `74`.
+  GSUB `calt` context lookups, GPOS lookup `37`, and the remaining mark/cursive
+  paths after the shared range-search cleanup.
 - Avoid retaining optimizations that only improve a single noisy run or regress
   Roboto/word-list smoke cases.

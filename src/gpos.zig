@@ -2,6 +2,7 @@ const std = @import("std");
 const bin = @import("binary.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
+const ot_layout = @import("opentype/layout.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
 
@@ -3516,18 +3517,12 @@ fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GposError
         2 => {
             const range_count = try readU16(table, coverage_offset + 2);
             if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
-            for (0..range_count) |i| {
-                const range_offset = coverage_offset + 4 + i * 6;
-                const start = try readU16(table, range_offset);
-                const end = try readU16(table, range_offset + 2);
-                const start_index = try readU16(table, range_offset + 4);
-                if (glyph >= start and glyph <= end) {
-                    // Keep coverage-index arithmetic in usize. Malformed or
-                    // edge-of-glyph-space ranges can otherwise overflow u16 in
-                    // safety builds before callers get a chance to bounds-check
-                    // the resulting index against their subtable-specific counts.
-                    return @as(usize, start_index) + (@as(usize, glyph) - @as(usize, start));
-                }
+            if (try findSortedGlyphRangeRecord(table, coverage_offset + 4, range_count, glyph)) |record| {
+                // Keep coverage-index arithmetic in usize. Malformed or
+                // edge-of-glyph-space ranges can otherwise overflow u16 in
+                // safety builds before callers get a chance to bounds-check
+                // the resulting index against their subtable-specific counts.
+                return @as(usize, record.value) + (@as(usize, glyph) - @as(usize, record.start));
             }
             return null;
         },
@@ -3591,6 +3586,14 @@ fn appendChainingSubtablePairs(table: Table, coverage_offset: usize, subtable_in
         },
         else => return error.UnsupportedGpos,
     }
+}
+
+fn findSortedGlyphRangeRecord(table: Table, records_offset: usize, range_count: u16, glyph: GlyphId) GposError!?ot_layout.GlyphRangeRecord {
+    if (table.offset > table.data.len or table.length > table.data.len - table.offset) return error.EndOfStream;
+    const data = table.data[table.offset .. table.offset + table.length];
+    return ot_layout.findSortedGlyphRangeRecord(data, records_offset, range_count, glyph) catch |err| switch (err) {
+        error.EndOfStream => error.EndOfStream,
+    };
 }
 
 fn buildChainingSubtableGroups(pairs: []ChainingSubtablePair, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ChainingSubtableGroup {
@@ -3721,14 +3724,7 @@ fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u
         2 => {
             const range_count = try readU16(table, class_def_offset + 2);
             if (!table.assume_validated) try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
-            for (0..range_count) |i| {
-                const range_offset = class_def_offset + 4 + i * 6;
-                const start = try readU16(table, range_offset);
-                const end = try readU16(table, range_offset + 2);
-                const class = try readU16(table, range_offset + 4);
-                if (glyph >= start and glyph <= end) return class;
-            }
-            return 0;
+            return if (try findSortedGlyphRangeRecord(table, class_def_offset + 4, range_count, glyph)) |record| record.value else 0;
         },
         else => return error.UnsupportedGpos,
     }

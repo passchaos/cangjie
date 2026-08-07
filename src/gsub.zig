@@ -2739,7 +2739,7 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, current_glyph) orelse continue;
             const second_glyph_index = nextUnignoredGlyphIndex(glyphs.items, pos + 1, lookup_flag, options, false, pos);
             const second_glyph = if (second_glyph_index) |index| glyphs.items[index] else null;
-            var third_glyph: ?GlyphId = null;
+            var third_glyph_index: ?usize = null;
             var third_glyph_resolved = false;
             for (grouped_subtables) |subtable_i| {
                 const parsed_subtable = if (subtable_i < accel.chaining_subtables.len and accel.chaining_subtables[subtable_i].input_count != 0)
@@ -2753,16 +2753,20 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
                     }
                     if (subtable.input_count > 2) {
                         if (!third_glyph_resolved) {
-                            third_glyph = if (second_glyph_index) |index|
-                                nextUnignoredGlyph(glyphs.items, index + 1, lookup_flag, options, false, pos)
+                            third_glyph_index = if (second_glyph_index) |index|
+                                nextUnignoredGlyphIndex(glyphs.items, index + 1, lookup_flag, options, false, pos)
                             else
                                 null;
                             third_glyph_resolved = true;
                         }
-                        const glyph = third_glyph orelse continue;
+                        const index = third_glyph_index orelse continue;
+                        const glyph = glyphs.items[index];
                         if (!subtable.third_input_digest.mayHave(glyph)) continue;
                     }
-                    const result = try applyAcceleratedChainingCoverageSubstitutionAt(table, subtable, glyphs, pos, allocator, lookup_flag, options);
+                    const result = if (subtable.backtrack_count == 0 and subtable.lookahead_count == 0 and subtable.input_count <= 3)
+                        try applyAcceleratedChainingCoverageNoContextAt(table, subtable, glyphs, pos, second_glyph_index, third_glyph_index, allocator, options)
+                    else
+                        try applyAcceleratedChainingCoverageSubstitutionAt(table, subtable, glyphs, pos, allocator, lookup_flag, options);
                     if (result.matched) {
                         next_pos = @max(next_pos, result.next_pos);
                         break;
@@ -3234,6 +3238,22 @@ fn applyAcceleratedChainingCoverageSubstitutionAt(table: Table, subtable_info: C
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, lookahead_indices_buf[0..subtable_info.lookahead_count], subtable_info.lookahead_offsets_pos)) return .{};
     try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices_buf[0..subtable_info.input_count], allocator, options);
     return .{ .matched = true, .next_pos = input_indices_buf[subtable_info.input_count - 1] + 1 };
+}
+
+fn applyAcceleratedChainingCoverageNoContextAt(table: Table, subtable_info: ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, second_glyph_index: ?usize, third_glyph_index: ?usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
+    if (subtable_info.input_count == 0 or subtable_info.input_count > 3) return .{};
+    var input_indices_buf: [3]usize = undefined;
+    input_indices_buf[0] = pos;
+    if (subtable_info.input_count > 1) {
+        input_indices_buf[1] = second_glyph_index orelse return .{};
+    }
+    if (subtable_info.input_count > 2) {
+        input_indices_buf[2] = third_glyph_index orelse return .{};
+    }
+    const input_indices = input_indices_buf[0..subtable_info.input_count];
+    if (!try coverageIndicesMatchFrom(table, subtable_info.subtable_offset, glyphs.items, input_indices, subtable_info.input_offsets_pos, 1)) return .{};
+    try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices, allocator, options);
+    return .{ .matched = true, .next_pos = input_indices[input_indices.len - 1] + 1 };
 }
 
 const CoverageSequenceKind = enum {

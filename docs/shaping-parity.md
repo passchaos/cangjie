@@ -96,8 +96,15 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `--language ara`.
 - Amiri `fa-words.txt` passes default `compare-harfrust` for 10,000 lines.
 - Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
+- SourceSerifVariable `en-words.txt` passes `compare-harfrust` for 12,391
+  lines.
+- SourceSerifVariable `en-thelittleprince.txt` passes `compare-harfrust` for
+  1,172 lines.
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
   lines.
+- NotoNastaliqUrdu `"سلام"` passes `compare-harfrust`; longer
+  `fa-words.txt` slices reach the real shaping path but are currently too slow
+  to use as a retained correctness gate.
 - NotoSansDevanagari parses and focused words `के`, `कि`, `की`, `का`,
   `श्रेणी`, `वार्ता`, `वर्षों`, `उत्तराखण्ड`, `हिन्दी`, `द्वारा`, `रूप`,
   `फ़िल्म`, `क्षेत्र`, `स्थित`, `एक्स्प्रेस`, `सन्`, `व्यक्ति`, `ा`,
@@ -116,9 +123,9 @@ goal is active, not complete.
   the only external timing baseline. The current `harfrust` `shape-bench`
   engine is a batch external-process baseline, not a fully fair in-process
   performance baseline.
-- Expand the benchmark matrix beyond Amiri and Roboto:
-  `NotoSansDevanagari-Regular.ttf`, `NotoNastaliqUrdu-Regular.ttf`,
-  `SourceSerifVariable-Roman.ttf`, and the harfrust text corpus.
+- Expand the benchmark matrix beyond Amiri, Roboto, SourceSerifVariable, and
+  the active Devanagari gate; NotoNastaliqUrdu still needs a practical longer
+  corpus gate after its GSUB slow path is optimized.
 - Track output parity, not only timing. `compare-harfrust` now compares glyph
   ids, clusters, advances, and offsets in HarfBuzz-style buffer order; feature
   override and broader font/script matrices still need expansion.

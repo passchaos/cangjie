@@ -143,56 +143,23 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `ट्विटर`, `वैश्विक`, `श्वि`, `क्वि`, and `ट्वि` pass `compare-harfrust`.
 - NotoSansDevanagari `hi-words.txt` passes `compare-harfrust` for 10,000
   lines.
-- NotoSansDuployan `duployan.txt` currently fails `compare-harfrust` even with
-  the local `/Users/bytedance/Work/harfbuzz/perf/fonts/NotoSansDuployan-Regular.otf`.
-  The initial failure was a large no-shaping mismatch; adding Duployan script
-  routing and a minimal USE-style feature sequence makes short samples expand
-  close to HarfRust, but full parity still needs USE syllable/reordering work.
-  A dedicated `src/use/` scaffold now covers USE category mapping and syllable
-  segmentation tests for the active Duployan sample without changing runtime
-  shaping behavior. The short smoke remains a failing gate at Cangjie `333`
-  glyphs versus HarfRust `335`, so this is structure and test foundation only,
-  not a parity claim.
-  Focused diagnosis narrowed the first short-smoke glyph-id mismatch to the
-  two-base input `"𛰂𛱛"`: the first differing glyph is in the second source
-  cluster at byte offset `4` (`U+1BC5B`). Wiring USE source syllables and a
-  HarfBuzz-style merged final GSUB stage now applies `blwm` before the relevant
-  `rclt`/`dist` lookups in LookupList order, so the two-base gate reaches
-  `161` glyphs on both Cangjie and HarfRust. This is still not parity: the
-  first glyph-id mismatch moved to index `104`, where Cangjie emits
-  `_.RDX.0E1, _.RDX.2E2` (`11465,11479`) and HarfRust emits
-  `_.RDX.3E1, _.RDX.0E2` (`11468,11477`).
-  Profile lookup deltas for `"𛰂𛱛"` identify `rclt` lookup `279` as the first
-  count-changing GSUB step (`2 -> 4` glyphs); later `dist` lookups expand that
-  intermediate stream to Cangjie's `160` glyphs. Use that lookup as the first
-  focused gate for implementing USE per-syllable common-feature matching.
-  GSUB now has opt-in source-syllable matching plus a merged feature lookup
-  plan for HarfBuzz-style stage execution. USE runtime shaping uses the source
-  syllable metadata for its per-syllable stages and uses the merged final stage
-  for `abvs/blws/haln/pres/psts` plus common/horizontal features such as
-  `abvm`, `blwm`, `dist`, and `rclt`.
-  Additional profile tracing reports the first changed glyph index per lookup:
-  on `"𛰂𛱛"`, lookup `279` first changes index `1`, lookup `280` first changes
-  index `2`, and lookup `248` first changes index `0`. The next implementation
-  should use these lookup-local windows to avoid moving the first-cluster
-  output while repairing the second-cluster `U+1BC5B` mismatch.
-  The current lookup-local window is: lookup `279` changes `[73,129]` to
-  `[73,7930]`; lookup `280` changes `[73,7930,129,7942]` to
-  `[73,7930,223,7942]`; lookup `248` then changes `[73,7930,223,7942]`
-  to `[7828,73,7930,223]`. In glyph names, lookup `280` rewrites
-  `u1BC5B.ou` (`129`) to `u1BC5B.ou.270p270` (`223`), preventing the later
-  `blwm` lookup `248` from inserting `_.pe.0.0` for the second cluster.
-  After the staged USE wiring, that `blwm` insertion happens. The next GSUB
-  slice fixed extension-wrapped chaining-context lookup ordering so matched
-  no-op subtables consume their input span like HarfBuzz/HarfRust. That removes
-  the two-base glyph-id mismatch. The following CursivePos slice fixed the
-  remaining two-base advance/offset mismatch by separating buffer direction
-  from LookupFlag direction and by letting overlapping cursive joins read the
-  placement state produced by earlier joins. The focused two-base gate
-  `𛰂𛱛` now passes against HarfRust with 161 glyphs.
-  The short mixed CGJ/ZWNJ sample is still not parity yet. Its first glyph-id
-  mismatch remains later in the byte-14 segment, so the second-cluster
-  `U+1BC5B` path is no longer the first blocker.
+- NotoSansDuployan still needs broad corpus validation, but the active focused
+  USE blockers now pass against HarfRust with glyph id, UTF-8 cluster, advance,
+  and offset parity:
+  - `𛰂𛱛` passes with 161 glyphs.
+  - `𛰜‌𛰂` passes with 169 glyphs.
+  - `𛰂𛱛͏͏͏𛰜‌𛰂` passes with 335 glyphs.
+  The fixes are structural rather than sample-specialized: USE final features
+  now mirror HarfBuzz/HarfRust's `abvs/blws/haln/pres/psts` stage, common
+  typographic features such as `abvm`, `blwm`, `dist`, and `rclt` run in a
+  separate typographic pass, and GSUB/GPOS carry a `glyph_substituted` bit so
+  untouched default-ignorables remain transparent while glyphs touched by GSUB
+  stay visible to later matching and final hiding. This matches the HarfBuzz
+  `_hb_glyph_info_is_default_ignorable()` contract used by HarfRust.
+  Earlier focused slices also fixed extension-wrapped chaining-context lookup
+  ordering and CursivePos placement/advance chaining. The remaining Duployan
+  work is to validate the full local `duployan.txt` corpus and other USE fonts
+  before making a broader USE parity claim.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.
@@ -213,9 +180,10 @@ goal is active, not complete.
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
-- Finish Duployan/USE shaping parity. The current `dupl` script route applies
-  a minimal USE feature sequence, but does not yet implement HarfBuzz/HarfRust
-  USE per-syllable masks or reordering.
+- Finish Duployan/USE shaping parity at corpus scale. The active short
+  Duployan gates pass, but full local `duployan.txt`, other USE scripts, and
+  fuzz/corpus failures still need retained gates before this can be called
+  broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence:
   GSUB `calt` context lookups, GPOS lookup `37`, and the remaining mark/cursive
   paths after the shared range-search cleanup.

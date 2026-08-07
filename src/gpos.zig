@@ -5210,6 +5210,49 @@ test "GPOS cursive attachment skips lookup-flag ignored glyphs" {
     try std.testing.expectEqual(@as(i16, 25), adjustments.items[1].y_placement);
 }
 
+test "GPOS cursive attachment skips only unsubstituted default ignorables" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+
+    writeU16Test(&bytes, 0, 3);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const cursive = 8;
+    writeU16Test(&bytes, cursive + 0, 1);
+    writeU16Test(&bytes, cursive + 2, 14);
+    writeU16Test(&bytes, cursive + 4, 2);
+    writeU16Test(&bytes, cursive + 6, 0);
+    writeU16Test(&bytes, cursive + 8, 22);
+    writeU16Test(&bytes, cursive + 10, 28);
+    writeU16Test(&bytes, cursive + 12, 0);
+    writeCoverage1ListTest(&bytes, cursive + 14, &.{ 10, 12 });
+    writeAnchor1Test(&bytes, cursive + 22, 100, 30);
+    writeAnchor1Test(&bytes, cursive + 28, 20, 5);
+
+    const glyphs = [_]GlyphId{ 10, 11, 12 };
+    const sources = [_]usize{ 0, 1, 2 };
+    const codepoints = [_]u21{ 'A', 0x034f, 'B' };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_source_indices = &sources,
+        .source_codepoints = &codepoints,
+        .glyph_substituted = &.{ false, false, false },
+    });
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
+
+    adjustments.clearRetainingCapacity();
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_source_indices = &sources,
+        .source_codepoints = &codepoints,
+        .glyph_substituted = &.{ false, true, false },
+    });
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
 test "GPOS mark-to-base stops at intervening non-covered base" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 64;

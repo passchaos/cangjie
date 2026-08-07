@@ -6813,6 +6813,30 @@ test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 4, 9, 5, 3 }, glyphs.items);
 }
 
+test "GSUB substituted default ignorables stay visible to contextual matching" {
+    const allocator = std.testing.allocator;
+    const glyphs = [_]GlyphId{ 10, 11, 12 };
+    const codepoints = [_]u21{ 'A', 0x200c, 'B' };
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(allocator);
+    try substituted.appendSlice(allocator, &.{ false, false, false });
+
+    const options = LookupOptions{
+        .glyph_source_indices = &sources,
+        .glyph_substituted = &substituted,
+        .source_codepoints = &codepoints,
+    };
+
+    try std.testing.expect(contextualMaySkipGlyph(0, options, &glyphs, 1, true));
+    substituted.items[1] = true;
+    try std.testing.expect(!contextualMaySkipGlyph(0, options, &glyphs, 1, true));
+}
+
 test "GSUB reverse chaining subtables do not cascade within lookup" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 84;

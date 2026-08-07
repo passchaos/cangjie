@@ -100,6 +100,7 @@ pub const NameEncoding = @import("font.zig").NameEncoding;
 pub const NameId = @import("font.zig").NameId;
 pub const NameLanguageTagInfo = @import("font.zig").NameLanguageTagInfo;
 pub const NameRecordInfo = @import("font.zig").NameRecordInfo;
+pub const Os2Info = @import("font.zig").Os2Info;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
 pub const GdefMetadataCache = @import("layout.zig").GdefMetadataCache;
@@ -3676,6 +3677,18 @@ test "uses OS/2 style attributes for database matching" {
     try std.testing.expect(attributes.italic);
     try std.testing.expect(!attributes.bold);
 
+    const os2 = (try narrow_italic.os2Info()).?;
+    try std.testing.expectEqual(@as(u16, 4), os2.version);
+    try std.testing.expectEqual(@as(u16, 650), os2.weight_class);
+    try std.testing.expectEqual(@as(u16, 3), os2.width_class);
+    try std.testing.expectEqual(@as(u16, 0x0001), os2.selection);
+    try std.testing.expectEqual(@as(i16, 650), os2.subscript_x_size);
+    try std.testing.expectEqual(@as(i16, 120), os2.subscript_y_offset);
+    try std.testing.expectEqual(@as(i16, 0), os2.typo_ascender);
+    try std.testing.expect(os2.code_page_ranges != null);
+    try std.testing.expect(os2.x_height != null);
+    try std.testing.expect(os2.lower_optical_point_size == null);
+
     var database = FontDatabase.init(allocator);
     defer database.deinit();
     _ = try database.addFont(&regular);
@@ -3686,6 +3699,32 @@ test "uses OS/2 style attributes for database matching" {
     try std.testing.expectEqual(@as(u16, 650), matched.weight);
     try std.testing.expectEqual(@as(u16, 75), matched.stretch);
     try std.testing.expectEqual(FontStyle.italic, matched.style);
+}
+
+test "OS/2 info handles missing and borrowed mutated tables" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.os2Info()) == null);
+
+    const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Regular", "Metric Sans Regular", 400, 5, false, false);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expect((try font.os2Info()) != null);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var os2_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "OS/2")) os2_offset = table.offset;
+    }
+    bytes[os2_offset orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.os2Info());
 }
 
 test "builds coverage-aware fallback cascades from the font database" {

@@ -113,6 +113,44 @@ pub const StyleAttributes = struct {
     bold: bool = false,
 };
 
+pub const Os2Info = struct {
+    version: u16,
+    x_avg_char_width: i16,
+    weight_class: u16,
+    width_class: u16,
+    fs_type: u16,
+    subscript_x_size: i16,
+    subscript_y_size: i16,
+    subscript_x_offset: i16,
+    subscript_y_offset: i16,
+    superscript_x_size: i16,
+    superscript_y_size: i16,
+    superscript_x_offset: i16,
+    superscript_y_offset: i16,
+    strikeout_size: i16,
+    strikeout_position: i16,
+    family_class: i16,
+    panose: [10]u8,
+    unicode_ranges: [4]u32,
+    vendor_id: [4]u8,
+    selection: u16,
+    first_char_index: u16,
+    last_char_index: u16,
+    typo_ascender: i16,
+    typo_descender: i16,
+    typo_line_gap: i16,
+    win_ascent: u16,
+    win_descent: u16,
+    code_page_ranges: ?[2]u32 = null,
+    x_height: ?i16 = null,
+    cap_height: ?i16 = null,
+    default_char: ?u16 = null,
+    break_char: ?u16 = null,
+    max_context: ?u16 = null,
+    lower_optical_point_size: ?u16 = null,
+    upper_optical_point_size: ?u16 = null,
+};
+
 pub const FontDecorationMetricSource = enum {
     font,
     fallback,
@@ -1548,6 +1586,14 @@ pub const Font = struct {
         const os2 = self.os2 orelse return .{};
         try validateSfntTableChecksum(self.data, os2);
         return try readOs2StyleAttributes(self.data, os2);
+    }
+
+    /// Read validated metadata from the optional SFNT `OS/2` table.
+    pub fn os2Info(self: *const Font) FontError!?Os2Info {
+        const os2 = self.os2 orelse return null;
+        try validateSfntTableChecksum(self.data, os2);
+        _ = try readOs2StyleAttributes(self.data, os2);
+        return try readOs2Info(self.data, os2);
     }
 
     pub fn variationAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationAxis {
@@ -3316,6 +3362,72 @@ fn minimumOs2TableLength(version: u16) FontError!usize {
 
 fn validateOs2Table(data: []const u8, os2: TableRecord) FontError!void {
     _ = try readOs2StyleAttributes(data, os2);
+}
+
+fn readOs2Info(data: []const u8, os2: TableRecord) FontError!Os2Info {
+    try requireTableLength(os2, 2);
+    const version = try bin.readU16At(data, os2.offset);
+    try requireTableLength(os2, try minimumOs2TableLength(version));
+
+    var info = Os2Info{
+        .version = version,
+        .x_avg_char_width = try bin.readI16At(data, os2.offset + 2),
+        .weight_class = try bin.readU16At(data, os2.offset + 4),
+        .width_class = try bin.readU16At(data, os2.offset + 6),
+        .fs_type = try bin.readU16At(data, os2.offset + 8),
+        .subscript_x_size = try bin.readI16At(data, os2.offset + 10),
+        .subscript_y_size = try bin.readI16At(data, os2.offset + 12),
+        .subscript_x_offset = try bin.readI16At(data, os2.offset + 14),
+        .subscript_y_offset = try bin.readI16At(data, os2.offset + 16),
+        .superscript_x_size = try bin.readI16At(data, os2.offset + 18),
+        .superscript_y_size = try bin.readI16At(data, os2.offset + 20),
+        .superscript_x_offset = try bin.readI16At(data, os2.offset + 22),
+        .superscript_y_offset = try bin.readI16At(data, os2.offset + 24),
+        .strikeout_size = try bin.readI16At(data, os2.offset + 26),
+        .strikeout_position = try bin.readI16At(data, os2.offset + 28),
+        .family_class = try bin.readI16At(data, os2.offset + 30),
+        .panose = try readArray10At(data, os2.offset + 32),
+        .unicode_ranges = .{
+            try bin.readU32At(data, os2.offset + 42),
+            try bin.readU32At(data, os2.offset + 46),
+            try bin.readU32At(data, os2.offset + 50),
+            try bin.readU32At(data, os2.offset + 54),
+        },
+        .vendor_id = try bin.readTagAt(data, os2.offset + 58),
+        .selection = try bin.readU16At(data, os2.offset + 62),
+        .first_char_index = try bin.readU16At(data, os2.offset + 64),
+        .last_char_index = try bin.readU16At(data, os2.offset + 66),
+        .typo_ascender = try bin.readI16At(data, os2.offset + 68),
+        .typo_descender = try bin.readI16At(data, os2.offset + 70),
+        .typo_line_gap = try bin.readI16At(data, os2.offset + 72),
+        .win_ascent = try bin.readU16At(data, os2.offset + 74),
+        .win_descent = try bin.readU16At(data, os2.offset + 76),
+    };
+    if (version >= 1) {
+        info.code_page_ranges = .{
+            try bin.readU32At(data, os2.offset + 78),
+            try bin.readU32At(data, os2.offset + 82),
+        };
+    }
+    if (version >= 2) {
+        info.x_height = try bin.readI16At(data, os2.offset + 86);
+        info.cap_height = try bin.readI16At(data, os2.offset + 88);
+        info.default_char = try bin.readU16At(data, os2.offset + 90);
+        info.break_char = try bin.readU16At(data, os2.offset + 92);
+        info.max_context = try bin.readU16At(data, os2.offset + 94);
+    }
+    if (version >= 5) {
+        info.lower_optical_point_size = try bin.readU16At(data, os2.offset + 96);
+        info.upper_optical_point_size = try bin.readU16At(data, os2.offset + 98);
+    }
+    return info;
+}
+
+fn readArray10At(data: []const u8, offset: usize) FontError![10]u8 {
+    if (offset > data.len or data.len - offset < 10) return error.BadSfnt;
+    var value: [10]u8 = undefined;
+    @memcpy(&value, data[offset .. offset + 10]);
+    return value;
 }
 
 fn readOs2StyleAttributes(data: []const u8, os2: TableRecord) FontError!StyleAttributes {

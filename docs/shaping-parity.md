@@ -175,6 +175,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   index `2`, and lookup `248` first changes index `0`. The next implementation
   should use these lookup-local windows to avoid moving the first-cluster
   output while repairing the second-cluster `U+1BC5B` mismatch.
+  The current lookup-local window is: lookup `279` changes `[73,129]` to
+  `[73,7930]`; lookup `280` changes `[73,7930,129,7942]` to
+  `[73,7930,223,7942]`; lookup `248` then changes `[73,7930,223,7942]`
+  to `[7828,73,7930,223]`. In glyph names, lookup `280` rewrites
+  `u1BC5B.ou` (`129`) to `u1BC5B.ou.270p270` (`223`), preventing the later
+  `blwm` lookup `248` from inserting `_.pe.0.0` for the second cluster.
 
 Conclusion: Arabic long text still trails CoreText substantially. The broad
 goal is active, not complete.

@@ -177,6 +177,15 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
             entry.last_hash_after,
             entry.last_first_diff,
         });
+        if (entry.last_hash_before != entry.last_hash_after and entry.window_len != 0) {
+            std.debug.print(
+                \\profile_gsub_lookup_window index={d} start={d} before=
+            , .{ entry.lookup_index, entry.window_start });
+            printU16Array(entry.glyphs_before_window[0..entry.window_len]);
+            std.debug.print(" after=", .{});
+            printU16Array(entry.glyphs_after_window[0..entry.window_len]);
+            std.debug.print("\n", .{});
+        }
     }
     for (result.profile.gpos_lookup_entries[0..result.profile.gpos_lookup_entry_count]) |entry| {
         std.debug.print(
@@ -235,6 +244,13 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
 fn printI32Array(label: []const u8, values: []const i32) void {
     if (values.len == 0) return;
     std.debug.print("{s}=", .{label});
+    for (values, 0..) |value, index| {
+        if (index != 0) std.debug.print(",", .{});
+        std.debug.print("{d}", .{value});
+    }
+}
+
+fn printU16Array(values: []const u16) void {
     for (values, 0..) |value, index| {
         if (index != 0) std.debug.print(",", .{});
         std.debug.print("{d}", .{value});

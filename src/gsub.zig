@@ -908,8 +908,12 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
     defer if (options.shape_profile != null) allocator.free(glyphs_before);
     defer {
         if (options.shape_profile) |profile| {
+            const first_diff = firstDifferentGlyphIndex(glyphs_before, glyphs.items);
+            const window_start = first_diff -| 2;
+            const before_window = glyphs_before[window_start..@min(glyphs_before.len, window_start + shape_profile_mod.ShapeStageProfile.lookup_window_capacity)];
+            const after_window = glyphs.items[window_start..@min(glyphs.items.len, window_start + shape_profile_mod.ShapeStageProfile.lookup_window_capacity)];
             profile.recordGsubLookupTime(lookup_index, shapeProfileElapsed(lookup_start, options.profile_io));
-            profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, glyphRunHash(glyphs.items), firstDifferentGlyphIndex(glyphs_before, glyphs.items));
+            profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, glyphRunHash(glyphs.items), first_diff, window_start, before_window, after_window);
         }
     }
     try ensureLookupHeaderWithin(table, lookup_offset);

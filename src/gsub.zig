@@ -1944,6 +1944,8 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
                         const glyph = second_glyph orelse continue;
                         if (!subtable.second_input_digest.mayHave(glyph)) continue;
                     }
+                    if (try applyAcceleratedChainingCoverageSubstitutionAt(table, subtable, glyphs, pos, allocator, lookup_flag, options)) break;
+                    continue;
                 }
                 if (try applyChainingContextSubstitutionAt(table, subtable_offset, parsed_subtable, glyphs, pos, allocator, lookup_flag, options)) break;
             }
@@ -2113,6 +2115,29 @@ fn applyChainingCoverageSubstitutionAt(table: Table, subtable_info: ChainingCove
     return true;
 }
 
+fn applyAcceleratedChainingCoverageSubstitutionAt(table: Table, subtable_info: ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!bool {
+    // The lookup accelerator groups format-3 chaining subtables by their first
+    // input Coverage. Reuse that proof here and only test the remaining input
+    // coverages plus the backtrack/lookahead regions.
+    if (subtable_info.input_count == 0) return false;
+    var input_indices_buf: [64]usize = undefined;
+    if (subtable_info.input_count > input_indices_buf.len) return error.UnsupportedGsub;
+    if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..subtable_info.input_count], false)) return false;
+    if (input_indices_buf[0] != pos) return false;
+    if (!try coverageIndicesMatchFrom(table, subtable_info.subtable_offset, glyphs.items, input_indices_buf[0..subtable_info.input_count], subtable_info.input_offsets_pos, 1)) return false;
+    var backtrack_indices_buf: [64]usize = undefined;
+    if (subtable_info.backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
+    if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..subtable_info.backtrack_count], true)) return false;
+    const lookahead_start = input_indices_buf[subtable_info.input_count - 1] + 1;
+    var lookahead_indices_buf: [64]usize = undefined;
+    if (subtable_info.lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
+    if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable_info.lookahead_count], true)) return false;
+    if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, backtrack_indices_buf[0..subtable_info.backtrack_count], subtable_info.backtrack_offsets_pos)) return false;
+    if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, lookahead_indices_buf[0..subtable_info.lookahead_count], subtable_info.lookahead_offsets_pos)) return false;
+    try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices_buf[0..subtable_info.input_count], allocator, options);
+    return true;
+}
+
 const CoverageSequenceKind = enum {
     backtrack,
     input,
@@ -2159,7 +2184,13 @@ fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_f
 }
 
 fn coverageIndicesMatch(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize) GsubError!bool {
-    for (indices, 0..) |glyph_index, i| {
+    return coverageIndicesMatchFrom(table, base_offset, glyphs, indices, offsets_pos, 0);
+}
+
+fn coverageIndicesMatchFrom(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize, start: usize) GsubError!bool {
+    var i = start;
+    while (i < indices.len) : (i += 1) {
+        const glyph_index = indices[i];
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
         if (try coverageIndex(table, coverage_offset, glyphs[glyph_index]) == null) return false;
     }

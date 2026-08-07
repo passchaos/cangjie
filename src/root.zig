@@ -264,6 +264,16 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
     }
     try std.testing.expect(saw_head);
 
+    var hhea_info: ?FontTableInfo = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "hhea")) hhea_info = table;
+    }
+    const hhea_record = hhea_info orelse return error.MissingTable;
+    const hhea_data = (try font.tableData(.{ 'h', 'h', 'e', 'a' })).?;
+    try std.testing.expectEqual(hhea_record.length, hhea_data.len);
+    try std.testing.expectEqualSlices(u8, bytes[hhea_record.offset .. hhea_record.offset + hhea_record.length], hhea_data);
+    try std.testing.expect((try font.tableData(.{ 'N', 'O', 'P', 'E' })) == null);
+
     var outline = try font.glyphOutline(allocator, 1);
     defer outline.deinit();
     try std.testing.expectEqual(@as(usize, 4), outline.commands.items.len);
@@ -294,6 +304,30 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
         if (pixel > 0) covered += 1;
     }
     try std.testing.expect(covered > 10);
+}
+
+test "raw SFNT table data revalidates borrowed checksums" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const hhea_data = (try font.tableData(.{ 'h', 'h', 'e', 'a' })).?;
+    try std.testing.expect(hhea_data.len >= 8);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var hhea_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "hhea")) hhea_offset = table.offset;
+    }
+    bytes[hhea_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.tableData(.{ 'h', 'h', 'e', 'a' }));
 }
 
 test "parses sbix PNG bitmap glyphs from Apple Color Emoji when available" {

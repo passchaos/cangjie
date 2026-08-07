@@ -637,6 +637,17 @@ pub const Font = struct {
         return infos;
     }
 
+    /// Borrow the raw bytes of an SFNT table by four-byte tag.
+    ///
+    /// The returned slice points into the caller-owned font data backing this
+    /// Font. Revalidate the table checksum at this API boundary so mutations to
+    /// borrowed bytes after parse do not escape as authoritative table data.
+    pub fn tableData(self: *const Font, tag: [4]u8) FontError!?[]const u8 {
+        const record = findTableByTag(self.owned_tables, tag) orelse return null;
+        try validateSfntTableChecksum(self.data, record);
+        return self.data[record.offset .. record.offset + record.length];
+    }
+
     /// Map a Unicode scalar value to a glyph id using the best supported cmap.
     ///
     /// Format 12 is preferred for precise full-Unicode coverage, which matters
@@ -2697,6 +2708,13 @@ fn readBigBitmapMetrics(data: []const u8, offset: usize) FontError!BitmapMetrics
 fn findTable(records: []const TableRecord, comptime table_tag: []const u8) ?TableRecord {
     for (records) |record| {
         if (bin.tagEq(record.tag, table_tag)) return record;
+    }
+    return null;
+}
+
+fn findTableByTag(records: []const TableRecord, table_tag: [4]u8) ?TableRecord {
+    for (records) |record| {
+        if (std.mem.eql(u8, &record.tag, &table_tag)) return record;
     }
     return null;
 }

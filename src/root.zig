@@ -113,6 +113,7 @@ pub const ColorLayer = @import("font.zig").ColorLayer;
 pub const ColorPaint = @import("font.zig").ColorPaint;
 pub const ColorGlyphPaint = @import("render_bridge.zig").ColorGlyphPaint;
 pub const PaletteColor = @import("font.zig").PaletteColor;
+pub const PaletteInfo = @import("font.zig").PaletteInfo;
 pub const SvgGlyphDocument = @import("font.zig").SvgGlyphDocument;
 pub const StatAxisValue = @import("font.zig").StatAxisValue;
 pub const StatAxisValueCoordinate = @import("font.zig").StatAxisValueCoordinate;
@@ -1518,6 +1519,14 @@ test "reads COLR layers and CPAL palette colors" {
 
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
+
+    const palettes = try font.colorPalettes(allocator);
+    defer allocator.free(palettes);
+    try std.testing.expectEqual(@as(usize, 1), palettes.len);
+    try std.testing.expectEqual(@as(u16, 0), palettes[0].first_color_index);
+    try std.testing.expectEqual(@as(u16, 2), palettes[0].color_count);
+    try std.testing.expectEqual(@as(u32, 0), palettes[0].palette_type);
+    try std.testing.expectEqual(@as(?u16, null), palettes[0].label_name_id);
 
     const layers = try font.colorLayers(allocator, 1);
     defer allocator.free(layers);

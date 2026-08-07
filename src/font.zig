@@ -198,6 +198,13 @@ pub const PaletteColor = struct {
     alpha: u8,
 };
 
+pub const PaletteInfo = struct {
+    first_color_index: u16,
+    color_count: u16,
+    palette_type: u32 = 0,
+    label_name_id: ?u16 = null,
+};
+
 pub const ColorPaint = union(enum) {
     solid: Solid,
     glyph: Glyph,
@@ -1489,6 +1496,45 @@ pub const Font = struct {
             .red = self.data[record + 2],
             .alpha = self.data[record + 3],
         };
+    }
+
+    pub fn colorPalettes(self: *const Font, allocator: std.mem.Allocator) FontError![]PaletteInfo {
+        const cpal = self.cpal orelse return try allocator.alloc(PaletteInfo, 0);
+        try validateSfntTableChecksum(self.data, cpal);
+        if (cpal.length < 12) return error.BadSfnt;
+        const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
+        try validateCpalNameReferences(self.data, cpal, self.name);
+
+        const version = try bin.readU16At(self.data, cpal.offset);
+        const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
+        const palettes = try allocator.alloc(PaletteInfo, palette_count);
+        errdefer allocator.free(palettes);
+
+        const version_0_header_len = 12 + @as(usize, palette_count) * 2;
+        const palette_types_offset: usize = if (version == 1)
+            @intCast(try bin.readU32At(self.data, cpal.offset + version_0_header_len))
+        else
+            0;
+        const palette_labels_offset: usize = if (version == 1)
+            @intCast(try bin.readU32At(self.data, cpal.offset + version_0_header_len + 4))
+        else
+            0;
+
+        for (palettes, 0..) |*palette, index| {
+            palette.* = .{
+                .first_color_index = try bin.readU16At(self.data, cpal.offset + 12 + index * 2),
+                .color_count = palette_entries,
+                .palette_type = if (palette_types_offset != 0)
+                    try bin.readU32At(self.data, cpal.offset + palette_types_offset + index * 4)
+                else
+                    0,
+                .label_name_id = if (palette_labels_offset != 0) label: {
+                    const name_id = try bin.readU16At(self.data, cpal.offset + palette_labels_offset + index * 2);
+                    break :label if (name_id == 0xffff) null else name_id;
+                } else null,
+            };
+        }
+        return palettes;
     }
 
     pub fn colorPaint(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorPaint {

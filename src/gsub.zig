@@ -142,6 +142,8 @@ const LigatureSetEntry = struct {
 };
 
 const ChainingCoverageSubtable = struct {
+    const max_fast_records = 4;
+
     subtable_offset: usize = 0,
     backtrack_offsets_pos: usize = 0,
     backtrack_count: u16 = 0,
@@ -153,6 +155,13 @@ const ChainingCoverageSubtable = struct {
     lookahead_count: u16 = 0,
     records_pos: usize = 0,
     subst_count: u16 = 0,
+    fast_record_count: u16 = 0,
+    fast_records: [max_fast_records]FastSingleRecord = [_]FastSingleRecord{.{}} ** max_fast_records,
+};
+
+const FastSingleRecord = struct {
+    sequence_index: u16 = 0,
+    accelerator: SingleSubstAccelerator = .{},
 };
 
 const ChainingClassSubtableAccelerator = struct {
@@ -912,6 +921,7 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
             raw_subtable_offset;
         const parsed_subtable = try parseChainingCoverageSubtable(table, subtable_offset) orelse continue;
         chaining_subtables[subtable_i] = parsed_subtable;
+        try fillFastChainingSingleRecords(table, &chaining_subtables[subtable_i]);
         const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos));
         try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
         if (parsed_subtable.input_count > 1) {
@@ -948,6 +958,35 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         .chaining_subtables = chaining_subtables,
         .chaining_groups = chaining_groups,
     };
+}
+
+fn fillFastChainingSingleRecords(table: Table, subtable: *ChainingCoverageSubtable) GsubError!void {
+    if (subtable.subst_count == 0 or subtable.subst_count > ChainingCoverageSubtable.max_fast_records) return;
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+
+    var records: [ChainingCoverageSubtable.max_fast_records]FastSingleRecord = [_]FastSingleRecord{.{}} ** ChainingCoverageSubtable.max_fast_records;
+    for (0..subtable.subst_count) |record_i| {
+        const record_offset = subtable.records_pos + record_i * 4;
+        const sequence_index = try readU16(table, record_offset);
+        if (sequence_index >= subtable.input_count) return;
+        const lookup_index = try readU16(table, record_offset + 2);
+        if (lookup_index >= lookup_count) return;
+        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+        if (try readU16(table, lookup_offset) != 1) return;
+        const lookup_flag = try readU16(table, lookup_offset + 2);
+        if (lookup_flag != 0) return;
+        const subtable_count = try readU16(table, lookup_offset + 4);
+        if (subtable_count != 1) return;
+        const single_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
+        records[record_i] = .{
+            .sequence_index = sequence_index,
+            .accelerator = try buildSingleSubstAccelerator(table, single_subtable_offset),
+        };
+        if (!records[record_i].accelerator.enabled) return;
+    }
+    subtable.fast_record_count = subtable.subst_count;
+    subtable.fast_records = records;
 }
 
 fn extensionChainingLookupUsesCoverageOnly(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!bool {
@@ -3493,8 +3532,22 @@ fn applyAcceleratedChainingCoverageNoContextAt(table: Table, subtable_info: Chai
     }
     const input_indices = input_indices_buf[0..subtable_info.input_count];
     if (!try coverageIndicesMatchFrom(table, subtable_info.subtable_offset, glyphs.items, input_indices, subtable_info.input_offsets_pos, 1)) return .{};
+    if (try applyFastChainingSingleRecords(table, subtable_info, glyphs, input_indices, options)) {
+        return .{ .matched = true, .next_pos = input_indices[input_indices.len - 1] + 1 };
+    }
     try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices, allocator, options);
     return .{ .matched = true, .next_pos = input_indices[input_indices.len - 1] + 1 };
+}
+
+fn applyFastChainingSingleRecords(table: Table, subtable: ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), input_indices: []const usize, options: LookupOptions) GsubError!bool {
+    if (subtable.fast_record_count == 0) return false;
+    for (subtable.fast_records[0..subtable.fast_record_count]) |record| {
+        if (record.sequence_index >= input_indices.len) return false;
+        const target_index = input_indices[record.sequence_index];
+        if (target_index >= glyphs.items.len) continue;
+        _ = try applySingleSubstitutionAccelerated(table, record.accelerator, glyphs, target_index, options);
+    }
+    return true;
 }
 
 const CoverageSequenceKind = enum {

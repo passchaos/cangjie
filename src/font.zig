@@ -15880,6 +15880,10 @@ test "STAT design axes public API revalidates borrowed metadata" {
         const axes = try font.statDesignAxes(allocator);
         defer allocator.free(axes);
         try std.testing.expectEqual(@as(usize, 0), axes.len);
+
+        const values = try font.statAxisValues(allocator);
+        defer font.freeStatAxisValues(allocator, values);
+        try std.testing.expectEqual(@as(usize, 0), values.len);
     }
 
     {
@@ -15898,6 +15902,14 @@ test "STAT design axes public API revalidates borrowed metadata" {
         try std.testing.expectEqualStrings("wdth", &axes[1].tag);
         try std.testing.expectEqual(@as(u16, 257), axes[1].name_id);
         try std.testing.expectEqual(@as(u16, 1), axes[1].ordering);
+
+        const values = try font.statAxisValues(allocator);
+        defer font.freeStatAxisValues(allocator, values);
+        try std.testing.expectEqual(@as(usize, 1), values.len);
+        try std.testing.expectEqual(@as(u16, 1), values[0].format);
+        try std.testing.expectEqual(@as(?u16, 0), values[0].axis_index);
+        try std.testing.expectEqual(@as(u16, 2), values[0].name_id);
+        try std.testing.expectApproxEqAbs(@as(f32, 400.0), values[0].value.?, 0.001);
     }
 
     {
@@ -15913,6 +15925,9 @@ test "STAT design axes public API revalidates borrowed metadata" {
         // name record shared with the variable-font fixture.
         writeU16Test(bytes, name_offset + 6 + 5 * 12 + 6, 400);
         try std.testing.expectError(error.InvalidName, font.statDesignAxes(allocator));
+
+        writeU16Test(bytes, name_offset + 6 + 1 * 12 + 6, 401);
+        try std.testing.expectError(error.InvalidName, font.statAxisValues(allocator));
     }
 
     {
@@ -15932,6 +15947,7 @@ test "STAT design axes public API revalidates borrowed metadata" {
         // STAT table no longer matches the SFNT checksum.
         writeU16Test(bytes, stat_offset + 26, 2);
         try std.testing.expectError(error.BadSfnt, font.statDesignAxes(allocator));
+        try std.testing.expectError(error.BadSfnt, font.statAxisValues(allocator));
     }
 
     {

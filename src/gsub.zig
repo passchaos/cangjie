@@ -96,6 +96,7 @@ pub const LookupOptions = struct {
 pub const LookupAccelerator = struct {
     extension_lookup_type: ?u16 = null,
     single_subst: SingleSubstAccelerator = .{},
+    ligature_subst: LigatureSubstAccelerator = .{},
     chaining_coverage_only: bool = false,
     chaining_input_digest: GlyphDigest = .{},
     chaining_subtable_digests: []const GlyphDigest = &.{},
@@ -117,6 +118,15 @@ const SingleSubstAccelerator = struct {
     single_mapping: bool = false,
     single_from: GlyphId = 0,
     single_to: GlyphId = 0,
+};
+
+const LigatureSubstAccelerator = struct {
+    sets: []const LigatureSetEntry = &.{},
+};
+
+const LigatureSetEntry = struct {
+    glyph: GlyphId,
+    set_offset: usize,
 };
 
 const ChainingCoverageSubtable = struct {
@@ -766,6 +776,7 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
 
 fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
     for (accelerators) |accelerator| {
+        allocator.free(accelerator.ligature_subst.sets);
         allocator.free(accelerator.chaining_subtable_digests);
         allocator.free(accelerator.chaining_subtables);
         for (accelerator.chaining_groups) |group| {
@@ -803,6 +814,10 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     if (lookup_type == 1 and lookup_flag == 0 and subtable_count == 1) {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
         accelerator.single_subst = try buildSingleSubstAccelerator(table, subtable_offset);
+    }
+    if (lookup_type == 4 and subtable_count == 1) {
+        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
+        accelerator.ligature_subst = try buildLigatureSubstAccelerator(table, subtable_offset, allocator);
     }
     if (lookup_type == 7) {
         accelerator.extension_lookup_type = try extensionLookupType(table, lookup_offset, subtable_count);
@@ -1122,6 +1137,57 @@ fn fillSingleMapping(table: Table, coverage_offset: usize, delta: i16, substitut
         try readU16(table, pos)
     else
         @bitCast(@as(i16, @bitCast(glyph)) +% delta);
+}
+
+fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LigatureSubstAccelerator {
+    if (try readU16(table, subtable_offset) != 1) return .{};
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    const lig_set_count = try readU16(table, subtable_offset + 4);
+    const sets = try allocator.alloc(LigatureSetEntry, lig_set_count);
+    errdefer allocator.free(sets);
+
+    var set_i: usize = 0;
+    while (set_i < lig_set_count) : (set_i += 1) {
+        const glyph = (try coverageGlyphAt(table, coverage_offset, set_i)) orelse {
+            allocator.free(sets);
+            return .{};
+        };
+        sets[set_i] = .{
+            .glyph = glyph,
+            .set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + set_i * 2)),
+        };
+    }
+    std.sort.heap(LigatureSetEntry, sets, {}, ligatureSetEntryLessThan);
+    return .{ .sets = sets };
+}
+
+fn coverageGlyphAt(table: Table, coverage_offset: usize, index: usize) GsubError!?GlyphId {
+    const format = try readU16(table, coverage_offset);
+    return switch (format) {
+        1 => glyph: {
+            const glyph_count = try readU16(table, coverage_offset + 2);
+            if (index >= glyph_count) break :glyph null;
+            break :glyph try readU16(table, coverage_offset + 4 + index * 2);
+        },
+        2 => glyph: {
+            const range_count = try readU16(table, coverage_offset + 2);
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                const start = try readU16(table, range_offset);
+                const end = try readU16(table, range_offset + 2);
+                const start_index = try readU16(table, range_offset + 4);
+                const len = @as(usize, end) - @as(usize, start) + 1;
+                if (index < start_index or index >= @as(usize, start_index) + len) continue;
+                break :glyph @intCast(@as(usize, start) + (index - @as(usize, start_index)));
+            }
+            break :glyph null;
+        },
+        else => error.UnsupportedGsub,
+    };
+}
+
+fn ligatureSetEntryLessThan(_: void, lhs: LigatureSetEntry, rhs: LigatureSetEntry) bool {
+    return lhs.glyph < rhs.glyph;
 }
 
 fn appendReverseChainingExactContext(table: Table, subtable: ReverseChainingSingleSubtable, subtable_index: u16, contexts: *std.ArrayList(ReverseChainingContextEntry), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
@@ -1529,6 +1595,12 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
         try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
         return;
     }
+    if (lookup_type == 4 and subtable_count == 1) {
+        if (ligatureLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            try applyLigatureSubstitutionAccelerated(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
+            return;
+        }
+    }
 
     for (0..subtable_count) |i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
@@ -1591,6 +1663,15 @@ fn reverseChainingLookupAccelerator(lookup_index: ?u16, options: LookupOptions) 
     if (index >= accelerators.len) return null;
     const accelerator = &accelerators[index];
     if (accelerator.reverse_chaining_subtables.len == 0 or accelerator.reverse_chaining_groups.len == 0) return null;
+    return accelerator;
+}
+
+fn ligatureLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LigatureSubstAccelerator {
+    const accelerators = options.lookup_accelerators orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const accelerator = &accelerators[index].ligature_subst;
+    if (accelerator.sets.len == 0) return null;
     return accelerator;
 }
 
@@ -2367,6 +2448,48 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
             }
         }
     }
+}
+
+fn applyLigatureSubstitutionAccelerated(table: Table, accelerator: LigatureSubstAccelerator, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
+    var i: usize = 0;
+    while (i < glyphs.items.len) : (i += 1) {
+        if (!sourceFeatureAllowsGlyph(options, i)) continue;
+        const first = glyphs.items[i];
+        if (lookupIgnoresGlyph(lookup_flag, options, first)) continue;
+        const set_offset = ligatureSetOffsetForGlyph(accelerator.sets, first) orelse continue;
+        if (try ligatureAt(table, set_offset, glyphs.items[i..], lookup_flag, options)) |match| {
+            const component_info = ligatureComponentInfoForMatch(options, i, match);
+            mergeLigatureClusterMetadata(options, i, match);
+            glyphs.items[i] = match.ligature;
+            markGlyphSubstituted(options, i);
+            setLigatureMetadata(options, i, component_info);
+            if (match.component_count > 1) {
+                var component_index = match.component_count;
+                while (component_index > 1) {
+                    component_index -= 1;
+                    try glyphs.replaceRange(allocator, i + match.component_offsets[component_index], 1, &.{});
+                    try replaceSourceMetadata(allocator, options, i + match.component_offsets[component_index], 1, 0, 0);
+                }
+            }
+        }
+    }
+}
+
+fn ligatureSetOffsetForGlyph(sets: []const LigatureSetEntry, glyph: GlyphId) ?usize {
+    var lo: usize = 0;
+    var hi: usize = sets.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = sets[mid].glyph;
+        if (glyph < candidate) {
+            hi = mid;
+        } else if (glyph > candidate) {
+            lo = mid + 1;
+        } else {
+            return sets[mid].set_offset;
+        }
+    }
+    return null;
 }
 
 fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {

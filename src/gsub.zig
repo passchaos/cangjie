@@ -48,6 +48,11 @@ pub const LookupOptions = struct {
     /// arrays in lockstep with the post-GSUB glyph stream so later GPOS lookups
     /// can reason about the original source components of ligatures.
     glyph_source_indices: ?*std.ArrayList(usize) = null,
+    /// Optional cluster-owner metadata parallel to `glyphs`. This intentionally
+    /// stays separate from `glyph_source_indices`: GPOS still needs original
+    /// source ownership, while HarfBuzz-style output clusters merge across
+    /// ligature components and deleted glyphs.
+    glyph_cluster_indices: ?*std.ArrayList(usize) = null,
     ligature_components: ?*std.ArrayList(gpos.LigatureComponentInfo) = null,
     /// Optional source-level feature assignment. `active_source_feature` gates
     /// a lookup to glyphs whose original source index carries that tag. Context
@@ -1314,6 +1319,9 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError
     if (options.glyph_source_indices) |sources| {
         if (sources.items.len != glyph_count) return error.InvalidShapingInput;
     }
+    if (options.glyph_cluster_indices) |clusters| {
+        if (clusters.items.len != glyph_count) return error.InvalidShapingInput;
+    }
     if (options.ligature_components) |components| {
         if (components.items.len != glyph_count) return error.InvalidShapingInput;
         for (components.items) |component_info| {
@@ -1355,6 +1363,12 @@ fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {
     return sources.items[glyph_index];
 }
 
+fn clusterForGlyph(options: LookupOptions, glyph_index: usize) usize {
+    const clusters = options.glyph_cluster_indices orelse return sourceForGlyph(options, glyph_index);
+    if (glyph_index >= clusters.items.len) return sourceForGlyph(options, glyph_index);
+    return clusters.items[glyph_index];
+}
+
 fn sourceFeatureAllowsGlyph(options: LookupOptions, glyph_index: usize) bool {
     const active = options.active_source_feature orelse return true;
     const features = options.source_features orelse return false;
@@ -1392,6 +1406,7 @@ fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
 }
 
 fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, glyph_index: usize, removed_len: usize, inserted_len: usize, source: usize) std.mem.Allocator.Error!void {
+    const cluster = clusterForGlyph(options, glyph_index);
     if (options.glyph_source_indices) |sources| {
         if (glyph_index <= sources.items.len) {
             const remove_count = @min(removed_len, sources.items.len - glyph_index);
@@ -1399,6 +1414,15 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
             defer allocator.free(replacements);
             @memset(replacements, source);
             try sources.replaceRange(allocator, glyph_index, remove_count, replacements);
+        }
+    }
+    if (options.glyph_cluster_indices) |clusters| {
+        if (glyph_index <= clusters.items.len) {
+            const remove_count = @min(removed_len, clusters.items.len - glyph_index);
+            const replacements = try allocator.alloc(usize, inserted_len);
+            defer allocator.free(replacements);
+            @memset(replacements, cluster);
+            try clusters.replaceRange(allocator, glyph_index, remove_count, replacements);
         }
     }
     if (options.ligature_components) |components| {
@@ -1409,6 +1433,60 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
             @memset(replacements, defaultLigatureComponentInfo(source));
             try components.replaceRange(allocator, glyph_index, remove_count, replacements);
         }
+    }
+}
+
+fn mergeLigatureClusterMetadata(options: LookupOptions, glyph_index: usize, match: LigatureMatch) void {
+    const clusters = options.glyph_cluster_indices orelse return;
+    if (glyph_index >= clusters.items.len) return;
+    mergeClusterRange(clusters.items, glyph_index, glyph_index + match.match_end);
+    mergeFollowingMarksForLigatureCluster(options, glyph_index, match);
+}
+
+fn mergeClusterRange(clusters: []usize, start_index: usize, end_index: usize) void {
+    if (start_index >= clusters.len) return;
+    var start = start_index;
+    var end = @min(end_index, clusters.len);
+    if (end <= start + 1) return;
+
+    var merged = clusters[start];
+    for (clusters[start..end]) |cluster| {
+        merged = @min(merged, cluster);
+    }
+
+    if (merged != clusters[end - 1]) {
+        while (end < clusters.len and clusters[end - 1] == clusters[end]) {
+            end += 1;
+        }
+    }
+
+    if (merged != clusters[start]) {
+        while (start > 0 and clusters[start - 1] == clusters[start]) {
+            start -= 1;
+        }
+    }
+
+    for (clusters[start..end]) |*cluster| {
+        cluster.* = merged;
+    }
+}
+
+fn mergeFollowingMarksForLigatureCluster(options: LookupOptions, glyph_index: usize, match: LigatureMatch) void {
+    const clusters = options.glyph_cluster_indices orelse return;
+    const sources = options.glyph_source_indices orelse return;
+    if (glyph_index >= clusters.items.len or glyph_index >= sources.items.len) return;
+    if (match.component_count <= 1) return;
+
+    const last_component = glyph_index + match.component_offsets[match.component_count - 1];
+    if (last_component >= clusters.items.len or last_component >= sources.items.len) return;
+    const last_source = sources.items[last_component];
+    const merged_cluster = clusters.items[glyph_index];
+
+    var index = glyph_index + match.match_end;
+    while (index < clusters.items.len and index < sources.items.len) : (index += 1) {
+        if (sources.items[index] != last_source) break;
+        if (clusters.items[index] != last_source) break;
+        clusters.items[index] = merged_cluster;
     }
 }
 
@@ -1533,6 +1611,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2));
         if (try ligatureAt(table, set_offset, glyphs.items[i..], lookup_flag, options)) |match| {
             const component_info = ligatureComponentInfoForMatch(options, i, match);
+            mergeLigatureClusterMetadata(options, i, match);
             glyphs.items[i] = match.ligature;
             setLigatureMetadata(options, i, component_info);
             if (match.component_count > 1) {
@@ -1586,6 +1665,7 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2));
     const match = try ligatureAt(table, set_offset, glyphs.items[glyph_index..], lookup_flag, options) orelse return null;
     const component_info = ligatureComponentInfoForMatch(options, glyph_index, match);
+    mergeLigatureClusterMetadata(options, glyph_index, match);
     glyphs.items[glyph_index] = match.ligature;
     setLigatureMetadata(options, glyph_index, component_info);
     if (match.component_count > 1) {
@@ -3355,6 +3435,7 @@ const LigatureMatch = struct {
     ligature: GlyphId,
     component_count: usize,
     component_offsets: [max_ligature_components]usize = [_]usize{0} ** max_ligature_components,
+    match_end: usize = 1,
 };
 
 const max_ligature_components = 64;
@@ -3383,7 +3464,7 @@ fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, lookup_f
             // LigatureSet records are ordered by font-authored preference. Do
             // not choose the longest matching sequence: a font may deliberately
             // place a shorter ligature before a longer one to control shaping.
-            return .{ .ligature = ligature, .component_count = component_count, .component_offsets = component_offsets };
+            return .{ .ligature = ligature, .component_count = component_count, .component_offsets = component_offsets, .match_end = cursor };
         }
     }
     return null;

@@ -2497,6 +2497,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const clusters = &scratch.clusters;
     const source_ends = &scratch.source_ends;
     const glyph_source_indices = &scratch.glyph_source_indices;
+    const glyph_cluster_indices = &scratch.glyph_cluster_indices;
     const ligature_components = &scratch.ligature_components;
     const joining_forms = &scratch.joining_forms;
     const source_features = &scratch.source_features;
@@ -2539,6 +2540,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try clusters.append(buffer.allocator, cluster_base + source_cluster);
         try source_ends.append(buffer.allocator, cluster_base + it.i);
         try glyph_source_indices.append(buffer.allocator, glyph_source_indices.items.len);
+        const cluster_owner_index = if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
+            glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
+        else
+            glyph_cluster_indices.items.len;
+        try glyph_cluster_indices.append(buffer.allocator, cluster_owner_index);
         try ligature_components.append(buffer.allocator, defaultLigatureComponentInfo(glyph_source_indices.items.len - 1));
     }
     if (shape_profile) |p| {
@@ -2567,6 +2573,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .vertical = lookup_options.writing_mode.isVertical(),
         .apply_all_if_unselected = false,
         .glyph_source_indices = glyph_source_indices,
+        .glyph_cluster_indices = glyph_cluster_indices,
         .ligature_components = ligature_components,
         .source_codepoints = codepoints.items,
         .shape_profile = shape_profile,
@@ -2581,7 +2588,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
     }
     if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
-        reorderArabicMarksForShaping(glyph_ids, glyph_source_indices, ligature_components, codepoints.items);
+        reorderArabicMarksForShaping(glyph_ids, glyph_source_indices, glyph_cluster_indices, ligature_components, codepoints.items);
         try joining_forms.resize(buffer.allocator, codepoints.items.len);
         try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
         try source_features.resize(buffer.allocator, joining_forms.items.len);
@@ -2735,7 +2742,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
         else
             @min(index, codepoints.items.len -| 1);
-        const source_span = sourceSpanForGlyph(index, source_index, clusters.items, source_ends.items, ligature_components.items) orelse
+        const cluster_index = if (index < glyph_cluster_indices.items.len)
+            @min(glyph_cluster_indices.items[index], clusters.items.len -| 1)
+        else
+            source_index;
+        const source_span = sourceSpanForGlyph(index, source_index, cluster_index, clusters.items, source_ends.items, ligature_components.items) orelse
             SourceSpan{ .start = cluster_base, .end = cluster_base };
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
@@ -2890,8 +2901,8 @@ fn reverseScratchGlyphOrderForNativeDirection(scratch: *layout_scratch.ShapeScra
 }
 
 fn scratchGlyphCluster(scratch: *const layout_scratch.ShapeScratch, glyph_index: usize) usize {
-    if (glyph_index >= scratch.glyph_source_indices.items.len) return glyph_index;
-    const source_index = scratch.glyph_source_indices.items[glyph_index];
+    if (glyph_index >= scratch.glyph_cluster_indices.items.len) return glyph_index;
+    const source_index = scratch.glyph_cluster_indices.items[glyph_index];
     if (source_index >= scratch.clusters.items.len) return source_index;
     return scratch.clusters.items[source_index];
 }
@@ -2909,6 +2920,7 @@ fn reverseScratchGlyphRange(scratch: *layout_scratch.ShapeScratch, start: usize,
 fn swapScratchGlyphs(scratch: *layout_scratch.ShapeScratch, a: usize, b: usize) void {
     std.mem.swap(GlyphId, &scratch.glyph_ids.items[a], &scratch.glyph_ids.items[b]);
     std.mem.swap(usize, &scratch.glyph_source_indices.items[a], &scratch.glyph_source_indices.items[b]);
+    std.mem.swap(usize, &scratch.glyph_cluster_indices.items[a], &scratch.glyph_cluster_indices.items[b]);
     std.mem.swap(gpos.LigatureComponentInfo, &scratch.ligature_components.items[a], &scratch.ligature_components.items[b]);
 }
 
@@ -2917,7 +2929,7 @@ const SourceSpan = struct {
     end: usize,
 };
 
-fn sourceSpanForGlyph(glyph_index: usize, fallback_source_index: usize, starts: []const usize, ends: []const usize, ligature_components: []const gpos.LigatureComponentInfo) ?SourceSpan {
+fn sourceSpanForGlyph(glyph_index: usize, fallback_source_index: usize, fallback_cluster_index: usize, starts: []const usize, ends: []const usize, ligature_components: []const gpos.LigatureComponentInfo) ?SourceSpan {
     if (glyph_index < ligature_components.len and ligature_components[glyph_index].component_count > 1) {
         const info = ligature_components[glyph_index];
         var span: ?SourceSpan = null;
@@ -2933,7 +2945,9 @@ fn sourceSpanForGlyph(glyph_index: usize, fallback_source_index: usize, starts: 
         }
         if (span) |value| return value;
     }
-    return sourceSpanForIndex(fallback_source_index, starts, ends);
+    const span = sourceSpanForIndex(fallback_source_index, starts, ends) orelse return sourceSpanForIndex(fallback_cluster_index, starts, ends);
+    const cluster = sourceSpanForIndex(fallback_cluster_index, starts, ends) orelse return span;
+    return .{ .start = cluster.start, .end = span.end };
 }
 
 fn sourceSpanForIndex(source_index: usize, starts: []const usize, ends: []const usize) ?SourceSpan {
@@ -3002,27 +3016,28 @@ fn mirroredCodepointForRtlShaping(font: *const Font, glyph_index_cache: ?*GlyphI
     return if (try glyphIndexWithOptionalCache(font, glyph_index_cache, mirrored) != 0) mirrored else codepoint;
 }
 
-fn reorderArabicMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21) void {
+fn reorderArabicMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21) void {
     var run_start: ?usize = null;
     for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
         const modified_class = arabicMarkSortClass(source_index, codepoints);
         if (modified_class == 0) {
-            if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, ligature_components, codepoints, start, glyph_index);
+            if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, ligature_components, codepoints, start, glyph_index);
             run_start = null;
             continue;
         }
         if (run_start == null) run_start = glyph_index;
     }
-    if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, ligature_components, codepoints, start, glyph_source_indices.items.len);
+    if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, ligature_components, codepoints, start, glyph_source_indices.items.len);
 }
 
-fn reorderArabicMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21, start: usize, end: usize) void {
+fn reorderArabicMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21, start: usize, end: usize) void {
     var i = start + 1;
     while (i < end) : (i += 1) {
         var j = i;
         while (j > start and arabicMarkSortClass(glyph_source_indices.items[j - 1], codepoints) > arabicMarkSortClass(glyph_source_indices.items[j], codepoints)) : (j -= 1) {
             std.mem.swap(GlyphId, &glyph_ids.items[j - 1], &glyph_ids.items[j]);
             std.mem.swap(usize, &glyph_source_indices.items[j - 1], &glyph_source_indices.items[j]);
+            std.mem.swap(usize, &glyph_cluster_indices.items[j - 1], &glyph_cluster_indices.items[j]);
             std.mem.swap(gpos.LigatureComponentInfo, &ligature_components.items[j - 1], &ligature_components.items[j]);
         }
     }

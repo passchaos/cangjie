@@ -61,6 +61,7 @@ For output parity against HarfRust, build the local CLI once:
 zig build shape-bench -Doptimize=ReleaseFast -- --engine harfrust --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
 zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl --iterations 1 --warmup 0 --samples 1 --line-summary --glyph-summary
 zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text "سلام" --direction rtl
+zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfbuzz --font ~/Work/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf --text "ffi" --direction ltr --disable-feature liga
 ```
 
 Current USE corpus parity gate:
@@ -72,9 +73,9 @@ zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font
 The `harfbuzz` engine links the system HarfBuzz C library in-process and is the
 preferred HarfBuzz timing baseline when the local development environment has
 `pkg-config harfbuzz` available. It supports the shared `--enable-feature` /
-`--disable-feature` overrides and `--glyph-summary` output, so focused
-HarfBuzz/Cangjie feature-diff fixtures can be built without shelling out to
-`hb-shape`.
+`--disable-feature` overrides, `--glyph-summary` output, and
+`compare-harfbuzz`, so focused HarfBuzz/Cangjie feature-diff fixtures can be
+built without shelling out to `hb-shape`.
 
 The `harfrust` engine shells out to `hr-shape` once per sample and uses
 `hr-shape -n` for measured iterations. It is useful for batch output parity and
@@ -141,7 +142,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - Amiri `"تثبیت"` passes default `compare-harfrust`; it also passes with
   `--language ara`.
 - Amiri `fa-words.txt` passes default `compare-harfrust` for 10,000 lines.
-- Roboto `en-2letters.txt` passes `compare-harfrust` for 12,391 lines.
+- Roboto `en-2letters.txt` passes `compare-harfrust` for 12,391 lines and
+  `compare-harfbuzz` for 12,391 lines; focused `"ffi"` also passes
+  `compare-harfbuzz --disable-feature liga`.
 - Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
 - Roboto `en-thelittleprince.txt` passes `compare-harfrust` for 1,172 lines.
 - SourceSerifVariable `en-words.txt` passes `compare-harfrust` for 12,391
@@ -192,10 +195,10 @@ goal is active, not complete.
 - Expand the benchmark matrix beyond Amiri, Roboto, SourceSerifVariable,
   NotoNastaliqUrdu, and the active Devanagari gate; broader Arabic, Urdu,
   Nastaliq, and mixed-script texts still need retained parity coverage.
-- Track output parity, not only timing. `compare-harfrust` now compares glyph
-  ids, clusters, advances, and offsets in HarfBuzz-style buffer order;
-  `--engine harfbuzz --glyph-summary` covers focused in-process HarfBuzz
-  feature checks, but broader font/script matrices still need expansion.
+- Track output parity, not only timing. `compare-harfrust` and
+  `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
+  HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are
+  covered, but broader font/script matrices still need expansion.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

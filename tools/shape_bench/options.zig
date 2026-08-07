@@ -10,6 +10,7 @@ pub const Engine = enum {
     harfrust,
     harfbuzz,
     compare_harfrust,
+    compare_harfbuzz,
 
     pub fn fromName(name: []const u8) ?Engine {
         if (std.mem.eql(u8, name, "cangjie")) return .cangjie;
@@ -17,6 +18,7 @@ pub const Engine = enum {
         if (std.mem.eql(u8, name, "harfrust")) return .harfrust;
         if (std.mem.eql(u8, name, "harfbuzz")) return .harfbuzz;
         if (std.mem.eql(u8, name, "compare-harfrust")) return .compare_harfrust;
+        if (std.mem.eql(u8, name, "compare-harfbuzz")) return .compare_harfbuzz;
         return null;
     }
 
@@ -27,6 +29,7 @@ pub const Engine = enum {
             .harfrust => "harfrust",
             .harfbuzz => "harfbuzz",
             .compare_harfrust => "compare-harfrust",
+            .compare_harfbuzz => "compare-harfbuzz",
         };
     }
 };
@@ -197,7 +200,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
 
     if (!std.math.isFinite(options.size) or options.size <= 0) return error.InvalidArguments;
-    if ((options.engine == .coretext or options.engine == .harfrust or options.engine == .harfbuzz or options.engine == .compare_harfrust) and options.font_path == null) return error.InvalidArguments;
+    if ((options.engine == .coretext or options.engine == .harfrust or options.engine == .harfbuzz or options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) and options.font_path == null) return error.InvalidArguments;
     return options;
 }
 
@@ -270,7 +273,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\usage: {s} [--font font.ttf|font.ttc] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
-        \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-harfrust
+        \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-harfrust|compare-harfbuzz
         \\                               shaping engine, default cangjie
         \\  --font PATH                  use a real TTF/OTF/TTC font
         \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup

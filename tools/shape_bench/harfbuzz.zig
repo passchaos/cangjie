@@ -26,8 +26,9 @@ const HarfBuzzFont = struct {
 
         const font = hb.hb_font_create(face) orelse return error.HarfBuzzFailed;
         errdefer hb.hb_font_destroy(font);
-        const scale: c_int = @intFromFloat(@round(size * 64.0));
-        hb.hb_font_set_scale(font, scale, scale);
+        _ = size;
+        const upem: c_int = @intCast(hb.hb_face_get_upem(face));
+        hb.hb_font_set_scale(font, upem, upem);
 
         return .{ .blob = blob, .face = face, .font = font };
     }

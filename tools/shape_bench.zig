@@ -46,8 +46,8 @@ pub fn main(init: std.process.Init) !void {
     const font_bytes = try runner.loadFontBytes(init.io, allocator, options);
     defer allocator.free(font_bytes);
 
-    if (options.engine == .compare_harfrust) {
-        try runHarfRustComparison(init.io, allocator, font_bytes, options);
+    if (options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) {
+        try runReferenceComparison(init.io, allocator, font_bytes, options);
         return;
     }
 
@@ -60,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
         .coretext => try coretext.run(init.io, allocator, font_bytes, options),
         .harfrust => try harfrust.run(init.io, allocator, options),
         .harfbuzz => try harfbuzz.run(init.io, allocator, font_bytes, options),
-        .compare_harfrust => unreachable,
+        .compare_harfrust, .compare_harfbuzz => unreachable,
     };
     defer {
         freeLineSummaries(allocator, result.line_summaries);
@@ -96,7 +96,7 @@ fn resolveDefaultHarfRustBin(io: std.Io, allocator: std.mem.Allocator, environ_m
     return path;
 }
 
-fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, base_options: options_mod.Options) !void {
+fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, base_options: options_mod.Options) !void {
     var options = base_options;
     options.engine = .cangjie;
     options.iterations = 1;
@@ -114,26 +114,37 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
     const cangjie_result = try runner.runCangjie(io, allocator, &font, options);
     defer freeResult(allocator, cangjie_result);
 
-    var harfrust_options = options;
-    harfrust_options.engine = .harfrust;
-    const harfrust_result = try harfrust.run(io, allocator, harfrust_options);
-    defer freeResult(allocator, harfrust_result);
+    var reference_options = options;
+    reference_options.engine = switch (base_options.engine) {
+        .compare_harfrust => .harfrust,
+        .compare_harfbuzz => .harfbuzz,
+        else => unreachable,
+    };
+    const reference_result = switch (reference_options.engine) {
+        .harfrust => try harfrust.run(io, allocator, reference_options),
+        .harfbuzz => try harfbuzz.run(io, allocator, font_bytes, reference_options),
+        else => unreachable,
+    };
+    defer freeResult(allocator, reference_result);
 
-    const mismatch = try firstLineMismatch(allocator, base_options.text_lines, cangjie_result.line_summaries, harfrust_result.line_summaries, base_options.direction);
+    const mismatch = try firstLineMismatch(allocator, base_options.text_lines, cangjie_result.line_summaries, reference_result.line_summaries, base_options.direction);
+    const reference_label = reference_options.engine.label();
     std.debug.print(
-        \\engine=compare-harfrust
+        \\engine={s}
         \\font={s}
         \\text={s}
         \\lines={d}
         \\cangjie_glyphs={d}
-        \\harfrust_glyphs={d}
+        \\{s}_glyphs={d}
         \\
     , .{
+        base_options.engine.label(),
         base_options.fontLabel(),
         base_options.textLabel(),
         cangjie_result.line_summaries.len,
         cangjie_result.glyph_count,
-        harfrust_result.glyph_count,
+        reference_label,
+        reference_result.glyph_count,
     });
     if (mismatch) |m| {
         defer allocator.free(m.cangjie_glyph_ids);
@@ -146,9 +157,9 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
             \\mismatch_line={d}
             \\mismatch_text={s}
             \\cangjie_line_glyphs={d}
-            \\harfrust_line_glyphs={d}
+            \\{s}_line_glyphs={d}
             \\cangjie_line_checksum={x}
-            \\harfrust_line_checksum={x}
+            \\{s}_line_checksum={x}
             \\mismatch_kind={s}
             \\cangjie_glyph_ids=
         , .{
@@ -156,13 +167,15 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
             m.line_index + 1,
             mismatch_text,
             m.cangjie.glyph_count,
+            reference_label,
             m.harfrust.glyph_count,
             m.cangjie.checksum,
+            reference_label,
             m.harfrust.checksum,
             m.kind.label(),
         });
         printGlyphIds(m.cangjie_glyph_ids);
-        std.debug.print("\nharfrust_glyph_ids=", .{});
+        std.debug.print("\n{s}_glyph_ids=", .{reference_label});
         printGlyphIds(m.harfrust.glyph_ids);
         if (m.kind == .glyph_id) {
             const diff_index = firstDifferentGlyphIndex(m.cangjie_glyph_ids, m.harfrust.glyph_ids);
@@ -171,23 +184,23 @@ fn runHarfRustComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: [
             printSourceCodepoints(mismatch_text);
             std.debug.print("\ncangjie_glyph_window=", .{});
             try printGlyphWindow(&font, m.cangjie_glyph_ids, m.cangjie_clusters, diff_index);
-            std.debug.print("\nharfrust_glyph_window=", .{});
+            std.debug.print("\n{s}_glyph_window=", .{reference_label});
             try printGlyphWindow(&font, m.harfrust.glyph_ids, m.harfrust.clusters, diff_index);
         }
         if (m.kind == .cluster) {
             std.debug.print("\ncangjie_clusters=", .{});
             printClusters(m.cangjie_clusters);
-            std.debug.print("\nharfrust_clusters=", .{});
+            std.debug.print("\n{s}_clusters=", .{reference_label});
             printClusters(m.harfrust.clusters);
         }
         if (m.kind.isPosition()) {
             std.debug.print("\ncangjie_{s}=", .{m.kind.label()});
             printI32Values(m.cangjie_position_values);
-            std.debug.print("\nharfrust_{s}=", .{m.kind.label()});
+            std.debug.print("\n{s}_{s}=", .{ reference_label, m.kind.label() });
             printI32Values(positionValues(m.harfrust, m.kind));
         }
         std.debug.print("\n", .{});
-        return error.HarfRustParityMismatch;
+        return error.ReferenceParityMismatch;
     }
     std.debug.print(
         \\parity=pass

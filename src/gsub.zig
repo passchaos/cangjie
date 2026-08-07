@@ -2784,7 +2784,7 @@ fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_c
     // Arabic shaping often reaches this path one short word at a time. For
     // those tiny runs the exact scan is cheaper than building coverage digests;
     // reserve the approximate filter for longer runs where it can amortize.
-    if (glyphs.len < 32) return try chainingCoverageLookupMayMatchByScan(table, lookup_offset, subtable_count, glyphs, lookup_flag, options);
+    if (glyphs.len < 64) return try chainingCoverageLookupMayMatchByScan(table, lookup_offset, subtable_count, glyphs, lookup_flag, options);
     const run_digest = glyphRunDigest(glyphs, lookup_flag, options);
     if (run_digest.isEmpty()) return false;
     for (0..subtable_count) |subtable_i| {

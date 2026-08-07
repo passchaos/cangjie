@@ -1429,6 +1429,29 @@ test "GPOS cursive positioning uses previous placement for overlapping joins" {
     try std.testing.expect(found);
 }
 
+test "GPOS cursive positioning reverses previous attachment chains" {
+    const allocator = std.testing.allocator;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try appendCursiveAdjustments(&adjustments, allocator, 0, 1, .{ .x = 120, .y = 44 }, .{ .x = 120, .y = 152 }, 0, .ltr);
+    try appendCursiveAdjustments(&adjustments, allocator, 2, 1, .{ .x = 376, .y = 79 }, .{ .x = 239, .y = 152 }, 0, .ltr);
+
+    var old_parent: ?Adjustment = null;
+    var middle: ?Adjustment = null;
+    for (adjustments.items) |adjustment| {
+        if (adjustment.index == 0) old_parent = adjustment;
+        if (adjustment.index == 1) middle = adjustment;
+    }
+
+    try std.testing.expectEqual(@as(?usize, 1), old_parent.?.attachment_parent_index);
+    try std.testing.expectEqual(AttachmentType.cursive, old_parent.?.attachment_type);
+    try std.testing.expectEqual(@as(i16, 108), old_parent.?.y_placement);
+    try std.testing.expectEqual(@as(?usize, 2), middle.?.attachment_parent_index);
+    try std.testing.expectEqual(AttachmentType.cursive, middle.?.attachment_type);
+    try std.testing.expectEqual(@as(i16, -73), middle.?.y_placement);
+}
+
 fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const parsed = try parseCursivePositionSubtable(table, subtable_offset);
     try collectCursiveAdjustmentParsed(table, parsed, glyphs, adjustments, allocator, lookup_flag, options);
@@ -1518,6 +1541,10 @@ fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: 
     const previous_placement = currentAdjustmentPlacement(adjustments.items, previous_position);
     const current_placement = currentAdjustmentPlacement(adjustments.items, current_position);
     const right_to_left = (lookup_flag & 0x0001) != 0;
+    const child_position = if (right_to_left) previous_position else current_position;
+    const parent_position = if (right_to_left) current_position else previous_position;
+    try reverseCursiveAttachmentChain(adjustments, allocator, child_position, parent_position);
+
     if (direction == .rtl) {
         const previous_x_delta = -exit.x - previous_placement.x;
         try appendAdjustmentEx(adjustments, allocator, previous_position, .{
@@ -1563,6 +1590,22 @@ fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: 
     }
 }
 
+fn reverseCursiveAttachmentChain(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, child_index: usize, new_parent_index: usize) std.mem.Allocator.Error!void {
+    var child_record = findAdjustmentMutable(adjustments.items, child_index) orelse return;
+    if (child_record.attachment_type != .cursive) return;
+    const old_parent_index = child_record.attachment_parent_index orelse return;
+    const child_placement = currentAdjustmentPlacement(adjustments.items, child_index);
+    child_record.attachment_type = .none;
+    child_record.attachment_parent_index = null;
+    if (old_parent_index == new_parent_index) return;
+
+    try reverseCursiveAttachmentChain(adjustments, allocator, old_parent_index, new_parent_index);
+    try appendAdjustmentEx(adjustments, allocator, old_parent_index, .{
+        .index = old_parent_index,
+        .y_placement = -child_placement.y,
+    }, .{ .attachment_type = .cursive, .attachment_parent_index = child_index, .y_placement_absolute = true });
+}
+
 const AdjustmentPlacement = struct {
     x: i16 = 0,
     y: i16 = 0,
@@ -1578,6 +1621,15 @@ fn currentAdjustmentPlacement(adjustments: []const Adjustment, index: usize) Adj
         };
     }
     return .{};
+}
+
+fn findAdjustmentMutable(adjustments: []Adjustment, index: usize) ?*Adjustment {
+    var i = adjustments.len;
+    while (i > 0) {
+        i -= 1;
+        if (adjustments[i].index == index) return &adjustments[i];
+    }
+    return null;
 }
 
 fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, target_index: usize, entry_exit_count: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {

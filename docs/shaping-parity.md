@@ -102,9 +102,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   1,172 lines.
 - Amiri `fa-thelittleprince.txt` passes default `compare-harfrust` for 771
   lines.
-- NotoNastaliqUrdu `"سلام"`, `"به"`, `"ویکی‌پدیا"`, `"هجری"`, `"جزء"`, and
-  `"اللَّهِ"` pass `compare-harfrust`; full `fa-words.txt` now reaches line
-  7329 and is blocked at `اللَّهُ` with a `DammaNS` y-offset mismatch.
+- NotoNastaliqUrdu `fa-words.txt` passes `compare-harfrust` for 10,000 lines;
+  focused blockers `"سلام"`, `"به"`, `"ویکی‌پدیا"`, `"هجری"`, `"جزء"`,
+  `"اللَّهِ"`, and `"اللَّهُ"` pass individually.
 - NotoSansDevanagari parses and focused words `के`, `कि`, `की`, `का`,
   `श्रेणी`, `वार्ता`, `वर्षों`, `उत्तराखण्ड`, `हिन्दी`, `द्वारा`, `रूप`,
   `फ़िल्म`, `क्षेत्र`, `स्थित`, `एक्स्प्रेस`, `सन्`, `व्यक्ति`, `ा`,
@@ -123,10 +123,9 @@ goal is active, not complete.
   the only external timing baseline. The current `harfrust` `shape-bench`
   engine is a batch external-process baseline, not a fully fair in-process
   performance baseline.
-- Expand the benchmark matrix beyond Amiri, Roboto, SourceSerifVariable, and
-  the active Devanagari gate; NotoNastaliqUrdu now reaches line 7329 of
-  `fa-words.txt`, but mark y-offset parity for `اللَّهُ` still blocks promoting
-  the full corpus to retained coverage.
+- Expand the benchmark matrix beyond Amiri, Roboto, SourceSerifVariable,
+  NotoNastaliqUrdu, and the active Devanagari gate; more complex Nastaliq,
+  Arabic, and mixed-script texts still need retained parity coverage.
 - Track output parity, not only timing. `compare-harfrust` now compares glyph
   ids, clusters, advances, and offsets in HarfBuzz-style buffer order; feature
   override and broader font/script matrices still need expansion.

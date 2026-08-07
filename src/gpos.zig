@@ -3356,6 +3356,7 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
 
     const mark_1_index = try coverageIndex(table, mark_1_coverage_offset, glyph) orelse return false;
     const mark_2_position = try previousUnignoredCoveredGlyph(table, mark_2_coverage_offset, glyphs, mark_1_position, lookup_flag, options) orelse return false;
+    if (!(try marksShareLigatureComponent(table, mark_1_coverage_offset, glyphs, mark_1_position, mark_2_position, lookup_flag, options))) return false;
     const mark_2_index = try coverageIndex(table, mark_2_coverage_offset, glyphs[mark_2_position]) orelse return false;
     const mark_1_record_offset = mark_1_array_offset + 2 + mark_1_index * 4;
     const mark_class = try readU16(table, mark_1_record_offset);
@@ -3373,6 +3374,35 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
         .y_placement = mark_2_anchor.y - mark_1_anchor.y,
     }, .{ .attachment_type = .mark, .attachment_parent_index = mark_2_position });
     return true;
+}
+
+fn marksShareLigatureComponent(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, mark_1_position: usize, mark_2_position: usize, lookup_flag: u16, options: LookupOptions) GposError!bool {
+    const first = try markLigatureComponentHint(table, mark_coverage_offset, glyphs, mark_1_position, lookup_flag, options) orelse return true;
+    const second = try markLigatureComponentHint(table, mark_coverage_offset, glyphs, mark_2_position, lookup_flag, options) orelse return true;
+    return first.ligature_position == second.ligature_position and first.component_index == second.component_index;
+}
+
+const MarkLigatureComponentHint = struct {
+    ligature_position: usize,
+    component_index: usize,
+};
+
+fn markLigatureComponentHint(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, mark_position: usize, lookup_flag: u16, options: LookupOptions) GposError!?MarkLigatureComponentHint {
+    const ligature_position = try previousCoveredLigatureGlyph(table, mark_coverage_offset, glyphs, mark_position, lookup_flag, options) orelse return null;
+    const components = options.ligature_components orelse return null;
+    if (ligature_position >= components.len) return null;
+    const info = components[ligature_position];
+    if (info.component_count <= 1) return null;
+    const sources = options.glyph_source_indices orelse return null;
+    if (mark_position >= sources.len) return null;
+
+    const mark_source = sources[mark_position];
+    var component_index: usize = 0;
+    for (info.component_sources[0..info.component_count], 0..) |component_source, index| {
+        if (component_source > mark_source) break;
+        component_index = index;
+    }
+    return .{ .ligature_position = ligature_position, .component_index = component_index };
 }
 
 const Anchor = struct {

@@ -1848,6 +1848,8 @@ fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: Text
         if (run.glyph_start >= end) continue;
         for (glyph_run_indices[run.glyph_start..end]) |*slot| slot.* = run_index;
     }
+    const glyph_cluster_index = try buildBidiGlyphClusterIndex(buffer.allocator, old_glyphs);
+    defer buffer.allocator.free(glyph_cluster_index);
 
     const seen = try buffer.allocator.alloc(bool, old_glyphs.len);
     defer buffer.allocator.free(seen);
@@ -1864,6 +1866,7 @@ fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: Text
             old_runs,
             single_font,
             glyph_run_indices,
+            glyph_cluster_index,
             seen,
             item,
             &visual_glyphs,
@@ -1901,18 +1904,20 @@ fn appendVisualGlyphsForBidiItem(
     old_runs: []const CascadeRun,
     single_font: ?*const Font,
     glyph_run_indices: []const usize,
+    glyph_cluster_index: []const BidiGlyphClusterEntry,
     seen: []bool,
     item: unicode.BidiMapItem,
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
 ) !void {
+    const range = bidiGlyphClusterRange(glyph_cluster_index, item.byte_start) orelse return;
     if (item.direction == .rtl) {
-        var glyph_index = glyphs.len;
-        while (glyph_index > 0) {
-            glyph_index -= 1;
-            const glyph = glyphs[glyph_index];
+        var entry_index = range.end;
+        while (entry_index > range.start) {
+            entry_index -= 1;
+            const glyph_index = glyph_cluster_index[entry_index].glyph_index;
             if (seen[glyph_index]) continue;
-            if (glyph.cluster != item.byte_start) continue;
+            const glyph = glyphs[glyph_index];
             const visual_codepoint = if (@max(glyph.source_byte_len, 1) == item.byte_len)
                 item.visual_codepoint
             else
@@ -1922,15 +1927,54 @@ fn appendVisualGlyphsForBidiItem(
         return;
     }
 
-    for (glyphs, 0..) |glyph, glyph_index| {
+    for (glyph_cluster_index[range.start..range.end]) |entry| {
+        const glyph_index = entry.glyph_index;
         if (seen[glyph_index]) continue;
-        if (glyph.cluster != item.byte_start) continue;
+        const glyph = glyphs[glyph_index];
         const visual_codepoint = if (@max(glyph.source_byte_len, 1) == item.byte_len)
             item.visual_codepoint
         else
             null;
         try appendVisualGlyph(allocator, glyphs, old_runs, single_font, glyph_run_indices, seen, glyph_index, visual_codepoint, out_glyphs, out_run_indices);
     }
+}
+
+const BidiGlyphClusterEntry = struct {
+    cluster: usize,
+    glyph_index: usize,
+};
+
+fn buildBidiGlyphClusterIndex(allocator: std.mem.Allocator, glyphs: []const GlyphPosition) ![]BidiGlyphClusterEntry {
+    const entries = try allocator.alloc(BidiGlyphClusterEntry, glyphs.len);
+    for (glyphs, entries, 0..) |glyph, *entry, glyph_index| {
+        entry.* = .{ .cluster = glyph.cluster, .glyph_index = glyph_index };
+    }
+    std.sort.heap(BidiGlyphClusterEntry, entries, {}, bidiGlyphClusterEntryLessThan);
+    return entries;
+}
+
+fn bidiGlyphClusterEntryLessThan(_: void, lhs: BidiGlyphClusterEntry, rhs: BidiGlyphClusterEntry) bool {
+    if (lhs.cluster == rhs.cluster) return lhs.glyph_index < rhs.glyph_index;
+    return lhs.cluster < rhs.cluster;
+}
+
+fn bidiGlyphClusterRange(entries: []const BidiGlyphClusterEntry, cluster: usize) ?struct { start: usize, end: usize } {
+    var low: usize = 0;
+    var high: usize = entries.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (entries[mid].cluster < cluster) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    const start = low;
+    while (low < entries.len and entries[low].cluster == cluster) {
+        low += 1;
+    }
+    if (start == low) return null;
+    return .{ .start = start, .end = low };
 }
 
 fn appendVisualGlyph(

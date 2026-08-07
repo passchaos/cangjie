@@ -88,6 +88,14 @@ Representative performance state near that commit:
 - Roboto `en-words`, Cangjie: about `1118 ns/glyph` median.
 - Amiri `fa-thelittleprince`, CoreText: about `1233 ns/glyph` median.
 
+Current local snapshot after the Nastaliq parity work:
+
+- Amiri `fa-thelittleprince`, Cangjie default visual-order path: about
+  `2254 ns/glyph` median.
+- Amiri `fa-thelittleprince`, Cangjie with `--no-bidi-reorder`: about
+  `1863 ns/glyph` median.
+- Amiri `fa-thelittleprince`, CoreText: about `1263 ns/glyph` median.
+
 Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 
 - Amiri `"آیت‌الله"` passes `compare-harfrust`.

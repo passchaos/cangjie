@@ -28,6 +28,10 @@ pub fn buildLtshTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ltshTtfTables(allocator));
 }
 
+pub fn buildLtagTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try ltagTtfTables(allocator));
+}
+
 pub fn buildMetaTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try metaTtfTables(allocator));
 }
@@ -571,6 +575,21 @@ fn ltshTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn ltagTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "ltag", .data = try ltagTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
@@ -4844,6 +4863,19 @@ fn ltshTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 2, 2);
     bytes[4] = 7;
     bytes[5] = 11;
+    return bytes;
+}
+
+fn ltagTable(allocator: std.mem.Allocator) ![]u8 {
+    const tag = "zh-Hant";
+    const bytes = try allocator.alloc(u8, 16 + tag.len);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 1);
+    writeU32(bytes, 4, 0);
+    writeU32(bytes, 8, 1);
+    writeU16(bytes, 12, 16);
+    writeU16(bytes, 14, tag.len);
+    @memcpy(bytes[16 .. 16 + tag.len], tag);
     return bytes;
 }
 

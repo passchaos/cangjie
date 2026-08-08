@@ -7,6 +7,7 @@ const gsub_mod = @import("gsub.zig");
 const gasp_mod = @import("opentype/gasp.zig");
 const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
+const ltag_mod = @import("opentype/ltag.zig");
 const meta_mod = @import("opentype/meta.zig");
 const name_mod = @import("opentype/name.zig");
 
@@ -177,6 +178,8 @@ pub const DsigInfo = struct {
 };
 
 pub const MetaRecordInfo = meta_mod.Record;
+
+pub const LtagRecordInfo = ltag_mod.Record;
 
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
@@ -611,6 +614,7 @@ pub const Font = struct {
     hmtx: TableRecord,
     hdmx: ?TableRecord,
     ltsh: ?TableRecord,
+    ltag: ?TableRecord,
     loca: ?TableRecord,
     cmap: TableRecord,
     kern: ?TableRecord,
@@ -704,6 +708,7 @@ pub const Font = struct {
         const hmtx = findTable(records, "hmtx") orelse return error.MissingTable;
         const hdmx = findTable(records, "hdmx");
         const ltsh = findTable(records, "LTSH");
+        const ltag = findTable(records, "ltag");
         const loca = findTable(records, "loca");
         const cmap = findTable(records, "cmap") orelse return error.MissingTable;
         const kern = findTable(records, "kern");
@@ -774,6 +779,7 @@ pub const Font = struct {
         if (kern) |kern_table| try validateKernTable(data, kern_table, glyph_count);
         if (hdmx) |hdmx_table| try validateHdmxTable(data, hdmx_table, glyph_count);
         if (ltsh) |ltsh_table| try validateLtshTable(data, ltsh_table, glyph_count);
+        if (ltag) |ltag_table| try validateLtagTable(data, ltag_table);
         if (gasp) |gasp_table| try validateGaspTable(data, gasp_table);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
@@ -856,6 +862,7 @@ pub const Font = struct {
             .hmtx = hmtx,
             .hdmx = hdmx,
             .ltsh = ltsh,
+            .ltag = ltag,
             .loca = loca,
             .cmap = cmap,
             .kern = kern,
@@ -915,6 +922,13 @@ pub const Font = struct {
         const record = findTableByTag(self.owned_tables, tag) orelse return null;
         try validateSfntTableChecksum(self.data, record);
         return self.data[record.offset .. record.offset + record.length];
+    }
+
+    /// Read validated records from the optional Apple SFNT `ltag` table.
+    pub fn ltagRecords(self: *const Font, allocator: std.mem.Allocator) FontError![]LtagRecordInfo {
+        const ltag = self.ltag orelse return try allocator.alloc(LtagRecordInfo, 0);
+        try validateSfntTableChecksum(self.data, ltag);
+        return try ltag_mod.records(allocator, self.data, ltag.offset, ltag.length);
     }
 
     /// Read validated records from the optional SFNT `meta` table.
@@ -4115,6 +4129,10 @@ fn clampI16(value: i32) i16 {
     if (value < std.math.minInt(i16)) return std.math.minInt(i16);
     if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
     return @intCast(value);
+}
+
+fn validateLtagTable(data: []const u8, ltag: TableRecord) FontError!void {
+    return try ltag_mod.validate(data, ltag.offset, ltag.length);
 }
 
 fn validateLtshTable(data: []const u8, ltsh: TableRecord, glyph_count: u16) FontError!void {
@@ -18050,6 +18068,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .hmtx = dummy_table,
         .hdmx = null,
         .ltsh = null,
+        .ltag = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18103,6 +18122,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .hmtx = dummy_table,
         .hdmx = null,
         .ltsh = null,
+        .ltag = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18156,6 +18176,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .hmtx = dummy_table,
         .hdmx = null,
         .ltsh = null,
+        .ltag = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18220,6 +18241,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .hmtx = dummy_table,
         .hdmx = null,
         .ltsh = null,
+        .ltag = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18273,6 +18295,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .hmtx = dummy_table,
         .hdmx = null,
         .ltsh = null,
+        .ltag = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18326,6 +18349,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .hmtx = dummy_table,
         .hdmx = null,
         .ltsh = null,
+        .ltag = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18379,6 +18403,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .hmtx = dummy_table,
         .hdmx = null,
         .ltsh = null,
+        .ltag = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18452,6 +18477,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .hmtx = dummy_table,
         .hdmx = null,
         .ltsh = null,
+        .ltag = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = kern_checksum, .offset = 0, .length = data.len },

@@ -101,6 +101,7 @@ pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const HdmxInfo = @import("font.zig").HdmxInfo;
 pub const HdmxRecord = @import("font.zig").HdmxRecord;
 pub const LtshInfo = @import("font.zig").LtshInfo;
+pub const LtagRecordInfo = @import("font.zig").LtagRecordInfo;
 pub const HorizontalMetricInfo = @import("font.zig").HorizontalMetricInfo;
 pub const MetricHeaderInfo = @import("font.zig").MetricHeaderInfo;
 pub const VerticalMetricInfo = @import("font.zig").VerticalMetricInfo;
@@ -475,6 +476,54 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "ltag records are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildLtagTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const records = try font.ltagRecords(allocator);
+    defer allocator.free(records);
+    try std.testing.expectEqual(@as(usize, 1), records.len);
+    try std.testing.expectEqualStrings("zh-Hant", records[0].tag);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    const empty = try missing.ltagRecords(allocator);
+    defer allocator.free(empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+}
+
+test "lazy ltag records revalidate borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildLtagTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const records = try font.ltagRecords(allocator);
+    defer allocator.free(records);
+    try std.testing.expectEqualStrings("zh-Hant", records[0].tag);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var ltag_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "ltag")) ltag_offset = table.offset;
+    }
+    bytes[ltag_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.ltagRecords(allocator));
 }
 
 test "LTSH thresholds are exposed" {

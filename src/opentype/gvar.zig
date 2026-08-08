@@ -555,14 +555,7 @@ pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, leng
     for (0..glyph.tuple_count) |tuple_index| {
         const delta_count = try decodeScaledTuplePointDeltas(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index, normalized_coords, all_points, raw_scratch, scaled_scratch);
         for (scaled_scratch[0..delta_count]) |delta| {
-            var found: ?usize = null;
-            for (out[0..out_count], 0..) |existing, index| {
-                if (existing.point == delta.point) {
-                    found = index;
-                    break;
-                }
-            }
-            const target_index = found orelse blk: {
+            const target_index = accumulationTargetIndex(out, out_count, all_points, delta.point) orelse blk: {
                 if (out_count == out.len) return error.BadSfnt;
                 out[out_count] = .{ .point = delta.point, .x = 0, .y = 0 };
                 out_count += 1;
@@ -577,6 +570,21 @@ pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, leng
         }
     }
     return out_count;
+}
+
+fn accumulationTargetIndex(out: []const ScaledPointDelta, out_count: usize, all_points: []const u16, point: u16) ?usize {
+    // The hot outline-at-coords path asks for a dense all-points vector
+    // containing 0...target_count-1.  In that common case the gvar point number
+    // is already the output index, avoiding an O(points) scan for every tuple
+    // delta while preserving the generic sparse/allocation-free decoder API.
+    if (all_points.len != 0) {
+        const candidate: usize = point;
+        if (candidate < all_points.len and all_points[candidate] == point) return candidate;
+    }
+    for (out[0..out_count], 0..) |existing, index| {
+        if (existing.point == point) return index;
+    }
+    return null;
 }
 
 pub fn tupleScalar(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, normalized_coords: []const f32) Error!f32 {
@@ -878,6 +886,19 @@ test "phantom point deltas derive metric deltas" {
     try std.testing.expectEqual(@as(f32, 10), phantom.right.x);
     try std.testing.expectEqual(@as(f32, 9), phantom.horizontalAdvanceDelta());
     try std.testing.expectEqual(@as(f32, 6), phantom.verticalAdvanceDelta());
+}
+
+test "gvar accumulation target index uses dense point ids directly" {
+    const out = [_]ScaledPointDelta{
+        .{ .point = 0, .x = 0, .y = 0 },
+        .{ .point = 1, .x = 0, .y = 0 },
+        .{ .point = 2, .x = 0, .y = 0 },
+    };
+    try std.testing.expectEqual(@as(?usize, 2), accumulationTargetIndex(&out, out.len, &.{ 0, 1, 2 }, 2));
+    // Non-dense caller-provided point lists are still supported by falling back
+    // to the generic search over accumulated outputs.
+    try std.testing.expectEqual(@as(?usize, 1), accumulationTargetIndex(&out, out.len, &.{ 2, 0, 1 }, 1));
+    try std.testing.expect(accumulationTargetIndex(&out, out.len, &.{ 0, 1, 2 }, 9) == null);
 }
 
 test "gvar glyph metadata exposes tuple headers" {

@@ -5,10 +5,12 @@ const max_variation_coords = 32;
 pub const Engine = enum {
     cangjie,
     freetype,
+    compare_freetype,
 
     pub fn fromName(name: []const u8) ?Engine {
         if (std.mem.eql(u8, name, "cangjie")) return .cangjie;
         if (std.mem.eql(u8, name, "freetype")) return .freetype;
+        if (std.mem.eql(u8, name, "compare-freetype")) return .compare_freetype;
         return null;
     }
 
@@ -16,6 +18,7 @@ pub const Engine = enum {
         return switch (self) {
             .cangjie => "cangjie",
             .freetype => "freetype",
+            .compare_freetype => "compare-freetype",
         };
     }
 };
@@ -165,7 +168,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
     if (!std.math.isFinite(options.font_size) or options.font_size <= 0) return error.InvalidArguments;
     if (options.target_size == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
-    if (options.engine == .freetype and options.mode == .raster_reuse) return error.InvalidArguments;
+    if ((options.engine == .freetype or options.engine == .compare_freetype) and options.mode == .raster_reuse) return error.InvalidArguments;
     return options;
 }
 
@@ -202,10 +205,10 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype] [--mode outline|raster|raster-reuse] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode outline|raster|raster-reuse] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
-        \\  --engine NAME        cangjie or freetype; default cangjie
+        \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
         \\  --mode NAME          outline, raster, or raster-reuse; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font

@@ -552,7 +552,16 @@ pub fn accumulateGlyphPointDeltas(data: []const u8, offset: usize, length: usize
 }
 
 pub fn accumulateGlyphPointDeltasForPointCount(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta) Error!usize {
-    return try accumulateGlyphPointDeltasForPointCountWithFlags(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, scaled_scratch, out, null);
+    _ = scaled_scratch;
+    return try accumulateGlyphPointDeltasForPointCountRawScratchWithFlags(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, out, null);
+}
+
+pub fn accumulateGlyphPointDeltasForPointCountRawScratch(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, out: []ScaledPointDelta) Error!usize {
+    return try accumulateGlyphPointDeltasForPointCountRawScratchWithFlags(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, out, null);
+}
+
+pub fn accumulateGlyphPointDeltasForPointCountRawScratchWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
+    return try accumulateGlyphPointDeltasForPointCountWithFlagsMode(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, out, has_delta, .decode_all);
 }
 
 /// Accumulate point-count deltas for a table that has already been structurally
@@ -561,7 +570,12 @@ pub fn accumulateGlyphPointDeltasForPointCount(data: []const u8, offset: usize, 
 /// so inactive malformed payloads are still caught at the API boundary; raster
 /// hot paths can use this variant after `Font.parse` has validated the table.
 pub fn accumulateGlyphPointDeltasForPointCountSkippingInactiveWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
-    return try accumulateGlyphPointDeltasForPointCountWithFlagsMode(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, scaled_scratch, out, has_delta, .skip_inactive);
+    _ = scaled_scratch;
+    return try accumulateGlyphPointDeltasForPointCountSkippingInactiveRawScratchWithFlags(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, out, has_delta);
+}
+
+pub fn accumulateGlyphPointDeltasForPointCountSkippingInactiveRawScratchWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
+    return try accumulateGlyphPointDeltasForPointCountWithFlagsMode(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, out, has_delta, .skip_inactive);
 }
 
 pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, all_points: []const u16, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
@@ -598,7 +612,8 @@ pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, leng
 }
 
 pub fn accumulateGlyphPointDeltasForPointCountWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
-    return try accumulateGlyphPointDeltasForPointCountWithFlagsMode(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, scaled_scratch, out, has_delta, .decode_all);
+    _ = scaled_scratch;
+    return try accumulateGlyphPointDeltasForPointCountRawScratchWithFlags(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, out, has_delta);
 }
 
 const PointCountAccumulationMode = enum {
@@ -606,7 +621,12 @@ const PointCountAccumulationMode = enum {
     skip_inactive,
 };
 
-fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool, mode: PointCountAccumulationMode) Error!usize {
+const RawDeltaRun = struct {
+    raw_count: usize,
+    scalar: f32,
+};
+
+fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, out: []ScaledPointDelta, has_delta: ?[]bool, mode: PointCountAccumulationMode) Error!usize {
     if (point_count > @as(usize, std.math.maxInt(u16)) + 1) return error.BadSfnt;
     if (has_delta) |flags| {
         if (flags.len < point_count) return error.BadSfnt;
@@ -634,30 +654,34 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
             .decode_all => blk: {
                 const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(table, tuple, tuple_data_offset, point_count, raw_scratch);
                 const scalar = try tupleScalarFromTuple(table, parsed, tuple, normalized_coords);
-                break :blk try scalePointDeltas(raw_scratch[0..raw_count], scalar, scaled_scratch);
+                break :blk RawDeltaRun{ .raw_count = raw_count, .scalar = scalar };
             },
             .skip_inactive => blk: {
                 const scalar = try tupleScalarFromTuple(table, parsed, tuple, normalized_coords);
-                if (scalar == 0) break :blk 0;
+                if (scalar == 0) break :blk RawDeltaRun{ .raw_count = 0, .scalar = scalar };
                 if (!initialized_out) {
                     initializeDensePointDeltas(out, point_count);
                     initialized_out = true;
                 }
                 const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(table, tuple, tuple_data_offset, point_count, raw_scratch);
-                break :blk try scalePointDeltas(raw_scratch[0..raw_count], scalar, scaled_scratch);
+                break :blk RawDeltaRun{ .raw_count = raw_count, .scalar = scalar };
             },
         };
-        for (scaled_scratch[0..delta_count]) |delta| {
-            const target_index: usize = delta.point;
-            if (target_index >= point_count) return error.BadSfnt;
-            out[target_index].x += delta.x;
-            out[target_index].y += delta.y;
-            if (has_delta) |flags| flags[target_index] = true;
-        }
+        try accumulateRawPointDeltas(out, point_count, raw_scratch[0..delta_count.raw_count], delta_count.scalar, has_delta);
         header_offset += tuple.header_size;
         tuple_data_bytes += tuple.variation_data_size;
     }
     return if (initialized_out) point_count else 0;
+}
+
+fn accumulateRawPointDeltas(out: []ScaledPointDelta, point_count: usize, deltas: []const PointDelta, scalar: f32, has_delta: ?[]bool) Error!void {
+    for (deltas) |delta| {
+        const target_index: usize = delta.point;
+        if (target_index >= point_count) return error.BadSfnt;
+        out[target_index].x += @as(f32, @floatFromInt(delta.x)) * scalar;
+        out[target_index].y += @as(f32, @floatFromInt(delta.y)) * scalar;
+        if (has_delta) |flags| flags[target_index] = true;
+    }
 }
 
 fn initializeDensePointDeltas(out: []ScaledPointDelta, point_count: usize) void {

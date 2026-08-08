@@ -1146,13 +1146,11 @@ pub const Font = struct {
         if (target_count > @as(usize, std.math.maxInt(u16)) + 1) return error.BadSfnt;
         const raw_scratch = try allocator.alloc(gvar_mod.PointDelta, target_count);
         defer allocator.free(raw_scratch);
-        const scaled_scratch = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
-        defer allocator.free(scaled_scratch);
         const out = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
         errdefer allocator.free(out);
         const count = switch (read_mode) {
-            .revalidate => try gvar_mod.accumulateGlyphPointDeltasForPointCountWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, axis_count, glyph_id, normalized_coords, target_count, raw_scratch, scaled_scratch, out, has_delta),
-            .parsed => try gvar_mod.accumulateGlyphPointDeltasForPointCountSkippingInactiveWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, axis_count, glyph_id, normalized_coords, target_count, raw_scratch, scaled_scratch, out, has_delta),
+            .revalidate => try gvar_mod.accumulateGlyphPointDeltasForPointCountRawScratchWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, axis_count, glyph_id, normalized_coords, target_count, raw_scratch, out, has_delta),
+            .parsed => try gvar_mod.accumulateGlyphPointDeltasForPointCountSkippingInactiveRawScratchWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, axis_count, glyph_id, normalized_coords, target_count, raw_scratch, out, has_delta),
         };
         if (count == 0 and read_mode == .parsed) {
             allocator.free(out);

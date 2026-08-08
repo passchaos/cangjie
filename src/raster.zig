@@ -664,6 +664,28 @@ pub const Rasterizer = struct {
             var row_max_x = min_x;
             for (sample_offsets) |sample_offset| {
                 const py = @as(f32, @floatFromInt(y)) + sample_offset;
+                if (prepared_lines.len == 2) {
+                    const first = prepared_lines[0];
+                    const second = prepared_lines[1];
+                    if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
+                    const first_x = first.slope * (py - first.ay) + first.ax;
+                    const second_x = second.slope * (py - second.ay) + second.ax;
+                    if (!std.math.isFinite(first_x) or !std.math.isFinite(second_x)) continue;
+                    if (@abs(second_x - first_x) <= 0.000001) continue;
+                    const start_f, const end_f, const left_delta = if (first_x < second_x)
+                        .{ first_x, second_x, first.delta }
+                    else
+                        .{ second_x, first_x, second.delta };
+                    if (fill_rule == .even_odd or left_delta != 0) {
+                        if (coverSpan(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f)) |span| {
+                            row_has_coverage = true;
+                            row_min_x = @min(row_min_x, span.min_x);
+                            row_max_x = @max(row_max_x, span.max_x);
+                        }
+                    }
+                    continue;
+                }
+
                 var intersection_count: usize = 0;
                 for (prepared_lines) |line| {
                     if (py < line.y_min or py >= line.y_max) continue;

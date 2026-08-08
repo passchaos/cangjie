@@ -7,6 +7,7 @@ const gsub_mod = @import("gsub.zig");
 const gasp_mod = @import("opentype/gasp.zig");
 const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
+const meta_mod = @import("opentype/meta.zig");
 const name_mod = @import("opentype/name.zig");
 
 /// Errors intentionally preserve the table family that failed. Callers such as
@@ -174,6 +175,8 @@ pub const DsigInfo = struct {
     flags: u16,
     signatures: []DsigSignatureInfo,
 };
+
+pub const MetaRecordInfo = meta_mod.Record;
 
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
@@ -617,6 +620,7 @@ pub const Font = struct {
     gpos: ?TableRecord,
     gsub: ?TableRecord,
     name: ?TableRecord,
+    meta: ?TableRecord,
     post: ?TableRecord,
     pclt: ?TableRecord,
     stat: ?TableRecord,
@@ -709,6 +713,7 @@ pub const Font = struct {
         const gpos = findTable(records, "GPOS");
         const gsub = findTable(records, "GSUB");
         const name = findTable(records, "name");
+        const meta = findTable(records, "meta");
         const post = findTable(records, "post");
         const pclt = findTable(records, "PCLT");
         const stat = findTable(records, "STAT");
@@ -757,6 +762,7 @@ pub const Font = struct {
         };
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
+        if (meta) |meta_table| try validateMetaTable(data, meta_table);
         if (name) |name_table| {
             validateNameTable(data, name_table) catch |err| switch (err) {
                 error.InvalidName => if (!is_ttc_face) return err,
@@ -859,6 +865,7 @@ pub const Font = struct {
             .gpos = gpos,
             .gsub = gsub,
             .name = name,
+            .meta = meta,
             .post = post,
             .pclt = pclt,
             .stat = stat,
@@ -908,6 +915,19 @@ pub const Font = struct {
         const record = findTableByTag(self.owned_tables, tag) orelse return null;
         try validateSfntTableChecksum(self.data, record);
         return self.data[record.offset .. record.offset + record.length];
+    }
+
+    /// Read validated records from the optional SFNT `meta` table.
+    pub fn metaRecords(self: *const Font, allocator: std.mem.Allocator) FontError![]MetaRecordInfo {
+        const meta = self.meta orelse return try allocator.alloc(MetaRecordInfo, 0);
+        try validateSfntTableChecksum(self.data, meta);
+        return try meta_mod.records(allocator, self.data, meta.offset, meta.length);
+    }
+
+    pub fn metaData(self: *const Font, tag: [4]u8) FontError!?[]const u8 {
+        const meta = self.meta orelse return null;
+        try validateSfntTableChecksum(self.data, meta);
+        return try meta_mod.dataForTag(self.data, meta.offset, meta.length, tag);
     }
 
     /// Read validated metadata from the optional SFNT `DSIG` table.
@@ -3784,6 +3804,10 @@ fn validateCffGlyphCount(data: []const u8, cff: TableRecord, glyph_count: u16) F
     // glyph ids that the CFF outline data can never resolve.
     const info = try cff_mod.parseInfo(data[cff.offset .. cff.offset + cff.length]);
     if (info.charstrings_count != glyph_count) return error.BadSfnt;
+}
+
+fn validateMetaTable(data: []const u8, meta: TableRecord) FontError!void {
+    return try meta_mod.validate(data, meta.offset, meta.length);
 }
 
 fn validateDsigTable(data: []const u8, dsig: TableRecord) FontError!void {
@@ -18035,6 +18059,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .meta = null,
         .post = null,
         .pclt = null,
         .stat = null,
@@ -18087,6 +18112,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .meta = null,
         .post = null,
         .pclt = null,
         .stat = null,
@@ -18139,6 +18165,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .meta = null,
         .post = null,
         .pclt = null,
         .stat = null,
@@ -18202,6 +18229,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .meta = null,
         .post = null,
         .pclt = null,
         .stat = null,
@@ -18254,6 +18282,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .meta = null,
         .post = null,
         .pclt = null,
         .stat = null,
@@ -18306,6 +18335,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .meta = null,
         .post = null,
         .pclt = null,
         .stat = null,
@@ -18358,6 +18388,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .meta = null,
         .post = null,
         .pclt = null,
         .stat = null,
@@ -18430,6 +18461,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .name = null,
+        .meta = null,
         .post = null,
         .pclt = null,
         .stat = null,

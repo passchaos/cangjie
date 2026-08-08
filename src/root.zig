@@ -111,6 +111,7 @@ pub const NameEncoding = @import("font.zig").NameEncoding;
 pub const NameId = @import("font.zig").NameId;
 pub const NameLanguageTagInfo = @import("font.zig").NameLanguageTagInfo;
 pub const NameRecordInfo = @import("font.zig").NameRecordInfo;
+pub const MetaRecordInfo = @import("font.zig").MetaRecordInfo;
 pub const Os2Info = @import("font.zig").Os2Info;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
@@ -578,6 +579,58 @@ test "lazy hdmx metadata revalidates borrowed table bytes" {
 
     try std.testing.expectError(error.BadSfnt, font.hdmxWidth(10, 1));
     try std.testing.expectError(error.BadSfnt, font.hdmxInfo(allocator));
+}
+
+test "meta records are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMetaTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const records = try font.metaRecords(allocator);
+    defer allocator.free(records);
+    try std.testing.expectEqual(@as(usize, 1), records.len);
+    try std.testing.expectEqualStrings("dlng", &records[0].tag);
+    try std.testing.expectEqualStrings("latn", records[0].data);
+
+    try std.testing.expectEqualStrings("latn", (try font.metaData(.{ 'd', 'l', 'n', 'g' })).?);
+    try std.testing.expect((try font.metaData(.{ 's', 'l', 'n', 'g' })) == null);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    const empty = try missing.metaRecords(allocator);
+    defer allocator.free(empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+    try std.testing.expect((try missing.metaData(.{ 'd', 'l', 'n', 'g' })) == null);
+}
+
+test "lazy meta records revalidate borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMetaTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expectEqualStrings("latn", (try font.metaData(.{ 'd', 'l', 'n', 'g' })).?);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var meta_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "meta")) meta_offset = table.offset;
+    }
+    bytes[meta_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.metaData(.{ 'd', 'l', 'n', 'g' }));
+    try std.testing.expectError(error.BadSfnt, font.metaRecords(allocator));
 }
 
 test "DSIG metadata is exposed when present" {

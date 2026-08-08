@@ -1130,6 +1130,7 @@ pub const Font = struct {
         const target = try self.gvarMetricVariationTarget(glyph_id, 0);
         const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, target.glyph_id, normalized_coords, target.point_count + 4, null, read_mode)) orelse return null;
         defer allocator.free(deltas);
+        if (deltas.len == 0) return null;
         return try gvar_mod.phantomPointDeltas(target.point_count, deltas);
     }
 
@@ -3522,6 +3523,7 @@ pub const Font = struct {
         defer if (target_count > inline_has_delta.len) allocator.free(has_delta);
         const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
         defer allocator.free(deltas);
+        if (deltas.len == 0) return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
         try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
         try applyGvarSimpleGlyphMetricDeltas(&outline, default_bounds, metrics, deltas, target_count - 4);
         return outline;
@@ -3699,6 +3701,10 @@ pub const Font = struct {
                 return;
             };
             defer outline.allocator.free(deltas);
+            if (deltas.len == 0) {
+                try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null, null);
+                return;
+            }
             try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, deltas, has_delta);
         } else {
             try self.appendCompoundGlyphAtCoords(outline, data, transform, depth + 1, glyph_id, normalized_coords, read_mode);

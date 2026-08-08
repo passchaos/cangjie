@@ -715,6 +715,13 @@ test "gvar metadata is exposed when present" {
     const deltas = (try font.gvarPointDeltasAtCoords(allocator, 1, &.{0.5})).?;
     defer allocator.free(deltas);
     try std.testing.expectEqual(@as(usize, 0), deltas.len);
+    var default_outline = try font.glyphOutline(allocator, 1);
+    defer default_outline.deinit();
+    var varied_outline = try font.glyphOutlineAtCoords(allocator, 1, &.{0.5});
+    defer varied_outline.deinit();
+    try std.testing.expectEqual(default_outline.bounds, varied_outline.bounds);
+    try std.testing.expectEqual(default_outline.advance_width, varied_outline.advance_width);
+    try std.testing.expectEqual(@as(usize, default_outline.commands.items.len), varied_outline.commands.items.len);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);

@@ -184,9 +184,11 @@ fn parsePositiveUsize(text: []const u8) !usize {
 }
 
 fn parseCodepoint(text: []const u8) !u21 {
-    const raw = if (std.mem.startsWith(u8, text, "U+")) text[2..] else text;
-    const radix: u8 = if (std.mem.startsWith(u8, raw, "0x")) 16 else 10;
-    const digits = if (radix == 16 and std.mem.startsWith(u8, raw, "0x")) raw[2..] else raw;
+    const has_unicode_prefix = std.mem.startsWith(u8, text, "U+") or std.mem.startsWith(u8, text, "u+");
+    const raw = if (has_unicode_prefix) text[2..] else text;
+    const has_hex_prefix = std.mem.startsWith(u8, raw, "0x") or std.mem.startsWith(u8, raw, "0X");
+    const radix: u8 = if (has_unicode_prefix or has_hex_prefix) 16 else 10;
+    const digits = if (has_hex_prefix) raw[2..] else raw;
     const value = try std.fmt.parseInt(u32, digits, radix);
     if (value > 0x10ffff or (value >= 0xd800 and value <= 0xdfff)) return error.InvalidArguments;
     return @intCast(value);
@@ -219,7 +221,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
         \\  --glyph-id N         glyph id to benchmark
-        \\  --codepoint VALUE    Unicode scalar when glyph id is not supplied
+        \\  --codepoint VALUE    Unicode scalar when glyph id is not supplied; decimal, 0xHEX, or U+HEX
         \\  --font-size PX       raster font size, default 200
         \\  --target-size PX     raster target size, default 256
         \\  --samples-per-axis N Cangjie raster supersamples per axis, default 4
@@ -233,4 +235,18 @@ pub fn printUsage(args: []const []const u8) void {
         \\  zig build glyph-bench -Doptimize=ReleaseFast -- --engine compare-freetype --mode raster --font ./font.ttf --glyph-id 42 --samples-per-axis 4 --format tsv
         \\
     , .{exe});
+}
+
+test "parse codepoint accepts documented decimal and hexadecimal forms" {
+    try std.testing.expectEqual(@as(u21, 'A'), try parseCodepoint("65"));
+    try std.testing.expectEqual(@as(u21, 'A'), try parseCodepoint("0x41"));
+    try std.testing.expectEqual(@as(u21, 'A'), try parseCodepoint("0X41"));
+    try std.testing.expectEqual(@as(u21, 'A'), try parseCodepoint("U+41"));
+    try std.testing.expectEqual(@as(u21, 'A'), try parseCodepoint("u+41"));
+    try std.testing.expectEqual(@as(u21, 0x1f600), try parseCodepoint("U+1F600"));
+}
+
+test "parse codepoint rejects non-scalar values" {
+    try std.testing.expectError(error.InvalidArguments, parseCodepoint("U+D800"));
+    try std.testing.expectError(error.InvalidArguments, parseCodepoint("U+110000"));
 }

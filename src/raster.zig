@@ -453,8 +453,9 @@ pub const Rasterizer = struct {
 
     pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
+        const use_default_outline = normalizedVariationCoordinatesAreDefault(normalized_variation_coords);
         for (run.glyphs) |position| {
-            var outline = if (normalized_variation_coords.len == 0)
+            var outline = if (use_default_outline)
                 try run.font.glyphOutlineForRaster(self.allocator, position.glyph_id)
             else
                 try run.font.glyphOutlineForRasterAtCoords(self.allocator, position.glyph_id, normalized_variation_coords);
@@ -576,7 +577,7 @@ pub const Rasterizer = struct {
     }
 
     fn glyphOutlineForRenderAtCoords(self: *Rasterizer, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, normalized_variation_coords: []const f32) !glyph_mod.GlyphOutline {
-        return if (normalized_variation_coords.len == 0)
+        return if (normalizedVariationCoordinatesAreDefault(normalized_variation_coords))
             try font.glyphOutlineForRaster(self.allocator, glyph_id)
         else
             try font.glyphOutlineForRasterAtCoords(self.allocator, glyph_id, normalized_variation_coords);
@@ -3113,6 +3114,13 @@ fn skipAsciiSeparators(text: []const u8, offset: usize) usize {
 
 fn isNameByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-' or byte == ':';
+}
+
+fn normalizedVariationCoordinatesAreDefault(coords: []const f32) bool {
+    for (coords) |coord| {
+        if (coord != 0) return false;
+    }
+    return true;
 }
 
 test "small glyph alignment translates outline to pixel grid" {

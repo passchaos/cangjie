@@ -609,6 +609,11 @@ pub const Rasterizer = struct {
 
         const sample_axis: i32 = @max(1, @as(i32, self.samples_per_axis));
         const sample_count = sample_axis * sample_axis;
+        var coverage_lut: [256]u8 = undefined;
+        for (&coverage_lut, 0..) |*coverage, count| {
+            const clamped_count = @min(@as(i32, @intCast(count)), sample_count);
+            coverage.* = @intCast(@divTrunc(clamped_count * 255, sample_count));
+        }
         const sample_axis_usize: usize = @intCast(sample_axis);
         var inline_sample_offsets: [16]f32 = undefined;
         const sample_offsets = if (sample_axis_usize <= inline_sample_offsets.len)
@@ -719,8 +724,7 @@ pub const Rasterizer = struct {
             while (x <= row_max_x) : (x += 1) {
                 const inside = coverage_counts[@intCast(x - min_x)];
                 if (inside == 0) continue;
-                const coverage: u8 = @intCast(@divTrunc(@as(i32, inside) * 255, sample_count));
-                target.blendUnchecked(x, y, coverage);
+                target.blendUnchecked(x, y, coverage_lut[inside]);
             }
         }
     }

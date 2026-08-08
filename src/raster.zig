@@ -607,8 +607,12 @@ pub const Rasterizer = struct {
         const row_width_i32 = max_x - min_x + 1;
         if (row_width_i32 <= 0) return;
         const row_width: usize = @intCast(row_width_i32);
-        const coverage_counts = try self.allocator.alloc(u8, row_width);
-        defer self.allocator.free(coverage_counts);
+        var inline_coverage_counts: [512]u8 = undefined;
+        const coverage_counts = if (row_width <= inline_coverage_counts.len)
+            inline_coverage_counts[0..row_width]
+        else
+            try self.allocator.alloc(u8, row_width);
+        defer if (row_width > inline_coverage_counts.len) self.allocator.free(coverage_counts);
         var prepared_lines = try prepareFillLines(self.allocator, lines);
         defer prepared_lines.deinit(self.allocator);
         var intersections: std.ArrayList(WindingIntersection) = .empty;

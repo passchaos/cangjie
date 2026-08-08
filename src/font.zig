@@ -16,6 +16,7 @@ const ltag_mod = @import("opentype/ltag.zig");
 const meta_mod = @import("opentype/meta.zig");
 const metric_variation_mod = @import("opentype/metric_variation.zig");
 const mvar_mod = @import("opentype/mvar.zig");
+const morx_mod = @import("opentype/morx.zig");
 const name_mod = @import("opentype/name.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
@@ -224,6 +225,10 @@ pub const GaspInfo = gasp_mod.Info;
 pub const KerxInfo = kerx_mod.Info;
 pub const KerxPairInfo = kerx_mod.Pair;
 pub const KerxSubtableInfo = kerx_mod.Subtable;
+pub const MorxChainInfo = morx_mod.Chain;
+pub const MorxFeatureInfo = morx_mod.Feature;
+pub const MorxInfo = morx_mod.Info;
+pub const MorxSubtableInfo = morx_mod.Subtable;
 
 pub const KernTableDialect = enum {
     legacy,
@@ -660,6 +665,7 @@ pub const Font = struct {
     cmap: TableRecord,
     kern: ?TableRecord,
     kerx: ?TableRecord,
+    morx: ?TableRecord,
     os2: ?TableRecord,
     gasp: ?TableRecord,
     gdef: ?TableRecord,
@@ -766,6 +772,7 @@ pub const Font = struct {
         const cmap = findTable(records, "cmap") orelse return error.MissingTable;
         const kern = findTable(records, "kern");
         const kerx = findTable(records, "kerx");
+        const morx = findTable(records, "morx");
         const os2 = findTable(records, "OS/2");
         const gasp = findTable(records, "gasp");
         const gdef = findTable(records, "GDEF");
@@ -830,6 +837,7 @@ pub const Font = struct {
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
         if (ankr) |ankr_table| try validateAnkrTable(data, ankr_table, glyph_count);
+        if (morx) |morx_table| try validateMorxTable(data, morx_table, glyph_count);
         if (feat) |feat_table| try validateFeatTable(data, feat_table);
         if (trak) |trak_table| try validateTrakTable(data, trak_table);
         if (meta) |meta_table| try validateMetaTable(data, meta_table);
@@ -937,6 +945,7 @@ pub const Font = struct {
             .cmap = cmap,
             .kern = kern,
             .kerx = kerx,
+            .morx = morx,
             .os2 = os2,
             .gasp = gasp,
             .gdef = gdef,
@@ -1020,6 +1029,18 @@ pub const Font = struct {
 
     pub fn freeCvarInfo(_: *const Font, allocator: std.mem.Allocator, info_value: CvarInfo) void {
         cvar_mod.free(allocator, info_value);
+    }
+
+    /// Read validated chain, feature, and subtable metadata from the optional AAT `morx` table.
+    pub fn morxInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?MorxInfo {
+        const morx = self.morx orelse return null;
+        try validateSfntTableChecksum(self.data, morx);
+        try validateMorxTable(self.data, morx, self.glyph_count);
+        return try morx_mod.info(allocator, self.data, morx.offset, morx.length, self.glyph_count);
+    }
+
+    pub fn freeMorxInfo(_: *const Font, allocator: std.mem.Allocator, info_value: MorxInfo) void {
+        morx_mod.free(allocator, info_value);
     }
 
     /// Read validated metadata and format-0 pairs from the optional AAT `kerx` table.
@@ -5115,6 +5136,10 @@ fn readAppleKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: Table
 
 fn validateKerxTable(data: []const u8, kerx: TableRecord, glyph_count: u16) FontError!void {
     return try kerx_mod.validate(data, kerx.offset, kerx.length, glyph_count);
+}
+
+fn validateMorxTable(data: []const u8, morx: TableRecord, glyph_count: u16) FontError!void {
+    return try morx_mod.validate(data, morx.offset, morx.length, glyph_count);
 }
 
 fn validateKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
@@ -18367,6 +18392,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .morx = null,
         .os2 = null,
         .gasp = null,
         .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = gdef_checksum, .offset = 0, .length = data.len },
@@ -18433,6 +18459,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .morx = null,
         .os2 = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = os2_checksum, .offset = 0, .length = declared_length },
         .gasp = null,
         .gdef = null,
@@ -18499,6 +18526,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .morx = null,
         .os2 = null,
         .gasp = null,
         .gdef = null,
@@ -18576,6 +18604,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .morx = null,
         .os2 = null,
         .gasp = null,
         .gdef = null,
@@ -18642,6 +18671,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .morx = null,
         .os2 = null,
         .gasp = null,
         .gdef = null,
@@ -18708,6 +18738,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .morx = null,
         .os2 = null,
         .gasp = null,
         .gdef = null,
@@ -18774,6 +18805,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .morx = null,
         .os2 = null,
         .gasp = null,
         .gdef = null,
@@ -18860,6 +18892,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = kern_checksum, .offset = 0, .length = data.len },
         .kerx = null,
+        .morx = null,
         .os2 = null,
         .gasp = null,
         .gdef = null,

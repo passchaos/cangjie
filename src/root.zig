@@ -143,6 +143,10 @@ pub const KernSubtableInfo = @import("font.zig").KernSubtableInfo;
 pub const KerxInfo = @import("font.zig").KerxInfo;
 pub const KerxPairInfo = @import("font.zig").KerxPairInfo;
 pub const KerxSubtableInfo = @import("font.zig").KerxSubtableInfo;
+pub const MorxChainInfo = @import("font.zig").MorxChainInfo;
+pub const MorxFeatureInfo = @import("font.zig").MorxFeatureInfo;
+pub const MorxInfo = @import("font.zig").MorxInfo;
+pub const MorxSubtableInfo = @import("font.zig").MorxSubtableInfo;
 pub const KernTableDialect = @import("font.zig").KernTableDialect;
 pub const GdefMetadataCache = @import("layout.zig").GdefMetadataCache;
 pub const GposTableProofCache = @import("layout.zig").GposTableProofCache;
@@ -501,6 +505,60 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "AAT morx chain metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMorxTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.morxInfo(allocator)).?;
+    defer font.freeMorxInfo(allocator, info);
+    try std.testing.expectEqual(@as(u16, 2), info.version);
+    try std.testing.expectEqual(@as(usize, 1), info.chains.len);
+    try std.testing.expectEqual(@as(u32, 1), info.chains[0].default_flags);
+    try std.testing.expectEqual(@as(usize, 44), info.chains[0].length);
+    try std.testing.expectEqual(@as(usize, 1), info.chains[0].features.len);
+    try std.testing.expectEqual(MorxFeatureInfo{ .feature_type = 1, .feature_setting = 2, .enable_flags = 4, .disable_flags = 0xfffffffb }, info.chains[0].features[0]);
+    try std.testing.expectEqual(@as(usize, 1), info.chains[0].subtables.len);
+    try std.testing.expectEqual(@as(u8, 4), info.chains[0].subtables[0].format);
+    try std.testing.expect(info.chains[0].subtables[0].all_directions);
+    try std.testing.expectEqual(@as(u32, 4), info.chains[0].subtables[0].sub_feature_flags);
+    try std.testing.expectEqualSlices(u8, &.{ 0x12, 0x34, 0x56, 0x78 }, info.chains[0].subtables[0].data);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.morxInfo(allocator)) == null);
+}
+
+test "lazy AAT morx metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMorxTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const info = (try font.morxInfo(allocator)).?;
+    defer font.freeMorxInfo(allocator, info);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var morx_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "morx")) morx_offset = table.offset;
+    }
+    bytes[morx_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.morxInfo(allocator));
 }
 
 test "AAT kerx format 0 pairs are exposed when present" {

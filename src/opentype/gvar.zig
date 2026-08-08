@@ -52,6 +52,17 @@ pub const PackedDeltasInfo = struct {
     word_count: usize,
 };
 
+pub const TuplePayloadInfo = struct {
+    tuple_data_offset: usize,
+    tuple_data_length: usize,
+    point_numbers_offset: ?usize = null,
+    point_numbers: PointNumbersInfo,
+    x_deltas_offset: usize,
+    x_deltas: PackedDeltasInfo,
+    y_deltas_offset: usize,
+    y_deltas: PackedDeltasInfo,
+};
+
 pub fn packedPointNumbersInfo(data: []const u8, offset: usize, limit: usize) Error!PointNumbersInfo {
     if (offset > data.len or limit > data.len or offset >= limit) return error.BadSfnt;
     var cursor = offset;
@@ -216,6 +227,48 @@ pub fn tupleInfo(data: []const u8, offset: usize, length: usize, expected_glyph_
         tuple_data_bytes += tuple.variation_data_size;
     }
     return error.BadSfnt;
+}
+
+pub fn tuplePayloadInfo(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, all_points_delta_count: ?usize) Error!?TuplePayloadInfo {
+    const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return null;
+    const tuple = (try tupleInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph)) orelse return null;
+    const table = data[offset .. offset + length];
+    var tuple_data_offset = glyph.data_offset + glyph.tuple_data_offset;
+    // Walk earlier tuples to find this tuple's serialized payload.
+    for (0..tuple_index_in_glyph) |index| {
+        const previous = (try tupleInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, index)) orelse return error.BadSfnt;
+        tuple_data_offset += previous.variation_data_size;
+    }
+    const tuple_data_end = tuple_data_offset + tuple.variation_data_size;
+    if (tuple_data_end > table.len) return error.BadSfnt;
+
+    var cursor = tuple_data_offset;
+    const point_numbers_offset: ?usize = if (tuple.private_point_numbers) cursor else null;
+    const points = if (tuple.private_point_numbers) blk: {
+        const parsed_points = try packedPointNumbersInfo(table, cursor, tuple_data_end);
+        cursor += parsed_points.bytes_consumed;
+        break :blk parsed_points;
+    } else PointNumbersInfo{ .all_points = true, .count = 0, .max_point = 0, .bytes_consumed = 0 };
+
+    const delta_count = if (points.all_points) (all_points_delta_count orelse return error.BadSfnt) else points.count;
+    const x_offset = cursor;
+    const x_deltas = try packedDeltasInfo(table, cursor, tuple_data_end, delta_count);
+    cursor += x_deltas.bytes_consumed;
+    const y_offset = cursor;
+    const y_deltas = try packedDeltasInfo(table, cursor, tuple_data_end, delta_count);
+    cursor += y_deltas.bytes_consumed;
+    if (cursor != tuple_data_end) return error.BadSfnt;
+
+    return .{
+        .tuple_data_offset = tuple_data_offset,
+        .tuple_data_length = tuple.variation_data_size,
+        .point_numbers_offset = point_numbers_offset,
+        .point_numbers = points,
+        .x_deltas_offset = x_offset,
+        .x_deltas = x_deltas,
+        .y_deltas_offset = y_offset,
+        .y_deltas = y_deltas,
+    };
 }
 
 pub fn tupleScalar(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, normalized_coords: []const f32) Error!f32 {
@@ -532,4 +585,34 @@ test "gvar packed deltas decode rejects count mismatch" {
     try std.testing.expectError(error.BadSfnt, decodePackedDeltas(&.{ 0x01, 1, 2 }, 0, 3, &too_small));
     var too_large: [3]i32 = undefined;
     try std.testing.expectError(error.BadSfnt, decodePackedDeltas(&.{ 0x01, 1, 2 }, 0, 3, &too_large));
+}
+
+test "gvar tuple payload metadata separates point and delta streams" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 9, // offsets: 0, 18.
+        0, 1, 0, 10, // GlyphVariationData header.
+        0, 7, 0xa0, 0x00, // Tuple header: variationDataSize=7, embedded peak + private points.
+        0x40, 0x00, // embedded peak tuple.
+        1, 0, 5, // private point numbers: one point, point id 5.
+        0, 7, // x delta: +7.
+        0, 249, // y delta: -7.
+        0, // padding after tuple payload.
+    };
+    const payload = (try tuplePayloadInfo(&bytes, 0, bytes.len, 1, 1, 0, 0, null)).?;
+    try std.testing.expectEqual(@as(usize, 34), payload.tuple_data_offset);
+    try std.testing.expectEqual(@as(usize, 7), payload.tuple_data_length);
+    try std.testing.expectEqual(@as(?usize, 34), payload.point_numbers_offset);
+    try std.testing.expectEqual(@as(usize, 1), payload.point_numbers.count);
+    try std.testing.expectEqual(@as(usize, 5), payload.point_numbers.max_point);
+    try std.testing.expectEqual(@as(usize, 37), payload.x_deltas_offset);
+    try std.testing.expectEqual(@as(usize, 1), payload.x_deltas.byte_count);
+    try std.testing.expectEqual(@as(usize, 39), payload.y_deltas_offset);
+    try std.testing.expectEqual(@as(usize, 1), payload.y_deltas.byte_count);
 }

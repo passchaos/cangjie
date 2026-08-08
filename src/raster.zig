@@ -630,6 +630,7 @@ pub const Rasterizer = struct {
         var y = min_y;
         while (y <= max_y) : (y += 1) {
             @memset(coverage_counts, 0);
+            var row_has_coverage = false;
             var sy: i32 = 0;
             while (sy < sample_axis) : (sy += 1) {
                 const py = @as(f32, @floatFromInt(y)) + (@as(f32, @floatFromInt(sy)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
@@ -659,6 +660,7 @@ pub const Rasterizer = struct {
                                 const end_f = current_x;
                                 if (winding != 0) {
                                     coverSpan(coverage_counts, min_x, max_x, sample_axis, start_f, end_f);
+                                    row_has_coverage = true;
                                 }
                             }
 
@@ -674,10 +676,12 @@ pub const Rasterizer = struct {
                         var pair: usize = 0;
                         while (pair + 1 < intersections.len) : (pair += 2) {
                             coverSpan(coverage_counts, min_x, max_x, sample_axis, intersections[pair].x, intersections[pair + 1].x);
+                            row_has_coverage = true;
                         }
                     },
                 }
             }
+            if (!row_has_coverage) continue;
             var x = min_x;
             while (x <= max_x) : (x += 1) {
                 const inside = coverage_counts[@intCast(x - min_x)];

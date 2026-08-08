@@ -140,6 +140,9 @@ pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
 pub const KernInfo = @import("font.zig").KernInfo;
 pub const KernSubtableInfo = @import("font.zig").KernSubtableInfo;
+pub const KerxInfo = @import("font.zig").KerxInfo;
+pub const KerxPairInfo = @import("font.zig").KerxPairInfo;
+pub const KerxSubtableInfo = @import("font.zig").KerxSubtableInfo;
 pub const KernTableDialect = @import("font.zig").KernTableDialect;
 pub const GdefMetadataCache = @import("layout.zig").GdefMetadataCache;
 pub const GposTableProofCache = @import("layout.zig").GposTableProofCache;
@@ -498,6 +501,58 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "AAT kerx format 0 pairs are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildKerxTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.kerxInfo(allocator)).?;
+    defer font.freeKerxInfo(allocator, info);
+    try std.testing.expectEqual(@as(u16, 2), info.version);
+    try std.testing.expectEqual(@as(usize, 1), info.subtables.len);
+    try std.testing.expectEqual(@as(u8, 0), info.subtables[0].format);
+    try std.testing.expect(info.subtables[0].horizontal);
+    try std.testing.expect(!info.subtables[0].cross_stream);
+    try std.testing.expectEqual(@as(u32, 0), info.subtables[0].tuple_count);
+    try std.testing.expectEqual(@as(usize, 2), info.subtables[0].pairs.len);
+    try std.testing.expectEqual(KerxPairInfo{ .left = 0, .right = 0, .value = -10 }, info.subtables[0].pairs[0]);
+    try std.testing.expectEqual(KerxPairInfo{ .left = 0, .right = 1, .value = -30 }, info.subtables[0].pairs[1]);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.kerxInfo(allocator)) == null);
+}
+
+test "lazy AAT kerx metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildKerxTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const info = (try font.kerxInfo(allocator)).?;
+    defer font.freeKerxInfo(allocator, info);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var kerx_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "kerx")) kerx_offset = table.offset;
+    }
+    bytes[kerx_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.kerxInfo(allocator));
 }
 
 test "AAT ankr anchor points are exposed when present" {

@@ -44,6 +44,10 @@ pub fn buildAnkrTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ankrTtfTables(allocator));
 }
 
+pub fn buildKerxTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -678,6 +682,21 @@ fn ankrTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    return tables;
+}
+
+fn kerxTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kerx", .data = try kerxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -2629,6 +2648,29 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 74, 700.0);
     writeF16Dot16(bytes, 78, 150.0);
     writeU16(bytes, 82, 261);
+    return bytes;
+}
+
+fn kerxTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 48);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2); // kerx version.
+    writeU32(bytes, 4, 1); // one subtable.
+
+    writeU32(bytes, 8, 40); // subtable length.
+    writeU32(bytes, 12, 0); // horizontal format 0 coverage.
+    writeU32(bytes, 16, 0); // tupleCount.
+    writeU32(bytes, 20, 2); // nPairs.
+    writeU32(bytes, 24, 12); // searchRange = 2 * 6.
+    writeU32(bytes, 28, 1); // entrySelector.
+    writeU32(bytes, 32, 0); // rangeShift.
+
+    writeU16(bytes, 36, 0);
+    writeU16(bytes, 38, 0);
+    writeI16(bytes, 40, -10);
+    writeU16(bytes, 42, 0);
+    writeU16(bytes, 44, 1);
+    writeI16(bytes, 46, -30);
     return bytes;
 }
 

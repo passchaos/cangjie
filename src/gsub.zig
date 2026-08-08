@@ -3945,7 +3945,16 @@ fn ensureSubstitutionRecordReferencesWithin(table: Table, records_offset: usize,
         if (lookup_index >= lookup_count) return error.BadGsub;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_offset_pos));
-        try ensureLookupHeaderWithin(table, lookup_offset);
+        if (table.glyph_count != null) {
+            // Font-load validation already walks every LookupList entry as a
+            // top-level lookup. Contextual records may reference the same
+            // extension/chaining lookups thousands of times in complex fonts;
+            // validating only the fixed header here preserves reference bounds
+            // while avoiding recursive revalidation of the referenced payload.
+            _ = try ensureLookupFixedHeaderWithin(table, lookup_offset);
+        } else {
+            try ensureLookupHeaderWithin(table, lookup_offset);
+        }
     }
 }
 
@@ -3974,6 +3983,14 @@ fn ensureExtensionSubstitutionLookupPayloadsWithin(table: Table, lookup_offset: 
 }
 
 fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
+    const lookup_type = try ensureLookupFixedHeaderWithin(table, lookup_offset);
+    if (lookup_type == 7 and !table.assume_validated) {
+        const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
+        try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
+    }
+}
+
+fn ensureLookupFixedHeaderWithin(table: Table, lookup_offset: usize) GsubError!u16 {
     if (lookup_offset > table.length or table.length - lookup_offset < 6) return error.BadGsub;
     const lookup_type = try readU16BadGsub(table, lookup_offset);
     const lookup_flag = try readU16BadGsub(table, lookup_offset + 2);
@@ -3986,9 +4003,7 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
         const mark_filtering_set_pos = subtable_offsets_pos + subtable_offsets_len;
         if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGsub;
     }
-    if (lookup_type == 7 and !table.assume_validated) {
-        try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
-    }
+    return lookup_type;
 }
 
 fn validateLookupFlag(lookup_flag: u16) GsubError!void {
@@ -5462,6 +5477,54 @@ test "GSUB class format 1 handles upper glyph boundary" {
     try std.testing.expectEqual(@as(u16, 7), try classValue(table, 0, 0xfffe));
     try std.testing.expectEqual(@as(u16, 9), try classValue(table, 0, 0xffff));
     try std.testing.expectEqual(@as(u16, 0), try classValue(table, 0, 0xfffd));
+}
+
+test "GSUB parse-time contextual records avoid recursively validating lookup payloads" {
+    var bytes = [_]u8{0} ** 120;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // ScriptList.
+    writeU16Test(&bytes, 6, 12); // FeatureList.
+    writeU16Test(&bytes, 8, 14); // LookupList.
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 6); // Lookup 0: contextual wrapper.
+    writeU16Test(&bytes, 18, 40); // Lookup 1: intentionally truncated payload.
+
+    writeU16Test(&bytes, 20, 5); // ContextSubst lookup type.
+    writeU16Test(&bytes, 22, 0);
+    writeU16Test(&bytes, 24, 1);
+    writeU16Test(&bytes, 26, 8);
+    const context_subtable: usize = 28;
+    writeU16Test(&bytes, context_subtable + 0, 1); // ContextSubst format 1.
+    writeU16Test(&bytes, context_subtable + 2, 20); // Coverage.
+    writeU16Test(&bytes, context_subtable + 4, 1); // SubRuleSetCount.
+    writeU16Test(&bytes, context_subtable + 6, 14); // SubRuleSet offset.
+    writeCoverage1(&bytes, context_subtable + 20, 1);
+    const rule_set = context_subtable + 14;
+    writeU16Test(&bytes, rule_set + 0, 1);
+    writeU16Test(&bytes, rule_set + 2, 4);
+    const rule = rule_set + 4;
+    writeU16Test(&bytes, rule + 0, 1); // GlyphCount.
+    writeU16Test(&bytes, rule + 2, 1); // SubstCount.
+    writeU16Test(&bytes, rule + 4, 0); // SequenceIndex.
+    writeU16Test(&bytes, rule + 6, 1); // LookupListIndex -> lookup 1.
+
+    const nested_lookup: usize = 54;
+    writeU16Test(&bytes, nested_lookup + 0, 2); // MultipleSubst.
+    writeU16Test(&bytes, nested_lookup + 2, 0);
+    writeU16Test(&bytes, nested_lookup + 4, 1);
+    writeU16Test(&bytes, nested_lookup + 6, 8); // Payload exists but is too short for MultipleSubst.
+    const nested_subtable = nested_lookup + 8;
+    writeU16Test(&bytes, nested_subtable + 0, 1);
+    writeU16Test(&bytes, nested_subtable + 2, 10); // Coverage offset.
+    writeU16Test(&bytes, nested_subtable + 4, 1); // SequenceCount.
+    writeU16Test(&bytes, nested_subtable + 6, 0); // Invalid required SequenceOffset.
+    writeCoverage1(&bytes, nested_subtable + 10, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .glyph_count = 10 };
+    try ensureSubstitutionRecordsWithin(table, rule + 4, 1, 1);
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 10));
 }
 
 test "GSUB rejects reserved LookupFlag bits" {

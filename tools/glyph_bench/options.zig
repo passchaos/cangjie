@@ -41,8 +41,20 @@ pub const BuiltinFont = enum {
     }
 };
 
+pub const OutputFormat = enum {
+    text,
+    tsv,
+
+    pub fn fromName(name: []const u8) ?OutputFormat {
+        if (std.mem.eql(u8, name, "text")) return .text;
+        if (std.mem.eql(u8, name, "tsv")) return .tsv;
+        return null;
+    }
+};
+
 pub const Options = struct {
     mode: Mode = .outline,
+    output_format: OutputFormat = .text,
     font_path: ?[]const u8 = null,
     builtin_font: BuiltinFont = .gvar_compound,
     glyph_id: ?u16 = null,
@@ -74,6 +86,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.mode = Mode.fromName(args[i]) orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--format")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.output_format = OutputFormat.fromName(args[i]) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--font")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -163,6 +179,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\
         \\options:
         \\  --mode NAME          benchmark mode, default outline
+        \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
         \\  --glyph-id N         glyph id to benchmark

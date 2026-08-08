@@ -15,6 +15,13 @@ pub const Result = struct {
 };
 
 pub fn print(options: options_mod.Options, result: Result) void {
+    switch (options.output_format) {
+        .text => printText(options, result),
+        .tsv => printTsv(options, result),
+    }
+}
+
+fn printText(options: options_mod.Options, result: Result) void {
     const total_iterations = options.iterations * options.samples;
     const ns_per_iter = if (total_iterations == 0) 0 else @as(f64, @floatFromInt(result.elapsed_ns)) / @as(f64, @floatFromInt(total_iterations));
     const stats = sampleStats(result.samples, options.iterations);
@@ -58,6 +65,34 @@ pub fn print(options: options_mod.Options, result: Result) void {
         const sample_ns_per_iter = if (sample.iterations == 0) 0 else @as(f64, @floatFromInt(sample.elapsed_ns)) / @as(f64, @floatFromInt(sample.iterations));
         std.debug.print("sample index={d} elapsed_ns={d} ns_per_iter={d:.3} checksum={x}\n", .{ sample.index, sample.elapsed_ns, sample_ns_per_iter, sample.checksum });
     }
+}
+
+fn printTsv(options: options_mod.Options, result: Result) void {
+    const total_iterations = options.iterations * options.samples;
+    const ns_per_iter = if (total_iterations == 0) 0 else @as(f64, @floatFromInt(result.elapsed_ns)) / @as(f64, @floatFromInt(total_iterations));
+    const stats = sampleStats(result.samples, options.iterations);
+    std.debug.print(
+        "mode\tfont\tglyph_id\tcodepoint\tfont_size\ttarget_size\tvariation_coords\titerations\twarmup\tsamples\telapsed_ns\tns_per_iter\tsample_min_ns_per_iter\tsample_median_ns_per_iter\tsample_max_ns_per_iter\tchecksum\n" ++
+            "{s}\t{s}\t{any}\tU+{X}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}\n",
+        .{
+            options.mode.label(),
+            options.fontLabel(),
+            options.glyph_id,
+            options.codepoint,
+            options.font_size,
+            options.target_size,
+            options.normalizedVariationCoords().len,
+            options.iterations,
+            options.warmup,
+            options.samples,
+            result.elapsed_ns,
+            ns_per_iter,
+            stats.min,
+            stats.median,
+            stats.max,
+            result.checksum,
+        },
+    );
 }
 
 const SampleStats = struct { min: f64, median: f64, max: f64 };

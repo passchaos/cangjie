@@ -37,6 +37,64 @@ pub const TupleInfo = struct {
     shared_tuple_index: ?u16 = null,
 };
 
+pub const PointNumbersInfo = struct {
+    all_points: bool,
+    count: usize,
+    max_point: usize,
+    bytes_consumed: usize,
+};
+
+pub fn packedPointNumbersInfo(data: []const u8, offset: usize, limit: usize) Error!PointNumbersInfo {
+    if (offset > data.len or limit > data.len or offset >= limit) return error.BadSfnt;
+    var cursor = offset;
+    const first = data[cursor];
+    cursor += 1;
+    if (first == 0) return .{ .all_points = true, .count = 0, .max_point = 0, .bytes_consumed = cursor - offset };
+
+    const point_count: usize = if ((first & 0x80) == 0) first else blk: {
+        if (cursor >= limit) return error.BadSfnt;
+        const second = data[cursor];
+        cursor += 1;
+        break :blk (@as(usize, first & 0x7f) << 8) | second;
+    };
+
+    var remaining = point_count;
+    var last_point: usize = 0;
+    var saw_point = false;
+    while (remaining != 0) {
+        if (cursor >= limit) return error.BadSfnt;
+        const control = data[cursor];
+        cursor += 1;
+        const run_count = @as(usize, control & 0x7f) + 1;
+        if (run_count > remaining) return error.BadSfnt;
+        const words = (control & 0x80) != 0;
+        for (0..run_count) |_| {
+            const delta: usize = if (words) blk: {
+                if (cursor > limit or 2 > limit - cursor) return error.BadSfnt;
+                const value = readU16(data, cursor);
+                cursor += 2;
+                break :blk value;
+            } else blk: {
+                if (cursor >= limit) return error.BadSfnt;
+                const value = data[cursor];
+                cursor += 1;
+                break :blk value;
+            };
+            if (delta > std.math.maxInt(usize) - last_point) return error.BadSfnt;
+            last_point += delta;
+            saw_point = true;
+        }
+        remaining -= run_count;
+    }
+
+    return .{
+        .all_points = false,
+        .count = point_count,
+        .max_point = if (saw_point) last_point else 0,
+        .bytes_consumed = cursor - offset,
+    };
+}
+
 pub fn validate(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!void {
     _ = try info(data, offset, length, expected_glyph_count, expected_axis_count);
 }
@@ -351,4 +409,24 @@ test "gvar tuple scalar uses intermediate region" {
     try std.testing.expectEqual(@as(f32, 0), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{0}));
     try std.testing.expectEqual(@as(f32, 1), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{0.5}));
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{0.75}), 0.001);
+}
+
+test "gvar packed point numbers expose counts" {
+    const all_points = try packedPointNumbersInfo(&.{0}, 0, 1);
+    try std.testing.expect(all_points.all_points);
+    try std.testing.expectEqual(@as(usize, 1), all_points.bytes_consumed);
+
+    const explicit = try packedPointNumbersInfo(&.{ 3, 2, 1, 2, 3 }, 0, 5);
+    try std.testing.expect(!explicit.all_points);
+    try std.testing.expectEqual(@as(usize, 3), explicit.count);
+    try std.testing.expectEqual(@as(usize, 6), explicit.max_point);
+    try std.testing.expectEqual(@as(usize, 5), explicit.bytes_consumed);
+}
+
+test "gvar packed point numbers support word deltas" {
+    const parsed = try packedPointNumbersInfo(&.{ 3, 0x82, 0, 1, 0, 2, 0, 3 }, 0, 8);
+    try std.testing.expectEqual(@as(usize, 3), parsed.count);
+    try std.testing.expectEqual(@as(usize, 6), parsed.max_point);
+    try std.testing.expectEqual(@as(usize, 8), parsed.bytes_consumed);
+    try std.testing.expectError(error.BadSfnt, packedPointNumbersInfo(&.{ 2, 2, 1 }, 0, 3));
 }

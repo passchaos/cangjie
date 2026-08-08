@@ -3210,6 +3210,14 @@ pub const Font = struct {
         return error.UnsupportedGlyph;
     }
 
+    pub fn glyphBoundsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.Bounds {
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        if (self.cff2 != null) {
+            return (try self.cff2GlyphBoundsAtCoords(glyph_id, normalized_coords)) orelse error.UnsupportedGlyph;
+        }
+        return try self.glyphBounds(glyph_id);
+    }
+
     pub fn glyphOutline(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         if (self.format == .truetype) {
@@ -3241,6 +3249,14 @@ pub const Font = struct {
             );
         }
         return self.glyphOutlineFromParsedTables(allocator, glyph_id, true);
+    }
+
+    pub fn glyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        if (self.cff2 != null) {
+            return (try self.cff2GlyphOutlineAtCoords(allocator, glyph_id, normalized_coords)) orelse error.UnsupportedGlyph;
+        }
+        return try self.glyphOutline(allocator, glyph_id);
     }
 
     pub fn glyphOutlineForRaster(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {

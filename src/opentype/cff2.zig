@@ -72,8 +72,13 @@ pub fn fontDictIndex(data: []const u8, offset: usize, length: usize, glyph_id: u
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     const table = data[offset .. offset + length];
     const parsed = try infoView(data, offset, length);
-    const fd_select = parsed.fd_select orelse return null;
     const fd_count = if (parsed.fd_array_index) |fd_array| @as(usize, @intCast(fd_array.count)) else 1;
+    const fd_select = parsed.fd_select orelse {
+        // CFF2 permits omitting FDSelect when all glyphs use the sole Font DICT.
+        // fontations/skrifa exposes that case as subfont index 0 rather than as
+        // missing metadata, so do the same for the public glyph->FD query.
+        return if (fd_count == 1) @as(?u16, 0) else error.BadSfnt;
+    };
     return try fdSelectValue(table, fd_select.offset, glyph_id, glyph_count, fd_count);
 }
 
@@ -594,6 +599,15 @@ test "CFF2 header exposes top dict, global subrs, and trailing data" {
     try std.testing.expect((try charStringData(&bytes, 0, bytes.len, 1)) == null);
 }
 
+test "CFF2 single Font DICT defaults to FD zero without FDSelect" {
+    const bytes = testCff2SingleFdNoSelectTable();
+    const parsed = try info(&bytes, 0, bytes.len);
+    try std.testing.expect(parsed.fd_select == null);
+    try std.testing.expectEqual(@as(u32, 1), parsed.fd_array_index.?.count);
+    try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 0, 2));
+    try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 1, 2));
+}
+
 test "CFF2 exposes Font DICT private metadata and local subrs" {
     const bytes = testCff2Table();
     const font_dict = (try fontDictInfo(&bytes, 0, bytes.len, 0)).?;
@@ -747,5 +761,52 @@ fn testCff2Table() [71]u8 {
     bytes[68] = 2;
     bytes[69] = 11;
     bytes[70] = 0x03;
+    return bytes;
+}
+
+fn testCff2SingleFdNoSelectTable() [52]u8 {
+    var bytes = [_]u8{0} ** 52;
+    bytes[0] = 2;
+    bytes[2] = 5;
+    std.mem.writeInt(u16, bytes[3..5], 7, .big);
+    bytes[5] = 159; // CharStrings offset 20.
+    bytes[6] = 17;
+    bytes[7] = 170; // FDArray offset 31.
+    bytes[8] = 12;
+    bytes[9] = 36;
+    bytes[10] = 190; // vstore offset 51.
+    bytes[11] = 24;
+
+    std.mem.writeInt(u32, bytes[12..16], 1, .big); // Global Subrs INDEX.
+    bytes[16] = 1;
+    bytes[17] = 1;
+    bytes[18] = 2;
+    bytes[19] = 11;
+
+    std.mem.writeInt(u32, bytes[20..24], 1, .big); // CharStrings INDEX.
+    bytes[24] = 1;
+    bytes[25] = 1;
+    bytes[26] = 6;
+    bytes[27] = 139;
+    bytes[28] = 139;
+    bytes[29] = 21;
+    bytes[30] = 14;
+
+    std.mem.writeInt(u32, bytes[31..35], 1, .big); // FDArray INDEX.
+    bytes[35] = 1;
+    bytes[36] = 1;
+    bytes[37] = 4;
+    bytes[38] = 145; // Private DICT size 6.
+    bytes[39] = 183; // Private DICT offset 44.
+    bytes[40] = 18;
+
+    bytes[44] = 146;
+    bytes[45] = 20;
+    bytes[46] = 119;
+    bytes[47] = 21;
+    bytes[48] = 145;
+    bytes[49] = 19;
+    bytes[50] = 0;
+    bytes[51] = 0x03;
     return bytes;
 }

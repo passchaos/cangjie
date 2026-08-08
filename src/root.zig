@@ -135,6 +135,7 @@ pub const MetaRecordInfo = @import("font.zig").MetaRecordInfo;
 pub const MvarInfo = @import("font.zig").MvarInfo;
 pub const MvarValueRecordInfo = @import("font.zig").MvarValueRecordInfo;
 pub const VvarInfo = @import("font.zig").VvarInfo;
+pub const VarcInfo = @import("font.zig").VarcInfo;
 pub const Os2Info = @import("font.zig").Os2Info;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
@@ -1720,6 +1721,53 @@ test "parses sbix PNG bitmap glyphs from Apple Color Emoji when available" {
     try std.testing.expect(bitmap.width > 0);
     try std.testing.expect(bitmap.height > 0);
     try std.testing.expect((try font.bestBitmapStrikePpem(40)) != null);
+}
+
+test "VARC top-level metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVarcTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.varcInfo(allocator)).?;
+    defer font.freeVarcInfo(allocator, info);
+    try std.testing.expectEqual(@as(u32, 0x00010000), info.version);
+    try std.testing.expectEqual(@as(usize, 24), info.coverage_offset);
+    try std.testing.expectEqual(@as(?usize, null), info.multi_var_store_offset);
+    try std.testing.expectEqual(@as(?usize, null), info.condition_list_offset);
+    try std.testing.expectEqual(@as(usize, 32), info.var_composite_glyphs_offset);
+    try std.testing.expectEqualSlices(u16, &.{ 0, 1 }, info.glyphs);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.varcInfo(allocator)) == null);
+}
+
+test "lazy VARC metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVarcTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const info = (try font.varcInfo(allocator)).?;
+    defer font.freeVarcInfo(allocator, info);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var varc_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "VARC")) varc_offset = table.offset;
+    }
+    bytes[varc_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.varcInfo(allocator));
 }
 
 test "parses EBDT EBLC bitmap glyph metadata" {

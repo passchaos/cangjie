@@ -160,6 +160,10 @@ pub fn buildEbdtBitmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ebdtBitmapTtfTables(allocator));
 }
 
+pub fn buildVarcTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try varcTtfTables(allocator));
+}
+
 pub fn buildSvgTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try svgTtfTables(allocator));
 }
@@ -1110,6 +1114,21 @@ fn ebdtBitmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn varcTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "VARC", .data = try varcTable(allocator) };
     return tables;
 }
 
@@ -3137,6 +3156,28 @@ fn colrV1IndirectPaintColrGlyphCycleTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 51, 2);
     bytes[53] = 11;
     writeU16(bytes, 54, 1);
+    return bytes;
+}
+
+fn varcTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 42);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 24); // Coverage offset.
+    writeU32(bytes, 20, 32); // VarCompositeGlyphs Index2 offset.
+    writeU16(bytes, 24, 1); // Coverage format 1.
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 0);
+    writeU16(bytes, 30, 1);
+    writeU16(bytes, 32, 1); // Index2 count.
+    bytes[34] = 1; // offSize.
+    bytes[36] = 1;
+    bytes[37] = 5;
+    bytes[38] = 0xaa;
+    bytes[39] = 0xbb;
+    bytes[40] = 0xcc;
+    bytes[41] = 0xdd;
     return bytes;
 }
 

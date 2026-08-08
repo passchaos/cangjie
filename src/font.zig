@@ -20,6 +20,7 @@ const morx_mod = @import("opentype/morx.zig");
 const name_mod = @import("opentype/name.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
+const varc_mod = @import("opentype/varc.zig");
 
 /// Errors intentionally preserve the table family that failed. Callers such as
 /// render bridges can distinguish malformed SFNT data from unsupported outline
@@ -49,6 +50,7 @@ pub const CvarTupleInfo = cvar_mod.TupleInfo;
 pub const TrueTypeProgramInfo = tt_program_mod.Info;
 pub const TrueTypeProgramInstructionInfo = tt_program_mod.Instruction;
 pub const TrueTypeProgramKind = tt_program_mod.Kind;
+pub const VarcInfo = varc_mod.Info;
 
 pub const FontTableInfo = struct {
     tag: [4]u8,
@@ -689,6 +691,7 @@ pub const Font = struct {
     hvar: ?TableRecord,
     mvar: ?TableRecord,
     vvar: ?TableRecord,
+    varc: ?TableRecord,
     colr: ?TableRecord,
     cpal: ?TableRecord,
     base: ?TableRecord,
@@ -814,6 +817,7 @@ pub const Font = struct {
         const hvar = findTable(records, "HVAR");
         const mvar = findTable(records, "MVAR");
         const vvar = findTable(records, "VVAR");
+        const varc = findTable(records, "VARC");
 
         if (format == .truetype and (glyf == null or loca == null)) return error.MissingTable;
         if (format == .opentype_cff and cff == null) return error.MissingTable;
@@ -910,6 +914,7 @@ pub const Font = struct {
                 else => return err,
             };
         }
+        if (varc) |varc_table| try validateVarcTable(data, varc_table, glyph_count);
         if (colr) |colr_table| {
             try validateColrV1TopLevelStructuralRanges(data, colr_table);
             try validateColrVariationData(data, colr_table, fvar, glyph_count);
@@ -974,6 +979,7 @@ pub const Font = struct {
             .hvar = hvar,
             .mvar = mvar,
             .vvar = vvar,
+            .varc = varc,
             .colr = colr,
             .cpal = cpal,
             .base = base,
@@ -1049,6 +1055,18 @@ pub const Font = struct {
 
     pub fn freeMorxInfo(_: *const Font, allocator: std.mem.Allocator, info_value: MorxInfo) void {
         morx_mod.free(allocator, info_value);
+    }
+
+    /// Read validated top-level metadata from the optional OpenType `VARC` table.
+    pub fn varcInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?VarcInfo {
+        const varc = self.varc orelse return null;
+        try validateSfntTableChecksum(self.data, varc);
+        try validateVarcTable(self.data, varc, self.glyph_count);
+        return try varc_mod.info(allocator, self.data, varc.offset, varc.length, self.glyph_count);
+    }
+
+    pub fn freeVarcInfo(_: *const Font, allocator: std.mem.Allocator, info_value: VarcInfo) void {
+        varc_mod.free(allocator, info_value);
     }
 
     /// Read validated metadata and format-0 pairs from the optional AAT `kerx` table.
@@ -8315,6 +8333,10 @@ fn readCvtValues(allocator: std.mem.Allocator, data: []const u8, cvt: TableRecor
 
 fn validateCvarTable(data: []const u8, cvar: TableRecord, fvar_axis_count: usize, cvt_value_count: usize) FontError!void {
     return try cvar_mod.validate(data, cvar.offset, cvar.length, fvar_axis_count, cvt_value_count);
+}
+
+fn validateVarcTable(data: []const u8, varc: TableRecord, glyph_count: u16) FontError!void {
+    return try varc_mod.validate(data, varc.offset, varc.length, glyph_count);
 }
 
 fn validateTrueTypeProgramTable(data: []const u8, table: TableRecord) FontError!void {
@@ -18473,6 +18495,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .hvar = null,
         .mvar = null,
         .vvar = null,
+        .varc = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18542,6 +18565,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .hvar = null,
         .mvar = null,
         .vvar = null,
+        .varc = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18611,6 +18635,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .hvar = null,
         .mvar = null,
         .vvar = null,
+        .varc = null,
         .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
         .cpal = null,
         .base = null,
@@ -18691,6 +18716,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .hvar = null,
         .mvar = null,
         .vvar = null,
+        .varc = null,
         .colr = null,
         .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
         .base = null,
@@ -18760,6 +18786,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .hvar = null,
         .mvar = null,
         .vvar = null,
+        .varc = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18829,6 +18856,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .hvar = null,
         .mvar = null,
         .vvar = null,
+        .varc = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18898,6 +18926,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .hvar = null,
         .mvar = null,
         .vvar = null,
+        .varc = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18987,6 +19016,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .hvar = null,
         .mvar = null,
         .vvar = null,
+        .varc = null,
         .colr = null,
         .cpal = null,
         .base = null,

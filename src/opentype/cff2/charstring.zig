@@ -257,7 +257,7 @@ fn Scanner(comptime Context: type) type {
         fn applyDefaultBlend(self: *Self) Error!void {
             const target_count = try self.popInteger();
             const region_count = try contextBlendRegionCount(Context, self.context, self.vs_index);
-            try foldDefaultBlend(&self.stack, &self.stack_len, target_count, region_count);
+            try applyBlend(Context, self.context, &self.stack, &self.stack_len, target_count, region_count, self.vs_index);
         }
 
         fn readStemHints(self: *Self) void {
@@ -768,7 +768,7 @@ fn BoundsExecutor(comptime Context: type) type {
         fn applyDefaultBlend(self: *Self) Error!void {
             const target_count = try self.popInteger();
             const region_count = try contextBlendRegionCount(Context, self.context, self.vs_index);
-            try foldDefaultBlend(&self.stack, &self.stack_len, target_count, region_count);
+            try applyBlend(Context, self.context, &self.stack, &self.stack_len, target_count, region_count, self.vs_index);
         }
 
         fn readStemHints(self: *Self) void {
@@ -792,12 +792,17 @@ fn contextBlendRegionCount(comptime Context: type, context: *Context, vs_index: 
     return error.BadSfnt;
 }
 
+fn contextBlendScalar(comptime Context: type, context: *Context, vs_index: u16, region_index: usize) Error!f32 {
+    if (@hasDecl(Context, "blendScalar")) return try context.blendScalar(vs_index, region_index);
+    return 0;
+}
+
 fn popVariationStoreIndex(index: i32) Error!u16 {
     if (index < 0 or index > std.math.maxInt(u16)) return error.BadSfnt;
     return @intCast(index);
 }
 
-fn foldDefaultBlend(stack: *[max_stack]Value, stack_len: *usize, target_count_value: i32, region_count: usize) Error!void {
+fn applyBlend(comptime Context: type, context: *Context, stack: *[max_stack]Value, stack_len: *usize, target_count_value: i32, region_count: usize, vs_index: u16) Error!void {
     if (target_count_value < 0) return error.BadSfnt;
     const target_count: usize = @intCast(target_count_value);
     const per_target = region_count + 1;
@@ -805,11 +810,15 @@ fn foldDefaultBlend(stack: *[max_stack]Value, stack_len: *usize, target_count_va
     const operand_count = target_count * per_target;
     if (operand_count > stack_len.*) return error.BadSfnt;
     const start = stack_len.* - operand_count;
-    // At the default instance all blend scalars are zero, so the first `n`
-    // operands are already the final values. Drop the following delta operands
-    // while preserving any unrelated operands below this blend group.
+    for (0..target_count) |target_index| {
+        var value = stack[start + target_index].number;
+        for (0..region_count) |region_index| {
+            const delta = stack[start + target_count + target_index * region_count + region_index].number;
+            value += delta * try contextBlendScalar(Context, context, vs_index, region_index);
+        }
+        stack[start + target_index] = .{ .number = value, .integer = false };
+    }
     stack_len.* = start + target_count;
-    _ = stack;
 }
 
 fn appendCubicDerivativeRoots(roots: *[4]f32, root_count: *usize, p0: f32, p1: f32, p2: f32, p3: f32) void {
@@ -1090,4 +1099,38 @@ test "CFF2 charstring default blend uses initial vsindex" {
     try std.testing.expect(parsed.scan.has_blend);
     try std.testing.expectEqual(@as(f32, 50), parsed.x_min);
     try std.testing.expectEqual(@as(f32, 60), parsed.x_max);
+}
+
+test "CFF2 charstring blend applies region scalars" {
+    const Context = struct {
+        pub fn blendRegionCount(_: *@This(), vs_index: u16) Error!usize {
+            if (vs_index != 0) return error.BadSfnt;
+            return 2;
+        }
+
+        pub fn blendScalar(_: *@This(), vs_index: u16, region_index: usize) Error!f32 {
+            if (vs_index != 0) return error.BadSfnt;
+            return switch (region_index) {
+                0 => 0.25,
+                1 => 0.5,
+                else => error.BadSfnt,
+            };
+        }
+
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var context = Context{};
+    // 50 + 20*0.25 + 30*0.5 = 70, then hlineto(10).
+    const parsed = try bounds(Context, &context, &.{ 189, 159, 169, 140, 16, 139, 21, 149, 6, 14 });
+    try std.testing.expect(parsed.scan.has_blend);
+    try std.testing.expectEqual(@as(f32, 70), parsed.x_min);
+    try std.testing.expectEqual(@as(f32, 80), parsed.x_max);
+    try std.testing.expectEqual(@as(usize, 1), parsed.line_count);
 }

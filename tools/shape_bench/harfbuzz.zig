@@ -44,6 +44,11 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     if (options.font_path == null) return error.InvalidArguments;
     const hb_font = try HarfBuzzFont.init(font_bytes, options.size);
     defer hb_font.deinit();
+    const normalized_coords = try harfBuzzNormalizedCoords(allocator, options.normalizedVariationCoords());
+    defer allocator.free(normalized_coords);
+    if (normalized_coords.len != 0) {
+        hb.hb_font_set_var_coords_normalized(hb_font.font, normalized_coords.ptr, @intCast(normalized_coords.len));
+    }
     const features = try harfBuzzFeatures(allocator, options);
     defer allocator.free(features);
 
@@ -228,6 +233,14 @@ fn harfBuzzFeatures(allocator: std.mem.Allocator, options: options_mod.Options) 
         };
     }
     return features;
+}
+
+fn harfBuzzNormalizedCoords(allocator: std.mem.Allocator, coords: []const f32) ![]c_int {
+    const out = try allocator.alloc(c_int, coords.len);
+    for (coords, out) |coord, *value| {
+        value.* = @intFromFloat(@round(coord * 16384.0));
+    }
+    return out;
 }
 
 fn scriptTagForText(text: []const u8) ?c_uint {

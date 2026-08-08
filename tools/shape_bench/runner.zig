@@ -91,6 +91,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .language_tag = options.language_tag,
         .script_position = options.script_position,
         .features = options.featureOverrides(),
+        .normalized_variation_coords = options.normalizedVariationCoords(),
     };
     const inline_text_lines = [_][]const u8{options.text};
     const text_lines = if (options.text_lines.len != 0) options.text_lines else inline_text_lines[0..];

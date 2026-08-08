@@ -2,6 +2,7 @@ const std = @import("std");
 const cangjie = @import("cangjie");
 
 const max_feature_overrides = 16;
+const max_variation_coords = 32;
 pub const default_harfrust_bin = "hr-shape";
 
 pub const Engine = enum {
@@ -81,6 +82,8 @@ pub const Options = struct {
     glyph_summary: bool = false,
     feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
     feature_override_count: usize = 0,
+    variation_coord_buf: [max_variation_coords]f32 = undefined,
+    variation_coord_count: usize = 0,
 
     pub fn fontLabel(self: Options) []const u8 {
         if (self.font_path) |path| return path;
@@ -98,6 +101,10 @@ pub const Options = struct {
 
     pub fn featureOverrideCount(self: Options) usize {
         return self.feature_override_count;
+    }
+
+    pub fn normalizedVariationCoords(self: *const Options) []const f32 {
+        return self.variation_coord_buf[0..self.variation_coord_count];
     }
 };
 
@@ -191,6 +198,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             try appendFeatureOverride(&options, args[i], false);
+        } else if (std.mem.eql(u8, arg, "--variation") or std.mem.eql(u8, arg, "--variations")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            try parseVariationCoords(&options, args[i]);
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.InvalidArguments;
         } else {
@@ -202,6 +213,21 @@ pub fn parse(args: []const []const u8) !Options {
     if (!std.math.isFinite(options.size) or options.size <= 0) return error.InvalidArguments;
     if ((options.engine == .coretext or options.engine == .harfrust or options.engine == .harfbuzz or options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) and options.font_path == null) return error.InvalidArguments;
     return options;
+}
+
+fn parseVariationCoords(options: *Options, text: []const u8) !void {
+    options.variation_coord_count = 0;
+    if (text.len == 0) return;
+    var it = std.mem.splitScalar(u8, text, ',');
+    while (it.next()) |raw_item| {
+        const item = std.mem.trim(u8, raw_item, " \t\r\n");
+        if (item.len == 0) return error.InvalidArguments;
+        if (options.variation_coord_count >= options.variation_coord_buf.len) return error.InvalidArguments;
+        const value = try std.fmt.parseFloat(f32, item);
+        if (!std.math.isFinite(value) or value < -1 or value > 1) return error.InvalidArguments;
+        options.variation_coord_buf[options.variation_coord_count] = value;
+        options.variation_coord_count += 1;
+    }
 }
 
 fn parsePositiveUsize(text: []const u8) !usize {
@@ -296,6 +322,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --glyph-summary              include per-line glyph id lists with --line-summary
         \\  --enable-feature TAG         enable one OpenType feature tag for Cangjie
         \\  --disable-feature TAG        disable one OpenType feature tag for Cangjie
+        \\  --variation CSV              comma-separated normalized variation coordinates, e.g. 0.5,-0.25
         \\
         \\examples:
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --iterations 50000

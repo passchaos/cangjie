@@ -16,6 +16,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         \\warmup={d}
         \\samples={d}
         \\feature_overrides={d}
+        \\variation_coords={d}
         \\use_caches={any}
         \\use_shaped_cache={any}
         \\profile={any}
@@ -37,6 +38,7 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         options.warmup,
         options.samples,
         options.featureOverrideCount(),
+        options.normalizedVariationCoords().len,
         options.use_caches,
         options.use_shaped_cache,
         options.profile,

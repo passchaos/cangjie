@@ -591,15 +591,18 @@ const PointCountAccumulationMode = enum {
 };
 
 fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool, mode: PointCountAccumulationMode) Error!usize {
+    if (point_count > @as(usize, std.math.maxInt(u16)) + 1) return error.BadSfnt;
     if (has_delta) |flags| {
         if (flags.len < point_count) return error.BadSfnt;
         @memset(flags[0..point_count], false);
     }
     const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return 0;
     if (out.len < point_count) return error.BadSfnt;
-    for (0..point_count) |point| {
-        if (point > std.math.maxInt(u16)) return error.BadSfnt;
-        out[point] = .{ .point = @intCast(point), .x = 0, .y = 0 };
+
+    var initialized_out = false;
+    if (mode == .decode_all) {
+        initializeDensePointDeltas(out, point_count);
+        initialized_out = true;
     }
 
     for (0..glyph.tuple_count) |tuple_index| {
@@ -608,6 +611,10 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
             .skip_inactive => blk: {
                 const scalar = try tupleScalar(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index, normalized_coords);
                 if (scalar == 0) break :blk 0;
+                if (!initialized_out) {
+                    initializeDensePointDeltas(out, point_count);
+                    initialized_out = true;
+                }
                 const raw_count = try decodeTuplePointDeltasForPointCount(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index, point_count, raw_scratch);
                 break :blk try scalePointDeltas(raw_scratch[0..raw_count], scalar, scaled_scratch);
             },
@@ -620,7 +627,13 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
             if (has_delta) |flags| flags[target_index] = true;
         }
     }
-    return point_count;
+    return if (initialized_out) point_count else 0;
+}
+
+fn initializeDensePointDeltas(out: []ScaledPointDelta, point_count: usize) void {
+    for (0..point_count) |point| {
+        out[point] = .{ .point = @intCast(point), .x = 0, .y = 0 };
+    }
 }
 
 fn accumulationTargetIndex(out: []const ScaledPointDelta, out_count: usize, all_points: []const u16, point: u16) ?usize {
@@ -1031,11 +1044,7 @@ test "gvar point-count accumulation can skip inactive tuple payloads" {
     try std.testing.expectError(error.BadSfnt, accumulateGlyphPointDeltasForPointCountWithFlags(&bytes, 0, bytes.len, 1, 1, 0, &.{0.0}, 3, &raw, &scaled, &out, &has_delta));
 
     const count = try accumulateGlyphPointDeltasForPointCountSkippingInactiveWithFlags(&bytes, 0, bytes.len, 1, 1, 0, &.{0.0}, 3, &raw, &scaled, &out, &has_delta);
-    try std.testing.expectEqual(@as(usize, 3), count);
-    try std.testing.expectEqual(@as(u16, 0), out[0].point);
-    try std.testing.expectEqual(@as(f32, 0), out[0].x);
-    try std.testing.expectEqual(@as(u16, 2), out[2].point);
-    try std.testing.expectEqual(@as(f32, 0), out[2].x);
+    try std.testing.expectEqual(@as(usize, 0), count);
     try std.testing.expectEqualSlices(bool, &.{ false, false, false }, &has_delta);
 }
 

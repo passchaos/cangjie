@@ -3937,6 +3937,14 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
         defer pos = next_pos;
         const current_glyph = glyphs.items[pos];
         if (accelerator) |accel| {
+            // The exact first-input group index is deliberately larger and
+            // more expensive than the three-mask digest. Follow HarfBuzz's
+            // forward-lookup order and reject definite misses here before
+            // consulting source metadata, GDEF, or the group hash table.
+            // `chaining_input_digest` is the union of every first-input
+            // Coverage, so its false positives are harmless and it cannot
+            // hide an applicable subtable.
+            if (!accel.chaining_input_digest.mayHave(current_glyph)) continue;
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
             const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, accel.chaining_group_slots, current_glyph) orelse continue;
@@ -7659,6 +7667,25 @@ test "GSUB chaining coverage lookup tries subtables per position" {
     try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 20, &glyphs, allocator, .{});
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1 }, glyphs.items);
+
+    glyphs.clearRetainingCapacity();
+    try glyphs.appendSlice(allocator, &.{ 99, 1, 1 });
+    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    defer deinitLookupAccelerators(allocator, accelerators);
+    try std.testing.expect(!accelerators[0].chaining_input_digest.mayHave(99));
+    try applyLookupWithIndex(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        20,
+        0,
+        &glyphs,
+        allocator,
+        .{ .lookup_accelerators = accelerators, .assume_validated = true },
+        null,
+    );
+
+    // The lookup digest rejects the leading miss, while the following covered
+    // position still tries ordered subtable alternatives and substitutes.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 99, 2, 1 }, glyphs.items);
 }
 
 test "GSUB context substitution skips lookup-flag ignored glyphs" {

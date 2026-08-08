@@ -247,6 +247,19 @@ Current local snapshot after the Nastaliq parity work:
   improved from about `569 ns/glyph` to `481 ns/glyph`, about `15.4%`.
   GPOS lookup 1 profile time fell from about `18.7 ms` to `5.9 ms`; full Roboto
   and Amiri corpus parity remained unchanged.
+- Testing the GSUB chaining lookup's three-mask first-input digest before its
+  exact group index now rejects definite misses ahead of source-feature, GDEF,
+  and hash-table work. The digest was already built for whole-run filtering, so
+  this adds no per-font storage and follows HarfBuzz's forward lookup order. A
+  fixed-CPU-30 ABBA comparison with four 11-sample medians per binary reduced
+  Amiri `fa-thelittleprince` from an average `1407.971 ns/glyph` to
+  `1173.736 ns/glyph`, about `16.6%`. A separate Roboto `en-words` ABBA check
+  improved from `414.100 ns/glyph` to `401.390 ns/glyph`, about `3.1%`, and
+  Amiri `fa-words` improved from `2023.398 ns/glyph` to
+  `1953.247 ns/glyph`, about `3.5%`. Full Amiri and Roboto in-process HarfBuzz
+  parity remained unchanged. A follow-up profile reduced
+  `applyChainingContextSubstitutionLookup` from about `28.9%` to `20.0%` of
+  sampled cycles, though it remains the largest isolated shaping hotspot.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

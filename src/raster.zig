@@ -36,6 +36,11 @@ pub const RenderTarget = struct {
         const idx = @as(usize, uy) * self.width + ux;
         self.pixels[idx] = @max(self.pixels[idx], coverage);
     }
+
+    fn blendUnchecked(self: *RenderTarget, x: i32, y: i32, coverage: u8) void {
+        const idx = @as(usize, @intCast(y)) * self.width + @as(usize, @intCast(x));
+        self.pixels[idx] = @max(self.pixels[idx], coverage);
+    }
 };
 
 pub const Rgba = struct {
@@ -704,7 +709,7 @@ pub const Rasterizer = struct {
                 const inside = coverage_counts[@intCast(x - min_x)];
                 if (inside == 0) continue;
                 const coverage: u8 = @intCast(@divTrunc(@as(i32, inside) * 255, sample_count));
-                target.blend(x, y, coverage);
+                target.blendUnchecked(x, y, coverage);
             }
         }
     }

@@ -12,6 +12,7 @@ const feat_mod = @import("opentype/feat.zig");
 const gasp_mod = @import("opentype/gasp.zig");
 const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
+const ift_mod = @import("opentype/ift.zig");
 const kerx_mod = @import("opentype/kerx.zig");
 const ltag_mod = @import("opentype/ltag.zig");
 const meta_mod = @import("opentype/meta.zig");
@@ -115,6 +116,8 @@ pub const HorizontalMetricInfo = struct {
     advance_width: u16,
     left_side_bearing: i16,
 };
+
+pub const IftPatchMapInfo = ift_mod.Info;
 
 pub const HdmxRecord = struct {
     ppem: u8,
@@ -695,6 +698,8 @@ pub const Font = struct {
     mvar: ?TableRecord,
     vvar: ?TableRecord,
     varc: ?TableRecord,
+    ift: ?TableRecord,
+    iftx: ?TableRecord,
     colr: ?TableRecord,
     cpal: ?TableRecord,
     base: ?TableRecord,
@@ -823,6 +828,8 @@ pub const Font = struct {
         const mvar = findTable(records, "MVAR");
         const vvar = findTable(records, "VVAR");
         const varc = findTable(records, "VARC");
+        const ift = findTable(records, "IFT ");
+        const iftx = findTable(records, "IFTX");
 
         if (format == .truetype and (glyf == null or loca == null)) return error.MissingTable;
         if (format == .opentype_cff and cff == null and cff2 == null) return error.MissingTable;
@@ -921,6 +928,8 @@ pub const Font = struct {
             };
         }
         if (varc) |varc_table| try validateVarcTable(data, varc_table, glyph_count);
+        if (ift) |ift_table| try validateIftPatchMapTable(data, ift_table);
+        if (iftx) |iftx_table| try validateIftPatchMapTable(data, iftx_table);
         if (colr) |colr_table| {
             try validateColrV1TopLevelStructuralRanges(data, colr_table);
             try validateColrVariationData(data, colr_table, fvar, glyph_count);
@@ -986,6 +995,8 @@ pub const Font = struct {
             .mvar = mvar,
             .vvar = vvar,
             .varc = varc,
+            .ift = ift,
+            .iftx = iftx,
             .colr = colr,
             .cpal = cpal,
             .base = base,
@@ -1070,6 +1081,22 @@ pub const Font = struct {
 
     pub fn freeMorxInfo(_: *const Font, allocator: std.mem.Allocator, info_value: MorxInfo) void {
         morx_mod.free(allocator, info_value);
+    }
+
+    /// Read validated top-level metadata from the optional IFT patch map table.
+    pub fn iftPatchMapInfo(self: *const Font) FontError!?IftPatchMapInfo {
+        const table = self.ift orelse return null;
+        try validateSfntTableChecksum(self.data, table);
+        try validateIftPatchMapTable(self.data, table);
+        return try ift_mod.info(self.data, table.offset, table.length);
+    }
+
+    /// Read validated top-level metadata from the optional IFTX patch map table.
+    pub fn iftxPatchMapInfo(self: *const Font) FontError!?IftPatchMapInfo {
+        const table = self.iftx orelse return null;
+        try validateSfntTableChecksum(self.data, table);
+        try validateIftPatchMapTable(self.data, table);
+        return try ift_mod.info(self.data, table.offset, table.length);
     }
 
     /// Read validated top-level metadata from the optional OpenType `VARC` table.
@@ -8356,6 +8383,10 @@ fn validateCvarTable(data: []const u8, cvar: TableRecord, fvar_axis_count: usize
 
 fn validateVarcTable(data: []const u8, varc: TableRecord, glyph_count: u16) FontError!void {
     return try varc_mod.validate(data, varc.offset, varc.length, glyph_count);
+}
+
+fn validateIftPatchMapTable(data: []const u8, table: TableRecord) FontError!void {
+    return try ift_mod.validate(data, table.offset, table.length);
 }
 
 fn validateTrueTypeProgramTable(data: []const u8, table: TableRecord) FontError!void {
@@ -18515,6 +18546,8 @@ fn gdefOnlyFont(data: []const u8) Font {
         .mvar = null,
         .vvar = null,
         .varc = null,
+        .ift = null,
+        .iftx = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18586,6 +18619,8 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .mvar = null,
         .vvar = null,
         .varc = null,
+        .ift = null,
+        .iftx = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18657,6 +18692,8 @@ fn colrOnlyFont(data: []const u8) Font {
         .mvar = null,
         .vvar = null,
         .varc = null,
+        .ift = null,
+        .iftx = null,
         .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
         .cpal = null,
         .base = null,
@@ -18739,6 +18776,8 @@ fn cpalOnlyFont(data: []const u8) Font {
         .mvar = null,
         .vvar = null,
         .varc = null,
+        .ift = null,
+        .iftx = null,
         .colr = null,
         .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
         .base = null,
@@ -18810,6 +18849,8 @@ fn svgOnlyFont(data: []const u8) Font {
         .mvar = null,
         .vvar = null,
         .varc = null,
+        .ift = null,
+        .iftx = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18881,6 +18922,8 @@ fn sbixOnlyFont(data: []const u8) Font {
         .mvar = null,
         .vvar = null,
         .varc = null,
+        .ift = null,
+        .iftx = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18952,6 +18995,8 @@ fn fvarOnlyFont(data: []const u8) Font {
         .mvar = null,
         .vvar = null,
         .varc = null,
+        .ift = null,
+        .iftx = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -19043,6 +19088,8 @@ fn kernOnlyFont(data: []const u8) Font {
         .mvar = null,
         .vvar = null,
         .varc = null,
+        .ift = null,
+        .iftx = null,
         .colr = null,
         .cpal = null,
         .base = null,

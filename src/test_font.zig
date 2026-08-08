@@ -164,6 +164,10 @@ pub fn buildVarcTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try varcTtfTables(allocator));
 }
 
+pub fn buildIftTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try iftTtfTables(allocator));
+}
+
 pub fn buildSvgTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try svgTtfTables(allocator));
 }
@@ -1133,6 +1137,21 @@ fn varcTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "VARC", .data = try varcTable(allocator) };
+    return tables;
+}
+
+fn iftTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "IFT ", .data = try iftPatchMapTable(allocator) };
+    tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     return tables;
 }
 
@@ -3172,6 +3191,24 @@ fn colrV1IndirectPaintColrGlyphCycleTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 51, 2);
     bytes[53] = 11;
     writeU16(bytes, 54, 1);
+    return bytes;
+}
+
+fn iftPatchMapTable(allocator: std.mem.Allocator) ![]u8 {
+    const template = "https://patch.example/{id}";
+    const bytes = try allocator.alloc(u8, 35 + template.len + 4 + 2);
+    @memset(bytes, 0);
+    bytes[0] = 2;
+    bytes[4] = 0x01;
+    for (0..16) |index| bytes[5 + index] = @intCast(index);
+    bytes[21] = 1;
+    bytes[24] = 1;
+    writeU32(bytes, 25, @intCast(35 + template.len + 4));
+    writeU16(bytes, 33, @intCast(template.len));
+    @memcpy(bytes[35..][0..template.len], template);
+    writeU32(bytes, 35 + template.len, 24);
+    bytes[35 + template.len + 4] = 0xaa;
+    bytes[35 + template.len + 5] = 0xbb;
     return bytes;
 }
 

@@ -115,6 +115,7 @@ pub const TrueTypeProgramInstructionInfo = @import("font.zig").TrueTypeProgramIn
 pub const TrueTypeProgramKind = @import("font.zig").TrueTypeProgramKind;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
+pub const IftPatchMapInfo = @import("font.zig").IftPatchMapInfo;
 pub const HdmxInfo = @import("font.zig").HdmxInfo;
 pub const HdmxRecord = @import("font.zig").HdmxRecord;
 pub const HvarInfo = @import("font.zig").HvarInfo;
@@ -1769,6 +1770,54 @@ test "parses sbix PNG bitmap glyphs from Apple Color Emoji when available" {
     try std.testing.expect(bitmap.width > 0);
     try std.testing.expect(bitmap.height > 0);
     try std.testing.expect((try font.bestBitmapStrikePpem(40)) != null);
+}
+
+test "IFT patch map metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.iftPatchMapInfo()).?;
+    try std.testing.expectEqual(@as(u8, 2), info.format);
+    try std.testing.expectEqual(@as(u8, 0x01), info.field_flags);
+    try std.testing.expectEqual(@as(u8, 15), info.compatibility_id[15]);
+    try std.testing.expectEqual(@as(u8, 1), info.default_patch_format);
+    try std.testing.expectEqual(@as(u32, 1), info.entry_count);
+    try std.testing.expectEqualStrings("https://patch.example/{id}", info.url_template);
+    try std.testing.expectEqual(@as(?u32, 24), info.cff_charstrings_offset);
+    try std.testing.expect(info.cff2_charstrings_offset == null);
+    try std.testing.expect((try font.iftxPatchMapInfo()) == null);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.iftPatchMapInfo()) == null);
+}
+
+test "lazy IFT patch map metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expect((try font.iftPatchMapInfo()) != null);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var ift_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "IFT ")) ift_offset = table.offset;
+    }
+    bytes[ift_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.iftPatchMapInfo());
 }
 
 test "VARC top-level metadata is exposed when present" {

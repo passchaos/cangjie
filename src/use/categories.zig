@@ -213,6 +213,14 @@ pub fn forCodepoint(codepoint: u21) Category {
         0x11446 => .consonant_mod_below,
         0x1145e => .final_mod_above,
         0x11460...0x11461 => .cons_with_stacker,
+        0xa880...0xa881 => .vowel_mod_post,
+        0xa882...0xa8b3,
+        0xa8d0...0xa8d9,
+        => .base,
+        0xa8b4 => .medial_post,
+        0xa8b5...0xa8c3 => .vowel_post,
+        0xa8c4 => .halant,
+        0xa8c5 => .vowel_mod_above,
         0x11c72...0x11c8f => .base,
         0x11c92...0x11ca7,
         0x11ca9...0x11caf,
@@ -370,6 +378,15 @@ test "Tai Tham USE categories distinguish sakot and medials" {
 test "Newa USE categories distinguish virama and dependent signs" {
     const codepoints = [_]u21{ 0x1140e, 0x11436, 0x11438, 0x1143e, 0x11442, 0x11443, 0x11445, 0x11446, 0x1145e, 0x11460 };
     const expected = [_]Category{ .base, .vowel_pre, .vowel_below, .vowel_above, .halant, .vowel_mod_above, .vowel_mod_post, .consonant_mod_below, .final_mod_above, .cons_with_stacker };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Saurashtra USE categories distinguish haaru and virama" {
+    const codepoints = [_]u21{ 0xa880, 0xa882, 0xa8b4, 0xa8b5, 0xa8c4, 0xa8c5, 0xa8d0 };
+    const expected = [_]Category{ .vowel_mod_post, .base, .medial_post, .vowel_post, .halant, .vowel_mod_above, .base };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

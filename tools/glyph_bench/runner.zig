@@ -58,6 +58,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, glyph_
     switch (options.mode) {
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
+        .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
     }
 }
 
@@ -91,6 +92,26 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, 
     while (i < iterations) : (i += 1) {
         target.clear(0);
         try rasterizer.renderRunAtCoords(&target, glyph_run, 0, options.font_size, options.normalizedVariationCoords());
+        checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
+    }
+}
+
+fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+    const coords = options.normalizedVariationCoords();
+    var outline = if (coords.len == 0)
+        try font.glyphOutlineForRaster(allocator, glyph_id)
+    else
+        try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
+    defer outline.deinit();
+
+    var target = try cangjie.RenderTarget.init(allocator, options.target_size, options.target_size);
+    defer target.deinit();
+    var rasterizer = cangjie.Rasterizer.init(allocator);
+    rasterizer.hint_size_px = options.font_size;
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        target.clear(0);
+        try rasterizer.renderGlyph(&target, &outline, 0, options.font_size, options.font_size, font.units_per_em);
         checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
     }
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
 const layout = @import("layout.zig");
+const curves = @import("raster/curves.zig");
 const scanline = @import("raster/scanline.zig");
 
 pub const RenderTarget = struct {
@@ -873,9 +874,10 @@ fn flattenOutline(lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOu
                 const a = current orelse continue;
                 const control = fontToPixel(q.control, scale, x, baseline_y);
                 const end = fontToPixel(q.end, scale, x, baseline_y);
+                const segments = curves.quadSegmentCount(a, control, end);
                 var prev = a;
-                for (1..17) |i| {
-                    const t = @as(f32, @floatFromInt(i)) / 16.0;
+                for (1..segments + 1) |i| {
+                    const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments));
                     const p = quadPoint(a, control, end, t);
                     lines.appendAssumeCapacity(.{ .a = prev, .b = p });
                     prev = p;
@@ -887,9 +889,10 @@ fn flattenOutline(lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOu
                 const c0 = fontToPixel(c.c0, scale, x, baseline_y);
                 const c1 = fontToPixel(c.c1, scale, x, baseline_y);
                 const end = fontToPixel(c.end, scale, x, baseline_y);
+                const segments = curves.cubicSegmentCount(a, c0, c1, end);
                 var prev = a;
-                for (1..25) |i| {
-                    const t = @as(f32, @floatFromInt(i)) / 24.0;
+                for (1..segments + 1) |i| {
+                    const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments));
                     const p = cubicPoint(a, c0, c1, end, t);
                     lines.appendAssumeCapacity(.{ .a = prev, .b = p });
                     prev = p;
@@ -951,9 +954,10 @@ fn flattenSvgOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), 
                 const a = current orelse continue;
                 const control = svgToPixel(transform.apply(q.control), scale, origin_x, origin_y);
                 const end = svgToPixel(transform.apply(q.end), scale, origin_x, origin_y);
+                const segments = curves.quadSegmentCount(a, control, end);
                 var prev = a;
-                for (1..17) |i| {
-                    const t = @as(f32, @floatFromInt(i)) / 16.0;
+                for (1..segments + 1) |i| {
+                    const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments));
                     const p = quadPoint(a, control, end, t);
                     try lines.append(allocator, .{ .a = prev, .b = p });
                     prev = p;
@@ -965,9 +969,10 @@ fn flattenSvgOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), 
                 const c0 = svgToPixel(transform.apply(c.c0), scale, origin_x, origin_y);
                 const c1 = svgToPixel(transform.apply(c.c1), scale, origin_x, origin_y);
                 const end = svgToPixel(transform.apply(c.end), scale, origin_x, origin_y);
+                const segments = curves.cubicSegmentCount(a, c0, c1, end);
                 var prev = a;
-                for (1..25) |i| {
-                    const t = @as(f32, @floatFromInt(i)) / 24.0;
+                for (1..segments + 1) |i| {
+                    const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments));
                     const p = cubicPoint(a, c0, c1, end, t);
                     try lines.append(allocator, .{ .a = prev, .b = p });
                     prev = p;
@@ -986,21 +991,8 @@ fn flattenSvgOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), 
     }
 }
 
-fn quadPoint(a: Point, b: Point, c: Point, t: f32) Point {
-    const mt = 1.0 - t;
-    return .{
-        .x = mt * mt * a.x + 2.0 * mt * t * b.x + t * t * c.x,
-        .y = mt * mt * a.y + 2.0 * mt * t * b.y + t * t * c.y,
-    };
-}
-
-fn cubicPoint(a: Point, b: Point, c: Point, d: Point, t: f32) Point {
-    const mt = 1.0 - t;
-    return .{
-        .x = mt * mt * mt * a.x + 3.0 * mt * mt * t * b.x + 3.0 * mt * t * t * c.x + t * t * t * d.x,
-        .y = mt * mt * mt * a.y + 3.0 * mt * mt * t * b.y + 3.0 * mt * t * t * c.y + t * t * t * d.y,
-    };
-}
+const quadPoint = curves.quadPoint;
+const cubicPoint = curves.cubicPoint;
 
 fn pointInside(lines: []const Line, point: Point) bool {
     var inside = false;

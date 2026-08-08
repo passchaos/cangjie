@@ -28,6 +28,10 @@ pub fn buildMvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mvarTtfTables(allocator));
 }
 
+pub fn buildMetricVariationTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try metricVariationTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -594,7 +598,25 @@ fn mvarTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[9] = .{ .tag = "MVAR", .data = try mvarTable(allocator) };
-    tables[10] = .{ .tag = "name", .data = try mvarNameTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    return tables;
+}
+
+fn metricVariationTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 12);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "HVAR", .data = try hvarTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[8] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    tables[11] = .{ .tag = "VVAR", .data = try vvarTable(allocator) };
     return tables;
 }
 
@@ -2397,11 +2419,11 @@ fn nameTableWithLanguageTag(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
-fn mvarNameTable(allocator: std.mem.Allocator) ![]u8 {
+fn singleAxisNameTable(allocator: std.mem.Allocator) ![]u8 {
     const records = [_]NameRecordSpec{
-        .{ .id = 1, .value = "Cangjie MVAR" },
+        .{ .id = 1, .value = "Cangjie Variable Metrics" },
         .{ .id = 2, .value = "Regular" },
-        .{ .id = 4, .value = "Cangjie MVAR Regular" },
+        .{ .id = 4, .value = "Cangjie Variable Metrics Regular" },
         .{ .id = 256, .value = "Weight" },
     };
     return genericNameTable(allocator, &records);
@@ -2567,7 +2589,47 @@ fn mvarTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn hvarTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 72);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 36); // ItemVariationStore offset.
+    writeU32(bytes, 8, 20); // advanceWidthMappingOffset.
+    writeU32(bytes, 12, 26); // lsbMappingOffset.
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 20);
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 26);
+    writeItemVariationStoreWithItems(bytes, 36, 2);
+    return bytes;
+}
+
+fn vvarTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 72);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 36); // ItemVariationStore offset.
+    writeU32(bytes, 8, 30); // advanceHeightMappingOffset.
+    writeU32(bytes, 20, 24); // vOrgMappingOffset.
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 24);
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 30);
+    writeItemVariationStoreWithItems(bytes, 36, 2);
+    return bytes;
+}
+
+fn writeDeltaSetIndexMapWithTwoEntries(bytes: []u8, offset: usize) void {
+    bytes[offset + 0] = 0; // DeltaSetIndexMap format 0.
+    bytes[offset + 1] = 0; // one-byte entries with one inner-index bit.
+    writeU16(bytes, offset + 2, 2);
+    bytes[offset + 4] = 0; // outerIndex 0, innerIndex 0.
+    bytes[offset + 5] = 1; // outerIndex 0, innerIndex 1.
+}
+
 fn writeItemVariationStoreWithOneItem(bytes: []u8, offset: usize) void {
+    writeItemVariationStoreWithItems(bytes, offset, 1);
+}
+
+fn writeItemVariationStoreWithItems(bytes: []u8, offset: usize, item_count: u16) void {
     writeU16(bytes, offset + 0, 1);
     writeU32(bytes, offset + 2, 12);
     writeU16(bytes, offset + 6, 1);
@@ -2579,11 +2641,13 @@ fn writeItemVariationStoreWithOneItem(bytes: []u8, offset: usize) void {
     writeF2Dot14(bytes, offset + 18, 0.0);
     writeF2Dot14(bytes, offset + 20, 1.0);
 
-    writeU16(bytes, offset + 24, 1);
+    writeU16(bytes, offset + 24, item_count);
     writeU16(bytes, offset + 26, 1);
     writeU16(bytes, offset + 28, 1);
     writeU16(bytes, offset + 30, 0);
-    writeI16(bytes, offset + 32, 7);
+    for (0..item_count) |index| {
+        writeI16(bytes, offset + 32 + index * 2, @intCast(7 + index));
+    }
 }
 
 fn statTable(allocator: std.mem.Allocator) ![]u8 {

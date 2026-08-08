@@ -11,6 +11,7 @@ const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
 const ltag_mod = @import("opentype/ltag.zig");
 const meta_mod = @import("opentype/meta.zig");
+const metric_variation_mod = @import("opentype/metric_variation.zig");
 const mvar_mod = @import("opentype/mvar.zig");
 const name_mod = @import("opentype/name.zig");
 const trak_mod = @import("opentype/trak.zig");
@@ -183,8 +184,12 @@ pub const DsigInfo = struct {
 
 pub const MetaRecordInfo = meta_mod.Record;
 
+pub const HvarInfo = metric_variation_mod.HvarInfo;
+pub const MetricVariationIndexMapEntryInfo = metric_variation_mod.IndexMapEntry;
+pub const MetricVariationIndexMapInfo = metric_variation_mod.IndexMap;
 pub const MvarInfo = mvar_mod.Info;
 pub const MvarValueRecordInfo = mvar_mod.ValueRecord;
+pub const VvarInfo = metric_variation_mod.VvarInfo;
 
 pub const LtagRecordInfo = ltag_mod.Record;
 
@@ -650,7 +655,9 @@ pub const Font = struct {
     stat: ?TableRecord,
     fvar: ?TableRecord,
     avar: ?TableRecord,
+    hvar: ?TableRecord,
     mvar: ?TableRecord,
+    vvar: ?TableRecord,
     colr: ?TableRecord,
     cpal: ?TableRecord,
     base: ?TableRecord,
@@ -908,7 +915,9 @@ pub const Font = struct {
             .stat = stat,
             .fvar = fvar,
             .avar = avar,
+            .hvar = hvar,
             .mvar = mvar,
+            .vvar = vvar,
             .colr = colr,
             .cpal = cpal,
             .base = base,
@@ -945,6 +954,22 @@ pub const Font = struct {
         return infos;
     }
 
+    /// Read validated metadata from the optional OpenType `HVAR` table.
+    pub fn hvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?HvarInfo {
+        const hvar = self.hvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, hvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMetricVariationTable(self.data, hvar, fvar_info.axis_count, 20);
+        return try metric_variation_mod.hvarInfo(allocator, self.data, hvar.offset, hvar.length);
+    }
+
+    pub fn freeHvarInfo(_: *const Font, allocator: std.mem.Allocator, info_value: HvarInfo) void {
+        metric_variation_mod.freeHvar(allocator, info_value);
+    }
+
     /// Read validated value records from the optional OpenType `MVAR` table.
     pub fn mvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?MvarInfo {
         const mvar = self.mvar orelse return null;
@@ -959,6 +984,22 @@ pub const Font = struct {
 
     pub fn freeMvarInfo(_: *const Font, allocator: std.mem.Allocator, info_value: MvarInfo) void {
         mvar_mod.free(allocator, info_value);
+    }
+
+    /// Read validated metadata from the optional OpenType `VVAR` table.
+    pub fn vvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?VvarInfo {
+        const vvar = self.vvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, vvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMetricVariationTable(self.data, vvar, fvar_info.axis_count, 24);
+        return try metric_variation_mod.vvarInfo(allocator, self.data, vvar.offset, vvar.length);
+    }
+
+    pub fn freeVvarInfo(_: *const Font, allocator: std.mem.Allocator, info_value: VvarInfo) void {
+        metric_variation_mod.freeVvar(allocator, info_value);
     }
 
     /// Read validated metadata from the optional OpenType `BASE` table.
@@ -18173,7 +18214,9 @@ fn gdefOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .hvar = null,
         .mvar = null,
+        .vvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18231,7 +18274,9 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .hvar = null,
         .mvar = null,
+        .vvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18289,7 +18334,9 @@ fn colrOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .hvar = null,
         .mvar = null,
+        .vvar = null,
         .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
         .cpal = null,
         .base = null,
@@ -18358,7 +18405,9 @@ fn cpalOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .hvar = null,
         .mvar = null,
+        .vvar = null,
         .colr = null,
         .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
         .base = null,
@@ -18416,7 +18465,9 @@ fn svgOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .hvar = null,
         .mvar = null,
+        .vvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18474,7 +18525,9 @@ fn sbixOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .hvar = null,
         .mvar = null,
+        .vvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18532,7 +18585,9 @@ fn fvarOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = data.len },
         .avar = null,
+        .hvar = null,
         .mvar = null,
+        .vvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18610,7 +18665,9 @@ fn kernOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .hvar = null,
         .mvar = null,
+        .vvar = null,
         .colr = null,
         .cpal = null,
         .base = null,

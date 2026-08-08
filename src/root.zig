@@ -108,6 +108,9 @@ pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const HdmxInfo = @import("font.zig").HdmxInfo;
 pub const HdmxRecord = @import("font.zig").HdmxRecord;
+pub const HvarInfo = @import("font.zig").HvarInfo;
+pub const MetricVariationIndexMapEntryInfo = @import("font.zig").MetricVariationIndexMapEntryInfo;
+pub const MetricVariationIndexMapInfo = @import("font.zig").MetricVariationIndexMapInfo;
 pub const LtshInfo = @import("font.zig").LtshInfo;
 pub const LtagRecordInfo = @import("font.zig").LtagRecordInfo;
 pub const HorizontalMetricInfo = @import("font.zig").HorizontalMetricInfo;
@@ -123,6 +126,7 @@ pub const NameRecordInfo = @import("font.zig").NameRecordInfo;
 pub const MetaRecordInfo = @import("font.zig").MetaRecordInfo;
 pub const MvarInfo = @import("font.zig").MvarInfo;
 pub const MvarValueRecordInfo = @import("font.zig").MvarValueRecordInfo;
+pub const VvarInfo = @import("font.zig").VvarInfo;
 pub const Os2Info = @import("font.zig").Os2Info;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
@@ -486,6 +490,76 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "HVAR and VVAR metric variation maps are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const hvar = (try font.hvarInfo(allocator)).?;
+    defer font.freeHvarInfo(allocator, hvar);
+    try std.testing.expectEqual(@as(u32, 0x00010000), hvar.version);
+    try std.testing.expectEqual(@as(usize, 36), hvar.item_variation_store_offset);
+    const advance_width = hvar.advance_width_mapping.?;
+    try std.testing.expectEqual(@as(u8, 0), advance_width.format);
+    try std.testing.expectEqual(@as(u8, 1), advance_width.entry_size);
+    try std.testing.expectEqual(@as(u8, 1), advance_width.inner_index_bit_count);
+    try std.testing.expectEqual(@as(usize, 2), advance_width.entries.len);
+    try std.testing.expectEqual(MetricVariationIndexMapEntryInfo{ .delta_set_outer_index = 0, .delta_set_inner_index = 0 }, advance_width.entries[0]);
+    try std.testing.expectEqual(MetricVariationIndexMapEntryInfo{ .delta_set_outer_index = 0, .delta_set_inner_index = 1 }, advance_width.entries[1]);
+    try std.testing.expect(hvar.rsb_mapping == null);
+
+    const vvar = (try font.vvarInfo(allocator)).?;
+    defer font.freeVvarInfo(allocator, vvar);
+    try std.testing.expectEqual(@as(usize, 36), vvar.item_variation_store_offset);
+    try std.testing.expect(vvar.tsb_mapping == null);
+    try std.testing.expect(vvar.bsb_mapping == null);
+    try std.testing.expectEqual(@as(usize, 2), vvar.advance_height_mapping.?.entries.len);
+    try std.testing.expectEqual(@as(usize, 2), vvar.v_org_mapping.?.entries.len);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.hvarInfo(allocator)) == null);
+    try std.testing.expect((try missing.vvarInfo(allocator)) == null);
+}
+
+test "lazy HVAR and VVAR metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const hvar = (try font.hvarInfo(allocator)).?;
+    defer font.freeHvarInfo(allocator, hvar);
+    const vvar = (try font.vvarInfo(allocator)).?;
+    defer font.freeVvarInfo(allocator, vvar);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var hvar_offset: ?usize = null;
+    var vvar_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "HVAR")) hvar_offset = table.offset;
+        if (std.mem.eql(u8, &table.tag, "VVAR")) vvar_offset = table.offset;
+    }
+
+    bytes[hvar_offset orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.hvarInfo(allocator));
+    bytes[hvar_offset.?] -%= 1;
+
+    bytes[vvar_offset orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.vvarInfo(allocator));
 }
 
 test "MVAR value records are exposed when present" {

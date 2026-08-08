@@ -268,11 +268,14 @@ const ChainingCoverageSubtable = struct {
     subtable_offset: usize = 0,
     backtrack_offsets_pos: usize = 0,
     backtrack_count: u16 = 0,
+    backtrack_coverages: []const NativeCoverage = &.{},
     input_offsets_pos: usize = 0,
     input_count: u16 = 0,
+    input_coverages: []const NativeCoverage = &.{},
     second_input_digest: GlyphDigest = .{},
     lookahead_offsets_pos: usize = 0,
     lookahead_count: u16 = 0,
+    lookahead_coverages: []const NativeCoverage = &.{},
     records_pos: usize = 0,
     pos_count: u16 = 0,
     fast_record_count: u16 = 0,
@@ -451,7 +454,7 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
         for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.chaining_groups);
         allocator.free(accelerator.chaining_group_slots);
-        allocator.free(accelerator.chaining_subtables);
+        deinitChainingCoverageSubtables(allocator, accelerator.chaining_subtables);
         deinitChainingClassSubtableAccelerators(allocator, accelerator.chaining_class_subtables);
     }
 }
@@ -508,8 +511,8 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         try allocator.alloc(ChainingCoverageSubtable, subtable_count)
     else
         try allocator.alloc(ChainingCoverageSubtable, 0);
-    errdefer allocator.free(chaining_subtables);
     @memset(chaining_subtables, .{});
+    errdefer deinitChainingCoverageSubtables(allocator, chaining_subtables);
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
         if (try lookupSubtableCoverageOffset(table, subtable_offset, lookup_type)) |coverage_offset| {
@@ -533,13 +536,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                 mark_to_base_subtables[subtable_i] = try buildMarkToBaseSubtable(table, subtable_offset, allocator);
             }
             if (chaining_subtables.len != 0) {
-                const parsed = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse continue;
-                chaining_subtables[subtable_i] = parsed;
-                try fillFastChainingSinglePosRecords(table, &chaining_subtables[subtable_i]);
-                if (parsed.input_count > 1) {
-                    const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed.input_offsets_pos + 2));
-                    chaining_subtables[subtable_i].second_input_digest = try coverageDigest(table, second_coverage_offset);
-                }
+                chaining_subtables[subtable_i] = try buildChainingCoverageSubtable(table, subtable_offset, allocator) orelse continue;
                 try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
             }
         }
@@ -2462,6 +2459,36 @@ fn buildNativeCoverage(table: Table, coverage_offset: usize, allocator: std.mem.
     };
 }
 
+fn buildNativeCoverageSequence(table: Table, base_offset: usize, offsets_pos: usize, count: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)![]const NativeCoverage {
+    const coverages = try allocator.alloc(NativeCoverage, count);
+    var built_count: usize = 0;
+    errdefer {
+        for (coverages[0..built_count]) |coverage| deinitNativeCoverage(allocator, coverage);
+        allocator.free(coverages);
+    }
+    for (coverages, 0..) |*coverage, i| {
+        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
+        coverage.* = try buildNativeCoverage(table, coverage_offset, allocator);
+        built_count += 1;
+    }
+    return coverages;
+}
+
+fn buildChainingCoverageSubtable(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!?ChainingCoverageSubtable {
+    var subtable = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse return null;
+    errdefer deinitChainingCoverageSubtableContents(allocator, subtable);
+
+    subtable.backtrack_coverages = try buildNativeCoverageSequence(table, subtable_offset, subtable.backtrack_offsets_pos, subtable.backtrack_count, allocator);
+    subtable.input_coverages = try buildNativeCoverageSequence(table, subtable_offset, subtable.input_offsets_pos, subtable.input_count, allocator);
+    subtable.lookahead_coverages = try buildNativeCoverageSequence(table, subtable_offset, subtable.lookahead_offsets_pos, subtable.lookahead_count, allocator);
+    try fillFastChainingSinglePosRecords(table, &subtable);
+    if (subtable.input_count > 1) {
+        const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable.input_offsets_pos + 2));
+        subtable.second_input_digest = try coverageDigest(table, second_coverage_offset);
+    }
+    return subtable;
+}
+
 fn deinitNativeCoverage(allocator: std.mem.Allocator, coverage: NativeCoverage) void {
     switch (coverage) {
         inline else => |items| allocator.free(items),
@@ -2478,6 +2505,22 @@ fn deinitMarkToBaseSubtableContents(allocator: std.mem.Allocator, subtables: []c
 fn deinitMarkToBaseSubtables(allocator: std.mem.Allocator, subtables: []const MarkToBaseSubtable) void {
     deinitMarkToBaseSubtableContents(allocator, subtables);
     allocator.free(subtables);
+}
+
+fn deinitChainingCoverageSubtables(allocator: std.mem.Allocator, subtables: []const ChainingCoverageSubtable) void {
+    for (subtables) |subtable| {
+        deinitChainingCoverageSubtableContents(allocator, subtable);
+    }
+    allocator.free(subtables);
+}
+
+fn deinitChainingCoverageSubtableContents(allocator: std.mem.Allocator, subtable: ChainingCoverageSubtable) void {
+    for (subtable.backtrack_coverages) |coverage| deinitNativeCoverage(allocator, coverage);
+    allocator.free(subtable.backtrack_coverages);
+    for (subtable.input_coverages) |coverage| deinitNativeCoverage(allocator, coverage);
+    allocator.free(subtable.input_coverages);
+    for (subtable.lookahead_coverages) |coverage| deinitNativeCoverage(allocator, coverage);
+    allocator.free(subtable.lookahead_coverages);
 }
 
 test "GPOS native Coverage preserves format 1 and 2 indexes" {
@@ -2513,6 +2556,54 @@ test "GPOS native Coverage preserves format 1 and 2 indexes" {
     try std.testing.expectEqual(@as(?usize, 3), range_coverage.index(40));
     try std.testing.expectEqual(@as(?usize, 5), range_coverage.index(42));
     try std.testing.expectEqual(@as(?usize, null), range_coverage.index(33));
+}
+
+test "GPOS chaining accelerator caches all Coverage regions" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 44;
+
+    writeU16Test(&bytes, 0, 3); // ChainContextPos format 3.
+    writeU16Test(&bytes, 2, 1); // Backtrack count.
+    writeU16Test(&bytes, 4, 20);
+    writeU16Test(&bytes, 6, 2); // Input count.
+    writeU16Test(&bytes, 8, 26);
+    writeU16Test(&bytes, 10, 32);
+    writeU16Test(&bytes, 12, 1); // Lookahead count.
+    writeU16Test(&bytes, 14, 38);
+    writeU16Test(&bytes, 16, 0); // No positioning records.
+    writeCoverage1Test(&bytes, 20, 2);
+    writeCoverage1Test(&bytes, 26, 3);
+    writeCoverage1Test(&bytes, 32, 4);
+    writeCoverage1Test(&bytes, 38, 5);
+
+    const table = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const subtable = (try buildChainingCoverageSubtable(table, 0, allocator)) orelse return error.TestUnexpectedResult;
+    defer deinitChainingCoverageSubtableContents(allocator, subtable);
+
+    try std.testing.expectEqual(@as(usize, 1), subtable.backtrack_coverages.len);
+    try std.testing.expectEqual(@as(usize, 2), subtable.input_coverages.len);
+    try std.testing.expectEqual(@as(usize, 1), subtable.lookahead_coverages.len);
+    try std.testing.expectEqual(@as(?usize, 0), subtable.backtrack_coverages[0].index(2));
+    try std.testing.expectEqual(@as(?usize, 0), subtable.input_coverages[0].index(3));
+    try std.testing.expectEqual(@as(?usize, 0), subtable.input_coverages[1].index(4));
+    try std.testing.expectEqual(@as(?usize, 0), subtable.lookahead_coverages[0].index(5));
+    try std.testing.expect(subtable.second_input_digest.mayHave(4));
+
+    const glyphs = [_]GlyphId{ 2, 3, 4, 5 };
+    try std.testing.expect(try gposCoverageIndicesMatchCached(
+        table,
+        0,
+        &glyphs,
+        &.{ 1, 2 },
+        subtable.input_offsets_pos,
+        subtable.input_coverages,
+        0,
+    ));
 }
 
 fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -3197,7 +3288,7 @@ fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverage
     var input_indices_buf: [64]usize = undefined;
     if (subtable.input_count > input_indices_buf.len) return error.UnsupportedGpos;
     if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..subtable.input_count])) return .{};
-    if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, input_indices_buf[0..subtable.input_count], subtable.input_offsets_pos)) return .{};
+    if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, input_indices_buf[0..subtable.input_count], subtable.input_offsets_pos, subtable.input_coverages, 0)) return .{};
     var backtrack_indices_buf: [64]usize = undefined;
     if (subtable.backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGpos;
     if (!collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, backtrack_indices_buf[0..subtable.backtrack_count])) return .{};
@@ -3205,8 +3296,8 @@ fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverage
     var lookahead_indices_buf: [64]usize = undefined;
     if (subtable.lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGpos;
     if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable.lookahead_count])) return .{};
-    if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos)) return .{};
-    if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos)) return .{};
+    if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos, subtable.backtrack_coverages, 0)) return .{};
+    if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos, subtable.lookahead_coverages, 0)) return .{};
     if (try collectFastChainingSinglePosRecords(table, subtable, glyphs, input_indices_buf[0..subtable.input_count], adjustments, allocator, options)) {
         return .{ .matched = true, .next_pos = input_indices_buf[subtable.input_count - 1] + 1 };
     }
@@ -3226,7 +3317,7 @@ fn collectAcceleratedChainingCoveragePositioningAt(table: Table, subtable: Chain
     if (subtable.input_count > input_indices_buf.len) return error.UnsupportedGpos;
     if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..subtable.input_count])) return .{};
     if (input_indices_buf[0] != pos) return .{};
-    if (!try gposCoverageIndicesMatchFrom(table, subtable.subtable_offset, glyphs, input_indices_buf[0..subtable.input_count], subtable.input_offsets_pos, 1)) return .{};
+    if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, input_indices_buf[0..subtable.input_count], subtable.input_offsets_pos, subtable.input_coverages, 1)) return .{};
     var backtrack_indices_buf: [64]usize = undefined;
     if (subtable.backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGpos;
     if (!collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, backtrack_indices_buf[0..subtable.backtrack_count])) return .{};
@@ -3234,8 +3325,8 @@ fn collectAcceleratedChainingCoveragePositioningAt(table: Table, subtable: Chain
     var lookahead_indices_buf: [64]usize = undefined;
     if (subtable.lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGpos;
     if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable.lookahead_count])) return .{};
-    if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos)) return .{};
-    if (!try gposCoverageIndicesMatch(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos)) return .{};
+    if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos, subtable.backtrack_coverages, 0)) return .{};
+    if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos, subtable.lookahead_coverages, 0)) return .{};
     if (try collectFastChainingSinglePosRecords(table, subtable, glyphs, input_indices_buf[0..subtable.input_count], adjustments, allocator, options)) {
         return .{ .matched = true, .next_pos = input_indices_buf[subtable.input_count - 1] + 1 };
     }
@@ -3261,15 +3352,23 @@ fn collectFastChainingSinglePosRecords(table: Table, subtable: ChainingCoverageS
 }
 
 fn collectSimpleChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverageSubtable, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {
-    const input_coverage_offset = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.input_offsets_pos));
-    if (!try contextCoverageContains(table, input_coverage_offset, glyphs[pos])) return .{};
+    if (subtable.input_coverages.len != 0) {
+        if (subtable.input_coverages[0].index(glyphs[pos]) == null) return .{};
+    } else {
+        const input_coverage_offset = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.input_offsets_pos));
+        if (!try contextCoverageContains(table, input_coverage_offset, glyphs[pos])) return .{};
+    }
     return try collectSimpleAcceleratedChainingCoveragePositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options);
 }
 
 fn collectSimpleAcceleratedChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverageSubtable, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {
     const lookahead_index = nextUnignoredGlyph(glyphs, pos + 1, lookup_flag, options) orelse return .{};
-    const lookahead_coverage_offset = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.lookahead_offsets_pos));
-    if (!try contextCoverageContains(table, lookahead_coverage_offset, glyphs[lookahead_index])) return .{};
+    if (subtable.lookahead_coverages.len != 0) {
+        if (subtable.lookahead_coverages[0].index(glyphs[lookahead_index]) == null) return .{};
+    } else {
+        const lookahead_coverage_offset = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.lookahead_offsets_pos));
+        if (!try contextCoverageContains(table, lookahead_coverage_offset, glyphs[lookahead_index])) return .{};
+    }
     const sequence_index = try readU16(table, subtable.records_pos);
     if (sequence_index != 0) return .{};
     const lookup_index = try readU16(table, subtable.records_pos + 2);
@@ -3297,16 +3396,16 @@ fn gposLookaheadCoverageMatches(table: Table, base_offset: usize, glyphs: []cons
     return true;
 }
 
-fn gposCoverageIndicesMatch(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize) GposError!bool {
-    return gposCoverageIndicesMatchFrom(table, base_offset, glyphs, indices, offsets_pos, 0);
-}
-
-fn gposCoverageIndicesMatchFrom(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize, start: usize) GposError!bool {
+fn gposCoverageIndicesMatchCached(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize, coverages: []const NativeCoverage, start: usize) GposError!bool {
     var i = start;
     while (i < indices.len) : (i += 1) {
-        const glyph_index = indices[i];
-        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
-        if (!try contextCoverageContains(table, coverage_offset, glyphs[glyph_index])) return false;
+        const glyph = glyphs[indices[i]];
+        if (i < coverages.len) {
+            if (coverages[i].index(glyph) == null) return false;
+        } else {
+            const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
+            if (!try contextCoverageContains(table, coverage_offset, glyph)) return false;
+        }
     }
     return true;
 }

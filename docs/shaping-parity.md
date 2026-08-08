@@ -284,6 +284,18 @@ Current local snapshot after the Nastaliq parity work:
   GPOS `coverageIndex` from about `7.1%` to `3.8%` of sampled cycles and no
   longer reports MarkBase collection as a separate hotspot. Full parity for
   all three corpora remained unchanged.
+- Format-3 GPOS chaining accelerators now reuse the same native-endian Coverage
+  representation for their input, backtrack, and lookahead regions. The common
+  single-input/single-lookahead fast path and the general cached matcher no
+  longer reread Coverage offsets or big-endian records per candidate. A
+  fixed-CPU comparison with four medians per binary reduced Amiri
+  `fa-thelittleprince` from `1109.091 ns/glyph` to `1070.655 ns/glyph`, about
+  `3.5%`; an eight-median 21-sample word-list check improved `fa-words` from
+  `1904.839` to `1869.466 ns/glyph`, about `1.9%`. Roboto `en-words` was flat
+  (`408.850` versus `408.847 ns/glyph`) because that font has no direct
+  format-3 GPOS chaining lookup. Amiri's 209 cached context Coverages cost
+  5,706 bytes without expanding format-2 ranges. Full parity for all three
+  corpora remained unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

@@ -22,6 +22,24 @@ pub const FdSelectInfo = struct {
     format: u8,
 };
 
+pub const FontDictInfo = struct {
+    index: usize,
+    data_offset: usize,
+    data_length: usize,
+    private_dict: PrivateDictInfo,
+};
+
+pub const PrivateDictInfo = struct {
+    offset: usize,
+    size: usize,
+    data: []const u8,
+    local_subrs_offset: ?usize = null,
+    local_subrs_index: ?IndexInfo = null,
+    default_width_x: ?i32 = null,
+    nominal_width_x: ?i32 = null,
+    variation_store_index: ?u16 = null,
+};
+
 pub const Info = struct {
     major_version: u8,
     minor_version: u8,
@@ -52,6 +70,24 @@ pub fn fontDictIndex(data: []const u8, offset: usize, length: usize, glyph_id: u
     const fd_select = parsed.fd_select orelse return null;
     const fd_count = if (parsed.fd_array_index) |fd_array| @as(usize, @intCast(fd_array.count)) else 1;
     return try fdSelectValue(table, fd_select.offset, glyph_id, glyph_count, fd_count);
+}
+
+pub fn fontDictInfo(data: []const u8, offset: usize, length: usize, font_dict_index: usize) Error!?FontDictInfo {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const parsed = try infoView(data, offset, length);
+    const fd_array = parsed.fd_array_index orelse return null;
+    if (font_dict_index >= fd_array.count) return null;
+    return try parseFontDict(table, fd_array, font_dict_index);
+}
+
+pub fn localSubrData(data: []const u8, offset: usize, length: usize, font_dict_index: usize, subr_index: usize) Error!?[]const u8 {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const fd_info = (try fontDictInfo(data, offset, length, font_dict_index)) orelse return null;
+    const local_subrs = fd_info.private_dict.local_subrs_index orelse return null;
+    if (subr_index >= local_subrs.count) return null;
+    return try indexObject(table, local_subrs, subr_index);
 }
 
 pub fn globalSubrData(data: []const u8, offset: usize, length: usize, subr_index: usize) Error!?[]const u8 {
@@ -193,6 +229,64 @@ fn parseTopDict(data: []const u8, table_len: usize) Error!TopDictInfo {
     return result;
 }
 
+fn parseFontDict(table: []const u8, fd_array: IndexInfo, font_dict_index: usize) Error!FontDictInfo {
+    const object = try indexObjectRange(table, fd_array, font_dict_index);
+    var parser = DictParser{ .data = object.data };
+    var private_dict: ?PrivateDictInfo = null;
+    while (try parser.next()) |entry| {
+        switch (entry.op) {
+            18 => {
+                const private_size = try readOffsetOperandAt(entry.operands, 0);
+                const private_offset = try readOffsetOperandAt(entry.operands, 1);
+                if (private_offset > table.len or private_size > table.len - private_offset) return error.BadSfnt;
+                private_dict = try parsePrivateDict(table, private_offset, private_size);
+            },
+            else => {},
+        }
+    }
+    return .{
+        .index = font_dict_index,
+        .data_offset = object.start,
+        .data_length = object.data.len,
+        // CFF2 Font DICTs are the per-FD source of Private DICT metadata.
+        // Requiring the link here lets callers fail before a charstring
+        // interpreter tries to resolve widths or local subroutines lazily.
+        .private_dict = private_dict orelse return error.BadSfnt,
+    };
+}
+
+fn parsePrivateDict(table: []const u8, offset: usize, size: usize) Error!PrivateDictInfo {
+    if (offset > table.len or size > table.len - offset) return error.BadSfnt;
+    const dict = table[offset .. offset + size];
+    var result = PrivateDictInfo{
+        .offset = offset,
+        .size = size,
+        .data = dict,
+    };
+    var parser = DictParser{ .data = dict };
+    while (try parser.next()) |entry| {
+        switch (entry.op) {
+            19 => {
+                const relative_offset = try readOffsetOperandAt(entry.operands, 0);
+                if (relative_offset > std.math.maxInt(usize) - offset) return error.BadSfnt;
+                const local_subrs_offset = offset + relative_offset;
+                if (local_subrs_offset < offset + size) return error.BadSfnt;
+                result.local_subrs_offset = local_subrs_offset;
+                result.local_subrs_index = try indexInfo(table, local_subrs_offset);
+            },
+            20 => result.default_width_x = try readIntegerOperandAt(entry.operands, 0),
+            21 => result.nominal_width_x = try readIntegerOperandAt(entry.operands, 0),
+            22 => {
+                const index = try readOffsetOperandAt(entry.operands, 0);
+                if (index > std.math.maxInt(u16)) return error.BadSfnt;
+                result.variation_store_index = @intCast(index);
+            },
+            else => {},
+        }
+    }
+    return result;
+}
+
 fn fdSelectValue(table: []const u8, offset: usize, glyph_id: usize, glyph_count: usize, fd_count: usize) Error!u16 {
     const fd_select = try fdSelectInfo(table, offset);
     return switch (fd_select.format) {
@@ -282,7 +376,17 @@ fn indexInfo(table: []const u8, offset: usize) Error!IndexInfo {
     };
 }
 
+const IndexObjectRange = struct {
+    start: usize,
+    end: usize,
+    data: []const u8,
+};
+
 fn indexObject(table: []const u8, index: IndexInfo, object_index: usize) Error![]const u8 {
+    return (try indexObjectRange(table, index, object_index)).data;
+}
+
+fn indexObjectRange(table: []const u8, index: IndexInfo, object_index: usize) Error!IndexObjectRange {
     if (object_index >= index.count) return error.BadSfnt;
     const offsets_start = index.offset + 5;
     const start = readSizedOffset(table, offsets_start + object_index * @as(usize, index.off_size), index.off_size);
@@ -291,7 +395,11 @@ fn indexObject(table: []const u8, index: IndexInfo, object_index: usize) Error![
     const object_start = index.data_offset + start - 1;
     const object_end = index.data_offset + end - 1;
     if (object_end > table.len) return error.BadSfnt;
-    return table[object_start..object_end];
+    return .{
+        .start = object_start,
+        .end = object_end,
+        .data = table[object_start..object_end],
+    };
 }
 
 fn readSizedOffset(table: []const u8, offset: usize, size: usize) usize {
@@ -307,8 +415,19 @@ fn readOffsetOperand(operands: []const i32) Error!usize {
     return @intCast(value);
 }
 
+fn readOffsetOperandAt(operands: []const i32, index: usize) Error!usize {
+    const value = try readIntegerOperandAt(operands, index);
+    if (value < 0) return error.BadSfnt;
+    return @intCast(value);
+}
+
+fn readIntegerOperandAt(operands: []const i32, index: usize) Error!i32 {
+    if (index >= operands.len) return error.BadSfnt;
+    return operands[index];
+}
+
 test "CFF2 header exposes top dict, global subrs, and trailing data" {
-    const bytes = [_]u8{ 2, 0, 5, 0, 10, 162, 17, 170, 12, 36, 178, 12, 37, 181, 24, 0, 0, 0, 1, 1, 1, 2, 11, 0, 0, 0, 1, 1, 1, 2, 14, 0, 0, 0, 1, 1, 1, 2, 14, 0, 0, 0, 0x03 };
+    const bytes = testCff2Table();
     const parsed = try info(&bytes, 0, bytes.len);
     try std.testing.expectEqual(@as(u8, 2), parsed.major_version);
     try std.testing.expectEqual(@as(u8, 5), parsed.header_size);
@@ -321,8 +440,8 @@ test "CFF2 header exposes top dict, global subrs, and trailing data" {
     try std.testing.expectEqual(@as(usize, 1), global_subrs.data_length);
     try std.testing.expectEqual(@as(?usize, 23), parsed.top_dict.charstrings_offset);
     try std.testing.expectEqual(@as(?usize, 31), parsed.top_dict.fd_array_offset);
-    try std.testing.expectEqual(@as(?usize, 39), parsed.top_dict.fd_select_offset);
-    try std.testing.expectEqual(@as(?usize, 42), parsed.top_dict.vstore_offset);
+    try std.testing.expectEqual(@as(?usize, 41), parsed.top_dict.fd_select_offset);
+    try std.testing.expectEqual(@as(?usize, 58), parsed.top_dict.vstore_offset);
     const charstrings = parsed.charstrings_index.?;
     try std.testing.expectEqual(@as(u32, 1), charstrings.count);
     try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
@@ -334,13 +453,36 @@ test "CFF2 header exposes top dict, global subrs, and trailing data" {
     const fd_array = parsed.fd_array_index.?;
     try std.testing.expectEqual(@as(u32, 1), fd_array.count);
     try std.testing.expectEqual(@as(usize, 38), fd_array.data_offset);
-    try std.testing.expectEqual(@as(usize, 1), fd_array.data_length);
+    try std.testing.expectEqual(@as(usize, 3), fd_array.data_length);
     const fd_select = parsed.fd_select.?;
-    try std.testing.expectEqual(@as(usize, 39), fd_select.offset);
+    try std.testing.expectEqual(@as(usize, 41), fd_select.offset);
     try std.testing.expectEqual(@as(u8, 0), fd_select.format);
     try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 0, 2));
     try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 1, 2));
     try std.testing.expect((try charStringData(&bytes, 0, bytes.len, 1)) == null);
+}
+
+test "CFF2 exposes Font DICT private metadata and local subrs" {
+    const bytes = testCff2Table();
+    const font_dict = (try fontDictInfo(&bytes, 0, bytes.len, 0)).?;
+    try std.testing.expectEqual(@as(usize, 0), font_dict.index);
+    try std.testing.expectEqual(@as(usize, 38), font_dict.data_offset);
+    try std.testing.expectEqual(@as(usize, 3), font_dict.data_length);
+    const private = font_dict.private_dict;
+    try std.testing.expectEqual(@as(usize, 44), private.offset);
+    try std.testing.expectEqual(@as(usize, 6), private.size);
+    try std.testing.expectEqualSlices(u8, &.{ 146, 20, 119, 21, 145, 19 }, private.data);
+    try std.testing.expectEqual(@as(?i32, 7), private.default_width_x);
+    try std.testing.expectEqual(@as(?i32, -20), private.nominal_width_x);
+    try std.testing.expectEqual(@as(?usize, 50), private.local_subrs_offset);
+    const local_subrs = private.local_subrs_index.?;
+    try std.testing.expectEqual(@as(usize, 50), local_subrs.offset);
+    try std.testing.expectEqual(@as(u32, 1), local_subrs.count);
+    try std.testing.expectEqual(@as(usize, 57), local_subrs.data_offset);
+    try std.testing.expectEqual(@as(usize, 1), local_subrs.data_length);
+    try std.testing.expectEqualSlices(u8, &.{11}, (try localSubrData(&bytes, 0, bytes.len, 0, 0)).?);
+    try std.testing.expect((try localSubrData(&bytes, 0, bytes.len, 0, 1)) == null);
+    try std.testing.expect((try fontDictInfo(&bytes, 0, bytes.len, 1)) == null);
 }
 
 test "CFF2 accepts an empty Global Subr INDEX" {
@@ -358,4 +500,60 @@ test "CFF2 rejects bad versions and oversized top dicts" {
     try std.testing.expectError(error.BadSfnt, validate(&.{ 1, 0, 5, 0, 0 }, 0, 5));
     try std.testing.expectError(error.BadSfnt, validate(&.{ 2, 0, 4, 0, 0 }, 0, 5));
     try std.testing.expectError(error.BadSfnt, validate(&.{ 2, 0, 5, 0, 1 }, 0, 5));
+}
+
+fn testCff2Table() [59]u8 {
+    var bytes = [_]u8{0} ** 59;
+    bytes[0] = 2;
+    bytes[2] = 5;
+    std.mem.writeInt(u16, bytes[3..5], 10, .big);
+    bytes[5] = 162; // CharStrings offset 23.
+    bytes[6] = 17;
+    bytes[7] = 170; // FDArray offset 31.
+    bytes[8] = 12;
+    bytes[9] = 36;
+    bytes[10] = 180; // FDSelect offset 41.
+    bytes[11] = 12;
+    bytes[12] = 37;
+    bytes[13] = 197; // vstore offset 58.
+    bytes[14] = 24;
+
+    std.mem.writeInt(u32, bytes[15..19], 1, .big); // Global Subrs INDEX.
+    bytes[19] = 1;
+    bytes[20] = 1;
+    bytes[21] = 2;
+    bytes[22] = 11;
+
+    std.mem.writeInt(u32, bytes[23..27], 1, .big); // CharStrings INDEX.
+    bytes[27] = 1;
+    bytes[28] = 1;
+    bytes[29] = 2;
+    bytes[30] = 14;
+
+    std.mem.writeInt(u32, bytes[31..35], 1, .big); // FDArray INDEX.
+    bytes[35] = 1;
+    bytes[36] = 1;
+    bytes[37] = 4;
+    bytes[38] = 145; // Private DICT size 6.
+    bytes[39] = 183; // Private DICT offset 44.
+    bytes[40] = 18;
+
+    bytes[41] = 0; // FDSelect format 0 for two glyphs.
+    bytes[42] = 0;
+    bytes[43] = 0;
+
+    bytes[44] = 146; // defaultWidthX 7.
+    bytes[45] = 20;
+    bytes[46] = 119; // nominalWidthX -20.
+    bytes[47] = 21;
+    bytes[48] = 145; // Local Subrs offset 6, immediately after Private DICT.
+    bytes[49] = 19;
+
+    std.mem.writeInt(u32, bytes[50..54], 1, .big); // Local Subrs INDEX.
+    bytes[54] = 1;
+    bytes[55] = 1;
+    bytes[56] = 2;
+    bytes[57] = 11;
+    bytes[58] = 0x03;
+    return bytes;
 }

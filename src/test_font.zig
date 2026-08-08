@@ -3829,7 +3829,7 @@ fn writeSimpleTriangleGlyph(bytes: []u8, off: usize, first_dx: u16, second_dx: u
 }
 
 fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 43);
+    const bytes = try allocator.alloc(u8, 59);
     @memset(bytes, 0);
     bytes[0] = 2;
     bytes[1] = 0;
@@ -3840,10 +3840,10 @@ fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
     bytes[7] = 170; // FDArray offset 31.
     bytes[8] = 12;
     bytes[9] = 36;
-    bytes[10] = 178; // FDSelect offset 39.
+    bytes[10] = 180; // FDSelect offset 41.
     bytes[11] = 12;
     bytes[12] = 37;
-    bytes[13] = 181; // vstore offset 42.
+    bytes[13] = 197; // vstore offset 58.
     bytes[14] = 24;
 
     writeU32(bytes, 15, 1); // CFF2 Global Subrs INDEX count.
@@ -3861,13 +3861,28 @@ fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
     writeU32(bytes, 31, 1); // CFF2 FDArray INDEX count.
     bytes[35] = 1;
     bytes[36] = 1;
-    bytes[37] = 2;
-    bytes[38] = 14;
+    bytes[37] = 4;
+    bytes[38] = 145; // Private DICT size 6.
+    bytes[39] = 183; // Private DICT offset 44.
+    bytes[40] = 18;
 
-    bytes[39] = 0; // FDSelect format 0.
-    bytes[40] = 0;
-    bytes[41] = 0;
-    bytes[42] = 0x03;
+    bytes[41] = 0; // FDSelect format 0.
+    bytes[42] = 0;
+    bytes[43] = 0;
+
+    bytes[44] = 146; // defaultWidthX 7.
+    bytes[45] = 20;
+    bytes[46] = 119; // nominalWidthX -20.
+    bytes[47] = 21;
+    bytes[48] = 145; // Local Subrs offset 6, immediately after Private DICT.
+    bytes[49] = 19;
+
+    writeU32(bytes, 50, 1); // CFF2 Local Subrs INDEX count.
+    bytes[54] = 1;
+    bytes[55] = 1;
+    bytes[56] = 2;
+    bytes[57] = 11;
+    bytes[58] = 0x03;
     return bytes;
 }
 

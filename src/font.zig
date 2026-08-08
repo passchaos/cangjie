@@ -49,6 +49,8 @@ pub const FontFormat = enum {
 };
 
 pub const Cff2Info = cff2_mod.Info;
+pub const Cff2FontDictInfo = cff2_mod.FontDictInfo;
+pub const Cff2PrivateDictInfo = cff2_mod.PrivateDictInfo;
 pub const MathConstant = math_mod.Constant;
 pub const MathInfo = math_mod.Info;
 pub const MathConstantsInfo = math_mod.Constants;
@@ -1058,6 +1060,22 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.globalSubrData(self.data, cff2.offset, cff2.length, subr_index);
+    }
+
+    /// Read CFF2 Font DICT and Private DICT metadata for a font-dict index.
+    pub fn cff2FontDictInfo(self: *const Font, font_dict_index: usize) FontError!?Cff2FontDictInfo {
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        return try cff2_mod.fontDictInfo(self.data, cff2.offset, cff2.length, font_dict_index);
+    }
+
+    /// Borrow raw CFF2 Local Subr bytes for a font-dict index, when present.
+    pub fn cff2LocalSubrData(self: *const Font, font_dict_index: usize, subr_index: usize) FontError!?[]const u8 {
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        return try cff2_mod.localSubrData(self.data, cff2.offset, cff2.length, font_dict_index, subr_index);
     }
 
     /// Borrow raw CFF2 CharString bytes for a glyph, when the optional CFF2 table is present.

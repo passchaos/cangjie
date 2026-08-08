@@ -8422,9 +8422,7 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
                 if (has_delta.len < points.len) return error.BadSfnt;
                 if (deltas.len < points.len) return error.BadSfnt;
                 const real_deltas = deltas[0..points.len];
-                for (0..points.len) |point_index| {
-                    if (real_deltas[point_index].point != point_index) return error.BadSfnt;
-                }
+                std.debug.assert(gvarDensePointIdsMatch(real_deltas));
                 var contour_start: usize = 0;
                 for (end_pts) |end_pt| {
                     const contour_end: usize = end_pt;
@@ -8461,6 +8459,13 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
         try appendContour(&builder, points[start .. end + 1], transform);
         start = end + 1;
     }
+}
+
+fn gvarDensePointIdsMatch(deltas: []const GvarScaledPointDelta) bool {
+    for (deltas, 0..) |delta, index| {
+        if (delta.point != index) return false;
+    }
+    return true;
 }
 
 fn flaggedPointForGvarIup(points: []const FlaggedPoint, index: usize) gvar_mod.Point {

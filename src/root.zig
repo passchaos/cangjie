@@ -531,12 +531,15 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
     try std.testing.expectEqual(@as(usize, 22), charstrings.data_offset);
     try std.testing.expectEqual(@as(usize, 1), charstrings.data_length);
+    try std.testing.expectEqualSlices(u8, &.{14}, (try font.cff2CharStringData(0)).?);
+    try std.testing.expect((try font.cff2CharStringData(1)) == null);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);
     var missing = try Font.parse(allocator, missing_bytes);
     defer missing.deinit();
     try std.testing.expect((try missing.cff2Info()) == null);
+    try std.testing.expect((try missing.cff2CharStringData(1)) == null);
 }
 
 test "lazy CFF2 metadata revalidates borrowed table bytes" {

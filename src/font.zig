@@ -1043,6 +1043,15 @@ pub const Font = struct {
         self.* = undefined;
     }
 
+    /// Borrow raw CFF2 CharString bytes for a glyph, when the optional CFF2 table is present.
+    pub fn cff2CharStringData(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        return try cff2_mod.charStringData(self.data, cff2.offset, cff2.length, glyph_id);
+    }
+
     /// Read validated top-level metadata from the optional OpenType `CFF2` table.
     pub fn cff2Info(self: *const Font) FontError!?Cff2Info {
         const cff2 = self.cff2 orelse return null;

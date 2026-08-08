@@ -36,6 +36,15 @@ pub fn info(data: []const u8, offset: usize, length: usize) Error!Info {
     return try infoView(data, offset, length);
 }
 
+pub fn charStringData(data: []const u8, offset: usize, length: usize, glyph_id: usize) Error!?[]const u8 {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const parsed = try infoView(data, offset, length);
+    const index = parsed.charstrings_index orelse return null;
+    if (glyph_id >= index.count) return null;
+    return try indexObject(table, index, glyph_id);
+}
+
 fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
     if (offset > data.len or length > data.len - offset or length < 5) return error.BadSfnt;
     const table = data[offset .. offset + length];
@@ -174,6 +183,18 @@ fn indexInfo(table: []const u8, offset: usize) Error!IndexInfo {
     };
 }
 
+fn indexObject(table: []const u8, index: IndexInfo, object_index: usize) Error![]const u8 {
+    if (object_index >= index.count) return error.BadSfnt;
+    const offsets_start = index.offset + 5;
+    const start = readSizedOffset(table, offsets_start + object_index * @as(usize, index.off_size), index.off_size);
+    const end = readSizedOffset(table, offsets_start + (object_index + 1) * @as(usize, index.off_size), index.off_size);
+    if (start > end or start == 0) return error.BadSfnt;
+    const object_start = index.data_offset + start - 1;
+    const object_end = index.data_offset + end - 1;
+    if (object_end > table.len) return error.BadSfnt;
+    return table[object_start..object_end];
+}
+
 fn readSizedOffset(table: []const u8, offset: usize, size: usize) usize {
     var value: usize = 0;
     for (0..size) |index| value = (value << 8) | table[offset + index];
@@ -202,6 +223,8 @@ test "CFF2 header exposes top dict and trailing data" {
     try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
     try std.testing.expectEqual(@as(usize, 22), charstrings.data_offset);
     try std.testing.expectEqual(@as(usize, 1), charstrings.data_length);
+    try std.testing.expectEqualSlices(u8, &.{14}, (try charStringData(&bytes, 0, bytes.len, 0)).?);
+    try std.testing.expect((try charStringData(&bytes, 0, bytes.len, 1)) == null);
 }
 
 test "CFF2 rejects bad versions and oversized top dicts" {

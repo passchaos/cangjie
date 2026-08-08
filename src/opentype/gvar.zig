@@ -539,6 +539,10 @@ pub fn accumulateGlyphPointDeltas(data: []const u8, offset: usize, length: usize
     return try accumulateGlyphPointDeltasWithFlags(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, all_points, raw_scratch, scaled_scratch, out, null);
 }
 
+pub fn accumulateGlyphPointDeltasForPointCount(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta) Error!usize {
+    return try accumulateGlyphPointDeltasForPointCountWithFlags(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, scaled_scratch, out, null);
+}
+
 pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, all_points: []const u16, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
     const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return 0;
     var out_count: usize = 0;
@@ -570,6 +574,31 @@ pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, leng
         }
     }
     return out_count;
+}
+
+pub fn accumulateGlyphPointDeltasForPointCountWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, point_count: usize, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
+    if (has_delta) |flags| {
+        if (flags.len < point_count) return error.BadSfnt;
+        @memset(flags[0..point_count], false);
+    }
+    const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return 0;
+    if (out.len < point_count) return error.BadSfnt;
+    for (0..point_count) |point| {
+        if (point > std.math.maxInt(u16)) return error.BadSfnt;
+        out[point] = .{ .point = @intCast(point), .x = 0, .y = 0 };
+    }
+
+    for (0..glyph.tuple_count) |tuple_index| {
+        const delta_count = try decodeScaledTuplePointDeltasForPointCount(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index, normalized_coords, point_count, raw_scratch, scaled_scratch);
+        for (scaled_scratch[0..delta_count]) |delta| {
+            const target_index: usize = delta.point;
+            if (target_index >= point_count) return error.BadSfnt;
+            out[target_index].x += delta.x;
+            out[target_index].y += delta.y;
+            if (has_delta) |flags| flags[target_index] = true;
+        }
+    }
+    return point_count;
 }
 
 fn accumulationTargetIndex(out: []const ScaledPointDelta, out_count: usize, all_points: []const u16, point: u16) ?usize {
@@ -899,6 +928,56 @@ test "gvar accumulation target index uses dense point ids directly" {
     // to the generic search over accumulated outputs.
     try std.testing.expectEqual(@as(?usize, 1), accumulationTargetIndex(&out, out.len, &.{ 2, 0, 1 }, 1));
     try std.testing.expect(accumulationTargetIndex(&out, out.len, &.{ 0, 1, 2 }, 9) == null);
+}
+
+test "gvar point-count accumulation keeps dense outputs and flags" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 8, // offsets: 0, 16.
+        0, 1, 0, 10, // GlyphVariationData header.
+        0, 5, 0x80, 0x00, // Tuple header: variationDataSize=5, embedded peak, all points.
+        0x40, 0x00, // peak = 1.
+        0x02, 1, 2, 3, // x deltas for points 0,1,2.
+        0x82, // y deltas zero run for three points.
+        0, // padding after tuple payload.
+    };
+    var raw: [3]PointDelta = undefined;
+    var scaled: [3]ScaledPointDelta = undefined;
+    var out: [3]ScaledPointDelta = undefined;
+    var has_delta = [_]bool{ false, false, false };
+    const count = try accumulateGlyphPointDeltasForPointCountWithFlags(&bytes, 0, bytes.len, 1, 1, 0, &.{0.5}, 3, &raw, &scaled, &out, &has_delta);
+    try std.testing.expectEqual(@as(usize, 3), count);
+    try std.testing.expectEqual(@as(u16, 0), out[0].point);
+    try std.testing.expectEqual(@as(f32, 0.5), out[0].x);
+    try std.testing.expectEqual(@as(u16, 2), out[2].point);
+    try std.testing.expectEqual(@as(f32, 1.5), out[2].x);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, true }, &has_delta);
+}
+
+test "gvar point-count accumulation clears flags for absent glyph data" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 0, // offsets: 0, 0.
+    };
+    var raw: [3]PointDelta = undefined;
+    var scaled: [3]ScaledPointDelta = undefined;
+    var out: [3]ScaledPointDelta = undefined;
+    var has_delta = [_]bool{ true, true, true };
+    const count = try accumulateGlyphPointDeltasForPointCountWithFlags(&bytes, 0, bytes.len, 1, 1, 0, &.{0.5}, 3, &raw, &scaled, &out, &has_delta);
+    try std.testing.expectEqual(@as(usize, 0), count);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false }, &has_delta);
 }
 
 test "gvar glyph metadata exposes tuple headers" {

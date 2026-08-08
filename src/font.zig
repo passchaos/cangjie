@@ -1121,21 +1121,14 @@ pub const Font = struct {
         const fvar = self.fvar orelse return error.BadSfnt;
         const fvar_info = try readFvarInfo(self.data, fvar);
         try validateSfntTableChecksum(self.data, gvar);
-        if (target_count > std.math.maxInt(u16)) return error.BadSfnt;
-        if (has_delta) |flags| {
-            if (flags.len < target_count) return error.BadSfnt;
-            @memset(flags[0..target_count], false);
-        }
-        const all_points = try allocator.alloc(u16, target_count);
-        defer allocator.free(all_points);
-        for (all_points, 0..) |*point, index| point.* = @intCast(index);
+        if (target_count > @as(usize, std.math.maxInt(u16)) + 1) return error.BadSfnt;
         const raw_scratch = try allocator.alloc(gvar_mod.PointDelta, target_count);
         defer allocator.free(raw_scratch);
         const scaled_scratch = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
         defer allocator.free(scaled_scratch);
         const out = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
         errdefer allocator.free(out);
-        const count = try gvar_mod.accumulateGlyphPointDeltasWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id, normalized_coords, all_points, raw_scratch, scaled_scratch, out, has_delta);
+        const count = try gvar_mod.accumulateGlyphPointDeltasForPointCountWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id, normalized_coords, target_count, raw_scratch, scaled_scratch, out, has_delta);
         return try allocator.realloc(out, count);
     }
 

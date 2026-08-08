@@ -60,6 +60,7 @@ pub const Script = enum {
     mongolian,
     balinese,
     javanese,
+    marchen,
     kayah_li,
     rejang,
     limbu,
@@ -528,6 +529,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     mong = tag("mong"),
     bali = tag("bali"),
     java = tag("java"),
+    marc = tag("marc"),
     kali = tag("kali"),
     rjng = tag("rjng"),
     limb = tag("limb"),
@@ -619,6 +621,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .mongolian => .mong,
         .balinese => .bali,
         .javanese => .java,
+        .marchen => .marc,
         .kayah_li => .kali,
         .rejang => .rjng,
         .limbu => .limb,
@@ -841,6 +844,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
+    if (isMarchenScriptCodepoint(codepoint)) return .marchen;
     if (isKayahLiScriptCodepoint(codepoint)) return .kayah_li;
     if (isRejangScriptCodepoint(codepoint)) return .rejang;
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
@@ -944,6 +948,15 @@ fn isJavaneseScriptCodepoint(codepoint: u21) bool {
     // block together avoids splitting aksara syllables through DFLT/unknown
     // runs before GSUB/GPOS lookup selection.
     return codepoint >= 0xa980 and codepoint <= 0xa9df;
+}
+
+fn isMarchenScriptCodepoint(codepoint: u21) bool {
+    // Marchen letters, subjoined consonants, dependent vowels, and head marks
+    // occupy one supplementary block and use the registered `marc` OpenType
+    // ScriptList tag. Keep assigned scalars in one USE shaping run.
+    return (codepoint >= 0x11c70 and codepoint <= 0x11c8f) or
+        (codepoint >= 0x11c92 and codepoint <= 0x11ca7) or
+        (codepoint >= 0x11ca9 and codepoint <= 0x11cb6);
 }
 
 fn isKayahLiScriptCodepoint(codepoint: u21) bool {
@@ -1788,7 +1801,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .marchen, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
@@ -3930,6 +3943,27 @@ test "Javanese syllables keep marks and select Javanese OpenType script" {
     try std.testing.expectEqualStrings("ꦲꦤꦕꦫꦏ", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Marchen stacks select the Marchen OpenType script" {
+    const allocator = std.testing.allocator;
+    const text = "𑲊𑲒𑲩";
+
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    try std.testing.expectEqual(@as(usize, 1), clusters.len);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.marchen, runs[0].script);
+    try std.testing.expectEqual(OpenTypeScriptTag.marc, openTypeScriptTag(runs[0].script));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x11c8a));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+    try std.testing.expectEqual(@as(usize, 1), words.len);
+    try std.testing.expectEqualStrings(text, text[words[0].byte_start..][0..words[0].byte_len]);
+}
+
 test "Kayah Li syllables keep marks and select Kayah Li OpenType script" {
     const allocator = std.testing.allocator;
 
@@ -4744,6 +4778,7 @@ const WordKind = enum {
     malayalam,
     balinese,
     javanese,
+    marchen,
     kayah_li,
     rejang,
     limbu,
@@ -4883,6 +4918,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .malayalam => .malayalam,
         .balinese => .balinese,
         .javanese => .javanese,
+        .marchen => .marchen,
         .limbu => .limbu,
         .buginese => .buginese,
         .sundanese => .sundanese,
@@ -5160,6 +5196,12 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0xa980 and codepoint <= 0xa982) or
         codepoint == 0xa9b3 or
         (codepoint >= 0xa9b6 and codepoint <= 0xa9b9) or
+        // Marchen subjoined consonants, nonspacing vowels, and nasal signs are
+        // Extend characters in one orthographic stack.
+        (codepoint >= 0x11c92 and codepoint <= 0x11ca7) or
+        (codepoint >= 0x11caa and codepoint <= 0x11cb0) or
+        (codepoint >= 0x11cb2 and codepoint <= 0x11cb3) or
+        (codepoint >= 0x11cb5 and codepoint <= 0x11cb6) or
         (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
         // Kayah Li dependent vowels and tones are nonspacing marks. Keeping
         // them attached preserves one caret/word/shaping unit for syllables
@@ -5529,6 +5571,11 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0xa9b4 and codepoint <= 0xa9b5) or
         (codepoint >= 0xa9ba and codepoint <= 0xa9bb) or
         (codepoint >= 0xa9be and codepoint <= 0xa9c0) or
+        // Marchen subjoined YA and spacing vowels I/O share the preceding
+        // letter's grapheme and shaping cluster.
+        codepoint == 0x11ca9 or
+        codepoint == 0x11cb1 or
+        codepoint == 0x11cb4 or
         // Rejang final H and virama are visible spacing signs but still belong
         // to the previous base for grapheme, word, and shaping boundaries.
         (codepoint >= 0xa952 and codepoint <= 0xa953) or

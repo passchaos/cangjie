@@ -90,6 +90,17 @@ pub fn forCodepoint(codepoint: u21) Category {
         => .medial_below,
         0xa9be => .medial_post,
         0xa9c0 => .halant,
+        0x11c72...0x11c8f => .base,
+        0x11c92...0x11ca7,
+        0x11ca9...0x11caf,
+        => .cons_sub,
+        0x11cb0,
+        0x11cb2,
+        => .vowel_below,
+        0x11cb1 => .vowel_pre,
+        0x11cb3 => .vowel_above,
+        0x11cb4 => .vowel_post,
+        0x11cb5...0x11cb6 => .vowel_mod_above,
         0x1bc00...0x1bc6a,
         0x1bc70...0x1bc7c,
         0x1bc80...0x1bc88,
@@ -175,6 +186,15 @@ test "Balinese USE categories distinguish a stacked consonant syllable" {
 test "Javanese USE categories distinguish prebase and medial signs" {
     const codepoints = [_]u21{ 0xa9a5, 0xa9ba, 0xa9c0, 0xa9bd, 0xa9be, 0xa980 };
     const expected = [_]Category{ .base, .vowel_pre, .halant, .medial_below, .medial_post, .vowel_mod_above };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Marchen USE categories distinguish subjoined letters and vowels" {
+    const codepoints = [_]u21{ 0x11c72, 0x11c92, 0x11ca9, 0x11cb0, 0x11cb1, 0x11cb3, 0x11cb4, 0x11cb5 };
+    const expected = [_]Category{ .base, .cons_sub, .cons_sub, .vowel_below, .vowel_pre, .vowel_above, .vowel_post, .vowel_mod_above };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

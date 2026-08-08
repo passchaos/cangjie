@@ -407,6 +407,17 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
     --font ~/Work/harfbuzz/test/shape/data/in-house/fonts/f70f345188472b93f565d1d7fae8c668dd6a3244.ttf \
     --text-file tests/data/javanese-use-tests.txt --direction ltr
   ```
+- Marchen passes `compare-harfbuzz` for all 35 upstream
+  `in-house/use-marchen.tests` inputs retained in
+  `tests/data/marchen-use-tests.txt`, covering subjoined consonants, pre/above/
+  below/post vowels, vowel modifiers, multi-component substitutions, and mark
+  positioning (`checksum=1756df70fe6bf584`). The gate is:
+  ```sh
+  zig build shape-bench -Doptimize=ReleaseFast -- \
+    --engine compare-harfbuzz \
+    --font ~/Work/harfbuzz/test/shape/data/in-house/fonts/85414f2552b654585b7a8d13dcc3e8fd9f7970a3.ttf \
+    --text-file tests/data/marchen-use-tests.txt --direction ltr
+  ```
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -429,9 +440,9 @@ goal is active, not complete.
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
-- Expand USE shaping parity beyond the retained Duployan, Balinese, and
-  Javanese gates. Other USE scripts/fonts and fuzz/corpus failures still need
-  retained gates before this can be called broad USE parity.
+- Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
+  and Marchen gates. Other USE scripts/fonts and fuzz/corpus failures still
+  need retained gates before this can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

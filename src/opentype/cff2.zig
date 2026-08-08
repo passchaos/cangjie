@@ -1,5 +1,6 @@
 const std = @import("std");
 const charstring_mod = @import("cff2/charstring.zig");
+const glyph_mod = @import("../glyph.zig");
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error;
 
@@ -152,6 +153,11 @@ pub fn charStringScanInfo(data: []const u8, offset: usize, length: usize, glyph_
 pub fn charStringBoundsInfo(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?CharStringBoundsInfo {
     var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count)) orelse return null;
     return try charstring_mod.bounds(CharStringScanContext, &execution.context, execution.charstring);
+}
+
+pub fn appendGlyphOutline(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize, outline: *glyph_mod.GlyphOutline) Error!?CharStringBoundsInfo {
+    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count)) orelse return null;
+    return try charstring_mod.appendOutline(CharStringScanContext, &execution.context, allocator, execution.charstring, outline);
 }
 
 const CharStringExecutionContext = struct {
@@ -537,23 +543,23 @@ test "CFF2 header exposes top dict, global subrs, and trailing data" {
     try std.testing.expectEqual(@as(usize, 22), global_subrs.data_offset);
     try std.testing.expectEqual(@as(usize, 1), global_subrs.data_length);
     try std.testing.expectEqual(@as(?usize, 23), parsed.top_dict.charstrings_offset);
-    try std.testing.expectEqual(@as(?usize, 35), parsed.top_dict.fd_array_offset);
-    try std.testing.expectEqual(@as(?usize, 45), parsed.top_dict.fd_select_offset);
-    try std.testing.expectEqual(@as(?usize, 62), parsed.top_dict.vstore_offset);
+    try std.testing.expectEqual(@as(?usize, 43), parsed.top_dict.fd_array_offset);
+    try std.testing.expectEqual(@as(?usize, 53), parsed.top_dict.fd_select_offset);
+    try std.testing.expectEqual(@as(?usize, 70), parsed.top_dict.vstore_offset);
     const charstrings = parsed.charstrings_index.?;
     try std.testing.expectEqual(@as(u32, 1), charstrings.count);
     try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
     try std.testing.expectEqual(@as(usize, 30), charstrings.data_offset);
-    try std.testing.expectEqual(@as(usize, 5), charstrings.data_length);
+    try std.testing.expectEqual(@as(usize, 13), charstrings.data_length);
     try std.testing.expectEqualSlices(u8, &.{11}, (try globalSubrData(&bytes, 0, bytes.len, 0)).?);
     try std.testing.expect((try globalSubrData(&bytes, 0, bytes.len, 1)) == null);
-    try std.testing.expectEqualSlices(u8, &.{ 32, 10, 32, 29, 14 }, (try charStringData(&bytes, 0, bytes.len, 0)).?);
+    try std.testing.expectEqualSlices(u8, &.{ 32, 10, 32, 29, 189, 159, 21, 239, 139, 139, 169, 5, 14 }, (try charStringData(&bytes, 0, bytes.len, 0)).?);
     const fd_array = parsed.fd_array_index.?;
     try std.testing.expectEqual(@as(u32, 1), fd_array.count);
-    try std.testing.expectEqual(@as(usize, 42), fd_array.data_offset);
+    try std.testing.expectEqual(@as(usize, 50), fd_array.data_offset);
     try std.testing.expectEqual(@as(usize, 3), fd_array.data_length);
     const fd_select = parsed.fd_select.?;
-    try std.testing.expectEqual(@as(usize, 45), fd_select.offset);
+    try std.testing.expectEqual(@as(usize, 53), fd_select.offset);
     try std.testing.expectEqual(@as(u8, 0), fd_select.format);
     try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 0, 2));
     try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 1, 2));
@@ -564,19 +570,19 @@ test "CFF2 exposes Font DICT private metadata and local subrs" {
     const bytes = testCff2Table();
     const font_dict = (try fontDictInfo(&bytes, 0, bytes.len, 0)).?;
     try std.testing.expectEqual(@as(usize, 0), font_dict.index);
-    try std.testing.expectEqual(@as(usize, 42), font_dict.data_offset);
+    try std.testing.expectEqual(@as(usize, 50), font_dict.data_offset);
     try std.testing.expectEqual(@as(usize, 3), font_dict.data_length);
     const private = font_dict.private_dict;
-    try std.testing.expectEqual(@as(usize, 48), private.offset);
+    try std.testing.expectEqual(@as(usize, 56), private.offset);
     try std.testing.expectEqual(@as(usize, 6), private.size);
     try std.testing.expectEqualSlices(u8, &.{ 146, 20, 119, 21, 145, 19 }, private.data);
     try std.testing.expectEqual(@as(?i32, 7), private.default_width_x);
     try std.testing.expectEqual(@as(?i32, -20), private.nominal_width_x);
-    try std.testing.expectEqual(@as(?usize, 54), private.local_subrs_offset);
+    try std.testing.expectEqual(@as(?usize, 62), private.local_subrs_offset);
     const local_subrs = private.local_subrs_index.?;
-    try std.testing.expectEqual(@as(usize, 54), local_subrs.offset);
+    try std.testing.expectEqual(@as(usize, 62), local_subrs.offset);
     try std.testing.expectEqual(@as(u32, 1), local_subrs.count);
-    try std.testing.expectEqual(@as(usize, 61), local_subrs.data_offset);
+    try std.testing.expectEqual(@as(usize, 69), local_subrs.data_offset);
     try std.testing.expectEqual(@as(usize, 1), local_subrs.data_length);
     try std.testing.expectEqualSlices(u8, &.{11}, (try localSubrData(&bytes, 0, bytes.len, 0, 0)).?);
     try std.testing.expect((try localSubrData(&bytes, 0, bytes.len, 0, 1)) == null);
@@ -604,9 +610,9 @@ test "CFF2 scans glyph charstrings through biased subr calls" {
     const bytes = testCff2Table();
     const scanned = (try charStringScanInfo(&bytes, 0, bytes.len, 0, 2)).?;
     try std.testing.expectEqual(@as(usize, 3), scanned.charstring_count);
-    try std.testing.expectEqual(@as(usize, 7), scanned.byte_count);
-    try std.testing.expectEqual(@as(usize, 2), scanned.number_count);
-    try std.testing.expectEqual(@as(usize, 5), scanned.operator_count);
+    try std.testing.expectEqual(@as(usize, 15), scanned.byte_count);
+    try std.testing.expectEqual(@as(usize, 8), scanned.number_count);
+    try std.testing.expectEqual(@as(usize, 7), scanned.operator_count);
     try std.testing.expectEqual(@as(usize, 1), scanned.local_subr_call_count);
     try std.testing.expectEqual(@as(usize, 1), scanned.global_subr_call_count);
     try std.testing.expectEqual(@as(u8, 1), scanned.max_depth);
@@ -632,20 +638,20 @@ test "CFF2 rejects bad versions and oversized top dicts" {
     try std.testing.expectError(error.BadSfnt, validate(&.{ 2, 0, 5, 0, 1 }, 0, 5));
 }
 
-fn testCff2Table() [63]u8 {
-    var bytes = [_]u8{0} ** 63;
+fn testCff2Table() [71]u8 {
+    var bytes = [_]u8{0} ** 71;
     bytes[0] = 2;
     bytes[2] = 5;
     std.mem.writeInt(u16, bytes[3..5], 10, .big);
     bytes[5] = 162; // CharStrings offset 23.
     bytes[6] = 17;
-    bytes[7] = 174; // FDArray offset 35.
+    bytes[7] = 182; // FDArray offset 43.
     bytes[8] = 12;
     bytes[9] = 36;
-    bytes[10] = 184; // FDSelect offset 45.
+    bytes[10] = 192; // FDSelect offset 53.
     bytes[11] = 12;
     bytes[12] = 37;
-    bytes[13] = 201; // vstore offset 62.
+    bytes[13] = 209; // vstore offset 70.
     bytes[14] = 24;
 
     std.mem.writeInt(u32, bytes[15..19], 1, .big); // Global Subrs INDEX.
@@ -657,37 +663,45 @@ fn testCff2Table() [63]u8 {
     std.mem.writeInt(u32, bytes[23..27], 1, .big); // CharStrings INDEX.
     bytes[27] = 1;
     bytes[28] = 1;
-    bytes[29] = 6;
+    bytes[29] = 14;
     bytes[30] = 32; // callsubr operand -107.
     bytes[31] = 10;
     bytes[32] = 32; // callgsubr operand -107.
     bytes[33] = 29;
-    bytes[34] = 14;
+    bytes[34] = 189; // rmoveto dx 50.
+    bytes[35] = 159; // rmoveto dy 20.
+    bytes[36] = 21;
+    bytes[37] = 239; // rlineto dx 100.
+    bytes[38] = 139; // rlineto dy 0.
+    bytes[39] = 139; // rlineto dx 0.
+    bytes[40] = 169; // rlineto dy 30.
+    bytes[41] = 5;
+    bytes[42] = 14;
 
-    std.mem.writeInt(u32, bytes[35..39], 1, .big); // FDArray INDEX.
-    bytes[39] = 1;
-    bytes[40] = 1;
-    bytes[41] = 4;
-    bytes[42] = 145; // Private DICT size 6.
-    bytes[43] = 187; // Private DICT offset 48.
-    bytes[44] = 18;
+    std.mem.writeInt(u32, bytes[43..47], 1, .big); // FDArray INDEX.
+    bytes[47] = 1;
+    bytes[48] = 1;
+    bytes[49] = 4;
+    bytes[50] = 145; // Private DICT size 6.
+    bytes[51] = 195; // Private DICT offset 56.
+    bytes[52] = 18;
 
-    bytes[45] = 0; // FDSelect format 0 for two glyphs.
-    bytes[46] = 0;
-    bytes[47] = 0;
+    bytes[53] = 0; // FDSelect format 0 for two glyphs.
+    bytes[54] = 0;
+    bytes[55] = 0;
 
-    bytes[48] = 146; // defaultWidthX 7.
-    bytes[49] = 20;
-    bytes[50] = 119; // nominalWidthX -20.
-    bytes[51] = 21;
-    bytes[52] = 145; // Local Subrs offset 6, immediately after Private DICT.
-    bytes[53] = 19;
+    bytes[56] = 146; // defaultWidthX 7.
+    bytes[57] = 20;
+    bytes[58] = 119; // nominalWidthX -20.
+    bytes[59] = 21;
+    bytes[60] = 145; // Local Subrs offset 6, immediately after Private DICT.
+    bytes[61] = 19;
 
-    std.mem.writeInt(u32, bytes[54..58], 1, .big); // Local Subrs INDEX.
-    bytes[58] = 1;
-    bytes[59] = 1;
-    bytes[60] = 2;
-    bytes[61] = 11;
-    bytes[62] = 0x03;
+    std.mem.writeInt(u32, bytes[62..66], 1, .big); // Local Subrs INDEX.
+    bytes[66] = 1;
+    bytes[67] = 1;
+    bytes[68] = 2;
+    bytes[69] = 11;
+    bytes[70] = 0x03;
     return bytes;
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const glyph_mod = @import("../../glyph.zig");
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error;
 
@@ -62,6 +63,16 @@ pub fn scan(comptime Context: type, context: *Context, bytes: []const u8) Error!
 /// same operand/subroutine machinery.
 pub fn bounds(comptime Context: type, context: *Context, bytes: []const u8) Error!BoundsInfo {
     var executor = BoundsExecutor(Context){ .context = context };
+    _ = try executor.runCharString(bytes, 0);
+    return executor.bounds_info;
+}
+
+pub fn appendOutline(comptime Context: type, context: *Context, allocator: std.mem.Allocator, bytes: []const u8, outline: *glyph_mod.GlyphOutline) Error!BoundsInfo {
+    var executor = BoundsExecutor(Context){
+        .context = context,
+        .allocator = allocator,
+        .outline = outline,
+    };
     _ = try executor.runCharString(bytes, 0);
     return executor.bounds_info;
 }
@@ -261,6 +272,8 @@ fn BoundsExecutor(comptime Context: type) type {
         x: f32 = 0,
         y: f32 = 0,
         contour_open: bool = false,
+        allocator: ?std.mem.Allocator = null,
+        outline: ?*glyph_mod.GlyphOutline = null,
         bounds_info: BoundsInfo = .{},
 
         const Self = @This();
@@ -334,6 +347,7 @@ fn BoundsExecutor(comptime Context: type) type {
                 },
                 14 => {
                     self.bounds_info.scan.has_endchar = true;
+                    try self.closeOpenContour();
                     self.clearStack();
                     return .endchar;
                 },
@@ -433,29 +447,26 @@ fn BoundsExecutor(comptime Context: type) type {
 
         fn rmoveto(self: *Self) Error!void {
             if (self.stack_len != 2) return error.BadSfnt;
-            self.closeOpenContour();
+            try self.closeOpenContour();
             self.x += self.stack[0].number;
             self.y += self.stack[1].number;
-            self.bounds_info.move_count += 1;
-            self.contour_open = true;
+            try self.moveTo();
             self.clearStack();
         }
 
         fn hmoveto(self: *Self) Error!void {
             if (self.stack_len != 1) return error.BadSfnt;
-            self.closeOpenContour();
+            try self.closeOpenContour();
             self.x += self.stack[0].number;
-            self.bounds_info.move_count += 1;
-            self.contour_open = true;
+            try self.moveTo();
             self.clearStack();
         }
 
         fn vmoveto(self: *Self) Error!void {
             if (self.stack_len != 1) return error.BadSfnt;
-            self.closeOpenContour();
+            try self.closeOpenContour();
             self.y += self.stack[0].number;
-            self.bounds_info.move_count += 1;
-            self.contour_open = true;
+            try self.moveTo();
             self.clearStack();
         }
 
@@ -463,7 +474,7 @@ fn BoundsExecutor(comptime Context: type) type {
             if (self.stack_len < 2 or (self.stack_len & 1) != 0) return error.BadSfnt;
             var i: usize = 0;
             while (i < self.stack_len) : (i += 2) {
-                self.lineBy(self.stack[i].number, self.stack[i + 1].number);
+                try self.lineBy(self.stack[i].number, self.stack[i + 1].number);
             }
             self.clearStack();
         }
@@ -472,7 +483,7 @@ fn BoundsExecutor(comptime Context: type) type {
             if (self.stack_len == 0) return error.BadSfnt;
             var horizontal = true;
             for (self.stack[0..self.stack_len]) |delta| {
-                if (horizontal) self.lineBy(delta.number, 0) else self.lineBy(0, delta.number);
+                if (horizontal) try self.lineBy(delta.number, 0) else try self.lineBy(0, delta.number);
                 horizontal = !horizontal;
             }
             self.clearStack();
@@ -482,7 +493,7 @@ fn BoundsExecutor(comptime Context: type) type {
             if (self.stack_len == 0) return error.BadSfnt;
             var vertical = true;
             for (self.stack[0..self.stack_len]) |delta| {
-                if (vertical) self.lineBy(0, delta.number) else self.lineBy(delta.number, 0);
+                if (vertical) try self.lineBy(0, delta.number) else try self.lineBy(delta.number, 0);
                 vertical = !vertical;
             }
             self.clearStack();
@@ -492,7 +503,7 @@ fn BoundsExecutor(comptime Context: type) type {
             if (self.stack_len < 6 or self.stack_len % 6 != 0) return error.BadSfnt;
             var i: usize = 0;
             while (i < self.stack_len) : (i += 6) {
-                self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
+                try self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
             }
             self.clearStack();
         }
@@ -501,9 +512,9 @@ fn BoundsExecutor(comptime Context: type) type {
             if (self.stack_len < 8 or ((self.stack_len - 2) % 6) != 0) return error.BadSfnt;
             var i: usize = 0;
             while (i + 2 < self.stack_len) : (i += 6) {
-                self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
+                try self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
             }
-            self.lineBy(self.stack[self.stack_len - 2].number, self.stack[self.stack_len - 1].number);
+            try self.lineBy(self.stack[self.stack_len - 2].number, self.stack[self.stack_len - 1].number);
             self.clearStack();
         }
 
@@ -511,9 +522,9 @@ fn BoundsExecutor(comptime Context: type) type {
             if (self.stack_len < 8 or ((self.stack_len - 6) & 1) != 0) return error.BadSfnt;
             var i: usize = 0;
             while (i + 6 < self.stack_len) : (i += 2) {
-                self.lineBy(self.stack[i].number, self.stack[i + 1].number);
+                try self.lineBy(self.stack[i].number, self.stack[i + 1].number);
             }
-            self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
+            try self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
             self.clearStack();
         }
 
@@ -526,7 +537,7 @@ fn BoundsExecutor(comptime Context: type) type {
             }
             if (self.stack_len - i < 4 or ((self.stack_len - i) % 4) != 0) return error.BadSfnt;
             while (i < self.stack_len) : (i += 4) {
-                self.curveByDeltas(dx1, self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, 0, self.stack[i + 3].number);
+                try self.curveByDeltas(dx1, self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, 0, self.stack[i + 3].number);
                 dx1 = 0;
             }
             self.clearStack();
@@ -541,7 +552,7 @@ fn BoundsExecutor(comptime Context: type) type {
             }
             if (self.stack_len - i < 4 or ((self.stack_len - i) % 4) != 0) return error.BadSfnt;
             while (i < self.stack_len) : (i += 4) {
-                self.curveByDeltas(self.stack[i].number, dy1, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, 0);
+                try self.curveByDeltas(self.stack[i].number, dy1, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, 0);
                 dy1 = 0;
             }
             self.clearStack();
@@ -563,9 +574,9 @@ fn BoundsExecutor(comptime Context: type) type {
                 const last_curve = self.stack_len - i == 5;
                 const d6 = if (last_curve) self.stack[i + 4].number else 0;
                 if (horizontal) {
-                    self.curveByDeltas(self.stack[i].number, 0, self.stack[i + 1].number, self.stack[i + 2].number, if (last_curve) d6 else 0, self.stack[i + 3].number);
+                    try self.curveByDeltas(self.stack[i].number, 0, self.stack[i + 1].number, self.stack[i + 2].number, if (last_curve) d6 else 0, self.stack[i + 3].number);
                 } else {
-                    self.curveByDeltas(0, self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, if (last_curve) d6 else 0);
+                    try self.curveByDeltas(0, self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, if (last_curve) d6 else 0);
                 }
                 i += if (last_curve) 5 else 4;
                 horizontal = !horizontal;
@@ -583,15 +594,15 @@ fn BoundsExecutor(comptime Context: type) type {
             const dx4 = self.stack[4].number;
             const dx5 = self.stack[5].number;
             const dx6 = self.stack[6].number;
-            self.curveByDeltas(dx1, 0, dx2, dy2, dx3, 0);
-            self.curveByDeltas(dx4, 0, dx5, -dy2, dx6, 0);
+            try self.curveByDeltas(dx1, 0, dx2, dy2, dx3, 0);
+            try self.curveByDeltas(dx4, 0, dx5, -dy2, dx6, 0);
             self.clearStack();
         }
 
         fn flex(self: *Self) Error!void {
             if (self.stack_len != 13) return error.BadSfnt;
-            self.curveByDeltas(self.stack[0].number, self.stack[1].number, self.stack[2].number, self.stack[3].number, self.stack[4].number, self.stack[5].number);
-            self.curveByDeltas(self.stack[6].number, self.stack[7].number, self.stack[8].number, self.stack[9].number, self.stack[10].number, self.stack[11].number);
+            try self.curveByDeltas(self.stack[0].number, self.stack[1].number, self.stack[2].number, self.stack[3].number, self.stack[4].number, self.stack[5].number);
+            try self.curveByDeltas(self.stack[6].number, self.stack[7].number, self.stack[8].number, self.stack[9].number, self.stack[10].number, self.stack[11].number);
             self.clearStack();
         }
 
@@ -606,8 +617,8 @@ fn BoundsExecutor(comptime Context: type) type {
             const dx5 = self.stack[6].number;
             const dy5 = self.stack[7].number;
             const dx6 = self.stack[8].number;
-            self.curveByDeltas(dx1, dy1, dx2, dy2, dx3, 0);
-            self.curveByDeltas(dx4, 0, dx5, dy5, dx6, -(dy1 + dy2 + dy5));
+            try self.curveByDeltas(dx1, dy1, dx2, dy2, dx3, 0);
+            try self.curveByDeltas(dx4, 0, dx5, dy5, dx6, -(dy1 + dy2 + dy5));
             self.clearStack();
         }
 
@@ -628,8 +639,8 @@ fn BoundsExecutor(comptime Context: type) type {
             const dy_total = dy1 + dy2 + dy3 + dy4 + dy5;
             const dx6: f32 = if (@abs(dx_total) > @abs(dy_total)) d6 else -dx_total;
             const dy6: f32 = if (@abs(dx_total) > @abs(dy_total)) -dy_total else d6;
-            self.curveByDeltas(dx1, dy1, dx2, dy2, dx3, dy3);
-            self.curveByDeltas(dx4, dy4, dx5, dy5, dx6, dy6);
+            try self.curveByDeltas(dx1, dy1, dx2, dy2, dx3, dy3);
+            try self.curveByDeltas(dx4, dy4, dx5, dy5, dx6, dy6);
             self.clearStack();
         }
 
@@ -642,15 +653,18 @@ fn BoundsExecutor(comptime Context: type) type {
             try self.push(.{ .number = lhs / rhs, .integer = false });
         }
 
-        fn lineBy(self: *Self, dx: f32, dy: f32) void {
+        fn lineBy(self: *Self, dx: f32, dy: f32) Error!void {
             self.includePoint(self.x, self.y);
             self.x += dx;
             self.y += dy;
             self.includePoint(self.x, self.y);
             self.bounds_info.line_count += 1;
+            if (self.outline) |outline| {
+                try outline.commands.append(self.allocator.?, .{ .line_to = .{ .x = self.x, .y = self.y } });
+            }
         }
 
-        fn curveByDeltas(self: *Self, dx1: f32, dy1: f32, dx2: f32, dy2: f32, dx3: f32, dy3: f32) void {
+        fn curveByDeltas(self: *Self, dx1: f32, dy1: f32, dx2: f32, dy2: f32, dx3: f32, dy3: f32) Error!void {
             self.includePoint(self.x, self.y);
             const c0_x = self.x + dx1;
             const c0_y = self.y + dy1;
@@ -662,6 +676,13 @@ fn BoundsExecutor(comptime Context: type) type {
             self.includePoint(c1_x, c1_y);
             self.includePoint(self.x, self.y);
             self.bounds_info.curve_count += 1;
+            if (self.outline) |outline| {
+                try outline.commands.append(self.allocator.?, .{ .cubic_to = .{
+                    .c0 = .{ .x = c0_x, .y = c0_y },
+                    .c1 = .{ .x = c1_x, .y = c1_y },
+                    .end = .{ .x = self.x, .y = self.y },
+                } });
+            }
         }
 
         fn includePoint(self: *Self, x: f32, y: f32) void {
@@ -679,7 +700,20 @@ fn BoundsExecutor(comptime Context: type) type {
             self.bounds_info.y_max = @max(self.bounds_info.y_max, y);
         }
 
-        fn closeOpenContour(self: *Self) void {
+        fn moveTo(self: *Self) Error!void {
+            self.bounds_info.move_count += 1;
+            self.contour_open = true;
+            if (self.outline) |outline| {
+                try outline.commands.append(self.allocator.?, .{ .move_to = .{ .x = self.x, .y = self.y } });
+            }
+        }
+
+        fn closeOpenContour(self: *Self) Error!void {
+            if (self.contour_open) {
+                if (self.outline) |outline| {
+                    try outline.commands.append(self.allocator.?, .close);
+                }
+            }
             self.contour_open = false;
         }
 

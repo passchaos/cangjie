@@ -3829,7 +3829,7 @@ fn writeSimpleTriangleGlyph(bytes: []u8, off: usize, first_dx: u16, second_dx: u
 }
 
 fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 63);
+    const bytes = try allocator.alloc(u8, 71);
     @memset(bytes, 0);
     bytes[0] = 2;
     bytes[1] = 0;
@@ -3837,13 +3837,13 @@ fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 3, 10);
     bytes[5] = 162; // CharStrings offset 23.
     bytes[6] = 17;
-    bytes[7] = 174; // FDArray offset 35.
+    bytes[7] = 182; // FDArray offset 43.
     bytes[8] = 12;
     bytes[9] = 36;
-    bytes[10] = 184; // FDSelect offset 45.
+    bytes[10] = 192; // FDSelect offset 53.
     bytes[11] = 12;
     bytes[12] = 37;
-    bytes[13] = 201; // vstore offset 62.
+    bytes[13] = 209; // vstore offset 70.
     bytes[14] = 24;
 
     writeU32(bytes, 15, 1); // CFF2 Global Subrs INDEX count.
@@ -3855,38 +3855,46 @@ fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
     writeU32(bytes, 23, 1); // CFF2 CharStrings INDEX count.
     bytes[27] = 1;
     bytes[28] = 1;
-    bytes[29] = 6;
+    bytes[29] = 14;
     bytes[30] = 32; // callsubr operand -107.
     bytes[31] = 10;
     bytes[32] = 32; // callgsubr operand -107.
     bytes[33] = 29;
-    bytes[34] = 14;
+    bytes[34] = 189; // rmoveto dx 50.
+    bytes[35] = 159; // rmoveto dy 20.
+    bytes[36] = 21;
+    bytes[37] = 239; // rlineto dx 100.
+    bytes[38] = 139; // rlineto dy 0.
+    bytes[39] = 139; // rlineto dx 0.
+    bytes[40] = 169; // rlineto dy 30.
+    bytes[41] = 5;
+    bytes[42] = 14;
 
-    writeU32(bytes, 35, 1); // CFF2 FDArray INDEX count.
-    bytes[39] = 1;
-    bytes[40] = 1;
-    bytes[41] = 4;
-    bytes[42] = 145; // Private DICT size 6.
-    bytes[43] = 187; // Private DICT offset 48.
-    bytes[44] = 18;
+    writeU32(bytes, 43, 1); // CFF2 FDArray INDEX count.
+    bytes[47] = 1;
+    bytes[48] = 1;
+    bytes[49] = 4;
+    bytes[50] = 145; // Private DICT size 6.
+    bytes[51] = 195; // Private DICT offset 56.
+    bytes[52] = 18;
 
-    bytes[45] = 0; // FDSelect format 0.
-    bytes[46] = 0;
-    bytes[47] = 0;
+    bytes[53] = 0; // FDSelect format 0.
+    bytes[54] = 0;
+    bytes[55] = 0;
 
-    bytes[48] = 146; // defaultWidthX 7.
-    bytes[49] = 20;
-    bytes[50] = 119; // nominalWidthX -20.
-    bytes[51] = 21;
-    bytes[52] = 145; // Local Subrs offset 6, immediately after Private DICT.
-    bytes[53] = 19;
+    bytes[56] = 146; // defaultWidthX 7.
+    bytes[57] = 20;
+    bytes[58] = 119; // nominalWidthX -20.
+    bytes[59] = 21;
+    bytes[60] = 145; // Local Subrs offset 6, immediately after Private DICT.
+    bytes[61] = 19;
 
-    writeU32(bytes, 54, 1); // CFF2 Local Subrs INDEX count.
-    bytes[58] = 1;
-    bytes[59] = 1;
-    bytes[60] = 2;
-    bytes[61] = 11;
-    bytes[62] = 0x03;
+    writeU32(bytes, 62, 1); // CFF2 Local Subrs INDEX count.
+    bytes[66] = 1;
+    bytes[67] = 1;
+    bytes[68] = 2;
+    bytes[69] = 11;
+    bytes[70] = 0x03;
     return bytes;
 }
 

@@ -3227,6 +3227,12 @@ pub const Font = struct {
         errdefer outline.deinit();
         if (self.format == .truetype) {
             try self.appendGlyphOutline(&outline, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
+        } else if (self.cff2) |cff2| {
+            try validateSfntTableChecksum(self.data, cff2);
+            try validateCff2Table(self.data, cff2);
+            if (try cff2_mod.appendGlyphOutline(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, &outline)) |bounds_info| {
+                outline.bounds = cff2BoundsInfoToGlyphBounds(bounds_info);
+            }
         } else {
             const cff = self.cff orelse return error.MissingTable;
             // CFF outlines are addressed lazily from borrowed SFNT bytes.
@@ -3250,6 +3256,22 @@ pub const Font = struct {
             .x_max = try bin.readI16At(slice, 6),
             .y_max = try bin.readI16At(slice, 8),
         };
+    }
+
+    fn cff2BoundsInfoToGlyphBounds(bounds: Cff2CharStringBoundsInfo) glyph_mod.Bounds {
+        if (!bounds.has_bounds) return .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
+        return .{
+            .x_min = clampF32ToI16(@floor(bounds.x_min)),
+            .y_min = clampF32ToI16(@floor(bounds.y_min)),
+            .x_max = clampF32ToI16(@ceil(bounds.x_max)),
+            .y_max = clampF32ToI16(@ceil(bounds.y_max)),
+        };
+    }
+
+    fn clampF32ToI16(value: f32) i16 {
+        if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
+        if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
+        return @intFromFloat(value);
     }
 
     fn glyphData(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError![]const u8 {

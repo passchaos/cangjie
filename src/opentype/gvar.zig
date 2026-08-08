@@ -44,6 +44,14 @@ pub const PointNumbersInfo = struct {
     bytes_consumed: usize,
 };
 
+pub const PackedDeltasInfo = struct {
+    count: usize,
+    bytes_consumed: usize,
+    zero_count: usize,
+    byte_count: usize,
+    word_count: usize,
+};
+
 pub fn packedPointNumbersInfo(data: []const u8, offset: usize, limit: usize) Error!PointNumbersInfo {
     if (offset > data.len or limit > data.len or offset >= limit) return error.BadSfnt;
     var cursor = offset;
@@ -92,6 +100,42 @@ pub fn packedPointNumbersInfo(data: []const u8, offset: usize, limit: usize) Err
         .count = point_count,
         .max_point = if (saw_point) last_point else 0,
         .bytes_consumed = cursor - offset,
+    };
+}
+
+pub fn packedDeltasInfo(data: []const u8, offset: usize, limit: usize, delta_count: usize) Error!PackedDeltasInfo {
+    if (offset > data.len or limit > data.len or offset > limit) return error.BadSfnt;
+    var cursor = offset;
+    var remaining = delta_count;
+    var zero_count: usize = 0;
+    var byte_count: usize = 0;
+    var word_count: usize = 0;
+    while (remaining != 0) {
+        if (cursor >= limit) return error.BadSfnt;
+        const control = data[cursor];
+        cursor += 1;
+        const run_count = @as(usize, control & 0x3f) + 1;
+        if (run_count > remaining) return error.BadSfnt;
+        const run_bytes: usize = if ((control & 0x80) != 0) blk: {
+            zero_count += run_count;
+            break :blk 0;
+        } else if ((control & 0x40) != 0) blk: {
+            word_count += run_count;
+            break :blk run_count * 2;
+        } else blk: {
+            byte_count += run_count;
+            break :blk run_count;
+        };
+        if (run_bytes > limit - cursor) return error.BadSfnt;
+        cursor += run_bytes;
+        remaining -= run_count;
+    }
+    return .{
+        .count = delta_count,
+        .bytes_consumed = cursor - offset,
+        .zero_count = zero_count,
+        .byte_count = byte_count,
+        .word_count = word_count,
     };
 }
 
@@ -429,4 +473,18 @@ test "gvar packed point numbers support word deltas" {
     try std.testing.expectEqual(@as(usize, 6), parsed.max_point);
     try std.testing.expectEqual(@as(usize, 8), parsed.bytes_consumed);
     try std.testing.expectError(error.BadSfnt, packedPointNumbersInfo(&.{ 2, 2, 1 }, 0, 3));
+}
+
+test "gvar packed deltas expose run counts" {
+    const parsed = try packedDeltasInfo(&.{ 0x01, 1, 255, 0x80, 0x40, 0, 10 }, 0, 7, 4);
+    try std.testing.expectEqual(@as(usize, 4), parsed.count);
+    try std.testing.expectEqual(@as(usize, 7), parsed.bytes_consumed);
+    try std.testing.expectEqual(@as(usize, 1), parsed.zero_count);
+    try std.testing.expectEqual(@as(usize, 2), parsed.byte_count);
+    try std.testing.expectEqual(@as(usize, 1), parsed.word_count);
+}
+
+test "gvar packed deltas reject truncated runs" {
+    try std.testing.expectError(error.BadSfnt, packedDeltasInfo(&.{ 0x41, 0, 1 }, 0, 3, 2));
+    try std.testing.expectError(error.BadSfnt, packedDeltasInfo(&.{ 0x02, 1, 2 }, 0, 3, 3));
 }

@@ -2350,11 +2350,15 @@ fn buildParagraphLines(
             last_break = null;
             width_at_break = 0;
         }
-        const glyph_source_end = glyphSourceEnd(glyph.*);
-        while (line_breaks.nextThrough(glyph_source_end)) |line_break| {
-            switch (line_break.kind) {
-                .soft => recordSoftLineBreak(buffer.glyphs.items, line_break.byte_offset, index, line_start, line_width, &last_break, &width_at_break),
-                .hard => {},
+        const atom_continues = index + 1 < buffer.glyphs.items.len and
+            glyphClusterStart(buffer.glyphs.items[index + 1]) == glyphClusterStart(glyph.*);
+        if (!atom_continues) {
+            const glyph_source_end = glyphSourceEnd(glyph.*);
+            while (line_breaks.nextThrough(glyph_source_end)) |line_break| {
+                switch (line_break.kind) {
+                    .soft => recordSoftLineBreak(buffer.glyphs.items, line_break.byte_offset, index, line_start, line_width, &last_break, &width_at_break),
+                    .hard => {},
+                }
             }
         }
     }
@@ -2390,11 +2394,60 @@ fn recordSoftLineBreak(glyphs: []const GlyphPosition, byte_offset: usize, index:
         }
         return;
     }
+    const current_source_end = glyphSourceEnd(current);
+    if (byte_offset > current.cluster and byte_offset < current_source_end) {
+        // The Unicode opportunity falls inside a source span collapsed by
+        // shaping (for example, a GSUB ligature). Reusing the current glyph
+        // stream across that boundary would be incorrect; HarfBuzz marks this
+        // situation UNSAFE_TO_BREAK and Parley consumes the shaped atom whole.
+        return;
+    }
+    if (byte_offset == current_source_end) {
+        // The caller invokes this only after reaching the last output glyph of
+        // the source atom. This is the overwhelmingly common case and avoids a
+        // linear search through every glyph accumulated on the current line.
+        const break_index = index + 1;
+        if (break_index > line_start) {
+            last_break.* = break_index;
+            width_at_break.* = line_width;
+        }
+        return;
+    }
     const break_index = glyphIndexForSourceBoundary(glyphs, byte_offset, line_start, index + 1) orelse @min(index + 1, glyphs.len);
     if (break_index > line_start) {
         last_break.* = break_index;
         width_at_break.* = lineWidth(glyphs[line_start..break_index]);
     }
+}
+
+test "soft line break mapping never splits a shaped source atom" {
+    const glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 0,
+            .source_byte_len = 2,
+            .x_advance = 10,
+        },
+        .{
+            .glyph_id = 2,
+            .codepoint = 'A',
+            .cluster = 0,
+            .source_byte_len = 2,
+            .x_advance = 5,
+        },
+    };
+    var last_break: ?usize = null;
+    var width_at_break: f32 = 0;
+
+    // A boundary inside a ligature/source span is unsafe without reshaping.
+    recordSoftLineBreak(&glyphs, 1, 1, 0, 15, &last_break, &width_at_break);
+    try std.testing.expectEqual(@as(?usize, null), last_break);
+
+    // A boundary at the atom's source end consumes every output glyph.
+    recordSoftLineBreak(&glyphs, 2, 1, 0, 15, &last_break, &width_at_break);
+    try std.testing.expectEqual(@as(?usize, 2), last_break);
+    try std.testing.expectApproxEqAbs(@as(f32, 15), width_at_break, 0.001);
 }
 
 const LineBreakCursor = struct {

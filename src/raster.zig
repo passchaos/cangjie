@@ -661,7 +661,7 @@ pub const Rasterizer = struct {
                 const py = @as(f32, @floatFromInt(y)) + sample_offset;
                 var intersection_count: usize = 0;
                 for (prepared_lines) |line| {
-                    if ((line.ay > py) == (line.by > py)) continue;
+                    if (py < line.y_min or py >= line.y_max) continue;
                     const x_intersect = line.slope * (py - line.ay) + line.ax;
                     if (!std.math.isFinite(x_intersect)) continue;
                     intersection_storage[intersection_count] = .{
@@ -784,7 +784,8 @@ const WindingIntersection = struct {
 const PreparedFillLine = struct {
     ax: f32,
     ay: f32,
-    by: f32,
+    y_min: f32,
+    y_max: f32,
     slope: f32,
     delta: i8,
 };
@@ -802,7 +803,8 @@ fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFill
         out[count] = .{
             .ax = line.a.x,
             .ay = line.a.y,
-            .by = line.b.y,
+            .y_min = @min(line.a.y, line.b.y),
+            .y_max = @max(line.a.y, line.b.y),
             .slope = (line.b.x - line.a.x) / dy,
             .delta = if (dy > 0.0) 1 else -1,
         };

@@ -4811,12 +4811,37 @@ fn ensureGlyphClassSetIndexWithin(table: Table, class_def_offset: usize, glyph: 
 }
 
 fn classValueForValidation(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u16 {
-    return classValue(table, class_def_offset, glyph) catch |err| {
+    return classValueTrusted(table, class_def_offset, glyph) catch |err| {
         return switch (err) {
             error.EndOfStream => error.BadGsub,
             else => err,
         };
     };
+}
+
+fn classValueTrusted(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u16 {
+    // Callers use this only after `ensureClassDefTableWithin` has validated the
+    // ClassDef shape. Avoid re-validating format-2 range order for every
+    // covered glyph in large contextual subtables; complex fonts such as
+    // NotoNastaliqUrdu can otherwise spend most parse time repeatedly proving
+    // the same ClassDef invariant.
+    const format = try readU16(table, class_def_offset);
+    switch (format) {
+        1 => {
+            const start = try readU16(table, class_def_offset + 2);
+            const count = try readU16(table, class_def_offset + 4);
+            const glyph_index = @as(usize, glyph);
+            const start_index = @as(usize, start);
+            const end_exclusive = start_index + @as(usize, count);
+            if (glyph_index < start_index or glyph_index >= end_exclusive) return 0;
+            return try readU16(table, class_def_offset + 6 + (glyph_index - start_index) * 2);
+        },
+        2 => {
+            const range_count = try readU16(table, class_def_offset + 2);
+            return if (try findSortedGlyphRangeRecord(table, class_def_offset + 4, range_count, glyph)) |record| record.value else 0;
+        },
+        else => return error.UnsupportedGsub,
+    }
 }
 
 fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GsubError!void {

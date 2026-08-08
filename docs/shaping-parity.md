@@ -363,8 +363,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `अंग्रेज़ी`, `सिद्धांत`, `पुनः`, `ज़्यादा`, `सन्‌`, `ि`, `अवार्ड्स`,
   `वर्ल्ड`, `चार्ल्स`, `्य`, `स्‍थान`, `ब्रिटिश`, `स्वागत`, `द्वितीय`, and
   `ट्विटर`, `वैश्विक`, `श्वि`, `क्वि`, and `ट्वि` pass `compare-harfrust`.
-- NotoSansDevanagari `hi-words.txt` passes `compare-harfrust` for 10,000
-  lines.
+- NotoSansDevanagari `hi-words.txt` passes both `compare-harfrust` and
+  `compare-harfbuzz` for 10,000 lines and 47,655 glyphs
+  (`checksum=da5f74de3edfe093`). This gate covers mixed-length format-2
+  ContextSubst rules at syllable boundaries and consecutive contextual
+  ligatures whose first substitution shortens the active glyph run.
 - NotoSansDuployan `duployan.txt` now passes `compare-harfrust` for all 14
   non-empty lines in the local HarfBuzz/HarfRust corpus, covering 503,948
   glyphs with glyph id, UTF-8 cluster, advance, and offset parity

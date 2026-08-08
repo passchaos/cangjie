@@ -84,6 +84,9 @@ pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
 pub const FeatureNameInfo = @import("font.zig").FeatureNameInfo;
 pub const FeatureSettingInfo = @import("font.zig").FeatureSettingInfo;
+pub const TrackInfo = @import("font.zig").TrackInfo;
+pub const TrackTableInfo = @import("font.zig").TrackTableInfo;
+pub const TrackValueInfo = @import("font.zig").TrackValueInfo;
 pub const DsigInfo = @import("font.zig").DsigInfo;
 pub const DsigSignatureInfo = @import("font.zig").DsigSignatureInfo;
 pub const GaspInfo = @import("font.zig").GaspInfo;
@@ -478,6 +481,59 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "AAT trak records are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildTrakTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.trakInfo(allocator)).?;
+    defer font.freeTrakInfo(allocator, info);
+    try std.testing.expectEqual(@as(usize, 1), info.horizontal.len);
+    try std.testing.expectEqual(@as(usize, 0), info.vertical.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), info.horizontal[0].track, 0.001);
+    try std.testing.expectEqual(@as(u16, 300), info.horizontal[0].name_id);
+    try std.testing.expectEqual(@as(usize, 2), info.horizontal[0].values.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 10.0), info.horizontal[0].values[0].size, 0.001);
+    try std.testing.expectEqual(@as(i16, -5), info.horizontal[0].values[0].value);
+    try std.testing.expectApproxEqAbs(@as(f32, 20.0), info.horizontal[0].values[1].size, 0.001);
+    try std.testing.expectEqual(@as(i16, 10), info.horizontal[0].values[1].value);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.trakInfo(allocator)) == null);
+}
+
+test "lazy AAT trak records revalidate borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildTrakTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const info = (try font.trakInfo(allocator)).?;
+    defer font.freeTrakInfo(allocator, info);
+    try std.testing.expectEqual(@as(usize, 1), info.horizontal.len);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var trak_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "trak")) trak_offset = table.offset;
+    }
+    bytes[trak_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.trakInfo(allocator));
 }
 
 test "AAT feat records are exposed when present" {

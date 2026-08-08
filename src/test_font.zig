@@ -20,6 +20,10 @@ pub fn buildFeatTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try featTtfTables(allocator));
 }
 
+pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
+}
+
 pub fn buildDsigTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try dsigTtfTables(allocator));
 }
@@ -550,6 +554,21 @@ fn featTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn trakTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "trak", .data = try trakTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
@@ -4857,6 +4876,27 @@ fn featTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 26, 301);
     writeU16(bytes, 28, 1);
     writeU16(bytes, 30, 302);
+    return bytes;
+}
+
+fn trakTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 40);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 0);
+    writeU16(bytes, 6, 12);
+    writeU16(bytes, 8, 0);
+    writeU16(bytes, 10, 0);
+    writeU16(bytes, 12, 1); // nTracks
+    writeU16(bytes, 14, 2); // nSizes
+    writeU32(bytes, 16, 28); // size table offset from trak start
+    writeF16Dot16(bytes, 20, 0.0); // track value
+    writeU16(bytes, 24, 300); // track name
+    writeU16(bytes, 26, 28 + 8); // per-size values offset
+    writeF16Dot16(bytes, 28, 10.0);
+    writeF16Dot16(bytes, 32, 20.0);
+    writeI16(bytes, 36, -5);
+    writeI16(bytes, 38, 10);
     return bytes;
 }
 

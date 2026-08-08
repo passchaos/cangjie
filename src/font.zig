@@ -11,6 +11,7 @@ const cmap_variation = @import("opentype/cmap_variation.zig");
 const ltag_mod = @import("opentype/ltag.zig");
 const meta_mod = @import("opentype/meta.zig");
 const name_mod = @import("opentype/name.zig");
+const trak_mod = @import("opentype/trak.zig");
 
 /// Errors intentionally preserve the table family that failed. Callers such as
 /// render bridges can distinguish malformed SFNT data from unsupported outline
@@ -184,6 +185,10 @@ pub const LtagRecordInfo = ltag_mod.Record;
 
 pub const FeatureNameInfo = feat_mod.Feature;
 pub const FeatureSettingInfo = feat_mod.Setting;
+
+pub const TrackInfo = trak_mod.Track;
+pub const TrackTableInfo = trak_mod.Info;
+pub const TrackValueInfo = trak_mod.TrackValue;
 
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
@@ -628,6 +633,7 @@ pub const Font = struct {
     gpos: ?TableRecord,
     gsub: ?TableRecord,
     feat: ?TableRecord,
+    trak: ?TableRecord,
     name: ?TableRecord,
     meta: ?TableRecord,
     post: ?TableRecord,
@@ -723,6 +729,7 @@ pub const Font = struct {
         const gpos = findTable(records, "GPOS");
         const gsub = findTable(records, "GSUB");
         const feat = findTable(records, "feat");
+        const trak = findTable(records, "trak");
         const name = findTable(records, "name");
         const meta = findTable(records, "meta");
         const post = findTable(records, "post");
@@ -774,6 +781,7 @@ pub const Font = struct {
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
         if (feat) |feat_table| try validateFeatTable(data, feat_table);
+        if (trak) |trak_table| try validateTrakTable(data, trak_table);
         if (meta) |meta_table| try validateMetaTable(data, meta_table);
         if (name) |name_table| {
             validateNameTable(data, name_table) catch |err| switch (err) {
@@ -879,6 +887,7 @@ pub const Font = struct {
             .gpos = gpos,
             .gsub = gsub,
             .feat = feat,
+            .trak = trak,
             .name = name,
             .meta = meta,
             .post = post,
@@ -930,6 +939,17 @@ pub const Font = struct {
         const record = findTableByTag(self.owned_tables, tag) orelse return null;
         try validateSfntTableChecksum(self.data, record);
         return self.data[record.offset .. record.offset + record.length];
+    }
+
+    /// Read validated tracking data from the optional AAT `trak` table.
+    pub fn trakInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?TrackTableInfo {
+        const trak = self.trak orelse return null;
+        try validateSfntTableChecksum(self.data, trak);
+        return try trak_mod.info(allocator, self.data, trak.offset, trak.length);
+    }
+
+    pub fn freeTrakInfo(_: *const Font, allocator: std.mem.Allocator, info: TrackTableInfo) void {
+        trak_mod.free(allocator, info);
     }
 
     /// Read validated records from the optional AAT `feat` table.
@@ -4148,6 +4168,10 @@ fn clampI16(value: i32) i16 {
     if (value < std.math.minInt(i16)) return std.math.minInt(i16);
     if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
     return @intCast(value);
+}
+
+fn validateTrakTable(data: []const u8, trak: TableRecord) FontError!void {
+    return try trak_mod.validate(data, trak.offset, trak.length);
 }
 
 fn validateFeatTable(data: []const u8, feat: TableRecord) FontError!void {
@@ -18101,6 +18125,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .feat = null,
+        .trak = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18156,6 +18181,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .gpos = null,
         .gsub = null,
         .feat = null,
+        .trak = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18211,6 +18237,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .feat = null,
+        .trak = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18277,6 +18304,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .feat = null,
+        .trak = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18332,6 +18360,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .feat = null,
+        .trak = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18387,6 +18416,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .feat = null,
+        .trak = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18442,6 +18472,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .feat = null,
+        .trak = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18517,6 +18548,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .gpos = null,
         .gsub = null,
         .feat = null,
+        .trak = null,
         .name = null,
         .meta = null,
         .post = null,

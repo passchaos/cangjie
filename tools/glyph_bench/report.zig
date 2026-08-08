@@ -21,9 +21,31 @@ pub fn print(options: options_mod.Options, result: Result) void {
     }
 }
 
+pub fn printComparison(options: options_mod.Options, cangjie: Result, freetype: Result) void {
+    const cangjie_ns = nsPerIter(options, cangjie);
+    const freetype_ns = nsPerIter(options, freetype);
+    const speedup = if (cangjie_ns == 0) 0 else freetype_ns / cangjie_ns;
+    const faster = if (cangjie_ns <= freetype_ns) "cangjie" else "freetype";
+    switch (options.output_format) {
+        .text => std.debug.print(
+            \\comparison=cangjie-vs-freetype
+            \\mode={s}
+            \\cangjie_ns_per_iter={d:.3}
+            \\freetype_ns_per_iter={d:.3}
+            \\cangjie_speedup_vs_freetype={d:.3}
+            \\faster={s}
+            \\
+        , .{ options.mode.label(), cangjie_ns, freetype_ns, speedup, faster }),
+        .tsv => std.debug.print(
+            "comparison\tmode\tcangjie_ns_per_iter\tfreetype_ns_per_iter\tcangjie_speedup_vs_freetype\tfaster\n" ++
+                "cangjie-vs-freetype\t{s}\t{d:.3}\t{d:.3}\t{d:.3}\t{s}\n",
+            .{ options.mode.label(), cangjie_ns, freetype_ns, speedup, faster },
+        ),
+    }
+}
+
 fn printText(options: options_mod.Options, result: Result) void {
-    const total_iterations = options.iterations * options.samples;
-    const ns_per_iter = if (total_iterations == 0) 0 else @as(f64, @floatFromInt(result.elapsed_ns)) / @as(f64, @floatFromInt(total_iterations));
+    const ns_per_iter = nsPerIter(options, result);
     const stats = sampleStats(result.samples, options.iterations);
     std.debug.print(
         \\mode={s}
@@ -70,8 +92,7 @@ fn printText(options: options_mod.Options, result: Result) void {
 }
 
 fn printTsv(options: options_mod.Options, result: Result) void {
-    const total_iterations = options.iterations * options.samples;
-    const ns_per_iter = if (total_iterations == 0) 0 else @as(f64, @floatFromInt(result.elapsed_ns)) / @as(f64, @floatFromInt(total_iterations));
+    const ns_per_iter = nsPerIter(options, result);
     const stats = sampleStats(result.samples, options.iterations);
     std.debug.print(
         "mode\tengine\tfont\tglyph_id\tcodepoint\tfont_size\ttarget_size\tvariation_coords\titerations\twarmup\tsamples\telapsed_ns\tns_per_iter\tsample_min_ns_per_iter\tsample_median_ns_per_iter\tsample_max_ns_per_iter\tchecksum\n" ++
@@ -99,6 +120,11 @@ fn printTsv(options: options_mod.Options, result: Result) void {
 }
 
 const SampleStats = struct { min: f64, median: f64, max: f64 };
+
+fn nsPerIter(options: options_mod.Options, result: Result) f64 {
+    const total_iterations = options.iterations * options.samples;
+    return if (total_iterations == 0) 0 else @as(f64, @floatFromInt(result.elapsed_ns)) / @as(f64, @floatFromInt(total_iterations));
+}
 
 fn sampleStats(samples: []const Sample, iterations: usize) SampleStats {
     if (samples.len == 0 or iterations == 0) return .{ .min = 0, .median = 0, .max = 0 };

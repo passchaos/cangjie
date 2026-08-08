@@ -49,6 +49,7 @@ pub fn main(init: std.process.Init) !void {
         const freetype_result = try freetype.run(init.io, allocator, font_bytes, freetype_options);
         defer allocator.free(freetype_result.samples);
         report.print(freetype_options, freetype_result);
+        report.printComparison(options, cangjie_result, freetype_result);
         return;
     }
 

@@ -140,6 +140,23 @@ pub const PostInfo = struct {
     glyph_name_count: ?u16 = null,
 };
 
+pub const PcltInfo = struct {
+    version: u32,
+    font_number: u32,
+    pitch: u16,
+    x_height: u16,
+    style: u16,
+    type_family: u16,
+    cap_height: u16,
+    symbol_set: u16,
+    typeface: [16]u8,
+    character_complement: [8]u8,
+    file_name: [6]u8,
+    stroke_weight: i8,
+    width_type: i8,
+    serif_style: u8,
+};
+
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
 
@@ -582,6 +599,7 @@ pub const Font = struct {
     gsub: ?TableRecord,
     name: ?TableRecord,
     post: ?TableRecord,
+    pclt: ?TableRecord,
     stat: ?TableRecord,
     fvar: ?TableRecord,
     avar: ?TableRecord,
@@ -671,6 +689,7 @@ pub const Font = struct {
         const gsub = findTable(records, "GSUB");
         const name = findTable(records, "name");
         const post = findTable(records, "post");
+        const pclt = findTable(records, "PCLT");
         const stat = findTable(records, "STAT");
         const fvar = findTable(records, "fvar");
         const avar = findTable(records, "avar");
@@ -715,6 +734,7 @@ pub const Font = struct {
             else => return err,
         };
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
+        if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
         if (name) |name_table| {
             validateNameTable(data, name_table) catch |err| switch (err) {
                 error.InvalidName => if (!is_ttc_face) return err,
@@ -815,6 +835,7 @@ pub const Font = struct {
             .gsub = gsub,
             .name = name,
             .post = post,
+            .pclt = pclt,
             .stat = stat,
             .fvar = fvar,
             .avar = avar,
@@ -1658,6 +1679,14 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, post);
         try validatePostTable(self.data, post, self.glyph_count, .{});
         return try readPostInfo(self.data, post);
+    }
+
+    /// Read validated metadata from the optional SFNT `PCLT` table.
+    pub fn pcltInfo(self: *const Font) FontError!?PcltInfo {
+        const pclt = self.pclt orelse return null;
+        try validateSfntTableChecksum(self.data, pclt);
+        try validatePcltTable(self.data, pclt);
+        return try readPcltInfo(self.data, pclt);
     }
 
     /// Return the PostScript glyph name advertised by the optional `post` table.
@@ -4130,6 +4159,54 @@ fn validateMetricHeaderReservedFields(data: []const u8, header: TableRecord) Fon
     for (0..5) |index| {
         if (try bin.readU16At(data, header.offset + 24 + index * 2) != 0) return error.InvalidMetrics;
     }
+}
+
+fn validatePcltTable(data: []const u8, pclt: TableRecord) FontError!void {
+    try requireTableLength(pclt, 54);
+    if (pclt.length != 54) return error.BadSfnt;
+    const version = try bin.readU32At(data, pclt.offset);
+    if (version != 0x00010000) return error.BadSfnt;
+}
+
+fn readPcltInfo(data: []const u8, pclt: TableRecord) FontError!PcltInfo {
+    try requireTableLength(pclt, 54);
+    return .{
+        .version = try bin.readU32At(data, pclt.offset),
+        .font_number = try bin.readU32At(data, pclt.offset + 4),
+        .pitch = try bin.readU16At(data, pclt.offset + 8),
+        .x_height = try bin.readU16At(data, pclt.offset + 10),
+        .style = try bin.readU16At(data, pclt.offset + 12),
+        .type_family = try bin.readU16At(data, pclt.offset + 14),
+        .cap_height = try bin.readU16At(data, pclt.offset + 16),
+        .symbol_set = try bin.readU16At(data, pclt.offset + 18),
+        .typeface = try readArray16At(data, pclt.offset + 20),
+        .character_complement = try readArray8At(data, pclt.offset + 36),
+        .file_name = try readArray6At(data, pclt.offset + 44),
+        .stroke_weight = @bitCast(data[pclt.offset + 50]),
+        .width_type = @bitCast(data[pclt.offset + 51]),
+        .serif_style = data[pclt.offset + 52],
+    };
+}
+
+fn readArray16At(data: []const u8, offset: usize) FontError![16]u8 {
+    if (offset > data.len or data.len - offset < 16) return error.BadSfnt;
+    var value: [16]u8 = undefined;
+    @memcpy(&value, data[offset .. offset + 16]);
+    return value;
+}
+
+fn readArray8At(data: []const u8, offset: usize) FontError![8]u8 {
+    if (offset > data.len or data.len - offset < 8) return error.BadSfnt;
+    var value: [8]u8 = undefined;
+    @memcpy(&value, data[offset .. offset + 8]);
+    return value;
+}
+
+fn readArray6At(data: []const u8, offset: usize) FontError![6]u8 {
+    if (offset > data.len or data.len - offset < 6) return error.BadSfnt;
+    var value: [6]u8 = undefined;
+    @memcpy(&value, data[offset .. offset + 6]);
+    return value;
 }
 
 fn readPostInfo(data: []const u8, post: TableRecord) FontError!PostInfo {
@@ -17836,6 +17913,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .gsub = null,
         .name = null,
         .post = null,
+        .pclt = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -17885,6 +17963,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .gsub = null,
         .name = null,
         .post = null,
+        .pclt = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -17934,6 +18013,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .gsub = null,
         .name = null,
         .post = null,
+        .pclt = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -17994,6 +18074,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .gsub = null,
         .name = null,
         .post = null,
+        .pclt = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -18043,6 +18124,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .gsub = null,
         .name = null,
         .post = null,
+        .pclt = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -18092,6 +18174,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .gsub = null,
         .name = null,
         .post = null,
+        .pclt = null,
         .stat = null,
         .fvar = null,
         .avar = null,
@@ -18141,6 +18224,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .gsub = null,
         .name = null,
         .post = null,
+        .pclt = null,
         .stat = null,
         .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = data.len },
         .avar = null,
@@ -18210,6 +18294,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .gsub = null,
         .name = null,
         .post = null,
+        .pclt = null,
         .stat = null,
         .fvar = null,
         .avar = null,

@@ -20,6 +20,10 @@ pub fn buildHdmxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try hdmxTtfTables(allocator));
 }
 
+pub fn buildPcltTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try pcltTtfTables(allocator));
+}
+
 pub fn buildScriptMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try scriptMetricsTtfTables(allocator));
 }
@@ -521,6 +525,21 @@ fn hdmxTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[2] = .{ .tag = "hdmx", .data = try hdmxTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn pcltTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "PCLT", .data = try pcltTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
@@ -4741,6 +4760,26 @@ fn hdmxTable(allocator: std.mem.Allocator) ![]u8 {
     bytes[13] = 12;
     bytes[14] = 6;
     bytes[15] = 12;
+    return bytes;
+}
+
+fn pcltTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 54);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU32(bytes, 4, 1234);
+    writeU16(bytes, 8, 500);
+    writeU16(bytes, 10, 450);
+    writeU16(bytes, 12, 2);
+    writeU16(bytes, 14, 0x0102);
+    writeU16(bytes, 16, 700);
+    writeU16(bytes, 18, 0x1234);
+    @memcpy(bytes[20..36], "CangjiePCLTTest!");
+    @memcpy(bytes[36..44], &[_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    @memcpy(bytes[44..50], "CJTEST");
+    bytes[50] = @bitCast(@as(i8, -2));
+    bytes[51] = @bitCast(@as(i8, 3));
+    bytes[52] = 4;
     return bytes;
 }
 

@@ -138,6 +138,7 @@ pub const ColorPaint = @import("font.zig").ColorPaint;
 pub const ColorGlyphPaint = @import("render_bridge.zig").ColorGlyphPaint;
 pub const PaletteColor = @import("font.zig").PaletteColor;
 pub const PaletteInfo = @import("font.zig").PaletteInfo;
+pub const PcltInfo = @import("font.zig").PcltInfo;
 pub const PostInfo = @import("font.zig").PostInfo;
 pub const SvgGlyphDocument = @import("font.zig").SvgGlyphDocument;
 pub const StatAxisValue = @import("font.zig").StatAxisValue;
@@ -706,6 +707,58 @@ test "lazy kern metadata revalidates borrowed table bytes" {
     }
     bytes[(kern_offset orelse return error.MissingTable) + 22] +%= 1;
     try std.testing.expectError(error.BadSfnt, font.kernInfo(allocator));
+}
+
+test "PCLT metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildPcltTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.pcltInfo()).?;
+    try std.testing.expectEqual(@as(u32, 0x00010000), info.version);
+    try std.testing.expectEqual(@as(u32, 1234), info.font_number);
+    try std.testing.expectEqual(@as(u16, 500), info.pitch);
+    try std.testing.expectEqual(@as(u16, 450), info.x_height);
+    try std.testing.expectEqual(@as(u16, 700), info.cap_height);
+    try std.testing.expectEqual(@as(u16, 0x1234), info.symbol_set);
+    try std.testing.expectEqualStrings("CangjiePCLTTest!", &info.typeface);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, &info.character_complement);
+    try std.testing.expectEqualStrings("CJTEST", &info.file_name);
+    try std.testing.expectEqual(@as(i8, -2), info.stroke_weight);
+    try std.testing.expectEqual(@as(i8, 3), info.width_type);
+    try std.testing.expectEqual(@as(u8, 4), info.serif_style);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.pcltInfo()) == null);
+}
+
+test "lazy PCLT metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildPcltTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expect((try font.pcltInfo()) != null);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var pclt_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "PCLT")) pclt_offset = table.offset;
+    }
+    bytes[pclt_offset orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.pcltInfo());
 }
 
 test "post metadata is exposed when present" {

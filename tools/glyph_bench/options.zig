@@ -86,6 +86,7 @@ pub const Options = struct {
     codepoint: u21 = 'A',
     font_size: f32 = 200,
     target_size: u32 = 256,
+    samples_per_axis: u8 = 4,
     iterations: usize = 10_000,
     warmup: usize = 1_000,
     samples: usize = 1,
@@ -144,6 +145,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.target_size = try std.fmt.parseInt(u32, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--samples-per-axis")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.samples_per_axis = try std.fmt.parseInt(u8, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--iterations")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -167,7 +172,7 @@ pub fn parse(args: []const []const u8) !Options {
         }
     }
     if (!std.math.isFinite(options.font_size) or options.font_size <= 0) return error.InvalidArguments;
-    if (options.target_size == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
+    if (options.target_size == 0 or options.samples_per_axis == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
     if ((options.engine == .freetype or options.engine == .compare_freetype) and options.mode == .raster_reuse) return error.InvalidArguments;
     return options;
 }
@@ -217,6 +222,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --codepoint VALUE    Unicode scalar when glyph id is not supplied
         \\  --font-size PX       raster font size, default 200
         \\  --target-size PX     raster target size, default 256
+        \\  --samples-per-axis N Cangjie raster supersamples per axis, default 4
         \\  --iterations N       measured iterations, default 10000
         \\  --warmup N           unmeasured warmup iterations, default 1000
         \\  --samples N          independent measured samples, default 1

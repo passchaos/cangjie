@@ -63,6 +63,7 @@ fn printText(options: options_mod.Options, result: Result) void {
         \\codepoint=U+{X}
         \\font_size={d}
         \\target_size={d}
+        \\samples_per_axis={d}
         \\variation_coords={d}
         \\iterations={d}
         \\warmup={d}
@@ -82,6 +83,7 @@ fn printText(options: options_mod.Options, result: Result) void {
         options.codepoint,
         options.font_size,
         options.target_size,
+        options.samples_per_axis,
         options.normalizedVariationCoords().len,
         options.iterations,
         options.warmup,
@@ -103,8 +105,8 @@ fn printTsv(options: options_mod.Options, result: Result) void {
     const ns_per_iter = nsPerIter(options, result);
     const stats = sampleStats(result.samples, options.iterations);
     std.debug.print(
-        "mode\tengine\tfont\tglyph_id\tcodepoint\tfont_size\ttarget_size\tvariation_coords\titerations\twarmup\tsamples\telapsed_ns\tns_per_iter\tsample_min_ns_per_iter\tsample_median_ns_per_iter\tsample_max_ns_per_iter\tchecksum\n" ++
-            "{s}\t{s}\t{s}\t{any}\tU+{X}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}\n",
+        "mode\tengine\tfont\tglyph_id\tcodepoint\tfont_size\ttarget_size\tsamples_per_axis\tvariation_coords\titerations\twarmup\tsamples\telapsed_ns\tns_per_iter\tsample_min_ns_per_iter\tsample_median_ns_per_iter\tsample_max_ns_per_iter\tchecksum\n" ++
+            "{s}\t{s}\t{s}\t{any}\tU+{X}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}\n",
         .{
             options.mode.label(),
             options.engine.label(),
@@ -113,6 +115,7 @@ fn printTsv(options: options_mod.Options, result: Result) void {
             options.codepoint,
             options.font_size,
             options.target_size,
+            options.samples_per_axis,
             options.normalizedVariationCoords().len,
             options.iterations,
             options.warmup,

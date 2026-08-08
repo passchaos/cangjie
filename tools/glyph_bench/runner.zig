@@ -80,6 +80,7 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, 
     defer target.deinit();
     var rasterizer = cangjie.Rasterizer.init(allocator);
     rasterizer.hint_size_px = options.font_size;
+    rasterizer.samples_per_axis = options.samples_per_axis;
     const coords = options.normalizedVariationCoords();
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -108,6 +109,7 @@ fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.F
     defer target.deinit();
     var rasterizer = cangjie.Rasterizer.init(allocator);
     rasterizer.hint_size_px = options.font_size;
+    rasterizer.samples_per_axis = options.samples_per_axis;
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         target.clear(0);

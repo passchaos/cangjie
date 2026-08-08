@@ -4792,16 +4792,52 @@ fn ensureCoveredClassSetIndexesWithin(table: Table, coverage_offset: usize, clas
         },
         2 => {
             const range_count = try readU16BadGsub(table, coverage_offset + 2);
-            for (0..range_count) |range_i| {
-                const range_offset = coverage_offset + 4 + range_i * 6;
-                const start = try readU16BadGsub(table, range_offset);
-                const end = try readU16BadGsub(table, range_offset + 2);
-                for (@as(usize, start)..@as(usize, end) + 1) |glyph| {
-                    try ensureGlyphClassSetIndexWithin(table, class_def_offset, @intCast(glyph), set_count);
+            const class_format = try readU16BadGsub(table, class_def_offset);
+            if (class_format == 2) {
+                try ensureCoverageClassRangeSetIndexesWithin(table, coverage_offset + 4, range_count, class_def_offset + 4, try readU16BadGsub(table, class_def_offset + 2), set_count);
+            } else {
+                for (0..range_count) |range_i| {
+                    const range_offset = coverage_offset + 4 + range_i * 6;
+                    const start = try readU16BadGsub(table, range_offset);
+                    const end = try readU16BadGsub(table, range_offset + 2);
+                    for (@as(usize, start)..@as(usize, end) + 1) |glyph| {
+                        try ensureGlyphClassSetIndexWithin(table, class_def_offset, @intCast(glyph), set_count);
+                    }
                 }
             }
         },
         else => return error.UnsupportedGsub,
+    }
+}
+
+fn ensureCoverageClassRangeSetIndexesWithin(table: Table, coverage_ranges_offset: usize, coverage_range_count: u16, class_ranges_offset: usize, class_range_count: u16, set_count: u16) GsubError!void {
+    // Coverage format 2 and ClassDef format 2 are both sorted range-record
+    // arrays. Walk them together instead of expanding every covered glyph and
+    // binary-searching the same ClassDef; this preserves the same bounds proof
+    // while avoiding O(covered_glyphs * log(class_ranges)) validation costs.
+    var coverage_i: usize = 0;
+    var class_i: usize = 0;
+    while (coverage_i < coverage_range_count) {
+        const coverage_range = coverage_ranges_offset + coverage_i * 6;
+        const coverage_start = try readU16BadGsub(table, coverage_range);
+        const coverage_end = try readU16BadGsub(table, coverage_range + 2);
+
+        while (class_i < class_range_count) {
+            const class_range = class_ranges_offset + class_i * 6;
+            const class_end = try readU16BadGsub(table, class_range + 2);
+            if (class_end >= coverage_start) break;
+            class_i += 1;
+        }
+
+        var scan_class_i = class_i;
+        while (scan_class_i < class_range_count) : (scan_class_i += 1) {
+            const class_range = class_ranges_offset + scan_class_i * 6;
+            const class_start = try readU16BadGsub(table, class_range);
+            if (class_start > coverage_end) break;
+            const class_value = try readU16BadGsub(table, class_range + 4);
+            if (class_value >= set_count) return error.BadGsub;
+        }
+        coverage_i += 1;
     }
 }
 

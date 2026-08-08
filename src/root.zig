@@ -2975,6 +2975,10 @@ test "paragraph layout rejects non-finite options before shaping mutation" {
         .max_width = 100,
         .paragraph_spacing = std.math.inf(f32),
     }));
+    try std.testing.expectError(error.InvalidFeatureTag, TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+        .max_width = 100,
+        .features = &.{.{ .tag = 0, .enabled = true }},
+    }));
 
     try std.testing.expectEqual(@as(usize, 1), layout_buffer.glyphs.items.len);
     try std.testing.expectEqual(@as(usize, 1), layout_buffer.lines.items.len);

@@ -8364,6 +8364,7 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
     }
     const instruction_len = try r.readU16();
     try r.skip(instruction_len);
+    try outline.commands.ensureUnusedCapacity(outline.allocator, total_points + @as(usize, contour_count));
 
     // X and Y values are stored as deltas in two separate streams. Expand the
     // run-length encoded flags into the point records themselves so the hot

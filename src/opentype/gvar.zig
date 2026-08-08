@@ -453,10 +453,18 @@ pub fn decodeScaledTuplePointDeltasForPointCount(data: []const u8, offset: usize
 }
 
 pub fn accumulateGlyphPointDeltas(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, all_points: []const u16, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta) Error!usize {
+    return try accumulateGlyphPointDeltasWithFlags(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, all_points, raw_scratch, scaled_scratch, out, null);
+}
+
+pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, all_points: []const u16, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
     const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return 0;
     var out_count: usize = 0;
     if (all_points.len != 0) {
         if (out.len < all_points.len) return error.BadSfnt;
+        if (has_delta) |flags| {
+            if (flags.len < all_points.len) return error.BadSfnt;
+            @memset(flags[0..all_points.len], false);
+        }
         for (all_points, 0..) |point, index| out[index] = .{ .point = point, .x = 0, .y = 0 };
         out_count = all_points.len;
     }
@@ -479,6 +487,10 @@ pub fn accumulateGlyphPointDeltas(data: []const u8, offset: usize, length: usize
             };
             out[target_index].x += delta.x;
             out[target_index].y += delta.y;
+            if (has_delta) |flags| {
+                if (target_index >= flags.len) return error.BadSfnt;
+                flags[target_index] = true;
+            }
         }
     }
     return out_count;

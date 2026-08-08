@@ -2804,7 +2804,7 @@ fn gvarTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn gvarDeltaTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 51);
+    const bytes = try allocator.alloc(u8, 48);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
@@ -2816,22 +2816,19 @@ fn gvarDeltaTable(allocator: std.mem.Allocator) ![]u8 {
     writeU32(bytes, 16, 32); // glyphVariationDataArrayOffset after offset array.
     writeU32(bytes, 20, 0);
     writeU32(bytes, 24, 0);
-    writeU32(bytes, 28, 19);
+    writeU32(bytes, 28, 16);
 
     writeU16(bytes, 32, 1); // one tuple.
     writeU16(bytes, 34, 10); // tuple data starts after one 6-byte header.
-    writeU16(bytes, 36, 9); // tuple payload size.
-    writeU16(bytes, 38, 0x8000); // embedded peak, all points.
+    writeU16(bytes, 36, 6); // tuple payload size.
+    writeU16(bytes, 38, 0xa000); // embedded peak + private point numbers.
     writeF2Dot14(bytes, 40, 1.0);
-    bytes[42] = 0x06; // seven x deltas.
-    bytes[43] = 10;
-    bytes[44] = 0;
-    bytes[45] = 0;
-    bytes[46] = 0;
-    bytes[47] = 0;
-    bytes[48] = 0;
-    bytes[49] = 0;
-    bytes[50] = 0x86; // seven y deltas are zero.
+    bytes[42] = 1; // one private point.
+    bytes[43] = 0; // one byte run.
+    bytes[44] = 0; // point id 0.
+    bytes[45] = 0; // one x delta.
+    bytes[46] = 10;
+    bytes[47] = 0x80; // one y delta is zero.
     return bytes;
 }
 

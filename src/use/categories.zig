@@ -49,7 +49,9 @@ pub const Category = enum(u8) {
 
 pub fn forCodepoint(codepoint: u21) Category {
     return switch (codepoint) {
+        0x00b2 => .final_mod_post,
         0x034f => .cg_joiner,
+        0x20f0 => .vowel_mod_above,
         // Keep these ranges in sync with the generated Unicode USE table.
         // Unlike general categories, USE categories encode the grammatical
         // role of each sign in the syllable state machine and reordering pass.
@@ -221,6 +223,30 @@ pub fn forCodepoint(codepoint: u21) Category {
         0xa8b5...0xa8c3 => .vowel_post,
         0xa8c4 => .halant,
         0xa8c5 => .vowel_mod_above,
+        0x11300...0x11303 => .vowel_mod_above,
+        0x11305...0x1130c,
+        0x1130f...0x11310,
+        0x11313...0x11328,
+        0x1132a...0x11330,
+        0x11332...0x11333,
+        0x11335...0x11339,
+        0x1133d,
+        0x1135e...0x11361,
+        => .base,
+        0x1133b...0x1133c => .consonant_mod_below,
+        0x1133e...0x1133f,
+        0x11341...0x11344,
+        0x11357,
+        0x11362...0x11363,
+        => .vowel_post,
+        0x11340 => .vowel_above,
+        0x11347...0x11348,
+        0x1134b...0x1134c,
+        => .vowel_pre,
+        0x1134d => .halant,
+        0x11366...0x1136c,
+        0x11370...0x11374,
+        => .vowel_mod_above,
         0x11c72...0x11c8f => .base,
         0x11c92...0x11ca7,
         0x11ca9...0x11caf,
@@ -387,6 +413,15 @@ test "Newa USE categories distinguish virama and dependent signs" {
 test "Saurashtra USE categories distinguish haaru and virama" {
     const codepoints = [_]u21{ 0xa880, 0xa882, 0xa8b4, 0xa8b5, 0xa8c4, 0xa8c5, 0xa8d0 };
     const expected = [_]Category{ .vowel_mod_post, .base, .medial_post, .vowel_post, .halant, .vowel_mod_above, .base };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Grantha USE categories distinguish vowels and virama" {
+    const codepoints = [_]u21{ 0x00b2, 0x11320, 0x1133b, 0x1133e, 0x11340, 0x11347, 0x1134d, 0x11367, 0x20f0 };
+    const expected = [_]Category{ .final_mod_post, .base, .consonant_mod_below, .vowel_post, .vowel_above, .vowel_pre, .halant, .vowel_mod_above, .vowel_mod_above };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

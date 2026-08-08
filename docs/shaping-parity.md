@@ -468,6 +468,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   script, with grapheme-cluster and advance parity. Retained corpora are
   `tests/data/saurashtra-use-font1.txt` (`275e7cda1944bff1`) and
   `tests/data/saurashtra-use-font2.txt` (`3bf3ed6bddc3dbce`).
+- Grantha passes both script-specific cases retained from upstream
+  `in-house/use-syllable.tests` across two fixture fonts. The first covers a
+  base with common U+20F0 and a combining Grantha digit under the `gran` script
+  (`tests/data/grantha-use-font1.txt`, checksum `5cf76a280887fce1`).
+  The second verifies that common U+00B2 is a USE `FMPst` non-cluster rather
+  than a broken cluster requiring a dotted circle
+  (`tests/data/grantha-use-font2.txt`, HarfRust checksum
+  `5ec68188a3d8a683`).
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -491,9 +499,9 @@ goal is active, not complete.
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
-  Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, and Saurashtra gates.
-  Other USE scripts/fonts and fuzz/corpus failures still need retained gates
-  before this can be called broad USE parity.
+  Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, and Grantha
+  gates. Other USE scripts/fonts and fuzz/corpus failures still need retained
+  gates before this can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

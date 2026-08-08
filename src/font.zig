@@ -3162,14 +3162,22 @@ pub const Font = struct {
 
     pub fn glyphBounds(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        if (self.format != .truetype) return error.UnsupportedGlyph;
-        const loca = self.loca orelse return error.MissingTable;
-        const glyf = self.glyf orelse return error.MissingTable;
-        try validateSfntTableChecksum(self.data, self.maxp);
-        try validateSfntTableChecksum(self.data, loca);
-        try validateSfntTableChecksum(self.data, glyf);
-        try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
-        return try self.glyphBoundsFromParsedTables(glyph_id);
+        if (self.format == .truetype) {
+            const loca = self.loca orelse return error.MissingTable;
+            const glyf = self.glyf orelse return error.MissingTable;
+            try validateSfntTableChecksum(self.data, self.maxp);
+            try validateSfntTableChecksum(self.data, loca);
+            try validateSfntTableChecksum(self.data, glyf);
+            try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
+            return try self.glyphBoundsFromParsedTables(glyph_id);
+        }
+        if (self.cff2) |cff2| {
+            try validateSfntTableChecksum(self.data, cff2);
+            try validateCff2Table(self.data, cff2);
+            const bounds = (try cff2_mod.charStringBoundsInfo(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count)) orelse return error.InvalidGlyph;
+            return cff2BoundsInfoToGlyphBounds(bounds);
+        }
+        return error.UnsupportedGlyph;
     }
 
     pub fn glyphOutline(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {

@@ -598,6 +598,11 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(usize, 3), bounds.scan.charstring_count);
     try std.testing.expectEqual(@as(usize, 1), bounds.scan.local_subr_call_count);
     try std.testing.expectEqual(@as(usize, 1), bounds.scan.global_subr_call_count);
+    const public_bounds = try font.glyphBounds(0);
+    try std.testing.expectEqual(@as(i16, 50), public_bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 20), public_bounds.y_min);
+    try std.testing.expectEqual(@as(i16, 150), public_bounds.x_max);
+    try std.testing.expectEqual(@as(i16, 50), public_bounds.y_max);
     var outline = try font.glyphOutline(allocator, 0);
     defer outline.deinit();
     try std.testing.expectEqual(@as(i16, 50), outline.bounds.x_min);

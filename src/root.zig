@@ -1347,11 +1347,18 @@ test "HVAR and VVAR metric variation maps are exposed when present" {
 
     const vvar = (try font.vvarInfo(allocator)).?;
     defer font.freeVvarInfo(allocator, vvar);
-    try std.testing.expectEqual(@as(usize, 36), vvar.item_variation_store_offset);
-    try std.testing.expect(vvar.tsb_mapping == null);
+    try std.testing.expectEqual(@as(usize, 42), vvar.item_variation_store_offset);
+    try std.testing.expect(vvar.tsb_mapping != null);
     try std.testing.expect(vvar.bsb_mapping == null);
     try std.testing.expectEqual(@as(usize, 2), vvar.advance_height_mapping.?.entries.len);
     try std.testing.expectEqual(@as(usize, 2), vvar.v_org_mapping.?.entries.len);
+    try std.testing.expectEqual(@as(?i32, 4), try font.vvarAdvanceHeightDeltaAtCoords(1, &.{0.5}));
+    const default_vertical = (try font.verticalMetrics(1)).?;
+    try std.testing.expectEqual(@as(u16, 1000), default_vertical.advance_height);
+    const varied_vertical = (try font.verticalMetricsAtCoords(1, &.{0.5})).?;
+    try std.testing.expectEqual(@as(u16, 1004), varied_vertical.advance_height);
+    try std.testing.expectEqual(@as(i16, 4), varied_vertical.top_side_bearing);
+    try std.testing.expectEqual(@as(?i16, 914), try font.verticalOriginYAtCoords(1, &.{0.5}));
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);
@@ -1361,6 +1368,9 @@ test "HVAR and VVAR metric variation maps are exposed when present" {
     try std.testing.expect((try missing.hvarAdvanceWidthDeltaAtCoords(1, &.{0.5})) == null);
     try std.testing.expectEqual(try missing.horizontalMetrics(1), try missing.horizontalMetricsAtCoords(1, &.{0.5}));
     try std.testing.expect((try missing.vvarInfo(allocator)) == null);
+    try std.testing.expect((try missing.vvarAdvanceHeightDeltaAtCoords(1, &.{0.5})) == null);
+    try std.testing.expect((try missing.verticalMetricsAtCoords(1, &.{0.5})) == null);
+    try std.testing.expect((try missing.verticalOriginYAtCoords(1, &.{0.5})) == null);
 }
 
 test "lazy HVAR and VVAR metadata revalidates borrowed table bytes" {

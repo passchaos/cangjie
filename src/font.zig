@@ -1483,6 +1483,41 @@ pub const Font = struct {
         metric_variation_mod.freeVvar(allocator, info_value);
     }
 
+    /// Return the VVAR advance-height delta in font units for a glyph at normalized coordinates.
+    pub fn vvarAdvanceHeightDeltaAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?i32 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const vvar = self.vvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, vvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMetricVariationTable(self.data, vvar, fvar_info.axis_count, 24);
+        return try metric_variation_mod.vvarAdvanceHeightDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords);
+    }
+
+    /// Return vertical metrics with VVAR advance/TSB deltas applied when present.
+    pub fn verticalMetricsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?VerticalMetrics {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        var metrics = (try self.verticalMetrics(glyph_id)) orelse return null;
+        const vvar = self.vvar orelse return metrics;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, vvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMetricVariationTable(self.data, vvar, fvar_info.axis_count, 24);
+
+        const advance_delta = try metric_variation_mod.vvarAdvanceHeightDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords);
+        metrics.advance_height = clampI32ToU16(@as(i32, metrics.advance_height) + advance_delta);
+        if (try metric_variation_mod.vvarTopSideBearingDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords)) |tsb_delta| {
+            metrics.top_side_bearing = clampI32ToI16(@as(i32, metrics.top_side_bearing) + tsb_delta);
+        }
+        return metrics;
+    }
+
     /// Read validated metadata from the optional OpenType `BASE` table.
     pub fn baseInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?BaseInfo {
         const base = self.base orelse return null;
@@ -3053,6 +3088,24 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, vorg);
         try validateVorgTable(self.data, vorg, self.glyph_count);
         return try vorgOriginY(self.data, vorg, glyph_id);
+    }
+
+    /// Return VORG vertical origin Y with VVAR vOrg delta applied when present.
+    pub fn verticalOriginYAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?i16 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        var origin = (try self.verticalOriginY(glyph_id)) orelse return null;
+        const vvar = self.vvar orelse return origin;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, vvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMetricVariationTable(self.data, vvar, fvar_info.axis_count, 24);
+        if (try metric_variation_mod.vvarVerticalOriginDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords)) |delta| {
+            origin = clampI32ToI16(@as(i32, origin) + delta);
+        }
+        return origin;
     }
 
     /// Expand the TrueType `loca` table into one glyf byte range per glyph.

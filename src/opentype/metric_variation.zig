@@ -67,22 +67,50 @@ pub fn vvarInfo(allocator: std.mem.Allocator, data: []const u8, offset: usize, l
 }
 
 pub fn hvarAdvanceWidthDelta(data: []const u8, offset: usize, length: usize, glyph_id: usize, normalized_coords: []const f32) Error!i32 {
-    if (normalized_coords.len == 0) return 0;
-    const h = try header(data, offset, length, 20);
-    const map_offset: usize = @intCast(try bin.readU32At(data, offset + 8));
-    const index = if (map_offset == 0)
-        DeltaSetIndex{ .outer = glyph_id >> 16, .inner = glyph_id & 0xffff }
-    else
-        try deltaSetIndexForMappedItem(data, offset, length, map_offset, 20, glyph_id);
-    return try itemVariationDelta(data, offset, length, h.item_variation_store_offset, index, normalized_coords);
+    return try advanceDelta(data, offset, length, 20, 8, glyph_id, normalized_coords);
 }
 
 pub fn hvarLeftSideBearingDelta(data: []const u8, offset: usize, length: usize, glyph_id: usize, normalized_coords: []const f32) Error!?i32 {
+    return try optionalMappedDelta(data, offset, length, 20, 12, glyph_id, normalized_coords);
+}
+
+pub fn hvarRightSideBearingDelta(data: []const u8, offset: usize, length: usize, glyph_id: usize, normalized_coords: []const f32) Error!?i32 {
+    return try optionalMappedDelta(data, offset, length, 20, 16, glyph_id, normalized_coords);
+}
+
+pub fn vvarAdvanceHeightDelta(data: []const u8, offset: usize, length: usize, glyph_id: usize, normalized_coords: []const f32) Error!i32 {
+    return try advanceDelta(data, offset, length, 24, 8, glyph_id, normalized_coords);
+}
+
+pub fn vvarTopSideBearingDelta(data: []const u8, offset: usize, length: usize, glyph_id: usize, normalized_coords: []const f32) Error!?i32 {
+    return try optionalMappedDelta(data, offset, length, 24, 12, glyph_id, normalized_coords);
+}
+
+pub fn vvarBottomSideBearingDelta(data: []const u8, offset: usize, length: usize, glyph_id: usize, normalized_coords: []const f32) Error!?i32 {
+    return try optionalMappedDelta(data, offset, length, 24, 16, glyph_id, normalized_coords);
+}
+
+pub fn vvarVerticalOriginDelta(data: []const u8, offset: usize, length: usize, glyph_id: usize, normalized_coords: []const f32) Error!?i32 {
+    return try optionalMappedDelta(data, offset, length, 24, 20, glyph_id, normalized_coords);
+}
+
+fn advanceDelta(data: []const u8, offset: usize, length: usize, minimum_length: usize, map_field_offset: usize, glyph_id: usize, normalized_coords: []const f32) Error!i32 {
     if (normalized_coords.len == 0) return 0;
-    const h = try header(data, offset, length, 20);
-    const map_offset: usize = @intCast(try bin.readU32At(data, offset + 12));
+    const h = try header(data, offset, length, minimum_length);
+    const map_offset: usize = @intCast(try bin.readU32At(data, offset + map_field_offset));
+    const index = if (map_offset == 0)
+        DeltaSetIndex{ .outer = glyph_id >> 16, .inner = glyph_id & 0xffff }
+    else
+        try deltaSetIndexForMappedItem(data, offset, length, map_offset, minimum_length, glyph_id);
+    return try itemVariationDelta(data, offset, length, h.item_variation_store_offset, index, normalized_coords);
+}
+
+fn optionalMappedDelta(data: []const u8, offset: usize, length: usize, minimum_length: usize, map_field_offset: usize, glyph_id: usize, normalized_coords: []const f32) Error!?i32 {
+    if (normalized_coords.len == 0) return 0;
+    const h = try header(data, offset, length, minimum_length);
+    const map_offset: usize = @intCast(try bin.readU32At(data, offset + map_field_offset));
     if (map_offset == 0) return null;
-    const index = try deltaSetIndexForMappedItem(data, offset, length, map_offset, 20, glyph_id);
+    const index = try deltaSetIndexForMappedItem(data, offset, length, map_offset, minimum_length, glyph_id);
     return try itemVariationDelta(data, offset, length, h.item_variation_store_offset, index, normalized_coords);
 }
 

@@ -710,7 +710,7 @@ fn gvarCompoundTtfTables(allocator: std.mem.Allocator) ![]Table {
 }
 
 fn metricVariationTtfTables(allocator: std.mem.Allocator) ![]Table {
-    const tables = try allocator.alloc(Table, 12);
+    const tables = try allocator.alloc(Table, 15);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
@@ -724,6 +724,9 @@ fn metricVariationTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
     tables[11] = .{ .tag = "VVAR", .data = try vvarTable(allocator) };
+    tables[12] = .{ .tag = "vhea", .data = try vheaTableWithMetrics(allocator, 1) };
+    tables[13] = .{ .tag = "vmtx", .data = try vmtxTable(allocator) };
+    tables[14] = .{ .tag = "VORG", .data = try vorgTable(allocator) };
     return tables;
 }
 
@@ -3090,16 +3093,18 @@ fn hvarTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn vvarTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 72);
+    const bytes = try allocator.alloc(u8, 78);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
-    writeU32(bytes, 4, 36); // ItemVariationStore offset.
-    writeU32(bytes, 8, 30); // advanceHeightMappingOffset.
-    writeU32(bytes, 20, 24); // vOrgMappingOffset.
+    writeU32(bytes, 4, 42); // ItemVariationStore offset.
+    writeU32(bytes, 8, 36); // advanceHeightMappingOffset.
+    writeU32(bytes, 12, 24); // tsbMappingOffset.
+    writeU32(bytes, 20, 30); // vOrgMappingOffset.
     writeDeltaSetIndexMapWithTwoEntries(bytes, 24);
     writeDeltaSetIndexMapWithTwoEntries(bytes, 30);
-    writeItemVariationStoreWithItems(bytes, 36, 2);
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 36);
+    writeItemVariationStoreWithItems(bytes, 42, 2);
     return bytes;
 }
 

@@ -444,10 +444,15 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderGlyph(self: *Rasterizer, target: *RenderTarget, outline: *const glyph_mod.GlyphOutline, x: f32, baseline_y: f32, font_size: f32, units_per_em: u16) !void {
-        var flattened = std.ArrayList(Line).empty;
-        defer flattened.deinit(self.allocator);
+        const flattened_capacity = flattenedLineCapacity(outline.commands.items);
+        var inline_flattened: [128]Line = undefined;
+        var flattened = if (flattened_capacity <= inline_flattened.len)
+            std.ArrayList(Line).initBuffer(inline_flattened[0..])
+        else
+            try std.ArrayList(Line).initCapacity(self.allocator, flattened_capacity);
+        defer if (flattened_capacity > inline_flattened.len) flattened.deinit(self.allocator);
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
-        try flattenOutline(self.allocator, &flattened, outline, scale, x, baseline_y);
+        flattenOutline(&flattened, outline, scale, x, baseline_y);
         const hint_size = self.hint_size_px orelse font_size;
         alignSmallGlyphToPixelGrid(flattened.items, outline, scale, font_size, hint_size);
         try self.fillLines(target, flattened.items, .non_zero);
@@ -1150,8 +1155,7 @@ fn outlineContourCount(outline: *const glyph_mod.GlyphOutline) usize {
     return count;
 }
 
-fn flattenOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, scale: f32, x: f32, baseline_y: f32) !void {
-    try lines.ensureUnusedCapacity(allocator, flattenedLineCapacity(outline.commands.items));
+fn flattenOutline(lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, scale: f32, x: f32, baseline_y: f32) void {
     var start: ?Point = null;
     var current: ?Point = null;
     for (outline.commands.items) |command| {
@@ -1164,7 +1168,7 @@ fn flattenOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), out
             .line_to => |p| {
                 const a = current orelse continue;
                 const b = fontToPixel(p, scale, x, baseline_y);
-                try lines.append(allocator, .{ .a = a, .b = b });
+                lines.appendAssumeCapacity(.{ .a = a, .b = b });
                 current = b;
             },
             .quad_to => |q| {
@@ -1173,7 +1177,7 @@ fn flattenOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), out
                 for (1..17) |i| {
                     const t = @as(f32, @floatFromInt(i)) / 16.0;
                     const p = quadPoint(a, fontToPixel(q.control, scale, x, baseline_y), fontToPixel(q.end, scale, x, baseline_y), t);
-                    try lines.append(allocator, .{ .a = prev, .b = p });
+                    lines.appendAssumeCapacity(.{ .a = prev, .b = p });
                     prev = p;
                 }
                 current = fontToPixel(q.end, scale, x, baseline_y);
@@ -1184,7 +1188,7 @@ fn flattenOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), out
                 for (1..25) |i| {
                     const t = @as(f32, @floatFromInt(i)) / 24.0;
                     const p = cubicPoint(a, fontToPixel(c.c0, scale, x, baseline_y), fontToPixel(c.c1, scale, x, baseline_y), fontToPixel(c.end, scale, x, baseline_y), t);
-                    try lines.append(allocator, .{ .a = prev, .b = p });
+                    lines.appendAssumeCapacity(.{ .a = prev, .b = p });
                     prev = p;
                 }
                 current = fontToPixel(c.end, scale, x, baseline_y);
@@ -1192,7 +1196,7 @@ fn flattenOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), out
             .close => {
                 if (current) |a| {
                     if (start) |b| {
-                        try lines.append(allocator, .{ .a = a, .b = b });
+                        lines.appendAssumeCapacity(.{ .a = a, .b = b });
                     }
                 }
                 current = start;

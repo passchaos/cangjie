@@ -72,14 +72,7 @@ pub fn fontDictIndex(data: []const u8, offset: usize, length: usize, glyph_id: u
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     const table = data[offset .. offset + length];
     const parsed = try infoView(data, offset, length);
-    const fd_count = if (parsed.fd_array_index) |fd_array| @as(usize, @intCast(fd_array.count)) else 1;
-    const fd_select = parsed.fd_select orelse {
-        // CFF2 permits omitting FDSelect when all glyphs use the sole Font DICT.
-        // fontations/skrifa exposes that case as subfont index 0 rather than as
-        // missing metadata, so do the same for the public glyph->FD query.
-        return if (fd_count == 1) @as(?u16, 0) else error.BadSfnt;
-    };
-    return try fdSelectValue(table, fd_select.offset, glyph_id, glyph_count, fd_count);
+    return try selectedFontDictIndex(table, parsed, glyph_id, glyph_count);
 }
 
 pub fn subrBias(count: u32) i32 {
@@ -179,10 +172,7 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
     if (glyph_id >= index.count) return null;
     const charstring = try indexObject(table, index, glyph_id);
 
-    const selected_fd = if (parsed.fd_select) |fd_select|
-        try fdSelectValue(table, fd_select.offset, glyph_id, glyph_count, if (parsed.fd_array_index) |fd_array| @as(usize, @intCast(fd_array.count)) else 1)
-    else
-        0;
+    const selected_fd = (try selectedFontDictIndex(table, parsed, glyph_id, glyph_count)) orelse 0;
     const local_subrs = if (parsed.fd_array_index) |fd_array| blk: {
         if (selected_fd >= fd_array.count) return error.BadSfnt;
         const font_dict = try parseFontDict(table, fd_array, selected_fd);
@@ -198,6 +188,17 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
             .local_subrs_index = local_subrs,
         },
     };
+}
+
+fn selectedFontDictIndex(table: []const u8, parsed: Info, glyph_id: usize, glyph_count: usize) Error!?u16 {
+    const fd_count = if (parsed.fd_array_index) |fd_array| @as(usize, @intCast(fd_array.count)) else 1;
+    const fd_select = parsed.fd_select orelse {
+        // CFF2 permits omitting FDSelect when all glyphs use the sole Font DICT.
+        // fontations/skrifa exposes that case as subfont index 0 rather than as
+        // missing metadata, so do the same for public queries and execution.
+        return if (fd_count == 1) @as(?u16, 0) else error.BadSfnt;
+    };
+    return try fdSelectValue(table, fd_select.offset, glyph_id, glyph_count, fd_count);
 }
 
 const CharStringScanContext = struct {
@@ -606,6 +607,16 @@ test "CFF2 single Font DICT defaults to FD zero without FDSelect" {
     try std.testing.expectEqual(@as(u32, 1), parsed.fd_array_index.?.count);
     try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 0, 2));
     try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 1, 2));
+}
+
+test "CFF2 multiple Font DICTs require FDSelect" {
+    var bytes = testCff2SingleFdNoSelectTable();
+    // Expand the FDArray count in-place without adding a second object. This is
+    // enough to exercise the glyph->FD selection contract before FD parsing.
+    std.mem.writeInt(u32, bytes[31..35], 2, .big);
+    try std.testing.expectError(error.BadSfnt, fontDictIndex(&bytes, 0, bytes.len, 0, 2));
+    try std.testing.expectError(error.BadSfnt, charStringScanInfo(&bytes, 0, bytes.len, 0, 2));
+    try std.testing.expectError(error.BadSfnt, charStringBoundsInfo(&bytes, 0, bytes.len, 0, 2));
 }
 
 test "CFF2 exposes Font DICT private metadata and local subrs" {

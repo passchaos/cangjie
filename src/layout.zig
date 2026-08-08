@@ -350,6 +350,10 @@ pub const ParagraphOptions = struct {
     word_spacing: f32 = 0,
     first_line_indent: f32 = 0,
     paragraph_spacing: f32 = 0,
+    /// Normalized variation-space coordinates forwarded to shaping. Paragraph
+    /// layout itself only consumes shaped advances, but variable font metrics
+    /// must be selected before line wrapping.
+    normalized_variation_coords: []const f32 = &.{},
 };
 
 /// A laid-out visual line. Glyph and run ranges are indexes into the owning
@@ -1547,14 +1551,20 @@ pub const TextShaper = struct {
         // Paragraph layout is deliberately staged: shape first, then line-wrap
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
-        _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, .{ .direction = options.direction });
+        _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, .{
+            .direction = options.direction,
+            .normalized_variation_coords = options.normalized_variation_coords,
+        });
         try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
         return buffer.paragraphLayout();
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try validateParagraphOptions(options);
-        _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, .{ .direction = options.direction });
+        _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, .{
+            .direction = options.direction,
+            .normalized_variation_coords = options.normalized_variation_coords,
+        });
         try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
         return buffer.paragraphLayout();
     }
@@ -1661,6 +1671,7 @@ fn validateParagraphOptions(options: ParagraphOptions) !void {
     {
         return error.InvalidParagraphOptions;
     }
+    try validateNormalizedVariationCoords(options.normalized_variation_coords);
 }
 
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {
@@ -1688,6 +1699,7 @@ fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []cons
                 .features = options.features,
                 .writing_mode = options.writing_mode,
                 .text_orientation = options.text_orientation,
+                .normalized_variation_coords = options.normalized_variation_coords,
             },
         );
     }

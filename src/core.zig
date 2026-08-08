@@ -197,6 +197,10 @@ pub const TextStyle = struct {
     font_style: TextFontStyle = .normal,
     font_stretch: u16 = 100,
     font_features: []const unicode.FeatureOverride = &.{},
+    /// Normalized variation-space coordinates in fvar axis order after avar
+    /// mapping. Higher-level attributed text forwards this to layout shaping so
+    /// HVAR/VVAR advances and bearings participate in measurement and wrapping.
+    normalized_variation_coords: []const f32 = &.{},
     color: raster.Rgba = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
     background_color: ?raster.Rgba = null,
     decoration: TextDecoration = .{},
@@ -330,6 +334,7 @@ pub const AttributedText = struct {
         if (style.line_height) |line_height| options.line_height = line_height;
         options.letter_spacing = style.letter_spacing;
         options.word_spacing = style.word_spacing;
+        options.normalized_variation_coords = style.normalized_variation_coords;
         return options;
     }
 
@@ -419,8 +424,10 @@ pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.Fo
             .line_height = run.style.line_height,
             .letter_spacing = run.style.letter_spacing,
             .word_spacing = run.style.word_spacing,
+            .normalized_variation_coords = run.style.normalized_variation_coords,
         };
-        const metrics = try layout.TextShaper.measureParagraphUtf8(cascade, &buffer, run_text, run.style.font_size, options);
+        const paragraph = try layout.TextShaper.layoutParagraphUtf8WithOptions(cascade, &buffer, run_text, run.style.font_size, options);
+        const metrics = textMetricsFromParagraph(paragraph);
         try positioned.append(allocator, .{
             .run = run,
             .x = width,
@@ -465,6 +472,7 @@ pub fn layoutAttributedGlyphRunsUtf8(allocator: std.mem.Allocator, cascade: layo
             .line_height = run.style.line_height,
             .letter_spacing = run.style.letter_spacing,
             .word_spacing = run.style.word_spacing,
+            .normalized_variation_coords = run.style.normalized_variation_coords,
         };
         const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &buffer, run_text, run.style.font_size, options);
         const metrics = textMetricsFromParagraph(paragraph);
@@ -759,6 +767,39 @@ test "measures attributed text with primary style" {
     try std.testing.expectApproxEqAbs(@as(f32, 34.0), metrics.width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 24.0), metrics.height, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 18.0), metrics.baseline, 0.001);
+}
+
+test "attributed text forwards normalized variation metrics" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try @import("font.zig").Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const @import("font.zig").Font{&font};
+    const cascade = layout.FontCascade.init(&fonts);
+    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const default_spans = [_]StyleSpan{
+        .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{ .font_size = 20 } },
+    };
+    const varied_spans = [_]StyleSpan{
+        .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{ .font_size = 20, .normalized_variation_coords = &.{0.5} } },
+    };
+    const default_metrics = try measureAttributedTextUtf8(cascade, &layout_buffer, .{ .text = "A", .spans = &default_spans }, 100);
+    const varied_metrics = try measureAttributedTextUtf8(cascade, &layout_buffer, .{ .text = "A", .spans = &varied_spans }, 100);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0), default_metrics.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.08), varied_metrics.width, 0.001);
+
+    var glyph_runs = try layoutAttributedGlyphRunsUtf8(allocator, cascade, .{ .text = "A", .spans = &varied_spans });
+    defer glyph_runs.deinit();
+    try std.testing.expectEqual(@as(usize, 1), glyph_runs.runs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.08), glyph_runs.metrics.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.08), glyph_runs.runs[0].glyphs[0].x_advance, 0.001);
 }
 
 test "measures attributed runs with per span style" {

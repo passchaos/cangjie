@@ -380,6 +380,18 @@ pub fn measureAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.F
     return positioned.metrics;
 }
 
+fn paragraphOptionsForStyle(style: TextStyle) layout.ParagraphOptions {
+    return .{
+        .max_width = std.math.inf(f32),
+        .line_height = style.line_height,
+        .letter_spacing = style.letter_spacing,
+        .word_spacing = style.word_spacing,
+        .script_tag = if (style.script) |script| unicode.openTypeScriptTag(script) else null,
+        .features = style.font_features,
+        .normalized_variation_coords = style.normalized_variation_coords,
+    };
+}
+
 pub const AttributedRunLayout = struct {
     allocator: std.mem.Allocator,
     runs: []PositionedAttributedRun,
@@ -419,13 +431,7 @@ pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.Fo
     var leading: f32 = 0;
     for (runs) |run| {
         const run_text = attributed.text[run.byte_range.start..run.byte_range.end()];
-        const options = layout.ParagraphOptions{
-            .max_width = std.math.inf(f32),
-            .line_height = run.style.line_height,
-            .letter_spacing = run.style.letter_spacing,
-            .word_spacing = run.style.word_spacing,
-            .normalized_variation_coords = run.style.normalized_variation_coords,
-        };
+        const options = paragraphOptionsForStyle(run.style);
         const paragraph = try layout.TextShaper.layoutParagraphUtf8WithOptions(cascade, &buffer, run_text, run.style.font_size, options);
         const metrics = textMetricsFromParagraph(paragraph);
         try positioned.append(allocator, .{
@@ -467,14 +473,8 @@ pub fn layoutAttributedGlyphRunsUtf8(allocator: std.mem.Allocator, cascade: layo
     var leading: f32 = 0;
     for (runs) |run| {
         const run_text = attributed.text[run.byte_range.start..run.byte_range.end()];
-        const options = layout.ParagraphOptions{
-            .max_width = std.math.inf(f32),
-            .line_height = run.style.line_height,
-            .letter_spacing = run.style.letter_spacing,
-            .word_spacing = run.style.word_spacing,
-            .normalized_variation_coords = run.style.normalized_variation_coords,
-        };
-        const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &buffer, run_text, run.style.font_size, options);
+        const options = paragraphOptionsForStyle(run.style);
+        const paragraph = try layout.TextShaper.layoutParagraphUtf8WithOptions(cascade, &buffer, run_text, run.style.font_size, options);
         const metrics = textMetricsFromParagraph(paragraph);
         const glyphs = try allocator.dupe(layout.GlyphPosition, paragraph.glyphs);
         errdefer allocator.free(glyphs);
@@ -800,6 +800,31 @@ test "attributed text forwards normalized variation metrics" {
     try std.testing.expectEqual(@as(usize, 1), glyph_runs.runs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 16.08), glyph_runs.metrics.width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 16.08), glyph_runs.runs[0].glyphs[0].x_advance, 0.001);
+}
+
+test "attributed text forwards OpenType feature styling" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildScriptFeatureGsubTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try @import("font.zig").Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const @import("font.zig").Font{&font};
+    const cascade = layout.FontCascade.init(&fonts);
+    const enable_sups = [_]unicode.FeatureOverride{.{ .tag = unicode.tag("sups"), .enabled = true }};
+    const spans = [_]StyleSpan{
+        .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{ .font_size = 20, .font_features = &enable_sups } },
+    };
+    const attributed = AttributedText{ .text = "A", .spans = &spans };
+    var glyph_runs = try layoutAttributedGlyphRunsUtf8(allocator, cascade, attributed);
+    defer glyph_runs.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), glyph_runs.runs.len);
+    try std.testing.expectEqual(@as(usize, 1), glyph_runs.runs[0].glyphs.len);
+    try std.testing.expectEqual(@as(@import("glyph.zig").GlyphId, 2), glyph_runs.runs[0].glyphs[0].glyph_id);
 }
 
 test "measures attributed runs with per span style" {

@@ -350,6 +350,12 @@ pub const ParagraphOptions = struct {
     word_spacing: f32 = 0,
     first_line_indent: f32 = 0,
     paragraph_spacing: f32 = 0,
+    /// Optional shaping controls used before wrapping. Paragraph layout keeps
+    /// these beside spacing/line options so higher-level styled text can drive
+    /// GSUB/GPOS without doing a separate pre-shape pass.
+    script_tag: ?unicode.OpenTypeScriptTag = null,
+    language_tag: ?unicode.OpenTypeLanguageTag = null,
+    features: []const unicode.FeatureOverride = &.{},
     /// Normalized variation-space coordinates forwarded to shaping. Paragraph
     /// layout itself only consumes shaped advances, but variable font metrics
     /// must be selected before line wrapping.
@@ -1551,20 +1557,14 @@ pub const TextShaper = struct {
         // Paragraph layout is deliberately staged: shape first, then line-wrap
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
-        _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, .{
-            .direction = options.direction,
-            .normalized_variation_coords = options.normalized_variation_coords,
-        });
+        _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
         try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
         return buffer.paragraphLayout();
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try validateParagraphOptions(options);
-        _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, .{
-            .direction = options.direction,
-            .normalized_variation_coords = options.normalized_variation_coords,
-        });
+        _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
         try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
         return buffer.paragraphLayout();
     }
@@ -1671,7 +1671,18 @@ fn validateParagraphOptions(options: ParagraphOptions) !void {
     {
         return error.InvalidParagraphOptions;
     }
+    try validateFeatureOverrides(options.features);
     try validateNormalizedVariationCoords(options.normalized_variation_coords);
+}
+
+fn shapeOptionsForParagraph(options: ParagraphOptions) ShapeOptions {
+    return .{
+        .direction = options.direction,
+        .script_tag = options.script_tag,
+        .language_tag = options.language_tag,
+        .features = options.features,
+        .normalized_variation_coords = options.normalized_variation_coords,
+    };
 }
 
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {

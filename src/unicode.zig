@@ -681,6 +681,87 @@ pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
     return .dflt;
 }
 
+/// Map a BCP47-ish locale tag to the OpenType language-system tags currently
+/// modeled by this module. This is intentionally conservative: unsupported
+/// languages return null so callers can fall back to content-based inference.
+pub fn openTypeLanguageTagForLocale(locale_tag: []const u8) ?OpenTypeLanguageTag {
+    var it = std.mem.tokenizeAny(u8, locale_tag, "-_");
+    const language_raw = it.next() orelse return null;
+    const language = canonicalLanguageAlias(language_raw);
+    var script: ?[]const u8 = null;
+    var region: ?[]const u8 = null;
+    while (it.next()) |subtag| {
+        if (script == null and isScriptSubtag(subtag)) {
+            script = subtag;
+            continue;
+        }
+        if (region == null and isRegionSubtag(subtag)) {
+            region = subtag;
+            continue;
+        }
+    }
+
+    if (asciiEqlIgnoreCase(language, "ja")) return .jan;
+    if (asciiEqlIgnoreCase(language, "ko")) return .kor;
+    if (asciiEqlIgnoreCase(language, "ar")) return .ara;
+    if (asciiEqlIgnoreCase(language, "hi")) return .hin;
+    if (asciiEqlIgnoreCase(language, "zh")) {
+        if (script) |script_value| {
+            if (asciiEqlIgnoreCase(script_value, "Hant")) return .zht;
+            if (asciiEqlIgnoreCase(script_value, "Hans")) return .zhs;
+        }
+        if (region) |region_value| {
+            if (asciiEqlIgnoreCase(region_value, "TW") or
+                asciiEqlIgnoreCase(region_value, "HK") or
+                asciiEqlIgnoreCase(region_value, "MO"))
+            {
+                return .zht;
+            }
+        }
+        return .zhs;
+    }
+    return null;
+}
+
+fn canonicalLanguageAlias(language: []const u8) []const u8 {
+    if (asciiEqlIgnoreCase(language, "iw")) return "he";
+    if (asciiEqlIgnoreCase(language, "in")) return "id";
+    if (asciiEqlIgnoreCase(language, "ji")) return "yi";
+    return language;
+}
+
+fn isScriptSubtag(subtag: []const u8) bool {
+    if (subtag.len != 4) return false;
+    for (subtag) |byte| {
+        if (!std.ascii.isAlphabetic(byte)) return false;
+    }
+    return true;
+}
+
+fn isRegionSubtag(subtag: []const u8) bool {
+    if (subtag.len == 2) {
+        for (subtag) |byte| {
+            if (!std.ascii.isAlphabetic(byte)) return false;
+        }
+        return true;
+    }
+    if (subtag.len == 3) {
+        for (subtag) |byte| {
+            if (!std.ascii.isDigit(byte)) return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+fn asciiEqlIgnoreCase(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |lhs, rhs| {
+        if (std.ascii.toLower(lhs) != std.ascii.toLower(rhs)) return false;
+    }
+    return true;
+}
+
 const DecodedCodepoint = struct {
     codepoint: u21,
     next: usize,

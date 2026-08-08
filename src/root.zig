@@ -292,6 +292,7 @@ pub const diagnoseClusterCaretConsistencyUtf8 = @import("layout.zig").diagnoseCl
 pub const diagnoseFontFallbackUtf8 = @import("layout.zig").diagnoseFontFallbackUtf8;
 pub const diagnoseShapeQualityUtf8 = @import("layout.zig").diagnoseShapeQualityUtf8;
 pub const inferOpenTypeLanguageTag = @import("unicode.zig").inferOpenTypeLanguageTag;
+pub const openTypeLanguageTagForLocale = @import("unicode.zig").openTypeLanguageTagForLocale;
 pub const itemizeBidiRuns = @import("unicode.zig").itemizeBidiRuns;
 pub const itemizeGraphemeClusters = @import("unicode.zig").itemizeGraphemeClusters;
 pub const itemizeLineBreaks = @import("unicode.zig").itemizeLineBreaks;
@@ -3108,6 +3109,11 @@ test "detects scripts and itemizes script runs" {
     try std.testing.expectEqual(OpenTypeLanguageTag.kor, inferOpenTypeLanguageTag("한글"));
     try std.testing.expectEqual(OpenTypeLanguageTag.ara, inferOpenTypeLanguageTag("ب"));
     try std.testing.expectEqual(OpenTypeLanguageTag.dflt, inferOpenTypeLanguageTag("A\xff一"));
+    try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .jan), openTypeLanguageTagForLocale("ja-JP"));
+    try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .zhs), openTypeLanguageTagForLocale("zh-Hans-CN"));
+    try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .zht), openTypeLanguageTagForLocale("zh-Hant-TW"));
+    try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .zht), openTypeLanguageTagForLocale("zh-HK"));
+    try std.testing.expect(openTypeLanguageTagForLocale("en-US") == null);
 
     const runs = try itemizeScriptRuns(allocator, "ab 12一丁،ب");
     defer allocator.free(runs);

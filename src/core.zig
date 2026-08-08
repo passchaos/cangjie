@@ -387,36 +387,10 @@ fn paragraphOptionsForStyle(style: TextStyle) layout.ParagraphOptions {
         .letter_spacing = style.letter_spacing,
         .word_spacing = style.word_spacing,
         .script_tag = if (style.script) |script| unicode.openTypeScriptTag(script) else null,
-        .language_tag = openTypeLanguageTagForLocale(style.locale),
+        .language_tag = if (style.locale) |locale| unicode.openTypeLanguageTagForLocale(locale) else null,
         .features = style.font_features,
         .normalized_variation_coords = style.normalized_variation_coords,
     };
-}
-
-fn openTypeLanguageTagForLocale(locale_tag: ?[]const u8) ?unicode.OpenTypeLanguageTag {
-    const tag_text = locale_tag orelse return null;
-    const parts = (Locale{ .tag = tag_text }).parse() catch return null;
-    const language = canonicalLanguageAlias(parts.language);
-    if (asciiEqlIgnoreCase(language, "ja")) return .jan;
-    if (asciiEqlIgnoreCase(language, "ko")) return .kor;
-    if (asciiEqlIgnoreCase(language, "ar")) return .ara;
-    if (asciiEqlIgnoreCase(language, "hi")) return .hin;
-    if (asciiEqlIgnoreCase(language, "zh")) {
-        if (parts.script) |script| {
-            if (asciiEqlIgnoreCase(script, "Hant")) return .zht;
-            if (asciiEqlIgnoreCase(script, "Hans")) return .zhs;
-        }
-        if (parts.region) |region| {
-            if (asciiEqlIgnoreCase(region, "TW") or
-                asciiEqlIgnoreCase(region, "HK") or
-                asciiEqlIgnoreCase(region, "MO"))
-            {
-                return .zht;
-            }
-        }
-        return .zhs;
-    }
-    return null;
 }
 
 pub const AttributedRunLayout = struct {

@@ -24,6 +24,19 @@ pub const GlyphInfo = struct {
     tuple_data_offset: usize,
 };
 
+pub const TupleInfo = struct {
+    glyph_id: u16,
+    tuple_index_in_glyph: u16,
+    header_offset: usize,
+    header_size: usize,
+    variation_data_size: usize,
+    raw_tuple_index: u16,
+    embedded_peak_tuple: bool,
+    intermediate_region: bool,
+    private_point_numbers: bool,
+    shared_tuple_index: ?u16 = null,
+};
+
 pub fn validate(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!void {
     _ = try info(data, offset, length, expected_glyph_count, expected_axis_count);
 }
@@ -54,6 +67,22 @@ pub fn glyphInfo(data: []const u8, offset: usize, length: usize, expected_glyph_
         .uses_shared_point_numbers = (raw_tuple_count & 0x8000) != 0,
         .tuple_data_offset = tuple_data_offset,
     };
+}
+
+pub fn tupleInfo(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize) Error!?TupleInfo {
+    const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return null;
+    if (tuple_index_in_glyph >= glyph.tuple_count) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    var header_offset = glyph.data_offset + 4;
+    var tuple_data_bytes: usize = 0;
+    for (0..glyph.tuple_count) |index| {
+        const tuple = try readTupleInfo(table, parsed, glyph, header_offset, index, tuple_data_bytes);
+        if (index == tuple_index_in_glyph) return tuple;
+        header_offset += tuple.header_size;
+        tuple_data_bytes += tuple.variation_data_size;
+    }
+    return error.BadSfnt;
 }
 
 pub fn info(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!Info {
@@ -104,6 +133,38 @@ pub fn info(data: []const u8, offset: usize, length: usize, expected_glyph_count
         .glyph_data_offset = glyph_data_offset,
         .offset_size = offset_size,
         .glyph_variation_data_count = variation_data_count,
+    };
+}
+
+fn readTupleInfo(table: []const u8, parsed: Info, glyph: GlyphInfo, header_offset: usize, tuple_index_in_glyph: usize, preceding_tuple_data_bytes: usize) Error!TupleInfo {
+    if (header_offset < glyph.data_offset or header_offset > glyph.data_offset + glyph.tuple_data_offset) return error.BadSfnt;
+    if (header_offset > table.len or table.len - header_offset < 4) return error.BadSfnt;
+    const variation_data_size = readU16(table, header_offset);
+    const raw_tuple_index = readU16(table, header_offset + 2);
+    if ((raw_tuple_index & 0x1000) != 0) return error.BadSfnt;
+    const embedded_peak_tuple = (raw_tuple_index & 0x8000) != 0;
+    const intermediate_region = (raw_tuple_index & 0x4000) != 0;
+    const private_point_numbers = (raw_tuple_index & 0x2000) != 0;
+    const shared_tuple_index: ?u16 = if (embedded_peak_tuple) null else raw_tuple_index & 0x0fff;
+    if (shared_tuple_index) |shared| {
+        if (shared >= parsed.shared_tuple_count) return error.BadSfnt;
+    }
+    var header_size: usize = 4;
+    if (embedded_peak_tuple) header_size += @as(usize, parsed.axis_count) * 2;
+    if (intermediate_region) header_size += @as(usize, parsed.axis_count) * 4;
+    if (header_size > glyph.data_offset + glyph.tuple_data_offset - header_offset) return error.BadSfnt;
+    if (variation_data_size > glyph.data_length - glyph.tuple_data_offset - preceding_tuple_data_bytes) return error.BadSfnt;
+    return .{
+        .glyph_id = glyph.glyph_id,
+        .tuple_index_in_glyph = @intCast(tuple_index_in_glyph),
+        .header_offset = header_offset,
+        .header_size = header_size,
+        .variation_data_size = variation_data_size,
+        .raw_tuple_index = raw_tuple_index,
+        .embedded_peak_tuple = embedded_peak_tuple,
+        .intermediate_region = intermediate_region,
+        .private_point_numbers = private_point_numbers,
+        .shared_tuple_index = shared_tuple_index,
     };
 }
 
@@ -164,4 +225,30 @@ test "gvar glyph metadata exposes tuple headers" {
     try std.testing.expectEqual(@as(u16, 1), parsed.tuple_count);
     try std.testing.expectEqual(@as(usize, 4), parsed.tuple_data_offset);
     try std.testing.expect(!parsed.uses_shared_point_numbers);
+}
+
+test "gvar tuple metadata exposes tuple flags" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 6, // offsets: 0, 12.
+        0, 1, 0, 10, // GlyphVariationData header.
+        0, 2, 0xa0, 0x00, // Tuple header: variationDataSize=2, embedded peak + private points.
+        0x40, 0x00, // embedded peak tuple.
+        0, 0, // two bytes tuple data.
+    };
+    const tuple = (try tupleInfo(&bytes, 0, bytes.len, 1, 1, 0, 0)).?;
+    try std.testing.expectEqual(@as(u16, 0), tuple.glyph_id);
+    try std.testing.expectEqual(@as(usize, 28), tuple.header_offset);
+    try std.testing.expectEqual(@as(usize, 6), tuple.header_size);
+    try std.testing.expectEqual(@as(usize, 2), tuple.variation_data_size);
+    try std.testing.expect(tuple.embedded_peak_tuple);
+    try std.testing.expect(tuple.private_point_numbers);
+    try std.testing.expect(!tuple.intermediate_region);
+    try std.testing.expect(tuple.shared_tuple_index == null);
 }

@@ -8349,8 +8349,12 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
     // X and Y values are stored as deltas in two separate streams. Expand the
     // run-length encoded flags into the point records themselves so the hot
     // outline path does not carry a second per-point allocation.
-    var points = try outline.allocator.alloc(FlaggedPoint, total_points);
-    defer outline.allocator.free(points);
+    var inline_points: [64]FlaggedPoint = undefined;
+    const points = if (total_points <= inline_points.len)
+        inline_points[0..total_points]
+    else
+        try outline.allocator.alloc(FlaggedPoint, total_points);
+    defer if (total_points > inline_points.len) outline.allocator.free(points);
     var i: usize = 0;
     while (i < total_points) : (i += 1) {
         const flag = try r.readU8();

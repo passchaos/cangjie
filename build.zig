@@ -102,4 +102,41 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         glyph_bench_cmd.addArgs(args);
     }
+
+    const bench_smoke_step = b.step("bench-smoke", "Run quick TSV smoke checks for benchmark tools");
+    const shape_bench_smoke_cmd = b.addRunArtifact(shape_bench_exe);
+    shape_bench_smoke_cmd.addArgs(&.{
+        "--engine",     "cangjie",
+        "--format",     "tsv",
+        "--builtin",    "script-feature",
+        "--text",       "A",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&shape_bench_smoke_cmd.step);
+
+    const glyph_outline_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_outline_smoke_cmd.addArgs(&.{
+        "--mode",       "outline",
+        "--format",     "tsv",
+        "--builtin",    "gvar-compound",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+        "--variation",  "0.5",
+    });
+    bench_smoke_step.dependOn(&glyph_outline_smoke_cmd.step);
+
+    const glyph_raster_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_raster_smoke_cmd.addArgs(&.{
+        "--mode",       "raster",
+        "--format",     "tsv",
+        "--builtin",    "gvar-compound",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+        "--variation",  "0.5",
+    });
+    bench_smoke_step.dependOn(&glyph_raster_smoke_cmd.step);
 }

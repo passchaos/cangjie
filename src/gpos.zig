@@ -3577,12 +3577,36 @@ fn ensureGlyphClassSetIndexWithin(table: Table, class_def_offset: usize, glyph: 
 }
 
 fn classValueForValidation(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u16 {
-    return classValue(table, class_def_offset, glyph) catch |err| {
+    return classValueTrusted(table, class_def_offset, glyph) catch |err| {
         return switch (err) {
             error.EndOfStream => error.BadGpos,
             else => err,
         };
     };
+}
+
+fn classValueTrusted(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u16 {
+    // Only parse-time validation calls this after `ensureClassDefTableWithin`
+    // has already proven the ClassDef layout and range ordering. Large GPOS
+    // contextual tables can ask for the class of every covered glyph; reusing
+    // the prior proof avoids repeatedly walking the same format-2 range array.
+    const format = try readU16(table, class_def_offset);
+    switch (format) {
+        1 => {
+            const start = try readU16(table, class_def_offset + 2);
+            const count = try readU16(table, class_def_offset + 4);
+            const glyph_index = @as(usize, glyph);
+            const start_index = @as(usize, start);
+            const end_exclusive = start_index + @as(usize, count);
+            if (glyph_index < start_index or glyph_index >= end_exclusive) return 0;
+            return try readU16(table, class_def_offset + 6 + (glyph_index - start_index) * 2);
+        },
+        2 => {
+            const range_count = try readU16(table, class_def_offset + 2);
+            return if (try findSortedGlyphRangeRecord(table, class_def_offset + 4, range_count, glyph)) |record| record.value else 0;
+        },
+        else => return error.UnsupportedGpos,
+    }
 }
 
 fn ensureContextCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GposError!void {

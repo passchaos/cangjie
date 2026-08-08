@@ -8480,6 +8480,9 @@ fn boundsForFlaggedPoints(points: []const FlaggedPoint) glyph_mod.Bounds {
 fn gvarDeltaForPoint(deltas: []const GvarScaledPointDelta, point: usize) gvar_mod.Point {
     if (point > std.math.maxInt(u16)) return .{ .x = 0, .y = 0 };
     const point_id: u16 = @intCast(point);
+    if (point < deltas.len and deltas[point].point == point_id) {
+        return .{ .x = deltas[point].x, .y = deltas[point].y };
+    }
     var result = gvar_mod.Point{ .x = 0, .y = 0 };
     for (deltas) |delta| {
         if (delta.point != point_id) continue;

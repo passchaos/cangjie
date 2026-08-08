@@ -3,6 +3,65 @@ const bin = @import("../binary.zig");
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error || error{EndOfStream};
 
+pub const Constant = enum(u8) {
+    script_percent_scale_down = 0,
+    script_script_percent_scale_down = 1,
+    delimited_sub_formula_min_height = 2,
+    display_operator_min_height = 3,
+    math_leading = 4,
+    axis_height = 5,
+    accent_base_height = 6,
+    flattened_accent_base_height = 7,
+    subscript_shift_down = 8,
+    subscript_top_max = 9,
+    subscript_baseline_drop_min = 10,
+    superscript_shift_up = 11,
+    superscript_shift_up_cramped = 12,
+    superscript_bottom_min = 13,
+    superscript_baseline_drop_max = 14,
+    sub_superscript_gap_min = 15,
+    superscript_bottom_max_with_subscript = 16,
+    space_after_script = 17,
+    upper_limit_gap_min = 18,
+    upper_limit_baseline_rise_min = 19,
+    lower_limit_gap_min = 20,
+    lower_limit_baseline_drop_min = 21,
+    stack_top_shift_up = 22,
+    stack_top_display_style_shift_up = 23,
+    stack_bottom_shift_down = 24,
+    stack_bottom_display_style_shift_down = 25,
+    stack_gap_min = 26,
+    stack_display_style_gap_min = 27,
+    stretch_stack_top_shift_up = 28,
+    stretch_stack_bottom_shift_down = 29,
+    stretch_stack_gap_above_min = 30,
+    stretch_stack_gap_below_min = 31,
+    fraction_numerator_shift_up = 32,
+    fraction_numerator_display_style_shift_up = 33,
+    fraction_denominator_shift_down = 34,
+    fraction_denominator_display_style_shift_down = 35,
+    fraction_numerator_gap_min = 36,
+    fraction_num_display_style_gap_min = 37,
+    fraction_rule_thickness = 38,
+    fraction_denominator_gap_min = 39,
+    fraction_denom_display_style_gap_min = 40,
+    skewed_fraction_horizontal_gap = 41,
+    skewed_fraction_vertical_gap = 42,
+    overbar_vertical_gap = 43,
+    overbar_rule_thickness = 44,
+    overbar_extra_ascender = 45,
+    underbar_vertical_gap = 46,
+    underbar_rule_thickness = 47,
+    underbar_extra_descender = 48,
+    radical_vertical_gap = 49,
+    radical_display_style_vertical_gap = 50,
+    radical_rule_thickness = 51,
+    radical_extra_ascender = 52,
+    radical_kern_before_degree = 53,
+    radical_kern_after_degree = 54,
+    radical_degree_bottom_raise_percent = 55,
+};
+
 pub const ValueRecord = struct {
     value: i16,
     device_offset: u16,
@@ -102,6 +161,24 @@ pub fn validate(data: []const u8, offset: usize, length: usize) Error!void {
     try validateConstants(data, offset, length, h.constants_offset);
     try validateGlyphInfo(data, offset, length, h.glyph_info_offset);
     try validateVariants(data, offset, length, h.variants_offset);
+}
+
+pub fn constantValue(data: []const u8, offset: usize, length: usize, constant: Constant) Error!i32 {
+    const h = try header(data, offset, length);
+    try validateConstants(data, offset, length, h.constants_offset);
+    const constants = offset + h.constants_offset;
+    return switch (constant) {
+        .script_percent_scale_down => try bin.readI16At(data, constants),
+        .script_script_percent_scale_down => try bin.readI16At(data, constants + 2),
+        .delimited_sub_formula_min_height => try bin.readU16At(data, constants + 4),
+        .display_operator_min_height => try bin.readU16At(data, constants + 6),
+        .radical_degree_bottom_raise_percent => try bin.readI16At(data, constants + 212),
+        else => |tag| blk: {
+            const index = @intFromEnum(tag);
+            if (index < 4 or index > 54) return error.BadSfnt;
+            break :blk try bin.readI16At(data, constants + 8 + (@as(usize, index) - 4) * 4);
+        },
+    };
 }
 
 pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize) Error!Info {
@@ -735,6 +812,10 @@ test "MATH constants expose scalar and value-record metadata" {
     try std.testing.expectEqual(@as(u16, 1200), parsed.constants.display_operator_min_height);
     try std.testing.expectEqual(@as(i16, 11), parsed.constants.value_records[0].value);
     try std.testing.expectEqual(@as(i16, 55), parsed.constants.radical_degree_bottom_raise_percent);
+    try std.testing.expectEqual(@as(i32, 80), try constantValue(&bytes, 0, bytes.len, .script_percent_scale_down));
+    try std.testing.expectEqual(@as(i32, 1200), try constantValue(&bytes, 0, bytes.len, .display_operator_min_height));
+    try std.testing.expectEqual(@as(i32, 11), try constantValue(&bytes, 0, bytes.len, .math_leading));
+    try std.testing.expectEqual(@as(i32, 55), try constantValue(&bytes, 0, bytes.len, .radical_degree_bottom_raise_percent));
     try std.testing.expectEqual(@as(?usize, 8), parsed.glyph_info.italics_correction_info_offset);
     try std.testing.expectEqual(@as(?usize, 24), parsed.glyph_info.top_accent_attachment_offset);
     try std.testing.expectEqual(@as(?usize, 40), parsed.glyph_info.extended_shape_coverage_offset);

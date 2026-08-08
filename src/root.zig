@@ -114,6 +114,7 @@ pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
 pub const TrueTypeProgramInstructionInfo = @import("font.zig").TrueTypeProgramInstructionInfo;
 pub const TrueTypeProgramKind = @import("font.zig").TrueTypeProgramKind;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
+pub const MathConstant = @import("font.zig").MathConstant;
 pub const MathInfo = @import("font.zig").MathInfo;
 pub const MathConstantsInfo = @import("font.zig").MathConstantsInfo;
 pub const MathValueRecordInfo = @import("font.zig").MathValueRecordInfo;
@@ -576,6 +577,10 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expectEqual(@as(usize, 51), info.constants.value_records.len);
     try std.testing.expectEqual(MathValueRecordInfo{ .value = 11, .device_offset = 0 }, info.constants.value_records[0]);
     try std.testing.expectEqual(@as(i16, 55), info.constants.radical_degree_bottom_raise_percent);
+    try std.testing.expectEqual(@as(?i32, 80), try font.mathConstantRaw(.script_percent_scale_down));
+    try std.testing.expectEqual(@as(?i32, 1200), try font.mathConstantRaw(.display_operator_min_height));
+    try std.testing.expectEqual(@as(?i32, 11), try font.mathConstantRaw(.math_leading));
+    try std.testing.expectEqual(@as(?i32, 55), try font.mathConstantRaw(.radical_degree_bottom_raise_percent));
     try std.testing.expectEqual(@as(?usize, 8), info.glyph_info.italics_correction_info_offset);
     try std.testing.expectEqual(@as(?usize, 24), info.glyph_info.top_accent_attachment_offset);
     try std.testing.expectEqual(@as(?usize, 40), info.glyph_info.extended_shape_coverage_offset);
@@ -610,6 +615,7 @@ test "MATH constants metadata is exposed when present" {
     var missing = try Font.parse(allocator, missing_bytes);
     defer missing.deinit();
     try std.testing.expect((try missing.mathInfo(allocator)) == null);
+    try std.testing.expect((try missing.mathConstantRaw(.math_leading)) == null);
 }
 
 test "lazy MATH metadata revalidates borrowed table bytes" {

@@ -49,6 +49,7 @@ pub const FontFormat = enum {
 };
 
 pub const Cff2Info = cff2_mod.Info;
+pub const MathConstant = math_mod.Constant;
 pub const MathInfo = math_mod.Info;
 pub const MathConstantsInfo = math_mod.Constants;
 pub const MathValueRecordInfo = math_mod.ValueRecord;
@@ -1284,6 +1285,14 @@ pub const Font = struct {
         const ltag = self.ltag orelse return try allocator.alloc(LtagRecordInfo, 0);
         try validateSfntTableChecksum(self.data, ltag);
         return try ltag_mod.records(allocator, self.data, ltag.offset, ltag.length);
+    }
+
+    /// Read one raw OpenType `MATH` constant, mirroring HarfBuzz's math constant selector.
+    pub fn mathConstantRaw(self: *const Font, constant: MathConstant) FontError!?i32 {
+        const math = self.math orelse return null;
+        try validateSfntTableChecksum(self.data, math);
+        try validateMathTable(self.data, math);
+        return try math_mod.constantValue(self.data, math.offset, math.length, constant);
     }
 
     /// Read validated constants metadata from the optional OpenType `MATH` table.

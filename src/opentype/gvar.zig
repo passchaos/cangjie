@@ -355,6 +355,38 @@ pub fn decodeScaledTuplePointDeltas(data: []const u8, offset: usize, length: usi
     return count;
 }
 
+pub fn accumulateGlyphPointDeltas(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, all_points: []const u16, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta) Error!usize {
+    const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return 0;
+    var out_count: usize = 0;
+    if (all_points.len != 0) {
+        if (out.len < all_points.len) return error.BadSfnt;
+        for (all_points, 0..) |point, index| out[index] = .{ .point = point, .x = 0, .y = 0 };
+        out_count = all_points.len;
+    }
+
+    for (0..glyph.tuple_count) |tuple_index| {
+        const delta_count = try decodeScaledTuplePointDeltas(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index, normalized_coords, all_points, raw_scratch, scaled_scratch);
+        for (scaled_scratch[0..delta_count]) |delta| {
+            var found: ?usize = null;
+            for (out[0..out_count], 0..) |existing, index| {
+                if (existing.point == delta.point) {
+                    found = index;
+                    break;
+                }
+            }
+            const target_index = found orelse blk: {
+                if (out_count == out.len) return error.BadSfnt;
+                out[out_count] = .{ .point = delta.point, .x = 0, .y = 0 };
+                out_count += 1;
+                break :blk out_count - 1;
+            };
+            out[target_index].x += delta.x;
+            out[target_index].y += delta.y;
+        }
+    }
+    return out_count;
+}
+
 pub fn tupleScalar(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, normalized_coords: []const f32) Error!f32 {
     const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
     const tuple = (try tupleInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph)) orelse return error.BadSfnt;
@@ -789,4 +821,32 @@ test "gvar tuple payload decodes scaled point deltas" {
     try std.testing.expectEqual(@as(u16, 5), out[0].point);
     try std.testing.expectEqual(@as(f32, 2), out[0].x);
     try std.testing.expectEqual(@as(f32, -2), out[0].y);
+}
+
+test "gvar accumulates scaled glyph point deltas" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 15, // offsets: 0, 30.
+        0, 2, 0, 16, // GlyphVariationData header: two tuples, dataOffset 16.
+        0, 7, 0xa0, 0x00, // tuple 0: size 7, embedded peak + private points.
+        0x40, 0x00, // peak = 1.
+        0, 7, 0xa0, 0x00, // tuple 1: size 7, embedded peak + private points.
+        0x40, 0x00, // peak = 1.
+        1, 0, 5, 0, 8, 0, 0, // tuple 0 payload: point 5, x +8, y 0.
+        1, 0, 5, 0, 4, 0, 2, // tuple 1 payload: point 5, x +4, y +2.
+    };
+    var raw: [1]PointDelta = undefined;
+    var scaled: [1]ScaledPointDelta = undefined;
+    var out: [1]ScaledPointDelta = undefined;
+    const count = try accumulateGlyphPointDeltas(&bytes, 0, bytes.len, 1, 1, 0, &.{0.5}, &.{}, &raw, &scaled, &out);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(u16, 5), out[0].point);
+    try std.testing.expectEqual(@as(f32, 6), out[0].x);
+    try std.testing.expectEqual(@as(f32, 1), out[0].y);
 }

@@ -665,6 +665,17 @@ pub const Rasterizer = struct {
                 if (intersections.len < 2) continue;
                 sortWindingIntersections(intersections);
 
+                if (intersections.len == 2 and @abs(intersections[1].x - intersections[0].x) > 0.000001) {
+                    if (fill_rule == .even_odd or intersections[0].delta != 0) {
+                        if (coverSpan(coverage_counts, min_x, max_x, sample_offsets, intersections[0].x, intersections[1].x)) |span| {
+                            row_has_coverage = true;
+                            row_min_x = @min(row_min_x, span.min_x);
+                            row_max_x = @max(row_max_x, span.max_x);
+                        }
+                    }
+                    continue;
+                }
+
                 switch (fill_rule) {
                     .non_zero => {
                         var winding: i32 = 0;

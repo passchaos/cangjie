@@ -61,6 +61,7 @@ pub const MathConstructionInfo = math_mod.Construction;
 pub const MathKernInfo = math_mod.MathKernInfo;
 pub const MathKernRecordInfo = math_mod.MathKernRecord;
 pub const MathKernTableInfo = math_mod.MathKern;
+pub const MathKernCorner = math_mod.KernCorner;
 
 pub const CvarInfo = cvar_mod.Info;
 pub const CvarTupleInfo = cvar_mod.TupleInfo;
@@ -1352,6 +1353,14 @@ pub const Font = struct {
         const construction = math_mod.constructionForGlyph(&info_value, glyph_id, vertical) orelse return null;
         const assembly = construction.assembly orelse return null;
         return assembly.italics_correction;
+    }
+
+    /// Return a raw MATH kern value for a glyph/corner/correction-height tuple.
+    pub fn mathKernValue(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, corner: MathKernCorner, correction_height: i16) FontError!?i16 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const info_value = (try self.mathInfo(allocator)) orelse return null;
+        defer self.freeMathInfo(allocator, info_value);
+        return math_mod.kernValue(&info_value, glyph_id, corner, correction_height);
     }
 
     /// Read one raw OpenType `MATH` constant, mirroring HarfBuzz's math constant selector.

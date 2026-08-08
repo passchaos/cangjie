@@ -81,6 +81,13 @@ pub const Constants = struct {
     radical_degree_bottom_raise_percent: i16,
 };
 
+pub const KernCorner = enum(u2) {
+    top_right = 0,
+    top_left = 1,
+    bottom_right = 2,
+    bottom_left = 3,
+};
+
 pub const MathKern = struct {
     offset: usize,
     correction_heights: []ValueRecord,
@@ -222,6 +229,20 @@ pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, lengt
         .glyph_info = glyph_info,
         .variants = variants,
     };
+}
+
+pub fn kernValue(value: *const Info, glyph_id: u16, corner: KernCorner, correction_height: i16) ?i16 {
+    const kern_info = value.glyph_info.math_kern_info orelse return null;
+    for (kern_info.records) |record| {
+        if (record.glyph_id != glyph_id) continue;
+        const kern = record.kerns[@intFromEnum(corner)] orelse return null;
+        var index: usize = 0;
+        while (index < kern.correction_heights.len) : (index += 1) {
+            if (correction_height < kern.correction_heights[index].value) break;
+        }
+        return kern.kern_values[index].value;
+    }
+    return null;
 }
 
 pub fn constructionForGlyph(value: *const Info, glyph_id: u16, vertical: bool) ?*const Construction {
@@ -868,7 +889,7 @@ test "MATH constants expose scalar and value-record metadata" {
     writeU16(&bytes, 328, 18);
     writeU16(&bytes, 336, 1);
     writeU16(&bytes, 338, 1);
-    writeU16(&bytes, 340, 3);
+    writeU16(&bytes, 340, 1);
     writeU16(&bytes, 342, 1);
     writeI16(&bytes, 344, 10);
     writeI16(&bytes, 348, -20);
@@ -902,6 +923,9 @@ test "MATH constants expose scalar and value-record metadata" {
     try std.testing.expectEqualSlices(u16, &.{1}, parsed.variants.vertical_glyphs);
     try std.testing.expectEqualSlices(u16, &.{0}, parsed.variants.horizontal_glyphs);
     try std.testing.expectEqual(@as(usize, 2), parsed.variants.construction_offsets.len);
+    try std.testing.expectEqual(@as(?i16, -20), kernValue(&parsed, 1, .top_right, 0));
+    try std.testing.expectEqual(@as(?i16, -30), kernValue(&parsed, 1, .top_right, 10));
+    try std.testing.expectEqual(@as(?i16, null), kernValue(&parsed, 0, .top_right, 0));
 }
 
 test "MATH rejects malformed constants offsets" {

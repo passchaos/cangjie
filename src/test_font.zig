@@ -3278,7 +3278,7 @@ fn mathTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 328, 18);
     writeU16(bytes, 336, 1);
     writeU16(bytes, 338, 1);
-    writeU16(bytes, 340, 3);
+    writeU16(bytes, 340, 1);
     writeU16(bytes, 342, 1);
     writeI16(bytes, 344, 10);
     writeI16(bytes, 348, -20);

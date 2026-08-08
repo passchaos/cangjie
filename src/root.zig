@@ -620,11 +620,14 @@ test "MATH constants metadata is exposed when present" {
 
     const kern_info = info.glyph_info.math_kern_info.?;
     try std.testing.expectEqual(@as(usize, 1), kern_info.records.len);
-    try std.testing.expectEqual(@as(u16, 3), kern_info.records[0].glyph_id);
+    try std.testing.expectEqual(@as(u16, 1), kern_info.records[0].glyph_id);
     const top_right = kern_info.records[0].kerns[0].?;
     try std.testing.expectEqual(MathValueRecordInfo{ .value = 10, .device_offset = 0 }, top_right.correction_heights[0]);
     try std.testing.expectEqual(MathValueRecordInfo{ .value = -20, .device_offset = 0 }, top_right.kern_values[0]);
     try std.testing.expectEqual(MathValueRecordInfo{ .value = -30, .device_offset = 0 }, top_right.kern_values[1]);
+    try std.testing.expectEqual(@as(?i16, -20), try font.mathKernValue(allocator, 1, .top_right, 0));
+    try std.testing.expectEqual(@as(?i16, -30), try font.mathKernValue(allocator, 1, .top_right, 10));
+    try std.testing.expectEqual(@as(?i16, null), try font.mathKernValue(allocator, 0, .top_right, 0));
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);
@@ -637,6 +640,7 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expect((try missing.mathGlyphVariants(allocator, 1, true)) == null);
     try std.testing.expect((try missing.mathGlyphAssemblyParts(allocator, 1, true)) == null);
     try std.testing.expect((try missing.mathGlyphAssemblyItalicsCorrection(allocator, 1, true)) == null);
+    try std.testing.expect((try missing.mathKernValue(allocator, 1, .top_right, 0)) == null);
 }
 
 test "lazy MATH metadata revalidates borrowed table bytes" {

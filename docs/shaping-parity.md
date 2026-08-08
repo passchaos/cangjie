@@ -157,6 +157,14 @@ Current local snapshot after the Nastaliq parity work:
   reported `validateShapingMetadata` among functions above the `0.5%` cutoff.
   The paired Roboto `en-words` medians were `971 ns/glyph` for the baseline and
   `964 ns/glyph` for the candidate, with identical checksums.
+- Inlining the overwhelmingly common zero-flag and `IgnoreMarks` glyph-filter
+  branches in GSUB and GPOS, while keeping mark-set and attachment filtering in
+  a cold helper, reduced a same-session seven-sample Amiri
+  `fa-thelittleprince` median from `1635 ns/glyph` to `1618 ns/glyph`, about
+  `1.1%`. The corresponding Roboto `en-words` medians were `974 ns/glyph`
+  baseline and `964 ns/glyph` candidate. A follow-up `perf` sample no longer
+  showed the common filter as an out-of-line symbol; only the genuinely complex
+  GPOS path remained, at about `0.2%`.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

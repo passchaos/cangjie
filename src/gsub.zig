@@ -2386,12 +2386,15 @@ fn applySingleSubstitutionAccelerated(table: Table, accelerator: SingleSubstAcce
     }
 }
 
-fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) bool {
+inline fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) bool {
     if (lookup_flag == 0) return false;
     const classes = options.glyph_classes;
     const class = if (classes) |items| if (glyph < items.len) items[glyph] else 0 else 0;
     if (lookup_flag == 0x0008) return class == 3;
+    return lookupIgnoresGlyphComplex(lookup_flag, options, glyph, class);
+}
 
+noinline fn lookupIgnoresGlyphComplex(lookup_flag: u16, options: LookupOptions, glyph: GlyphId, class: u16) bool {
     // UseMarkFilteringSet appends a set index after the SubTable offsets; it
     // does not consume the high-byte MarkAttachmentType bits. Apply both mark
     // filters independently so a lookup can require a selected mark set and a
@@ -2405,7 +2408,7 @@ fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) 
         if (is_mark and !in_selected_set) return true;
     }
 
-    if (classes != null) {
+    if (options.glyph_classes != null) {
         if ((lookup_flag & 0x0002) != 0 and class == 1) return true;
         if ((lookup_flag & 0x0004) != 0 and class == 2) return true;
         if ((lookup_flag & 0x0008) != 0 and class == 3) return true;

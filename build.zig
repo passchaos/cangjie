@@ -69,6 +69,25 @@ pub fn build(b: *std.Build) void {
         line_break_bench_cmd.addArgs(args);
     }
 
+    const reflow_bench_exe = b.addExecutable(.{
+        .name = "cangjie-reflow-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/reflow_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+            },
+        }),
+    });
+
+    const reflow_bench_step = b.step("reflow-bench", "Compare repeated shaping with retained paragraph reflow");
+    const reflow_bench_cmd = b.addRunArtifact(reflow_bench_exe);
+    reflow_bench_step.dependOn(&reflow_bench_cmd.step);
+    if (b.args) |args| {
+        reflow_bench_cmd.addArgs(args);
+    }
+
     const harfbuzz_c = b.addTranslateC(.{
         .root_source_file = b.path("tools/shape_bench/harfbuzz.h"),
         .target = target,

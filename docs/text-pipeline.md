@@ -100,6 +100,14 @@ layer is a separate migration.
 `WrapMode.no_wrap` is also enforced by reflow now: width does not introduce
 soft lines, but mandatory Unicode line separators still do.
 
+`ShapedParagraph` now implements the first width-independent paragraph
+boundary. It owns source text plus pristine shaped glyph/run snapshots.
+`ReflowBuffer` restores those snapshots before each layout, so different
+widths, line limits, tabs, spacing, and ellipsis can be applied repeatedly
+without another GSUB/GPOS pass and without accumulating mutations. Reflow
+rejects direction, script, language, feature, or variation changes because
+those options require reshaping.
+
 ## Generated Data And Reproducibility
 
 The runtime table is generated from `unicode-linebreak 0.1.5`'s `tables.rs`:
@@ -157,17 +165,15 @@ Future changes must preserve these rules:
 
 1. Extract generated UAX #29 grapheme analysis from `unicode.zig` and expose a
    streaming boundary API shared by shaping and emergency wrapping.
-2. Introduce a width-independent `ShapedParagraph`/`TextLayout` object so
-   different widths can reflow without reshaping, following Parley's split.
-3. Move bidi visual reordering from whole-paragraph shaping to final lines.
-4. Add explicit shaping-cluster safety flags modeled after HarfBuzz and merge
+2. Move bidi visual reordering from whole-paragraph shaping to final lines.
+3. Add explicit shaping-cluster safety flags modeled after HarfBuzz and merge
    them with UAX #14 opportunities.
-5. Consolidate plan caches and transient arrays into reusable shaping/layout
+4. Consolidate plan caches and transient arrays into reusable shaping/layout
    contexts, following HarfBuzz and Swash lifetime boundaries.
-6. Add optional dictionary segmentation and hyphenation as tailoring layers;
+5. Add optional dictionary segmentation and hyphenation as tailoring layers;
    do not bake language-specific guesses into the default UAX #14 state
    machine.
-7. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
+6. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
    does not by itself establish end-to-end superiority over reference engines.
 
 The standalone iterator benchmark is:
@@ -186,3 +192,18 @@ Rust's already-valid `&str` input. Validation does not run inside the
 per-scalar iterator step. The iterator is correct and allocation-free, but does
 not yet beat the reference performance bar; this result must not be presented
 as a performance win.
+
+Repeated reflow can be compared with the legacy shape-on-every-layout path:
+
+```sh
+zig build reflow-bench -Doptimize=ReleaseFast -- --iterations 10000
+```
+
+On the initial 39-glyph, four-width fixture, retained reflow measured about
+`10.4x` faster than calling the complete shape-and-layout path for every width,
+and about `3.0x` faster than the existing shaped-run cache path, with identical
+glyph/line-count checksums. The retained paragraph caches both grapheme and
+line-break analysis and restores directly into reusable output storage, so
+repeated widths do not redo Unicode boundary work or cache lookup/copy setup.
+This is an architectural workload win, not a claim that Cangjie's individual
+shaping or line-breaking stages already outperform every external reference.

@@ -677,6 +677,87 @@ pub const ParagraphLayout = struct {
     }
 };
 
+/// Width-independent, owning paragraph content.
+///
+/// HarfBuzz shapes one homogeneous buffer, while Parley retains shaped
+/// paragraph content and rebuilds only visual lines when the available width
+/// changes. This object is Cangjie's equivalent boundary: it owns immutable
+/// source bytes, glyphs, font runs, and Unicode boundary analysis, but no line
+/// geometry. Fonts referenced by `runs` must outlive this object and every
+/// layout returned from it.
+pub const ShapedParagraph = struct {
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    glyphs: []const GlyphPosition,
+    runs: []const CascadeRun,
+    grapheme_clusters: []const unicode.GraphemeCluster,
+    line_breaks: []const unicode.LineBreak,
+    default_metrics: BaselineMetrics,
+    shape_key: ShapePlanKey,
+
+    pub fn deinit(self: *ShapedParagraph) void {
+        self.allocator.free(self.line_breaks);
+        self.allocator.free(self.grapheme_clusters);
+        self.allocator.free(self.runs);
+        self.allocator.free(self.glyphs);
+        self.allocator.free(self.text);
+        self.* = undefined;
+    }
+
+    pub fn shapedText(self: *const ShapedParagraph) ShapedText {
+        return .{ .glyphs = self.glyphs, .runs = self.runs };
+    }
+
+    /// Reflow this immutable shaping result into reusable output storage.
+    ///
+    /// The returned slices borrow `reflow` and remain valid until its next
+    /// `layout` call or deinitialization. A separate `ReflowBuffer` may be used
+    /// concurrently for the same paragraph; one buffer itself is single-user.
+    pub fn layout(self: *const ShapedParagraph, reflow: *ReflowBuffer, options: ParagraphOptions) !ParagraphLayout {
+        try validateParagraphOptions(options);
+        if (!paragraphOptionsMatchShapeKey(self.text, options, self.shape_key)) {
+            return error.ParagraphShapingOptionsChanged;
+        }
+        try reflow.restore(self);
+        errdefer reflow.buffer.clear();
+        try buildParagraphLines(
+            &reflow.buffer,
+            self.text,
+            options,
+            self.default_metrics,
+            self.grapheme_clusters,
+            self.line_breaks,
+        );
+        return reflow.buffer.paragraphLayout();
+    }
+};
+
+/// Reusable scratch/output storage for reflowing a `ShapedParagraph`.
+///
+/// Reflow restores pristine shaped glyphs and runs before applying tabs,
+/// spacing, line limits, or ellipsis. This prevents width changes from
+/// accumulating advance adjustments or permanently truncating the shaped
+/// paragraph.
+pub const ReflowBuffer = struct {
+    buffer: LayoutBuffer,
+
+    pub fn init(allocator: std.mem.Allocator) ReflowBuffer {
+        return .{ .buffer = LayoutBuffer.init(allocator) };
+    }
+
+    pub fn deinit(self: *ReflowBuffer) void {
+        self.buffer.deinit();
+        self.* = undefined;
+    }
+
+    fn restore(self: *ReflowBuffer, paragraph: *const ShapedParagraph) !void {
+        self.buffer.clear();
+        try self.buffer.glyphs.appendSlice(self.buffer.allocator, paragraph.glyphs);
+        errdefer self.buffer.clear();
+        try self.buffer.runs.appendSlice(self.buffer.allocator, paragraph.runs);
+    }
+};
+
 fn positionByteOffset(layout_value: ParagraphLayout, position: TextPosition) usize {
     if (layout_value.glyphs.len == 0) return position.cluster;
     if (position.glyph_index >= layout_value.glyphs.len) return position.cluster;
@@ -981,7 +1062,7 @@ pub fn diagnoseClusterCaretConsistencyUtf8(
     try buildParagraphLines(&buffer, text, .{
         .max_width = std.math.inf(f32),
         .direction = options.direction,
-    }, defaultBaselineMetrics(cascade.fonts[0], font_size));
+    }, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null);
     return try diagnoseClusterCaretConsistencyForLayout(allocator, text, buffer.paragraphLayout());
 }
 
@@ -1542,6 +1623,65 @@ pub const TextShaper = struct {
         return buffer.scriptedText();
     }
 
+    /// Shape and retain a width-independent paragraph.
+    ///
+    /// Unlike `layoutParagraphUtf8`, this performs GSUB/GPOS and fallback only
+    /// once. Call `ShapedParagraph.layout` with different `ParagraphOptions`
+    /// to rebuild visual lines without reshaping.
+    pub fn shapeParagraphUtf8(allocator: std.mem.Allocator, cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ShapedParagraph {
+        return try shapeParagraphUtf8WithCaches(allocator, cascade, null, null, null, null, buffer, text, font_size, options);
+    }
+
+    pub fn shapeParagraphUtf8WithCaches(
+        allocator: std.mem.Allocator,
+        cascade: FontCascade,
+        fallback_cache: ?*FontFallbackCache,
+        metrics_cache: ?*GlyphMetricsCache,
+        glyph_index_cache: ?*GlyphIndexCache,
+        shaped_cache: ?*ShapedRunCache,
+        buffer: *LayoutBuffer,
+        text: []const u8,
+        font_size: f32,
+        options: ParagraphOptions,
+    ) !ShapedParagraph {
+        try validateParagraphOptions(options);
+        if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+        const shape_options = shapeOptionsForParagraph(options);
+        const shaped = try shapeUtf8CascadeWithCaches(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            shaped_cache,
+            buffer,
+            text,
+            font_size,
+            shape_options,
+        );
+
+        const owned_text = try allocator.dupe(u8, text);
+        errdefer allocator.free(owned_text);
+        const owned_glyphs = try allocator.dupe(GlyphPosition, shaped.glyphs);
+        errdefer allocator.free(owned_glyphs);
+        const owned_runs = try allocator.dupe(CascadeRun, shaped.runs);
+        errdefer allocator.free(owned_runs);
+        const grapheme_clusters = try unicode.itemizeGraphemeClusters(allocator, text);
+        errdefer allocator.free(grapheme_clusters);
+        const line_breaks = try unicode.itemizeLineBreaks(allocator, text);
+        errdefer allocator.free(line_breaks);
+
+        return .{
+            .allocator = allocator,
+            .text = owned_text,
+            .glyphs = owned_glyphs,
+            .runs = owned_runs,
+            .grapheme_clusters = grapheme_clusters,
+            .line_breaks = line_breaks,
+            .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
+            .shape_key = ShapePlanKey.fromText(text, shape_options),
+        };
+    }
+
     pub fn layoutParagraphUtf8(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         return try layoutParagraphUtf8WithOptions(cascade, buffer, text, font_size, options);
     }
@@ -1568,14 +1708,14 @@ pub const TextShaper = struct {
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
         _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
-        try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
+        try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null);
         return buffer.paragraphLayout();
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try validateParagraphOptions(options);
         _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
-        try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size));
+        try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null);
         return buffer.paragraphLayout();
     }
 
@@ -1693,6 +1833,10 @@ fn shapeOptionsForParagraph(options: ParagraphOptions) ShapeOptions {
         .features = options.features,
         .normalized_variation_coords = options.normalized_variation_coords,
     };
+}
+
+fn paragraphOptionsMatchShapeKey(text: []const u8, options: ParagraphOptions, shape_key: ShapePlanKey) bool {
+    return shapePlanKeysEqual(ShapePlanKey.fromText(text, shapeOptionsForParagraph(options)), shape_key);
 }
 
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {
@@ -2105,7 +2249,14 @@ fn recomputeRunOffsets(buffer: *LayoutBuffer) void {
     }
 }
 
-fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: ParagraphOptions, default_metrics: BaselineMetrics) !void {
+fn buildParagraphLines(
+    buffer: *LayoutBuffer,
+    text: []const u8,
+    options: ParagraphOptions,
+    default_metrics: BaselineMetrics,
+    analyzed_graphemes: ?[]const unicode.GraphemeCluster,
+    analyzed_line_breaks: ?[]const unicode.LineBreak,
+) !void {
     buffer.lines.clearRetainingCapacity();
     const line_height = options.line_height orelse default_metrics.lineHeight();
     const line_metrics = metricsForLineHeight(default_metrics, line_height);
@@ -2122,14 +2273,17 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
     const max_lines = options.max_lines orelse std.math.maxInt(usize);
     const space_advance = defaultSpaceAdvance(buffer.glyphs.items);
     const tab_stop = @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
-    // Emergency grapheme fallback is never reached by no-wrap layout. Avoiding
-    // this side array makes that policy fully allocation-free after shaping.
-    const grapheme_clusters = if (options.wrap_mode == .word)
-        try unicode.itemizeGraphemeClusters(buffer.allocator, text)
-    else
-        &.{};
-    defer if (options.wrap_mode == .word) buffer.allocator.free(grapheme_clusters);
-    var line_breaks = StreamingLineBreaks.init(text);
+    // Retained paragraphs carry font-independent grapheme analysis so width
+    // changes do not repeat UAX #29 work. Legacy one-shot layout computes a
+    // temporary array only when emergency wrapping can need it.
+    var owned_graphemes: ?[]unicode.GraphemeCluster = null;
+    defer if (owned_graphemes) |clusters| buffer.allocator.free(clusters);
+    const grapheme_clusters = analyzed_graphemes orelse clusters: {
+        if (options.wrap_mode == .no_wrap) break :clusters &.{};
+        owned_graphemes = try unicode.itemizeGraphemeClusters(buffer.allocator, text);
+        break :clusters owned_graphemes.?;
+    };
+    var line_breaks = LineBreakCursor.init(text, analyzed_line_breaks);
 
     // Greedy line breaking tracks the most recent soft break. When a line
     // overflows, it prefers that break; otherwise it breaks at the overflowing
@@ -2236,27 +2390,40 @@ fn recordSoftLineBreak(glyphs: []const GlyphPosition, byte_offset: usize, index:
     }
 }
 
-const StreamingLineBreaks = struct {
+const LineBreakCursor = struct {
     iterator: unicode.LineBreakIterator,
+    analyzed: ?[]const unicode.LineBreak = null,
+    analyzed_index: usize = 0,
     pending: ?unicode.LineBreak = null,
 
-    fn init(text: []const u8) StreamingLineBreaks {
-        return .{ .iterator = unicode.lineBreaksAssumeValid(text) };
+    fn init(text: []const u8, analyzed: ?[]const unicode.LineBreak) LineBreakCursor {
+        return .{
+            .iterator = unicode.lineBreaksAssumeValid(text),
+            .analyzed = analyzed,
+        };
     }
 
     /// Return the next boundary whose source position has already been covered
-    /// by shaped glyphs. One boundary is retained when the Unicode iterator
-    /// runs ahead, which gives layout a pull interface without allocating a
-    /// complete boundary list or rescanning an unbreakable source run.
-    fn nextThrough(self: *StreamingLineBreaks, byte_offset: usize) ?unicode.LineBreak {
-        if (self.pending == null) self.pending = self.iterator.next();
-        const candidate = self.pending orelse return null;
+    /// by shaped glyphs. Retained paragraphs read pre-analyzed opportunities;
+    /// one-shot layout uses one-item iterator lookahead without allocating a
+    /// complete boundary list.
+    fn nextThrough(self: *LineBreakCursor, byte_offset: usize) ?unicode.LineBreak {
+        const candidate = if (self.analyzed) |breaks|
+            if (self.analyzed_index < breaks.len) breaks[self.analyzed_index] else return null
+        else candidate: {
+            if (self.pending == null) self.pending = self.iterator.next();
+            break :candidate self.pending orelse return null;
+        };
         if (candidate.byte_offset > byte_offset) return null;
-        self.pending = null;
+        if (self.analyzed != null) {
+            self.analyzed_index += 1;
+        } else {
+            self.pending = null;
+        }
         return candidate;
     }
 
-    fn discardThrough(self: *StreamingLineBreaks, byte_offset: usize) void {
+    fn discardThrough(self: *LineBreakCursor, byte_offset: usize) void {
         while (self.nextThrough(byte_offset) != null) {}
     }
 };

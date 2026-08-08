@@ -238,6 +238,8 @@ pub const GlyphRunDrawCommand = @import("render_bridge.zig").GlyphRunDrawCommand
 pub const ParagraphLayout = @import("layout.zig").ParagraphLayout;
 pub const ParagraphLine = @import("layout.zig").ParagraphLine;
 pub const ParagraphOptions = @import("layout.zig").ParagraphOptions;
+pub const ReflowBuffer = @import("layout.zig").ReflowBuffer;
+pub const ShapedParagraph = @import("layout.zig").ShapedParagraph;
 pub const PositionedGlyph = @import("render_bridge.zig").PositionedGlyph;
 pub const PositionedAttributedRun = @import("core.zig").PositionedAttributedRun;
 pub const ScriptPosition = @import("layout.zig").ScriptPosition;
@@ -6394,6 +6396,148 @@ test "paragraph no-wrap mode preserves explicit hard breaks" {
     try std.testing.expectEqual(@as(usize, 3), paragraph.lines[1].glyph_len);
     try std.testing.expect(paragraph.lines[0].width > 10);
     try std.testing.expect(paragraph.lines[1].width > 10);
+}
+
+test "shaped paragraphs reflow repeatedly without reshaping or accumulating layout changes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var source = [_]u8{ 'A', '\t', 'A', ' ', 'A', ' ', 'A' };
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        &source,
+        20,
+        .{
+            .max_width = 200,
+            .letter_spacing = 2,
+            .word_spacing = 3,
+        },
+    );
+    defer paragraph.deinit();
+    source[0] = 'Z';
+    try std.testing.expectEqualStrings("A\tA A A", paragraph.text);
+    const pristine_glyphs = try allocator.dupe(GlyphPosition, paragraph.glyphs);
+    defer allocator.free(pristine_glyphs);
+    const pristine_runs = try allocator.dupe(CascadeRun, paragraph.runs);
+    defer allocator.free(pristine_runs);
+    const pristine_graphemes = try allocator.dupe(GraphemeCluster, paragraph.grapheme_clusters);
+    defer allocator.free(pristine_graphemes);
+    const pristine_breaks = try allocator.dupe(LineBreak, paragraph.line_breaks);
+    defer allocator.free(pristine_breaks);
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const narrow = try paragraph.layout(&reflow, .{
+        .max_width = 45,
+        .letter_spacing = 2,
+        .word_spacing = 3,
+    });
+    try std.testing.expect(narrow.lines.len > 1);
+    const narrow_line_count = narrow.lines.len;
+    const narrow_first_width = narrow.lines[0].width;
+
+    const wide = try paragraph.layout(&reflow, .{
+        .max_width = 500,
+        .letter_spacing = 2,
+        .word_spacing = 3,
+    });
+    try std.testing.expectEqual(@as(usize, 1), wide.lines.len);
+
+    const narrow_again = try paragraph.layout(&reflow, .{
+        .max_width = 45,
+        .letter_spacing = 2,
+        .word_spacing = 3,
+    });
+    try std.testing.expectEqual(narrow_line_count, narrow_again.lines.len);
+    try std.testing.expectApproxEqAbs(narrow_first_width, narrow_again.lines[0].width, 0.001);
+    try std.testing.expectEqualSlices(GlyphPosition, pristine_glyphs, paragraph.glyphs);
+    try std.testing.expectEqualSlices(CascadeRun, pristine_runs, paragraph.runs);
+    try std.testing.expectEqualSlices(GraphemeCluster, pristine_graphemes, paragraph.grapheme_clusters);
+    try std.testing.expectEqualSlices(LineBreak, pristine_breaks, paragraph.line_breaks);
+}
+
+test "shaped paragraph reflow restores content after ellipsis truncation" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "A A A A A",
+        20,
+        .{ .max_width = 200 },
+    );
+    defer paragraph.deinit();
+    const shaped_glyph_count = paragraph.glyphs.len;
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const clipped = try paragraph.layout(&reflow, .{
+        .max_width = 42,
+        .max_lines = 1,
+        .ellipsis = true,
+    });
+    try std.testing.expectEqual(@as(usize, 1), clipped.lines.len);
+    try std.testing.expect(clipped.glyphs.len <= shaped_glyph_count);
+
+    const restored = try paragraph.layout(&reflow, .{ .max_width = 500 });
+    try std.testing.expectEqual(shaped_glyph_count, restored.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 1), restored.lines.len);
+    try std.testing.expectEqual(@as(u21, 'A'), restored.glyphs[restored.glyphs.len - 1].codepoint);
+}
+
+test "shaped paragraph rejects options that require reshaping" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "AA",
+        20,
+        .{ .max_width = 100 },
+    );
+    defer paragraph.deinit();
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    try std.testing.expectError(error.ParagraphShapingOptionsChanged, paragraph.layout(&reflow, .{
+        .max_width = 100,
+        .direction = .rtl,
+    }));
+    try std.testing.expectEqual(@as(usize, 0), reflow.buffer.glyphs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), reflow.buffer.lines.items.len);
 }
 
 test "limits paragraph lines and appends ellipsis" {

@@ -601,6 +601,8 @@ test "CFF2 top-level metadata is exposed when present" {
     const bounds_at_coords = (try font.cff2CharStringBoundsInfoAtCoords(0, &.{0.5})).?;
     try std.testing.expectEqual(@as(f32, 50), bounds_at_coords.x_min);
     try std.testing.expectEqual(@as(f32, 150), bounds_at_coords.x_max);
+    try std.testing.expectError(error.BadSfnt, font.cff2CharStringBoundsInfoAtCoords(0, &.{std.math.nan(f32)}));
+    try std.testing.expectError(error.BadSfnt, font.cff2CharStringBoundsInfoAtCoords(0, &.{1.0001}));
     const public_bounds = try font.glyphBounds(0);
     try std.testing.expectEqual(@as(i16, 50), public_bounds.x_min);
     try std.testing.expectEqual(@as(i16, 20), public_bounds.y_min);
@@ -625,6 +627,8 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(i16, 50), outline_at_coords.bounds.x_min);
     try std.testing.expectEqual(@as(i16, 150), outline_at_coords.bounds.x_max);
     try std.testing.expectEqual(@as(usize, 4), outline_at_coords.commands.items.len);
+    try std.testing.expectError(error.BadSfnt, font.cff2GlyphOutlineAtCoords(allocator, 0, &.{std.math.inf(f32)}));
+    try std.testing.expectError(error.BadSfnt, font.cff2GlyphOutlineAtCoords(allocator, 0, &.{-1.0001}));
     try std.testing.expect((try font.cff2CharStringData(1)) == null);
     try std.testing.expect((try font.cff2CharStringScanInfo(1)) == null);
     try std.testing.expect((try font.cff2CharStringBoundsInfo(1)) == null);

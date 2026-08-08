@@ -1122,6 +1122,7 @@ pub const Font = struct {
     /// Execute CFF2 bounds using caller-supplied normalized variation coordinates.
     pub fn cff2CharStringBoundsInfoAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?Cff2CharStringBoundsInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const cff2 = self.cff2 orelse return null;
         try validateSfntTableChecksum(self.data, cff2);
         try validateCff2Table(self.data, cff2);
@@ -1131,6 +1132,7 @@ pub const Font = struct {
     /// Build a CFF2 glyph outline using caller-supplied normalized variation coordinates.
     pub fn cff2GlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const cff2 = self.cff2 orelse return null;
         try validateSfntTableChecksum(self.data, cff2);
         try validateCff2Table(self.data, cff2);
@@ -11243,6 +11245,10 @@ fn validateVariationCoordinates(axes: []const VariationAxis, coordinates: []cons
 fn validateNormalizedVariationCoordinate(value: f32) FontError!void {
     if (!std.math.isFinite(value)) return error.BadSfnt;
     if (value < -1.0 or value > 1.0) return error.BadSfnt;
+}
+
+fn validateNormalizedVariationCoordinateSlice(values: []const f32) FontError!void {
+    for (values) |value| try validateNormalizedVariationCoordinate(value);
 }
 
 fn variationAxisIndex(axes: []const VariationAxis, tag: [4]u8) ?usize {

@@ -1416,6 +1416,41 @@ pub const Font = struct {
         metric_variation_mod.freeHvar(allocator, info_value);
     }
 
+    /// Return the HVAR advance-width delta in font units for a glyph at normalized coordinates.
+    pub fn hvarAdvanceWidthDeltaAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?i32 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const hvar = self.hvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, hvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMetricVariationTable(self.data, hvar, fvar_info.axis_count, 20);
+        return try metric_variation_mod.hvarAdvanceWidthDelta(self.data, hvar.offset, hvar.length, glyph_id, normalized_coords);
+    }
+
+    /// Return horizontal metrics with HVAR advance/LSB deltas applied when present.
+    pub fn horizontalMetricsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!HorizontalMetricInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        var metrics = try self.horizontalMetrics(glyph_id);
+        const hvar = self.hvar orelse return metrics;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, hvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMetricVariationTable(self.data, hvar, fvar_info.axis_count, 20);
+
+        const advance_delta = try metric_variation_mod.hvarAdvanceWidthDelta(self.data, hvar.offset, hvar.length, glyph_id, normalized_coords);
+        metrics.advance_width = clampI32ToU16(@as(i32, metrics.advance_width) + advance_delta);
+        if (try metric_variation_mod.hvarLeftSideBearingDelta(self.data, hvar.offset, hvar.length, glyph_id, normalized_coords)) |lsb_delta| {
+            metrics.left_side_bearing = clampI32ToI16(@as(i32, metrics.left_side_bearing) + lsb_delta);
+        }
+        return metrics;
+    }
+
     /// Read validated value records from the optional OpenType `MVAR` table.
     pub fn mvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?MvarInfo {
         const mvar = self.mvar orelse return null;
@@ -8340,6 +8375,18 @@ fn clampF32ToU16(value: f32) u16 {
     if (value <= 0) return 0;
     if (value >= @as(f32, @floatFromInt(std.math.maxInt(u16)))) return std.math.maxInt(u16);
     return @intFromFloat(value);
+}
+
+fn clampI32ToU16(value: i32) u16 {
+    if (value <= 0) return 0;
+    if (value >= std.math.maxInt(u16)) return std.math.maxInt(u16);
+    return @intCast(value);
+}
+
+fn clampI32ToI16(value: i32) i16 {
+    if (value <= std.math.minInt(i16)) return std.math.minInt(i16);
+    if (value >= std.math.maxInt(i16)) return std.math.maxInt(i16);
+    return @intCast(value);
 }
 
 fn clampGlyphPointF32ToI16(value: f32) i16 {

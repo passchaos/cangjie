@@ -3123,8 +3123,8 @@ fn writeItemVariationStoreWithItems(bytes: []u8, offset: usize, item_count: u16)
 
     writeU16(bytes, offset + 12, 1);
     writeU16(bytes, offset + 14, 1);
-    writeF2Dot14(bytes, offset + 16, -1.0);
-    writeF2Dot14(bytes, offset + 18, 0.0);
+    writeF2Dot14(bytes, offset + 16, 0.0);
+    writeF2Dot14(bytes, offset + 18, 1.0);
     writeF2Dot14(bytes, offset + 20, 1.0);
 
     writeU16(bytes, offset + 24, item_count);

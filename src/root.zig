@@ -1338,6 +1338,13 @@ test "HVAR and VVAR metric variation maps are exposed when present" {
     try std.testing.expectEqual(MetricVariationIndexMapEntryInfo{ .delta_set_outer_index = 0, .delta_set_inner_index = 1 }, advance_width.entries[1]);
     try std.testing.expect(hvar.rsb_mapping == null);
 
+    try std.testing.expectEqual(@as(?i32, 4), try font.hvarAdvanceWidthDeltaAtCoords(1, &.{0.5}));
+    const default_metrics = try font.horizontalMetrics(1);
+    try std.testing.expectEqual(@as(u16, 800), default_metrics.advance_width);
+    const varied_metrics = try font.horizontalMetricsAtCoords(1, &.{0.5});
+    try std.testing.expectEqual(@as(u16, 804), varied_metrics.advance_width);
+    try std.testing.expectEqual(@as(i16, 4), varied_metrics.left_side_bearing);
+
     const vvar = (try font.vvarInfo(allocator)).?;
     defer font.freeVvarInfo(allocator, vvar);
     try std.testing.expectEqual(@as(usize, 36), vvar.item_variation_store_offset);
@@ -1351,6 +1358,8 @@ test "HVAR and VVAR metric variation maps are exposed when present" {
     var missing = try Font.parse(allocator, missing_bytes);
     defer missing.deinit();
     try std.testing.expect((try missing.hvarInfo(allocator)) == null);
+    try std.testing.expect((try missing.hvarAdvanceWidthDeltaAtCoords(1, &.{0.5})) == null);
+    try std.testing.expectEqual(try missing.horizontalMetrics(1), try missing.horizontalMetricsAtCoords(1, &.{0.5}));
     try std.testing.expect((try missing.vvarInfo(allocator)) == null);
 }
 

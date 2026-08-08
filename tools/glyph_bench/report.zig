@@ -27,6 +27,7 @@ fn printText(options: options_mod.Options, result: Result) void {
     const stats = sampleStats(result.samples, options.iterations);
     std.debug.print(
         \\mode={s}
+        \\engine={s}
         \\font={s}
         \\glyph_id={any}
         \\codepoint=U+{X}
@@ -45,6 +46,7 @@ fn printText(options: options_mod.Options, result: Result) void {
         \\
     , .{
         options.mode.label(),
+        options.engine.label(),
         options.fontLabel(),
         options.glyph_id,
         options.codepoint,
@@ -72,10 +74,11 @@ fn printTsv(options: options_mod.Options, result: Result) void {
     const ns_per_iter = if (total_iterations == 0) 0 else @as(f64, @floatFromInt(result.elapsed_ns)) / @as(f64, @floatFromInt(total_iterations));
     const stats = sampleStats(result.samples, options.iterations);
     std.debug.print(
-        "mode\tfont\tglyph_id\tcodepoint\tfont_size\ttarget_size\tvariation_coords\titerations\twarmup\tsamples\telapsed_ns\tns_per_iter\tsample_min_ns_per_iter\tsample_median_ns_per_iter\tsample_max_ns_per_iter\tchecksum\n" ++
-            "{s}\t{s}\t{any}\tU+{X}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}\n",
+        "mode\tengine\tfont\tglyph_id\tcodepoint\tfont_size\ttarget_size\tvariation_coords\titerations\twarmup\tsamples\telapsed_ns\tns_per_iter\tsample_min_ns_per_iter\tsample_median_ns_per_iter\tsample_max_ns_per_iter\tchecksum\n" ++
+            "{s}\t{s}\t{s}\t{any}\tU+{X}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}\n",
         .{
             options.mode.label(),
+            options.engine.label(),
             options.fontLabel(),
             options.glyph_id,
             options.codepoint,

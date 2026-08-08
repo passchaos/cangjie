@@ -57,6 +57,14 @@ pub fn build(b: *std.Build) void {
     });
     harfbuzz_c.linkSystemLibrary("harfbuzz", .{});
 
+    const freetype_c = b.addTranslateC(.{
+        .root_source_file = b.path("tools/glyph_bench/freetype.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    freetype_c.addSystemIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    freetype_c.linkSystemLibrary("freetype", .{});
+
     const shape_bench_mod = b.createModule(.{
         .root_source_file = b.path("tools/shape_bench.zig"),
         .target = target,
@@ -92,6 +100,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "cangjie", .module = mod },
+                .{ .name = "freetype", .module = freetype_c.createModule() },
             },
         }),
     });
@@ -127,6 +136,18 @@ pub fn build(b: *std.Build) void {
         "--variation",  "0.5",
     });
     bench_smoke_step.dependOn(&glyph_outline_smoke_cmd.step);
+
+    const glyph_freetype_outline_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_freetype_outline_smoke_cmd.addArgs(&.{
+        "--engine",     "freetype",
+        "--mode",       "outline",
+        "--format",     "tsv",
+        "--builtin",    "gvar-compound",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&glyph_freetype_outline_smoke_cmd.step);
 
     const glyph_raster_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_raster_smoke_cmd.addArgs(&.{

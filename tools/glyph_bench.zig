@@ -2,6 +2,7 @@ const std = @import("std");
 const cangjie = @import("cangjie");
 
 const options_mod = @import("glyph_bench/options.zig");
+const freetype = @import("glyph_bench/freetype.zig");
 const report = @import("glyph_bench/report.zig");
 const runner = @import("glyph_bench/runner.zig");
 
@@ -27,6 +28,12 @@ pub fn main(init: std.process.Init) !void {
 
     const font_bytes = try runner.loadFontBytes(init.io, allocator, options);
     defer allocator.free(font_bytes);
+    if (options.engine == .freetype) {
+        const result = try freetype.run(init.io, allocator, font_bytes, options);
+        defer allocator.free(result.samples);
+        report.print(options, result);
+        return;
+    }
     var font = try cangjie.Font.parse(allocator, font_bytes);
     defer font.deinit();
 

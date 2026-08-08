@@ -2,6 +2,24 @@ const std = @import("std");
 
 const max_variation_coords = 32;
 
+pub const Engine = enum {
+    cangjie,
+    freetype,
+
+    pub fn fromName(name: []const u8) ?Engine {
+        if (std.mem.eql(u8, name, "cangjie")) return .cangjie;
+        if (std.mem.eql(u8, name, "freetype")) return .freetype;
+        return null;
+    }
+
+    pub fn label(self: Engine) []const u8 {
+        return switch (self) {
+            .cangjie => "cangjie",
+            .freetype => "freetype",
+        };
+    }
+};
+
 pub const Mode = enum {
     outline,
     raster,
@@ -56,6 +74,7 @@ pub const OutputFormat = enum {
 };
 
 pub const Options = struct {
+    engine: Engine = .cangjie,
     mode: Mode = .outline,
     output_format: OutputFormat = .text,
     font_path: ?[]const u8 = null,
@@ -85,7 +104,11 @@ pub fn parse(args: []const []const u8) !Options {
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        if (std.mem.eql(u8, arg, "--mode")) {
+        if (std.mem.eql(u8, arg, "--engine")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.engine = Engine.fromName(args[i]) orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--mode")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.mode = Mode.fromName(args[i]) orelse return error.InvalidArguments;
@@ -142,6 +165,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
     if (!std.math.isFinite(options.font_size) or options.font_size <= 0) return error.InvalidArguments;
     if (options.target_size == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
+    if (options.engine == .freetype and options.mode != .outline) return error.InvalidArguments;
     return options;
 }
 
@@ -178,9 +202,10 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--mode outline|raster|raster-reuse] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype] [--mode outline|raster|raster-reuse] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
+        \\  --engine NAME        cangjie or freetype; default cangjie
         \\  --mode NAME          outline, raster, or raster-reuse; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font

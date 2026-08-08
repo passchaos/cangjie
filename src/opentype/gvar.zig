@@ -85,6 +85,36 @@ pub fn tupleInfo(data: []const u8, offset: usize, length: usize, expected_glyph_
     return error.BadSfnt;
 }
 
+pub fn tupleScalar(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, normalized_coords: []const f32) Error!f32 {
+    const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    const tuple = (try tupleInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph)) orelse return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    var result: f32 = 1.0;
+    for (0..parsed.axis_count) |axis| {
+        const peak = try tuplePeakCoordinate(table, parsed, tuple, axis);
+        if (peak == 0) continue;
+        const coord = if (axis < normalized_coords.len) normalized_coords[axis] else 0;
+        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
+        if (coord == 0) return 0;
+        if (coord == peak) continue;
+        if (tuple.intermediate_region) {
+            const start = try tupleIntermediateCoordinate(table, parsed, tuple, axis, .start);
+            const end = try tupleIntermediateCoordinate(table, parsed, tuple, axis, .end);
+            if (start > peak or peak > end or (start < 0 and end > 0 and peak != 0)) continue;
+            if (coord < start or coord > end) return 0;
+            if (coord < peak) {
+                if (peak != start) result *= (coord - start) / (peak - start);
+            } else if (peak != end) {
+                result *= (end - coord) / (end - peak);
+            }
+        } else {
+            if (coord < @min(peak, 0) or coord > @max(peak, 0)) return 0;
+            result *= coord / peak;
+        }
+    }
+    return result;
+}
+
 pub fn info(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!Info {
     if (offset > data.len or length > data.len - offset or length < 20) return error.BadSfnt;
     const table = data[offset .. offset + length];
@@ -166,6 +196,34 @@ fn readTupleInfo(table: []const u8, parsed: Info, glyph: GlyphInfo, header_offse
         .private_point_numbers = private_point_numbers,
         .shared_tuple_index = shared_tuple_index,
     };
+}
+
+const IntermediateKind = enum { start, end };
+
+fn tuplePeakCoordinate(table: []const u8, parsed: Info, tuple: TupleInfo, axis: usize) Error!f32 {
+    if (axis >= parsed.axis_count) return error.BadSfnt;
+    const coord_offset = if (tuple.embedded_peak_tuple) blk: {
+        break :blk tuple.header_offset + 4 + axis * 2;
+    } else blk: {
+        const shared = tuple.shared_tuple_index orelse return error.BadSfnt;
+        break :blk parsed.shared_tuple_offset + @as(usize, shared) * @as(usize, parsed.axis_count) * 2 + axis * 2;
+    };
+    return try readNormalizedF2Dot14(table, coord_offset);
+}
+
+fn tupleIntermediateCoordinate(table: []const u8, parsed: Info, tuple: TupleInfo, axis: usize, kind: IntermediateKind) Error!f32 {
+    if (!tuple.intermediate_region or axis >= parsed.axis_count) return error.BadSfnt;
+    var base = tuple.header_offset + 4;
+    if (tuple.embedded_peak_tuple) base += @as(usize, parsed.axis_count) * 2;
+    if (kind == .end) base += @as(usize, parsed.axis_count) * 2;
+    return try readNormalizedF2Dot14(table, base + axis * 2);
+}
+
+fn readNormalizedF2Dot14(data: []const u8, offset: usize) Error!f32 {
+    if (offset > data.len or data.len - offset < 2) return error.BadSfnt;
+    const value = std.mem.readInt(i16, data[offset..][0..2], .big);
+    if (value < -0x4000 or value > 0x4000) return error.BadSfnt;
+    return @as(f32, @floatFromInt(value)) / 16384.0;
 }
 
 fn glyphDataOffset(table: []const u8, offset: usize, size: u8, limit: usize) Error!usize {
@@ -251,4 +309,46 @@ test "gvar tuple metadata exposes tuple flags" {
     try std.testing.expect(tuple.private_point_numbers);
     try std.testing.expect(!tuple.intermediate_region);
     try std.testing.expect(tuple.shared_tuple_index == null);
+}
+
+test "gvar tuple scalar uses embedded peak" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 6, // offsets: 0, 12.
+        0, 2, 0, 10, // GlyphVariationData header.
+        0, 2, 0x80, 0x00, // embedded peak.
+        0x40, 0x00, // peak = 1.
+        0, 0, // tuple data.
+    };
+    try std.testing.expectEqual(@as(f32, 0), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{}));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{0.5}), 0.001);
+    try std.testing.expectEqual(@as(f32, 1), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{1}));
+}
+
+test "gvar tuple scalar uses intermediate region" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 8, // offsets: 0, 16.
+        0, 2, 0, 14, // GlyphVariationData header.
+        0, 2, 0xc0, 0x00, // embedded peak + intermediate.
+        0x20, 0x00, // peak = 0.5.
+        0, 0, // start = 0.
+        0x40, 0x00, // end = 1.
+        0, 0, // tuple data.
+    };
+    try std.testing.expectEqual(@as(f32, 0), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{0}));
+    try std.testing.expectEqual(@as(f32, 1), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{0.5}));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), try tupleScalar(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{0.75}), 0.001);
 }

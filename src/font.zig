@@ -4,6 +4,7 @@ const cff_mod = @import("cff.zig");
 const glyph_mod = @import("glyph.zig");
 const gpos_mod = @import("gpos.zig");
 const gsub_mod = @import("gsub.zig");
+const feat_mod = @import("opentype/feat.zig");
 const gasp_mod = @import("opentype/gasp.zig");
 const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
@@ -180,6 +181,9 @@ pub const DsigInfo = struct {
 pub const MetaRecordInfo = meta_mod.Record;
 
 pub const LtagRecordInfo = ltag_mod.Record;
+
+pub const FeatureNameInfo = feat_mod.Feature;
+pub const FeatureSettingInfo = feat_mod.Setting;
 
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
@@ -623,6 +627,7 @@ pub const Font = struct {
     gdef: ?TableRecord,
     gpos: ?TableRecord,
     gsub: ?TableRecord,
+    feat: ?TableRecord,
     name: ?TableRecord,
     meta: ?TableRecord,
     post: ?TableRecord,
@@ -717,6 +722,7 @@ pub const Font = struct {
         const gdef = findTable(records, "GDEF");
         const gpos = findTable(records, "GPOS");
         const gsub = findTable(records, "GSUB");
+        const feat = findTable(records, "feat");
         const name = findTable(records, "name");
         const meta = findTable(records, "meta");
         const post = findTable(records, "post");
@@ -767,6 +773,7 @@ pub const Font = struct {
         };
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
+        if (feat) |feat_table| try validateFeatTable(data, feat_table);
         if (meta) |meta_table| try validateMetaTable(data, meta_table);
         if (name) |name_table| {
             validateNameTable(data, name_table) catch |err| switch (err) {
@@ -871,6 +878,7 @@ pub const Font = struct {
             .gdef = gdef,
             .gpos = gpos,
             .gsub = gsub,
+            .feat = feat,
             .name = name,
             .meta = meta,
             .post = post,
@@ -922,6 +930,17 @@ pub const Font = struct {
         const record = findTableByTag(self.owned_tables, tag) orelse return null;
         try validateSfntTableChecksum(self.data, record);
         return self.data[record.offset .. record.offset + record.length];
+    }
+
+    /// Read validated records from the optional AAT `feat` table.
+    pub fn featFeatures(self: *const Font, allocator: std.mem.Allocator) FontError![]FeatureNameInfo {
+        const feat = self.feat orelse return try allocator.alloc(FeatureNameInfo, 0);
+        try validateSfntTableChecksum(self.data, feat);
+        return try feat_mod.features(allocator, self.data, feat.offset, feat.length);
+    }
+
+    pub fn freeFeatFeatures(_: *const Font, allocator: std.mem.Allocator, features: []FeatureNameInfo) void {
+        feat_mod.free(allocator, features);
     }
 
     /// Read validated records from the optional Apple SFNT `ltag` table.
@@ -4129,6 +4148,10 @@ fn clampI16(value: i32) i16 {
     if (value < std.math.minInt(i16)) return std.math.minInt(i16);
     if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
     return @intCast(value);
+}
+
+fn validateFeatTable(data: []const u8, feat: TableRecord) FontError!void {
+    return try feat_mod.validate(data, feat.offset, feat.length);
 }
 
 fn validateLtagTable(data: []const u8, ltag: TableRecord) FontError!void {
@@ -18077,6 +18100,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = gdef_checksum, .offset = 0, .length = data.len },
         .gpos = null,
         .gsub = null,
+        .feat = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18131,6 +18155,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .feat = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18185,6 +18210,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .feat = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18250,6 +18276,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .feat = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18304,6 +18331,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .feat = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18358,6 +18386,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .feat = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18412,6 +18441,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .feat = null,
         .name = null,
         .meta = null,
         .post = null,
@@ -18486,6 +18516,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .feat = null,
         .name = null,
         .meta = null,
         .post = null,

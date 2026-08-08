@@ -82,6 +82,8 @@ pub const serializeManifest = @import("database.zig").serializeManifest;
 pub const userFontSourcesForOs = @import("database.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
+pub const FeatureNameInfo = @import("font.zig").FeatureNameInfo;
+pub const FeatureSettingInfo = @import("font.zig").FeatureSettingInfo;
 pub const DsigInfo = @import("font.zig").DsigInfo;
 pub const DsigSignatureInfo = @import("font.zig").DsigSignatureInfo;
 pub const GaspInfo = @import("font.zig").GaspInfo;
@@ -476,6 +478,59 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "AAT feat records are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildFeatTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const features = try font.featFeatures(allocator);
+    defer font.freeFeatFeatures(allocator, features);
+    try std.testing.expectEqual(@as(usize, 1), features.len);
+    try std.testing.expectEqual(@as(u16, 1), features[0].feature);
+    try std.testing.expectEqual(@as(u16, 0x8000), features[0].flags);
+    try std.testing.expectEqual(@as(u16, 300), features[0].name_id);
+    try std.testing.expectEqual(@as(usize, 2), features[0].settings.len);
+    try std.testing.expectEqual(FeatureSettingInfo{ .setting = 0, .name_id = 301 }, features[0].settings[0]);
+    try std.testing.expectEqual(FeatureSettingInfo{ .setting = 1, .name_id = 302 }, features[0].settings[1]);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    const empty = try missing.featFeatures(allocator);
+    defer missing.freeFeatFeatures(allocator, empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+}
+
+test "lazy AAT feat records revalidate borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildFeatTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const features = try font.featFeatures(allocator);
+    defer font.freeFeatFeatures(allocator, features);
+    try std.testing.expectEqual(@as(usize, 1), features.len);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var feat_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "feat")) feat_offset = table.offset;
+    }
+    bytes[feat_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.featFeatures(allocator));
 }
 
 test "ltag records are exposed when present" {

@@ -112,6 +112,7 @@ pub const Cff2FontDictInfo = @import("font.zig").Cff2FontDictInfo;
 pub const Cff2PrivateDictInfo = @import("font.zig").Cff2PrivateDictInfo;
 pub const Cff2CharStringScanInfo = @import("font.zig").Cff2CharStringScanInfo;
 pub const Cff2CharStringBoundsInfo = @import("font.zig").Cff2CharStringBoundsInfo;
+pub const GvarInfo = @import("font.zig").GvarInfo;
 pub const CvarInfo = @import("font.zig").CvarInfo;
 pub const CvarTupleInfo = @import("font.zig").CvarTupleInfo;
 pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
@@ -685,6 +686,52 @@ test "CFF2 variation outline changes with normalized coordinates" {
     defer generic_outline.deinit();
     try std.testing.expectEqual(@as(f32, 60), generic_outline.commands.items[0].move_to.x);
     try std.testing.expectEqual(@as(f32, 70), generic_outline.commands.items[1].line_to.x);
+}
+
+test "gvar metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.gvarInfo()).?;
+    try std.testing.expectEqual(@as(u16, 1), info.major_version);
+    try std.testing.expectEqual(@as(u16, 0), info.minor_version);
+    try std.testing.expectEqual(@as(u16, 1), info.axis_count);
+    try std.testing.expectEqual(@as(u16, 2), info.glyph_count);
+    try std.testing.expectEqual(@as(u8, 2), info.offset_size);
+    try std.testing.expectEqual(@as(usize, 0), info.glyph_variation_data_count);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.gvarInfo()) == null);
+}
+
+test "lazy gvar metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expect((try font.gvarInfo()) != null);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var gvar_tail: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "gvar")) gvar_tail = table.offset + table.length - 1;
+    }
+    bytes[gvar_tail orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.gvarInfo());
 }
 
 test "generic glyph at-coords APIs validate coordinates and fall back" {

@@ -6,6 +6,7 @@ const cff_mod = @import("cff.zig");
 const cff2_mod = @import("opentype/cff2.zig");
 const cvar_mod = @import("opentype/cvar.zig");
 const glyph_mod = @import("glyph.zig");
+const gvar_mod = @import("opentype/gvar.zig");
 const gpos_mod = @import("gpos.zig");
 const gsub_mod = @import("gsub.zig");
 const feat_mod = @import("opentype/feat.zig");
@@ -53,6 +54,7 @@ pub const Cff2FontDictInfo = cff2_mod.FontDictInfo;
 pub const Cff2PrivateDictInfo = cff2_mod.PrivateDictInfo;
 pub const Cff2CharStringScanInfo = cff2_mod.CharStringScanInfo;
 pub const Cff2CharStringBoundsInfo = cff2_mod.CharStringBoundsInfo;
+pub const GvarInfo = gvar_mod.Info;
 pub const MathConstant = math_mod.Constant;
 pub const MathInfo = math_mod.Info;
 pub const MathConstantsInfo = math_mod.Constants;
@@ -713,6 +715,7 @@ pub const Font = struct {
     avar: ?TableRecord,
     cvt: ?TableRecord,
     cvar: ?TableRecord,
+    gvar: ?TableRecord,
     fpgm: ?TableRecord,
     prep: ?TableRecord,
     hvar: ?TableRecord,
@@ -1013,6 +1016,7 @@ pub const Font = struct {
             .avar = avar,
             .cvt = cvt,
             .cvar = cvar,
+            .gvar = gvar,
             .fpgm = fpgm,
             .prep = prep,
             .hvar = hvar,
@@ -1045,6 +1049,16 @@ pub const Font = struct {
         self.allocator.free(self.cmap_subtables);
         self.allocator.free(self.owned_tables);
         self.* = undefined;
+    }
+
+    /// Read validated top-level metadata from the optional TrueType `gvar` table.
+    pub fn gvarInfo(self: *const Font) FontError!?GvarInfo {
+        const gvar = self.gvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateSfntTableChecksum(self.data, gvar);
+        try gvar_mod.validate(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count);
+        return try gvar_mod.info(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count);
     }
 
     /// Return the CFF2 font-dict index selected for a glyph, when FDSelect is present.
@@ -18836,6 +18850,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .gvar = null,
         .fpgm = null,
         .prep = null,
         .hvar = null,
@@ -18910,6 +18925,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .gvar = null,
         .fpgm = null,
         .prep = null,
         .hvar = null,
@@ -18984,6 +19000,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .gvar = null,
         .fpgm = null,
         .prep = null,
         .hvar = null,
@@ -19069,6 +19086,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .gvar = null,
         .fpgm = null,
         .prep = null,
         .hvar = null,
@@ -19143,6 +19161,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .gvar = null,
         .fpgm = null,
         .prep = null,
         .hvar = null,
@@ -19217,6 +19236,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .gvar = null,
         .fpgm = null,
         .prep = null,
         .hvar = null,
@@ -19291,6 +19311,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .gvar = null,
         .fpgm = null,
         .prep = null,
         .hvar = null,
@@ -19385,6 +19406,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .gvar = null,
         .fpgm = null,
         .prep = null,
         .hvar = null,

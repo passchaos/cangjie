@@ -120,6 +120,10 @@ pub fn buildVariableTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try variableTtfTables(allocator));
 }
 
+pub fn buildGvarTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try gvarTtfTables(allocator));
+}
+
 pub fn buildVariableStatTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try variableStatTtfTables(allocator));
 }
@@ -642,6 +646,23 @@ fn mvarTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[9] = .{ .tag = "MVAR", .data = try mvarTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    return tables;
+}
+
+fn gvarTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 11);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "gvar", .data = try gvarTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[8] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
     return tables;
 }
@@ -2741,6 +2762,23 @@ fn singleAxisFvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 28, 900.0);
     writeU16(bytes, 32, 0);
     writeU16(bytes, 34, 256);
+    return bytes;
+}
+
+fn gvarTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 26);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 4, 1); // axisCount.
+    writeU16(bytes, 6, 0); // sharedTupleCount.
+    writeU32(bytes, 8, 0); // sharedTupleOffset.
+    writeU16(bytes, 12, 2); // glyphCount.
+    writeU16(bytes, 14, 0); // short offsets.
+    writeU32(bytes, 16, 26); // glyphVariationDataArrayOffset after offset array.
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 0);
+    writeU16(bytes, 24, 0); // all glyphs have empty variation data.
     return bytes;
 }
 

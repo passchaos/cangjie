@@ -3829,16 +3829,24 @@ fn writeSimpleTriangleGlyph(bytes: []u8, off: usize, first_dx: u16, second_dx: u
 }
 
 fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 9);
+    const bytes = try allocator.alloc(u8, 17);
     @memset(bytes, 0);
     bytes[0] = 2;
     bytes[1] = 0;
-    bytes[2] = 6;
-    writeU16(bytes, 3, 2);
-    bytes[5] = 0xff; // one byte of header padding.
-    bytes[6] = 0x11;
-    bytes[7] = 0x22;
-    bytes[8] = 0x33;
+    bytes[2] = 5;
+    writeU16(bytes, 3, 10);
+    bytes[5] = 149; // CharStrings offset 10.
+    bytes[6] = 17;
+    bytes[7] = 151; // FDArray offset 12.
+    bytes[8] = 12;
+    bytes[9] = 36;
+    bytes[10] = 153; // FDSelect offset 14.
+    bytes[11] = 12;
+    bytes[12] = 37;
+    bytes[13] = 155; // vstore offset 16.
+    bytes[14] = 24;
+    bytes[15] = 0xaa;
+    bytes[16] = 0xbb;
     return bytes;
 }
 

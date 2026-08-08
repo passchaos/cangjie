@@ -520,10 +520,13 @@ test "CFF2 top-level metadata is exposed when present" {
     const info = (try font.cff2Info()).?;
     try std.testing.expectEqual(@as(u8, 2), info.major_version);
     try std.testing.expectEqual(@as(u8, 0), info.minor_version);
-    try std.testing.expectEqual(@as(u8, 6), info.header_size);
-    try std.testing.expectEqual(@as(u16, 2), info.top_dict_length);
-    try std.testing.expectEqualSlices(u8, &.{ 0x11, 0x22 }, info.top_dict_data);
-    try std.testing.expectEqualSlices(u8, &.{0x33}, info.trailing_data);
+    try std.testing.expectEqual(@as(u8, 5), info.header_size);
+    try std.testing.expectEqual(@as(u16, 10), info.top_dict_length);
+    try std.testing.expectEqual(@as(?usize, 10), info.top_dict.charstrings_offset);
+    try std.testing.expectEqual(@as(?usize, 12), info.top_dict.fd_array_offset);
+    try std.testing.expectEqual(@as(?usize, 14), info.top_dict.fd_select_offset);
+    try std.testing.expectEqual(@as(?usize, 16), info.top_dict.vstore_offset);
+    try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xbb }, info.trailing_data);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);

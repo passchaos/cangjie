@@ -16,6 +16,7 @@ const metric_variation_mod = @import("opentype/metric_variation.zig");
 const mvar_mod = @import("opentype/mvar.zig");
 const name_mod = @import("opentype/name.zig");
 const trak_mod = @import("opentype/trak.zig");
+const tt_program_mod = @import("opentype/tt_program.zig");
 
 /// Errors intentionally preserve the table family that failed. Callers such as
 /// render bridges can distinguish malformed SFNT data from unsupported outline
@@ -42,6 +43,9 @@ pub const FontFormat = enum {
 
 pub const CvarInfo = cvar_mod.Info;
 pub const CvarTupleInfo = cvar_mod.TupleInfo;
+pub const TrueTypeProgramInfo = tt_program_mod.Info;
+pub const TrueTypeProgramInstructionInfo = tt_program_mod.Instruction;
+pub const TrueTypeProgramKind = tt_program_mod.Kind;
 
 pub const FontTableInfo = struct {
     tag: [4]u8,
@@ -661,6 +665,8 @@ pub const Font = struct {
     avar: ?TableRecord,
     cvt: ?TableRecord,
     cvar: ?TableRecord,
+    fpgm: ?TableRecord,
+    prep: ?TableRecord,
     hvar: ?TableRecord,
     mvar: ?TableRecord,
     vvar: ?TableRecord,
@@ -763,6 +769,8 @@ pub const Font = struct {
         const avar = findTable(records, "avar");
         const cvt = findTable(records, "cvt ");
         const cvar = findTable(records, "cvar");
+        const fpgm = findTable(records, "fpgm");
+        const prep = findTable(records, "prep");
         const colr = findTable(records, "COLR");
         const cpal = findTable(records, "CPAL");
         const base = findTable(records, "BASE");
@@ -819,6 +827,8 @@ pub const Font = struct {
         if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
         if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
         const cvt_value_count = if (cvt) |cvt_table| try validateCvtTable(cvt_table) else null;
+        if (fpgm) |fpgm_table| try validateTrueTypeProgramTable(data, fpgm_table);
+        if (prep) |prep_table| try validateTrueTypeProgramTable(data, prep_table);
         if (kern) |kern_table| try validateKernTable(data, kern_table, glyph_count);
         if (hdmx) |hdmx_table| try validateHdmxTable(data, hdmx_table, glyph_count);
         if (ltsh) |ltsh_table| try validateLtshTable(data, ltsh_table, glyph_count);
@@ -926,6 +936,8 @@ pub const Font = struct {
             .avar = avar,
             .cvt = cvt,
             .cvar = cvar,
+            .fpgm = fpgm,
+            .prep = prep,
             .hvar = hvar,
             .mvar = mvar,
             .vvar = vvar,
@@ -990,6 +1002,26 @@ pub const Font = struct {
 
     pub fn freeCvarInfo(_: *const Font, allocator: std.mem.Allocator, info_value: CvarInfo) void {
         cvar_mod.free(allocator, info_value);
+    }
+
+    /// Decode the optional TrueType `fpgm` font program as structural bytecode.
+    pub fn fontProgramInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?TrueTypeProgramInfo {
+        const fpgm = self.fpgm orelse return null;
+        try validateSfntTableChecksum(self.data, fpgm);
+        try validateTrueTypeProgramTable(self.data, fpgm);
+        return try tt_program_mod.info(allocator, .font, self.data[fpgm.offset .. fpgm.offset + fpgm.length]);
+    }
+
+    /// Decode the optional TrueType `prep` control-value program as structural bytecode.
+    pub fn controlValueProgramInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?TrueTypeProgramInfo {
+        const prep = self.prep orelse return null;
+        try validateSfntTableChecksum(self.data, prep);
+        try validateTrueTypeProgramTable(self.data, prep);
+        return try tt_program_mod.info(allocator, .control_value, self.data[prep.offset .. prep.offset + prep.length]);
+    }
+
+    pub fn freeTrueTypeProgramInfo(_: *const Font, allocator: std.mem.Allocator, info_value: TrueTypeProgramInfo) void {
+        tt_program_mod.free(allocator, info_value);
     }
 
     /// Read validated metadata from the optional OpenType `HVAR` table.
@@ -8150,6 +8182,10 @@ fn readCvtValues(allocator: std.mem.Allocator, data: []const u8, cvt: TableRecor
 
 fn validateCvarTable(data: []const u8, cvar: TableRecord, fvar_axis_count: usize, cvt_value_count: usize) FontError!void {
     return try cvar_mod.validate(data, cvar.offset, cvar.length, fvar_axis_count, cvt_value_count);
+}
+
+fn validateTrueTypeProgramTable(data: []const u8, table: TableRecord) FontError!void {
+    return try tt_program_mod.validate(data[table.offset .. table.offset + table.length]);
 }
 
 fn validateVariationDataTables(
@@ -18296,6 +18332,8 @@ fn gdefOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .fpgm = null,
+        .prep = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18358,6 +18396,8 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .fpgm = null,
+        .prep = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18420,6 +18460,8 @@ fn colrOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .fpgm = null,
+        .prep = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18493,6 +18535,8 @@ fn cpalOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .fpgm = null,
+        .prep = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18555,6 +18599,8 @@ fn svgOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .fpgm = null,
+        .prep = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18617,6 +18663,8 @@ fn sbixOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .fpgm = null,
+        .prep = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18679,6 +18727,8 @@ fn fvarOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .fpgm = null,
+        .prep = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18761,6 +18811,8 @@ fn kernOnlyFont(data: []const u8) Font {
         .avar = null,
         .cvt = null,
         .cvar = null,
+        .fpgm = null,
+        .prep = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,

@@ -106,6 +106,9 @@ pub const FontFormat = @import("font.zig").FontFormat;
 pub const FontHeaderInfo = @import("font.zig").FontHeaderInfo;
 pub const CvarInfo = @import("font.zig").CvarInfo;
 pub const CvarTupleInfo = @import("font.zig").CvarTupleInfo;
+pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
+pub const TrueTypeProgramInstructionInfo = @import("font.zig").TrueTypeProgramInstructionInfo;
+pub const TrueTypeProgramKind = @import("font.zig").TrueTypeProgramKind;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const HdmxInfo = @import("font.zig").HdmxInfo;
@@ -492,6 +495,68 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "TrueType fpgm and prep programs expose structural bytecode" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildTrueTypeProgramTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fpgm = (try font.fontProgramInfo(allocator)).?;
+    defer font.freeTrueTypeProgramInfo(allocator, fpgm);
+    try std.testing.expectEqual(TrueTypeProgramKind.font, fpgm.kind);
+    try std.testing.expectEqual(@as(usize, 10), fpgm.bytecode.len);
+    try std.testing.expectEqual(@as(usize, 3), fpgm.instructions.len);
+    try std.testing.expectEqual(@as(u8, 0xb1), fpgm.instructions[0].opcode);
+    try std.testing.expectEqual(@as(?u16, 2), fpgm.instructions[0].push_value_count);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, fpgm.instructions[0].immediate);
+    try std.testing.expectEqual(@as(u8, 0x41), fpgm.instructions[1].opcode);
+    try std.testing.expect(fpgm.instructions[1].push_words);
+    try std.testing.expect(!fpgm.instructions[2].isPush());
+
+    const prep = (try font.controlValueProgramInfo(allocator)).?;
+    defer font.freeTrueTypeProgramInfo(allocator, prep);
+    try std.testing.expectEqual(TrueTypeProgramKind.control_value, prep.kind);
+    try std.testing.expectEqual(@as(usize, 1), prep.instructions.len);
+    try std.testing.expectEqual(@as(u8, 0x40), prep.instructions[0].opcode);
+    try std.testing.expectEqual(@as(?u16, 2), prep.instructions[0].push_value_count);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.fontProgramInfo(allocator)) == null);
+    try std.testing.expect((try missing.controlValueProgramInfo(allocator)) == null);
+}
+
+test "lazy TrueType program metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildTrueTypeProgramTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fpgm = (try font.fontProgramInfo(allocator)).?;
+    defer font.freeTrueTypeProgramInfo(allocator, fpgm);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var fpgm_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "fpgm")) fpgm_offset = table.offset;
+    }
+    // Mutating borrowed table bytes after parse invalidates the checksum
+    // recorded in the table directory, so the lazy API must reject it.
+    bytes[(fpgm_offset orelse return error.MissingTable) + 2] = 0x40;
+
+    try std.testing.expectError(error.BadSfnt, font.fontProgramInfo(allocator));
 }
 
 test "cvt values and cvar tuple metadata are exposed when present" {

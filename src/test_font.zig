@@ -36,6 +36,10 @@ pub fn buildCvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cvarTtfTables(allocator));
 }
 
+pub fn buildTrueTypeProgramTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try trueTypeProgramTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -639,6 +643,22 @@ fn cvarTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[9] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[10] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[11] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    return tables;
+}
+
+fn trueTypeProgramTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fpgm", .data = try fpgmTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "prep", .data = try prepTable(allocator) };
     return tables;
 }
 
@@ -2590,6 +2610,30 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 74, 700.0);
     writeF16Dot16(bytes, 78, 150.0);
     writeU16(bytes, 82, 261);
+    return bytes;
+}
+
+fn fpgmTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 10);
+    @memset(bytes, 0);
+    bytes[0] = 0xb1; // PUSHB[2]
+    bytes[1] = 1;
+    bytes[2] = 2;
+    bytes[3] = 0x41; // NPUSHW[2]
+    bytes[4] = 2;
+    writeU16(bytes, 5, 3);
+    writeU16(bytes, 7, 0xfffe);
+    bytes[9] = 0x2d; // ENDF.
+    return bytes;
+}
+
+fn prepTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 4);
+    @memset(bytes, 0);
+    bytes[0] = 0x40; // NPUSHB[2]
+    bytes[1] = 2;
+    bytes[2] = 4;
+    bytes[3] = 5;
     return bytes;
 }
 

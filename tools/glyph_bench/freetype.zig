@@ -120,12 +120,21 @@ fn outlineChecksum(slot: ft.FT_GlyphSlot) u64 {
     hasher.update(std.mem.asBytes(&outline.n_points));
     const point_count: usize = @intCast(@max(outline.n_points, 0));
     const contour_count: usize = @intCast(@max(outline.n_contours, 0));
-    for (outline.points[0..point_count]) |point| {
-        hasher.update(std.mem.asBytes(&point.x));
-        hasher.update(std.mem.asBytes(&point.y));
+    if (point_count != 0) {
+        if (outline.points == null or outline.tags == null) return hasher.final();
+        const points: [*]const ft.FT_Vector = @ptrCast(outline.points);
+        const tags: [*]const u8 = @ptrCast(outline.tags);
+        for (points[0..point_count]) |point| {
+            hasher.update(std.mem.asBytes(&point.x));
+            hasher.update(std.mem.asBytes(&point.y));
+        }
+        for (tags[0..point_count]) |tag| hasher.update(std.mem.asBytes(&tag));
     }
-    for (outline.tags[0..point_count]) |tag| hasher.update(std.mem.asBytes(&tag));
-    for (outline.contours[0..contour_count]) |contour| hasher.update(std.mem.asBytes(&contour));
+    if (contour_count != 0) {
+        if (outline.contours == null) return hasher.final();
+        const contours: [*]const c_short = @ptrCast(outline.contours);
+        for (contours[0..contour_count]) |contour| hasher.update(std.mem.asBytes(&contour));
+    }
     return hasher.final();
 }
 

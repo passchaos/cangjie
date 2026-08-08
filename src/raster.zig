@@ -620,8 +620,12 @@ pub const Rasterizer = struct {
             try self.allocator.alloc(PreparedFillLine, lines.len);
         defer if (lines.len > inline_prepared_lines.len) self.allocator.free(prepared_storage);
         const prepared_lines = prepareFillLines(prepared_storage, lines);
-        var intersections: std.ArrayList(WindingIntersection) = .empty;
-        defer intersections.deinit(self.allocator);
+        var inline_intersections: [128]WindingIntersection = undefined;
+        const intersection_storage = if (prepared_lines.len <= inline_intersections.len)
+            inline_intersections[0..prepared_lines.len]
+        else
+            try self.allocator.alloc(WindingIntersection, prepared_lines.len);
+        defer if (prepared_lines.len > inline_intersections.len) self.allocator.free(intersection_storage);
 
         var y = min_y;
         while (y <= max_y) : (y += 1) {
@@ -629,26 +633,28 @@ pub const Rasterizer = struct {
             var sy: i32 = 0;
             while (sy < sample_axis) : (sy += 1) {
                 const py = @as(f32, @floatFromInt(y)) + (@as(f32, @floatFromInt(sy)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
-                intersections.clearRetainingCapacity();
+                var intersection_count: usize = 0;
                 for (prepared_lines) |line| {
                     if ((line.ay > py) == (line.by > py)) continue;
                     const x_intersect = line.slope * (py - line.ay) + line.ax;
                     if (!std.math.isFinite(x_intersect)) continue;
-                    try intersections.append(self.allocator, .{
+                    intersection_storage[intersection_count] = .{
                         .x = x_intersect,
                         .delta = line.delta,
-                    });
+                    };
+                    intersection_count += 1;
                 }
-                if (intersections.items.len < 2) continue;
-                std.sort.heap(WindingIntersection, intersections.items, {}, lessThanWindingIntersection);
+                const intersections = intersection_storage[0..intersection_count];
+                if (intersections.len < 2) continue;
+                std.sort.heap(WindingIntersection, intersections, {}, lessThanWindingIntersection);
 
                 switch (fill_rule) {
                     .non_zero => {
                         var winding: i32 = 0;
                         var previous_x: ?f32 = null;
                         var index: usize = 0;
-                        while (index < intersections.items.len) {
-                            const current_x = intersections.items[index].x;
+                        while (index < intersections.len) {
+                            const current_x = intersections[index].x;
                             if (previous_x) |start_f| {
                                 const end_f = current_x;
                                 if (winding != 0) {
@@ -657,8 +663,8 @@ pub const Rasterizer = struct {
                             }
 
                             var delta_sum: i32 = 0;
-                            while (index < intersections.items.len and @abs(intersections.items[index].x - current_x) <= 0.000001) : (index += 1) {
-                                delta_sum += intersections.items[index].delta;
+                            while (index < intersections.len and @abs(intersections[index].x - current_x) <= 0.000001) : (index += 1) {
+                                delta_sum += intersections[index].delta;
                             }
                             winding += delta_sum;
                             previous_x = current_x;
@@ -666,8 +672,8 @@ pub const Rasterizer = struct {
                     },
                     .even_odd => {
                         var pair: usize = 0;
-                        while (pair + 1 < intersections.items.len) : (pair += 2) {
-                            coverSpan(coverage_counts, min_x, max_x, sample_axis, intersections.items[pair].x, intersections.items[pair + 1].x);
+                        while (pair + 1 < intersections.len) : (pair += 2) {
+                            coverSpan(coverage_counts, min_x, max_x, sample_axis, intersections[pair].x, intersections[pair + 1].x);
                         }
                     },
                 }

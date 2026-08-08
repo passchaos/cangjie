@@ -3506,7 +3506,7 @@ pub const Font = struct {
         const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
-        const target_count = try self.gvarTargetCount(glyph_id);
+        const target_count = try gvarTargetCountForGlyphData(data);
         const has_delta = try allocator.alloc(bool, target_count);
         defer allocator.free(has_delta);
         const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
@@ -3591,6 +3591,10 @@ pub const Font = struct {
         }, glyph_id);
     }
 
+    fn gvarTargetCountForGlyphData(glyph_data: []const u8) FontError!usize {
+        return (try gvar_mod.glyfVariationPointCount(glyph_data)) + 4;
+    }
+
     const GvarMetricVariationTarget = struct {
         glyph_id: glyph_mod.GlyphId,
         point_count: usize,
@@ -3672,7 +3676,7 @@ pub const Font = struct {
         if (data.len == 0) return;
         const contour_count = try bin.readI16At(data, 0);
         if (contour_count >= 0) {
-            const target_count = try self.gvarTargetCount(glyph_id);
+            const target_count = try gvarTargetCountForGlyphData(data);
             const has_delta = try outline.allocator.alloc(bool, target_count);
             defer outline.allocator.free(has_delta);
             const deltas = (try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse {
@@ -3729,7 +3733,7 @@ pub const Font = struct {
     }
 
     fn appendCompoundGlyphAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, data: []const u8, parent_transform: Transform, depth: u8, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
-        const target_count = try self.gvarTargetCount(glyph_id);
+        const target_count = try gvarTargetCountForGlyphData(data);
         const maybe_deltas = try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, null, read_mode);
         defer if (maybe_deltas) |deltas| outline.allocator.free(deltas);
 

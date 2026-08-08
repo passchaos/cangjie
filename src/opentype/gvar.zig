@@ -75,6 +75,11 @@ pub const ScaledPointDelta = struct {
     y: f32,
 };
 
+pub const Point = struct {
+    x: f32,
+    y: f32,
+};
+
 pub fn packedPointNumbersInfo(data: []const u8, offset: usize, limit: usize) Error!PointNumbersInfo {
     if (offset > data.len or limit > data.len or offset >= limit) return error.BadSfnt;
     var cursor = offset;
@@ -230,6 +235,14 @@ fn setDeltaField(delta: *PointDelta, field: DeltaField, value: i32) void {
     switch (field) {
         .x => delta.x = value,
         .y => delta.y = value,
+    }
+}
+
+pub fn applyPointDeltas(points: []Point, deltas: []const ScaledPointDelta) Error!void {
+    for (deltas) |delta| {
+        if (delta.point >= points.len) return error.BadSfnt;
+        points[delta.point].x += delta.x;
+        points[delta.point].y += delta.y;
     }
 }
 
@@ -909,4 +922,21 @@ test "gvar tuple payload decodes contiguous all-point deltas" {
     try std.testing.expectEqual(@as(u16, 2), scaled[2].point);
     try std.testing.expectEqual(@as(f32, 1.5), scaled[2].x);
     try std.testing.expectEqual(@as(f32, 0), scaled[2].y);
+}
+
+test "gvar applies accumulated deltas to points" {
+    var points = [_]Point{
+        .{ .x = 10, .y = 20 },
+        .{ .x = 30, .y = 40 },
+        .{ .x = 50, .y = 60 },
+    };
+    try applyPointDeltas(&points, &.{
+        .{ .point = 0, .x = 1.5, .y = -2.5 },
+        .{ .point = 2, .x = -10, .y = 5 },
+    });
+    try std.testing.expectEqual(@as(f32, 11.5), points[0].x);
+    try std.testing.expectEqual(@as(f32, 17.5), points[0].y);
+    try std.testing.expectEqual(@as(f32, 40), points[2].x);
+    try std.testing.expectEqual(@as(f32, 65), points[2].y);
+    try std.testing.expectError(error.BadSfnt, applyPointDeltas(&points, &.{.{ .point = 3, .x = 1, .y = 1 }}));
 }

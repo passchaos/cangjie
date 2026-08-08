@@ -51,6 +51,7 @@ pub const FontFormat = enum {
 pub const Cff2Info = cff2_mod.Info;
 pub const Cff2FontDictInfo = cff2_mod.FontDictInfo;
 pub const Cff2PrivateDictInfo = cff2_mod.PrivateDictInfo;
+pub const Cff2CharStringScanInfo = cff2_mod.CharStringScanInfo;
 pub const MathConstant = math_mod.Constant;
 pub const MathInfo = math_mod.Info;
 pub const MathConstantsInfo = math_mod.Constants;
@@ -1101,6 +1102,15 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.charStringData(self.data, cff2.offset, cff2.length, glyph_id);
+    }
+
+    /// Structurally scan a CFF2 glyph charstring and reachable subroutines.
+    pub fn cff2CharStringScanInfo(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?Cff2CharStringScanInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        return try cff2_mod.charStringScanInfo(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count);
     }
 
     /// Read validated top-level metadata from the optional OpenType `CFF2` table.

@@ -3210,7 +3210,7 @@ pub const Font = struct {
                 max_component_depth,
             );
         }
-        return self.glyphOutlineFromParsedTables(allocator, glyph_id);
+        return self.glyphOutlineFromParsedTables(allocator, glyph_id, true);
     }
 
     pub fn glyphOutlineForRaster(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
@@ -3218,14 +3218,14 @@ pub const Font = struct {
         // Font.parse has already validated the table grammar and checksums.
         // Rasterization is a hot path that can request dozens of outlines from
         // the same immutable parsed font in one SVG/UI frame; revalidating the
-        // whole glyf/CFF table for every glyph makes real rendering do repeated
-        // document-level validation work. Keep `glyphOutline()` as the strict
-        // defensive API for callers that need post-parse mutation checks, and
-        // use this parsed-font fast path for normal rendering.
-        return self.glyphOutlineFromParsedTables(allocator, glyph_id);
+        // whole glyf/CFF/CFF2 table for every glyph makes real rendering do
+        // repeated document-level validation work. Keep `glyphOutline()` as the
+        // strict defensive API for callers that need post-parse mutation checks,
+        // and use this parsed-font fast path for normal rendering.
+        return self.glyphOutlineFromParsedTables(allocator, glyph_id, false);
     }
 
-    fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
+    fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, strict_revalidate: bool) FontError!glyph_mod.GlyphOutline {
         const metrics = try self.horizontalMetrics(glyph_id);
         const bounds = if (self.format == .truetype)
             try self.glyphBoundsFromParsedTables(glyph_id)
@@ -3236,8 +3236,10 @@ pub const Font = struct {
         if (self.format == .truetype) {
             try self.appendGlyphOutline(&outline, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
         } else if (self.cff2) |cff2| {
-            try validateSfntTableChecksum(self.data, cff2);
-            try validateCff2Table(self.data, cff2);
+            if (strict_revalidate) {
+                try validateSfntTableChecksum(self.data, cff2);
+                try validateCff2Table(self.data, cff2);
+            }
             if (try cff2_mod.appendGlyphOutline(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, &outline)) |bounds_info| {
                 outline.bounds = cff2BoundsInfoToGlyphBounds(bounds_info);
             }

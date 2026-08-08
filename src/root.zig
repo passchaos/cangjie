@@ -659,6 +659,37 @@ test "lazy CFF2 metadata revalidates borrowed table bytes" {
     try std.testing.expectError(error.BadSfnt, font.cff2Info());
 }
 
+test "CFF2 raster outline uses parsed-font fast path" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCff2Otf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var cff2_tail: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "CFF2")) cff2_tail = table.offset + table.length - 1;
+    }
+    // Mutate a trailing CFF2 byte that invalidates the table checksum without
+    // touching the already-validated CharStrings/FD data used by the parsed-font
+    // raster fast path.
+    bytes[cff2_tail orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 0));
+    var outline = try font.glyphOutlineForRaster(allocator, 0);
+    defer outline.deinit();
+    try std.testing.expectEqual(@as(usize, 4), outline.commands.items.len);
+    try std.testing.expectEqual(@as(i16, 50), outline.bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 20), outline.bounds.y_min);
+    try std.testing.expectEqual(@as(i16, 150), outline.bounds.x_max);
+    try std.testing.expectEqual(@as(i16, 50), outline.bounds.y_max);
+}
+
 test "MATH constants metadata is exposed when present" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

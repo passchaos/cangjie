@@ -641,6 +641,8 @@ pub const Rasterizer = struct {
         while (y <= max_y) : (y += 1) {
             @memset(coverage_counts, 0);
             var row_has_coverage = false;
+            var row_min_x = max_x;
+            var row_max_x = min_x;
             for (sample_offsets) |sample_offset| {
                 const py = @as(f32, @floatFromInt(y)) + sample_offset;
                 var intersection_count: usize = 0;
@@ -668,8 +670,11 @@ pub const Rasterizer = struct {
                             if (previous_x) |start_f| {
                                 const end_f = current_x;
                                 if (winding != 0) {
-                                    coverSpan(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f);
-                                    row_has_coverage = true;
+                                    if (coverSpan(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f)) |span| {
+                                        row_has_coverage = true;
+                                        row_min_x = @min(row_min_x, span.min_x);
+                                        row_max_x = @max(row_max_x, span.max_x);
+                                    }
                                 }
                             }
 
@@ -684,15 +689,18 @@ pub const Rasterizer = struct {
                     .even_odd => {
                         var pair: usize = 0;
                         while (pair + 1 < intersections.len) : (pair += 2) {
-                            coverSpan(coverage_counts, min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x);
-                            row_has_coverage = true;
+                            if (coverSpan(coverage_counts, min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x)) |span| {
+                                row_has_coverage = true;
+                                row_min_x = @min(row_min_x, span.min_x);
+                                row_max_x = @max(row_max_x, span.max_x);
+                            }
                         }
                     },
                 }
             }
             if (!row_has_coverage) continue;
-            var x = min_x;
-            while (x <= max_x) : (x += 1) {
+            var x = row_min_x;
+            while (x <= row_max_x) : (x += 1) {
                 const inside = coverage_counts[@intCast(x - min_x)];
                 if (inside == 0) continue;
                 const coverage: u8 = @intCast(@divTrunc(@as(i32, inside) * 255, sample_count));
@@ -804,10 +812,16 @@ fn sortWindingIntersections(intersections: []WindingIntersection) void {
     std.sort.heap(WindingIntersection, intersections, {}, lessThanWindingIntersection);
 }
 
-fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) void {
-    if (!std.math.isFinite(start_f) or !std.math.isFinite(end_f)) return;
+const CoveredSpan = struct {
+    min_x: i32,
+    max_x: i32,
+};
+
+fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) ?CoveredSpan {
+    if (!std.math.isFinite(start_f) or !std.math.isFinite(end_f)) return null;
+    if (@as(f64, end_f) <= @as(f64, start_f)) return null;
     if (@as(f64, end_f) <= @as(f64, @floatFromInt(min_x)) or
-        @as(f64, start_f) >= @as(f64, @floatFromInt(max_x)) + 1.0) return;
+        @as(f64, start_f) >= @as(f64, @floatFromInt(max_x)) + 1.0) return null;
     var x = @max(min_x, floorI32Saturating(start_f));
     const x_end = @min(max_x, ceilI32Saturating(end_f));
     const full_start = @max(x, ceilI32Saturating(start_f));
@@ -820,6 +834,7 @@ fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []co
         }
         coverPartialPixel(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
     }
+    return .{ .min_x = @max(min_x, floorI32Saturating(start_f)), .max_x = x_end };
 }
 
 fn coverPartialPixel(coverage_counts: []u8, min_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32, x: i32) void {

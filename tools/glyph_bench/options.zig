@@ -228,5 +228,9 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --samples N          independent measured samples, default 1
         \\  --variation CSV      normalized variation coordinates, e.g. 0.5,-0.25
         \\
+        \\examples:
+        \\  zig build glyph-bench -Doptimize=ReleaseFast -- --engine compare-freetype --mode outline --font ./font.ttf --glyph-id 42 --format tsv
+        \\  zig build glyph-bench -Doptimize=ReleaseFast -- --engine compare-freetype --mode raster --font ./font.ttf --glyph-id 42 --samples-per-axis 4 --format tsv
+        \\
     , .{exe});
 }

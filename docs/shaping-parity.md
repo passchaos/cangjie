@@ -388,12 +388,24 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   cases retained in `tests/data/balinese-rendering-tests.txt`, covering USE
   category assignment, syllable cluster ownership, split pre-base vowels,
   broken-syllable dotted circles, ligature decomposition, and GPOS output
-  (`checksum=b7767f522a7f1ef`). The gate is:
+  (`checksum=21249c939189778c`). The gate is:
   ```sh
   zig build shape-bench -Doptimize=ReleaseFast -- \
     --engine compare-harfbuzz \
     --font ~/Work/harfbuzz/test/shape/data/text-rendering-tests/fonts/NotoSansBalinese-Regular.ttf \
     --text-file tests/data/balinese-rendering-tests.txt --direction ltr
+  ```
+- Javanese passes `compare-harfbuzz` for all 54 upstream
+  `in-house/use-javanese.tests` inputs retained in
+  `tests/data/javanese-use-tests.txt`, covering pre-base vowels, pref-produced
+  pre-base forms, akhand ligatures, ZWNJ/ZWSP boundaries, native digits,
+  punctuation, and monotone-grapheme cluster ownership
+  (`checksum=6f45576043094fa5`). The gate is:
+  ```sh
+  zig build shape-bench -Doptimize=ReleaseFast -- \
+    --engine compare-harfbuzz \
+    --font ~/Work/harfbuzz/test/shape/data/in-house/fonts/f70f345188472b93f565d1d7fae8c668dd6a3244.ttf \
+    --text-file tests/data/javanese-use-tests.txt --direction ltr
   ```
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
@@ -417,9 +429,9 @@ goal is active, not complete.
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
-- Expand USE shaping parity beyond the retained Duployan and Balinese gates.
-  Other USE scripts/fonts and fuzz/corpus failures still need retained gates
-  before this can be called broad USE parity.
+- Expand USE shaping parity beyond the retained Duployan, Balinese, and
+  Javanese gates. Other USE scripts/fonts and fuzz/corpus failures still need
+  retained gates before this can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

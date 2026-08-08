@@ -59,6 +59,11 @@ pub const LookupOptions = struct {
     /// default-ignorables visible to contextual matching once GSUB has touched
     /// them, even if their glyph id later returns to the original glyph.
     glyph_substituted: ?*std.ArrayList(bool) = null,
+    /// Optional feature-stage substitution state parallel to `glyphs`.
+    /// Script shapers use this to observe which glyphs changed during one
+    /// specific feature without clearing the cumulative substitution state
+    /// needed by default-ignorable handling.
+    glyph_stage_substituted: ?*std.ArrayList(bool) = null,
     ligature_components: ?*std.ArrayList(gpos.LigatureComponentInfo) = null,
     /// Optional source-level feature assignment. `active_source_feature` gates
     /// a lookup to glyphs whose original source index carries that tag. Context
@@ -2750,6 +2755,9 @@ fn validateShapingMetadataRequirements(options: LookupOptions, glyph_count: usiz
     if (options.glyph_substituted) |substituted| {
         if (substituted.items.len != glyph_count) return error.InvalidShapingInput;
     }
+    if (options.glyph_stage_substituted) |substituted| {
+        if (substituted.items.len != glyph_count) return error.InvalidShapingInput;
+    }
     if (options.ligature_components) |components| {
         if (components.items.len != glyph_count) return error.InvalidShapingInput;
         for (components.items) |component_info| {
@@ -2898,8 +2906,12 @@ fn glyphWasSubstituted(options: LookupOptions, glyph_index: usize) bool {
 
 fn markGlyphSubstituted(options: LookupOptions, glyph_index: usize) void {
     noteGlyphMutation(options);
-    const substituted = options.glyph_substituted orelse return;
-    if (glyph_index < substituted.items.len) substituted.items[glyph_index] = true;
+    if (options.glyph_substituted) |substituted| {
+        if (glyph_index < substituted.items.len) substituted.items[glyph_index] = true;
+    }
+    if (options.glyph_stage_substituted) |substituted| {
+        if (glyph_index < substituted.items.len) substituted.items[glyph_index] = true;
+    }
 }
 
 fn noteGlyphMutation(options: LookupOptions) void {
@@ -2953,6 +2965,15 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
         }
     }
     if (options.glyph_substituted) |substituted| {
+        if (glyph_index <= substituted.items.len) {
+            const remove_count = @min(removed_len, substituted.items.len - glyph_index);
+            const replacements = try allocator.alloc(bool, inserted_len);
+            defer allocator.free(replacements);
+            @memset(replacements, true);
+            try substituted.replaceRange(allocator, glyph_index, remove_count, replacements);
+        }
+    }
+    if (options.glyph_stage_substituted) |substituted| {
         if (glyph_index <= substituted.items.len) {
             const remove_count = @min(removed_len, substituted.items.len - glyph_index);
             const replacements = try allocator.alloc(bool, inserted_len);
@@ -5929,6 +5950,7 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     var scratch_options = options;
     scratch_options.glyph_source_indices = null;
     scratch_options.glyph_substituted = null;
+    scratch_options.glyph_stage_substituted = null;
     scratch_options.ligature_components = null;
     scratch_options.source_features = null;
     scratch_options.active_source_feature = null;
@@ -7644,6 +7666,10 @@ test "GSUB multiple substitution preserves ligature provenance" {
     defer sources.deinit(allocator);
     try sources.append(allocator, 3);
 
+    var stage_substituted = std.ArrayList(bool).empty;
+    defer stage_substituted.deinit(allocator);
+    try stage_substituted.append(allocator, false);
+
     var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
     defer components.deinit(allocator);
     var ligature_info = gpos.LigatureComponentInfo{ .component_count = 2 };
@@ -7653,11 +7679,13 @@ test "GSUB multiple substitution preserves ligature provenance" {
 
     try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
         .glyph_source_indices = &sources,
+        .glyph_stage_substituted = &stage_substituted,
         .ligature_components = &components,
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 20, 21 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 3, 3 }, sources.items);
+    try std.testing.expectEqualSlices(bool, &.{ true, true }, stage_substituted.items);
     try std.testing.expectEqual(@as(u8, 2), components.items[0].component_count);
     try std.testing.expectEqual(@as(u8, 2), components.items[1].component_count);
     try std.testing.expect(components.items[0].multiplied);

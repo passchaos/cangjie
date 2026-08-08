@@ -72,6 +72,24 @@ pub fn forCodepoint(codepoint: u21) Category {
         0x1b6b...0x1b73 => .symbol_mod_above,
         0x200c => .zwnj,
         0x2060 => .word_joiner,
+        0xa980...0xa981 => .vowel_mod_above,
+        0xa982 => .final_above,
+        0xa983 => .vowel_mod_post,
+        0xa984...0xa9b2,
+        0xa9d0...0xa9d9,
+        => .base,
+        0xa9b3 => .consonant_mod_above,
+        0xa9b4...0xa9b5 => .vowel_post,
+        0xa9b6...0xa9b7,
+        0xa9bc,
+        => .vowel_above,
+        0xa9b8...0xa9b9 => .vowel_below,
+        0xa9ba...0xa9bb => .vowel_pre,
+        0xa9bd,
+        0xa9bf,
+        => .medial_below,
+        0xa9be => .medial_post,
+        0xa9c0 => .halant,
         0x1bc00...0x1bc6a,
         0x1bc70...0x1bc7c,
         0x1bc80...0x1bc88,
@@ -148,6 +166,15 @@ test "Duployan affixes use HarfBuzz consonant category" {
 test "Balinese USE categories distinguish a stacked consonant syllable" {
     const codepoints = [_]u21{ 0x1b15, 0x1b44, 0x1b16, 0x1b02 };
     const expected = [_]Category{ .base, .halant, .base, .vowel_mod_above };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Javanese USE categories distinguish prebase and medial signs" {
+    const codepoints = [_]u21{ 0xa9a5, 0xa9ba, 0xa9c0, 0xa9bd, 0xa9be, 0xa980 };
+    const expected = [_]Category{ .base, .vowel_pre, .halant, .medial_below, .medial_post, .vowel_mod_above };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

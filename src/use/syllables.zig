@@ -482,6 +482,19 @@ test "USE syllables group a Balinese stacked consonant and modifier" {
     );
 }
 
+test "USE syllables group a Javanese prebase vowel with its base" {
+    const allocator = std.testing.allocator;
+    const codepoints = [_]u21{ 0xa9a5, 0xa9ba };
+    const syllables = try find(allocator, &codepoints);
+    defer allocator.free(syllables);
+
+    try std.testing.expectEqualSlices(
+        Syllable,
+        &.{.{ .start = 0, .end = codepoints.len, .kind = .standard }},
+        syllables,
+    );
+}
+
 test "USE source features assign topographical forms per syllable" {
     const allocator = std.testing.allocator;
     const codepoints = [_]u21{ 0x1bc02, 0x1bc5b, 0x034f, 0x034f, 0x034f, 0x1bc1c, 0x200c, 0x1bc02 };

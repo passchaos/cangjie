@@ -3105,10 +3105,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const glyph_source_indices = &scratch.glyph_source_indices;
     const glyph_cluster_indices = &scratch.glyph_cluster_indices;
     const glyph_substituted = &scratch.glyph_substituted;
+    const glyph_stage_substituted = &scratch.glyph_stage_substituted;
     const ligature_components = &scratch.ligature_components;
     const joining_forms = &scratch.joining_forms;
     const source_features = &scratch.source_features;
     const source_syllables = &scratch.source_syllables;
+    const source_pref_substituted = &scratch.source_pref_substituted;
 
     const shape_profile = buffer.shape_profile;
     const profile_io = buffer.profile_io;
@@ -3265,11 +3267,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     } else if (use_shape) {
         try source_features.resize(buffer.allocator, codepoints.items.len);
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
+        try source_pref_substituted.resize(buffer.allocator, codepoints.items.len);
+        @memset(source_pref_substituted.items, false);
         try use_shaper.markSourceFeatures(buffer.allocator, source_features.items, source_syllables.items, codepoints.items);
-        use_shaper.mergeSyllableClusters(
-            glyph_source_indices.items,
+        try use_shaper.assignGraphemeClusterOwners(
+            buffer.allocator,
+            text,
+            cluster_base,
+            clusters.items,
+            codepoints.items,
             glyph_cluster_indices.items,
-            source_syllables.items,
         );
         var use_options = gsub_options;
         use_options.source_features = source_features.items;
@@ -3277,7 +3284,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.defaultPreprocessingFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.rphfFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.prefFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
+        @memset(glyph_stage_substituted.items, false);
+        var pref_options = use_options;
+        pref_options.glyph_stage_substituted = glyph_stage_substituted;
+        try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.prefFeatureApplications(), glyph_ids, pref_options, gdef_metadata.*);
+        use_shaper.recordPrefSubstitutions(
+            glyph_source_indices.items,
+            glyph_stage_substituted.items,
+            source_pref_substituted.items,
+        );
+        glyph_stage_substituted.clearRetainingCapacity();
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         if (use_shaper.hasBrokenSyllable(source_syllables.items)) {
             const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
@@ -3300,6 +3317,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             glyph_substituted.items,
             ligature_components.items,
             source_syllables.items,
+            source_pref_substituted.items,
             codepoints.items,
         );
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.topographicalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
@@ -3609,6 +3627,7 @@ const SourceSpan = struct {
 };
 
 fn sourceSpanForGlyph(glyph_index: usize, fallback_source_index: usize, fallback_cluster_index: usize, starts: []const usize, ends: []const usize, ligature_components: []const gpos.LigatureComponentInfo) ?SourceSpan {
+    const cluster = sourceSpanForIndex(fallback_cluster_index, starts, ends);
     if (glyph_index < ligature_components.len and ligature_components[glyph_index].component_count > 1) {
         const info = ligature_components[glyph_index];
         var span: ?SourceSpan = null;
@@ -3622,11 +3641,17 @@ fn sourceSpanForGlyph(glyph_index: usize, fallback_source_index: usize, fallback
                 span = component_span;
             }
         }
-        if (span) |value| return value;
+        if (span) |value| {
+            // Ligature components determine the source extent, but GSUB's
+            // cluster-owner metadata determines the public cluster start.
+            // Reordering or a later ligature can merge that owner farther left
+            // than the ligature's own first logical component.
+            return .{ .start = if (cluster) |owner| owner.start else value.start, .end = value.end };
+        }
     }
-    const span = sourceSpanForIndex(fallback_source_index, starts, ends) orelse return sourceSpanForIndex(fallback_cluster_index, starts, ends);
-    const cluster = sourceSpanForIndex(fallback_cluster_index, starts, ends) orelse return span;
-    return .{ .start = cluster.start, .end = span.end };
+    const span = sourceSpanForIndex(fallback_source_index, starts, ends) orelse return cluster;
+    const owner = cluster orelse return span;
+    return .{ .start = owner.start, .end = span.end };
 }
 
 fn sourceSpanForIndex(source_index: usize, starts: []const usize, ends: []const usize) ?SourceSpan {
@@ -3635,6 +3660,18 @@ fn sourceSpanForIndex(source_index: usize, starts: []const usize, ends: []const 
     const start = starts[index];
     const end = if (index < ends.len) @max(ends[index], start) else start;
     return .{ .start = start, .end = end };
+}
+
+test "ligature source spans honor a merged cluster owner" {
+    const starts = [_]usize{ 0, 3, 6, 9 };
+    const ends = [_]usize{ 3, 6, 9, 12 };
+    var info = gpos.LigatureComponentInfo{ .component_count = 2 };
+    info.component_sources[0] = 2;
+    info.component_sources[1] = 3;
+
+    const span = sourceSpanForGlyph(0, 2, 1, &starts, &ends, &.{info}).?;
+
+    try std.testing.expectEqual(SourceSpan{ .start = 3, .end = 12 }, span);
 }
 
 fn defaultLigatureComponentInfo(source_index: usize) gpos.LigatureComponentInfo {

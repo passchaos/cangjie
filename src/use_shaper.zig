@@ -9,7 +9,7 @@ const categories = @import("use/categories.zig");
 const syllables = @import("use/syllables.zig");
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .bali or script_tag == .dupl;
+    return script_tag == .bali or script_tag == .dupl or script_tag == .java;
 }
 
 pub const Category = categories.Category;
@@ -33,39 +33,47 @@ pub fn markSourceFeatures(
     try syllables.markSourceFeatures(allocator, source_features, source_syllables, codepoints);
 }
 
-pub fn mergeSyllableClusters(
-    glyph_source_indices: []const usize,
+pub fn assignGraphemeClusterOwners(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    cluster_base: usize,
+    source_byte_starts: []const usize,
+    codepoints: []const u21,
     glyph_cluster_indices: []usize,
-    source_syllables: []const u8,
-) void {
-    std.debug.assert(glyph_source_indices.len == glyph_cluster_indices.len);
-    const glyph_count = glyph_source_indices.len;
-    var start: usize = 0;
-    while (start < glyph_count) {
-        const source = glyph_source_indices[start];
-        if (source >= source_syllables.len or source_syllables[source] == 0) {
-            start += 1;
-            continue;
-        }
+) !void {
+    if (source_byte_starts.len == 0 or glyph_cluster_indices.len == 0) return;
+    if (source_byte_starts.len != codepoints.len) return error.InvalidUseInput;
 
-        const syllable_id = source_syllables[source];
-        var end = start + 1;
-        while (end < glyph_count) : (end += 1) {
-            const next_source = glyph_source_indices[end];
-            if (next_source >= source_syllables.len or source_syllables[next_source] != syllable_id) break;
-        }
+    const graphemes = try unicode.itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(graphemes);
+    const owner_by_source = try allocator.alloc(usize, source_byte_starts.len);
+    defer allocator.free(owner_by_source);
+    for (owner_by_source, 0..) |*owner, source| owner.* = source;
 
-        // USE serials identify orthographic units, while glyph source indices
-        // must remain per-character for feature and attachment processing.
-        // Merge only the independent cluster-owner metadata so substitutions
-        // retain precise source identity but the final glyph run cannot expose
-        // a caret or line-break opportunity inside one USE syllable.
-        var owner = glyph_cluster_indices[start];
-        for (glyph_cluster_indices[start + 1 .. end]) |candidate| {
-            owner = @min(owner, candidate);
+    var source: usize = 0;
+    for (graphemes) |grapheme| {
+        const grapheme_end = grapheme.byte_start + grapheme.byte_len;
+        while (source < source_byte_starts.len and source_byte_starts[source] - cluster_base < grapheme.byte_start) : (source += 1) {}
+        if (source >= source_byte_starts.len) break;
+
+        const owner = source;
+        while (source < source_byte_starts.len) : (source += 1) {
+            const byte_start = source_byte_starts[source] - cluster_base;
+            if (byte_start >= grapheme_end) break;
+            // UAX #29 classifies ZWNJ as Extend, but HarfBuzz intentionally
+            // preserves its input cluster in the shaping buffer. Contextual
+            // matching still treats it as a joiner; only cluster ownership
+            // remains independent.
+            owner_by_source[source] = if (codepoints[source] == 0x200c) source else owner;
         }
-        @memset(glyph_cluster_indices[start..end], owner);
-        start = end;
+    }
+
+    // HarfBuzz's default monotone-grapheme cluster level performs this merge
+    // before GSUB. Keeping the metadata at that granularity lets later
+    // ligatures merge adjacent graphemes only when they actually consume
+    // components, rather than collapsing every character in a USE syllable.
+    for (glyph_cluster_indices) |*cluster| {
+        if (cluster.* < owner_by_source.len) cluster.* = owner_by_source[cluster.*];
     }
 }
 
@@ -74,6 +82,19 @@ pub fn hasBrokenSyllable(source_syllables: []const u8) bool {
         if (syllableKindIs(syllable_id, .broken)) return true;
     }
     return false;
+}
+
+pub fn recordPrefSubstitutions(
+    glyph_source_indices: []const usize,
+    glyph_stage_substituted: []const bool,
+    source_pref_substituted: []bool,
+) void {
+    std.debug.assert(glyph_source_indices.len == glyph_stage_substituted.len);
+    for (glyph_source_indices, glyph_stage_substituted) |source, substituted| {
+        if (substituted and source < source_pref_substituted.len) {
+            source_pref_substituted[source] = true;
+        }
+    }
 }
 
 pub fn insertDottedCirclesForBrokenSyllables(
@@ -140,6 +161,7 @@ pub fn reorderPrebaseGlyphs(
     glyph_substituted: []bool,
     ligature_components: []gpos.LigatureComponentInfo,
     source_syllables: []const u8,
+    source_pref_substituted: []const bool,
     codepoints: []const u21,
 ) void {
     const glyph_count = glyph_ids.len;
@@ -167,6 +189,7 @@ pub fn reorderPrebaseGlyphs(
             glyph_cluster_indices,
             glyph_substituted,
             ligature_components,
+            source_pref_substituted,
             codepoints,
             syllable_start,
             syllable_end,
@@ -181,6 +204,7 @@ fn reorderPrebaseGlyphsInSyllable(
     glyph_cluster_indices: []usize,
     glyph_substituted: []bool,
     ligature_components: []gpos.LigatureComponentInfo,
+    source_pref_substituted: []const bool,
     codepoints: []const u21,
     start: usize,
     end: usize,
@@ -189,7 +213,7 @@ fn reorderPrebaseGlyphsInSyllable(
     var index = start;
     while (index < end) {
         const source = glyph_source_indices[index];
-        const category = if (source < codepoints.len) categories.forCodepoint(codepoints[source]) else .other;
+        const category = categoryForReordering(source, source_pref_substituted, codepoints);
         if (categories.isHalantLike(category) and ligature_components[index].component_count <= 1) {
             insertion = index + 1;
             index += 1;
@@ -223,6 +247,11 @@ fn reorderPrebaseGlyphsInSyllable(
         }
         index = source_group_end;
     }
+}
+
+fn categoryForReordering(source: usize, source_pref_substituted: []const bool, codepoints: []const u21) Category {
+    if (source < source_pref_substituted.len and source_pref_substituted[source]) return .vowel_pre;
+    return if (source < codepoints.len) categories.forCodepoint(codepoints[source]) else .other;
 }
 
 fn mergeClusterRange(clusters: []usize, start: usize, end: usize) void {
@@ -365,18 +394,32 @@ test "USE category covers Duployan sample codepoints" {
 test "USE shaping includes Balinese" {
     try @import("std").testing.expect(shouldShape(.bali));
     try @import("std").testing.expect(shouldShape(.dupl));
+    try @import("std").testing.expect(shouldShape(.java));
     try @import("std").testing.expect(!shouldShape(.latn));
 }
 
-test "USE syllable cluster merging preserves source ownership" {
-    const sources = [_]usize{ 0, 1, 2, 3, 4, 5 };
-    const syllable_serials = [_]u8{ 0x12, 0x12, 0x12, 0x12, 0x22, 0x22 };
-    var cluster_owners = [_]usize{ 0, 1, 2, 3, 4, 5 };
+test "USE cluster owners start at Unicode grapheme boundaries" {
+    const allocator = std.testing.allocator;
+    const text = "ꦟ꧀ꦢꦿ";
+    const byte_starts = [_]usize{ 0, 3, 6, 9 };
+    const codepoints = [_]u21{ 0xa99f, 0xa9c0, 0xa9a2, 0xa9bf };
+    var cluster_owners = [_]usize{ 0, 1, 2, 3 };
 
-    mergeSyllableClusters(&sources, &cluster_owners, &syllable_serials);
+    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
 
-    try @import("std").testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 4, 4 }, &cluster_owners);
-    try @import("std").testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3, 4, 5 }, &sources);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, &cluster_owners);
+}
+
+test "USE cluster owners preserve ZWNJ identity" {
+    const allocator = std.testing.allocator;
+    const text = "ꦢ꧀‌ꦔ";
+    const byte_starts = [_]usize{ 0, 3, 6, 9 };
+    const codepoints = [_]u21{ 0xa9a2, 0xa9c0, 0x200c, 0xa994 };
+    var cluster_owners = [_]usize{ 0, 1, 2, 3 };
+
+    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 3 }, &cluster_owners);
 }
 
 test "USE reordering moves only the first split prebase component" {
@@ -390,6 +433,7 @@ test "USE reordering moves only the first split prebase component" {
         .{ .component_sources = [_]usize{1} ** gpos.max_ligature_components },
     };
     const syllable_serials = [_]u8{ 0x12, 0x12 };
+    const pref_substituted = [_]bool{ false, false };
     const codepoints = [_]u21{ 0x1b19, 0x1b40 };
 
     reorderPrebaseGlyphs(
@@ -399,6 +443,7 @@ test "USE reordering moves only the first split prebase component" {
         &substituted,
         &components,
         &syllable_serials,
+        &pref_substituted,
         &codepoints,
     );
 
@@ -406,6 +451,34 @@ test "USE reordering moves only the first split prebase component" {
     try std.testing.expectEqualSlices(usize, &.{ 1, 0, 1 }, &sources);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 1 }, &cluster_owners);
     try std.testing.expectEqualSlices(bool, &.{ true, false, true }, &substituted);
+}
+
+test "USE pref substitutions reorder as prebase glyphs" {
+    var glyph_ids = [_]GlyphId{ 10, 20 };
+    var sources = [_]usize{ 0, 1 };
+    var cluster_owners = [_]usize{ 0, 0 };
+    var substituted = [_]bool{ false, true };
+    var components = [_]gpos.LigatureComponentInfo{
+        .{ .component_sources = [_]usize{0} ** gpos.max_ligature_components },
+        .{ .component_sources = [_]usize{1} ** gpos.max_ligature_components },
+    };
+    const syllable_serials = [_]u8{ 0x12, 0x12 };
+    const pref_substituted = [_]bool{ false, true };
+    const codepoints = [_]u21{ 0xa99f, 0xa9c0 };
+
+    reorderPrebaseGlyphs(
+        &glyph_ids,
+        &sources,
+        &cluster_owners,
+        &substituted,
+        &components,
+        &syllable_serials,
+        &pref_substituted,
+        &codepoints,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 20, 10 }, &glyph_ids);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, &sources);
 }
 
 test "USE inserts a dotted circle into each broken syllable" {

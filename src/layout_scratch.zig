@@ -12,20 +12,24 @@ pub const ShapeScratch = struct {
     glyph_source_indices: std.ArrayList(usize) = .empty,
     glyph_cluster_indices: std.ArrayList(usize) = .empty,
     glyph_substituted: std.ArrayList(bool) = .empty,
+    glyph_stage_substituted: std.ArrayList(bool) = .empty,
     ligature_components: std.ArrayList(gpos.LigatureComponentInfo) = .empty,
     joining_forms: std.ArrayList(unicode.JoiningForm) = .empty,
     source_features: std.ArrayList(u32) = .empty,
     source_syllables: std.ArrayList(u8) = .empty,
+    source_pref_substituted: std.ArrayList(bool) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
     attachment_links: std.ArrayList(@import("attachment.zig").Link) = .empty,
 
     pub fn deinit(self: *ShapeScratch, allocator: std.mem.Allocator) void {
         self.attachment_links.deinit(allocator);
         self.gpos_adjustments.deinit(allocator);
+        self.source_pref_substituted.deinit(allocator);
         self.source_syllables.deinit(allocator);
         self.source_features.deinit(allocator);
         self.joining_forms.deinit(allocator);
         self.ligature_components.deinit(allocator);
+        self.glyph_stage_substituted.deinit(allocator);
         self.glyph_substituted.deinit(allocator);
         self.glyph_cluster_indices.deinit(allocator);
         self.glyph_source_indices.deinit(allocator);
@@ -44,10 +48,12 @@ pub const ShapeScratch = struct {
         self.glyph_source_indices.clearRetainingCapacity();
         self.glyph_cluster_indices.clearRetainingCapacity();
         self.glyph_substituted.clearRetainingCapacity();
+        self.glyph_stage_substituted.clearRetainingCapacity();
         self.ligature_components.clearRetainingCapacity();
         self.joining_forms.clearRetainingCapacity();
         self.source_features.clearRetainingCapacity();
         self.source_syllables.clearRetainingCapacity();
+        self.source_pref_substituted.clearRetainingCapacity();
         self.gpos_adjustments.clearRetainingCapacity();
         self.attachment_links.clearRetainingCapacity();
     }

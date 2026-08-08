@@ -7878,11 +7878,20 @@ fn validateMarkGlyphSetsDefGlyphBounds(data: []const u8, offset: usize, glyph_co
         const coverage_relative = try bin.readU32At(data, offset + 4 + index * 4);
         if (coverage_relative < coverage_data_start) return error.BadSfnt;
         if (coverage_relative > data.len - offset) return error.BadSfnt;
-        try validateCoverageGlyphBounds(data, offset + coverage_relative, glyph_count);
+        try validateCoverageGlyphBoundsForReadMode(data, offset + coverage_relative, glyph_count, .mark_filtering_set);
     }
 }
 
+const CoverageReadMode = enum {
+    canonical,
+    mark_filtering_set,
+};
+
 fn validateCoverageGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
+    return validateCoverageGlyphBoundsForReadMode(data, offset, glyph_count, .canonical);
+}
+
+fn validateCoverageGlyphBoundsForReadMode(data: []const u8, offset: usize, glyph_count: u16, read_mode: CoverageReadMode) FontError!void {
     if (offset + 2 > data.len) return error.BadSfnt;
     const format = try bin.readU16At(data, offset);
     switch (format) {
@@ -7894,7 +7903,16 @@ fn validateCoverageGlyphBounds(data: []const u8, offset: usize, glyph_count: u16
             for (0..count) |index| {
                 const glyph_id = try bin.readU16At(data, offset + 4 + index * 2);
                 if (previous) |last| {
-                    if (glyph_id <= last) return error.BadSfnt;
+                    switch (read_mode) {
+                        .canonical => if (glyph_id <= last) return error.BadSfnt,
+                        // Roboto's GDEF MarkGlyphSetsDef contains duplicate
+                        // glyph ids in format-1 Coverage arrays. HarfBuzz and
+                        // FreeType tolerate that shape for mark filtering, and
+                        // downstream membership checks are set-like, so accept
+                        // non-decreasing order here while still rejecting
+                        // genuinely unsorted data.
+                        .mark_filtering_set => if (glyph_id < last) return error.BadSfnt,
+                    }
                 }
                 if (glyph_id >= glyph_count) return error.BadSfnt;
                 previous = glyph_id;
@@ -7990,15 +8008,18 @@ fn coverageGlyphs(allocator: std.mem.Allocator, data: []const u8, offset: usize)
             const glyphs = try allocator.alloc(glyph_mod.GlyphId, glyph_count);
             errdefer allocator.free(glyphs);
             var previous: ?glyph_mod.GlyphId = null;
-            for (glyphs, 0..) |*glyph, index| {
+            var out: usize = 0;
+            for (0..glyph_count) |index| {
                 const glyph_id = try bin.readU16At(data, offset + 4 + index * 2);
                 if (previous) |last| {
-                    if (glyph_id <= last) return error.BadSfnt;
+                    if (glyph_id < last) return error.BadSfnt;
+                    if (glyph_id == last) continue;
                 }
                 previous = glyph_id;
-                glyph.* = glyph_id;
+                glyphs[out] = glyph_id;
+                out += 1;
             }
-            return glyphs;
+            return try allocator.realloc(glyphs, out);
         },
         2 => {
             if (offset + 4 > data.len) return error.BadSfnt;
@@ -11850,17 +11871,26 @@ test "GDEF MarkGlyphSetsDef rejects coverage offsets into its header" {
     try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(std.testing.allocator, &bytes, 0));
 }
 
-test "GDEF MarkGlyphSetsDef rejects malformed coverage ordering" {
+test "GDEF MarkGlyphSetsDef handles duplicate and unsorted coverage glyphs" {
+    const allocator = std.testing.allocator;
     var bytes: [28]u8 = .{0} ** 28;
     writeU16Test(&bytes, 0, 1); // MarkGlyphSetsDef format.
     writeU16Test(&bytes, 2, 1);
     writeU32Test(&bytes, 4, 8);
 
     writeU16Test(&bytes, 8, 1); // Coverage format 1.
-    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 5);
+    writeU16Test(&bytes, 14, 5); // Duplicate glyphs appear in real GDEF mark-filtering sets.
+    writeU16Test(&bytes, 16, 9);
+    const sets = try readMarkGlyphSetsDef(allocator, &bytes, 0);
+    defer freeMarkFilteringSets(allocator, sets);
+    try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 5, 9 }, sets[0]);
+
     writeU16Test(&bytes, 12, 9);
-    writeU16Test(&bytes, 14, 5); // Unsorted; mark sets must use canonical Coverage data.
-    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(std.testing.allocator, &bytes, 0));
+    writeU16Test(&bytes, 14, 5); // Genuinely unsorted; still reject.
+    writeU16Test(&bytes, 16, 10);
+    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(allocator, &bytes, 0));
 
     writeU16Test(&bytes, 8, 2); // Coverage format 2.
     writeU16Test(&bytes, 10, 2);
@@ -11870,7 +11900,7 @@ test "GDEF MarkGlyphSetsDef rejects malformed coverage ordering" {
     writeU16Test(&bytes, 18, 9); // Overlaps the previous inclusive range.
     writeU16Test(&bytes, 20, 11);
     writeU16Test(&bytes, 22, 5);
-    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(std.testing.allocator, &bytes, 0));
+    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(allocator, &bytes, 0));
 }
 
 test "ignores mark glyph filtering offset field before GDEF 1.2" {

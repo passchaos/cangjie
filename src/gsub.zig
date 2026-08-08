@@ -512,7 +512,7 @@ pub fn applyFeatureSequenceWithOptions(
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try validateShapingMetadata(options, glyphs.items.len);
+    try validateShapingMetadataForApplications(options, glyphs.items.len, applications);
     var mutation_generation: usize = 0;
     const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
@@ -552,7 +552,6 @@ pub fn applyFeatureSequenceWithOptions(
         selected_options.match_source_syllable = application.match_source_syllable;
         selected_options.active_auto_zwnj = application.auto_zwnj;
         selected_options.active_auto_zwj = application.auto_zwj;
-        try validateShapingMetadata(selected_options, glyphs.items.len);
         try applySelectedFeatureFromPlan(table, application.tag, feature_indices.items, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -682,7 +681,7 @@ pub fn applyFeatureLookupPlanWithOptions(
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try validateShapingMetadata(options, glyphs.items.len);
+    try validateShapingMetadataForFeaturePlan(options, glyphs.items.len, plan);
     var mutation_generation: usize = 0;
     const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
@@ -698,7 +697,6 @@ pub fn applyFeatureLookupPlanWithOptions(
         selected_options.match_source_syllable = entry.application.match_source_syllable;
         selected_options.active_auto_zwnj = entry.application.auto_zwnj;
         selected_options.active_auto_zwj = entry.application.auto_zwj;
-        try validateShapingMetadata(selected_options, glyphs.items.len);
         try applyLookupPlanEntry(table, lookup_count, entry, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -713,7 +711,7 @@ pub fn applyMergedFeatureLookupPlanWithOptions(
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try validateShapingMetadata(options, glyphs.items.len);
+    try validateShapingMetadataForMergedPlan(options, glyphs.items.len, plan);
     var mutation_generation: usize = 0;
     const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
@@ -732,7 +730,6 @@ pub fn applyMergedFeatureLookupPlanWithOptions(
         selected_options.active_auto_zwnj = lookup.auto_zwnj;
         selected_options.active_auto_zwj = lookup.auto_zwj;
         selected_options.match_source_syllable = lookup.match_source_syllable;
-        try validateShapingMetadata(selected_options, glyphs.items.len);
         try applyLookupWithIndex(table, lookup_offset, lookup.lookup, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -2455,6 +2452,45 @@ fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
 }
 
 fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError!void {
+    return validateShapingMetadataRequirements(
+        options,
+        glyph_count,
+        options.active_source_feature != null or options.active_source_feature_mask != 0,
+        options.match_source_syllable or options.match_source_syllable_lookups != null,
+    );
+}
+
+fn validateShapingMetadataForApplications(options: LookupOptions, glyph_count: usize, applications: []const FeatureApplication) GsubError!void {
+    var require_source_features = options.active_source_feature != null or options.active_source_feature_mask != 0;
+    var require_source_syllables = options.match_source_syllable or options.match_source_syllable_lookups != null;
+    for (applications) |application| {
+        require_source_features = require_source_features or application.source_scoped;
+        require_source_syllables = require_source_syllables or application.match_source_syllable;
+    }
+    return validateShapingMetadataRequirements(options, glyph_count, require_source_features, require_source_syllables);
+}
+
+fn validateShapingMetadataForFeaturePlan(options: LookupOptions, glyph_count: usize, plan: FeatureLookupPlan) GsubError!void {
+    var require_source_features = options.active_source_feature != null or options.active_source_feature_mask != 0;
+    var require_source_syllables = options.match_source_syllable or options.match_source_syllable_lookups != null;
+    for (plan.entries) |entry| {
+        require_source_features = require_source_features or entry.application.source_scoped;
+        require_source_syllables = require_source_syllables or entry.application.match_source_syllable;
+    }
+    return validateShapingMetadataRequirements(options, glyph_count, require_source_features, require_source_syllables);
+}
+
+fn validateShapingMetadataForMergedPlan(options: LookupOptions, glyph_count: usize, plan: MergedFeatureLookupPlan) GsubError!void {
+    var require_source_features = options.active_source_feature != null or options.active_source_feature_mask != 0;
+    var require_source_syllables = options.match_source_syllable or options.match_source_syllable_lookups != null;
+    for (plan.lookups) |lookup| {
+        require_source_features = require_source_features or lookup.source_mask != 0;
+        require_source_syllables = require_source_syllables or lookup.match_source_syllable;
+    }
+    return validateShapingMetadataRequirements(options, glyph_count, require_source_features, require_source_syllables);
+}
+
+fn validateShapingMetadataRequirements(options: LookupOptions, glyph_count: usize, require_source_features: bool, require_source_syllables: bool) GsubError!void {
     if (options.glyph_source_indices) |sources| {
         if (sources.items.len != glyph_count) return error.InvalidShapingInput;
     }
@@ -2470,26 +2506,76 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError
             try validateLigatureComponentInfo(component_info);
         }
     }
-    if (options.active_source_feature != null or options.active_source_feature_mask != 0) {
-        const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
-        const features = options.source_features orelse return error.InvalidShapingInput;
-        for (sources.items) |source| {
-            if (source >= features.len) return error.InvalidShapingInput;
-        }
-    }
-    if (options.match_source_syllable or options.match_source_syllable_lookups != null) {
-        const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
-        const syllables = options.source_syllables orelse return error.InvalidShapingInput;
-        for (sources.items) |source| {
-            if (source >= syllables.len) return error.InvalidShapingInput;
-        }
-    }
-    if (options.source_codepoints) |codepoints| {
-        const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
-        for (sources.items) |source| {
+    if (!require_source_features and !require_source_syllables and options.source_codepoints == null) return;
+
+    const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
+    const features = if (require_source_features)
+        options.source_features orelse return error.InvalidShapingInput
+    else
+        &.{};
+    const syllables = if (require_source_syllables)
+        options.source_syllables orelse return error.InvalidShapingInput
+    else
+        &.{};
+    for (sources.items) |source| {
+        if (require_source_features and source >= features.len) return error.InvalidShapingInput;
+        if (require_source_syllables and source >= syllables.len) return error.InvalidShapingInput;
+        if (options.source_codepoints) |codepoints| {
             if (source >= codepoints.len) return error.InvalidShapingInput;
         }
     }
+}
+
+test "GSUB feature plans validate derived source metadata requirements once" {
+    const allocator = std.testing.allocator;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 1);
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.append(allocator, 0);
+
+    const source_scoped_plan = FeatureLookupPlan{
+        .entries = @constCast(&[_]FeatureLookupPlanEntry{.{
+            .application = .{ .tag = unicode.tag("init"), .source_scoped = true },
+            .lookups = &.{},
+            .lookup_offsets = &.{},
+        }}),
+    };
+    try std.testing.expectError(
+        error.InvalidShapingInput,
+        validateShapingMetadataForFeaturePlan(.{ .glyph_source_indices = &sources }, glyphs.items.len, source_scoped_plan),
+    );
+
+    const syllable_plan = FeatureLookupPlan{
+        .entries = @constCast(&[_]FeatureLookupPlanEntry{.{
+            .application = .{ .tag = unicode.tag("rphf"), .match_source_syllable = true },
+            .lookups = &.{},
+            .lookup_offsets = &.{},
+        }}),
+    };
+    try std.testing.expectError(
+        error.InvalidShapingInput,
+        validateShapingMetadataForFeaturePlan(.{ .glyph_source_indices = &sources }, glyphs.items.len, syllable_plan),
+    );
+
+    const source_scoped_application = [_]FeatureApplication{
+        .{ .tag = unicode.tag("init"), .source_scoped = true },
+    };
+    try std.testing.expectError(
+        error.InvalidShapingInput,
+        validateShapingMetadataForApplications(.{ .glyph_source_indices = &sources }, glyphs.items.len, &source_scoped_application),
+    );
+
+    const merged_plan = MergedFeatureLookupPlan{
+        .lookups = @constCast(&[_]MergedFeatureLookup{.{ .lookup = 0, .source_mask = 1 }}),
+        .lookup_offsets = @constCast(&[_]usize{0}),
+    };
+    try std.testing.expectError(
+        error.InvalidShapingInput,
+        validateShapingMetadataForMergedPlan(.{ .glyph_source_indices = &sources }, glyphs.items.len, merged_plan),
+    );
 }
 
 fn validateLigatureComponentInfo(info: gpos.LigatureComponentInfo) GsubError!void {

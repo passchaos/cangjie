@@ -149,6 +149,14 @@ Current local snapshot after the Nastaliq parity work:
   capability bit avoids generation bookkeeping for fonts without an applicable
   chaining accelerator; the paired Roboto `en-words` smoke run did not regress
   (`949 ns/glyph` baseline versus `931 ns/glyph` candidate in that session).
+- Validating all source-parallel GSUB metadata requirements once per cached
+  feature plan, instead of once again for every Arabic feature stage, reduced
+  a later same-session Amiri `fa-thelittleprince` median from
+  `1793 ns/glyph` to `1644 ns/glyph`, about `8.3%`. A `perf` sample after the
+  change measured about `1640 ns/glyph` over ten iterations and no longer
+  reported `validateShapingMetadata` among functions above the `0.5%` cutoff.
+  The paired Roboto `en-words` medians were `971 ns/glyph` for the baseline and
+  `964 ns/glyph` for the candidate, with identical checksums.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

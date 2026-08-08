@@ -70,6 +70,18 @@ pub fn forCodepoint(codepoint: u21) Category {
         0x1b3e...0x1b41 => .vowel_pre,
         0x1b44 => .halant,
         0x1b6b...0x1b73 => .symbol_mod_above,
+        0x1bc0...0x1be5 => .base,
+        0x1be6 => .consonant_mod_above,
+        0x1be7,
+        0x1bea...0x1bec,
+        0x1bee,
+        => .vowel_post,
+        0x1be8...0x1be9,
+        0x1bed,
+        0x1bef,
+        => .vowel_above,
+        0x1bf0...0x1bf1 => .final_above,
+        0x1bf2...0x1bf3 => .reordering_killer,
         0x200c => .zwnj,
         0x2060 => .word_joiner,
         0xa980...0xa981 => .vowel_mod_above,
@@ -226,6 +238,15 @@ test "Marchen USE categories distinguish subjoined letters and vowels" {
 test "Cham USE categories distinguish medial positions" {
     const codepoints = [_]u21{ 0xaa00, 0xaa29, 0xaa2d, 0xaa34, 0xaa35, 0xaa36, 0xaa43, 0xaa4d };
     const expected = [_]Category{ .base, .vowel_mod_above, .vowel_below, .medial_pre, .medial_above, .medial_below, .final_above, .final_post };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Batak USE categories distinguish vowels and reordering killers" {
+    const codepoints = [_]u21{ 0x1bc7, 0x1be6, 0x1bea, 0x1bed, 0x1bf0, 0x1bf3 };
+    const expected = [_]Category{ .base, .consonant_mod_above, .vowel_post, .vowel_above, .final_above, .reordering_killer };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

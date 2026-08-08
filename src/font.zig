@@ -6710,7 +6710,12 @@ fn validateCmapEncodingCompatibility(platform_id: u16, encoding_id: u16, format:
             4 => isUnicodeFullRepertoireCmapFormat(format),
             5 => format == 14,
             6 => format == 13,
-            else => false,
+            // Unknown Unicode encoding IDs occur in otherwise valid, subsetted
+            // fonts. Treat ordinary mapping formats as Unicode scalar maps and
+            // keep validating their structure, but do not let an unrecognized
+            // optional EncodingRecord invalidate standard sibling records.
+            // Formats 13/14 remain restricted to their registered encodings.
+            else => isGeneralCharacterCmapFormat(format),
         },
         1 => isLegacyByteOrBmpCmapFormat(format),
         2 => encoding_id <= 2 and isGeneralCharacterCmapFormat(format),
@@ -13761,6 +13766,17 @@ test "cmap platform and encoding records allow only compatible formats" {
         var full_repertoire_format4 = format4;
         writeU16Test(&full_repertoire_format4, 6, 10);
         try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &full_repertoire_format4, cmap, 512));
+
+        var unknown_unicode_encoding_format4 = full_repertoire_format4;
+        writeU16Test(&unknown_unicode_encoding_format4, 4, 0);
+        const unknown_unicode_encoding = try parseCmapSubtables(allocator, &unknown_unicode_encoding_format4, cmap, 512);
+        allocator.free(unknown_unicode_encoding);
+
+        // Unknown Unicode encoding IDs may carry ordinary maps, but must not
+        // appropriate the registered variation-sequence or last-resort formats.
+        var unknown_variation_format = unknown_unicode_encoding_format4;
+        writeU16Test(&unknown_variation_format, 12, 14);
+        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &unknown_variation_format, cmap, 512));
     }
 
     {

@@ -188,6 +188,7 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
         .charstring = charstring,
         .context = .{
             .table = table,
+            .vstore_offset = parsed.top_dict.vstore_offset,
             .global_subrs_index = parsed.global_subrs_index,
             .local_subrs_index = local_subrs,
         },
@@ -196,8 +197,14 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
 
 const CharStringScanContext = struct {
     table: []const u8,
+    vstore_offset: ?usize = null,
     global_subrs_index: IndexInfo,
     local_subrs_index: ?IndexInfo = null,
+
+    pub fn blendRegionCount(self: *CharStringScanContext, vs_index: u16) Error!usize {
+        const offset = self.vstore_offset orelse return error.BadSfnt;
+        return try itemVariationDataRegionCount(self.table, offset, vs_index);
+    }
 
     pub fn globalSubr(self: *CharStringScanContext, operand: i32) Error!?[]const u8 {
         const subr_index = subrIndexForOperand(self.global_subrs_index, operand) orelse return null;
@@ -210,6 +217,27 @@ const CharStringScanContext = struct {
         return try indexObject(self.table, local_subrs, subr_index);
     }
 };
+
+fn itemVariationDataRegionCount(table: []const u8, vstore_offset: usize, vs_index: u16) Error!usize {
+    // CFF2's Top DICT vstore operand points at a CFF2 VariationStore: a
+    // USHORT length followed by a standard OpenType ItemVariationStore.
+    if (vstore_offset > table.len or table.len - vstore_offset < 10) return error.BadSfnt;
+    const vstore_length = std.mem.readInt(u16, table[vstore_offset..][0..2], .big);
+    if (vstore_length < 10 or vstore_length > table.len - vstore_offset) return error.BadSfnt;
+    const store = vstore_offset + 2;
+    if (table.len - store < 8) return error.BadSfnt;
+    const format = std.mem.readInt(u16, table[store..][0..2], .big);
+    if (format != 1) return error.BadSfnt;
+    const data_count = std.mem.readInt(u16, table[store + 6 ..][0..2], .big);
+    if (vs_index >= data_count) return error.BadSfnt;
+    const offset_pos = store + 8 + @as(usize, vs_index) * 4;
+    if (offset_pos > table.len or table.len - offset_pos < 4) return error.BadSfnt;
+    const data_offset = std.mem.readInt(u32, table[offset_pos..][0..4], .big);
+    if (data_offset == 0) return error.BadSfnt;
+    const data_start = store + @as(usize, @intCast(data_offset));
+    if (data_start > table.len or table.len - data_start < 6) return error.BadSfnt;
+    return std.mem.readInt(u16, table[data_start + 4 ..][0..2], .big);
+}
 
 fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
     if (offset > data.len or length > data.len - offset or length < 5) return error.BadSfnt;
@@ -619,6 +647,22 @@ test "CFF2 scans glyph charstrings through biased subr calls" {
     try std.testing.expect(scanned.has_return);
     try std.testing.expect(scanned.has_endchar);
     try std.testing.expect((try charStringScanInfo(&bytes, 0, bytes.len, 1, 2)) == null);
+}
+
+test "CFF2 reads VariationStore region counts for default blend" {
+    const bytes = [_]u8{
+        0, 24, // CFF2 VariationStore length, including this length field.
+        0, 1, // ItemVariationStore format.
+        0, 0, 0, 0, // VariationRegionList offset; unused for default-instance folding.
+        0, 1, // One ItemVariationData subtable.
+        0, 0, 0, 12, // Offset to ItemVariationData from ItemVariationStore start.
+        0, 1, // itemCount.
+        0, 0, // wordDeltaCount.
+        0, 2, // regionIndexCount.
+        0, 0, 0, 1, // Region indexes.
+    };
+    try std.testing.expectEqual(@as(usize, 2), try itemVariationDataRegionCount(&bytes, 0, 0));
+    try std.testing.expectError(error.BadSfnt, itemVariationDataRegionCount(&bytes, 0, 1));
 }
 
 test "CFF2 accepts an empty Global Subr INDEX" {

@@ -111,6 +111,7 @@ fn Scanner(comptime Context: type) type {
         stack: [max_stack]Value = undefined,
         stack_len: usize = 0,
         operation_count: usize = 0,
+        vs_index: u16 = 0,
         info: Info = .{},
 
         const Self = @This();
@@ -172,18 +173,13 @@ fn Scanner(comptime Context: type) type {
                     return .endchar;
                 },
                 15 => {
-                    _ = try self.popInteger();
+                    self.vs_index = try popVariationStoreIndex(try self.popInteger());
                     self.info.has_vsindex = true;
-                    self.clearStack();
                     return .none;
                 },
                 16 => {
-                    // Full blend evaluation depends on the ItemVariationStore.
-                    // A scanner only needs to know that blend was present; the
-                    // executor will apply deltas with coordinates later.
-                    if (self.stack_len == 0) return error.BadSfnt;
+                    try self.applyDefaultBlend();
                     self.info.has_blend = true;
-                    self.clearStack();
                     return .none;
                 },
                 19, 20 => {
@@ -252,6 +248,12 @@ fn Scanner(comptime Context: type) type {
             return value.integer_value;
         }
 
+        fn applyDefaultBlend(self: *Self) Error!void {
+            const target_count = try self.popInteger();
+            const region_count = try contextBlendRegionCount(Context, self.context, self.vs_index);
+            try foldDefaultBlend(&self.stack, &self.stack_len, target_count, region_count);
+        }
+
         fn readStemHints(self: *Self) void {
             self.info.stem_count += self.stack_len / 2;
             self.clearStack();
@@ -272,6 +274,7 @@ fn BoundsExecutor(comptime Context: type) type {
         x: f32 = 0,
         y: f32 = 0,
         contour_open: bool = false,
+        vs_index: u16 = 0,
         allocator: ?std.mem.Allocator = null,
         outline: ?*glyph_mod.GlyphOutline = null,
         bounds_info: BoundsInfo = .{},
@@ -352,12 +355,15 @@ fn BoundsExecutor(comptime Context: type) type {
                     return .endchar;
                 },
                 15 => {
-                    _ = try self.popInteger();
+                    self.vs_index = try popVariationStoreIndex(try self.popInteger());
                     self.bounds_info.scan.has_vsindex = true;
-                    self.clearStack();
                     return .none;
                 },
-                16 => return error.BadSfnt,
+                16 => {
+                    try self.applyDefaultBlend();
+                    self.bounds_info.scan.has_blend = true;
+                    return .none;
+                },
                 19, 20 => {
                     self.readStemHints();
                     const mask_len = (self.bounds_info.scan.stem_count + 7) / 8;
@@ -731,6 +737,12 @@ fn BoundsExecutor(comptime Context: type) type {
             return value.integer_value;
         }
 
+        fn applyDefaultBlend(self: *Self) Error!void {
+            const target_count = try self.popInteger();
+            const region_count = try contextBlendRegionCount(Context, self.context, self.vs_index);
+            try foldDefaultBlend(&self.stack, &self.stack_len, target_count, region_count);
+        }
+
         fn readStemHints(self: *Self) void {
             self.bounds_info.scan.stem_count += self.stack_len / 2;
             self.clearStack();
@@ -740,6 +752,31 @@ fn BoundsExecutor(comptime Context: type) type {
             self.stack_len = 0;
         }
     };
+}
+
+fn contextBlendRegionCount(comptime Context: type, context: *Context, vs_index: u16) Error!usize {
+    if (@hasDecl(Context, "blendRegionCount")) return try context.blendRegionCount(vs_index);
+    return error.BadSfnt;
+}
+
+fn popVariationStoreIndex(index: i32) Error!u16 {
+    if (index < 0 or index > std.math.maxInt(u16)) return error.BadSfnt;
+    return @intCast(index);
+}
+
+fn foldDefaultBlend(stack: *[max_stack]Value, stack_len: *usize, target_count_value: i32, region_count: usize) Error!void {
+    if (target_count_value < 0) return error.BadSfnt;
+    const target_count: usize = @intCast(target_count_value);
+    const per_target = region_count + 1;
+    if (per_target == 0 or (target_count != 0 and per_target > std.math.maxInt(usize) / target_count)) return error.BadSfnt;
+    const operand_count = target_count * per_target;
+    if (operand_count > stack_len.*) return error.BadSfnt;
+    const start = stack_len.* - operand_count;
+    // At the default instance all blend scalars are zero, so the first `n`
+    // operands are already the final values. Drop the following delta operands
+    // while preserving any unrelated operands below this blend group.
+    stack_len.* = start + target_count;
+    _ = stack;
 }
 
 fn readNumber(bytes: []const u8, offset: *usize, first: u8) Error!Value {
@@ -866,4 +903,34 @@ test "CFF2 charstring bounds includes cubic control points" {
     try std.testing.expectEqual(@as(usize, 0), parsed.line_count);
     try std.testing.expectEqual(@as(usize, 1), parsed.curve_count);
     try std.testing.expect(parsed.scan.has_endchar);
+}
+
+test "CFF2 charstring default blend folds deltas" {
+    const Context = struct {
+        pub fn blendRegionCount(_: *@This(), vs_index: u16) Error!usize {
+            if (vs_index != 0) return error.BadSfnt;
+            return 2;
+        }
+
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var context = Context{};
+    // 50 50 100 1 blend 0 rmoveto; 10 hlineto. At the default instance
+    // the blend keeps the default x value (50) and drops the deltas.
+    const parsed = try bounds(Context, &context, &.{ 189, 189, 239, 140, 16, 139, 21, 149, 6, 14 });
+    try std.testing.expect(parsed.scan.has_blend);
+    try std.testing.expect(parsed.has_bounds);
+    try std.testing.expectEqual(@as(f32, 50), parsed.x_min);
+    try std.testing.expectEqual(@as(f32, 0), parsed.y_min);
+    try std.testing.expectEqual(@as(f32, 60), parsed.x_max);
+    try std.testing.expectEqual(@as(f32, 0), parsed.y_max);
+    try std.testing.expectEqual(@as(usize, 1), parsed.move_count);
+    try std.testing.expectEqual(@as(usize, 1), parsed.line_count);
 }

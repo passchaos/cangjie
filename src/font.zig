@@ -8395,16 +8395,20 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
                 if (has_delta.len < points.len) return error.BadSfnt;
                 if (deltas.len < points.len) return error.BadSfnt;
                 const real_deltas = deltas[0..points.len];
-                var original = try outline.allocator.alloc(gvar_mod.Point, points.len);
-                defer outline.allocator.free(original);
-                for (points, 0..) |point, point_index| {
-                    original[point_index] = .{ .x = @floatFromInt(point.x), .y = @floatFromInt(point.y) };
+                for (0..points.len) |point_index| {
                     if (real_deltas[point_index].point != point_index) return error.BadSfnt;
                 }
                 var contour_start: usize = 0;
                 for (end_pts) |end_pt| {
                     const contour_end: usize = end_pt;
-                    try gvar_mod.interpolateContourScaledDeltas(original[contour_start .. contour_end + 1], has_delta[contour_start .. contour_end + 1], real_deltas[contour_start .. contour_end + 1]);
+                    try gvar_mod.interpolateContourScaledDeltasWithReader(
+                        []const FlaggedPoint,
+                        points[contour_start .. contour_end + 1],
+                        contour_end - contour_start + 1,
+                        flaggedPointForGvarIup,
+                        has_delta[contour_start .. contour_end + 1],
+                        real_deltas[contour_start .. contour_end + 1],
+                    );
                     contour_start = contour_end + 1;
                 }
                 for (points, real_deltas) |*point, delta| {
@@ -8430,6 +8434,10 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
         try appendContour(&builder, points[start .. end + 1], transform);
         start = end + 1;
     }
+}
+
+fn flaggedPointForGvarIup(points: []const FlaggedPoint, index: usize) gvar_mod.Point {
+    return .{ .x = @floatFromInt(points[index].x), .y = @floatFromInt(points[index].y) };
 }
 
 fn boundsForFlaggedPoints(points: []const FlaggedPoint) glyph_mod.Bounds {

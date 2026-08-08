@@ -316,8 +316,12 @@ pub fn interpolateContourDeltas(original: []const Point, has_delta: []const bool
 }
 
 pub fn interpolateContourScaledDeltas(original: []const Point, has_delta: []const bool, deltas: []ScaledPointDelta) Error!void {
-    if (original.len != has_delta.len or original.len != deltas.len) return error.BadSfnt;
-    if (original.len == 0) return;
+    return try interpolateContourScaledDeltasWithReader([]const Point, original, original.len, pointAt, has_delta, deltas);
+}
+
+pub fn interpolateContourScaledDeltasWithReader(comptime Context: type, context: Context, original_len: usize, comptime read_point: fn (Context, usize) Point, has_delta: []const bool, deltas: []ScaledPointDelta) Error!void {
+    if (original_len != has_delta.len or original_len != deltas.len) return error.BadSfnt;
+    if (original_len == 0) return;
     var first_delta: ?usize = null;
     for (has_delta, 0..) |has, index| {
         if (has) {
@@ -327,10 +331,10 @@ pub fn interpolateContourScaledDeltas(original: []const Point, has_delta: []cons
     }
     const first = first_delta orelse return;
     var current = first;
-    var index = (first + 1) % original.len;
-    while (index != first) : (index = (index + 1) % original.len) {
+    var index = (first + 1) % original_len;
+    while (index != first) : (index = (index + 1) % original_len) {
         if (has_delta[index]) {
-            interpolateScaledDeltaRun(original, deltas, current, index);
+            interpolateScaledDeltaRunWithReader(Context, context, read_point, deltas, current, index);
             current = index;
         }
     }
@@ -342,8 +346,12 @@ pub fn interpolateContourScaledDeltas(original: []const Point, has_delta: []cons
             }
         }
     } else {
-        interpolateScaledDeltaRun(original, deltas, current, first);
+        interpolateScaledDeltaRunWithReader(Context, context, read_point, deltas, current, first);
     }
+}
+
+fn pointAt(points: []const Point, index: usize) Point {
+    return points[index];
 }
 
 fn interpolateDeltaRun(original: []const Point, deltas: []Point, left_ref: usize, right_ref: usize) void {
@@ -355,10 +363,17 @@ fn interpolateDeltaRun(original: []const Point, deltas: []Point, left_ref: usize
 }
 
 fn interpolateScaledDeltaRun(original: []const Point, deltas: []ScaledPointDelta, left_ref: usize, right_ref: usize) void {
-    var index = (left_ref + 1) % original.len;
-    while (index != right_ref) : (index = (index + 1) % original.len) {
-        deltas[index].x = interpolateAxis(original[index].x, original[left_ref].x, original[right_ref].x, deltas[left_ref].x, deltas[right_ref].x);
-        deltas[index].y = interpolateAxis(original[index].y, original[left_ref].y, original[right_ref].y, deltas[left_ref].y, deltas[right_ref].y);
+    interpolateScaledDeltaRunWithReader([]const Point, original, pointAt, deltas, left_ref, right_ref);
+}
+
+fn interpolateScaledDeltaRunWithReader(comptime Context: type, context: Context, comptime read_point: fn (Context, usize) Point, deltas: []ScaledPointDelta, left_ref: usize, right_ref: usize) void {
+    const left = read_point(context, left_ref);
+    const right = read_point(context, right_ref);
+    var index = (left_ref + 1) % deltas.len;
+    while (index != right_ref) : (index = (index + 1) % deltas.len) {
+        const point = read_point(context, index);
+        deltas[index].x = interpolateAxis(point.x, left.x, right.x, deltas[left_ref].x, deltas[right_ref].x);
+        deltas[index].y = interpolateAxis(point.y, left.y, right.y, deltas[left_ref].y, deltas[right_ref].y);
     }
 }
 

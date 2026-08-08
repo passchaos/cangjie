@@ -1150,7 +1150,10 @@ pub const Font = struct {
         defer allocator.free(scaled_scratch);
         const out = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
         errdefer allocator.free(out);
-        const count = try gvar_mod.accumulateGlyphPointDeltasForPointCountWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, axis_count, glyph_id, normalized_coords, target_count, raw_scratch, scaled_scratch, out, has_delta);
+        const count = switch (read_mode) {
+            .revalidate => try gvar_mod.accumulateGlyphPointDeltasForPointCountWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, axis_count, glyph_id, normalized_coords, target_count, raw_scratch, scaled_scratch, out, has_delta),
+            .parsed => try gvar_mod.accumulateGlyphPointDeltasForPointCountSkippingInactiveWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, axis_count, glyph_id, normalized_coords, target_count, raw_scratch, scaled_scratch, out, has_delta),
+        };
         return try allocator.realloc(out, count);
     }
 

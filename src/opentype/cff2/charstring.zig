@@ -50,7 +50,7 @@ pub const BoundsInfo = struct {
 /// operand stack because their coordinates are irrelevant for metadata scans.
 pub fn scan(comptime Context: type, context: *Context, bytes: []const u8) Error!Info {
     var scanner = Scanner(Context){ .context = context };
-    _ = try scanner.runCharString(bytes, 0);
+    if (try scanner.runCharString(bytes, 0) == .none) scanner.info.has_endchar = true;
     return scanner.info;
 }
 
@@ -62,7 +62,7 @@ pub fn scan(comptime Context: type, context: *Context, bytes: []const u8) Error!
 /// reusing the same operand/subroutine machinery as the outline builder.
 pub fn bounds(comptime Context: type, context: *Context, bytes: []const u8) Error!BoundsInfo {
     var executor = BoundsExecutor(Context){ .context = context };
-    _ = try executor.runCharString(bytes, 0);
+    if (try executor.runCharString(bytes, 0) == .none) try executor.finishImplicitEndchar();
     return executor.bounds_info;
 }
 
@@ -72,7 +72,7 @@ pub fn appendOutline(comptime Context: type, context: *Context, allocator: std.m
         .allocator = allocator,
         .outline = outline,
     };
-    _ = try executor.runCharString(bytes, 0);
+    if (try executor.runCharString(bytes, 0) == .none) try executor.finishImplicitEndchar();
     return executor.bounds_info;
 }
 
@@ -729,6 +729,12 @@ fn BoundsExecutor(comptime Context: type) type {
             }
         }
 
+        fn finishImplicitEndchar(self: *Self) Error!void {
+            self.bounds_info.scan.has_endchar = true;
+            try self.closeOpenContour();
+            self.clearStack();
+        }
+
         fn closeOpenContour(self: *Self) Error!void {
             if (self.contour_open) {
                 if (self.outline) |outline| {
@@ -1007,4 +1013,42 @@ test "CFF2 charstring default blend folds deltas" {
     try std.testing.expectEqual(@as(f32, 0), parsed.y_max);
     try std.testing.expectEqual(@as(usize, 1), parsed.move_count);
     try std.testing.expectEqual(@as(usize, 1), parsed.line_count);
+}
+
+test "CFF2 charstring scan simulates missing top-level endchar" {
+    const Context = struct {
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var context = Context{};
+    const parsed = try scan(Context, &context, &.{ 139, 139, 21 });
+    try std.testing.expect(parsed.has_endchar);
+    try std.testing.expectEqual(@as(usize, 1), parsed.operator_count);
+}
+
+test "CFF2 charstring outline closes missing top-level endchar" {
+    const Context = struct {
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 0, .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 }, 0, 0);
+    defer outline.deinit();
+    var context = Context{};
+    // rmoveto(0,0); rlineto(20,0) without an explicit endchar.
+    const parsed = try appendOutline(Context, &context, std.testing.allocator, &.{ 139, 139, 21, 159, 139, 5 }, &outline);
+    try std.testing.expect(parsed.scan.has_endchar);
+    try std.testing.expectEqual(@as(usize, 3), outline.commands.items.len);
+    try std.testing.expectEqual(.close, outline.commands.items[2]);
 }

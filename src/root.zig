@@ -812,6 +812,48 @@ test "gvar compound glyph deltas adjust component offsets" {
     try std.testing.expectEqual(varied_outline.bounds, varied_bounds);
 }
 
+test "rasterizer renders variable outlines at normalized coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarCompoundTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const glyphs = [_]GlyphPosition{.{
+        .glyph_id = 2,
+        .codepoint = 'A',
+        .cluster = 0,
+        .source_byte_len = 1,
+        .x_advance = 200,
+    }};
+    const run = GlyphRun{ .font = &font, .font_size = 200, .glyphs = &glyphs };
+
+    var default_target = try RenderTarget.init(allocator, 220, 220);
+    defer default_target.deinit();
+    var varied_target = try RenderTarget.init(allocator, 220, 220);
+    defer varied_target.deinit();
+
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.hint_size_px = 200;
+    rasterizer.embolden_small_glyphs = false;
+    try rasterizer.renderRun(&default_target, run, 20, 180);
+    try rasterizer.renderRunAtCoords(&varied_target, run, 20, 180, &.{0.5});
+
+    try std.testing.expect(renderTargetPixelDifference(&default_target, &varied_target) > 0);
+}
+
+fn renderTargetPixelDifference(a: *const RenderTarget, b: *const RenderTarget) usize {
+    if (a.width != b.width or a.height != b.height or a.pixels.len != b.pixels.len) return std.math.maxInt(usize);
+    var diff: usize = 0;
+    for (a.pixels, b.pixels) |lhs, rhs| {
+        if (lhs != rhs) diff += 1;
+    }
+    return diff;
+}
+
 test "lazy gvar metadata revalidates borrowed table bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

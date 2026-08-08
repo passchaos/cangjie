@@ -448,9 +448,16 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderRun(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32) !void {
+        return try self.renderRunAtCoords(target, run, x, baseline_y, &.{});
+    }
+
+    pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
         for (run.glyphs) |position| {
-            var outline = try run.font.glyphOutlineForRaster(self.allocator, position.glyph_id);
+            var outline = if (normalized_variation_coords.len == 0)
+                try run.font.glyphOutlineForRaster(self.allocator, position.glyph_id)
+            else
+                try run.font.glyphOutlineAtCoords(self.allocator, position.glyph_id, normalized_variation_coords);
             defer outline.deinit();
             try self.renderGlyph(target, &outline, pen_x + position.x_offset, baseline_y + position.y_offset, run.font_size, run.font.units_per_em);
             pen_x += position.x_advance;
@@ -458,8 +465,12 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderShapedText(self: *Rasterizer, target: *RenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32) !void {
+        return try self.renderShapedTextAtCoords(target, shaped, x, baseline_y, &.{});
+    }
+
+    pub fn renderShapedTextAtCoords(self: *Rasterizer, target: *RenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
         for (shaped.runs) |run| {
-            try self.renderRun(target, run.glyphRun(shaped), x + run.x_offset, baseline_y);
+            try self.renderRunAtCoords(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, normalized_variation_coords);
         }
     }
 

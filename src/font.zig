@@ -1144,8 +1144,12 @@ pub const Font = struct {
         const axis_count = try self.fvarAxisCountForReadMode(read_mode);
         if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, gvar);
         if (target_count > @as(usize, std.math.maxInt(u16)) + 1) return error.BadSfnt;
-        const raw_scratch = try allocator.alloc(gvar_mod.PointDelta, target_count);
-        defer allocator.free(raw_scratch);
+        var inline_raw_scratch: [64]gvar_mod.PointDelta = undefined;
+        const raw_scratch = if (target_count <= inline_raw_scratch.len)
+            inline_raw_scratch[0..target_count]
+        else
+            try allocator.alloc(gvar_mod.PointDelta, target_count);
+        defer if (target_count > inline_raw_scratch.len) allocator.free(raw_scratch);
         const out = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
         errdefer allocator.free(out);
         const count = switch (read_mode) {

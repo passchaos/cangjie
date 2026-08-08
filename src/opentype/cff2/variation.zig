@@ -15,13 +15,17 @@ pub fn regionCount(table: []const u8, vstore_offset: usize, vs_index: u16) Error
 }
 
 pub fn defaultScalar(table: []const u8, vstore_offset: usize, vs_index: u16, item_region_index: usize) Error!f32 {
+    return try scalar(table, vstore_offset, vs_index, item_region_index, &.{});
+}
+
+pub fn scalar(table: []const u8, vstore_offset: usize, vs_index: u16, item_region_index: usize, normalized_coords: []const f32) Error!f32 {
     const ref = try itemVariationDataRef(table, vstore_offset, vs_index);
     if (item_region_index >= ref.item_region_count) return error.BadSfnt;
     const region_index_offset = ref.data_start + 6 + item_region_index * 2;
     if (region_index_offset > table.len or table.len - region_index_offset < 2) return error.BadSfnt;
     const region_index = std.mem.readInt(u16, table[region_index_offset..][0..2], .big);
     if (region_index >= ref.region_count) return error.BadSfnt;
-    return try variationRegionDefaultScalar(table, ref.region_list_start, ref.axis_count, region_index);
+    return try variationRegionScalar(table, ref.region_list_start, ref.axis_count, region_index, normalized_coords);
 }
 
 fn itemVariationDataRef(table: []const u8, vstore_offset: usize, vs_index: u16) Error!ItemVariationDataRef {
@@ -62,11 +66,11 @@ fn itemVariationDataRef(table: []const u8, vstore_offset: usize, vs_index: u16) 
     };
 }
 
-fn variationRegionDefaultScalar(table: []const u8, region_list_start: usize, axis_count: u16, region_index: u16) Error!f32 {
+fn variationRegionScalar(table: []const u8, region_list_start: usize, axis_count: u16, region_index: u16, normalized_coords: []const f32) Error!f32 {
     const region_record_size = @as(usize, axis_count) * 6;
     const region_start = region_list_start + 4 + @as(usize, region_index) * region_record_size;
     if (region_start > table.len or region_record_size > table.len - region_start) return error.BadSfnt;
-    var scalar: f32 = 1.0;
+    var result: f32 = 1.0;
     for (0..axis_count) |axis| {
         const axis_offset = region_start + axis * 6;
         const start = f2dot14ToF32(std.mem.readInt(i16, table[axis_offset..][0..2], .big));
@@ -74,16 +78,17 @@ fn variationRegionDefaultScalar(table: []const u8, region_list_start: usize, axi
         const end = f2dot14ToF32(std.mem.readInt(i16, table[axis_offset + 4 ..][0..2], .big));
         if (peak == 0) continue;
         if (start > peak or peak > end or (start < 0 and end > 0)) continue;
-        const coord: f32 = 0;
+        const coord = if (axis < normalized_coords.len) normalized_coords[axis] else 0;
+        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
         if (coord < start or coord > end) return 0;
         if (coord == peak) continue;
         if (coord < peak) {
-            scalar = (scalar * (coord - start)) / (peak - start);
+            result = (result * (coord - start)) / (peak - start);
         } else {
-            scalar = (scalar * (end - coord)) / (end - peak);
+            result = (result * (end - coord)) / (end - peak);
         }
     }
-    return scalar;
+    return result;
 }
 
 fn f2dot14ToF32(value: i16) f32 {
@@ -103,11 +108,15 @@ test "CFF2 VariationStore default scalars" {
         0, 0, 0, 1, // Region indexes used by this ItemVariationData.
         0, 1, // axisCount.
         0, 2, // regionCount.
-        0xc0, 0x00, 0, 0, 0x40, 0x00, // Region 0: scalar at coord 0 is 1.
-        0, 0, 0, 0, 0, 0, // Region 1: peak 0 is ignored, scalar stays 1.
+        0xc0, 0x00, 0, 0, 0x40, 0x00, // Region 0: peak 0 is ignored, scalar stays 1.
+        0, 0, 0x40, 0x00, 0x40, 0x00, // Region 1: coord 0.5 has scalar 0.5.
     };
     try std.testing.expectEqual(@as(usize, 2), try regionCount(&bytes, 0, 0));
     try std.testing.expectEqual(@as(f32, 1), try defaultScalar(&bytes, 0, 0, 0));
-    try std.testing.expectEqual(@as(f32, 1), try defaultScalar(&bytes, 0, 0, 1));
+    try std.testing.expectEqual(@as(f32, 0), try defaultScalar(&bytes, 0, 0, 1));
+    try std.testing.expectEqual(@as(f32, 1), try scalar(&bytes, 0, 0, 0, &.{0.5}));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), try scalar(&bytes, 0, 0, 1, &.{0.5}), 0.001);
+    try std.testing.expectEqual(@as(f32, 1), try scalar(&bytes, 0, 0, 1, &.{1}));
+    try std.testing.expectError(error.BadSfnt, scalar(&bytes, 0, 0, 1, &.{std.math.inf(f32)}));
     try std.testing.expectError(error.BadSfnt, regionCount(&bytes, 0, 1));
 }

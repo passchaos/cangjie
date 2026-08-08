@@ -16,6 +16,10 @@ pub fn buildGaspTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try gaspTtfTables(allocator));
 }
 
+pub fn buildDsigTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try dsigTtfTables(allocator));
+}
+
 pub fn buildHdmxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try hdmxTtfTables(allocator));
 }
@@ -513,6 +517,21 @@ fn gaspTtfTables(allocator: std.mem.Allocator) ![]Table {
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "gasp", .data = try gaspTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn dsigTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "DSIG", .data = try dsigTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
@@ -4762,6 +4781,23 @@ fn gaspTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 6, 0x0003);
     writeU16(bytes, 8, 0xffff);
     writeU16(bytes, 10, 0x000f);
+    return bytes;
+}
+
+fn dsigTable(allocator: std.mem.Allocator) ![]u8 {
+    const payload = "sig";
+    const block_offset: usize = 20;
+    const block_len: usize = 8 + payload.len;
+    const bytes = try allocator.alloc(u8, block_offset + block_len);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 1);
+    writeU16(bytes, 4, 1);
+    writeU16(bytes, 6, 1);
+    writeU32(bytes, 8, 1);
+    writeU32(bytes, 12, @intCast(block_len));
+    writeU32(bytes, 16, @intCast(block_offset));
+    writeU32(bytes, block_offset + 4, payload.len);
+    @memcpy(bytes[block_offset + 8 .. block_offset + 8 + payload.len], payload);
     return bytes;
 }
 

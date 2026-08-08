@@ -82,6 +82,8 @@ pub const serializeManifest = @import("database.zig").serializeManifest;
 pub const userFontSourcesForOs = @import("database.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
+pub const DsigInfo = @import("font.zig").DsigInfo;
+pub const DsigSignatureInfo = @import("font.zig").DsigSignatureInfo;
 pub const GaspInfo = @import("font.zig").GaspInfo;
 pub const GaspRange = @import("font.zig").GaspRange;
 pub const CharmapInfo = @import("font.zig").CharmapInfo;
@@ -576,6 +578,53 @@ test "lazy hdmx metadata revalidates borrowed table bytes" {
 
     try std.testing.expectError(error.BadSfnt, font.hdmxWidth(10, 1));
     try std.testing.expectError(error.BadSfnt, font.hdmxInfo(allocator));
+}
+
+test "DSIG metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildDsigTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.dsigInfo(allocator)).?;
+    defer font.freeDsigInfo(allocator, info);
+    try std.testing.expectEqual(@as(u32, 1), info.version);
+    try std.testing.expectEqual(@as(u16, 1), info.flags);
+    try std.testing.expectEqual(@as(usize, 1), info.signatures.len);
+    try std.testing.expectEqual(@as(u32, 1), info.signatures[0].format);
+    try std.testing.expectEqualStrings("sig", info.signatures[0].signature);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.dsigInfo(allocator)) == null);
+}
+
+test "lazy DSIG metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildDsigTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const initial = (try font.dsigInfo(allocator)).?;
+    defer font.freeDsigInfo(allocator, initial);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var dsig_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "DSIG")) dsig_offset = table.offset;
+    }
+    bytes[dsig_offset orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.dsigInfo(allocator));
 }
 
 test "gasp metadata and PPEM behavior are exposed" {

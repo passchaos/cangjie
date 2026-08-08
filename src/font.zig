@@ -162,6 +162,19 @@ pub const PcltInfo = struct {
     serif_style: u8,
 };
 
+pub const DsigSignatureInfo = struct {
+    format: u32,
+    offset: usize,
+    length: usize,
+    signature: []const u8,
+};
+
+pub const DsigInfo = struct {
+    version: u32,
+    flags: u16,
+    signatures: []DsigSignatureInfo,
+};
+
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
 
@@ -611,6 +624,7 @@ pub const Font = struct {
     avar: ?TableRecord,
     colr: ?TableRecord,
     cpal: ?TableRecord,
+    dsig: ?TableRecord,
     vorg: ?TableRecord,
     svg: ?TableRecord,
     sbix: ?TableRecord,
@@ -702,6 +716,7 @@ pub const Font = struct {
         const avar = findTable(records, "avar");
         const colr = findTable(records, "COLR");
         const cpal = findTable(records, "CPAL");
+        const dsig = findTable(records, "DSIG");
         const vorg = findTable(records, "VORG");
         const svg = findTable(records, "SVG ");
         const sbix = findTable(records, "sbix");
@@ -807,6 +822,7 @@ pub const Font = struct {
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
         }
+        if (dsig) |dsig_table| try validateDsigTable(data, dsig_table);
         if (vorg) |vorg_table| try validateVorgTable(data, vorg_table, glyph_count);
         if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
         if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
@@ -850,6 +866,7 @@ pub const Font = struct {
             .avar = avar,
             .colr = colr,
             .cpal = cpal,
+            .dsig = dsig,
             .vorg = vorg,
             .svg = svg,
             .sbix = sbix,
@@ -891,6 +908,18 @@ pub const Font = struct {
         const record = findTableByTag(self.owned_tables, tag) orelse return null;
         try validateSfntTableChecksum(self.data, record);
         return self.data[record.offset .. record.offset + record.length];
+    }
+
+    /// Read validated metadata from the optional SFNT `DSIG` table.
+    pub fn dsigInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?DsigInfo {
+        const dsig = self.dsig orelse return null;
+        try validateSfntTableChecksum(self.data, dsig);
+        try validateDsigTable(self.data, dsig);
+        return try readDsigInfo(allocator, self.data, dsig);
+    }
+
+    pub fn freeDsigInfo(_: *const Font, allocator: std.mem.Allocator, info: DsigInfo) void {
+        allocator.free(info.signatures);
     }
 
     /// Read validated metadata from the optional SFNT `gasp` table.
@@ -3755,6 +3784,55 @@ fn validateCffGlyphCount(data: []const u8, cff: TableRecord, glyph_count: u16) F
     // glyph ids that the CFF outline data can never resolve.
     const info = try cff_mod.parseInfo(data[cff.offset .. cff.offset + cff.length]);
     if (info.charstrings_count != glyph_count) return error.BadSfnt;
+}
+
+fn validateDsigTable(data: []const u8, dsig: TableRecord) FontError!void {
+    try requireTableLength(dsig, 8);
+    if (try bin.readU32At(data, dsig.offset) != 1) return error.BadSfnt;
+    const signature_count = try bin.readU16At(data, dsig.offset + 4);
+    const flags = try bin.readU16At(data, dsig.offset + 6);
+    if ((flags & ~@as(u16, 0x0001)) != 0) return error.BadSfnt;
+    const records_end = 8 + @as(usize, signature_count) * 12;
+    if (records_end > dsig.length) return error.BadSfnt;
+    var previous_end: usize = records_end;
+    for (0..signature_count) |index| {
+        const record = dsig.offset + 8 + index * 12;
+        const format = try bin.readU32At(data, record);
+        if (format != 1) return error.BadSfnt;
+        const length: usize = @intCast(try bin.readU32At(data, record + 4));
+        const offset: usize = @intCast(try bin.readU32At(data, record + 8));
+        if (offset < records_end or offset > dsig.length or length > dsig.length - offset) return error.BadSfnt;
+        if (offset < previous_end) return error.BadSfnt;
+        const block = dsig.offset + offset;
+        if (length < 8) return error.BadSfnt;
+        if (try bin.readU16At(data, block) != 0 or try bin.readU16At(data, block + 2) != 0) return error.BadSfnt;
+        const signature_len: usize = @intCast(try bin.readU32At(data, block + 4));
+        if (signature_len != length - 8) return error.BadSfnt;
+        previous_end = offset + length;
+    }
+}
+
+fn readDsigInfo(allocator: std.mem.Allocator, data: []const u8, dsig: TableRecord) FontError!DsigInfo {
+    const signature_count = try bin.readU16At(data, dsig.offset + 4);
+    const signatures = try allocator.alloc(DsigSignatureInfo, signature_count);
+    errdefer allocator.free(signatures);
+    for (signatures, 0..) |*signature, index| {
+        const record = dsig.offset + 8 + index * 12;
+        const length: usize = @intCast(try bin.readU32At(data, record + 4));
+        const offset: usize = @intCast(try bin.readU32At(data, record + 8));
+        const block = dsig.offset + offset;
+        signature.* = .{
+            .format = try bin.readU32At(data, record),
+            .offset = offset,
+            .length = length,
+            .signature = data[block + 8 .. block + length],
+        };
+    }
+    return .{
+        .version = try bin.readU32At(data, dsig.offset),
+        .flags = try bin.readU16At(data, dsig.offset + 6),
+        .signatures = signatures,
+    };
 }
 
 fn validateVorgTable(data: []const u8, vorg: TableRecord, glyph_count: u16) FontError!void {
@@ -17964,6 +18042,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .dsig = null,
         .vorg = null,
         .svg = null,
         .sbix = null,
@@ -18015,6 +18094,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .dsig = null,
         .vorg = null,
         .svg = null,
         .sbix = null,
@@ -18066,6 +18146,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
         .cpal = null,
+        .dsig = null,
         .vorg = null,
         .svg = null,
         .sbix = null,
@@ -18128,6 +18209,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
+        .dsig = null,
         .vorg = null,
         .svg = null,
         .sbix = null,
@@ -18179,6 +18261,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .dsig = null,
         .vorg = null,
         .svg = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = svg_checksum, .offset = 0, .length = data.len },
         .sbix = null,
@@ -18230,6 +18313,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .dsig = null,
         .vorg = null,
         .svg = null,
         .sbix = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = sbix_checksum, .offset = 0, .length = data.len },
@@ -18281,6 +18365,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .dsig = null,
         .vorg = null,
         .svg = null,
         .sbix = null,
@@ -18352,6 +18437,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .dsig = null,
         .vorg = null,
         .svg = null,
         .sbix = null,

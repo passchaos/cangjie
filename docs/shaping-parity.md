@@ -197,6 +197,13 @@ Current local snapshot after the Nastaliq parity work:
   `955 ns/glyph` to `924 ns/glyph`. Follow-up `perf` no longer reported
   top-level `applySingleSubstitution`, and reduced `coverageIndex` from about
   `8.6%` to `5.1%`.
+- Direct coverage-only GSUB chaining lookups now reuse the accelerator's
+  parse-time format proof instead of rescanning every subtable before each
+  application. A same-session eleven-sample Amiri `fa-thelittleprince` median
+  improved from `1270 ns/glyph` to `1249 ns/glyph`, about `1.6%`; a
+  reverse-order nine-sample Roboto `en-words` check improved from
+  `919 ns/glyph` to `913 ns/glyph`. The generic runtime format walk remains for
+  uncached low-level calls and mixed-format lookups.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

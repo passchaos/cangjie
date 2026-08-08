@@ -1995,7 +1995,7 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
             return;
         }
     }
-    if (lookup_type == 6 and try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
+    if (lookup_type == 6) {
         if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
             const run_digest = if (run_digest_cache) |cache|
                 cache.get(glyphs.items, lookup_flag, lookup_options)
@@ -2005,9 +2005,15 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
             try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
             return;
         }
-        if (!try chainingCoverageLookupMayMatch(table, lookup_offset, subtable_count, glyphs.items, lookup_flag, lookup_options)) return;
-        try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
-        return;
+        if (try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
+            if (!try chainingCoverageLookupMayMatch(table, lookup_offset, subtable_count, glyphs.items, lookup_flag, lookup_options)) return;
+            try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
+            return;
+        }
+        // Mixed glyph/class/coverage lookups use the generic ordered subtable
+        // dispatcher below. Only uncached low-level callers need this runtime
+        // format walk; validated accelerators already prove their lookup is
+        // coverage-only at construction time.
     }
     if (lookup_type == 4 and subtable_count == 1) {
         if (ligatureLookupAccelerator(lookup_index, lookup_options)) |accelerator| {

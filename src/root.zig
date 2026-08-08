@@ -576,6 +576,10 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expectEqual(MathGlyphValueRecordInfo{ .glyph_id = 3, .value_record = .{ .value = -12, .device_offset = 0 } }, info.glyph_info.italics_corrections[0]);
     try std.testing.expectEqual(MathGlyphValueRecordInfo{ .glyph_id = 3, .value_record = .{ .value = 42, .device_offset = 0 } }, info.glyph_info.top_accent_attachments[0]);
     try std.testing.expectEqualSlices(u16, &.{3}, info.glyph_info.extended_shape_glyphs);
+    try std.testing.expectEqual(@as(u16, 5), info.variants.min_connector_overlap);
+    try std.testing.expectEqualSlices(u16, &.{5}, info.variants.vertical_glyphs);
+    try std.testing.expectEqualSlices(u16, &.{6}, info.variants.horizontal_glyphs);
+    try std.testing.expectEqual(@as(usize, 2), info.variants.construction_offsets.len);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);

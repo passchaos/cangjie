@@ -32,6 +32,15 @@ pub const GlyphInfo = struct {
     extended_shape_glyphs: []u16,
 };
 
+pub const Variants = struct {
+    min_connector_overlap: u16,
+    vertical_coverage_offset: ?usize,
+    horizontal_coverage_offset: ?usize,
+    vertical_glyphs: []u16,
+    horizontal_glyphs: []u16,
+    construction_offsets: []?usize,
+};
+
 pub const Info = struct {
     version: u32,
     constants_offset: usize,
@@ -39,13 +48,14 @@ pub const Info = struct {
     variants_offset: usize,
     constants: Constants,
     glyph_info: GlyphInfo,
+    variants: Variants,
 };
 
 pub fn validate(data: []const u8, offset: usize, length: usize) Error!void {
     const h = try header(data, offset, length);
     try validateConstants(data, offset, length, h.constants_offset);
     try validateGlyphInfo(data, offset, length, h.glyph_info_offset);
-    try validateChildOffset(h.variants_offset, length, 10);
+    try validateVariants(data, offset, length, h.variants_offset);
 }
 
 pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize) Error!Info {
@@ -55,6 +65,8 @@ pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, lengt
     errdefer freeConstants(allocator, constants);
     const glyph_info = try readGlyphInfo(allocator, data, offset, length, h.glyph_info_offset);
     errdefer freeGlyphInfo(allocator, glyph_info);
+    const variants = try readVariants(allocator, data, offset, length, h.variants_offset);
+    errdefer freeVariants(allocator, variants);
     return .{
         .version = h.version,
         .constants_offset = h.constants_offset,
@@ -62,18 +74,26 @@ pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, lengt
         .variants_offset = h.variants_offset,
         .constants = constants,
         .glyph_info = glyph_info,
+        .variants = variants,
     };
 }
 
 pub fn free(allocator: std.mem.Allocator, value: Info) void {
     freeConstants(allocator, value.constants);
     freeGlyphInfo(allocator, value.glyph_info);
+    freeVariants(allocator, value.variants);
 }
 
 fn freeGlyphInfo(allocator: std.mem.Allocator, value: GlyphInfo) void {
     allocator.free(value.italics_corrections);
     allocator.free(value.top_accent_attachments);
     allocator.free(value.extended_shape_glyphs);
+}
+
+fn freeVariants(allocator: std.mem.Allocator, value: Variants) void {
+    allocator.free(value.vertical_glyphs);
+    allocator.free(value.horizontal_glyphs);
+    allocator.free(value.construction_offsets);
 }
 
 fn freeConstants(allocator: std.mem.Allocator, value: Constants) void {
@@ -134,6 +154,72 @@ fn validateGlyphInfo(data: []const u8, table_offset: usize, table_length: usize,
 fn validateChildWithinParent(child_offset: u16, table_length: usize, parent_offset: usize, min_len: usize) Error!void {
     const relative = parent_offset + @as(usize, child_offset);
     if (relative > table_length or min_len > table_length - relative) return error.BadSfnt;
+}
+
+fn validateVariants(data: []const u8, table_offset: usize, table_length: usize, variants_offset: usize) Error!void {
+    try validateChildOffset(variants_offset, table_length, 10);
+    const start = table_offset + variants_offset;
+    const vert_coverage_offset = try bin.readU16At(data, start + 2);
+    const horiz_coverage_offset = try bin.readU16At(data, start + 4);
+    const vert_count: usize = @intCast(try bin.readU16At(data, start + 6));
+    const horiz_count: usize = @intCast(try bin.readU16At(data, start + 8));
+    const construction_count = vert_count + horiz_count;
+    if (construction_count > (table_length - variants_offset - 10) / 2) return error.BadSfnt;
+    if (vert_count != 0) {
+        if (vert_coverage_offset == 0) return error.BadSfnt;
+        if (try coverageGlyphCount(data, table_offset, table_length, variants_offset + @as(usize, vert_coverage_offset)) != vert_count) return error.BadSfnt;
+    }
+    if (horiz_count != 0) {
+        if (horiz_coverage_offset == 0) return error.BadSfnt;
+        if (try coverageGlyphCount(data, table_offset, table_length, variants_offset + @as(usize, horiz_coverage_offset)) != horiz_count) return error.BadSfnt;
+    }
+    for (0..construction_count) |index| {
+        const construction_offset = try bin.readU16At(data, start + 10 + index * 2);
+        if (construction_offset != 0) try validateGlyphConstruction(data, table_offset, table_length, variants_offset + @as(usize, construction_offset));
+    }
+}
+
+fn validateGlyphConstruction(data: []const u8, table_offset: usize, table_length: usize, construction_offset: usize) Error!void {
+    try validateChildOffset(construction_offset, table_length, 4);
+    const start = table_offset + construction_offset;
+    const assembly_offset = try bin.readU16At(data, start);
+    const variant_count: usize = @intCast(try bin.readU16At(data, start + 2));
+    if (variant_count > (table_length - construction_offset - 4) / 4) return error.BadSfnt;
+    if (assembly_offset != 0) try validateChildWithinParent(assembly_offset, table_length, construction_offset, 6);
+}
+
+fn readVariants(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, table_length: usize, variants_offset: usize) Error!Variants {
+    try validateVariants(data, table_offset, table_length, variants_offset);
+    const start = table_offset + variants_offset;
+    const vert_coverage_offset = try bin.readU16At(data, start + 2);
+    const horiz_coverage_offset = try bin.readU16At(data, start + 4);
+    const vert_count: usize = @intCast(try bin.readU16At(data, start + 6));
+    const horiz_count: usize = @intCast(try bin.readU16At(data, start + 8));
+    const vertical_glyphs = if (vert_count != 0)
+        try coverageGlyphs(allocator, data, table_offset, table_length, variants_offset + @as(usize, vert_coverage_offset))
+    else
+        try allocator.alloc(u16, 0);
+    errdefer allocator.free(vertical_glyphs);
+    const horizontal_glyphs = if (horiz_count != 0)
+        try coverageGlyphs(allocator, data, table_offset, table_length, variants_offset + @as(usize, horiz_coverage_offset))
+    else
+        try allocator.alloc(u16, 0);
+    errdefer allocator.free(horizontal_glyphs);
+    const construction_count = vert_count + horiz_count;
+    const construction_offsets = try allocator.alloc(?usize, construction_count);
+    errdefer allocator.free(construction_offsets);
+    for (construction_offsets, 0..) |*value, index| {
+        const raw = try bin.readU16At(data, start + 10 + index * 2);
+        value.* = nullableOffset(raw);
+    }
+    return .{
+        .min_connector_overlap = try bin.readU16At(data, start),
+        .vertical_coverage_offset = nullableOffset(vert_coverage_offset),
+        .horizontal_coverage_offset = nullableOffset(horiz_coverage_offset),
+        .vertical_glyphs = vertical_glyphs,
+        .horizontal_glyphs = horizontal_glyphs,
+        .construction_offsets = construction_offsets,
+    };
 }
 
 fn validateDeviceTable(data: []const u8, table_offset: usize, table_length: usize, parent_offset: usize, device_offset: u16) Error!void {
@@ -325,7 +411,7 @@ fn writeI16(bytes: []u8, offset: usize, value: i16) void {
 }
 
 test "MATH constants expose scalar and value-record metadata" {
-    var bytes: [280]u8 = .{0} ** 280;
+    var bytes: [296]u8 = .{0} ** 296;
     writeU16(&bytes, 0, 1);
     writeU16(&bytes, 4, 10);
     writeU16(&bytes, 6, 224);
@@ -354,6 +440,17 @@ test "MATH constants expose scalar and value-record metadata" {
     writeU16(&bytes, 264, 1);
     writeU16(&bytes, 266, 1);
     writeU16(&bytes, 268, 3);
+    writeU16(&bytes, 270, 5);
+    writeU16(&bytes, 272, 14);
+    writeU16(&bytes, 274, 20);
+    writeU16(&bytes, 276, 1);
+    writeU16(&bytes, 278, 1);
+    writeU16(&bytes, 284, 1);
+    writeU16(&bytes, 286, 1);
+    writeU16(&bytes, 288, 5);
+    writeU16(&bytes, 290, 1);
+    writeU16(&bytes, 292, 1);
+    writeU16(&bytes, 294, 6);
 
     try validate(&bytes, 0, bytes.len);
     const parsed = try info(std.testing.allocator, &bytes, 0, bytes.len);
@@ -370,6 +467,10 @@ test "MATH constants expose scalar and value-record metadata" {
     try std.testing.expectEqual(GlyphValueRecord{ .glyph_id = 3, .value_record = .{ .value = -12, .device_offset = 0 } }, parsed.glyph_info.italics_corrections[0]);
     try std.testing.expectEqual(GlyphValueRecord{ .glyph_id = 3, .value_record = .{ .value = 42, .device_offset = 0 } }, parsed.glyph_info.top_accent_attachments[0]);
     try std.testing.expectEqualSlices(u16, &.{3}, parsed.glyph_info.extended_shape_glyphs);
+    try std.testing.expectEqual(@as(u16, 5), parsed.variants.min_connector_overlap);
+    try std.testing.expectEqualSlices(u16, &.{5}, parsed.variants.vertical_glyphs);
+    try std.testing.expectEqualSlices(u16, &.{6}, parsed.variants.horizontal_glyphs);
+    try std.testing.expectEqual(@as(usize, 2), parsed.variants.construction_offsets.len);
 }
 
 test "MATH rejects malformed constants offsets" {

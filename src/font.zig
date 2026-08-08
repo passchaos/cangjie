@@ -57,6 +57,9 @@ pub const MathVariantRecordInfo = math_mod.VariantRecord;
 pub const MathPartRecordInfo = math_mod.PartRecord;
 pub const MathAssemblyInfo = math_mod.Assembly;
 pub const MathConstructionInfo = math_mod.Construction;
+pub const MathKernInfo = math_mod.MathKernInfo;
+pub const MathKernRecordInfo = math_mod.MathKernRecord;
+pub const MathKernTableInfo = math_mod.MathKern;
 
 pub const CvarInfo = cvar_mod.Info;
 pub const CvarTupleInfo = cvar_mod.TupleInfo;

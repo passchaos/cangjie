@@ -122,6 +122,9 @@ pub const MathVariantRecordInfo = @import("font.zig").MathVariantRecordInfo;
 pub const MathPartRecordInfo = @import("font.zig").MathPartRecordInfo;
 pub const MathAssemblyInfo = @import("font.zig").MathAssemblyInfo;
 pub const MathConstructionInfo = @import("font.zig").MathConstructionInfo;
+pub const MathKernInfo = @import("font.zig").MathKernInfo;
+pub const MathKernRecordInfo = @import("font.zig").MathKernRecordInfo;
+pub const MathKernTableInfo = @import("font.zig").MathKernTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const IftPatchMapInfo = @import("font.zig").IftPatchMapInfo;
 pub const IftTableKeyedPatchInfo = @import("font.zig").IftTableKeyedPatchInfo;
@@ -576,6 +579,7 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expectEqual(@as(?usize, 8), info.glyph_info.italics_correction_info_offset);
     try std.testing.expectEqual(@as(?usize, 24), info.glyph_info.top_accent_attachment_offset);
     try std.testing.expectEqual(@as(?usize, 40), info.glyph_info.extended_shape_coverage_offset);
+    try std.testing.expectEqual(@as(?usize, 100), info.glyph_info.math_kern_info_offset);
     try std.testing.expectEqual(@as(usize, 1), info.glyph_info.italics_corrections.len);
     try std.testing.expectEqual(MathGlyphValueRecordInfo{ .glyph_id = 3, .value_record = .{ .value = -12, .device_offset = 0 } }, info.glyph_info.italics_corrections[0]);
     try std.testing.expectEqual(MathGlyphValueRecordInfo{ .glyph_id = 3, .value_record = .{ .value = 42, .device_offset = 0 } }, info.glyph_info.top_accent_attachments[0]);
@@ -593,6 +597,13 @@ test "MATH constants metadata is exposed when present" {
     const assembly = info.variants.constructions[0].assembly.?;
     try std.testing.expectEqual(MathValueRecordInfo{ .value = -7, .device_offset = 0 }, assembly.italics_correction);
     try std.testing.expectEqual(MathPartRecordInfo{ .glyph_id = 8, .start_connector_length = 1, .end_connector_length = 2, .full_advance = 3, .flags = 1 }, assembly.parts[0]);
+    const kern_info = info.glyph_info.math_kern_info.?;
+    try std.testing.expectEqual(@as(usize, 1), kern_info.records.len);
+    try std.testing.expectEqual(@as(u16, 3), kern_info.records[0].glyph_id);
+    const top_right = kern_info.records[0].kerns[0].?;
+    try std.testing.expectEqual(MathValueRecordInfo{ .value = 10, .device_offset = 0 }, top_right.correction_heights[0]);
+    try std.testing.expectEqual(MathValueRecordInfo{ .value = -20, .device_offset = 0 }, top_right.kern_values[0]);
+    try std.testing.expectEqual(MathValueRecordInfo{ .value = -30, .device_offset = 0 }, top_right.kern_values[1]);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);

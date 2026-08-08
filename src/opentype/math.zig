@@ -22,6 +22,22 @@ pub const Constants = struct {
     radical_degree_bottom_raise_percent: i16,
 };
 
+pub const MathKern = struct {
+    offset: usize,
+    correction_heights: []ValueRecord,
+    kern_values: []ValueRecord,
+};
+
+pub const MathKernRecord = struct {
+    glyph_id: u16,
+    kerns: [4]?MathKern,
+};
+
+pub const MathKernInfo = struct {
+    coverage_offset: usize,
+    records: []MathKernRecord,
+};
+
 pub const GlyphInfo = struct {
     italics_correction_info_offset: ?usize,
     top_accent_attachment_offset: ?usize,
@@ -30,6 +46,7 @@ pub const GlyphInfo = struct {
     italics_corrections: []GlyphValueRecord,
     top_accent_attachments: []GlyphValueRecord,
     extended_shape_glyphs: []u16,
+    math_kern_info: ?MathKernInfo,
 };
 
 pub const VariantRecord = struct {
@@ -117,6 +134,19 @@ fn freeGlyphInfo(allocator: std.mem.Allocator, value: GlyphInfo) void {
     allocator.free(value.italics_corrections);
     allocator.free(value.top_accent_attachments);
     allocator.free(value.extended_shape_glyphs);
+    if (value.math_kern_info) |info_value| freeMathKernInfo(allocator, info_value);
+}
+
+fn freeMathKernInfo(allocator: std.mem.Allocator, info_value: MathKernInfo) void {
+    for (info_value.records) |record| {
+        for (record.kerns) |maybe_kern| {
+            if (maybe_kern) |kern| {
+                allocator.free(kern.correction_heights);
+                allocator.free(kern.kern_values);
+            }
+        }
+    }
+    allocator.free(info_value.records);
 }
 
 fn freeVariants(allocator: std.mem.Allocator, value: Variants) void {
@@ -182,7 +212,7 @@ fn validateGlyphInfo(data: []const u8, table_offset: usize, table_length: usize,
     if (italic_offset != 0) try validateMathValueArraySubtable(data, table_offset, table_length, glyph_info_offset + @as(usize, italic_offset));
     if (accent_offset != 0) try validateMathValueArraySubtable(data, table_offset, table_length, glyph_info_offset + @as(usize, accent_offset));
     if (extended_offset != 0) _ = try coverageGlyphCount(data, table_offset, table_length, glyph_info_offset + @as(usize, extended_offset));
-    if (kern_offset != 0) try validateChildWithinParent(kern_offset, table_length, glyph_info_offset, 2);
+    if (kern_offset != 0) try validateMathKernInfo(data, table_offset, table_length, glyph_info_offset + @as(usize, kern_offset));
 }
 
 fn validateChildWithinParent(child_offset: u16, table_length: usize, parent_offset: usize, min_len: usize) Error!void {
@@ -383,6 +413,11 @@ fn readGlyphInfo(allocator: std.mem.Allocator, data: []const u8, table_offset: u
     else
         try allocator.alloc(u16, 0);
     errdefer allocator.free(extended_shape_glyphs);
+    const math_kern_info = if (kern_offset != 0)
+        try readMathKernInfo(allocator, data, table_offset, table_length, glyph_info_offset + @as(usize, kern_offset))
+    else
+        null;
+    errdefer if (math_kern_info) |info_value| freeMathKernInfo(allocator, info_value);
     return .{
         .italics_correction_info_offset = nullableOffset(italic_offset),
         .top_accent_attachment_offset = nullableOffset(accent_offset),
@@ -391,11 +426,104 @@ fn readGlyphInfo(allocator: std.mem.Allocator, data: []const u8, table_offset: u
         .italics_corrections = italics,
         .top_accent_attachments = top_accents,
         .extended_shape_glyphs = extended_shape_glyphs,
+        .math_kern_info = math_kern_info,
     };
 }
 
 fn nullableOffset(value: u16) ?usize {
     return if (value == 0) null else @intCast(value);
+}
+
+fn validateMathKernInfo(data: []const u8, table_offset: usize, table_length: usize, kern_info_offset: usize) Error!void {
+    try validateChildOffset(kern_info_offset, table_length, 4);
+    const start = table_offset + kern_info_offset;
+    const coverage_offset: usize = @intCast(try bin.readU16At(data, start));
+    if (coverage_offset == 0) return error.BadSfnt;
+    const coverage_count = try coverageGlyphCount(data, table_offset, table_length, kern_info_offset + coverage_offset);
+    const record_count: usize = @intCast(try bin.readU16At(data, start + 2));
+    if (record_count != coverage_count) return error.BadSfnt;
+    if (record_count > (table_length - kern_info_offset - 4) / 8) return error.BadSfnt;
+    for (0..record_count) |record_index| {
+        const record = start + 4 + record_index * 8;
+        for (0..4) |corner| {
+            const kern_offset = try bin.readU16At(data, record + corner * 2);
+            if (kern_offset != 0) try validateMathKern(data, table_offset, table_length, kern_info_offset + @as(usize, kern_offset));
+        }
+    }
+}
+
+fn validateMathKern(data: []const u8, table_offset: usize, table_length: usize, kern_offset: usize) Error!void {
+    try validateChildOffset(kern_offset, table_length, 2);
+    const start = table_offset + kern_offset;
+    const height_count: usize = @intCast(try bin.readU16At(data, start));
+    const record_count = height_count * 2 + 1;
+    if (record_count > (table_length - kern_offset - 2) / 4) return error.BadSfnt;
+    var previous_height: ?i16 = null;
+    for (0..record_count) |index| {
+        const value_record = start + 2 + index * 4;
+        const value = try bin.readI16At(data, value_record);
+        const device_offset = try bin.readU16At(data, value_record + 2);
+        if (index < height_count) {
+            if (previous_height) |last| if (value <= last) return error.BadSfnt;
+            previous_height = value;
+        }
+        if (device_offset != 0) try validateDeviceTable(data, table_offset, table_length, kern_offset, device_offset);
+    }
+}
+
+fn readMathKernInfo(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, table_length: usize, kern_info_offset: usize) Error!MathKernInfo {
+    try validateMathKernInfo(data, table_offset, table_length, kern_info_offset);
+    const start = table_offset + kern_info_offset;
+    const coverage_offset: usize = @intCast(try bin.readU16At(data, start));
+    const glyphs = try coverageGlyphs(allocator, data, table_offset, table_length, kern_info_offset + coverage_offset);
+    defer allocator.free(glyphs);
+    const records = try allocator.alloc(MathKernRecord, glyphs.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (records[0..initialized]) |record| {
+            for (record.kerns) |maybe_kern| if (maybe_kern) |kern| {
+                allocator.free(kern.correction_heights);
+                allocator.free(kern.kern_values);
+            };
+        }
+        allocator.free(records);
+    }
+    for (records, 0..) |*record, record_index| {
+        const record_offset = start + 4 + record_index * 8;
+        var kerns: [4]?MathKern = .{ null, null, null, null };
+        var corner: usize = 0;
+        errdefer {
+            for (kerns[0..corner]) |maybe_kern| if (maybe_kern) |kern| {
+                allocator.free(kern.correction_heights);
+                allocator.free(kern.kern_values);
+            };
+        }
+        while (corner < 4) : (corner += 1) {
+            const raw_offset = try bin.readU16At(data, record_offset + corner * 2);
+            kerns[corner] = if (raw_offset == 0) null else try readMathKern(allocator, data, table_offset, kern_info_offset + @as(usize, raw_offset));
+        }
+        record.* = .{ .glyph_id = glyphs[record_index], .kerns = kerns };
+        initialized += 1;
+    }
+    return .{ .coverage_offset = coverage_offset, .records = records };
+}
+
+fn readMathKern(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, kern_offset: usize) Error!MathKern {
+    const start = table_offset + kern_offset;
+    const height_count: usize = @intCast(try bin.readU16At(data, start));
+    const correction_heights = try allocator.alloc(ValueRecord, height_count);
+    errdefer allocator.free(correction_heights);
+    const kern_values = try allocator.alloc(ValueRecord, height_count + 1);
+    errdefer allocator.free(kern_values);
+    for (correction_heights, 0..) |*record, index| {
+        const value_record = start + 2 + index * 4;
+        record.* = .{ .value = try bin.readI16At(data, value_record), .device_offset = try bin.readU16At(data, value_record + 2) };
+    }
+    for (kern_values, 0..) |*record, index| {
+        const value_record = start + 2 + (height_count + index) * 4;
+        record.* = .{ .value = try bin.readI16At(data, value_record), .device_offset = try bin.readU16At(data, value_record + 2) };
+    }
+    return .{ .offset = kern_offset, .correction_heights = correction_heights, .kern_values = kern_values };
 }
 
 fn validateMathValueArraySubtable(data: []const u8, table_offset: usize, table_length: usize, subtable_offset: usize) Error!void {
@@ -531,7 +659,7 @@ fn writeI16(bytes: []u8, offset: usize, value: i16) void {
 }
 
 test "MATH constants expose scalar and value-record metadata" {
-    var bytes: [324]u8 = .{0} ** 324;
+    var bytes: [356]u8 = .{0} ** 356;
     writeU16(&bytes, 0, 1);
     writeU16(&bytes, 4, 10);
     writeU16(&bytes, 6, 224);
@@ -545,6 +673,7 @@ test "MATH constants expose scalar and value-record metadata" {
     writeU16(&bytes, 224, 8);
     writeU16(&bytes, 226, 24);
     writeU16(&bytes, 228, 40);
+    writeU16(&bytes, 230, 100);
     writeU16(&bytes, 232, 8);
     writeU16(&bytes, 234, 1);
     writeI16(&bytes, 236, -12);
@@ -587,6 +716,16 @@ test "MATH constants expose scalar and value-record metadata" {
     writeU16(&bytes, 314, 2);
     writeU16(&bytes, 316, 3);
     writeU16(&bytes, 318, 1);
+    writeU16(&bytes, 324, 12);
+    writeU16(&bytes, 326, 1);
+    writeU16(&bytes, 328, 18);
+    writeU16(&bytes, 336, 1);
+    writeU16(&bytes, 338, 1);
+    writeU16(&bytes, 340, 3);
+    writeU16(&bytes, 342, 1);
+    writeI16(&bytes, 344, 10);
+    writeI16(&bytes, 348, -20);
+    writeI16(&bytes, 352, -30);
 
     try validate(&bytes, 0, bytes.len);
     const parsed = try info(std.testing.allocator, &bytes, 0, bytes.len);

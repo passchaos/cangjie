@@ -37,6 +37,9 @@ pub const WordSegment = @import("unicode.zig").WordSegment;
 pub const SentenceSegment = @import("unicode.zig").SentenceSegment;
 pub const LineBreak = @import("unicode.zig").LineBreak;
 pub const LineBreakKind = @import("unicode.zig").LineBreakKind;
+pub const LineBreakClass = @import("unicode.zig").LineBreakClass;
+pub const LineBreakIterator = @import("unicode.zig").LineBreakIterator;
+pub const line_break_unicode_version = @import("unicode.zig").line_break_unicode_version;
 pub const OverflowMode = @import("core.zig").OverflowMode;
 pub const FeatureOverride = @import("unicode.zig").FeatureOverride;
 pub const ParagraphStyle = @import("core.zig").ParagraphStyle;
@@ -292,6 +295,8 @@ pub const diagnoseClusterCaretConsistencyUtf8 = @import("layout.zig").diagnoseCl
 pub const diagnoseFontFallbackUtf8 = @import("layout.zig").diagnoseFontFallbackUtf8;
 pub const diagnoseShapeQualityUtf8 = @import("layout.zig").diagnoseShapeQualityUtf8;
 pub const inferOpenTypeLanguageTag = @import("unicode.zig").inferOpenTypeLanguageTag;
+pub const lineBreakClassForCodepoint = @import("unicode.zig").lineBreakClassForCodepoint;
+pub const lineBreaks = @import("unicode.zig").lineBreaks;
 pub const openTypeLanguageTagForLocale = @import("unicode.zig").openTypeLanguageTagForLocale;
 pub const itemizeBidiRuns = @import("unicode.zig").itemizeBidiRuns;
 pub const itemizeGraphemeClusters = @import("unicode.zig").itemizeGraphemeClusters;
@@ -3797,13 +3802,17 @@ test "itemizes line break opportunities" {
     try std.testing.expectEqual(@as(usize, 7), breaks[2].byte_offset);
     try std.testing.expectEqual(LineBreakKind.soft, breaks[2].kind);
     try std.testing.expectEqual(@as(usize, 10), breaks[3].byte_offset);
-    try std.testing.expectEqual(LineBreakKind.soft, breaks[3].kind);
+    try std.testing.expectEqual(LineBreakKind.hard, breaks[3].kind);
 
     const crlf = try itemizeLineBreaks(allocator, "A\r\nB");
     defer allocator.free(crlf);
-    try std.testing.expectEqual(@as(usize, 1), crlf.len);
+    try std.testing.expectEqual(@as(usize, 2), crlf.len);
     try std.testing.expectEqual(@as(usize, 3), crlf[0].byte_offset);
     try std.testing.expectEqual(LineBreakKind.hard, crlf[0].kind);
+    try std.testing.expectEqual(@as(usize, 4), crlf[1].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.hard, crlf[1].kind);
+
+    try std.testing.expectError(error.InvalidUtf8, lineBreaks("A\xff"));
 }
 
 test "line break opportunities stay on grapheme cluster boundaries" {
@@ -3818,7 +3827,7 @@ test "line break opportunities stay on grapheme cluster boundaries" {
     try std.testing.expectEqual(LineBreakKind.soft, breaks[0].kind);
     try std.testing.expectEqualStrings("\u{4e00}\u{e0100}", text[0..breaks[0].byte_offset]);
     try std.testing.expectEqual(@as(usize, text.len), breaks[1].byte_offset);
-    try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
+    try std.testing.expectEqual(LineBreakKind.hard, breaks[1].kind);
 }
 
 test "shapes mixed-script text with script run metadata" {
@@ -6321,6 +6330,70 @@ test "paragraph wrapping consumes Unicode line break data" {
     try std.testing.expectEqual(@as(usize, 0), ivs.glyphs[0].cluster);
     try std.testing.expectEqual(@as(usize, 7), ivs.glyphs[0].source_byte_len);
     try std.testing.expectEqual(@as(usize, 7), ivs.glyphs[1].cluster);
+}
+
+test "paragraph wrapping honors UAX 14 punctuation and no-break glue" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const cjk_bytes = try test_font.buildNamedCjkTtf(allocator);
+    defer allocator.free(cjk_bytes);
+    var cjk_font = try Font.parse(allocator, cjk_bytes);
+    defer cjk_font.deinit();
+    const cjk_fonts = [_]*const Font{&cjk_font};
+    const cjk_cascade = FontCascade.init(&cjk_fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const punctuation = try TextShaper.layoutParagraphUtf8(cjk_cascade, &layout_buffer, "你。好", 20, .{
+        .max_width = 20,
+        .line_height = 24,
+    });
+    try std.testing.expectEqual(@as(usize, 2), punctuation.lines.len);
+    try std.testing.expectEqual(@as(usize, 2), punctuation.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(u21, 0x4f60), punctuation.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x3002), punctuation.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x597d), punctuation.glyphs[2].codepoint);
+
+    const ascii_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(ascii_bytes);
+    var ascii_font = try Font.parse(allocator, ascii_bytes);
+    defer ascii_font.deinit();
+    const ascii_fonts = [_]*const Font{&ascii_font};
+    const ascii_cascade = FontCascade.init(&ascii_fonts);
+    const glued = try TextShaper.layoutParagraphUtf8(ascii_cascade, &layout_buffer, "A A\u{00a0}A", 20, .{
+        .max_width = 50,
+        .line_height = 24,
+    });
+    try std.testing.expectEqual(@as(usize, 2), glued.lines.len);
+    try std.testing.expectEqual(@as(usize, 1), glued.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 3), glued.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(u21, 0x00a0), glued.glyphs[3].codepoint);
+}
+
+test "paragraph no-wrap mode preserves explicit hard breaks" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A A\nA A", 20, .{
+        .max_width = 10,
+        .wrap_mode = .no_wrap,
+        .line_height = 24,
+    });
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 3), paragraph.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 3), paragraph.lines[1].glyph_len);
+    try std.testing.expect(paragraph.lines[0].width > 10);
+    try std.testing.expect(paragraph.lines[1].width > 10);
 }
 
 test "limits paragraph lines and appends ellipsis" {

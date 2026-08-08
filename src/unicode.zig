@@ -1,4 +1,5 @@
 const std = @import("std");
+const line_break = @import("text/line_break.zig");
 
 /// Lightweight Unicode helpers used by the shaping/layout layers.
 /// The tables are intentionally compact and cover the scripts and boundaries
@@ -455,15 +456,23 @@ pub const SentenceSegment = struct {
     byte_len: usize,
 };
 
-pub const LineBreakKind = enum {
-    soft,
-    hard,
-};
+pub const LineBreakKind = line_break.BreakKind;
+pub const LineBreak = line_break.Break;
+pub const LineBreakIterator = line_break.Iterator;
+pub const LineBreakClass = line_break.BreakClass;
+pub const line_break_unicode_version = line_break.unicode_version;
 
-pub const LineBreak = struct {
-    byte_offset: usize,
-    kind: LineBreakKind,
-};
+pub fn lineBreaks(text: []const u8) line_break.Error!LineBreakIterator {
+    return line_break.breaks(text);
+}
+
+pub fn lineBreaksAssumeValid(text: []const u8) LineBreakIterator {
+    return line_break.breaksAssumeValid(text);
+}
+
+pub fn lineBreakClassForCodepoint(codepoint: u21) LineBreakClass {
+    return line_break.classForCodepoint(codepoint);
+}
 
 pub const OpenTypeScriptTag = enum(u32) {
     dflt = tag("DFLT"),
@@ -2186,28 +2195,9 @@ pub fn itemizeLineBreaks(allocator: std.mem.Allocator, text: []const u8) ![]Line
     var breaks = std.ArrayList(LineBreak).empty;
     errdefer breaks.deinit(allocator);
 
-    // Emit hard breaks for CR/LF and soft opportunities after whitespace or
-    // East Asian grapheme clusters. Break offsets must point to cluster
-    // boundaries: otherwise an ideograph followed by a variation selector, or a
-    // kana base followed by a combining mark, could be split between the base
-    // and its visual modifier.
-    const clusters = try itemizeGraphemeClusters(allocator, text);
-    defer allocator.free(clusters);
-    for (clusters, 0..) |cluster, cluster_index| {
-        const cluster_end = cluster.byte_start + cluster.byte_len;
-        const codepoint = firstCodepoint(text[cluster.byte_start..cluster_end]) orelse continue;
-        if (codepoint == '\n' or codepoint == '\r') {
-            try breaks.append(allocator, .{ .byte_offset = cluster_end, .kind = .hard });
-        } else if (isLineBreakSpace(codepoint)) {
-            try breaks.append(allocator, .{ .byte_offset = cluster_end, .kind = .soft });
-        } else if (isLineBreakEastAsian(codepoint) and !nextClusterProhibitsEastAsianBreak(text, clusters, cluster_index)) {
-            // East Asian text permits breaks between most ideographic/kana
-            // clusters, but not immediately before closing punctuation. Keeping
-            // that small UAX #14 invariant here prevents wrapped lines from
-            // starting with common CJK closers such as U+3002 IDEOGRAPHIC FULL
-            // STOP while preserving the compact line-break model.
-            try breaks.append(allocator, .{ .byte_offset = cluster_end, .kind = .soft });
-        }
+    var iterator = try lineBreaks(text);
+    while (iterator.next()) |opportunity| {
+        try breaks.append(allocator, opportunity);
     }
 
     return try breaks.toOwnedSlice(allocator);
@@ -3255,9 +3245,11 @@ test "line breaks do not start lines with East Asian closing punctuation" {
     const breaks = try itemizeLineBreaks(allocator, text);
     defer allocator.free(breaks);
 
-    try std.testing.expectEqual(@as(usize, 1), breaks.len);
-    try std.testing.expectEqual(@as(usize, text.len), breaks[0].byte_offset);
+    try std.testing.expectEqual(@as(usize, 2), breaks.len);
+    try std.testing.expectEqual(@as(usize, 6), breaks[0].byte_offset);
     try std.testing.expectEqual(LineBreakKind.soft, breaks[0].kind);
+    try std.testing.expectEqual(@as(usize, text.len), breaks[1].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.hard, breaks[1].kind);
 }
 
 test "line breaks include breakable Unicode space separators" {
@@ -3266,11 +3258,13 @@ test "line breaks include breakable Unicode space separators" {
     const breaks = try itemizeLineBreaks(allocator, "a\xe3\x80\x80b\xc2\xa0c\xe2\x80\x83d");
     defer allocator.free(breaks);
 
-    try std.testing.expectEqual(@as(usize, 2), breaks.len);
+    try std.testing.expectEqual(@as(usize, 3), breaks.len);
     try std.testing.expectEqual(@as(usize, 4), breaks[0].byte_offset);
     try std.testing.expectEqual(LineBreakKind.soft, breaks[0].kind);
     try std.testing.expectEqual(@as(usize, 11), breaks[1].byte_offset);
     try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
+    try std.testing.expectEqual(@as(usize, 12), breaks[2].byte_offset);
+    try std.testing.expectEqual(LineBreakKind.hard, breaks[2].kind);
 }
 
 test "sentence segmentation keeps Arabic-Indic decimal numbers together" {
@@ -4480,7 +4474,7 @@ test "Yi syllables and radicals select Yi script primitives" {
     try std.testing.expectEqual(@as(usize, 6), breaks[1].byte_offset);
     try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
     try std.testing.expectEqual(@as(usize, 9), breaks[2].byte_offset);
-    try std.testing.expectEqual(LineBreakKind.soft, breaks[2].kind);
+    try std.testing.expectEqual(LineBreakKind.hard, breaks[2].kind);
 }
 
 test "Vai syllables select Vai script and word primitives" {
@@ -4564,7 +4558,7 @@ test "Nushu characters select Nushu script and ideographic layout primitives" {
     try std.testing.expectEqual(@as(usize, 8), breaks[1].byte_offset);
     try std.testing.expectEqual(LineBreakKind.soft, breaks[1].kind);
     try std.testing.expectEqual(@as(usize, 12), breaks[2].byte_offset);
-    try std.testing.expectEqual(LineBreakKind.soft, breaks[2].kind);
+    try std.testing.expectEqual(LineBreakKind.hard, breaks[2].kind);
 }
 
 test "Runic text selects Runic script primitives and groups words around separators" {
@@ -4829,75 +4823,6 @@ fn isSentenceTrailingClose(codepoint: u21) bool {
         '\'', '"', ')', ']', '}', 0x00bb, 0x2019, 0x201d, 0x3009, 0x300b, 0x300d, 0x300f, 0x3011, 0x3015, 0x3017, 0x3019, 0x301b => true,
         else => false,
     };
-}
-
-fn isLineBreakSpace(codepoint: u21) bool {
-    return codepoint == ' ' or
-        codepoint == '\t' or
-        // Unicode space separators that permit wrapping should behave like
-        // ASCII spaces here. Keep no-break spaces out of this compact list so
-        // callers do not wrap inside intentionally glued labels or numbers.
-        codepoint == 0x1680 or
-        (codepoint >= 0x2000 and codepoint <= 0x200a) or
-        codepoint == 0x205f or
-        codepoint == 0x3000;
-}
-
-fn nextClusterProhibitsEastAsianBreak(text: []const u8, clusters: []const GraphemeCluster, cluster_index: usize) bool {
-    const next_index = cluster_index + 1;
-    if (next_index >= clusters.len) return false;
-    const next = clusters[next_index];
-    const next_end = next.byte_start + next.byte_len;
-    const next_codepoint = firstCodepoint(text[next.byte_start..next_end]) orelse return false;
-    return isEastAsianClosingPunctuation(next_codepoint);
-}
-
-fn isEastAsianClosingPunctuation(codepoint: u21) bool {
-    return switch (codepoint) {
-        0x3001,
-        0x3002,
-        0xff0c,
-        0xff0e,
-        0xff1a,
-        0xff1b,
-        0xff01,
-        0xff1f,
-        0x3009,
-        0x300b,
-        0x300d,
-        0x300f,
-        0x3011,
-        0x3015,
-        0x3017,
-        0x3019,
-        0x301b,
-        0xff09,
-        0xff3d,
-        0xff5d,
-        0xff60,
-        => true,
-        else => false,
-    };
-}
-
-fn isLineBreakEastAsian(codepoint: u21) bool {
-    return (codepoint >= 0x1100 and codepoint <= 0x11ff) or
-        (codepoint >= 0x2e80 and codepoint <= 0x2eff) or
-        (codepoint >= 0x2f00 and codepoint <= 0x2fdf) or
-        (codepoint >= 0x3040 and codepoint <= 0x30ff) or
-        (codepoint >= 0x3130 and codepoint <= 0x318f) or
-        (codepoint >= 0x31a0 and codepoint <= 0x31ff) or
-        (codepoint >= 0x3400 and codepoint <= 0x4dbf) or
-        (codepoint >= 0x4e00 and codepoint <= 0x9fff) or
-        (codepoint >= 0xa000 and codepoint <= 0xa4cf) or
-        // Nushu is a supplementary-plane ideographic script. Treat it like
-        // Han/Yi for this compact line-break primitive so long unspaced Nushu
-        // text can wrap between characters instead of only at ASCII spaces.
-        (codepoint >= 0x1b170 and codepoint <= 0x1b2ff) or
-        (codepoint >= 0xac00 and codepoint <= 0xd7af) or
-        (codepoint >= 0xf900 and codepoint <= 0xfaff) or
-        (codepoint >= 0x20000 and codepoint <= 0x2fffd) or
-        (codepoint >= 0x30000 and codepoint <= 0x3fffd);
 }
 
 fn wordKindForCodepoint(codepoint: u21) WordKind {

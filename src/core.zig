@@ -218,10 +218,7 @@ pub const VerticalAlign = enum {
     bottom,
 };
 
-pub const WrapMode = enum {
-    no_wrap,
-    word,
-};
+pub const WrapMode = layout.WrapMode;
 
 pub const OverflowMode = enum {
     clip,
@@ -245,6 +242,7 @@ pub const ParagraphStyle = struct {
     pub fn paragraphOptions(self: ParagraphStyle, max_width: f32) layout.ParagraphOptions {
         return .{
             .max_width = max_width,
+            .wrap_mode = self.wrap_mode,
             .alignment = self.text_align,
             .line_height = self.line_height,
             .direction = self.direction,
@@ -723,6 +721,7 @@ test "paragraph style converts to paragraph options" {
         .text_align = .center,
         .line_height = 24,
         .max_lines = 2,
+        .wrap_mode = .no_wrap,
         .overflow_mode = .ellipsis,
         .tab_width = 2,
         .first_line_indent = 10,
@@ -732,6 +731,7 @@ test "paragraph style converts to paragraph options" {
 
     try std.testing.expectEqual(layout.TextDirection.rtl, options.direction);
     try std.testing.expectEqual(layout.TextAlign.center, options.alignment);
+    try std.testing.expectEqual(layout.WrapMode.no_wrap, options.wrap_mode);
     try std.testing.expectApproxEqAbs(@as(f32, 24), options.line_height.?, 0.001);
     try std.testing.expectEqual(@as(usize, 2), options.max_lines.?);
     try std.testing.expect(options.ellipsis);

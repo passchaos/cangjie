@@ -316,6 +316,15 @@ pub const TextAlign = enum {
     right,
 };
 
+pub const WrapMode = enum {
+    /// Preserve explicit Unicode hard breaks but do not introduce lines to
+    /// satisfy `max_width`.
+    no_wrap,
+    /// Greedily wrap at UAX #14 opportunities, with grapheme-boundary
+    /// emergency breaks when an unbreakable fragment exceeds `max_width`.
+    word,
+};
+
 pub const BaselineMetrics = struct {
     ascent: f32,
     descent: f32,
@@ -337,6 +346,7 @@ pub const TextMetrics = struct {
 
 pub const ParagraphOptions = struct {
     max_width: f32,
+    wrap_mode: WrapMode = .word,
     alignment: TextAlign = .left,
     line_height: ?f32 = null,
     direction: TextDirection = .ltr,
@@ -2100,6 +2110,7 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
     const line_height = options.line_height orelse default_metrics.lineHeight();
     const line_metrics = metricsForLineHeight(default_metrics, line_height);
     const max_width = if (options.max_width > 0) options.max_width else std.math.inf(f32);
+    const wrap_width = if (options.wrap_mode == .no_wrap) std.math.inf(f32) else max_width;
     const alignment = defaultAlignment(options);
     var line_start: usize = 0;
     var line_width: f32 = 0;
@@ -2111,22 +2122,30 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
     const max_lines = options.max_lines orelse std.math.maxInt(usize);
     const space_advance = defaultSpaceAdvance(buffer.glyphs.items);
     const tab_stop = @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
-    const grapheme_clusters = try unicode.itemizeGraphemeClusters(buffer.allocator, text);
-    defer buffer.allocator.free(grapheme_clusters);
-    const line_breaks = try unicode.itemizeLineBreaks(buffer.allocator, text);
-    defer buffer.allocator.free(line_breaks);
-    var line_break_index: usize = 0;
+    // Emergency grapheme fallback is never reached by no-wrap layout. Avoiding
+    // this side array makes that policy fully allocation-free after shaping.
+    const grapheme_clusters = if (options.wrap_mode == .word)
+        try unicode.itemizeGraphemeClusters(buffer.allocator, text)
+    else
+        &.{};
+    defer if (options.wrap_mode == .word) buffer.allocator.free(grapheme_clusters);
+    var line_breaks = StreamingLineBreaks.init(text);
 
     // Greedy line breaking tracks the most recent soft break. When a line
     // overflows, it prefers that break; otherwise it breaks at the overflowing
-    // grapheme cluster so long words and CJK runs still make progress. Falling
-    // back at grapheme boundaries is critical for clusters that shape into
-    // multiple glyphs, such as base+combining-mark sequences when a font lacks
-    // mark attachment: splitting inside that cluster would put one user-visible
-    // character on two different lines.
+    // grapheme cluster so long words and CJK runs still make progress. UAX #14
+    // opportunities are pulled only as glyph source ranges are consumed rather
+    // than materialized into a paragraph-sized side array. This mirrors the
+    // streaming boundary stage used by unicode-linebreak and keeps reflow's
+    // transient memory independent of the number of legal break positions.
+    //
+    // Falling back at grapheme boundaries remains critical for clusters that
+    // shape into multiple glyphs, such as base+combining-mark sequences when a
+    // font lacks mark attachment: splitting inside that cluster would put one
+    // user-visible character on two different lines.
     glyph_loop: while (index < buffer.glyphs.items.len) : (index += 1) {
         var glyph = &buffer.glyphs.items[index];
-        if (glyph.codepoint == '\n' or glyph.codepoint == '\r') {
+        if (isMandatoryLineBreak(glyph.codepoint)) {
             try appendParagraphLine(buffer, line_start, index, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
             if (buffer.lines.items.len >= max_lines) {
                 try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
@@ -2134,7 +2153,7 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
             }
             y += line_height + options.paragraph_spacing;
             const break_end_index = if (glyph.codepoint == '\r' and index + 1 < buffer.glyphs.items.len and buffer.glyphs.items[index + 1].codepoint == '\n') index + 2 else index + 1;
-            consumeLineBreaksThrough(line_breaks, &line_break_index, glyphSourceEnd(buffer.glyphs.items[break_end_index - 1]));
+            line_breaks.discardThrough(glyphSourceEnd(buffer.glyphs.items[break_end_index - 1]));
             line_start = break_end_index;
             line_width = 0;
             last_break = null;
@@ -2151,7 +2170,7 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
         }
         glyph.x_advance += spacingForGlyph(glyph.codepoint, options);
         line_width += glyph.x_advance;
-        const current_line_limit = lineWidthLimit(line_in_paragraph, max_width, options);
+        const current_line_limit = lineWidthLimit(line_in_paragraph, wrap_width, options);
         if (line_width > current_line_limit and index + 1 > line_start) {
             const overflow_break = chooseOverflowBreak(buffer.glyphs.items, grapheme_clusters, index, line_start, last_break);
             if (overflow_break.defer_until_cluster_end) continue;
@@ -2176,9 +2195,7 @@ fn buildParagraphLines(buffer: *LayoutBuffer, text: []const u8, options: Paragra
             width_at_break = 0;
         }
         const glyph_source_end = glyphSourceEnd(glyph.*);
-        while (line_break_index < line_breaks.len and line_breaks[line_break_index].byte_offset <= glyph_source_end) {
-            const line_break = line_breaks[line_break_index];
-            line_break_index += 1;
+        while (line_breaks.nextThrough(glyph_source_end)) |line_break| {
             switch (line_break.kind) {
                 .soft => recordSoftLineBreak(buffer.glyphs.items, line_break.byte_offset, index, line_start, line_width, &last_break, &width_at_break),
                 .hard => {},
@@ -2219,10 +2236,36 @@ fn recordSoftLineBreak(glyphs: []const GlyphPosition, byte_offset: usize, index:
     }
 }
 
-fn consumeLineBreaksThrough(line_breaks: []const unicode.LineBreak, line_break_index: *usize, byte_offset: usize) void {
-    while (line_break_index.* < line_breaks.len and line_breaks[line_break_index.*].byte_offset <= byte_offset) {
-        line_break_index.* += 1;
+const StreamingLineBreaks = struct {
+    iterator: unicode.LineBreakIterator,
+    pending: ?unicode.LineBreak = null,
+
+    fn init(text: []const u8) StreamingLineBreaks {
+        return .{ .iterator = unicode.lineBreaksAssumeValid(text) };
     }
+
+    /// Return the next boundary whose source position has already been covered
+    /// by shaped glyphs. One boundary is retained when the Unicode iterator
+    /// runs ahead, which gives layout a pull interface without allocating a
+    /// complete boundary list or rescanning an unbreakable source run.
+    fn nextThrough(self: *StreamingLineBreaks, byte_offset: usize) ?unicode.LineBreak {
+        if (self.pending == null) self.pending = self.iterator.next();
+        const candidate = self.pending orelse return null;
+        if (candidate.byte_offset > byte_offset) return null;
+        self.pending = null;
+        return candidate;
+    }
+
+    fn discardThrough(self: *StreamingLineBreaks, byte_offset: usize) void {
+        while (self.nextThrough(byte_offset) != null) {}
+    }
+};
+
+fn isMandatoryLineBreak(codepoint: u21) bool {
+    return switch (unicode.lineBreakClassForCodepoint(codepoint)) {
+        .mandatory, .carriage_return, .line_feed, .next_line => true,
+        else => false,
+    };
 }
 
 fn graphemeOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []const unicode.GraphemeCluster, index: usize, line_start: usize) OverflowBreak {

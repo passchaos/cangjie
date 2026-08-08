@@ -50,6 +50,25 @@ pub fn build(b: *std.Build) void {
         render_text_cmd.addArgs(args);
     }
 
+    const line_break_bench_exe = b.addExecutable(.{
+        .name = "cangjie-line-break-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/line_break_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+            },
+        }),
+    });
+
+    const line_break_bench_step = b.step("line-break-bench", "Benchmark streaming Unicode line breaking");
+    const line_break_bench_cmd = b.addRunArtifact(line_break_bench_exe);
+    line_break_bench_step.dependOn(&line_break_bench_cmd.step);
+    if (b.args) |args| {
+        line_break_bench_cmd.addArgs(args);
+    }
+
     const harfbuzz_c = b.addTranslateC(.{
         .root_source_file = b.path("tools/shape_bench/harfbuzz.h"),
         .target = target,

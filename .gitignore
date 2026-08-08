@@ -3,3 +3,5 @@ zig-out
 zig-pkg
 assets
 .DS_Store
+__pycache__/
+*.py[cod]

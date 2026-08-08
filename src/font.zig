@@ -98,6 +98,16 @@ pub const VerticalMetricInfo = struct {
     top_side_bearing: i16,
 };
 
+pub const VerticalOriginMetric = struct {
+    glyph_id: glyph_mod.GlyphId,
+    origin_y: i16,
+};
+
+pub const VerticalOriginInfo = struct {
+    default_origin_y: i16,
+    metrics: []VerticalOriginMetric,
+};
+
 pub const GlyphLocationInfo = struct {
     glyph_id: glyph_mod.GlyphId,
     offset: usize,
@@ -564,6 +574,7 @@ pub const Font = struct {
     avar: ?TableRecord,
     colr: ?TableRecord,
     cpal: ?TableRecord,
+    vorg: ?TableRecord,
     svg: ?TableRecord,
     sbix: ?TableRecord,
     cblc: ?TableRecord,
@@ -651,6 +662,7 @@ pub const Font = struct {
         const avar = findTable(records, "avar");
         const colr = findTable(records, "COLR");
         const cpal = findTable(records, "CPAL");
+        const vorg = findTable(records, "VORG");
         const svg = findTable(records, "SVG ");
         const sbix = findTable(records, "sbix");
         const cblc = findTable(records, "CBLC");
@@ -752,6 +764,7 @@ pub const Font = struct {
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
         }
+        if (vorg) |vorg_table| try validateVorgTable(data, vorg_table, glyph_count);
         if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
         if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
         if (cblc != null and cbdt != null) try validateCblcCbdtTables(data, cblc.?, cbdt.?, glyph_count);
@@ -791,6 +804,7 @@ pub const Font = struct {
             .avar = avar,
             .colr = colr,
             .cpal = cpal,
+            .vorg = vorg,
             .svg = svg,
             .sbix = sbix,
             .cblc = cblc,
@@ -2163,6 +2177,26 @@ pub const Font = struct {
         // they merely selected an absent runtime palette.
         if (self.cpal == null) return error.BadSfnt;
         _ = (try self.paletteColor(0, color_index)) orelse return error.BadSfnt;
+    }
+
+    /// Read validated metadata from the optional SFNT `VORG` table.
+    pub fn verticalOrigins(self: *const Font, allocator: std.mem.Allocator) FontError!?VerticalOriginInfo {
+        const vorg = self.vorg orelse return null;
+        try validateSfntTableChecksum(self.data, vorg);
+        try validateVorgTable(self.data, vorg, self.glyph_count);
+        return try readVorgInfo(allocator, self.data, vorg);
+    }
+
+    pub fn freeVerticalOrigins(_: *const Font, allocator: std.mem.Allocator, info: VerticalOriginInfo) void {
+        allocator.free(info.metrics);
+    }
+
+    pub fn verticalOriginY(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?i16 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const vorg = self.vorg orelse return null;
+        try validateSfntTableChecksum(self.data, vorg);
+        try validateVorgTable(self.data, vorg, self.glyph_count);
+        return try vorgOriginY(self.data, vorg, glyph_id);
     }
 
     /// Expand the TrueType `loca` table into one glyf byte range per glyph.
@@ -3626,6 +3660,60 @@ fn validateCffGlyphCount(data: []const u8, cff: TableRecord, glyph_count: u16) F
     // glyph ids that the CFF outline data can never resolve.
     const info = try cff_mod.parseInfo(data[cff.offset .. cff.offset + cff.length]);
     if (info.charstrings_count != glyph_count) return error.BadSfnt;
+}
+
+fn validateVorgTable(data: []const u8, vorg: TableRecord, glyph_count: u16) FontError!void {
+    try requireTableLength(vorg, 8);
+    if (try bin.readU32At(data, vorg.offset) != 0x00010000) return error.BadSfnt;
+    const count = try bin.readU16At(data, vorg.offset + 6);
+    if (@as(usize, count) * 4 > vorg.length - 8) return error.BadSfnt;
+    if (vorg.length != 8 + @as(usize, count) * 4) return error.BadSfnt;
+    var previous: ?glyph_mod.GlyphId = null;
+    for (0..count) |index| {
+        const record = vorg.offset + 8 + index * 4;
+        const glyph_id = try bin.readU16At(data, record);
+        if (glyph_id >= glyph_count) return error.BadSfnt;
+        if (previous) |last| {
+            if (glyph_id <= last) return error.BadSfnt;
+        }
+        previous = glyph_id;
+    }
+}
+
+fn readVorgInfo(allocator: std.mem.Allocator, data: []const u8, vorg: TableRecord) FontError!VerticalOriginInfo {
+    const count = try bin.readU16At(data, vorg.offset + 6);
+    const metrics = try allocator.alloc(VerticalOriginMetric, count);
+    errdefer allocator.free(metrics);
+    for (metrics, 0..) |*metric, index| {
+        const record = vorg.offset + 8 + index * 4;
+        metric.* = .{
+            .glyph_id = try bin.readU16At(data, record),
+            .origin_y = try bin.readI16At(data, record + 2),
+        };
+    }
+    return .{
+        .default_origin_y = try bin.readI16At(data, vorg.offset + 4),
+        .metrics = metrics,
+    };
+}
+
+fn vorgOriginY(data: []const u8, vorg: TableRecord, glyph_id: glyph_mod.GlyphId) FontError!i16 {
+    const count = try bin.readU16At(data, vorg.offset + 6);
+    var lo: usize = 0;
+    var hi: usize = count;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const record = vorg.offset + 8 + mid * 4;
+        const candidate = try bin.readU16At(data, record);
+        if (glyph_id < candidate) {
+            hi = mid;
+        } else if (glyph_id > candidate) {
+            lo = mid + 1;
+        } else {
+            return try bin.readI16At(data, record + 2);
+        }
+    }
+    return try bin.readI16At(data, vorg.offset + 4);
 }
 
 fn validateGaspTable(data: []const u8, gasp: TableRecord) FontError!void {
@@ -17659,6 +17747,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .vorg = null,
         .svg = null,
         .sbix = null,
         .cblc = null,
@@ -17706,6 +17795,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .vorg = null,
         .svg = null,
         .sbix = null,
         .cblc = null,
@@ -17753,6 +17843,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
         .cpal = null,
+        .vorg = null,
         .svg = null,
         .sbix = null,
         .cblc = null,
@@ -17811,6 +17902,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
+        .vorg = null,
         .svg = null,
         .sbix = null,
         .cblc = null,
@@ -17858,6 +17950,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .vorg = null,
         .svg = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = svg_checksum, .offset = 0, .length = data.len },
         .sbix = null,
         .cblc = null,
@@ -17905,6 +17998,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .vorg = null,
         .svg = null,
         .sbix = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = sbix_checksum, .offset = 0, .length = data.len },
         .cblc = null,
@@ -17952,6 +18046,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .vorg = null,
         .svg = null,
         .sbix = null,
         .cblc = null,
@@ -18019,6 +18114,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .vorg = null,
         .svg = null,
         .sbix = null,
         .cblc = null,

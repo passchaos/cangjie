@@ -99,6 +99,8 @@ pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const HorizontalMetricInfo = @import("font.zig").HorizontalMetricInfo;
 pub const MetricHeaderInfo = @import("font.zig").MetricHeaderInfo;
 pub const VerticalMetricInfo = @import("font.zig").VerticalMetricInfo;
+pub const VerticalOriginInfo = @import("font.zig").VerticalOriginInfo;
+pub const VerticalOriginMetric = @import("font.zig").VerticalOriginMetric;
 pub const GlyphClass = @import("font.zig").GlyphClass;
 pub const NameEncoding = @import("font.zig").NameEncoding;
 pub const NameId = @import("font.zig").NameId;
@@ -376,6 +378,56 @@ test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes
         if (pixel > 0) covered += 1;
     }
     try std.testing.expect(covered > 10);
+}
+
+test "VORG vertical origins are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVorgTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const origins = (try font.verticalOrigins(allocator)).?;
+    defer font.freeVerticalOrigins(allocator, origins);
+    try std.testing.expectEqual(@as(i16, 880), origins.default_origin_y);
+    try std.testing.expectEqual(@as(usize, 1), origins.metrics.len);
+    try std.testing.expectEqual(VerticalOriginMetric{ .glyph_id = 1, .origin_y = 910 }, origins.metrics[0]);
+
+    try std.testing.expectEqual(@as(?i16, 880), try font.verticalOriginY(0));
+    try std.testing.expectEqual(@as(?i16, 910), try font.verticalOriginY(1));
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.verticalOrigins(allocator)) == null);
+    try std.testing.expect((try missing.verticalOriginY(1)) == null);
+}
+
+test "lazy VORG metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildVorgTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expectEqual(@as(?i16, 910), try font.verticalOriginY(1));
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var vorg_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "VORG")) vorg_offset = table.offset;
+    }
+    bytes[vorg_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.verticalOriginY(1));
+    try std.testing.expectError(error.BadSfnt, font.verticalOrigins(allocator));
 }
 
 test "vertical header metadata is exposed when present" {

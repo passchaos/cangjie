@@ -32,6 +32,34 @@ pub const GlyphInfo = struct {
     extended_shape_glyphs: []u16,
 };
 
+pub const VariantRecord = struct {
+    glyph_id: u16,
+    advance_measurement: u16,
+};
+
+pub const PartRecord = struct {
+    glyph_id: u16,
+    start_connector_length: u16,
+    end_connector_length: u16,
+    full_advance: u16,
+    flags: u16,
+};
+
+pub const Assembly = struct {
+    italics_correction: ValueRecord,
+    parts: []PartRecord,
+};
+
+pub const Construction = struct {
+    index: usize,
+    glyph_id: u16,
+    vertical: bool,
+    offset: usize,
+    assembly_offset: ?usize,
+    assembly: ?Assembly,
+    variants: []VariantRecord,
+};
+
 pub const Variants = struct {
     min_connector_overlap: u16,
     vertical_coverage_offset: ?usize,
@@ -39,6 +67,7 @@ pub const Variants = struct {
     vertical_glyphs: []u16,
     horizontal_glyphs: []u16,
     construction_offsets: []?usize,
+    constructions: []Construction,
 };
 
 pub const Info = struct {
@@ -91,9 +120,14 @@ fn freeGlyphInfo(allocator: std.mem.Allocator, value: GlyphInfo) void {
 }
 
 fn freeVariants(allocator: std.mem.Allocator, value: Variants) void {
+    for (value.constructions) |construction| {
+        if (construction.assembly) |assembly| allocator.free(assembly.parts);
+        allocator.free(construction.variants);
+    }
     allocator.free(value.vertical_glyphs);
     allocator.free(value.horizontal_glyphs);
     allocator.free(value.construction_offsets);
+    allocator.free(value.constructions);
 }
 
 fn freeConstants(allocator: std.mem.Allocator, value: Constants) void {
@@ -185,7 +219,21 @@ fn validateGlyphConstruction(data: []const u8, table_offset: usize, table_length
     const assembly_offset = try bin.readU16At(data, start);
     const variant_count: usize = @intCast(try bin.readU16At(data, start + 2));
     if (variant_count > (table_length - construction_offset - 4) / 4) return error.BadSfnt;
-    if (assembly_offset != 0) try validateChildWithinParent(assembly_offset, table_length, construction_offset, 6);
+    if (assembly_offset != 0) try validateGlyphAssembly(data, table_offset, table_length, construction_offset + @as(usize, assembly_offset));
+}
+
+fn validateGlyphAssembly(data: []const u8, table_offset: usize, table_length: usize, assembly_offset: usize) Error!void {
+    try validateChildOffset(assembly_offset, table_length, 6);
+    const start = table_offset + assembly_offset;
+    const device_offset = try bin.readU16At(data, start + 2);
+    if (device_offset != 0) try validateDeviceTable(data, table_offset, table_length, assembly_offset, device_offset);
+    const part_count: usize = @intCast(try bin.readU16At(data, start + 4));
+    if (part_count > (table_length - assembly_offset - 6) / 10) return error.BadSfnt;
+    for (0..part_count) |index| {
+        const part = start + 6 + index * 10;
+        const flags = try bin.readU16At(data, part + 8);
+        if ((flags & ~@as(u16, 0x0001)) != 0) return error.BadSfnt;
+    }
 }
 
 fn readVariants(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, table_length: usize, variants_offset: usize) Error!Variants {
@@ -208,10 +256,30 @@ fn readVariants(allocator: std.mem.Allocator, data: []const u8, table_offset: us
     const construction_count = vert_count + horiz_count;
     const construction_offsets = try allocator.alloc(?usize, construction_count);
     errdefer allocator.free(construction_offsets);
+    var non_null_construction_count: usize = 0;
     for (construction_offsets, 0..) |*value, index| {
         const raw = try bin.readU16At(data, start + 10 + index * 2);
         value.* = nullableOffset(raw);
+        if (value.* != null) non_null_construction_count += 1;
     }
+
+    const constructions = try allocator.alloc(Construction, non_null_construction_count);
+    var initialized: usize = 0;
+    errdefer {
+        for (constructions[0..initialized]) |construction| {
+            if (construction.assembly) |assembly| allocator.free(assembly.parts);
+            allocator.free(construction.variants);
+        }
+        allocator.free(constructions);
+    }
+    for (construction_offsets, 0..) |maybe_offset, index| {
+        const construction_offset = maybe_offset orelse continue;
+        const vertical = index < vert_count;
+        const glyph_id = if (vertical) vertical_glyphs[index] else horizontal_glyphs[index - vert_count];
+        constructions[initialized] = try readGlyphConstruction(allocator, data, table_offset, table_length, index, glyph_id, vertical, variants_offset + construction_offset);
+        initialized += 1;
+    }
+
     return .{
         .min_connector_overlap = try bin.readU16At(data, start),
         .vertical_coverage_offset = nullableOffset(vert_coverage_offset),
@@ -219,6 +287,58 @@ fn readVariants(allocator: std.mem.Allocator, data: []const u8, table_offset: us
         .vertical_glyphs = vertical_glyphs,
         .horizontal_glyphs = horizontal_glyphs,
         .construction_offsets = construction_offsets,
+        .constructions = constructions,
+    };
+}
+
+fn readGlyphConstruction(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, table_length: usize, index: usize, glyph_id: u16, vertical: bool, construction_offset: usize) Error!Construction {
+    try validateGlyphConstruction(data, table_offset, table_length, construction_offset);
+    const start = table_offset + construction_offset;
+    const assembly_offset_raw = try bin.readU16At(data, start);
+    const variant_count: usize = @intCast(try bin.readU16At(data, start + 2));
+    const variants = try allocator.alloc(VariantRecord, variant_count);
+    errdefer allocator.free(variants);
+    for (variants, 0..) |*variant, variant_index| {
+        const record = start + 4 + variant_index * 4;
+        variant.* = .{
+            .glyph_id = try bin.readU16At(data, record),
+            .advance_measurement = try bin.readU16At(data, record + 2),
+        };
+    }
+    const assembly = if (assembly_offset_raw != 0)
+        try readGlyphAssembly(allocator, data, table_offset, construction_offset + @as(usize, assembly_offset_raw))
+    else
+        null;
+    errdefer if (assembly) |value| allocator.free(value.parts);
+    return .{
+        .index = index,
+        .glyph_id = glyph_id,
+        .vertical = vertical,
+        .offset = construction_offset,
+        .assembly_offset = nullableOffset(assembly_offset_raw),
+        .assembly = assembly,
+        .variants = variants,
+    };
+}
+
+fn readGlyphAssembly(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, assembly_offset: usize) Error!Assembly {
+    const start = table_offset + assembly_offset;
+    const part_count: usize = @intCast(try bin.readU16At(data, start + 4));
+    const parts = try allocator.alloc(PartRecord, part_count);
+    errdefer allocator.free(parts);
+    for (parts, 0..) |*out, index| {
+        const part = start + 6 + index * 10;
+        out.* = .{
+            .glyph_id = try bin.readU16At(data, part),
+            .start_connector_length = try bin.readU16At(data, part + 2),
+            .end_connector_length = try bin.readU16At(data, part + 4),
+            .full_advance = try bin.readU16At(data, part + 6),
+            .flags = try bin.readU16At(data, part + 8),
+        };
+    }
+    return .{
+        .italics_correction = .{ .value = try bin.readI16At(data, start), .device_offset = try bin.readU16At(data, start + 2) },
+        .parts = parts,
     };
 }
 
@@ -411,7 +531,7 @@ fn writeI16(bytes: []u8, offset: usize, value: i16) void {
 }
 
 test "MATH constants expose scalar and value-record metadata" {
-    var bytes: [296]u8 = .{0} ** 296;
+    var bytes: [324]u8 = .{0} ** 324;
     writeU16(&bytes, 0, 1);
     writeU16(&bytes, 4, 10);
     writeU16(&bytes, 6, 224);
@@ -448,9 +568,25 @@ test "MATH constants expose scalar and value-record metadata" {
     writeU16(&bytes, 284, 1);
     writeU16(&bytes, 286, 1);
     writeU16(&bytes, 288, 5);
+    writeU16(&bytes, 280, 26);
+    writeU16(&bytes, 282, 0);
+    writeU16(&bytes, 284, 1);
+    writeU16(&bytes, 286, 1);
+    writeU16(&bytes, 288, 5);
     writeU16(&bytes, 290, 1);
     writeU16(&bytes, 292, 1);
     writeU16(&bytes, 294, 6);
+    writeU16(&bytes, 296, 8);
+    writeU16(&bytes, 298, 1);
+    writeU16(&bytes, 300, 7);
+    writeU16(&bytes, 302, 900);
+    writeI16(&bytes, 304, -7);
+    writeU16(&bytes, 308, 1);
+    writeU16(&bytes, 310, 8);
+    writeU16(&bytes, 312, 1);
+    writeU16(&bytes, 314, 2);
+    writeU16(&bytes, 316, 3);
+    writeU16(&bytes, 318, 1);
 
     try validate(&bytes, 0, bytes.len);
     const parsed = try info(std.testing.allocator, &bytes, 0, bytes.len);

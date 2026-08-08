@@ -118,6 +118,10 @@ pub const MathInfo = @import("font.zig").MathInfo;
 pub const MathConstantsInfo = @import("font.zig").MathConstantsInfo;
 pub const MathValueRecordInfo = @import("font.zig").MathValueRecordInfo;
 pub const MathGlyphValueRecordInfo = @import("font.zig").MathGlyphValueRecordInfo;
+pub const MathVariantRecordInfo = @import("font.zig").MathVariantRecordInfo;
+pub const MathPartRecordInfo = @import("font.zig").MathPartRecordInfo;
+pub const MathAssemblyInfo = @import("font.zig").MathAssemblyInfo;
+pub const MathConstructionInfo = @import("font.zig").MathConstructionInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const IftPatchMapInfo = @import("font.zig").IftPatchMapInfo;
 pub const IftTableKeyedPatchInfo = @import("font.zig").IftTableKeyedPatchInfo;
@@ -580,6 +584,15 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expectEqualSlices(u16, &.{5}, info.variants.vertical_glyphs);
     try std.testing.expectEqualSlices(u16, &.{6}, info.variants.horizontal_glyphs);
     try std.testing.expectEqual(@as(usize, 2), info.variants.construction_offsets.len);
+    try std.testing.expectEqual(@as(?usize, 26), info.variants.construction_offsets[0]);
+    try std.testing.expect(info.variants.construction_offsets[1] == null);
+    try std.testing.expectEqual(@as(usize, 1), info.variants.constructions.len);
+    try std.testing.expectEqual(@as(u16, 5), info.variants.constructions[0].glyph_id);
+    try std.testing.expect(info.variants.constructions[0].vertical);
+    try std.testing.expectEqual(MathVariantRecordInfo{ .glyph_id = 7, .advance_measurement = 900 }, info.variants.constructions[0].variants[0]);
+    const assembly = info.variants.constructions[0].assembly.?;
+    try std.testing.expectEqual(MathValueRecordInfo{ .value = -7, .device_offset = 0 }, assembly.italics_correction);
+    try std.testing.expectEqual(MathPartRecordInfo{ .glyph_id = 8, .start_connector_length = 1, .end_connector_length = 2, .full_advance = 3, .flags = 1 }, assembly.parts[0]);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);

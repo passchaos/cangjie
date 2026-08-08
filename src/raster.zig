@@ -647,7 +647,7 @@ pub const Rasterizer = struct {
                 }
                 const intersections = intersection_storage[0..intersection_count];
                 if (intersections.len < 2) continue;
-                std.sort.heap(WindingIntersection, intersections, {}, lessThanWindingIntersection);
+                sortWindingIntersections(intersections);
 
                 switch (fill_rule) {
                     .non_zero => {
@@ -777,6 +777,22 @@ const GlyphFillRule = enum {
 
 fn lessThanWindingIntersection(_: void, lhs: WindingIntersection, rhs: WindingIntersection) bool {
     return lhs.x < rhs.x;
+}
+
+fn sortWindingIntersections(intersections: []WindingIntersection) void {
+    if (intersections.len <= 16) {
+        var index: usize = 1;
+        while (index < intersections.len) : (index += 1) {
+            const value = intersections[index];
+            var cursor = index;
+            while (cursor > 0 and intersections[cursor - 1].x > value.x) : (cursor -= 1) {
+                intersections[cursor] = intersections[cursor - 1];
+            }
+            intersections[cursor] = value;
+        }
+        return;
+    }
+    std.sort.heap(WindingIntersection, intersections, {}, lessThanWindingIntersection);
 }
 
 fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_axis: i32, start_f: f32, end_f: f32) void {

@@ -214,6 +214,16 @@ Current local snapshot after the Nastaliq parity work:
   `fa-thelittleprince` still pass in-process HarfBuzz parity. A seven-sample
   Amiri no-bidi-reorder check also improved slightly from about
   `1050 ns/glyph` to `1042 ns/glyph`.
+- Large predecoded LigatureSubst lookups now use HarfBuzz's second-component
+  prefilter: the next non-ignored glyph is found once and reused while
+  definitions remain in font-authored preference order. A lookup-level cost
+  model enables the larger matcher only at 32 competing definitions, keeping
+  small Arabic lookups on the original direct path. In a fixed-CPU-30 ABBA
+  comparison with four 15-sample medians per binary, Roboto `en-words`
+  improved from `477.678 ns/glyph` to `429.937 ns/glyph`, about `10.0%`.
+  Amiri `fa-thelittleprince` was effectively flat at `1405.212` versus
+  `1407.046 ns/glyph` (`+0.13%`, within run noise). Both corpora retained full
+  in-process HarfBuzz parity.
 - Predecoding xAdvance-only PairPos format-1 records into sorted native-endian
   `(first, second, advance)` records reduced the next same-session Roboto
   `en-words` median from about `627 ns/glyph` to `570 ns/glyph`, about `9%`.

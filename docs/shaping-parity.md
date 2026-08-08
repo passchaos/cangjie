@@ -141,6 +141,14 @@ Current local snapshot after the Nastaliq parity work:
   visual-order path.  This is a meaningful improvement from the older
   `~2.0 µs/glyph` Amiri state, but Cangjie is still roughly `2.4x` slower than
   HarfBuzz on this workload.
+- Reusing GSUB run digests across consecutive no-op format-3 chaining lookups
+  reduced a same-session, five-sample Amiri `fa-thelittleprince` median from
+  `1769 ns/glyph` at commit `0e38374` to `1700 ns/glyph`, about a `3.9%`
+  improvement. The cache is invalidated by a mutation generation after any
+  substitution so later lookups see newly produced glyphs. A table-level
+  capability bit avoids generation bookkeeping for fonts without an applicable
+  chaining accelerator; the paired Roboto `en-words` smoke run did not regress
+  (`949 ns/glyph` baseline versus `931 ns/glyph` candidate in that session).
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

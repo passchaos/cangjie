@@ -11,6 +11,7 @@ const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
 const ltag_mod = @import("opentype/ltag.zig");
 const meta_mod = @import("opentype/meta.zig");
+const mvar_mod = @import("opentype/mvar.zig");
 const name_mod = @import("opentype/name.zig");
 const trak_mod = @import("opentype/trak.zig");
 
@@ -181,6 +182,9 @@ pub const DsigInfo = struct {
 };
 
 pub const MetaRecordInfo = meta_mod.Record;
+
+pub const MvarInfo = mvar_mod.Info;
+pub const MvarValueRecordInfo = mvar_mod.ValueRecord;
 
 pub const LtagRecordInfo = ltag_mod.Record;
 
@@ -646,6 +650,7 @@ pub const Font = struct {
     stat: ?TableRecord,
     fvar: ?TableRecord,
     avar: ?TableRecord,
+    mvar: ?TableRecord,
     colr: ?TableRecord,
     cpal: ?TableRecord,
     base: ?TableRecord,
@@ -903,6 +908,7 @@ pub const Font = struct {
             .stat = stat,
             .fvar = fvar,
             .avar = avar,
+            .mvar = mvar,
             .colr = colr,
             .cpal = cpal,
             .base = base,
@@ -937,6 +943,22 @@ pub const Font = struct {
             };
         }
         return infos;
+    }
+
+    /// Read validated value records from the optional OpenType `MVAR` table.
+    pub fn mvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?MvarInfo {
+        const mvar = self.mvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, mvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMvarTable(self.data, mvar, fvar_info.axis_count);
+        return try mvar_mod.info(allocator, self.data, mvar.offset, mvar.length);
+    }
+
+    pub fn freeMvarInfo(_: *const Font, allocator: std.mem.Allocator, info_value: MvarInfo) void {
+        mvar_mod.free(allocator, info_value);
     }
 
     /// Read validated metadata from the optional OpenType `BASE` table.
@@ -8499,23 +8521,17 @@ fn validateMetricVariationTopLevelPayloads(data: []const u8, table: TableRecord,
 }
 
 fn validateMvarTable(data: []const u8, mvar: TableRecord, fvar_axis_count: usize) FontError!void {
-    if (mvar.length < 12) return error.BadSfnt;
-    const major = try bin.readU16At(data, mvar.offset);
-    const minor = try bin.readU16At(data, mvar.offset + 2);
-    if (major != 1 or minor != 0) return error.BadSfnt;
-    const reserved = try bin.readU16At(data, mvar.offset + 4);
-    const value_record_size: usize = @intCast(try bin.readU16At(data, mvar.offset + 6));
-    const value_record_count: usize = @intCast(try bin.readU16At(data, mvar.offset + 8));
-    const store_offset: usize = @intCast(try bin.readU16At(data, mvar.offset + 10));
-    if (reserved != 0 or value_record_size < 8) return error.BadSfnt;
-    if (value_record_count > (mvar.length - 12) / value_record_size) return error.BadSfnt;
+    const mvar_header = try mvar_mod.header(data, mvar.offset, mvar.length);
+    try mvar_mod.validateValueRecords(data, mvar.offset, mvar_header);
+    const store_offset = mvar_header.item_variation_store_offset orelse return;
 
-    const records_end = 12 + value_record_count * value_record_size;
-    const store_info = try validateItemVariationStore(data, mvar, store_offset, fvar_axis_count, records_end);
-    for (0..value_record_count) |index| {
-        const record = mvar.offset + 12 + index * value_record_size;
-        const outer_index: usize = @intCast(try bin.readU16At(data, record + 4));
-        const inner_index: usize = @intCast(try bin.readU16At(data, record + 6));
+    const store_info = try validateItemVariationStore(data, mvar, store_offset, fvar_axis_count, mvar_header.records_end);
+    for (0..mvar_header.value_record_count) |index| {
+        const record = try mvar_mod.valueRecordAt(data, mvar.offset, mvar_header, index);
+        if (!record.hasVariationData()) continue;
+
+        const outer_index: usize = @intCast(record.delta_set_outer_index);
+        const inner_index: usize = @intCast(record.delta_set_inner_index);
         if (outer_index >= store_info.item_data_count) return error.BadSfnt;
         const item_count = try itemVariationDataItemCount(data, mvar, store_offset, outer_index);
         if (inner_index >= item_count) return error.BadSfnt;
@@ -18157,6 +18173,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .mvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18214,6 +18231,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .mvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18271,6 +18289,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .mvar = null,
         .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
         .cpal = null,
         .base = null,
@@ -18339,6 +18358,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .mvar = null,
         .colr = null,
         .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
         .base = null,
@@ -18396,6 +18416,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .mvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18453,6 +18474,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .mvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18510,6 +18532,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = data.len },
         .avar = null,
+        .mvar = null,
         .colr = null,
         .cpal = null,
         .base = null,
@@ -18587,6 +18610,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .mvar = null,
         .colr = null,
         .cpal = null,
         .base = null,

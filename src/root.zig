@@ -121,6 +121,8 @@ pub const NameId = @import("font.zig").NameId;
 pub const NameLanguageTagInfo = @import("font.zig").NameLanguageTagInfo;
 pub const NameRecordInfo = @import("font.zig").NameRecordInfo;
 pub const MetaRecordInfo = @import("font.zig").MetaRecordInfo;
+pub const MvarInfo = @import("font.zig").MvarInfo;
+pub const MvarValueRecordInfo = @import("font.zig").MvarValueRecordInfo;
 pub const Os2Info = @import("font.zig").Os2Info;
 pub const FontFallbackCache = @import("layout.zig").FontFallbackCache;
 pub const FontFallbackDecision = @import("layout.zig").FontFallbackDecision;
@@ -484,6 +486,64 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "MVAR value records are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMvarTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.mvarInfo(allocator)).?;
+    defer font.freeMvarInfo(allocator, info);
+    try std.testing.expectEqual(@as(u32, 0x00010000), info.version);
+    try std.testing.expectEqual(@as(u16, 8), info.value_record_size);
+    try std.testing.expectEqual(@as(?usize, 28), info.item_variation_store_offset);
+    try std.testing.expectEqual(@as(usize, 2), info.value_records.len);
+    try std.testing.expectEqual(MvarValueRecordInfo{
+        .value_tag = .{ 'h', 'a', 's', 'c' },
+        .delta_set_outer_index = 0,
+        .delta_set_inner_index = 0,
+    }, info.value_records[0]);
+    try std.testing.expect(info.value_records[0].hasVariationData());
+    try std.testing.expectEqualStrings("hdsc", &info.value_records[1].value_tag);
+    try std.testing.expectEqual(@as(u16, 0xffff), info.value_records[1].delta_set_outer_index);
+    try std.testing.expectEqual(@as(u16, 0xffff), info.value_records[1].delta_set_inner_index);
+    try std.testing.expect(!info.value_records[1].hasVariationData());
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.mvarInfo(allocator)) == null);
+}
+
+test "lazy MVAR metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMvarTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const info = (try font.mvarInfo(allocator)).?;
+    defer font.freeMvarInfo(allocator, info);
+    try std.testing.expectEqual(@as(usize, 2), info.value_records.len);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var mvar_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "MVAR")) mvar_offset = table.offset;
+    }
+    bytes[mvar_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.mvarInfo(allocator));
 }
 
 test "BASE baseline metadata is exposed when present" {

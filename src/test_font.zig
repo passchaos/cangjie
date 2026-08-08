@@ -24,6 +24,10 @@ pub fn buildBaseTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try baseTtfTables(allocator));
 }
 
+pub fn buildMvarTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try mvarTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -574,6 +578,23 @@ fn baseTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn mvarTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 11);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "MVAR", .data = try mvarTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try mvarNameTable(allocator) };
     return tables;
 }
 
@@ -2324,7 +2345,7 @@ fn nameTableWithPostScript(allocator: std.mem.Allocator, family: []const u8, sub
     @memset(bytes, 0);
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, records.len);
-    writeU16(bytes, 4, header_len);
+    writeU16(bytes, 4, @intCast(header_len));
 
     var storage_offset: usize = 0;
     for (records, 0..) |record, index| {
@@ -2357,7 +2378,7 @@ fn nameTableWithLanguageTag(allocator: std.mem.Allocator) ![]u8 {
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, name_record_count);
-    writeU16(bytes, 4, header_len);
+    writeU16(bytes, 4, @intCast(header_len));
 
     writeU16(bytes, 6, 3);
     writeU16(bytes, 8, 1);
@@ -2376,8 +2397,18 @@ fn nameTableWithLanguageTag(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn mvarNameTable(allocator: std.mem.Allocator) ![]u8 {
+    const records = [_]NameRecordSpec{
+        .{ .id = 1, .value = "Cangjie MVAR" },
+        .{ .id = 2, .value = "Regular" },
+        .{ .id = 4, .value = "Cangjie MVAR Regular" },
+        .{ .id = 256, .value = "Weight" },
+    };
+    return genericNameTable(allocator, &records);
+}
+
 fn variableNameTable(allocator: std.mem.Allocator) ![]u8 {
-    const records = [_]struct { id: u16, value: []const u8 }{
+    const records = [_]NameRecordSpec{
         .{ .id = 1, .value = "Cangjie Variable" },
         .{ .id = 2, .value = "Regular" },
         .{ .id = 4, .value = "Cangjie Variable Regular" },
@@ -2390,14 +2421,23 @@ fn variableNameTable(allocator: std.mem.Allocator) ![]u8 {
         .{ .id = 260, .value = "Bold Wide" },
         .{ .id = 261, .value = "CangjieVariable-BoldWide" },
     };
+    return genericNameTable(allocator, &records);
+}
+
+const NameRecordSpec = struct {
+    id: u16,
+    value: []const u8,
+};
+
+fn genericNameTable(allocator: std.mem.Allocator, records: []const NameRecordSpec) ![]u8 {
     var storage_len: usize = 0;
     for (records) |record| storage_len += record.value.len * 2;
     const header_len = 6 + records.len * 12;
     const bytes = try allocator.alloc(u8, header_len + storage_len);
     @memset(bytes, 0);
     writeU16(bytes, 0, 0);
-    writeU16(bytes, 2, records.len);
-    writeU16(bytes, 4, header_len);
+    writeU16(bytes, 2, @intCast(records.len));
+    writeU16(bytes, 4, @intCast(header_len));
 
     var storage_offset: usize = 0;
     for (records, 0..) |record, index| {
@@ -2455,6 +2495,25 @@ fn writeScriptMetricsDefaults(bytes: []u8) void {
     writeI16(bytes, 24, 350);
 }
 
+fn singleAxisFvarTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 36);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 16);
+    writeU16(bytes, 6, 2);
+    writeU16(bytes, 8, 1);
+    writeU16(bytes, 10, 20);
+    writeU16(bytes, 12, 0);
+    writeU16(bytes, 14, 0);
+    writeTag(bytes, 16, "wght");
+    writeF16Dot16(bytes, 20, 100.0);
+    writeF16Dot16(bytes, 24, 400.0);
+    writeF16Dot16(bytes, 28, 900.0);
+    writeU16(bytes, 32, 0);
+    writeU16(bytes, 34, 256);
+    return bytes;
+}
+
 fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 84);
     @memset(bytes, 0);
@@ -2488,6 +2547,43 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 78, 150.0);
     writeU16(bytes, 82, 261);
     return bytes;
+}
+
+fn mvarTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 62);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 6, 8);
+    writeU16(bytes, 8, 2);
+    writeU16(bytes, 10, 28);
+    writeTag(bytes, 12, "hasc");
+    writeU16(bytes, 16, 0);
+    writeU16(bytes, 18, 0);
+    writeTag(bytes, 20, "hdsc");
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 0xffff);
+    writeItemVariationStoreWithOneItem(bytes, 28);
+    return bytes;
+}
+
+fn writeItemVariationStoreWithOneItem(bytes: []u8, offset: usize) void {
+    writeU16(bytes, offset + 0, 1);
+    writeU32(bytes, offset + 2, 12);
+    writeU16(bytes, offset + 6, 1);
+    writeU32(bytes, offset + 8, 24);
+
+    writeU16(bytes, offset + 12, 1);
+    writeU16(bytes, offset + 14, 1);
+    writeF2Dot14(bytes, offset + 16, -1.0);
+    writeF2Dot14(bytes, offset + 18, 0.0);
+    writeF2Dot14(bytes, offset + 20, 1.0);
+
+    writeU16(bytes, offset + 24, 1);
+    writeU16(bytes, offset + 26, 1);
+    writeU16(bytes, offset + 28, 1);
+    writeU16(bytes, offset + 30, 0);
+    writeI16(bytes, offset + 32, 7);
 }
 
 fn statTable(allocator: std.mem.Allocator) ![]u8 {

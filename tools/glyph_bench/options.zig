@@ -165,7 +165,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
     if (!std.math.isFinite(options.font_size) or options.font_size <= 0) return error.InvalidArguments;
     if (options.target_size == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
-    if (options.engine == .freetype and options.mode != .outline) return error.InvalidArguments;
+    if (options.engine == .freetype and options.mode == .raster_reuse) return error.InvalidArguments;
     return options;
 }
 

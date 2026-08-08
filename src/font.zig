@@ -1128,9 +1128,8 @@ pub const Font = struct {
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
 
         const target = try self.gvarMetricVariationTarget(glyph_id, 0);
-        const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, target.glyph_id, normalized_coords, target.point_count + 4, null, read_mode)) orelse return null;
+        const deltas = (try self.gvarPointDeltasAtCoordsPreparedNoShrink(allocator, target.glyph_id, normalized_coords, target.point_count + 4, null, read_mode)) orelse return null;
         defer allocator.free(deltas);
-        if (deltas.len == 0) return null;
         return try gvar_mod.phantomPointDeltas(target.point_count, deltas);
     }
 
@@ -1141,6 +1140,22 @@ pub const Font = struct {
     }
 
     fn gvarPointDeltasAtCoordsPrepared(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, target_count: usize, has_delta: ?[]bool, read_mode: OutlineReadMode) FontError!?[]GvarScaledPointDelta {
+        const out, const count = (try self.gvarPointDeltasAtCoordsPreparedNoShrinkWithCount(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return null;
+        if (count == out.len) return out;
+        return try allocator.realloc(out, count);
+    }
+
+    fn gvarPointDeltasAtCoordsPreparedNoShrink(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, target_count: usize, has_delta: ?[]bool, read_mode: OutlineReadMode) FontError!?[]GvarScaledPointDelta {
+        const out, const count = (try self.gvarPointDeltasAtCoordsPreparedNoShrinkWithCount(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return null;
+        if (count == 0) {
+            allocator.free(out);
+            return null;
+        }
+        std.debug.assert(count == out.len);
+        return out;
+    }
+
+    fn gvarPointDeltasAtCoordsPreparedNoShrinkWithCount(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, target_count: usize, has_delta: ?[]bool, read_mode: OutlineReadMode) FontError!?struct { []GvarScaledPointDelta, usize } {
         const gvar = self.gvar orelse return null;
         const axis_count = try self.fvarAxisCountForReadMode(read_mode);
         if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, gvar);
@@ -1161,7 +1176,7 @@ pub const Font = struct {
             allocator.free(out);
             return null;
         }
-        return try allocator.realloc(out, count);
+        return .{ out, count };
     }
 
     fn fvarAxisCountForReadMode(self: *const Font, read_mode: OutlineReadMode) FontError!usize {
@@ -3521,9 +3536,8 @@ pub const Font = struct {
         else
             try allocator.alloc(bool, target_count);
         defer if (target_count > inline_has_delta.len) allocator.free(has_delta);
-        const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
+        const deltas = (try self.gvarPointDeltasAtCoordsPreparedNoShrink(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
         defer allocator.free(deltas);
-        if (deltas.len == 0) return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
         try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
         try applyGvarSimpleGlyphMetricDeltas(&outline, default_bounds, metrics, deltas, target_count - 4);
         return outline;
@@ -3696,15 +3710,11 @@ pub const Font = struct {
             else
                 try outline.allocator.alloc(bool, target_count);
             defer if (target_count > inline_has_delta.len) outline.allocator.free(has_delta);
-            const deltas = (try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse {
+            const deltas = (try self.gvarPointDeltasAtCoordsPreparedNoShrink(outline.allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse {
                 try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null, null);
                 return;
             };
             defer outline.allocator.free(deltas);
-            if (deltas.len == 0) {
-                try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null, null);
-                return;
-            }
             try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, deltas, has_delta);
         } else {
             try self.appendCompoundGlyphAtCoords(outline, data, transform, depth + 1, glyph_id, normalized_coords, read_mode);
@@ -3755,7 +3765,7 @@ pub const Font = struct {
 
     fn appendCompoundGlyphAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, data: []const u8, parent_transform: Transform, depth: u8, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
         const target_count = try gvarTargetCountForGlyphData(data);
-        const maybe_deltas = try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, null, read_mode);
+        const maybe_deltas = try self.gvarPointDeltasAtCoordsPreparedNoShrink(outline.allocator, glyph_id, normalized_coords, target_count, null, read_mode);
         defer if (maybe_deltas) |deltas| outline.allocator.free(deltas);
 
         var r = bin.Reader.init(data);

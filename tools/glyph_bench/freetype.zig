@@ -46,9 +46,16 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     defer ft_face.deinit();
 
     const glyph_id = resolveGlyphId(ft_face.face, options);
+    var empty_target_pixels: [0]u8 = .{};
+    const target_pixels: []u8 = if (options.mode == .raster)
+        try allocator.alloc(u8, @as(usize, options.target_size) * options.target_size)
+    else
+        empty_target_pixels[0..];
+    defer if (options.mode == .raster) allocator.free(target_pixels);
+
     if (options.warmup != 0) {
         var warmup_checksum: u64 = 0;
-        try runIterations(ft_face.face, glyph_id, options, options.warmup, &warmup_checksum);
+        try runIterations(ft_face.face, glyph_id, options, options.warmup, target_pixels, &warmup_checksum);
     }
 
     var samples = std.ArrayList(report.Sample).empty;
@@ -59,7 +66,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     while (sample_index < options.samples) : (sample_index += 1) {
         var sample_checksum: u64 = 0;
         const start = std.Io.Clock.now(.awake, io).nanoseconds;
-        try runIterations(ft_face.face, glyph_id, options, options.iterations, &sample_checksum);
+        try runIterations(ft_face.face, glyph_id, options, options.iterations, target_pixels, &sample_checksum);
         const sample_elapsed = std.Io.Clock.now(.awake, io).nanoseconds - start;
         elapsed += sample_elapsed;
         checksum = updateChecksum(checksum, sample_checksum);
@@ -84,7 +91,7 @@ fn resolveGlyphId(face: ft.FT_Face, options: options_mod.Options) ft.FT_UInt {
     return ft.FT_Get_Char_Index(face, options.codepoint);
 }
 
-fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, target_pixels: []u8, checksum: *u64) !void {
     const load_flags: ft.FT_Int32 = switch (options.mode) {
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .raster => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
@@ -95,7 +102,7 @@ fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Op
         if (ft.FT_Load_Glyph(face, glyph_id, load_flags) != 0) return error.FreeTypeFailed;
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
             .outline => outlineChecksum(face.*.glyph),
-            .raster => bitmapChecksum(face.*.glyph),
+            .raster => rasterTargetChecksum(face.*.glyph, options, target_pixels),
             .raster_reuse => unreachable,
         });
     }
@@ -122,27 +129,37 @@ fn outlineChecksum(slot: ft.FT_GlyphSlot) u64 {
     return hasher.final();
 }
 
-fn bitmapChecksum(slot: ft.FT_GlyphSlot) u64 {
-    var hasher = std.hash.Wyhash.init(0);
-    if (slot == null) return hasher.final();
+fn rasterTargetChecksum(slot: ft.FT_GlyphSlot, options: options_mod.Options, target_pixels: []u8) u64 {
+    @memset(target_pixels, 0);
+    if (slot == null) return std.hash.Wyhash.hash(0, target_pixels);
     const glyph = slot.*;
     const bitmap = glyph.bitmap;
-    hasher.update(std.mem.asBytes(&glyph.bitmap_left));
-    hasher.update(std.mem.asBytes(&glyph.bitmap_top));
-    hasher.update(std.mem.asBytes(&bitmap.width));
-    hasher.update(std.mem.asBytes(&bitmap.rows));
-    hasher.update(std.mem.asBytes(&bitmap.pitch));
-    hasher.update(std.mem.asBytes(&bitmap.pixel_mode));
     const width: usize = @intCast(bitmap.width);
     const rows: usize = @intCast(bitmap.rows);
     const pitch_abs: usize = @intCast(if (bitmap.pitch < 0) -bitmap.pitch else bitmap.pitch);
-    if (bitmap.buffer == null or width == 0 or rows == 0 or pitch_abs == 0) return hasher.final();
+    if (bitmap.buffer == null or width == 0 or rows == 0 or pitch_abs == 0) return std.hash.Wyhash.hash(0, target_pixels);
+
+    const target_size_i32: i32 = @intCast(options.target_size);
+    const baseline_y: i32 = @intFromFloat(@round(options.font_size));
+    const origin_x: i32 = glyph.bitmap_left;
+    const origin_y: i32 = baseline_y - glyph.bitmap_top;
     const buffer: [*]const u8 = @ptrCast(bitmap.buffer);
+
     for (0..rows) |row| {
-        const offset = if (bitmap.pitch >= 0) row * pitch_abs else (rows - 1 - row) * pitch_abs;
-        hasher.update(buffer[offset..][0..@min(width, pitch_abs)]);
+        const dst_y = origin_y + @as(i32, @intCast(row));
+        if (dst_y < 0 or dst_y >= target_size_i32) continue;
+        const src_offset = if (bitmap.pitch >= 0) row * pitch_abs else (rows - 1 - row) * pitch_abs;
+        var col: usize = 0;
+        while (col < width and col < pitch_abs) : (col += 1) {
+            const dst_x = origin_x + @as(i32, @intCast(col));
+            if (dst_x < 0 or dst_x >= target_size_i32) continue;
+            const coverage = buffer[src_offset + col];
+            const dst_index = @as(usize, @intCast(dst_y)) * options.target_size + @as(usize, @intCast(dst_x));
+            target_pixels[dst_index] = @max(target_pixels[dst_index], coverage);
+        }
     }
-    return hasher.final();
+
+    return std.hash.Wyhash.hash(0, target_pixels);
 }
 
 fn updateChecksum(seed: u64, value: u64) u64 {

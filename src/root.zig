@@ -775,6 +775,42 @@ test "gvar point deltas are exposed for non-empty glyph data" {
     try std.testing.expectEqual(@as(i16, 4), varied_outline.left_side_bearing);
 }
 
+test "gvar compound glyph deltas adjust component offsets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarCompoundTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const deltas = (try font.gvarPointDeltasAtCoords(allocator, 2, &.{0.5})).?;
+    defer allocator.free(deltas);
+    try std.testing.expectEqual(@as(usize, 5), deltas.len);
+    try std.testing.expectEqual(@as(f32, 10), deltas[0].x);
+    try std.testing.expectEqual(@as(f32, 9), deltas[2].x);
+
+    const phantom = (try font.gvarPhantomPointDeltasAtCoords(allocator, 2, &.{0.5})).?;
+    try std.testing.expectEqual(@as(f32, 9), phantom.horizontalAdvanceDelta());
+
+    var default_outline = try font.glyphOutline(allocator, 2);
+    defer default_outline.deinit();
+    var varied_outline = try font.glyphOutlineAtCoords(allocator, 2, &.{0.5});
+    defer varied_outline.deinit();
+
+    // Compound `gvar` point deltas apply to component placement, not to contour
+    // IUP. The fixture's only component moves +10 design units at coord 0.5.
+    try std.testing.expectEqual(@as(f32, default_outline.commands.items[0].move_to.x + 10), varied_outline.commands.items[0].move_to.x);
+    try std.testing.expectEqual(@as(i16, 20), varied_outline.bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 720), varied_outline.bounds.x_max);
+    try std.testing.expectEqual(@as(u16, 1009), varied_outline.advance_width);
+    try std.testing.expectEqual(@as(i16, 20), varied_outline.left_side_bearing);
+
+    const varied_bounds = (try font.gvarGlyphBoundsAtCoords(allocator, 2, &.{0.5})).?;
+    try std.testing.expectEqual(varied_outline.bounds, varied_bounds);
+}
+
 test "lazy gvar metadata revalidates borrowed table bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

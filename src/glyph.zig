@@ -46,6 +46,68 @@ pub const GlyphOutline = struct {
     }
 };
 
+pub fn boundsForCommands(commands: []const PathCommand) Bounds {
+    var acc = PathBoundsAccumulator{};
+    for (commands) |command| {
+        switch (command) {
+            .move_to => |point| acc.include(point),
+            .line_to => |point| acc.include(point),
+            .quad_to => |curve| {
+                acc.include(curve.control);
+                acc.include(curve.end);
+            },
+            .cubic_to => |curve| {
+                acc.include(curve.c0);
+                acc.include(curve.c1);
+                acc.include(curve.end);
+            },
+            .close => {},
+        }
+    }
+    return acc.finish();
+}
+
+const PathBoundsAccumulator = struct {
+    has_point: bool = false,
+    x_min: f32 = 0,
+    y_min: f32 = 0,
+    x_max: f32 = 0,
+    y_max: f32 = 0,
+
+    fn include(self: *PathBoundsAccumulator, point: Point) void {
+        if (!self.has_point) {
+            self.* = .{
+                .has_point = true,
+                .x_min = point.x,
+                .y_min = point.y,
+                .x_max = point.x,
+                .y_max = point.y,
+            };
+            return;
+        }
+        self.x_min = @min(self.x_min, point.x);
+        self.y_min = @min(self.y_min, point.y);
+        self.x_max = @max(self.x_max, point.x);
+        self.y_max = @max(self.y_max, point.y);
+    }
+
+    fn finish(self: PathBoundsAccumulator) Bounds {
+        if (!self.has_point) return .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
+        return .{
+            .x_min = clampF32ToI16(@floor(self.x_min)),
+            .y_min = clampF32ToI16(@floor(self.y_min)),
+            .x_max = clampF32ToI16(@ceil(self.x_max)),
+            .y_max = clampF32ToI16(@ceil(self.y_max)),
+        };
+    }
+};
+
+fn clampF32ToI16(value: f32) i16 {
+    if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
+    if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
+    return @intFromFloat(value);
+}
+
 pub const OutlineBuilder = struct {
     outline: *GlyphOutline,
 

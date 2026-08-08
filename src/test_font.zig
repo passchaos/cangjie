@@ -128,6 +128,10 @@ pub fn buildGvarDeltaTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try gvarDeltaTtfTables(allocator));
 }
 
+pub fn buildGvarCompoundTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try gvarCompoundTtfTables(allocator));
+}
+
 pub fn buildVariableStatTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try variableStatTtfTables(allocator));
 }
@@ -684,6 +688,23 @@ fn gvarDeltaTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
     tables[8] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    return tables;
+}
+
+fn gvarCompoundTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 11);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try gvarCompoundGlyfTable(allocator) };
+    tables[3] = .{ .tag = "gvar", .data = try gvarCompoundTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTableWithLigature(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[8] = .{ .tag = "loca", .data = try gvarCompoundLocaTable(allocator) };
+    tables[9] = .{ .tag = "maxp", .data = try gvarCompoundMaxpTable(allocator) };
     tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
     return tables;
 }
@@ -2845,6 +2866,40 @@ fn gvarDeltaTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn gvarCompoundTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 56);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 4, 1); // axisCount.
+    writeU16(bytes, 6, 0); // sharedTupleCount.
+    writeU32(bytes, 8, 0); // sharedTupleOffset.
+    writeU16(bytes, 12, 3); // glyphCount.
+    writeU16(bytes, 14, 1); // long offsets.
+    writeU32(bytes, 16, 36); // glyphVariationDataArrayOffset after offset array.
+    writeU32(bytes, 20, 0);
+    writeU32(bytes, 24, 0);
+    writeU32(bytes, 28, 0);
+    writeU32(bytes, 32, 20);
+
+    writeU16(bytes, 36, 1); // one tuple.
+    writeU16(bytes, 38, 10); // tuple data starts after one 6-byte header.
+    writeU16(bytes, 40, 10); // tuple payload size.
+    writeU16(bytes, 42, 0xa000); // embedded peak + private point numbers.
+    writeF2Dot14(bytes, 44, 1.0);
+    bytes[46] = 3; // component point 0, left phantom, right phantom.
+    bytes[47] = 2; // one byte run with three point-number deltas.
+    bytes[48] = 0; // component point id 0.
+    bytes[49] = 1; // left phantom point id 1.
+    bytes[50] = 1; // right phantom point id 2.
+    bytes[51] = 2; // three x deltas.
+    bytes[52] = 20; // component offset x delta.
+    bytes[53] = 0; // left phantom x delta.
+    bytes[54] = 18; // right phantom x delta.
+    bytes[55] = 0x82; // three y deltas are zero.
+    return bytes;
+}
+
 fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 84);
     @memset(bytes, 0);
@@ -3914,6 +3969,24 @@ fn glyfTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn gvarCompoundGlyfTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 56);
+    @memset(bytes, 0);
+    writeSimpleTriangleGlyph(bytes, 12, 350, 350, 250);
+
+    const off = 40;
+    writeI16(bytes, off + 0, -1); // one compound glyph.
+    writeI16(bytes, off + 2, 0);
+    writeI16(bytes, off + 4, 0);
+    writeI16(bytes, off + 6, 700);
+    writeI16(bytes, off + 8, 700);
+    writeU16(bytes, off + 10, 0x0002); // ARGS_ARE_XY_VALUES, byte args.
+    writeU16(bytes, off + 12, 1); // component glyph id.
+    bytes[off + 14] = 10; // x offset.
+    bytes[off + 15] = 0; // y offset.
+    return bytes;
+}
+
 fn glyfTableWithThreeOutlinedGlyphs(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 96);
     @memset(bytes, 0);
@@ -4258,6 +4331,15 @@ fn locaTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 6, 20);
     writeU16(bytes, 8, 20);
     writeU16(bytes, 10, 20);
+    return bytes;
+}
+
+fn gvarCompoundLocaTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 6);
+    writeU16(bytes, 4, 20);
+    writeU16(bytes, 6, 28);
     return bytes;
 }
 
@@ -5755,6 +5837,15 @@ fn maxpTableWithGlyphs(allocator: std.mem.Allocator, glyph_count: u16) ![]u8 {
     writeU16(bytes, 6, 3); // maxPoints for the synthetic simple glyph.
     writeU16(bytes, 8, 1); // maxContours for the synthetic simple glyph.
     writeU16(bytes, 14, 2);
+    return bytes;
+}
+
+fn gvarCompoundMaxpTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try maxpTableWithGlyphs(allocator, 3);
+    writeU16(bytes, 10, 3); // maxCompositePoints.
+    writeU16(bytes, 12, 1); // maxCompositeContours.
+    writeU16(bytes, 28, 1); // maxComponentElements.
+    writeU16(bytes, 30, 1); // maxComponentDepth.
     return bytes;
 }
 

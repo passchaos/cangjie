@@ -1122,6 +1122,10 @@ pub const Font = struct {
         const fvar_info = try readFvarInfo(self.data, fvar);
         try validateSfntTableChecksum(self.data, gvar);
         if (target_count > std.math.maxInt(u16)) return error.BadSfnt;
+        if (has_delta) |flags| {
+            if (flags.len < target_count) return error.BadSfnt;
+            @memset(flags[0..target_count], false);
+        }
         const all_points = try allocator.alloc(u16, target_count);
         defer allocator.free(all_points);
         for (all_points, 0..) |*point, index| point.* = @intCast(index);
@@ -3364,7 +3368,7 @@ pub const Font = struct {
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return try self.glyphOutline(allocator, glyph_id);
         const contour_count = try bin.readI16At(data, 0);
-        if (contour_count < 0) return try self.glyphOutline(allocator, glyph_id);
+        if (contour_count < 0) return try self.glyfCompoundGlyphOutlineAtCoords(allocator, glyph_id, data, normalized_coords);
         const metrics = try self.horizontalMetrics(glyph_id);
         const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
@@ -3376,6 +3380,19 @@ pub const Font = struct {
         defer allocator.free(deltas);
         try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
         try applyGvarSimpleGlyphMetricDeltas(&outline, default_bounds, metrics, deltas, target_count - 4);
+        return outline;
+    }
+
+    fn glyfCompoundGlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, data: []const u8, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
+        const metrics = try self.horizontalMetrics(glyph_id);
+        const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
+        var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
+        errdefer outline.deinit();
+        try self.appendCompoundGlyphAtCoords(&outline, data, Transform.identity(), 1, glyph_id, normalized_coords);
+        outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
+        if (try self.gvarPhantomPointDeltasAtCoords(allocator, glyph_id, normalized_coords)) |phantom| {
+            applyGvarGlyphMetricDeltas(&outline, default_bounds, metrics, phantom);
+        }
         return outline;
     }
 
@@ -3509,6 +3526,26 @@ pub const Font = struct {
         }
     }
 
+    fn appendGlyphOutlineAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId, transform: Transform, depth: u8, normalized_coords: []const f32) FontError!void {
+        if (depth > 8) return error.CompoundDepthExceeded;
+        const data = try self.glyphData(glyph_id);
+        if (data.len == 0) return;
+        const contour_count = try bin.readI16At(data, 0);
+        if (contour_count >= 0) {
+            const target_count = try self.gvarTargetCount(glyph_id);
+            const has_delta = try outline.allocator.alloc(bool, target_count);
+            defer outline.allocator.free(has_delta);
+            const deltas = (try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, has_delta)) orelse {
+                try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null, null);
+                return;
+            };
+            defer outline.allocator.free(deltas);
+            try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, deltas, has_delta);
+        } else {
+            try self.appendCompoundGlyphAtCoords(outline, data, transform, depth + 1, glyph_id, normalized_coords);
+        }
+    }
+
     fn appendCompoundGlyph(self: *const Font, outline: *glyph_mod.GlyphOutline, data: []const u8, parent_transform: Transform, depth: u8) FontError!void {
         var r = bin.Reader.init(data);
         _ = try r.readI16();
@@ -3547,6 +3584,55 @@ pub const Font = struct {
                 child.yy = f2dot14(try r.readI16());
             }
             try self.appendGlyphOutline(outline, component_glyph, parent_transform.mul(child), depth);
+            if ((flags & 0x0020) == 0) break;
+        }
+    }
+
+    fn appendCompoundGlyphAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, data: []const u8, parent_transform: Transform, depth: u8, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!void {
+        const target_count = try self.gvarTargetCount(glyph_id);
+        const maybe_deltas = try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, null);
+        defer if (maybe_deltas) |deltas| outline.allocator.free(deltas);
+
+        var r = bin.Reader.init(data);
+        _ = try r.readI16();
+        try r.skip(8);
+        var component_index: usize = 0;
+        while (true) : (component_index += 1) {
+            const flags = try r.readU16();
+            const component_glyph = try r.readU16();
+            var arg1: i16 = 0;
+            var arg2: i16 = 0;
+            if ((flags & 0x0001) != 0) {
+                arg1 = try r.readI16();
+                arg2 = try r.readI16();
+            } else {
+                arg1 = try r.readI8();
+                arg2 = try r.readI8();
+            }
+            // Keep point-matching components on the same unsupported path as
+            // the default compound loader. Component gvar deltas are offsets,
+            // and applying them to anchor-point placement requires the hinting
+            // and point-match semantics this renderer still does not expose.
+            if ((flags & 0x0002) == 0) return error.UnsupportedGlyph;
+
+            const component_delta = if (maybe_deltas) |deltas| gvarDeltaForPoint(deltas, component_index) else gvar_mod.Point{ .x = 0, .y = 0 };
+            var child = Transform.identity();
+            child.dx = @as(f32, @floatFromInt(arg1)) + @round(component_delta.x);
+            child.dy = @as(f32, @floatFromInt(arg2)) + @round(component_delta.y);
+            if ((flags & 0x0008) != 0) {
+                const scale = f2dot14(try r.readI16());
+                child.xx = scale;
+                child.yy = scale;
+            } else if ((flags & 0x0040) != 0) {
+                child.xx = f2dot14(try r.readI16());
+                child.yy = f2dot14(try r.readI16());
+            } else if ((flags & 0x0080) != 0) {
+                child.xx = f2dot14(try r.readI16());
+                child.yx = f2dot14(try r.readI16());
+                child.xy = f2dot14(try r.readI16());
+                child.yy = f2dot14(try r.readI16());
+            }
+            try self.appendGlyphOutlineAtCoords(outline, component_glyph, parent_transform.mul(child), depth, normalized_coords);
             if ((flags & 0x0020) == 0) break;
         }
     }
@@ -8221,6 +8307,25 @@ fn boundsForFlaggedPoints(points: []const FlaggedPoint) glyph_mod.Bounds {
     return result;
 }
 
+fn gvarDeltaForPoint(deltas: []const GvarScaledPointDelta, point: usize) gvar_mod.Point {
+    if (point > std.math.maxInt(u16)) return .{ .x = 0, .y = 0 };
+    const point_id: u16 = @intCast(point);
+    var result = gvar_mod.Point{ .x = 0, .y = 0 };
+    for (deltas) |delta| {
+        if (delta.point != point_id) continue;
+        result.x += delta.x;
+        result.y += delta.y;
+    }
+    return result;
+}
+
+fn applyGvarGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: glyph_mod.Bounds, default_metrics: HorizontalMetricInfo, phantom: GvarPhantomPointDeltas) void {
+    const default_left_phantom = @as(f32, @floatFromInt(@as(i32, default_bounds.x_min) - @as(i32, default_metrics.left_side_bearing)));
+    const varied_left_phantom = default_left_phantom + phantom.left.x;
+    outline.left_side_bearing = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(outline.bounds.x_min)) - varied_left_phantom));
+    outline.advance_width = clampF32ToU16(@round(@as(f32, @floatFromInt(default_metrics.advance_width)) + phantom.horizontalAdvanceDelta()));
+}
+
 fn applyGvarSimpleGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: glyph_mod.Bounds, default_metrics: HorizontalMetricInfo, deltas: []const GvarScaledPointDelta, point_count: usize) FontError!void {
     const phantom = try gvar_mod.phantomPointDeltas(point_count, deltas);
     // TrueType's horizontal phantom points define metric deltas:
@@ -8228,10 +8333,7 @@ fn applyGvarSimpleGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bo
     // the same design-space coordinate convention as `glyphOutline()`, so only
     // the metric fields are adjusted here; point-coordinate variation is already
     // applied by appendSimpleGlyph().
-    const default_left_phantom = @as(f32, @floatFromInt(@as(i32, default_bounds.x_min) - @as(i32, default_metrics.left_side_bearing)));
-    const varied_left_phantom = default_left_phantom + phantom.left.x;
-    outline.left_side_bearing = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(outline.bounds.x_min)) - varied_left_phantom));
-    outline.advance_width = clampF32ToU16(@round(@as(f32, @floatFromInt(default_metrics.advance_width)) + phantom.horizontalAdvanceDelta()));
+    applyGvarGlyphMetricDeltas(outline, default_bounds, default_metrics, phantom);
 }
 
 fn clampF32ToU16(value: f32) u16 {

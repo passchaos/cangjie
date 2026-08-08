@@ -132,10 +132,12 @@ pub const LookupOptions = struct {
 pub const LookupAccelerator = struct {
     coverage_digest: GlyphDigest = .{},
     coverage_groups: []const ChainingSubtableGroup = &.{},
+    coverage_group_slots: []const u16 = &.{},
     single_pos_subtables: []const SinglePosSubtable = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
+    chaining_group_slots: []const u16 = &.{},
     chaining_class_subtables: []const ChainingClassSubtableAccelerator = &.{},
 };
 
@@ -361,9 +363,11 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
     for (accelerators) |accelerator| {
         for (accelerator.coverage_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.coverage_groups);
+        allocator.free(accelerator.coverage_group_slots);
         allocator.free(accelerator.single_pos_subtables);
         for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.chaining_groups);
+        allocator.free(accelerator.chaining_group_slots);
         allocator.free(accelerator.chaining_subtables);
         deinitChainingClassSubtableAccelerators(allocator, accelerator.chaining_class_subtables);
     }
@@ -427,19 +431,23 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     accelerator.single_pos_subtables = single_pos_subtables;
     if (coverage_pairs.items.len != 0) {
         accelerator.coverage_groups = try buildChainingSubtableGroups(coverage_pairs.items, allocator);
+        accelerator.coverage_group_slots = try buildChainingGroupSlots(accelerator.coverage_groups, allocator);
     }
     coverage_pairs.deinit(allocator);
     errdefer {
         for (accelerator.coverage_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.coverage_groups);
+        allocator.free(accelerator.coverage_group_slots);
     }
     if (chaining_subtables.len != 0 and group_pairs.items.len != 0) {
         accelerator.chaining_coverage_only = true;
         accelerator.chaining_subtables = chaining_subtables;
         accelerator.chaining_groups = try buildChainingSubtableGroups(group_pairs.items, allocator);
+        accelerator.chaining_group_slots = try buildChainingGroupSlots(accelerator.chaining_groups, allocator);
         errdefer {
             for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
             allocator.free(accelerator.chaining_groups);
+            allocator.free(accelerator.chaining_group_slots);
         }
     }
     group_pairs.deinit(allocator);
@@ -893,7 +901,7 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         else
             glyphRunDigest(glyphs, lookup_flag, lookup_options);
         if (run_digest.isEmpty() or !accelerator.coverage_digest.mayIntersect(run_digest)) return;
-        if (accelerator.coverage_groups.len != 0 and !lookupCoverageGroupsMayMatchRun(accelerator.coverage_groups, glyphs, lookup_flag, lookup_options)) return;
+        if (accelerator.coverage_groups.len != 0 and !lookupCoverageGroupsMayMatchRun(accelerator.coverage_groups, accelerator.coverage_group_slots, glyphs, lookup_flag, lookup_options)) return;
     }
     if (lookup_type == 1) {
         try collectSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
@@ -971,10 +979,10 @@ fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupA
     return accelerator;
 }
 
-fn lookupCoverageGroupsMayMatchRun(groups: []const ChainingSubtableGroup, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) bool {
+fn lookupCoverageGroupsMayMatchRun(groups: []const ChainingSubtableGroup, slots: []const u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) bool {
     for (glyphs) |glyph| {
         if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        if (chainingSubtableGroupForGlyph(groups, glyph) != null) return true;
+        if (chainingSubtableGroupForGlyph(groups, slots, glyph) != null) return true;
     }
     return false;
 }
@@ -2420,7 +2428,7 @@ fn collectChainingCoveragePositioningLookup(table: Table, lookup_offset: usize, 
         var next_pos = pos + 1;
         defer pos = next_pos;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
-        const grouped_subtables = chainingSubtableGroupForGlyph(accelerator.chaining_groups, glyphs[pos]) orelse continue;
+        const grouped_subtables = chainingSubtableGroupForGlyph(accelerator.chaining_groups, accelerator.chaining_group_slots, glyphs[pos]) orelse continue;
         const second_glyph_index = nextUnignoredGlyph(glyphs, pos + 1, lookup_flag, options);
         for (grouped_subtables) |subtable_i| {
             const parsed = if (subtable_i < accelerator.chaining_subtables.len and accelerator.chaining_subtables[subtable_i].input_count != 0)
@@ -2443,7 +2451,7 @@ fn collectChainingCoveragePositioningLookup(table: Table, lookup_offset: usize, 
 
 fn collectNestedChainingCoveragePositioningAt(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!bool {
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
-    const grouped_subtables = chainingSubtableGroupForGlyph(accelerator.chaining_groups, glyphs[pos]) orelse return false;
+    const grouped_subtables = chainingSubtableGroupForGlyph(accelerator.chaining_groups, accelerator.chaining_group_slots, glyphs[pos]) orelse return false;
     const second_glyph_index = nextUnignoredGlyph(glyphs, pos + 1, lookup_flag, options);
     for (grouped_subtables) |subtable_i| {
         if (subtable_i >= subtable_count) return error.BadGpos;
@@ -4451,7 +4459,33 @@ fn buildChainingSubtableGroups(pairs: []ChainingSubtablePair, allocator: std.mem
     return groups;
 }
 
-fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, glyph: GlyphId) ?[]const u16 {
+const min_chaining_groups_for_hash = 8;
+
+fn buildChainingGroupSlots(groups: []const ChainingSubtableGroup, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u16 {
+    if (groups.len < min_chaining_groups_for_hash or groups.len > std.math.maxInt(u16)) return try allocator.alloc(u16, 0);
+    // Match GSUB's bounded first-input index: an empty zero slot and at most
+    // 50% load keep both successful and negative GPOS coverage probes short.
+    const slot_count = std.math.ceilPowerOfTwo(usize, groups.len * 2) catch return error.OutOfMemory;
+    const slots = try allocator.alloc(u16, slot_count);
+    @memset(slots, 0);
+    for (groups, 0..) |group, group_i| {
+        var slot = chainingGroupHash(group.glyph) & (slots.len - 1);
+        while (slots[slot] != 0) slot = (slot + 1) & (slots.len - 1);
+        slots[slot] = @intCast(group_i + 1);
+    }
+    return slots;
+}
+
+fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, slots: []const u16, glyph: GlyphId) ?[]const u16 {
+    if (slots.len != 0) {
+        var slot = chainingGroupHash(glyph) & (slots.len - 1);
+        while (slots[slot] != 0) : (slot = (slot + 1) & (slots.len - 1)) {
+            const group = groups[slots[slot] - 1];
+            if (group.glyph == glyph) return group.subtable_indices;
+        }
+        return null;
+    }
+
     var lo: usize = 0;
     var hi: usize = groups.len;
     while (lo < hi) {
@@ -4466,6 +4500,37 @@ fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, glyph: G
         }
     }
     return null;
+}
+
+fn chainingGroupHash(glyph: GlyphId) usize {
+    return @as(usize, glyph) *% 0x9e37;
+}
+
+test "GPOS chaining group slots preserve hits and misses" {
+    const allocator = std.testing.allocator;
+    var groups: [min_chaining_groups_for_hash]ChainingSubtableGroup = undefined;
+    var group_indices: [min_chaining_groups_for_hash][1]u16 = undefined;
+    for (&groups, 0..) |*group, i| {
+        group_indices[i][0] = @intCast(i);
+        group.* = .{
+            .glyph = @intCast(13 + i * 19),
+            .subtable_indices = &group_indices[i],
+        };
+    }
+    const slots = try buildChainingGroupSlots(&groups, allocator);
+    defer allocator.free(slots);
+    for (groups, 0..) |group, i| {
+        const indices = chainingSubtableGroupForGlyph(&groups, slots, group.glyph) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualSlices(u16, &.{@intCast(i)}, indices);
+    }
+    try std.testing.expect(chainingSubtableGroupForGlyph(&groups, slots, 12) == null);
+
+    const small_groups = groups[0 .. min_chaining_groups_for_hash - 1];
+    const small_slots = try buildChainingGroupSlots(small_groups, allocator);
+    defer allocator.free(small_slots);
+    try std.testing.expectEqual(@as(usize, 0), small_slots.len);
+    const fallback = chainingSubtableGroupForGlyph(small_groups, small_slots, small_groups[3].glyph) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u16, &group_indices[3], fallback);
 }
 
 fn contextCoverageContains(table: Table, coverage_offset: usize, glyph: GlyphId) GposError!bool {

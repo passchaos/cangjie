@@ -180,6 +180,14 @@ Current local snapshot after the Nastaliq parity work:
   measured `1443 ns/glyph`, reduced the chaining lookup share from about
   `28.9%` to `21.8%`, and no longer reported the group-search function
   separately.
+- Applying the same bounded group index to GPOS lookup-level exact-coverage
+  filters and chaining subtable selection reduced the next nine-sample Amiri
+  `fa-thelittleprince` median from `1442 ns/glyph` to `1320 ns/glyph`, about
+  `8.5%`. The two GPOS slot-table families total about 46,336 bytes for Amiri.
+  A follow-up `perf` run measured `1343 ns/glyph`, reduced
+  `collectLookupWithIndex` from about `13.6%` to `8.0%`, and removed its group
+  binary search as a separate symbol. A reverse-order nine-sample Roboto
+  `en-words` check also improved from `1006 ns/glyph` to `954 ns/glyph`.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

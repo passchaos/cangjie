@@ -57,10 +57,9 @@ pub fn scan(comptime Context: type, context: *Context, bytes: []const u8) Error!
 /// Execute enough of a CFF2/Type2 charstring to compute conservative outline
 /// bounds and operation counts.
 ///
-/// Cubic bounds include control points, matching HarfBuzz's fast CFF extents
-/// path and avoiding expensive cubic-extrema solving in this metadata API. A
-/// later full outline builder can refine exact path geometry while reusing the
-/// same operand/subroutine machinery.
+/// Cubic bounds solve the derivative roots for each axis instead of merely
+/// including control points. That keeps public glyph bounds tight while still
+/// reusing the same operand/subroutine machinery as the outline builder.
 pub fn bounds(comptime Context: type, context: *Context, bytes: []const u8) Error!BoundsInfo {
     var executor = BoundsExecutor(Context){ .context = context };
     _ = try executor.runCharString(bytes, 0);
@@ -671,16 +670,19 @@ fn BoundsExecutor(comptime Context: type) type {
         }
 
         fn curveByDeltas(self: *Self, dx1: f32, dy1: f32, dx2: f32, dy2: f32, dx3: f32, dy3: f32) Error!void {
-            self.includePoint(self.x, self.y);
-            const c0_x = self.x + dx1;
-            const c0_y = self.y + dy1;
+            const p0_x = self.x;
+            const p0_y = self.y;
+            const c0_x = p0_x + dx1;
+            const c0_y = p0_y + dy1;
             const c1_x = c0_x + dx2;
             const c1_y = c0_y + dy2;
-            self.x = c1_x + dx3;
-            self.y = c1_y + dy3;
-            self.includePoint(c0_x, c0_y);
-            self.includePoint(c1_x, c1_y);
-            self.includePoint(self.x, self.y);
+            const p3_x = c1_x + dx3;
+            const p3_y = c1_y + dy3;
+            self.includePoint(p0_x, p0_y);
+            self.includeCubicExtrema(p0_x, p0_y, c0_x, c0_y, c1_x, c1_y, p3_x, p3_y);
+            self.includePoint(p3_x, p3_y);
+            self.x = p3_x;
+            self.y = p3_y;
             self.bounds_info.curve_count += 1;
             if (self.outline) |outline| {
                 try outline.commands.append(self.allocator.?, .{ .cubic_to = .{
@@ -688,6 +690,19 @@ fn BoundsExecutor(comptime Context: type) type {
                     .c1 = .{ .x = c1_x, .y = c1_y },
                     .end = .{ .x = self.x, .y = self.y },
                 } });
+            }
+        }
+
+        fn includeCubicExtrema(self: *Self, p0_x: f32, p0_y: f32, p1_x: f32, p1_y: f32, p2_x: f32, p2_y: f32, p3_x: f32, p3_y: f32) void {
+            var roots: [4]f32 = undefined;
+            var root_count: usize = 0;
+            appendCubicDerivativeRoots(&roots, &root_count, p0_x, p1_x, p2_x, p3_x);
+            appendCubicDerivativeRoots(&roots, &root_count, p0_y, p1_y, p2_y, p3_y);
+            for (roots[0..root_count]) |t| {
+                self.includePoint(
+                    cubicAt(p0_x, p1_x, p2_x, p3_x, t),
+                    cubicAt(p0_y, p1_y, p2_y, p3_y, t),
+                );
             }
         }
 
@@ -777,6 +792,41 @@ fn foldDefaultBlend(stack: *[max_stack]Value, stack_len: *usize, target_count_va
     // while preserving any unrelated operands below this blend group.
     stack_len.* = start + target_count;
     _ = stack;
+}
+
+fn appendCubicDerivativeRoots(roots: *[4]f32, root_count: *usize, p0: f32, p1: f32, p2: f32, p3: f32) void {
+    const a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
+    const b = 2.0 * (p0 - 2.0 * p1 + p2);
+    const c = p1 - p0;
+    const epsilon = 0.000001;
+    if (@abs(a) <= epsilon) {
+        if (@abs(b) <= epsilon) return;
+        appendUnitRoot(roots, root_count, -c / b);
+        return;
+    }
+    const discriminant = b * b - 4.0 * a * c;
+    if (discriminant < 0) return;
+    if (discriminant <= epsilon) {
+        appendUnitRoot(roots, root_count, -b / (2.0 * a));
+        return;
+    }
+    const sqrt_discriminant = @sqrt(discriminant);
+    appendUnitRoot(roots, root_count, (-b + sqrt_discriminant) / (2.0 * a));
+    appendUnitRoot(roots, root_count, (-b - sqrt_discriminant) / (2.0 * a));
+}
+
+fn appendUnitRoot(roots: *[4]f32, root_count: *usize, t: f32) void {
+    if (t <= 0 or t >= 1) return;
+    for (roots[0..root_count.*]) |existing| {
+        if (@abs(existing - t) <= 0.000001) return;
+    }
+    roots[root_count.*] = t;
+    root_count.* += 1;
+}
+
+fn cubicAt(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) f32 {
+    const mt = 1.0 - t;
+    return mt * mt * mt * p0 + 3.0 * mt * mt * t * p1 + 3.0 * mt * t * t * p2 + t * t * t * p3;
 }
 
 fn readNumber(bytes: []const u8, offset: *usize, first: u8) Error!Value {
@@ -880,7 +930,7 @@ test "CFF2 charstring bounds tracks moves and lines" {
     try std.testing.expect(parsed.scan.has_endchar);
 }
 
-test "CFF2 charstring bounds includes cubic control points" {
+test "CFF2 charstring bounds solves cubic extrema" {
     const Context = struct {
         pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
             return null;
@@ -892,17 +942,41 @@ test "CFF2 charstring bounds includes cubic control points" {
     };
 
     var context = Context{};
-    // rmoveto(0, 0); rrcurveto(50, 0, 0, 50, 50, 0); endchar.
-    const parsed = try bounds(Context, &context, &.{ 139, 139, 21, 189, 139, 139, 189, 189, 139, 8, 14 });
+    // rmoveto(0, 0); rrcurveto(50, 100, 0, 0, 50, -100); endchar.
+    // Control points reach y=100, but the curve itself peaks at y=75.
+    const parsed = try bounds(Context, &context, &.{ 139, 139, 21, 189, 239, 139, 139, 189, 39, 8, 14 });
     try std.testing.expect(parsed.has_bounds);
     try std.testing.expectEqual(@as(f32, 0), parsed.x_min);
     try std.testing.expectEqual(@as(f32, 0), parsed.y_min);
     try std.testing.expectEqual(@as(f32, 100), parsed.x_max);
-    try std.testing.expectEqual(@as(f32, 50), parsed.y_max);
+    try std.testing.expectApproxEqAbs(@as(f32, 75), parsed.y_max, 0.001);
     try std.testing.expectEqual(@as(usize, 1), parsed.move_count);
     try std.testing.expectEqual(@as(usize, 0), parsed.line_count);
     try std.testing.expectEqual(@as(usize, 1), parsed.curve_count);
     try std.testing.expect(parsed.scan.has_endchar);
+}
+
+test "CFF2 charstring bounds excludes off-curve controls when monotonic" {
+    const Context = struct {
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var context = Context{};
+    // rmoveto(0, 0); rrcurveto(0, 100, 100, -100, 100, 0); endchar.
+    // The off-curve control reaches y=100, but the curve extrema stay inside.
+    const parsed = try bounds(Context, &context, &.{ 139, 139, 21, 139, 239, 239, 39, 239, 139, 8, 14 });
+    try std.testing.expect(parsed.has_bounds);
+    try std.testing.expectEqual(@as(f32, 0), parsed.x_min);
+    try std.testing.expectEqual(@as(f32, 0), parsed.y_min);
+    try std.testing.expectEqual(@as(f32, 200), parsed.x_max);
+    try std.testing.expectApproxEqAbs(@as(f32, 44.44445), parsed.y_max, 0.001);
+    try std.testing.expectEqual(@as(usize, 1), parsed.curve_count);
 }
 
 test "CFF2 charstring default blend folds deltas" {

@@ -296,6 +296,16 @@ Current local snapshot after the Nastaliq parity work:
   format-3 GPOS chaining lookup. Amiri's 209 cached context Coverages cost
   5,706 bytes without expanding format-2 ranges. Full parity for all three
   corpora remained unchanged.
+- Coverage-only GPOS chaining lookups now skip the lookup-level exact group
+  preflight because their grouped collector performs the same lookup as its
+  first operation for every glyph. A miss no longer scans the run once in the
+  preflight and once in the collector, while a hit no longer scans the prefix
+  twice. This adds no accelerator storage. Four fixed-CPU medians reduced Amiri
+  `fa-thelittleprince` from `1071.944 ns/glyph` to
+  `1064.520 ns/glyph`, about `0.7%`, and a four-median 31-sample
+  `fa-words` check improved from `1866.696` to `1851.023 ns/glyph`, about
+  `0.8%`. Roboto `en-words` remained flat (`406.629` versus
+  `406.511 ns/glyph`), and full parity for all three corpora was unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

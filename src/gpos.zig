@@ -1255,7 +1255,17 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         else
             glyphRunDigest(glyphs, lookup_flag, lookup_options);
         if (run_digest.isEmpty() or !accelerator.coverage_digest.mayIntersect(run_digest)) return;
-        if (accelerator.coverage_groups.len != 0 and !lookupCoverageGroupsMayMatchRun(accelerator.coverage_groups, accelerator.coverage_group_slots, glyphs, lookup_flag, lookup_options)) return;
+        // The coverage-only chaining collector performs this same exact group
+        // lookup as its first action for every glyph. Running a whole-run exact
+        // preflight here only duplicates the scan: a miss costs the same work,
+        // while a hit scans the prefix twice. Other lookup kinds do not own an
+        // equivalent grouped dispatcher and retain the preflight.
+        if (!accelerator.chaining_coverage_only and
+            accelerator.coverage_groups.len != 0 and
+            !lookupCoverageGroupsMayMatchRun(accelerator.coverage_groups, accelerator.coverage_group_slots, glyphs, lookup_flag, lookup_options))
+        {
+            return;
+        }
     }
     if (lookup_type == 1) {
         try collectSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);

@@ -15,6 +15,7 @@ const cmap_variation = @import("opentype/cmap_variation.zig");
 const ift_mod = @import("opentype/ift.zig");
 const kerx_mod = @import("opentype/kerx.zig");
 const ltag_mod = @import("opentype/ltag.zig");
+const math_mod = @import("opentype/math.zig");
 const meta_mod = @import("opentype/meta.zig");
 const metric_variation_mod = @import("opentype/metric_variation.zig");
 const mvar_mod = @import("opentype/mvar.zig");
@@ -48,6 +49,9 @@ pub const FontFormat = enum {
 };
 
 pub const Cff2Info = cff2_mod.Info;
+pub const MathInfo = math_mod.Info;
+pub const MathConstantsInfo = math_mod.Constants;
+pub const MathValueRecordInfo = math_mod.ValueRecord;
 
 pub const CvarInfo = cvar_mod.Info;
 pub const CvarTupleInfo = cvar_mod.TupleInfo;
@@ -686,6 +690,7 @@ pub const Font = struct {
     feat: ?TableRecord,
     trak: ?TableRecord,
     name: ?TableRecord,
+    math: ?TableRecord,
     meta: ?TableRecord,
     post: ?TableRecord,
     pclt: ?TableRecord,
@@ -799,6 +804,7 @@ pub const Font = struct {
         const feat = findTable(records, "feat");
         const trak = findTable(records, "trak");
         const name = findTable(records, "name");
+        const math = findTable(records, "MATH");
         const meta = findTable(records, "meta");
         const post = findTable(records, "post");
         const pclt = findTable(records, "PCLT");
@@ -861,6 +867,7 @@ pub const Font = struct {
         if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
         if (ankr) |ankr_table| try validateAnkrTable(data, ankr_table, glyph_count);
         if (morx) |morx_table| try validateMorxTable(data, morx_table, glyph_count);
+        if (math) |math_table| try validateMathTable(data, math_table);
         if (feat) |feat_table| try validateFeatTable(data, feat_table);
         if (trak) |trak_table| try validateTrakTable(data, trak_table);
         if (meta) |meta_table| try validateMetaTable(data, meta_table);
@@ -983,6 +990,7 @@ pub const Font = struct {
             .feat = feat,
             .trak = trak,
             .name = name,
+            .math = math,
             .meta = meta,
             .post = post,
             .pclt = pclt,
@@ -1268,6 +1276,18 @@ pub const Font = struct {
         const ltag = self.ltag orelse return try allocator.alloc(LtagRecordInfo, 0);
         try validateSfntTableChecksum(self.data, ltag);
         return try ltag_mod.records(allocator, self.data, ltag.offset, ltag.length);
+    }
+
+    /// Read validated constants metadata from the optional OpenType `MATH` table.
+    pub fn mathInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?MathInfo {
+        const math = self.math orelse return null;
+        try validateSfntTableChecksum(self.data, math);
+        try validateMathTable(self.data, math);
+        return try math_mod.info(allocator, self.data, math.offset, math.length);
+    }
+
+    pub fn freeMathInfo(_: *const Font, allocator: std.mem.Allocator, info_value: MathInfo) void {
+        math_mod.free(allocator, info_value);
     }
 
     /// Read validated records from the optional SFNT `meta` table.
@@ -4215,6 +4235,10 @@ fn validateCffGlyphCount(data: []const u8, cff: TableRecord, glyph_count: u16) F
 
 fn validateMetaTable(data: []const u8, meta: TableRecord) FontError!void {
     return try meta_mod.validate(data, meta.offset, meta.length);
+}
+
+fn validateMathTable(data: []const u8, math: TableRecord) FontError!void {
+    return try math_mod.validate(data, math.offset, math.length);
 }
 
 fn validateDsigTable(data: []const u8, dsig: TableRecord) FontError!void {
@@ -18548,6 +18572,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .feat = null,
         .trak = null,
         .name = null,
+        .math = null,
         .meta = null,
         .post = null,
         .pclt = null,
@@ -18621,6 +18646,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .feat = null,
         .trak = null,
         .name = null,
+        .math = null,
         .meta = null,
         .post = null,
         .pclt = null,
@@ -18694,6 +18720,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .feat = null,
         .trak = null,
         .name = null,
+        .math = null,
         .meta = null,
         .post = null,
         .pclt = null,
@@ -18778,6 +18805,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .feat = null,
         .trak = null,
         .name = null,
+        .math = null,
         .meta = null,
         .post = null,
         .pclt = null,
@@ -18851,6 +18879,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .feat = null,
         .trak = null,
         .name = null,
+        .math = null,
         .meta = null,
         .post = null,
         .pclt = null,
@@ -18924,6 +18953,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .feat = null,
         .trak = null,
         .name = null,
+        .math = null,
         .meta = null,
         .post = null,
         .pclt = null,
@@ -18997,6 +19027,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .feat = null,
         .trak = null,
         .name = null,
+        .math = null,
         .meta = null,
         .post = null,
         .pclt = null,
@@ -19090,6 +19121,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .feat = null,
         .trak = null,
         .name = null,
+        .math = null,
         .meta = null,
         .post = null,
         .pclt = null,

@@ -168,6 +168,10 @@ pub fn buildIftTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try iftTtfTables(allocator));
 }
 
+pub fn buildMathTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try mathTtfTables(allocator));
+}
+
 pub fn buildSvgTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try svgTtfTables(allocator));
 }
@@ -1151,6 +1155,21 @@ fn iftTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "IFT ", .data = try iftPatchMapTable(allocator) };
     tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    return tables;
+}
+
+fn mathTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "MATH", .data = try mathTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     return tables;
 }
@@ -3191,6 +3210,23 @@ fn colrV1IndirectPaintColrGlyphCycleTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 51, 2);
     bytes[53] = 11;
     writeU16(bytes, 54, 1);
+    return bytes;
+}
+
+fn mathTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 242);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 224);
+    writeU16(bytes, 8, 232);
+    writeI16(bytes, 10, 80);
+    writeI16(bytes, 12, 60);
+    writeU16(bytes, 14, 1000);
+    writeU16(bytes, 16, 1200);
+    writeI16(bytes, 18, 11);
+    writeI16(bytes, 222, 55);
     return bytes;
 }
 

@@ -114,6 +114,9 @@ pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
 pub const TrueTypeProgramInstructionInfo = @import("font.zig").TrueTypeProgramInstructionInfo;
 pub const TrueTypeProgramKind = @import("font.zig").TrueTypeProgramKind;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
+pub const MathInfo = @import("font.zig").MathInfo;
+pub const MathConstantsInfo = @import("font.zig").MathConstantsInfo;
+pub const MathValueRecordInfo = @import("font.zig").MathValueRecordInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const IftPatchMapInfo = @import("font.zig").IftPatchMapInfo;
 pub const IftTableKeyedPatchInfo = @import("font.zig").IftTableKeyedPatchInfo;
@@ -540,6 +543,60 @@ test "lazy CFF2 metadata revalidates borrowed table bytes" {
     bytes[cff2_offset orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.cff2Info());
+}
+
+test "MATH constants metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMathTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.mathInfo(allocator)).?;
+    defer font.freeMathInfo(allocator, info);
+    try std.testing.expectEqual(@as(u32, 0x00010000), info.version);
+    try std.testing.expectEqual(@as(usize, 10), info.constants_offset);
+    try std.testing.expectEqual(@as(usize, 224), info.glyph_info_offset);
+    try std.testing.expectEqual(@as(usize, 232), info.variants_offset);
+    try std.testing.expectEqual(@as(i16, 80), info.constants.script_percent_scale_down);
+    try std.testing.expectEqual(@as(i16, 60), info.constants.script_script_percent_scale_down);
+    try std.testing.expectEqual(@as(u16, 1000), info.constants.delimited_sub_formula_min_height);
+    try std.testing.expectEqual(@as(u16, 1200), info.constants.display_operator_min_height);
+    try std.testing.expectEqual(@as(usize, 51), info.constants.value_records.len);
+    try std.testing.expectEqual(MathValueRecordInfo{ .value = 11, .device_offset = 0 }, info.constants.value_records[0]);
+    try std.testing.expectEqual(@as(i16, 55), info.constants.radical_degree_bottom_raise_percent);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.mathInfo(allocator)) == null);
+}
+
+test "lazy MATH metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMathTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const info = (try font.mathInfo(allocator)).?;
+    defer font.freeMathInfo(allocator, info);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var math_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "MATH")) math_offset = table.offset;
+    }
+    bytes[math_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.mathInfo(allocator));
 }
 
 test "minimal OTF exposes compact maxp metadata" {

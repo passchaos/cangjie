@@ -8318,7 +8318,7 @@ fn kernFormat0Body(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.G
     return null;
 }
 
-fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour_count: u16, transform: Transform, gvar_deltas: ?[]const GvarScaledPointDelta, gvar_has_delta: ?[]const bool) FontError!void {
+fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour_count: u16, transform: Transform, gvar_deltas: ?[]GvarScaledPointDelta, gvar_has_delta: ?[]const bool) FontError!void {
     if (contour_count == 0) return;
     var r = bin.Reader.init(data);
     _ = try r.readI16();
@@ -8391,28 +8391,26 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
     }
     if (gvar_deltas) |deltas| {
         if (gvar_has_delta) |has_delta| {
-            if (has_delta.len < points.len) return error.BadSfnt;
-            var original = try outline.allocator.alloc(gvar_mod.Point, points.len);
-            defer outline.allocator.free(original);
-            var delta_points = try outline.allocator.alloc(gvar_mod.Point, points.len);
-            defer outline.allocator.free(delta_points);
-            for (points, 0..) |point, point_index| {
-                original[point_index] = .{ .x = @floatFromInt(point.x), .y = @floatFromInt(point.y) };
-                delta_points[point_index] = .{ .x = 0, .y = 0 };
-            }
-            for (deltas) |delta| {
-                if (delta.point >= points.len) continue; // Ignore phantom-point deltas for outline geometry.
-                delta_points[delta.point] = .{ .x = delta.x, .y = delta.y };
-            }
-            var contour_start: usize = 0;
-            for (end_pts) |end_pt| {
-                const contour_end: usize = end_pt;
-                try gvar_mod.interpolateContourDeltas(original[contour_start .. contour_end + 1], has_delta[contour_start .. contour_end + 1], delta_points[contour_start .. contour_end + 1]);
-                contour_start = contour_end + 1;
-            }
-            for (points, delta_points) |*point, delta| {
-                point.x = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.x)) + delta.x));
-                point.y = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.y)) + delta.y));
+            if (deltas.len != 0) {
+                if (has_delta.len < points.len) return error.BadSfnt;
+                if (deltas.len < points.len) return error.BadSfnt;
+                const real_deltas = deltas[0..points.len];
+                var original = try outline.allocator.alloc(gvar_mod.Point, points.len);
+                defer outline.allocator.free(original);
+                for (points, 0..) |point, point_index| {
+                    original[point_index] = .{ .x = @floatFromInt(point.x), .y = @floatFromInt(point.y) };
+                    if (real_deltas[point_index].point != point_index) return error.BadSfnt;
+                }
+                var contour_start: usize = 0;
+                for (end_pts) |end_pt| {
+                    const contour_end: usize = end_pt;
+                    try gvar_mod.interpolateContourScaledDeltas(original[contour_start .. contour_end + 1], has_delta[contour_start .. contour_end + 1], real_deltas[contour_start .. contour_end + 1]);
+                    contour_start = contour_end + 1;
+                }
+                for (points, real_deltas) |*point, delta| {
+                    point.x = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.x)) + delta.x));
+                    point.y = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.y)) + delta.y));
+                }
             }
         } else {
             for (deltas) |delta| {

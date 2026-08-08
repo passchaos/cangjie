@@ -315,7 +315,46 @@ pub fn interpolateContourDeltas(original: []const Point, has_delta: []const bool
     }
 }
 
+pub fn interpolateContourScaledDeltas(original: []const Point, has_delta: []const bool, deltas: []ScaledPointDelta) Error!void {
+    if (original.len != has_delta.len or original.len != deltas.len) return error.BadSfnt;
+    if (original.len == 0) return;
+    var first_delta: ?usize = null;
+    for (has_delta, 0..) |has, index| {
+        if (has) {
+            first_delta = index;
+            break;
+        }
+    }
+    const first = first_delta orelse return;
+    var current = first;
+    var index = (first + 1) % original.len;
+    while (index != first) : (index = (index + 1) % original.len) {
+        if (has_delta[index]) {
+            interpolateScaledDeltaRun(original, deltas, current, index);
+            current = index;
+        }
+    }
+    if (current == first) {
+        for (deltas, 0..) |*delta, point_index| {
+            if (point_index != first) {
+                delta.x = deltas[first].x;
+                delta.y = deltas[first].y;
+            }
+        }
+    } else {
+        interpolateScaledDeltaRun(original, deltas, current, first);
+    }
+}
+
 fn interpolateDeltaRun(original: []const Point, deltas: []Point, left_ref: usize, right_ref: usize) void {
+    var index = (left_ref + 1) % original.len;
+    while (index != right_ref) : (index = (index + 1) % original.len) {
+        deltas[index].x = interpolateAxis(original[index].x, original[left_ref].x, original[right_ref].x, deltas[left_ref].x, deltas[right_ref].x);
+        deltas[index].y = interpolateAxis(original[index].y, original[left_ref].y, original[right_ref].y, deltas[left_ref].y, deltas[right_ref].y);
+    }
+}
+
+fn interpolateScaledDeltaRun(original: []const Point, deltas: []ScaledPointDelta, left_ref: usize, right_ref: usize) void {
     var index = (left_ref + 1) % original.len;
     while (index != right_ref) : (index = (index + 1) % original.len) {
         deltas[index].x = interpolateAxis(original[index].x, original[left_ref].x, original[right_ref].x, deltas[left_ref].x, deltas[right_ref].x);
@@ -1415,4 +1454,20 @@ test "gvar IUP interpolates between explicit deltas" {
     try interpolateContourDeltas(&original, &has, &deltas);
     try std.testing.expectEqual(@as(f32, 5), deltas[1].x);
     try std.testing.expectEqual(@as(f32, 10), deltas[3].x);
+}
+
+test "gvar IUP interpolates scaled dense deltas in place" {
+    const original = [_]Point{ .{ .x = 0, .y = 0 }, .{ .x = 5, .y = 0 }, .{ .x = 10, .y = 0 }, .{ .x = 15, .y = 0 } };
+    const has = [_]bool{ true, false, true, false };
+    var deltas = [_]ScaledPointDelta{
+        .{ .point = 0, .x = 0, .y = 0 },
+        .{ .point = 1, .x = 0, .y = 0 },
+        .{ .point = 2, .x = 10, .y = 0 },
+        .{ .point = 3, .x = 0, .y = 0 },
+    };
+    try interpolateContourScaledDeltas(&original, &has, &deltas);
+    try std.testing.expectEqual(@as(f32, 5), deltas[1].x);
+    try std.testing.expectEqual(@as(f32, 10), deltas[3].x);
+    try std.testing.expectEqual(@as(u16, 1), deltas[1].point);
+    try std.testing.expectEqual(@as(u16, 3), deltas[3].point);
 }

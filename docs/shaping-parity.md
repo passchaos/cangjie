@@ -418,6 +418,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
     --font ~/Work/harfbuzz/test/shape/data/in-house/fonts/85414f2552b654585b7a8d13dcc3e8fd9f7970a3.ttf \
     --text-file tests/data/marchen-use-tests.txt --direction ltr
   ```
+- Cham passes the five script-specific cases extracted from upstream
+  `in-house/use-syllable.tests` across its two fixture fonts. These cover
+  above/below vowels, all four medial positions, `pref` reordering, ZWNJ
+  handling, and fonts without a usable invisible glyph. Retained corpora are
+  `tests/data/cham-use-font1.txt` (`checksum=9aef257a83ae9578`) and
+  `tests/data/cham-use-font2.txt` (`checksum=2a55c08e9d3d7e1d`).
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -441,8 +447,8 @@ goal is active, not complete.
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
-  and Marchen gates. Other USE scripts/fonts and fuzz/corpus failures still
-  need retained gates before this can be called broad USE parity.
+  Marchen, and Cham gates. Other USE scripts/fonts and fuzz/corpus failures
+  still need retained gates before this can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

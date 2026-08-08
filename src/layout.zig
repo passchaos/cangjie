@@ -3111,6 +3111,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const source_features = &scratch.source_features;
     const source_syllables = &scratch.source_syllables;
     const source_pref_substituted = &scratch.source_pref_substituted;
+    const glyph_output_indices = &scratch.glyph_output_indices;
 
     const shape_profile = buffer.shape_profile;
     const profile_io = buffer.profile_io;
@@ -3413,6 +3414,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const attachment_links = &scratch.attachment_links;
     try attachment_links.resize(buffer.allocator, glyph_ids.items.len);
     @memset(attachment_links.items, .{});
+    try glyph_output_indices.resize(buffer.allocator, glyph_ids.items.len);
+    @memset(glyph_output_indices.items, std.math.maxInt(usize));
     for (glyph_ids.items, 0..) |glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
@@ -3450,6 +3453,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
         const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
         const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint) and !was_substituted;
+        // HarfBuzz removes an untouched default-ignorable when the font has no
+        // usable invisible/space glyph. Do this after GPOS so the character was
+        // still available to every contextual lookup, then remap attachment
+        // links below for the compacted output stream.
+        if (hide_default_ignorable and invisible_glyph_id == 0) {
+            previous_glyph = glyph_id;
+            continue;
+        }
         const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
         const zero_mark_advance = glyph_class == .mark and
             !mark_attachment and
@@ -3482,6 +3493,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @as(f32, @floatFromInt(value.top_side_bearing)) * scale
         else
             0.0;
+        glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
         try buffer.glyphs.append(buffer.allocator, .{
             .glyph_id = output_glyph_id,
             .codepoint = source_codepoint,
@@ -3498,7 +3510,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         previous_glyph = glyph_id;
     }
-    propagateGlyphAttachmentOffsets(buffer.glyphs.items[segment_glyph_start..], attachment_links.items, lookup_options);
+    compactAttachmentLinks(
+        attachment_links.items,
+        glyph_output_indices.items,
+        buffer.glyphs.items.len - segment_glyph_start,
+    );
+    propagateGlyphAttachmentOffsets(
+        buffer.glyphs.items[segment_glyph_start..],
+        attachment_links.items[0 .. buffer.glyphs.items.len - segment_glyph_start],
+        lookup_options,
+    );
     if (shape_profile) |p| p.position_ns += shapeProfileElapsed(position_start, profile_io);
 }
 
@@ -3686,6 +3707,36 @@ fn attachmentLinkForAdjustment(adjustment: gpos.Adjustment) attachment.Link {
         .mark => .{ .kind = .mark, .parent_index = adjustment.attachment_parent_index },
         .cursive => .{ .kind = .cursive, .parent_index = adjustment.attachment_parent_index },
     };
+}
+
+fn remapAttachmentLinkForOutput(link: attachment.Link, output_indices: []const usize) attachment.Link {
+    const parent = link.parent_index orelse return link;
+    if (parent >= output_indices.len) return .{};
+    const output_parent = output_indices[parent];
+    if (output_parent == std.math.maxInt(usize)) return .{};
+    return .{ .kind = link.kind, .parent_index = output_parent };
+}
+
+fn compactAttachmentLinks(links: []attachment.Link, output_indices: []const usize, output_len: usize) void {
+    for (output_indices, 0..) |output_index, input_index| {
+        if (output_index == std.math.maxInt(usize) or output_index >= output_len) continue;
+        links[output_index] = remapAttachmentLinkForOutput(links[input_index], output_indices);
+    }
+}
+
+test "attachment links remap after hidden glyph removal" {
+    const removed = std.math.maxInt(usize);
+    const output_indices = [_]usize{ 0, removed, 1 };
+    var links = [_]attachment.Link{
+        .{},
+        .{},
+        .{ .kind = .mark, .parent_index = 0 },
+    };
+
+    compactAttachmentLinks(&links, &output_indices, 2);
+
+    try std.testing.expectEqual(attachment.Link{}, links[0]);
+    try std.testing.expectEqual(attachment.Link{ .kind = .mark, .parent_index = 0 }, links[1]);
 }
 
 fn propagateGlyphAttachmentOffsets(glyphs: []GlyphPosition, links: []attachment.Link, options: LookupOptions) void {

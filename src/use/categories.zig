@@ -90,6 +90,28 @@ pub fn forCodepoint(codepoint: u21) Category {
         => .medial_below,
         0xa9be => .medial_post,
         0xa9c0 => .halant,
+        0xaa00...0xaa28,
+        0xaa40...0xaa42,
+        0xaa44...0xaa4b,
+        0xaa50...0xaa59,
+        => .base,
+        0xaa29 => .vowel_mod_above,
+        0xaa2a...0xaa2c,
+        0xaa2e,
+        0xaa31,
+        => .vowel_above,
+        0xaa2d,
+        0xaa32,
+        => .vowel_below,
+        0xaa2f...0xaa30 => .vowel_pre,
+        0xaa33 => .medial_post,
+        0xaa34 => .medial_pre,
+        0xaa35 => .medial_above,
+        0xaa36 => .medial_below,
+        0xaa43,
+        0xaa4c,
+        => .final_above,
+        0xaa4d => .final_post,
         0x11c72...0x11c8f => .base,
         0x11c92...0x11ca7,
         0x11ca9...0x11caf,
@@ -195,6 +217,15 @@ test "Javanese USE categories distinguish prebase and medial signs" {
 test "Marchen USE categories distinguish subjoined letters and vowels" {
     const codepoints = [_]u21{ 0x11c72, 0x11c92, 0x11ca9, 0x11cb0, 0x11cb1, 0x11cb3, 0x11cb4, 0x11cb5 };
     const expected = [_]Category{ .base, .cons_sub, .cons_sub, .vowel_below, .vowel_pre, .vowel_above, .vowel_post, .vowel_mod_above };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Cham USE categories distinguish medial positions" {
+    const codepoints = [_]u21{ 0xaa00, 0xaa29, 0xaa2d, 0xaa34, 0xaa35, 0xaa36, 0xaa43, 0xaa4d };
+    const expected = [_]Category{ .base, .vowel_mod_above, .vowel_below, .medial_pre, .medial_above, .medial_below, .final_above, .final_post };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

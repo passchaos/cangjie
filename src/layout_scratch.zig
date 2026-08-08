@@ -18,12 +18,14 @@ pub const ShapeScratch = struct {
     source_features: std.ArrayList(u32) = .empty,
     source_syllables: std.ArrayList(u8) = .empty,
     source_pref_substituted: std.ArrayList(bool) = .empty,
+    glyph_output_indices: std.ArrayList(usize) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
     attachment_links: std.ArrayList(@import("attachment.zig").Link) = .empty,
 
     pub fn deinit(self: *ShapeScratch, allocator: std.mem.Allocator) void {
         self.attachment_links.deinit(allocator);
         self.gpos_adjustments.deinit(allocator);
+        self.glyph_output_indices.deinit(allocator);
         self.source_pref_substituted.deinit(allocator);
         self.source_syllables.deinit(allocator);
         self.source_features.deinit(allocator);
@@ -54,6 +56,7 @@ pub const ShapeScratch = struct {
         self.source_features.clearRetainingCapacity();
         self.source_syllables.clearRetainingCapacity();
         self.source_pref_substituted.clearRetainingCapacity();
+        self.glyph_output_indices.clearRetainingCapacity();
         self.gpos_adjustments.clearRetainingCapacity();
         self.attachment_links.clearRetainingCapacity();
     }

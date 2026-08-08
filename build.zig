@@ -83,4 +83,23 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         shape_bench_cmd.addArgs(args);
     }
+
+    const glyph_bench_exe = b.addExecutable(.{
+        .name = "cangjie-glyph-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/glyph_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+            },
+        }),
+    });
+
+    const glyph_bench_step = b.step("glyph-bench", "Benchmark Cangjie glyph outline/raster hot paths");
+    const glyph_bench_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_bench_step.dependOn(&glyph_bench_cmd.step);
+    if (b.args) |args| {
+        glyph_bench_cmd.addArgs(args);
+    }
 }

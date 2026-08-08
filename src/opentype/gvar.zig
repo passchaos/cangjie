@@ -238,6 +238,58 @@ fn setDeltaField(delta: *PointDelta, field: DeltaField, value: i32) void {
     }
 }
 
+pub fn interpolateContourDeltas(original: []const Point, has_delta: []const bool, deltas: []Point) Error!void {
+    if (original.len != has_delta.len or original.len != deltas.len) return error.BadSfnt;
+    if (original.len == 0) return;
+    var first_delta: ?usize = null;
+    for (has_delta, 0..) |has, index| {
+        if (has) {
+            first_delta = index;
+            break;
+        }
+    }
+    const first = first_delta orelse return;
+    var current = first;
+    var index = (first + 1) % original.len;
+    while (index != first) : (index = (index + 1) % original.len) {
+        if (has_delta[index]) {
+            interpolateDeltaRun(original, deltas, current, index);
+            current = index;
+        }
+    }
+    if (current == first) {
+        for (deltas, 0..) |*delta, point_index| {
+            if (point_index != first) delta.* = deltas[first];
+        }
+    } else {
+        interpolateDeltaRun(original, deltas, current, first);
+    }
+}
+
+fn interpolateDeltaRun(original: []const Point, deltas: []Point, left_ref: usize, right_ref: usize) void {
+    var index = (left_ref + 1) % original.len;
+    while (index != right_ref) : (index = (index + 1) % original.len) {
+        deltas[index].x = interpolateAxis(original[index].x, original[left_ref].x, original[right_ref].x, deltas[left_ref].x, deltas[right_ref].x);
+        deltas[index].y = interpolateAxis(original[index].y, original[left_ref].y, original[right_ref].y, deltas[left_ref].y, deltas[right_ref].y);
+    }
+}
+
+fn interpolateAxis(coord: f32, ref1_coord: f32, ref2_coord: f32, ref1_delta: f32, ref2_delta: f32) f32 {
+    var in1 = ref1_coord;
+    var in2 = ref2_coord;
+    var d1 = ref1_delta;
+    var d2 = ref2_delta;
+    if (in1 > in2) {
+        std.mem.swap(f32, &in1, &in2);
+        std.mem.swap(f32, &d1, &d2);
+    }
+    if (in1 == in2 and d1 != d2) return 0;
+    if (coord <= in1) return d1;
+    if (coord >= in2) return d2;
+    if (in1 == in2) return d1;
+    return d1 + (coord - in1) * ((d2 - d1) / (in2 - in1));
+}
+
 pub fn applyPointDeltas(points: []Point, deltas: []const ScaledPointDelta) Error!void {
     for (deltas) |delta| {
         if (delta.point >= points.len) return error.BadSfnt;
@@ -939,4 +991,22 @@ test "gvar applies accumulated deltas to points" {
     try std.testing.expectEqual(@as(f32, 40), points[2].x);
     try std.testing.expectEqual(@as(f32, 65), points[2].y);
     try std.testing.expectError(error.BadSfnt, applyPointDeltas(&points, &.{.{ .point = 3, .x = 1, .y = 1 }}));
+}
+
+test "gvar IUP shifts contour with one explicit delta" {
+    const original = [_]Point{ .{ .x = 0, .y = 0 }, .{ .x = 10, .y = 0 }, .{ .x = 20, .y = 0 } };
+    const has = [_]bool{ false, true, false };
+    var deltas = [_]Point{ .{ .x = 0, .y = 0 }, .{ .x = 5, .y = -2 }, .{ .x = 0, .y = 0 } };
+    try interpolateContourDeltas(&original, &has, &deltas);
+    try std.testing.expectEqual(@as(f32, 5), deltas[0].x);
+    try std.testing.expectEqual(@as(f32, -2), deltas[2].y);
+}
+
+test "gvar IUP interpolates between explicit deltas" {
+    const original = [_]Point{ .{ .x = 0, .y = 0 }, .{ .x = 5, .y = 0 }, .{ .x = 10, .y = 0 }, .{ .x = 15, .y = 0 } };
+    const has = [_]bool{ true, false, true, false };
+    var deltas = [_]Point{ .{ .x = 0, .y = 0 }, .{ .x = 0, .y = 0 }, .{ .x = 10, .y = 0 }, .{ .x = 0, .y = 0 } };
+    try interpolateContourDeltas(&original, &has, &deltas);
+    try std.testing.expectEqual(@as(f32, 5), deltas[1].x);
+    try std.testing.expectEqual(@as(f32, 10), deltas[3].x);
 }

@@ -642,6 +642,7 @@ pub const Rasterizer = struct {
         else
             try self.allocator.alloc(u8, row_width);
         defer if (row_width > inline_coverage_counts.len) self.allocator.free(coverage_counts);
+        @memset(coverage_counts, 0);
         var inline_prepared_lines: [128]PreparedFillLine = undefined;
         const prepared_storage = if (lines.len <= inline_prepared_lines.len)
             inline_prepared_lines[0..lines.len]
@@ -658,7 +659,6 @@ pub const Rasterizer = struct {
 
         var y = min_y;
         while (y <= max_y) : (y += 1) {
-            @memset(coverage_counts, 0);
             var row_has_coverage = false;
             var row_min_x = max_x;
             var row_max_x = min_x;
@@ -735,6 +735,9 @@ pub const Rasterizer = struct {
                 if (inside == 0) continue;
                 target.blendUnchecked(x, y, coverage_lut[inside]);
             }
+            const clear_start: usize = @intCast(row_min_x - min_x);
+            const clear_end: usize = @intCast(row_max_x - min_x + 1);
+            @memset(coverage_counts[clear_start..clear_end], 0);
         }
     }
 

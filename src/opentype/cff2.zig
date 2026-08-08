@@ -145,17 +145,21 @@ pub fn charStringData(data: []const u8, offset: usize, length: usize, glyph_id: 
 }
 
 pub fn charStringScanInfo(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?CharStringScanInfo {
-    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count)) orelse return null;
+    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count, &.{})) orelse return null;
     return try charstring_mod.scan(CharStringScanContext, &execution.context, execution.charstring);
 }
 
 pub fn charStringBoundsInfo(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?CharStringBoundsInfo {
-    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count)) orelse return null;
+    return try charStringBoundsInfoAtCoords(data, offset, length, glyph_id, glyph_count, &.{});
+}
+
+pub fn charStringBoundsInfoAtCoords(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize, normalized_coords: []const f32) Error!?CharStringBoundsInfo {
+    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count, normalized_coords)) orelse return null;
     return try charstring_mod.bounds(CharStringScanContext, &execution.context, execution.charstring);
 }
 
 pub fn appendGlyphOutline(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize, outline: *glyph_mod.GlyphOutline) Error!?CharStringBoundsInfo {
-    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count)) orelse return null;
+    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count, &.{})) orelse return null;
     return try charstring_mod.appendOutline(CharStringScanContext, &execution.context, allocator, execution.charstring, outline);
 }
 
@@ -164,7 +168,7 @@ const CharStringExecutionContext = struct {
     context: CharStringScanContext,
 };
 
-fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?CharStringExecutionContext {
+fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize, normalized_coords: []const f32) Error!?CharStringExecutionContext {
     if (glyph_id >= glyph_count) return error.BadSfnt;
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     const table = data[offset .. offset + length];
@@ -186,6 +190,7 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
             .table = table,
             .vstore_offset = parsed.top_dict.vstore_offset,
             .default_vs_index = if (private_dict) |private| private.variation_store_index else null,
+            .normalized_coords = normalized_coords,
             .global_subrs_index = parsed.global_subrs_index,
             .local_subrs_index = if (private_dict) |private| private.local_subrs_index else null,
         },
@@ -207,6 +212,7 @@ const CharStringScanContext = struct {
     table: []const u8,
     vstore_offset: ?usize = null,
     default_vs_index: ?u16 = null,
+    normalized_coords: []const f32 = &.{},
     global_subrs_index: IndexInfo,
     local_subrs_index: ?IndexInfo = null,
 
@@ -221,7 +227,7 @@ const CharStringScanContext = struct {
 
     pub fn blendScalar(self: *CharStringScanContext, vs_index: u16, region_index: usize) Error!f32 {
         const offset = self.vstore_offset orelse return error.BadSfnt;
-        return try variation_mod.defaultScalar(self.table, offset, vs_index, region_index);
+        return try variation_mod.scalar(self.table, offset, vs_index, region_index, self.normalized_coords);
     }
 
     pub fn globalSubr(self: *CharStringScanContext, operand: i32) Error!?[]const u8 {
@@ -665,6 +671,16 @@ test "CFF2 resolves biased Global and Local Subr operands" {
     try std.testing.expect((try localSubrDataForOperand(&bytes, 0, bytes.len, 0, -106)) == null);
 }
 
+test "CFF2 charstring bounds accepts normalized variation coordinates" {
+    const bytes = testCff2BlendTable();
+    const default_bounds = (try charStringBoundsInfoAtCoords(&bytes, 0, bytes.len, 0, 1, &.{})).?;
+    try std.testing.expectEqual(@as(f32, 50), default_bounds.x_min);
+    try std.testing.expectEqual(@as(f32, 60), default_bounds.x_max);
+    const varied_bounds = (try charStringBoundsInfoAtCoords(&bytes, 0, bytes.len, 0, 1, &.{0.5})).?;
+    try std.testing.expectEqual(@as(f32, 60), varied_bounds.x_min);
+    try std.testing.expectEqual(@as(f32, 70), varied_bounds.x_max);
+}
+
 test "CFF2 scans glyph charstrings through biased subr calls" {
     const bytes = testCff2Table();
     const scanned = (try charStringScanInfo(&bytes, 0, bytes.len, 0, 2)).?;
@@ -809,5 +825,76 @@ fn testCff2SingleFdNoSelectTable() [52]u8 {
     bytes[49] = 19;
     bytes[50] = 0;
     bytes[51] = 0x03;
+    return bytes;
+}
+
+fn testCff2BlendTable() [98]u8 {
+    var bytes = [_]u8{0} ** 98;
+    bytes[0] = 2;
+    bytes[2] = 5;
+    std.mem.writeInt(u16, bytes[3..5], 7, .big);
+    bytes[5] = 159; // CharStrings offset 20.
+    bytes[6] = 17;
+    bytes[7] = 178; // FDArray offset 39.
+    bytes[8] = 12;
+    bytes[9] = 36;
+    bytes[10] = 194; // vstore offset 55.
+    bytes[11] = 24;
+
+    std.mem.writeInt(u32, bytes[12..16], 0, .big); // Empty Global Subrs INDEX.
+
+    std.mem.writeInt(u32, bytes[20..24], 1, .big); // CharStrings INDEX.
+    bytes[24] = 1;
+    bytes[25] = 1;
+    bytes[26] = 13;
+    bytes[27] = 189; // default x 50.
+    bytes[28] = 159; // delta x 20.
+    bytes[29] = 140; // blend count 1.
+    bytes[30] = 16;
+    bytes[31] = 139; // y 0.
+    bytes[32] = 21; // rmoveto.
+    bytes[33] = 149; // hlineto 10.
+    bytes[34] = 6;
+    bytes[35] = 14;
+
+    std.mem.writeInt(u32, bytes[39..43], 1, .big); // FDArray INDEX.
+    bytes[43] = 1;
+    bytes[44] = 1;
+    bytes[45] = 4;
+    bytes[46] = 140; // Private DICT size 1.
+    bytes[47] = 193; // Private DICT offset 54.
+    bytes[48] = 18;
+
+    bytes[49] = 0; // FDSelect format 0 for one glyph.
+    bytes[50] = 0;
+
+    bytes[54] = 0x0e; // Private DICT object: ignored operator with empty operands.
+
+    bytes[55] = 0;
+    bytes[56] = 43; // CFF2 VariationStore length, including this length field.
+    bytes[57] = 0;
+    bytes[58] = 1; // ItemVariationStore format.
+    std.mem.writeInt(u32, bytes[59..63], 20, .big); // VariationRegionList offset.
+    bytes[63] = 0;
+    bytes[64] = 1; // One ItemVariationData subtable.
+    std.mem.writeInt(u32, bytes[65..69], 12, .big); // ItemVariationData offset.
+    bytes[69] = 0;
+    bytes[70] = 1; // itemCount.
+    bytes[71] = 0;
+    bytes[72] = 0; // wordDeltaCount.
+    bytes[73] = 0;
+    bytes[74] = 1; // regionIndexCount.
+    bytes[75] = 0;
+    bytes[76] = 0; // region index 0.
+    bytes[77] = 0;
+    bytes[78] = 1; // axisCount.
+    bytes[79] = 0;
+    bytes[80] = 1; // regionCount.
+    bytes[81] = 0;
+    bytes[82] = 0; // start 0.
+    bytes[83] = 0x40;
+    bytes[84] = 0; // peak 1.
+    bytes[85] = 0x40;
+    bytes[86] = 0; // end 1.
     return bytes;
 }

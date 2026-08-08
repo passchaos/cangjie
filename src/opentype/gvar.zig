@@ -63,6 +63,12 @@ pub const TuplePayloadInfo = struct {
     y_deltas: PackedDeltasInfo,
 };
 
+pub const PointDelta = struct {
+    point: u16,
+    x: i32,
+    y: i32,
+};
+
 pub fn packedPointNumbersInfo(data: []const u8, offset: usize, limit: usize) Error!PointNumbersInfo {
     if (offset > data.len or limit > data.len or offset >= limit) return error.BadSfnt;
     var cursor = offset;
@@ -181,6 +187,46 @@ pub fn decodePackedDeltas(data: []const u8, offset: usize, limit: usize, out: []
     return cursor - offset;
 }
 
+const DeltaField = enum { x, y };
+
+fn decodePackedDeltasIntoPointField(data: []const u8, offset: usize, limit: usize, out: []PointDelta, field: DeltaField) Error!usize {
+    if (offset > data.len or limit > data.len or offset > limit) return error.BadSfnt;
+    var cursor = offset;
+    var written: usize = 0;
+    while (written < out.len) {
+        if (cursor >= limit) return error.BadSfnt;
+        const control = data[cursor];
+        cursor += 1;
+        const run_count = @as(usize, control & 0x3f) + 1;
+        if (run_count > out.len - written) return error.BadSfnt;
+        if ((control & 0x80) != 0) {
+            for (out[written .. written + run_count]) |*delta| setDeltaField(delta, field, 0);
+        } else if ((control & 0x40) != 0) {
+            const run_bytes = run_count * 2;
+            if (run_bytes > limit - cursor) return error.BadSfnt;
+            for (0..run_count) |index| {
+                setDeltaField(&out[written + index], field, std.mem.readInt(i16, data[cursor + index * 2 ..][0..2], .big));
+            }
+            cursor += run_bytes;
+        } else {
+            if (run_count > limit - cursor) return error.BadSfnt;
+            for (0..run_count) |index| {
+                setDeltaField(&out[written + index], field, @as(i8, @bitCast(data[cursor + index])));
+            }
+            cursor += run_count;
+        }
+        written += run_count;
+    }
+    return cursor - offset;
+}
+
+fn setDeltaField(delta: *PointDelta, field: DeltaField, value: i32) void {
+    switch (field) {
+        .x => delta.x = value,
+        .y => delta.y = value,
+    }
+}
+
 pub fn validate(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!void {
     _ = try info(data, offset, length, expected_glyph_count, expected_axis_count);
 }
@@ -269,6 +315,24 @@ pub fn tuplePayloadInfo(data: []const u8, offset: usize, length: usize, expected
         .y_deltas_offset = y_offset,
         .y_deltas = y_deltas,
     };
+}
+
+pub fn decodeTuplePointDeltas(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, all_points: []const u16, out: []PointDelta) Error!usize {
+    const all_points_count: ?usize = if (all_points.len == 0) null else all_points.len;
+    const payload = (try tuplePayloadInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph, all_points_count)) orelse return 0;
+    const count = if (payload.point_numbers.all_points) all_points.len else payload.point_numbers.count;
+    if (out.len < count) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+
+    if (payload.point_numbers.all_points) {
+        for (all_points, 0..) |point, index| out[index].point = point;
+    } else {
+        try decodePackedPointNumbers(table, payload.point_numbers_offset orelse return error.BadSfnt, payload.x_deltas_offset, out[0..count]);
+    }
+
+    _ = try decodePackedDeltasIntoPointField(table, payload.x_deltas_offset, payload.y_deltas_offset, out[0..count], .x);
+    _ = try decodePackedDeltasIntoPointField(table, payload.y_deltas_offset, payload.tuple_data_offset + payload.tuple_data_length, out[0..count], .y);
+    return count;
 }
 
 pub fn tupleScalar(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, normalized_coords: []const f32) Error!f32 {
@@ -410,6 +474,43 @@ fn readNormalizedF2Dot14(data: []const u8, offset: usize) Error!f32 {
     const value = std.mem.readInt(i16, data[offset..][0..2], .big);
     if (value < -0x4000 or value > 0x4000) return error.BadSfnt;
     return @as(f32, @floatFromInt(value)) / 16384.0;
+}
+
+fn decodePackedPointNumbers(data: []const u8, offset: usize, limit: usize, out: []PointDelta) Error!void {
+    const points_info = try packedPointNumbersInfo(data, offset, limit);
+    if (points_info.all_points or out.len < points_info.count) return error.BadSfnt;
+    var cursor = offset;
+    const first = data[cursor];
+    cursor += 1;
+    const point_count: usize = if ((first & 0x80) == 0) first else blk: {
+        cursor += 1;
+        break :blk points_info.count;
+    };
+    var remaining = point_count;
+    var last_point: usize = 0;
+    var out_index: usize = 0;
+    while (remaining != 0) {
+        const control = data[cursor];
+        cursor += 1;
+        const run_count = @as(usize, control & 0x7f) + 1;
+        const words = (control & 0x80) != 0;
+        for (0..run_count) |_| {
+            const delta: usize = if (words) blk: {
+                const value = readU16(data, cursor);
+                cursor += 2;
+                break :blk value;
+            } else blk: {
+                const value = data[cursor];
+                cursor += 1;
+                break :blk value;
+            };
+            last_point += delta;
+            if (last_point > std.math.maxInt(u16)) return error.BadSfnt;
+            out[out_index].point = @intCast(last_point);
+            out_index += 1;
+        }
+        remaining -= run_count;
+    }
 }
 
 fn glyphDataOffset(table: []const u8, offset: usize, size: u8, limit: usize) Error!usize {
@@ -615,4 +716,30 @@ test "gvar tuple payload metadata separates point and delta streams" {
     try std.testing.expectEqual(@as(usize, 1), payload.x_deltas.byte_count);
     try std.testing.expectEqual(@as(usize, 39), payload.y_deltas_offset);
     try std.testing.expectEqual(@as(usize, 1), payload.y_deltas.byte_count);
+}
+
+test "gvar tuple payload decodes point deltas" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 9, // offsets: 0, 18.
+        0, 1, 0, 10, // GlyphVariationData header.
+        0, 7, 0xa0, 0x00, // Tuple header: variationDataSize=7, embedded peak + private points.
+        0x40, 0x00, // embedded peak tuple.
+        1, 0, 5, // private point numbers: one point, point id 5.
+        0, 7, // x delta: +7.
+        0, 249, // y delta: -7.
+        0, // padding after tuple payload.
+    };
+    var out: [1]PointDelta = undefined;
+    const count = try decodeTuplePointDeltas(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{}, &out);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(u16, 5), out[0].point);
+    try std.testing.expectEqual(@as(i32, 7), out[0].x);
+    try std.testing.expectEqual(@as(i32, -7), out[0].y);
 }

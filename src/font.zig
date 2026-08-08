@@ -1092,11 +1092,14 @@ pub const Font = struct {
     fn gvarPointDeltasAtCoordsWithFlags(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, has_delta: ?[]bool) FontError!?[]GvarScaledPointDelta {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        return try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, try self.gvarTargetCount(glyph_id), has_delta);
+    }
+
+    fn gvarPointDeltasAtCoordsPrepared(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, target_count: usize, has_delta: ?[]bool) FontError!?[]GvarScaledPointDelta {
         const gvar = self.gvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
         const fvar_info = try readFvarInfo(self.data, fvar);
         try validateSfntTableChecksum(self.data, gvar);
-        const target_count = try self.gvarTargetCount(glyph_id);
         if (target_count > std.math.maxInt(u16)) return error.BadSfnt;
         const all_points = try allocator.alloc(u16, target_count);
         defer allocator.free(all_points);
@@ -3338,7 +3341,7 @@ pub const Font = struct {
         const target_count = try self.gvarTargetCount(glyph_id);
         const has_delta = try allocator.alloc(bool, target_count);
         defer allocator.free(has_delta);
-        const deltas = (try self.gvarPointDeltasAtCoordsWithFlags(allocator, glyph_id, normalized_coords, has_delta)) orelse return try self.glyphOutline(allocator, glyph_id);
+        const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, target_count, has_delta)) orelse return try self.glyphOutline(allocator, glyph_id);
         defer allocator.free(deltas);
         try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
         return outline;

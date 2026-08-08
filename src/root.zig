@@ -1722,6 +1722,37 @@ test "parses sbix PNG bitmap glyphs from Apple Color Emoji when available" {
     try std.testing.expect((try font.bestBitmapStrikePpem(40)) != null);
 }
 
+test "parses EBDT EBLC bitmap glyph metadata" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildEbdtBitmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const strikes = try font.bitmapStrikes(allocator);
+    defer allocator.free(strikes);
+    try std.testing.expectEqual(@as(usize, 1), strikes.len);
+    try std.testing.expectEqual(BitmapStrikeSource.eblc_ebdt, strikes[0].source);
+    try std.testing.expectEqual(@as(u16, 12), strikes[0].ppem);
+    try std.testing.expectEqual(@as(GlyphId, 1), strikes[0].start_glyph);
+    try std.testing.expectEqual(@as(GlyphId, 1), strikes[0].end_glyph);
+
+    const glyph_id = try font.glyphIndex('A');
+    const bitmap_info = (try font.bitmapGlyphInfo(glyph_id, 12)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.eblc_ebdt, bitmap_info.source);
+    try std.testing.expectEqual(@as(?u16, 1), bitmap_info.image_format);
+    try std.testing.expectEqual(@as(i16, 1), bitmap_info.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 9), bitmap_info.origin_offset_y);
+    try std.testing.expectEqual(@as(u32, 8), bitmap_info.width);
+    try std.testing.expectEqual(@as(u32, 1), bitmap_info.height);
+    try std.testing.expect(!bitmap_info.is_png);
+    try std.testing.expectEqual(@as(usize, 1), bitmap_info.data_length);
+    try std.testing.expect((try font.bitmapGlyphPng(glyph_id, 12)) == null);
+    try std.testing.expectEqual(@as(?u16, 12), try font.bestBitmapStrikePpem(12));
+}
+
 test "parses CBDT CBLC PNG bitmap glyphs" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

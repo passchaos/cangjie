@@ -156,6 +156,10 @@ pub fn buildCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cbdtPngTtfTables(allocator));
 }
 
+pub fn buildEbdtBitmapTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try ebdtBitmapTtfTables(allocator));
+}
+
 pub fn buildSvgTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try svgTtfTables(allocator));
 }
@@ -1083,6 +1087,22 @@ fn cbdtPngTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[0] = .{ .tag = "CBDT", .data = try cbdtPngTable(allocator) };
     tables[1] = .{ .tag = "CBLC", .data = try cblcPngTable(allocator) };
     tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn ebdtBitmapTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "EBDT", .data = try ebdtBitmapTable(allocator) };
+    tables[2] = .{ .tag = "EBLC", .data = try eblcBitmapTable(allocator) };
     tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
@@ -3117,6 +3137,59 @@ fn colrV1IndirectPaintColrGlyphCycleTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 51, 2);
     bytes[53] = 11;
     writeU16(bytes, 54, 1);
+    return bytes;
+}
+
+fn ebdtBitmapTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 4 + 5 + 1);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+    const off = 4;
+    bytes[off + 0] = 1; // height.
+    bytes[off + 1] = 8; // width: one byte per row for byte-aligned data.
+    bytes[off + 2] = 1; // bearingX.
+    bytes[off + 3] = 9; // bearingY.
+    bytes[off + 4] = 9; // advance.
+    bytes[off + 5] = 0b1010_0000;
+    return bytes;
+}
+
+fn eblcBitmapTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8 + 48 + 8 + 12);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, 20);
+    writeU32(bytes, size + 8, 1);
+    bytes[size + 16] = 9;
+    bytes[size + 17] = @bitCast(@as(i8, -2));
+    bytes[size + 18] = 9;
+    bytes[size + 28] = 9;
+    bytes[size + 29] = @bitCast(@as(i8, -2));
+    bytes[size + 30] = 9;
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 1);
+    bytes[size + 44] = 12;
+    bytes[size + 45] = 12;
+    bytes[size + 46] = 1;
+    bytes[size + 47] = 1;
+
+    const record = 56;
+    writeU16(bytes, record + 0, 1);
+    writeU16(bytes, record + 2, 1);
+    writeU32(bytes, record + 4, 8);
+
+    const subtable = 64;
+    writeU16(bytes, subtable + 0, 3);
+    writeU16(bytes, subtable + 2, 1); // EBDT image format 1: small metrics + bitmap data.
+    writeU32(bytes, subtable + 4, 4);
+    writeU16(bytes, subtable + 8, 0);
+    writeU16(bytes, subtable + 10, 6);
     return bytes;
 }
 

@@ -532,6 +532,7 @@ pub const BitmapGlyphInfo = struct {
 pub const BitmapStrikeSource = enum {
     sbix,
     cblc_cbdt,
+    eblc_ebdt,
 };
 
 pub const BitmapStrikeInfo = struct {
@@ -697,6 +698,8 @@ pub const Font = struct {
     sbix: ?TableRecord,
     cblc: ?TableRecord,
     cbdt: ?TableRecord,
+    eblc: ?TableRecord,
+    ebdt: ?TableRecord,
     glyf: ?TableRecord,
     cff: ?TableRecord,
     cmap_subtables: []CmapSubtable,
@@ -801,6 +804,8 @@ pub const Font = struct {
         const sbix = findTable(records, "sbix");
         const cblc = findTable(records, "CBLC");
         const cbdt = findTable(records, "CBDT");
+        const eblc = findTable(records, "EBLC");
+        const ebdt = findTable(records, "EBDT");
         const glyf = findTable(records, "glyf");
         const cff = findTable(records, "CFF ");
         const vhea = findTable(records, "vhea");
@@ -917,6 +922,7 @@ pub const Font = struct {
         if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
         if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
         if (cblc != null and cbdt != null) try validateCblcCbdtTables(data, cblc.?, cbdt.?, glyph_count);
+        if (eblc != null and ebdt != null) try validateCblcCbdtTables(data, eblc.?, ebdt.?, glyph_count);
         if (!is_ttc_face) try validateSfntTableChecksums(data, records);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
@@ -977,6 +983,8 @@ pub const Font = struct {
             .sbix = sbix,
             .cblc = cblc,
             .cbdt = cbdt,
+            .eblc = eblc,
+            .ebdt = ebdt,
             .glyf = glyf,
             .cff = cff,
             .cmap_subtables = cmap_subtables,
@@ -2695,6 +2703,49 @@ pub const Font = struct {
         return if (document) |value| value.data else null;
     }
 
+    fn appendBitmapStrikesFromLocationTables(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        strikes: *std.ArrayList(BitmapStrikeInfo),
+        location_table: TableRecord,
+        data_table: TableRecord,
+        source: BitmapStrikeSource,
+    ) FontError!void {
+        try validateSfntTableChecksum(self.data, location_table);
+        try validateSfntTableChecksum(self.data, data_table);
+        try validateCblcCbdtTables(self.data, location_table, data_table, self.glyph_count);
+        const strike_count = try cblcStrikeCount(self.data, location_table);
+        try strikes.ensureUnusedCapacity(allocator, strike_count);
+        for (0..strike_count) |strike_index| {
+            const strike = try cblcStrike(self.data, location_table, self.glyph_count, strike_index);
+            strikes.appendAssumeCapacity(.{
+                .source = source,
+                .ppem = strike.ppem,
+                .ppi = strike.ppi,
+                .start_glyph = strike.start_glyph,
+                .end_glyph = strike.end_glyph,
+            });
+        }
+    }
+
+    fn recordBestBitmapPpemFromLocationTables(
+        self: *const Font,
+        location_table: TableRecord,
+        data_table: TableRecord,
+        size_px: f32,
+        best_ppem: *?u16,
+        best_distance: *f32,
+    ) FontError!void {
+        try validateSfntTableChecksum(self.data, location_table);
+        try validateSfntTableChecksum(self.data, data_table);
+        try validateCblcCbdtTables(self.data, location_table, data_table, self.glyph_count);
+        const strike_count = try cblcStrikeCount(self.data, location_table);
+        for (0..strike_count) |strike_index| {
+            const strike = try cblcStrike(self.data, location_table, self.glyph_count, strike_index);
+            recordBestBitmapPpem(strike.ppem, size_px, best_ppem, best_distance);
+        }
+    }
+
     pub fn bitmapStrikes(self: *const Font, allocator: std.mem.Allocator) FontError![]BitmapStrikeInfo {
         var strikes = std.ArrayList(BitmapStrikeInfo).empty;
         errdefer strikes.deinit(allocator);
@@ -2717,23 +2768,10 @@ pub const Font = struct {
         }
 
         if (self.cblc != null and self.cbdt != null) {
-            const cblc = self.cblc.?;
-            const cbdt = self.cbdt.?;
-            try validateSfntTableChecksum(self.data, cblc);
-            try validateSfntTableChecksum(self.data, cbdt);
-            try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
-            const strike_count = try cblcStrikeCount(self.data, cblc);
-            try strikes.ensureUnusedCapacity(allocator, strike_count);
-            for (0..strike_count) |strike_index| {
-                const strike = try cblcStrike(self.data, cblc, self.glyph_count, strike_index);
-                strikes.appendAssumeCapacity(.{
-                    .source = .cblc_cbdt,
-                    .ppem = strike.ppem,
-                    .ppi = strike.ppi,
-                    .start_glyph = strike.start_glyph,
-                    .end_glyph = strike.end_glyph,
-                });
-            }
+            try self.appendBitmapStrikesFromLocationTables(allocator, &strikes, self.cblc.?, self.cbdt.?, .cblc_cbdt);
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            try self.appendBitmapStrikesFromLocationTables(allocator, &strikes, self.eblc.?, self.ebdt.?, .eblc_ebdt);
         }
 
         return try strikes.toOwnedSlice(allocator);
@@ -2759,20 +2797,14 @@ pub const Font = struct {
         }
 
         if (self.cblc != null and self.cbdt != null) {
-            const cblc = self.cblc.?;
-            const cbdt = self.cbdt.?;
-            try validateSfntTableChecksum(self.data, cblc);
-            try validateSfntTableChecksum(self.data, cbdt);
             // CBLC strike metadata is meaningful only with the CBDT payloads it
             // indexes. Revalidating both tables here keeps this metadata-only
             // query from returning a ppem for a borrowed bitmap table whose
             // referenced image bytes no longer satisfy the parser invariants.
-            try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
-            const strike_count = try cblcStrikeCount(self.data, cblc);
-            for (0..strike_count) |strike_index| {
-                const strike = try cblcStrike(self.data, cblc, self.glyph_count, strike_index);
-                recordBestBitmapPpem(strike.ppem, size_px, &best_ppem, &best_distance);
-            }
+            try self.recordBestBitmapPpemFromLocationTables(self.cblc.?, self.cbdt.?, size_px, &best_ppem, &best_distance);
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            try self.recordBestBitmapPpemFromLocationTables(self.eblc.?, self.ebdt.?, size_px, &best_ppem, &best_distance);
         }
 
         return best_ppem;
@@ -2803,7 +2835,15 @@ pub const Font = struct {
             try validateSfntTableChecksum(self.data, cblc);
             try validateSfntTableChecksum(self.data, cbdt);
             try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
-            return try cblcGlyphInfo(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px);
+            if (try cblcGlyphInfo(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |info| return info;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try validateSfntTableChecksum(self.data, eblc);
+            try validateSfntTableChecksum(self.data, ebdt);
+            try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
+            if (try cblcGlyphInfo(self.data, eblc, ebdt, self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |info| return info;
         }
         return null;
     }
@@ -2838,7 +2878,15 @@ pub const Font = struct {
             try validateSfntTableChecksum(self.data, cblc);
             try validateSfntTableChecksum(self.data, cbdt);
             try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
-            return try cblcGlyphPng(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px);
+            if (try cblcGlyphPng(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px)) |png| return png;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try validateSfntTableChecksum(self.data, eblc);
+            try validateSfntTableChecksum(self.data, ebdt);
+            try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
+            if (try cblcGlyphPng(self.data, eblc, ebdt, self.glyph_count, glyph_id, size_px)) |png| return png;
         }
         return null;
     }
@@ -3293,14 +3341,14 @@ fn cblcStrike(data: []const u8, cblc: TableRecord, glyph_count: u16, strike_inde
     };
 }
 
-fn cblcGlyphInfo(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphInfo {
+fn cblcGlyphInfo(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16, glyph_id: glyph_mod.GlyphId, size_px: f32, source: BitmapStrikeSource) FontError!?BitmapGlyphInfo {
     var best: ?BitmapGlyphInfo = null;
     var best_distance: f32 = std.math.inf(f32);
     const strike_count = try cblcStrikeCount(data, cblc);
     for (0..strike_count) |strike_index| {
         const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
         const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
-        if (try cbdtGlyphInfo(data, cbdt, strike, location, glyph_id)) |info| recordBestBitmapInfo(info, size_px, &best, &best_distance);
+        if (try cbdtGlyphInfo(data, cbdt, strike, location, glyph_id, source)) |info| recordBestBitmapInfo(info, size_px, &best, &best_distance);
     }
     return best;
 }
@@ -3576,34 +3624,44 @@ fn readCblcOffset(data: []const u8, offset: usize, size: usize) FontError!usize 
     };
 }
 
-fn cbdtGlyphInfo(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation, glyph_id: glyph_mod.GlyphId) FontError!?BitmapGlyphInfo {
+fn cbdtGlyphInfo(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation, glyph_id: glyph_mod.GlyphId, source: BitmapStrikeSource) FontError!?BitmapGlyphInfo {
     if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
     const start = cbdt.offset + location.offset;
     const end = start + location.length;
     const slice = data[start..end];
     const metrics_len: usize = switch (location.image_format) {
-        17 => 5,
-        18 => 8,
+        1, 2, 17 => 5,
+        6, 7, 18 => 8,
         19 => 0,
         else => return null,
     };
-    if (slice.len < metrics_len + 4) return error.BadSfnt;
+    const needs_embedded_length = switch (location.image_format) {
+        17, 18, 19 => true,
+        else => false,
+    };
+    if (slice.len < metrics_len + if (needs_embedded_length) @as(usize, 4) else 0) return error.BadSfnt;
     const metrics = switch (location.image_format) {
-        17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
-        18 => readBigBitmapMetrics(slice, 0) catch unreachable,
+        1, 2, 17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
+        6, 7, 18 => readBigBitmapMetrics(slice, 0) catch unreachable,
         19 => BitmapMetrics{ .height = 0, .width = 0, .bearing_x = 0, .bearing_y = 0, .advance = 0 },
         else => unreachable,
     };
-    const data_len = try bin.readU32At(slice, metrics_len);
-    if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
-    const payload = slice[metrics_len + 4 .. metrics_len + 4 + data_len];
+    const payload = switch (location.image_format) {
+        1, 2, 6, 7 => slice[metrics_len..],
+        17, 18, 19 => payload: {
+            const data_len = try bin.readU32At(slice, metrics_len);
+            if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
+            break :payload slice[metrics_len + 4 .. metrics_len + 4 + data_len];
+        },
+        else => unreachable,
+    };
     const is_png = isPngPayload(payload);
     const dimensions = if (is_png)
         try validatePngBitmapPayload(payload)
     else
         PngDimensions{ .width = metrics.width, .height = metrics.height };
     return .{
-        .source = .cblc_cbdt,
+        .source = source,
         .glyph_id = glyph_id,
         .ppem = strike.ppem,
         .ppi = strike.ppi,
@@ -3612,8 +3670,8 @@ fn cbdtGlyphInfo(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locati
         .width = dimensions.width,
         .height = dimensions.height,
         .image_format = location.image_format,
-        .data_offset = start + metrics_len + 4,
-        .data_length = data_len,
+        .data_offset = @intFromPtr(payload.ptr) - @intFromPtr(data.ptr),
+        .data_length = payload.len,
         .is_png = is_png,
     };
 }
@@ -3638,8 +3696,8 @@ fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locatio
     };
     if (slice.len < metrics_len + 4) return error.BadSfnt;
     const metrics = switch (location.image_format) {
-        17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
-        18 => readBigBitmapMetrics(slice, 0) catch unreachable,
+        1, 2, 17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
+        6, 7, 18 => readBigBitmapMetrics(slice, 0) catch unreachable,
         19 => BitmapMetrics{ .height = 0, .width = 0, .bearing_x = 0, .bearing_y = 0, .advance = 0 },
         else => unreachable,
     };
@@ -18424,6 +18482,8 @@ fn gdefOnlyFont(data: []const u8) Font {
         .sbix = null,
         .cblc = null,
         .cbdt = null,
+        .eblc = null,
+        .ebdt = null,
         .glyf = null,
         .cff = null,
         .cmap_subtables = empty_cmaps,
@@ -18491,6 +18551,8 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .sbix = null,
         .cblc = null,
         .cbdt = null,
+        .eblc = null,
+        .ebdt = null,
         .glyf = null,
         .cff = null,
         .cmap_subtables = empty_cmaps,
@@ -18558,6 +18620,8 @@ fn colrOnlyFont(data: []const u8) Font {
         .sbix = null,
         .cblc = null,
         .cbdt = null,
+        .eblc = null,
+        .ebdt = null,
         .glyf = null,
         .cff = null,
         .cmap_subtables = empty_cmaps,
@@ -18636,6 +18700,8 @@ fn cpalOnlyFont(data: []const u8) Font {
         .sbix = null,
         .cblc = null,
         .cbdt = null,
+        .eblc = null,
+        .ebdt = null,
         .glyf = null,
         .cff = null,
         .cmap_subtables = empty_cmaps,
@@ -18703,6 +18769,8 @@ fn svgOnlyFont(data: []const u8) Font {
         .sbix = null,
         .cblc = null,
         .cbdt = null,
+        .eblc = null,
+        .ebdt = null,
         .glyf = null,
         .cff = null,
         .cmap_subtables = empty_cmaps,
@@ -18770,6 +18838,8 @@ fn sbixOnlyFont(data: []const u8) Font {
         .sbix = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = sbix_checksum, .offset = 0, .length = data.len },
         .cblc = null,
         .cbdt = null,
+        .eblc = null,
+        .ebdt = null,
         .glyf = null,
         .cff = null,
         .cmap_subtables = empty_cmaps,
@@ -18837,6 +18907,8 @@ fn fvarOnlyFont(data: []const u8) Font {
         .sbix = null,
         .cblc = null,
         .cbdt = null,
+        .eblc = null,
+        .ebdt = null,
         .glyf = null,
         .cff = null,
         .cmap_subtables = empty_cmaps,
@@ -18924,6 +18996,8 @@ fn kernOnlyFont(data: []const u8) Font {
         .sbix = null,
         .cblc = null,
         .cbdt = null,
+        .eblc = null,
+        .ebdt = null,
         .glyf = null,
         .cff = null,
         .cmap_subtables = empty_cmaps,

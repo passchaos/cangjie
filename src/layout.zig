@@ -165,6 +165,10 @@ pub const ShapeOptions = struct {
     language_tag: ?unicode.OpenTypeLanguageTag = null,
     script_position: ScriptPosition = .normal,
     features: []const unicode.FeatureOverride = &.{},
+    /// Normalized variation-space coordinates in fvar axis order after avar
+    /// mapping. The default empty slice preserves legacy/default-instance
+    /// shaping and lets glyph metric caches stay keyed only by glyph id.
+    normalized_variation_coords: []const f32 = &.{},
 };
 
 /// Coarse shaping plan identity. It intentionally excludes the concrete font
@@ -180,6 +184,7 @@ pub const ShapePlanKey = struct {
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     script_position: ScriptPosition = .normal,
     feature_hash: u64 = 0,
+    variation_hash: u64 = 0,
 
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
         return .{
@@ -192,6 +197,7 @@ pub const ShapePlanKey = struct {
             .language_tag = effectiveLanguageTag(text, options),
             .script_position = options.script_position,
             .feature_hash = featureOverridesHash(options.features),
+            .variation_hash = normalizedVariationCoordsHash(options.normalized_variation_coords),
         };
     }
 };
@@ -1589,6 +1595,7 @@ fn validateShapingInput(text: []const u8, font_size: f32, options: ShapeOptions)
     try validateShapingUtf8(text);
     try validateShapingFontSize(font_size);
     try validateFeatureOverrides(options.features);
+    try validateNormalizedVariationCoords(options.normalized_variation_coords);
 }
 
 fn validateShapingUtf8(text: []const u8) !void {
@@ -1618,6 +1625,12 @@ fn validateFeatureOverrides(features: []const unicode.FeatureOverride) !void {
         for (features[0..index]) |previous| {
             if (previous.tag == feature.tag) return error.DuplicateFeatureTag;
         }
+    }
+}
+
+fn validateNormalizedVariationCoords(coords: []const f32) !void {
+    for (coords) |coord| {
+        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
     }
 }
 
@@ -2468,6 +2481,7 @@ const LookupOptions = struct {
     features: []const unicode.FeatureOverride = &.{},
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
+    normalized_variation_coords: []const f32 = &.{},
 };
 
 fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
@@ -2481,6 +2495,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
         .features = options.features,
         .writing_mode = options.writing_mode,
         .text_orientation = options.text_orientation,
+        .normalized_variation_coords = options.normalized_variation_coords,
     };
 }
 
@@ -2502,6 +2517,16 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
     return hasher.final();
 }
 
+fn normalizedVariationCoordsHash(coords: []const f32) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(std.mem.asBytes(&coords.len));
+    for (coords) |coord| {
+        const bits: u32 = @bitCast(coord);
+        hasher.update(std.mem.asBytes(&bits));
+    }
+    return hasher.final();
+}
+
 fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
     return a.direction == b.direction and
         a.reorder_bidi == b.reorder_bidi and
@@ -2511,7 +2536,8 @@ fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
         a.script_tag == b.script_tag and
         a.language_tag == b.language_tag and
         a.script_position == b.script_position and
-        a.feature_hash == b.feature_hash;
+        a.feature_hash == b.feature_hash and
+        a.variation_hash == b.variation_hash;
 }
 
 fn shapedRunCacheKeysEqual(a: ShapedRunCacheKey, b: ShapedRunCacheKey) bool {
@@ -2823,7 +2849,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             source_index;
         const source_span = sourceSpanForGlyph(index, source_index, cluster_index, clusters.items, source_ends.items, ligature_components.items) orelse
             SourceSpan{ .start = cluster_base, .end = cluster_base };
-        const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id);
+        const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id, lookup_options.normalized_variation_coords);
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
         if (kern_lookup) |lookup| {
             if (previous_glyph) |previous| {
@@ -2861,7 +2887,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const use_sideways_vertical_advance = lookup_options.writing_mode.isVertical() and
             glyphUsesSidewaysAdvance(source_codepoint, lookup_options.text_orientation);
         const vertical_metrics = if (lookup_options.writing_mode.isVertical())
-            try verticalMetricsWithOptionalCache(font, metrics_cache, glyph_id)
+            try verticalMetricsWithOptionalCache(font, metrics_cache, glyph_id, lookup_options.normalized_variation_coords)
         else
             null;
         const vertical_advance = if (use_sideways_vertical_advance)
@@ -3162,7 +3188,14 @@ fn runHasGdefMarks(glyphs: []const GlyphId, metadata: GdefLookupMetadata) bool {
     return false;
 }
 
-fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId) !GlyphMetrics {
+fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId, normalized_variation_coords: []const f32) !GlyphMetrics {
+    if (normalized_variation_coords.len != 0) {
+        const raw = try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords);
+        return .{
+            .advance_width = raw.advance_width,
+            .left_side_bearing = raw.left_side_bearing,
+        };
+    }
     if (cache) |metrics_cache| return try metrics_cache.horizontalMetrics(font, glyph_id);
     const raw = try font.horizontalMetrics(glyph_id);
     return .{
@@ -3171,7 +3204,17 @@ fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCa
     };
 }
 
-fn verticalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId) !?VerticalGlyphMetrics {
+fn verticalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId, normalized_variation_coords: []const f32) !?VerticalGlyphMetrics {
+    if (normalized_variation_coords.len != 0) {
+        const raw = font.verticalMetricsAtCoords(glyph_id, normalized_variation_coords) catch |err| switch (err) {
+            error.InvalidMetrics => null,
+            else => return err,
+        };
+        return if (raw) |value| .{
+            .advance_height = value.advance_height,
+            .top_side_bearing = value.top_side_bearing,
+        } else null;
+    }
     if (cache) |metrics_cache| {
         return metrics_cache.verticalMetrics(font, glyph_id) catch |err| switch (err) {
             // Some deployed CJK fonts advertise optional vhea/vmtx tables with

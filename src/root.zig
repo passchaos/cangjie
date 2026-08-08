@@ -1373,6 +1373,49 @@ test "HVAR and VVAR metric variation maps are exposed when present" {
     try std.testing.expect((try missing.verticalOriginYAtCoords(1, &.{0.5})) == null);
 }
 
+test "shaping applies normalized variation metric coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const default_run = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{});
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0), default_run.width(), 0.001);
+
+    const varied_run = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .normalized_variation_coords = &.{0.5} });
+    try std.testing.expectApproxEqAbs(@as(f32, 16.08), varied_run.width(), 0.001);
+    try std.testing.expectError(error.BadSfnt, TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .normalized_variation_coords = &.{1.1} }));
+
+    const vertical_default = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .writing_mode = .vertical_rl });
+    try std.testing.expectApproxEqAbs(@as(f32, 20.0), vertical_default.height(), 0.001);
+    const vertical_varied = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .writing_mode = .vertical_rl, .normalized_variation_coords = &.{0.5} });
+    try std.testing.expectApproxEqAbs(@as(f32, 20.08), vertical_varied.height(), 0.001);
+
+    var fallback_cache = FontFallbackCache.init(allocator);
+    defer fallback_cache.deinit();
+    var shaped_cache = ShapedRunCache.init(allocator);
+    defer shaped_cache.deinit();
+    const first = try TextShaper.shapeUtf8CascadeWithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "A", 20, .{});
+    const first_width = first.width();
+    const second = try TextShaper.shapeUtf8CascadeWithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "A", 20, .{ .normalized_variation_coords = &.{0.5} });
+    const second_width = second.width();
+    const third = try TextShaper.shapeUtf8CascadeWithCaches(cascade, &fallback_cache, null, null, &shaped_cache, &layout_buffer, "A", 20, .{ .normalized_variation_coords = &.{0.5} });
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0), first_width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.08), second_width, 0.001);
+    try std.testing.expectApproxEqAbs(second_width, third.width(), 0.001);
+    try std.testing.expectEqual(@as(usize, 2), shaped_cache.entries.items.len);
+    try std.testing.expectEqual(@as(usize, 1), shaped_cache.hits);
+}
+
 test "lazy HVAR and VVAR metadata revalidates borrowed table bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

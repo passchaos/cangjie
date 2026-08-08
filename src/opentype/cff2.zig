@@ -43,6 +43,16 @@ pub fn info(data: []const u8, offset: usize, length: usize) Error!Info {
     return try infoView(data, offset, length);
 }
 
+pub fn fontDictIndex(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?u16 {
+    if (glyph_id >= glyph_count) return error.BadSfnt;
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const parsed = try infoView(data, offset, length);
+    const fd_select = parsed.fd_select orelse return null;
+    const fd_count = if (parsed.fd_array_index) |fd_array| @as(usize, @intCast(fd_array.count)) else 1;
+    return try fdSelectValue(table, fd_select.offset, glyph_id, glyph_count, fd_count);
+}
+
 pub fn charStringData(data: []const u8, offset: usize, length: usize, glyph_id: usize) Error!?[]const u8 {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     const table = data[offset .. offset + length];
@@ -169,6 +179,48 @@ fn parseTopDict(data: []const u8, table_len: usize) Error!TopDictInfo {
     return result;
 }
 
+fn fdSelectValue(table: []const u8, offset: usize, glyph_id: usize, glyph_count: usize, fd_count: usize) Error!u16 {
+    const fd_select = try fdSelectInfo(table, offset);
+    return switch (fd_select.format) {
+        0 => blk: {
+            if (glyph_count > table.len - offset - 1) return error.BadSfnt;
+            const value = table[offset + 1 + glyph_id];
+            if (value >= fd_count) return error.BadSfnt;
+            break :blk value;
+        },
+        3 => try fdSelectRangeValue(table, offset + 1, glyph_id, glyph_count, fd_count, 2, 1),
+        4 => try fdSelectRangeValue(table, offset + 1, glyph_id, glyph_count, fd_count, 4, 2),
+        else => error.BadSfnt,
+    };
+}
+
+fn fdSelectRangeValue(table: []const u8, offset: usize, glyph_id: usize, glyph_count: usize, fd_count: usize, glyph_size: usize, fd_size: usize) Error!u16 {
+    if (offset > table.len or glyph_size > table.len - offset) return error.BadSfnt;
+    const range_count = readSizedOffset(table, offset, glyph_size);
+    const record_size = glyph_size + fd_size;
+    const records_start = offset + glyph_size;
+    if (range_count == 0 or range_count > (table.len - records_start) / record_size) return error.BadSfnt;
+    const sentinel_offset = records_start + range_count * record_size;
+    if (glyph_size > table.len - sentinel_offset) return error.BadSfnt;
+    const sentinel = readSizedOffset(table, sentinel_offset, glyph_size);
+    if (sentinel != glyph_count) return error.BadSfnt;
+
+    var previous_first: ?usize = null;
+    var selected_fd: ?u16 = null;
+    for (0..range_count) |index| {
+        const record = records_start + index * record_size;
+        const first = readSizedOffset(table, record, glyph_size);
+        const fd = readSizedOffset(table, record + glyph_size, fd_size);
+        if (first >= glyph_count or fd >= fd_count) return error.BadSfnt;
+        if (previous_first) |previous| {
+            if (first <= previous) return error.BadSfnt;
+        } else if (first != 0) return error.BadSfnt;
+        previous_first = first;
+        if (glyph_id >= first) selected_fd = @intCast(fd);
+    }
+    return selected_fd orelse error.BadSfnt;
+}
+
 fn fdSelectInfo(table: []const u8, offset: usize) Error!FdSelectInfo {
     if (offset >= table.len) return error.BadSfnt;
     const format = table[offset];
@@ -254,6 +306,8 @@ test "CFF2 header exposes top dict and trailing data" {
     const fd_select = parsed.fd_select.?;
     try std.testing.expectEqual(@as(usize, 31), fd_select.offset);
     try std.testing.expectEqual(@as(u8, 0), fd_select.format);
+    try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 0, 2));
+    try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 1, 2));
     try std.testing.expect((try charStringData(&bytes, 0, bytes.len, 1)) == null);
 }
 

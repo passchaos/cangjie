@@ -538,6 +538,8 @@ test "CFF2 top-level metadata is exposed when present" {
     const fd_select = info.fd_select.?;
     try std.testing.expectEqual(@as(usize, 31), fd_select.offset);
     try std.testing.expectEqual(@as(u8, 0), fd_select.format);
+    try std.testing.expectEqual(@as(?u16, 0), try font.cff2FontDictIndex(0));
+    try std.testing.expectEqual(@as(?u16, 0), try font.cff2FontDictIndex(1));
     try std.testing.expectEqualSlices(u8, &.{14}, (try font.cff2CharStringData(0)).?);
     try std.testing.expect((try font.cff2CharStringData(1)) == null);
 
@@ -547,6 +549,7 @@ test "CFF2 top-level metadata is exposed when present" {
     defer missing.deinit();
     try std.testing.expect((try missing.cff2Info()) == null);
     try std.testing.expect((try missing.cff2CharStringData(1)) == null);
+    try std.testing.expect((try missing.cff2FontDictIndex(1)) == null);
 }
 
 test "lazy CFF2 metadata revalidates borrowed table bytes" {

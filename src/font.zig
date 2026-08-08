@@ -1043,6 +1043,15 @@ pub const Font = struct {
         self.* = undefined;
     }
 
+    /// Return the CFF2 font-dict index selected for a glyph, when FDSelect is present.
+    pub fn cff2FontDictIndex(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?u16 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        return try cff2_mod.fontDictIndex(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count);
+    }
+
     /// Borrow raw CFF2 CharString bytes for a glyph, when the optional CFF2 table is present.
     pub fn cff2CharStringData(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;

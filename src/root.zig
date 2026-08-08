@@ -620,6 +620,11 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(f32, 150), outline.commands.items[2].line_to.x);
     try std.testing.expectEqual(@as(f32, 50), outline.commands.items[2].line_to.y);
     try std.testing.expectEqual(.close, outline.commands.items[3]);
+    var outline_at_coords = (try font.cff2GlyphOutlineAtCoords(allocator, 0, &.{0.5})).?;
+    defer outline_at_coords.deinit();
+    try std.testing.expectEqual(@as(i16, 50), outline_at_coords.bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 150), outline_at_coords.bounds.x_max);
+    try std.testing.expectEqual(@as(usize, 4), outline_at_coords.commands.items.len);
     try std.testing.expect((try font.cff2CharStringData(1)) == null);
     try std.testing.expect((try font.cff2CharStringScanInfo(1)) == null);
     try std.testing.expect((try font.cff2CharStringBoundsInfo(1)) == null);
@@ -638,6 +643,7 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expect((try missing.cff2CharStringScanInfo(1)) == null);
     try std.testing.expect((try missing.cff2CharStringBoundsInfo(1)) == null);
     try std.testing.expect((try missing.cff2CharStringBoundsInfoAtCoords(1, &.{0.5})) == null);
+    try std.testing.expect((try missing.cff2GlyphOutlineAtCoords(allocator, 1, &.{0.5})) == null);
     try std.testing.expect((try missing.cff2FontDictIndex(1)) == null);
 }
 

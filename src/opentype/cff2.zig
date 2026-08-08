@@ -159,7 +159,11 @@ pub fn charStringBoundsInfoAtCoords(data: []const u8, offset: usize, length: usi
 }
 
 pub fn appendGlyphOutline(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize, outline: *glyph_mod.GlyphOutline) Error!?CharStringBoundsInfo {
-    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count, &.{})) orelse return null;
+    return try appendGlyphOutlineAtCoords(allocator, data, offset, length, glyph_id, glyph_count, &.{}, outline);
+}
+
+pub fn appendGlyphOutlineAtCoords(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize, normalized_coords: []const f32, outline: *glyph_mod.GlyphOutline) Error!?CharStringBoundsInfo {
+    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count, normalized_coords)) orelse return null;
     return try charstring_mod.appendOutline(CharStringScanContext, &execution.context, allocator, execution.charstring, outline);
 }
 

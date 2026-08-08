@@ -1128,6 +1128,23 @@ pub const Font = struct {
         return try cff2_mod.charStringBoundsInfoAtCoords(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords);
     }
 
+    /// Build a CFF2 glyph outline using caller-supplied normalized variation coordinates.
+    pub fn cff2GlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?glyph_mod.GlyphOutline {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        const metrics = try self.horizontalMetrics(glyph_id);
+        var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 }, metrics.advance_width, metrics.left_side_bearing);
+        errdefer outline.deinit();
+        if (try cff2_mod.appendGlyphOutlineAtCoords(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords, &outline)) |bounds_info| {
+            outline.bounds = cff2BoundsInfoToGlyphBounds(bounds_info);
+            return outline;
+        }
+        outline.deinit();
+        return null;
+    }
+
     /// Read validated top-level metadata from the optional OpenType `CFF2` table.
     pub fn cff2Info(self: *const Font) FontError!?Cff2Info {
         const cff2 = self.cff2 orelse return null;

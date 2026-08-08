@@ -2,6 +2,7 @@ const std = @import("std");
 const base_mod = @import("opentype/base.zig");
 const bin = @import("binary.zig");
 const cff_mod = @import("cff.zig");
+const cvar_mod = @import("opentype/cvar.zig");
 const glyph_mod = @import("glyph.zig");
 const gpos_mod = @import("gpos.zig");
 const gsub_mod = @import("gsub.zig");
@@ -38,6 +39,9 @@ pub const FontFormat = enum {
     truetype,
     opentype_cff,
 };
+
+pub const CvarInfo = cvar_mod.Info;
+pub const CvarTupleInfo = cvar_mod.TupleInfo;
 
 pub const FontTableInfo = struct {
     tag: [4]u8,
@@ -655,6 +659,8 @@ pub const Font = struct {
     stat: ?TableRecord,
     fvar: ?TableRecord,
     avar: ?TableRecord,
+    cvt: ?TableRecord,
+    cvar: ?TableRecord,
     hvar: ?TableRecord,
     mvar: ?TableRecord,
     vvar: ?TableRecord,
@@ -755,6 +761,8 @@ pub const Font = struct {
         const stat = findTable(records, "STAT");
         const fvar = findTable(records, "fvar");
         const avar = findTable(records, "avar");
+        const cvt = findTable(records, "cvt ");
+        const cvar = findTable(records, "cvar");
         const colr = findTable(records, "COLR");
         const cpal = findTable(records, "CPAL");
         const base = findTable(records, "BASE");
@@ -810,6 +818,7 @@ pub const Font = struct {
         }
         if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
         if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
+        const cvt_value_count = if (cvt) |cvt_table| try validateCvtTable(cvt_table) else null;
         if (kern) |kern_table| try validateKernTable(data, kern_table, glyph_count);
         if (hdmx) |hdmx_table| try validateHdmxTable(data, hdmx_table, glyph_count);
         if (ltsh) |ltsh_table| try validateLtshTable(data, ltsh_table, glyph_count);
@@ -847,7 +856,7 @@ pub const Font = struct {
             .{ .loca = loca.?, .glyf = glyf.?, .index_to_loc_format = index_to_loc_format }
         else
             null;
-        try validateVariationDataTables(data, glyph_count, fvar, gvar, hvar, mvar, vvar, gvar_target_context);
+        try validateVariationDataTablesWithCvar(data, glyph_count, fvar, gvar, hvar, mvar, vvar, cvar, cvt_value_count, gvar_target_context);
         validateVariationNameReferences(allocator, data, fvar, stat, name) catch |err| switch (err) {
             error.InvalidName => if (!is_ttc_face) return err,
             else => return err,
@@ -915,6 +924,8 @@ pub const Font = struct {
             .stat = stat,
             .fvar = fvar,
             .avar = avar,
+            .cvt = cvt,
+            .cvar = cvar,
             .hvar = hvar,
             .mvar = mvar,
             .vvar = vvar,
@@ -952,6 +963,33 @@ pub const Font = struct {
             };
         }
         return infos;
+    }
+
+    /// Read raw TrueType Control Value Table entries from the optional `cvt ` table.
+    pub fn cvtValues(self: *const Font, allocator: std.mem.Allocator) FontError![]i16 {
+        const cvt = self.cvt orelse return try allocator.alloc(i16, 0);
+        try validateSfntTableChecksum(self.data, cvt);
+        _ = try validateCvtTable(cvt);
+        return try readCvtValues(allocator, self.data, cvt);
+    }
+
+    /// Read validated tuple metadata from the optional TrueType `cvar` table.
+    pub fn cvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?CvarInfo {
+        const cvar = self.cvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        const cvt = self.cvt orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, cvt);
+        const cvt_value_count = try validateCvtTable(cvt);
+        try validateSfntTableChecksum(self.data, cvar);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateCvarTable(self.data, cvar, fvar_info.axis_count, cvt_value_count);
+        return try cvar_mod.info(allocator, self.data, cvar.offset, cvar.length, fvar_info.axis_count);
+    }
+
+    pub fn freeCvarInfo(_: *const Font, allocator: std.mem.Allocator, info_value: CvarInfo) void {
+        cvar_mod.free(allocator, info_value);
     }
 
     /// Read validated metadata from the optional OpenType `HVAR` table.
@@ -8097,13 +8135,55 @@ const GvarGlyphTargetContext = struct {
     index_to_loc_format: i16,
 };
 
-fn validateVariationDataTables(data: []const u8, glyph_count: u16, fvar: ?TableRecord, gvar: ?TableRecord, hvar: ?TableRecord, mvar: ?TableRecord, vvar: ?TableRecord, gvar_target_context: ?GvarGlyphTargetContext) FontError!void {
-    if (gvar == null and hvar == null and mvar == null and vvar == null) return;
+fn validateCvtTable(cvt: TableRecord) FontError!usize {
+    if ((cvt.length & 1) != 0) return error.BadSfnt;
+    return cvt.length / 2;
+}
+
+fn readCvtValues(allocator: std.mem.Allocator, data: []const u8, cvt: TableRecord) FontError![]i16 {
+    const value_count = try validateCvtTable(cvt);
+    const values = try allocator.alloc(i16, value_count);
+    errdefer allocator.free(values);
+    for (values, 0..) |*value, index| value.* = try bin.readI16At(data, cvt.offset + index * 2);
+    return values;
+}
+
+fn validateCvarTable(data: []const u8, cvar: TableRecord, fvar_axis_count: usize, cvt_value_count: usize) FontError!void {
+    return try cvar_mod.validate(data, cvar.offset, cvar.length, fvar_axis_count, cvt_value_count);
+}
+
+fn validateVariationDataTables(
+    data: []const u8,
+    glyph_count: u16,
+    fvar: ?TableRecord,
+    gvar: ?TableRecord,
+    hvar: ?TableRecord,
+    mvar: ?TableRecord,
+    vvar: ?TableRecord,
+    gvar_target_context: ?GvarGlyphTargetContext,
+) FontError!void {
+    return try validateVariationDataTablesWithCvar(data, glyph_count, fvar, gvar, hvar, mvar, vvar, null, null, gvar_target_context);
+}
+
+fn validateVariationDataTablesWithCvar(
+    data: []const u8,
+    glyph_count: u16,
+    fvar: ?TableRecord,
+    gvar: ?TableRecord,
+    hvar: ?TableRecord,
+    mvar: ?TableRecord,
+    vvar: ?TableRecord,
+    cvar: ?TableRecord,
+    cvt_value_count: ?usize,
+    gvar_target_context: ?GvarGlyphTargetContext,
+) FontError!void {
+    if (gvar == null and hvar == null and mvar == null and vvar == null and cvar == null) return;
     const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
     if (gvar) |table| try validateGvarTable(data, table, glyph_count, fvar_info.axis_count, gvar_target_context);
     if (hvar) |table| try validateMetricVariationTable(data, table, fvar_info.axis_count, 20);
     if (vvar) |table| try validateMetricVariationTable(data, table, fvar_info.axis_count, 24);
     if (mvar) |table| try validateMvarTable(data, table, fvar_info.axis_count);
+    if (cvar) |table| try validateCvarTable(data, table, fvar_info.axis_count, cvt_value_count orelse return error.BadSfnt);
 }
 
 fn validateAvarTable(data: []const u8, avar: TableRecord, fvar: ?TableRecord) FontError!void {
@@ -18214,6 +18294,8 @@ fn gdefOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .cvt = null,
+        .cvar = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18274,6 +18356,8 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .cvt = null,
+        .cvar = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18334,6 +18418,8 @@ fn colrOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .cvt = null,
+        .cvar = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18405,6 +18491,8 @@ fn cpalOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .cvt = null,
+        .cvar = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18465,6 +18553,8 @@ fn svgOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .cvt = null,
+        .cvar = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18525,6 +18615,8 @@ fn sbixOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .cvt = null,
+        .cvar = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18585,6 +18677,8 @@ fn fvarOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = data.len },
         .avar = null,
+        .cvt = null,
+        .cvar = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,
@@ -18665,6 +18759,8 @@ fn kernOnlyFont(data: []const u8) Font {
         .stat = null,
         .fvar = null,
         .avar = null,
+        .cvt = null,
+        .cvar = null,
         .hvar = null,
         .mvar = null,
         .vvar = null,

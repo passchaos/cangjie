@@ -104,6 +104,8 @@ pub const ScaledFontScriptMetrics = @import("font.zig").ScaledFontScriptMetrics;
 pub const FontError = @import("font.zig").FontError;
 pub const FontFormat = @import("font.zig").FontFormat;
 pub const FontHeaderInfo = @import("font.zig").FontHeaderInfo;
+pub const CvarInfo = @import("font.zig").CvarInfo;
+pub const CvarTupleInfo = @import("font.zig").CvarTupleInfo;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const HdmxInfo = @import("font.zig").HdmxInfo;
@@ -490,6 +492,66 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "cvt values and cvar tuple metadata are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCvarTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const cvt_values = try font.cvtValues(allocator);
+    defer allocator.free(cvt_values);
+    try std.testing.expectEqualSlices(i16, &.{ 10, 20, -5, 0 }, cvt_values);
+
+    const cvar = (try font.cvarInfo(allocator)).?;
+    defer font.freeCvarInfo(allocator, cvar);
+    try std.testing.expectEqual(@as(u32, 0x00010000), cvar.version);
+    try std.testing.expectEqual(@as(u16, 1), cvar.tuple_count);
+    try std.testing.expect(!cvar.uses_shared_point_numbers);
+    try std.testing.expectEqual(@as(usize, 14), cvar.data_offset);
+    try std.testing.expectEqual(@as(usize, 1), cvar.tuples.len);
+    try std.testing.expectEqual(@as(u16, 5), cvar.tuples[0].variation_data_size);
+    try std.testing.expect(!cvar.tuples[0].hasPrivatePointNumbers());
+    try std.testing.expect(!cvar.tuples[0].hasIntermediateRegion());
+    try std.testing.expectEqual(@as(usize, 1), cvar.tuples[0].peak_coordinates.len);
+    try std.testing.expectEqual(@as(i16, 0x4000), cvar.tuples[0].peak_coordinates[0]);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    const empty_cvt = try missing.cvtValues(allocator);
+    defer allocator.free(empty_cvt);
+    try std.testing.expectEqual(@as(usize, 0), empty_cvt.len);
+    try std.testing.expect((try missing.cvarInfo(allocator)) == null);
+}
+
+test "lazy cvar metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCvarTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cvar = (try font.cvarInfo(allocator)).?;
+    defer font.freeCvarInfo(allocator, cvar);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var cvar_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "cvar")) cvar_offset = table.offset;
+    }
+    bytes[cvar_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.cvarInfo(allocator));
 }
 
 test "HVAR and VVAR metric variation maps are exposed when present" {

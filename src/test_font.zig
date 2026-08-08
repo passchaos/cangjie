@@ -32,6 +32,10 @@ pub fn buildMetricVariationTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try metricVariationTtfTables(allocator));
 }
 
+pub fn buildCvarTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try cvarTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -617,6 +621,24 @@ fn metricVariationTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
     tables[11] = .{ .tag = "VVAR", .data = try vvarTable(allocator) };
+    return tables;
+}
+
+fn cvarTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 12);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "cvar", .data = try cvarTable(allocator) };
+    tables[2] = .{ .tag = "cvt ", .data = try cvtTable(allocator) };
+    tables[3] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[4] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[5] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[6] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[7] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[9] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[10] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[11] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
     return tables;
 }
 
@@ -2568,6 +2590,34 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 74, 700.0);
     writeF16Dot16(bytes, 78, 150.0);
     writeU16(bytes, 82, 261);
+    return bytes;
+}
+
+fn cvtTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8);
+    @memset(bytes, 0);
+    writeI16(bytes, 0, 10);
+    writeI16(bytes, 2, 20);
+    writeI16(bytes, 4, -5);
+    writeI16(bytes, 6, 0);
+    return bytes;
+}
+
+fn cvarTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 19);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 4, 1); // one tuple variation header.
+    writeU16(bytes, 6, 14); // tuple payload begins after the embedded peak tuple.
+    writeU16(bytes, 8, 5); // packed delta bytes for four CVT entries.
+    writeU16(bytes, 10, 0x8000); // embedded peak tuple.
+    writeF2Dot14(bytes, 12, 1.0);
+    bytes[14] = 3; // One four-delta byte run.
+    bytes[15] = 1;
+    bytes[16] = 2;
+    bytes[17] = 3;
+    bytes[18] = 4;
     return bytes;
 }
 

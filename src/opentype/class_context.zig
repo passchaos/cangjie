@@ -19,6 +19,8 @@ pub const Rule = struct {
     order: u32,
     lookup_index: u16,
     classes_start: u32,
+    subst_count: u16 = 1,
+    records_offset: u32 = 0,
 };
 
 pub const RuleGroup = struct {

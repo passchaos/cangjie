@@ -9,7 +9,7 @@ const categories = @import("use/categories.zig");
 const syllables = @import("use/syllables.zig");
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cham or script_tag == .dupl or script_tag == .java or script_tag == .marc;
+    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cakm or script_tag == .cham or script_tag == .dupl or script_tag == .java or script_tag == .marc;
 }
 
 pub const Category = categories.Category;
@@ -65,6 +65,18 @@ pub fn assignGraphemeClusterOwners(
             // matching still treats it as a joiner; only cluster ownership
             // remains independent.
             owner_by_source[source] = if (codepoints[source] == 0x200c) source else owner;
+        }
+    }
+
+    // HarfBuzz's monotone-grapheme initialization keeps a WORD JOINER as its
+    // own cluster but assigns immediately following Unicode marks to that
+    // cluster. UAX #29 exposes a break after the control, so this USE-specific
+    // adjustment is needed for broken clusters such as WJ + dependent vowel.
+    for (codepoints, 0..) |codepoint, source_index| {
+        if (source_index == 0 or !categories.isUnicodeMarkForUse(codepoint)) continue;
+        const previous_owner = owner_by_source[source_index - 1];
+        if (categories.forCodepoint(codepoints[previous_owner]) == .word_joiner) {
+            owner_by_source[source_index] = previous_owner;
         }
     }
 
@@ -395,6 +407,7 @@ test "USE shaping includes Balinese" {
     try @import("std").testing.expect(shouldShape(.bali));
     try @import("std").testing.expect(shouldShape(.batk));
     try @import("std").testing.expect(shouldShape(.brah));
+    try @import("std").testing.expect(shouldShape(.cakm));
     try @import("std").testing.expect(shouldShape(.cham));
     try @import("std").testing.expect(shouldShape(.dupl));
     try @import("std").testing.expect(shouldShape(.java));
@@ -424,6 +437,18 @@ test "USE cluster owners preserve ZWNJ identity" {
     try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 3 }, &cluster_owners);
+}
+
+test "USE cluster owners attach marks after WORD JOINER" {
+    const allocator = std.testing.allocator;
+    const text = "𑄤⁠𑄧";
+    const byte_starts = [_]usize{ 0, 4, 7 };
+    const codepoints = [_]u21{ 0x11124, 0x2060, 0x11127 };
+    var cluster_owners = [_]usize{ 0, 1, 2 };
+
+    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 1 }, &cluster_owners);
 }
 
 test "USE reordering moves only the first split prebase component" {

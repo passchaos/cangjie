@@ -82,7 +82,11 @@ pub fn forCodepoint(codepoint: u21) Category {
         => .vowel_above,
         0x1bf0...0x1bf1 => .final_above,
         0x1bf2...0x1bf3 => .reordering_killer,
+        0x200b => .word_joiner,
         0x200c => .zwnj,
+        // USE treats ZWJ like CGJ for syllable segmentation: both are filtered
+        // out of the machine input while remaining visible to GSUB context.
+        0x200d => .cg_joiner,
         0x2060 => .word_joiner,
         0xa980...0xa981 => .vowel_mod_above,
         0xa982 => .final_above,
@@ -143,6 +147,24 @@ pub fn forCodepoint(codepoint: u21) Category {
         0x11046 => .halant,
         0x11052...0x11065 => .base_num,
         0x1107f => .halant_num,
+        0x11100...0x11102 => .vowel_mod_above,
+        0x11103...0x11126,
+        0x11136...0x1113f,
+        0x11144,
+        0x11147,
+        => .base,
+        0x11127...0x11129,
+        0x1112d,
+        0x11130,
+        => .vowel_below,
+        0x1112a...0x1112b,
+        0x1112e...0x1112f,
+        0x11131...0x11132,
+        => .vowel_above,
+        0x1112c => .vowel_pre,
+        0x11133 => .invisible_stacker,
+        0x11134 => .consonant_mod_above,
+        0x11145...0x11146 => .vowel_post,
         0x11c72...0x11c8f => .base,
         0x11c92...0x11ca7,
         0x11ca9...0x11caf,
@@ -208,9 +230,7 @@ pub fn isPostbase(category: Category) bool {
 }
 
 pub fn isUnicodeMarkForUse(codepoint: u21) bool {
-    return unicode.isSpacingMarkCodepoint(codepoint) or
-        (codepoint >= 0x0300 and codepoint <= 0x036f) or
-        (codepoint >= 0x1bc9d and codepoint <= 0x1bc9e);
+    return unicode.isUnicodeMarkCodepoint(codepoint);
 }
 
 test "USE category covers Duployan sample codepoints" {
@@ -275,6 +295,15 @@ test "Batak USE categories distinguish vowels and reordering killers" {
 test "Brahmi USE categories distinguish numbers and joiners" {
     const codepoints = [_]u21{ 0x11003, 0x11013, 0x1103c, 0x11046, 0x11052, 0x1107f };
     const expected = [_]Category{ .cons_with_stacker, .base, .vowel_below, .halant, .base_num, .halant_num };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Chakma USE categories distinguish stacker and vowels" {
+    const codepoints = [_]u21{ 0x11103, 0x11127, 0x1112a, 0x1112c, 0x11133, 0x11134, 0x11145 };
+    const expected = [_]Category{ .base, .vowel_below, .vowel_above, .vowel_pre, .invisible_stacker, .consonant_mod_above, .vowel_post };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

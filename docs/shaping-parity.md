@@ -436,6 +436,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   clusters. Retained corpora are `tests/data/brahmi-use-font1.txt`
   (`checksum=b27f31c50b8dfdbc`) and `tests/data/brahmi-use-font2.txt`
   (`checksum=f386e68d32dec96b`).
+- Chakma passes both joiner cases extracted from upstream
+  `in-house/use-syllable.tests` (`checksum=123ca7f06e6519fd`). The retained
+  `tests/data/chakma-use-tests.txt` gate distinguishes ZWJ, which stays
+  transparent to USE syllable matching, from WORD JOINER, which starts a
+  broken dependent-vowel cluster and therefore requires a dotted circle.
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -459,7 +464,7 @@ goal is active, not complete.
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
-  Marchen, Cham, Batak, and Brahmi gates. Other USE scripts/fonts and
+  Marchen, Cham, Batak, Brahmi, and Chakma gates. Other USE scripts/fonts and
   fuzz/corpus failures still need retained gates before this can be called
   broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`

@@ -208,7 +208,11 @@ fn matchBrokenCluster(items: []const IncludedCodepoint, start: usize) ?usize {
         matchNumberJoinerTerminatedClusterTail(items, index) orelse
         matchNumeralClusterTail(items, index) orelse
         return null;
-    return tail_end;
+    // `complex_syllable_tail` is entirely optional in the generated grammar.
+    // Ragel's scanner never emits a zero-length token, so mirror that behavior
+    // explicitly: an unrelated category such as WORD JOINER must fall through
+    // to one non-cluster item instead of stalling `find()` forever.
+    return if (tail_end > start) tail_end else null;
 }
 
 fn matchTail(items: []const IncludedCodepoint, start: usize) ?usize {
@@ -506,6 +510,23 @@ test "USE syllables identify Brahmi numeral groups" {
         &.{
             .{ .start = 0, .end = 3, .kind = .numeral },
             .{ .start = 3, .end = 6, .kind = .numeral },
+        },
+        syllables,
+    );
+}
+
+test "USE WORD JOINER starts a broken Chakma vowel cluster" {
+    const allocator = std.testing.allocator;
+    const codepoints = [_]u21{ 0x11124, 0x2060, 0x11127 };
+    const syllables = try find(allocator, &codepoints);
+    defer allocator.free(syllables);
+
+    try std.testing.expectEqualSlices(
+        Syllable,
+        &.{
+            .{ .start = 0, .end = 1, .kind = .standard },
+            .{ .start = 1, .end = 2, .kind = .non_cluster },
+            .{ .start = 2, .end = 3, .kind = .broken },
         },
         syllables,
     );

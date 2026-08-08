@@ -5335,6 +5335,10 @@ pub fn isSpacingMarkCodepoint(codepoint: u21) bool {
     return isSpacingMark(codepoint);
 }
 
+pub fn isUnicodeMarkCodepoint(codepoint: u21) bool {
+    return isCombiningMark(codepoint) or isSpacingMark(codepoint);
+}
+
 fn isEmojiTagCodepoint(codepoint: u21) bool {
     // Emoji flag tag sequences (for example subdivision flags such as England)
     // encode their tag letters in Plane 14. Unicode assigns these scalars

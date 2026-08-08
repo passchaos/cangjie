@@ -29,6 +29,7 @@ pub const Info = struct {
     top_dict_length: u16,
     top_dict_data: []const u8,
     trailing_data: []const u8,
+    global_subrs_index: IndexInfo,
     top_dict: TopDictInfo,
     charstrings_index: ?IndexInfo = null,
     fd_array_index: ?IndexInfo = null,
@@ -51,6 +52,14 @@ pub fn fontDictIndex(data: []const u8, offset: usize, length: usize, glyph_id: u
     const fd_select = parsed.fd_select orelse return null;
     const fd_count = if (parsed.fd_array_index) |fd_array| @as(usize, @intCast(fd_array.count)) else 1;
     return try fdSelectValue(table, fd_select.offset, glyph_id, glyph_count, fd_count);
+}
+
+pub fn globalSubrData(data: []const u8, offset: usize, length: usize, subr_index: usize) Error!?[]const u8 {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const parsed = try infoView(data, offset, length);
+    if (subr_index >= parsed.global_subrs_index.count) return null;
+    return try indexObject(table, parsed.global_subrs_index, subr_index);
 }
 
 pub fn charStringData(data: []const u8, offset: usize, length: usize, glyph_id: usize) Error!?[]const u8 {
@@ -76,6 +85,10 @@ fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
     const top_end = top_start + @as(usize, top_dict_length);
     const top_dict_data = table[top_start..top_end];
     const top_dict = try parseTopDict(top_dict_data, table.len);
+    // CFF2 keeps the Global Subr INDEX directly after the Top DICT. Parse it
+    // eagerly because later CFF2 charstring execution needs these bounds before
+    // interpreting callgsubr operands.
+    const global_subrs_index = try indexInfo(table, top_end);
     const charstrings_index = if (top_dict.charstrings_offset) |charstrings_offset| try indexInfo(table, charstrings_offset) else null;
     const fd_array_index = if (top_dict.fd_array_offset) |fd_array_offset| try indexInfo(table, fd_array_offset) else null;
     const fd_select = if (top_dict.fd_select_offset) |fd_select_offset| try fdSelectInfo(table, fd_select_offset) else null;
@@ -86,6 +99,7 @@ fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
         .top_dict_length = top_dict_length,
         .top_dict_data = top_dict_data,
         .trailing_data = table[top_end..],
+        .global_subrs_index = global_subrs_index,
         .top_dict = top_dict,
         .charstrings_index = charstrings_index,
         .fd_array_index = fd_array_index,
@@ -234,8 +248,18 @@ fn fdSelectInfo(table: []const u8, offset: usize) Error!FdSelectInfo {
 }
 
 fn indexInfo(table: []const u8, offset: usize) Error!IndexInfo {
-    if (offset > table.len or table.len - offset < 5) return error.BadSfnt;
+    if (offset > table.len or table.len - offset < 4) return error.BadSfnt;
     const count = std.mem.readInt(u32, table[offset..][0..4], .big);
+    if (count == 0) {
+        return .{
+            .offset = offset,
+            .count = 0,
+            .off_size = 0,
+            .data_offset = offset + 4,
+            .data_length = 0,
+        };
+    }
+    if (table.len - offset < 5) return error.BadSfnt;
     const off_size = table[offset + 4];
     if (off_size < 1 or off_size > 4) return error.BadSfnt;
     const offset_array_len = (@as(usize, count) + 1) * @as(usize, off_size);
@@ -283,32 +307,51 @@ fn readOffsetOperand(operands: []const i32) Error!usize {
     return @intCast(value);
 }
 
-test "CFF2 header exposes top dict and trailing data" {
-    const bytes = [_]u8{ 2, 0, 5, 0, 10, 154, 17, 162, 12, 36, 170, 12, 37, 173, 24, 0, 0, 0, 1, 1, 1, 2, 14, 0, 0, 0, 1, 1, 1, 2, 14, 0, 0, 0, 0x03 };
+test "CFF2 header exposes top dict, global subrs, and trailing data" {
+    const bytes = [_]u8{ 2, 0, 5, 0, 10, 162, 17, 170, 12, 36, 178, 12, 37, 181, 24, 0, 0, 0, 1, 1, 1, 2, 11, 0, 0, 0, 1, 1, 1, 2, 14, 0, 0, 0, 1, 1, 1, 2, 14, 0, 0, 0, 0x03 };
     const parsed = try info(&bytes, 0, bytes.len);
     try std.testing.expectEqual(@as(u8, 2), parsed.major_version);
     try std.testing.expectEqual(@as(u8, 5), parsed.header_size);
     try std.testing.expectEqual(@as(u16, 10), parsed.top_dict_length);
-    try std.testing.expectEqual(@as(?usize, 15), parsed.top_dict.charstrings_offset);
-    try std.testing.expectEqual(@as(?usize, 23), parsed.top_dict.fd_array_offset);
-    try std.testing.expectEqual(@as(?usize, 31), parsed.top_dict.fd_select_offset);
-    try std.testing.expectEqual(@as(?usize, 34), parsed.top_dict.vstore_offset);
+    const global_subrs = parsed.global_subrs_index;
+    try std.testing.expectEqual(@as(usize, 15), global_subrs.offset);
+    try std.testing.expectEqual(@as(u32, 1), global_subrs.count);
+    try std.testing.expectEqual(@as(u8, 1), global_subrs.off_size);
+    try std.testing.expectEqual(@as(usize, 22), global_subrs.data_offset);
+    try std.testing.expectEqual(@as(usize, 1), global_subrs.data_length);
+    try std.testing.expectEqual(@as(?usize, 23), parsed.top_dict.charstrings_offset);
+    try std.testing.expectEqual(@as(?usize, 31), parsed.top_dict.fd_array_offset);
+    try std.testing.expectEqual(@as(?usize, 39), parsed.top_dict.fd_select_offset);
+    try std.testing.expectEqual(@as(?usize, 42), parsed.top_dict.vstore_offset);
     const charstrings = parsed.charstrings_index.?;
     try std.testing.expectEqual(@as(u32, 1), charstrings.count);
     try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
-    try std.testing.expectEqual(@as(usize, 22), charstrings.data_offset);
+    try std.testing.expectEqual(@as(usize, 30), charstrings.data_offset);
     try std.testing.expectEqual(@as(usize, 1), charstrings.data_length);
+    try std.testing.expectEqualSlices(u8, &.{11}, (try globalSubrData(&bytes, 0, bytes.len, 0)).?);
+    try std.testing.expect((try globalSubrData(&bytes, 0, bytes.len, 1)) == null);
     try std.testing.expectEqualSlices(u8, &.{14}, (try charStringData(&bytes, 0, bytes.len, 0)).?);
     const fd_array = parsed.fd_array_index.?;
     try std.testing.expectEqual(@as(u32, 1), fd_array.count);
-    try std.testing.expectEqual(@as(usize, 30), fd_array.data_offset);
+    try std.testing.expectEqual(@as(usize, 38), fd_array.data_offset);
     try std.testing.expectEqual(@as(usize, 1), fd_array.data_length);
     const fd_select = parsed.fd_select.?;
-    try std.testing.expectEqual(@as(usize, 31), fd_select.offset);
+    try std.testing.expectEqual(@as(usize, 39), fd_select.offset);
     try std.testing.expectEqual(@as(u8, 0), fd_select.format);
     try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 0, 2));
     try std.testing.expectEqual(@as(?u16, 0), try fontDictIndex(&bytes, 0, bytes.len, 1, 2));
     try std.testing.expect((try charStringData(&bytes, 0, bytes.len, 1)) == null);
+}
+
+test "CFF2 accepts an empty Global Subr INDEX" {
+    const bytes = [_]u8{ 2, 0, 5, 0, 0, 0, 0, 0, 0 };
+    const parsed = try info(&bytes, 0, bytes.len);
+    try std.testing.expectEqual(@as(usize, 5), parsed.global_subrs_index.offset);
+    try std.testing.expectEqual(@as(u32, 0), parsed.global_subrs_index.count);
+    try std.testing.expectEqual(@as(u8, 0), parsed.global_subrs_index.off_size);
+    try std.testing.expectEqual(@as(usize, 9), parsed.global_subrs_index.data_offset);
+    try std.testing.expectEqual(@as(usize, 0), parsed.global_subrs_index.data_length);
+    try std.testing.expect((try globalSubrData(&bytes, 0, bytes.len, 0)) == null);
 }
 
 test "CFF2 rejects bad versions and oversized top dicts" {

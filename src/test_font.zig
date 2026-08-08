@@ -3829,38 +3829,45 @@ fn writeSimpleTriangleGlyph(bytes: []u8, off: usize, first_dx: u16, second_dx: u
 }
 
 fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 35);
+    const bytes = try allocator.alloc(u8, 43);
     @memset(bytes, 0);
     bytes[0] = 2;
     bytes[1] = 0;
     bytes[2] = 5;
     writeU16(bytes, 3, 10);
-    bytes[5] = 154; // CharStrings offset 15.
+    bytes[5] = 162; // CharStrings offset 23.
     bytes[6] = 17;
-    bytes[7] = 162; // FDArray offset 23.
+    bytes[7] = 170; // FDArray offset 31.
     bytes[8] = 12;
     bytes[9] = 36;
-    bytes[10] = 170; // FDSelect offset 31.
+    bytes[10] = 178; // FDSelect offset 39.
     bytes[11] = 12;
     bytes[12] = 37;
-    bytes[13] = 173; // vstore offset 34.
+    bytes[13] = 181; // vstore offset 42.
     bytes[14] = 24;
 
-    writeU32(bytes, 15, 1); // CFF2 CharStrings INDEX count.
+    writeU32(bytes, 15, 1); // CFF2 Global Subrs INDEX count.
     bytes[19] = 1; // offSize.
     bytes[20] = 1;
     bytes[21] = 2;
-    bytes[22] = 14; // one tiny charstring payload.
+    bytes[22] = 11; // one tiny subroutine payload.
 
-    writeU32(bytes, 23, 1); // CFF2 FDArray INDEX count.
+    writeU32(bytes, 23, 1); // CFF2 CharStrings INDEX count.
     bytes[27] = 1;
     bytes[28] = 1;
     bytes[29] = 2;
-    bytes[30] = 14;
-    bytes[31] = 0; // FDSelect format 0.
-    bytes[32] = 0;
-    bytes[33] = 0;
-    bytes[34] = 0x03;
+    bytes[30] = 14; // one tiny charstring payload.
+
+    writeU32(bytes, 31, 1); // CFF2 FDArray INDEX count.
+    bytes[35] = 1;
+    bytes[36] = 1;
+    bytes[37] = 2;
+    bytes[38] = 14;
+
+    bytes[39] = 0; // FDSelect format 0.
+    bytes[40] = 0;
+    bytes[41] = 0;
+    bytes[42] = 0x03;
     return bytes;
 }
 

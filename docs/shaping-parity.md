@@ -188,6 +188,15 @@ Current local snapshot after the Nastaliq parity work:
   `collectLookupWithIndex` from about `13.6%` to `8.0%`, and removed its group
   binary search as a separate symbol. A reverse-order nine-sample Roboto
   `en-words` check also improved from `1006 ns/glyph` to `954 ns/glyph`.
+- Predecoding single-subtable GSUB `SingleSubst` mappings into native-endian
+  sorted `(from, to)` records moved top-level application off the generic
+  Coverage parser. The records cost four bytes per mapping: about 18.5 KiB for
+  Amiri and 3.2 KiB for Roboto. A same-session nine-sample Amiri
+  `fa-thelittleprince` median fell from `1329 ns/glyph` to `1268 ns/glyph`,
+  about `4.5%`; a reverse-order Roboto `en-words` comparison improved from
+  `955 ns/glyph` to `924 ns/glyph`. Follow-up `perf` no longer reported
+  top-level `applySingleSubstitution`, and reduced `coverageIndex` from about
+  `8.6%` to `5.1%`.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

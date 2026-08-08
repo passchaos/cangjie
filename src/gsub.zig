@@ -104,6 +104,7 @@ pub const LookupAccelerator = struct {
     table_uses_run_digest_cache: bool = false,
     extension_lookup_type: ?u16 = null,
     single_subst: SingleSubstAccelerator = .{},
+    single_subst_entries: []const SingleSubstEntry = &.{},
     multiple_subst: MultipleSubstAccelerator = .{},
     ligature_subst: LigatureSubstAccelerator = .{},
     context_class_subtables: []const ContextClassSubtableAccelerator = &.{},
@@ -130,6 +131,11 @@ const SingleSubstAccelerator = struct {
     single_mapping: bool = false,
     single_from: GlyphId = 0,
     single_to: GlyphId = 0,
+};
+
+const SingleSubstEntry = struct {
+    from: GlyphId,
+    to: GlyphId,
 };
 
 const MultipleSubstAccelerator = struct {
@@ -884,6 +890,7 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
 
 fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
     for (accelerators) |accelerator| {
+        allocator.free(accelerator.single_subst_entries);
         allocator.free(accelerator.multiple_subst.entries);
         allocator.free(accelerator.ligature_subst.sets);
         deinitContextClassSubtableAccelerators(allocator, accelerator.context_class_subtables);
@@ -935,9 +942,13 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
     var accelerator = LookupAccelerator{};
-    if (lookup_type == 1 and lookup_flag == 0 and subtable_count == 1) {
+    if (lookup_type == 1 and subtable_count == 1) {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
-        accelerator.single_subst = try buildSingleSubstAccelerator(table, subtable_offset);
+        accelerator.single_subst_entries = try buildSingleSubstEntries(table, subtable_offset, allocator);
+        errdefer allocator.free(accelerator.single_subst_entries);
+        if (lookup_flag == 0) {
+            accelerator.single_subst = try buildSingleSubstAccelerator(table, subtable_offset);
+        }
     }
     if (lookup_type == 2 and subtable_count == 1) {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
@@ -1405,6 +1416,60 @@ fn buildSingleSubstAccelerator(table: Table, subtable_offset: usize) GsubError!S
     }
 }
 
+fn buildSingleSubstEntries(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]SingleSubstEntry {
+    const subst_format = try readU16(table, subtable_offset);
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    const entry_count = try coverageGlyphCount(table, coverage_offset);
+    const entries = try allocator.alloc(SingleSubstEntry, entry_count);
+    errdefer allocator.free(entries);
+
+    switch (subst_format) {
+        1 => {
+            const delta = try readI16(table, subtable_offset + 4);
+            for (entries, 0..) |*entry, i| {
+                const from = (try coverageGlyphAt(table, coverage_offset, i)) orelse return error.BadGsub;
+                entry.* = .{
+                    .from = from,
+                    .to = @bitCast(@as(i16, @bitCast(from)) +% delta),
+                };
+            }
+        },
+        2 => {
+            const glyph_count = try readU16(table, subtable_offset + 4);
+            if (glyph_count != entry_count) return error.BadGsub;
+            for (entries, 0..) |*entry, i| {
+                entry.* = .{
+                    .from = (try coverageGlyphAt(table, coverage_offset, i)) orelse return error.BadGsub,
+                    .to = try readU16(table, subtable_offset + 6 + i * 2),
+                };
+            }
+        },
+        else => return error.UnsupportedGsub,
+    }
+    // Coverage validation proves source glyphs are strictly ordered. Keep that
+    // order so top-level application can binary-search native-endian records
+    // without reparsing the Coverage and substitute arrays for every glyph.
+    return entries;
+}
+
+fn coverageGlyphCount(table: Table, coverage_offset: usize) GsubError!usize {
+    return switch (try readU16(table, coverage_offset)) {
+        1 => try readU16(table, coverage_offset + 2),
+        2 => count: {
+            const range_count = try readU16(table, coverage_offset + 2);
+            var count: usize = 0;
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                const start = try readU16(table, range_offset);
+                const end = try readU16(table, range_offset + 2);
+                count += @as(usize, end) - @as(usize, start) + 1;
+            }
+            break :count count;
+        },
+        else => error.UnsupportedGsub,
+    };
+}
+
 fn fillSingleMapping(table: Table, coverage_offset: usize, delta: i16, substitutes_pos: ?usize, accelerator: *SingleSubstAccelerator) GsubError!void {
     const format = try readU16(table, coverage_offset);
     const glyph = switch (format) {
@@ -1856,6 +1921,10 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
     }
     lookup_options.match_source_syllable = lookupMatchesSourceSyllable(lookup_index, options);
     if (lookup_type == 1) {
+        if (singleLookupEntries(lookup_index, lookup_options)) |entries| {
+            applySingleSubstitutionEntries(entries, glyphs, lookup_flag, lookup_options);
+            return;
+        }
         try applySingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
         return;
     }
@@ -2018,6 +2087,15 @@ fn multipleLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const
     const accelerator = &accelerators[index].multiple_subst;
     if (accelerator.entries.len == 0) return null;
     return accelerator;
+}
+
+fn singleLookupEntries(lookup_index: ?u16, options: LookupOptions) ?[]const SingleSubstEntry {
+    const accelerators = options.lookup_accelerators orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const entries = accelerators[index].single_subst_entries;
+    if (entries.len == 0) return null;
+    return entries;
 }
 
 fn ligatureLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LigatureSubstAccelerator {
@@ -2272,6 +2350,76 @@ fn applySingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_co
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
         try applySingleSubstitutionSubtable(table, subtable_offset, glyphs, lookup_flag, options, matched);
     }
+}
+
+fn applySingleSubstitutionEntries(entries: []const SingleSubstEntry, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) void {
+    for (glyphs.items, 0..) |*glyph, glyph_index| {
+        if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
+        if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
+        const entry = singleSubstEntryForGlyph(entries, glyph.*) orelse continue;
+        glyph.* = entry.to;
+        markGlyphSubstituted(options, glyph_index);
+    }
+}
+
+fn singleSubstEntryForGlyph(entries: []const SingleSubstEntry, glyph: GlyphId) ?SingleSubstEntry {
+    var lo: usize = 0;
+    var hi: usize = entries.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = entries[mid].from;
+        if (glyph < candidate) {
+            hi = mid;
+        } else if (glyph > candidate) {
+            lo = mid + 1;
+        } else {
+            return entries[mid];
+        }
+    }
+    return null;
+}
+
+test "GSUB native single substitution entries preserve coverage mapping and flags" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 32;
+
+    writeU16Test(&bytes, 0, 2); // SingleSubst format 2.
+    writeU16Test(&bytes, 2, 12);
+    writeU16Test(&bytes, 4, 3);
+    writeU16Test(&bytes, 6, 30);
+    writeU16Test(&bytes, 8, 31);
+    writeU16Test(&bytes, 10, 40);
+
+    writeU16Test(&bytes, 12, 2); // Coverage format 2.
+    writeU16Test(&bytes, 14, 2);
+    writeU16Test(&bytes, 16, 10);
+    writeU16Test(&bytes, 18, 11);
+    writeU16Test(&bytes, 20, 0);
+    writeU16Test(&bytes, 22, 20);
+    writeU16Test(&bytes, 24, 20);
+    writeU16Test(&bytes, 26, 2);
+
+    const entries = try buildSingleSubstEntries(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        0,
+        allocator,
+    );
+    defer allocator.free(entries);
+    try std.testing.expectEqual(@as(usize, 3), entries.len);
+    try std.testing.expectEqual(SingleSubstEntry{ .from = 10, .to = 30 }, entries[0]);
+    try std.testing.expectEqual(SingleSubstEntry{ .from = 11, .to = 31 }, entries[1]);
+    try std.testing.expectEqual(SingleSubstEntry{ .from = 20, .to = 40 }, entries[2]);
+    try std.testing.expect(singleSubstEntryForGlyph(entries, 19) == null);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 9, 10, 11, 20, 21 });
+    var glyph_classes = [_]u16{0} ** 22;
+    glyph_classes[11] = 3;
+    applySingleSubstitutionEntries(entries, &glyphs, 0x0008, .{
+        .glyph_classes = &glyph_classes,
+    });
+    try std.testing.expectEqualSlices(GlyphId, &.{ 9, 30, 11, 40, 21 }, glyphs.items);
 }
 
 fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions, matched: []bool) GsubError!void {

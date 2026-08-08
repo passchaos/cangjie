@@ -6183,6 +6183,8 @@ test "maps logical carets onto visually reordered bidi glyphs" {
     const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "\u{05d0}12\u{05d1}", 20, .{ .max_width = 200, .direction = .rtl });
     const clusters = try itemizeGraphemeClusters(allocator, "\u{05d0}12\u{05d1}");
     defer allocator.free(clusters);
+    try std.testing.expectEqual(@as(usize, 0), paragraph.lines[0].byte_start);
+    try std.testing.expectEqual(@as(usize, "\u{05d0}12\u{05d1}".len), paragraph.lines[0].byte_len);
 
     const after_alef = paragraph.nextGraphemeCaret(clusters, .{ .glyph_index = 3, .cluster = 0 });
     try std.testing.expectEqual(@as(usize, 1), after_alef.glyph_index);
@@ -6336,6 +6338,10 @@ test "paragraph wrapping consumes Unicode line break data" {
     try std.testing.expectEqual(@as(usize, 2), crlf.lines.len);
     try std.testing.expectEqual(@as(usize, 1), crlf.lines[0].glyph_len);
     try std.testing.expectEqual(@as(usize, 1), crlf.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(usize, 0), crlf.lines[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 3), crlf.lines[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 3), crlf.lines[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 1), crlf.lines[1].byte_len);
     try std.testing.expectEqual(@as(u21, 'A'), crlf.glyphs[0].codepoint);
     try std.testing.expectEqual(@as(u21, 'A'), crlf.glyphs[3].codepoint);
 
@@ -6357,6 +6363,10 @@ test "paragraph wrapping consumes Unicode line break data" {
     try std.testing.expectEqual(@as(usize, 0), ivs.glyphs[0].cluster);
     try std.testing.expectEqual(@as(usize, 7), ivs.glyphs[0].source_byte_len);
     try std.testing.expectEqual(@as(usize, 7), ivs.glyphs[1].cluster);
+    try std.testing.expectEqual(@as(usize, 0), ivs.lines[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 7), ivs.lines[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 7), ivs.lines[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 3), ivs.lines[1].byte_len);
 }
 
 test "paragraph layout preserves an empty caret line after trailing newline" {
@@ -6380,6 +6390,10 @@ test "paragraph layout preserves an empty caret line after trailing newline" {
     try std.testing.expectEqual(@as(usize, 1), paragraph.lines[0].glyph_len);
     try std.testing.expectEqual(@as(usize, 0), paragraph.lines[1].glyph_len);
     try std.testing.expectEqual(paragraph.glyphs.len, paragraph.lines[1].glyph_start);
+    try std.testing.expectEqual(@as(usize, 0), paragraph.lines[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 0), paragraph.lines[1].byte_len);
 }
 
 test "paragraph wrapping honors UAX 14 punctuation and no-break glue" {
@@ -7179,6 +7193,10 @@ test "lays out wrapped and aligned fallback text into paragraph lines" {
     try std.testing.expectApproxEqAbs(@as(f32, 24.0), paragraph.lines[1].y, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 48.0), paragraph.height, 0.001);
     try std.testing.expect(paragraph.lines[0].run_len >= 2);
+    try std.testing.expectEqual(@as(usize, 0), paragraph.lines[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 4), paragraph.lines[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 4), paragraph.lines[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines[1].byte_len);
 }
 
 test "paragraph lines expose baseline metrics" {

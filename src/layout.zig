@@ -379,6 +379,14 @@ pub const ParagraphLine = struct {
     glyph_len: usize,
     run_start: usize,
     run_len: usize,
+    /// Logical UTF-8 source range represented by this visual line.
+    ///
+    /// Soft wrapping excludes discarded boundary whitespace from the next
+    /// line but keeps it in the preceding line's source range. Explicit line
+    /// separators are included in the preceding line. A trailing hard break
+    /// therefore creates an empty final line at `text.len`.
+    byte_start: usize,
+    byte_len: usize,
     x: f32,
     y: f32,
     width: f32,
@@ -394,6 +402,10 @@ pub const ParagraphLine = struct {
 
     pub fn runs(self: ParagraphLine, paragraph: ParagraphLayout) []const CascadeRun {
         return paragraph.runs[self.run_start .. self.run_start + self.run_len];
+    }
+
+    pub fn byteEnd(self: ParagraphLine) usize {
+        return self.byte_start + self.byte_len;
     }
 };
 
@@ -2264,6 +2276,7 @@ fn buildParagraphLines(
     const wrap_width = if (options.wrap_mode == .no_wrap) std.math.inf(f32) else max_width;
     const alignment = defaultAlignment(options);
     var line_start: usize = 0;
+    var line_byte_start: usize = 0;
     var line_width: f32 = 0;
     var last_break: ?usize = null;
     var width_at_break: f32 = 0;
@@ -2301,15 +2314,17 @@ fn buildParagraphLines(
     glyph_loop: while (index < buffer.glyphs.items.len) : (index += 1) {
         var glyph = &buffer.glyphs.items[index];
         if (isMandatoryLineBreak(glyph.codepoint)) {
-            try appendParagraphLine(buffer, line_start, index, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+            const break_end_index = if (glyph.codepoint == '\r' and index + 1 < buffer.glyphs.items.len and buffer.glyphs.items[index + 1].codepoint == '\n') index + 2 else index + 1;
+            const line_byte_end = glyphSourceEnd(buffer.glyphs.items[break_end_index - 1]);
+            try appendParagraphLine(buffer, line_start, index, line_byte_start, line_byte_end, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
             if (buffer.lines.items.len >= max_lines) {
                 try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
                 return;
             }
             y += line_height + options.paragraph_spacing;
-            const break_end_index = if (glyph.codepoint == '\r' and index + 1 < buffer.glyphs.items.len and buffer.glyphs.items[index + 1].codepoint == '\n') index + 2 else index + 1;
             line_breaks.discardThrough(glyphSourceEnd(buffer.glyphs.items[break_end_index - 1]));
             line_start = break_end_index;
+            line_byte_start = line_byte_end;
             line_width = 0;
             last_break = null;
             width_at_break = 0;
@@ -2336,15 +2351,22 @@ fn buildParagraphLines(
                 width_at_break
             else
                 lineWidth(buffer.glyphs.items[line_start..break_end]);
-            try appendParagraphLine(buffer, line_start, break_end, break_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+            var next_line_start = break_end;
+            trimLeadingSoftBreaks(buffer.glyphs.items, &next_line_start);
+            // Boundary whitespace is omitted from both visual glyph ranges but
+            // still belongs to the preceding line's logical source range.
+            // Advancing the byte boundary through `next_line_start` keeps line
+            // ranges contiguous and gives per-line bidi the exact source slice.
+            const line_byte_end = byteEndForGlyphPrefix(buffer.glyphs.items, next_line_start, line_byte_start);
+            try appendParagraphLine(buffer, line_start, break_end, line_byte_start, line_byte_end, break_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
             if (buffer.lines.items.len >= max_lines) {
                 try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
                 return;
             }
             y += line_height;
             line_in_paragraph += 1;
-            line_start = break_end;
-            trimLeadingSoftBreaks(buffer.glyphs.items, &line_start);
+            line_start = next_line_start;
+            line_byte_start = byteEndForGlyphPrefix(buffer.glyphs.items, line_start, line_byte_end);
             line_width = lineWidth(buffer.glyphs.items[line_start .. index + 1]);
             terminal_emergency_line_committed = break_end == buffer.glyphs.items.len;
             last_break = null;
@@ -2367,7 +2389,7 @@ fn buildParagraphLines(
     // that case `line_start == glyph_count`; appending again would fabricate an
     // empty trailing line even though the source contains no hard terminator.
     if (!terminal_emergency_line_committed) {
-        try appendParagraphLine(buffer, line_start, buffer.glyphs.items.len, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+        try appendParagraphLine(buffer, line_start, buffer.glyphs.items.len, line_byte_start, text.len, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
     }
     try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, false);
 }
@@ -2527,6 +2549,18 @@ fn glyphSourceEnd(glyph: GlyphPosition) usize {
     return glyph.cluster + @max(glyph.source_byte_len, 1);
 }
 
+fn byteEndForGlyphPrefix(glyphs: []const GlyphPosition, glyph_end: usize, fallback: usize) usize {
+    var byte_end = fallback;
+    // Logical line byte boundaries are independent of visual glyph order. A
+    // prefix scan is therefore intentionally source-oriented: it finds the
+    // largest source end represented before the visual split even when bidi
+    // clusters inside that prefix are not monotonic.
+    for (glyphs[0..@min(glyph_end, glyphs.len)]) |glyph| {
+        byte_end = @max(byte_end, glyphSourceEnd(glyph));
+    }
+    return byte_end;
+}
+
 fn graphemeClusterContaining(clusters: []const unicode.GraphemeCluster, byte_offset: usize) ?unicode.GraphemeCluster {
     for (clusters) |cluster| {
         const end = cluster.byte_start + cluster.byte_len;
@@ -2641,7 +2675,7 @@ fn appendEllipsisToLastLine(buffer: *LayoutBuffer, max_width: f32, alignment: Te
     line.x = alignedLineX(line.width, max_width, alignment);
 }
 
-fn appendParagraphLine(buffer: *LayoutBuffer, glyph_start: usize, glyph_end: usize, width: f32, metrics: BaselineMetrics, y: f32, alignment: TextAlign, max_width: f32, indent: f32) !void {
+fn appendParagraphLine(buffer: *LayoutBuffer, glyph_start: usize, glyph_end: usize, byte_start: usize, byte_end: usize, width: f32, metrics: BaselineMetrics, y: f32, alignment: TextAlign, max_width: f32, indent: f32) !void {
     const available_width = lineWidthLimitForIndent(max_width, indent);
     const x = indent + alignedLineX(width, available_width, alignment);
     const run_range = runRangeForGlyphs(buffer.runs.items, glyph_start, glyph_end);
@@ -2650,6 +2684,8 @@ fn appendParagraphLine(buffer: *LayoutBuffer, glyph_start: usize, glyph_end: usi
         .glyph_len = glyph_end - glyph_start,
         .run_start = run_range.start,
         .run_len = run_range.len,
+        .byte_start = byte_start,
+        .byte_len = byte_end - byte_start,
         .x = x,
         .y = y,
         .width = width,

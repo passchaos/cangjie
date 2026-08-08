@@ -1129,6 +1129,12 @@ pub const Font = struct {
         return try cff2_mod.charStringBoundsInfoAtCoords(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords);
     }
 
+    /// Return integer CFF2 glyph bounds using caller-supplied normalized variation coordinates.
+    pub fn cff2GlyphBoundsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?glyph_mod.Bounds {
+        const bounds = (try self.cff2CharStringBoundsInfoAtCoords(glyph_id, normalized_coords)) orelse return null;
+        return cff2BoundsInfoToGlyphBounds(bounds);
+    }
+
     /// Build a CFF2 glyph outline using caller-supplied normalized variation coordinates.
     pub fn cff2GlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;

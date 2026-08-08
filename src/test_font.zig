@@ -20,6 +20,10 @@ pub fn buildHdmxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try hdmxTtfTables(allocator));
 }
 
+pub fn buildLtshTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try ltshTtfTables(allocator));
+}
+
 pub fn buildPcltTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try pcltTtfTables(allocator));
 }
@@ -525,6 +529,21 @@ fn hdmxTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[2] = .{ .tag = "hdmx", .data = try hdmxTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn ltshTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "LTSH", .data = try ltshTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
@@ -4760,6 +4779,16 @@ fn hdmxTable(allocator: std.mem.Allocator) ![]u8 {
     bytes[13] = 12;
     bytes[14] = 6;
     bytes[15] = 12;
+    return bytes;
+}
+
+fn ltshTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 6);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 2);
+    bytes[4] = 7;
+    bytes[5] = 11;
     return bytes;
 }
 

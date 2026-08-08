@@ -98,6 +98,7 @@ pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const HdmxInfo = @import("font.zig").HdmxInfo;
 pub const HdmxRecord = @import("font.zig").HdmxRecord;
+pub const LtshInfo = @import("font.zig").LtshInfo;
 pub const HorizontalMetricInfo = @import("font.zig").HorizontalMetricInfo;
 pub const MetricHeaderInfo = @import("font.zig").MetricHeaderInfo;
 pub const VerticalMetricInfo = @import("font.zig").VerticalMetricInfo;
@@ -471,6 +472,55 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "LTSH thresholds are exposed" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildLtshTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.ltshInfo(allocator)).?;
+    defer font.freeLtshInfo(allocator, info);
+    try std.testing.expectEqual(@as(u16, 0), info.version);
+    try std.testing.expectEqualSlices(u8, &.{ 7, 11 }, info.thresholds);
+
+    try std.testing.expectEqual(@as(?u8, 7), try font.linearThreshold(0));
+    try std.testing.expectEqual(@as(?u8, 11), try font.linearThreshold(1));
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.ltshInfo(allocator)) == null);
+    try std.testing.expect((try missing.linearThreshold(1)) == null);
+}
+
+test "lazy LTSH metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildLtshTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expectEqual(@as(?u8, 11), try font.linearThreshold(1));
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var ltsh_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "LTSH")) ltsh_offset = table.offset;
+    }
+    bytes[ltsh_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.linearThreshold(1));
+    try std.testing.expectError(error.BadSfnt, font.ltshInfo(allocator));
 }
 
 test "hdmx metadata and widths are exposed" {

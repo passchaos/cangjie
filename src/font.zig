@@ -105,6 +105,11 @@ pub const HdmxInfo = struct {
     records: []HdmxRecord,
 };
 
+pub const LtshInfo = struct {
+    version: u16,
+    thresholds: []u8,
+};
+
 pub const VerticalMetricInfo = struct {
     advance_height: u16,
     top_side_bearing: i16,
@@ -589,6 +594,7 @@ pub const Font = struct {
     maxp: TableRecord,
     hmtx: TableRecord,
     hdmx: ?TableRecord,
+    ltsh: ?TableRecord,
     loca: ?TableRecord,
     cmap: TableRecord,
     kern: ?TableRecord,
@@ -679,6 +685,7 @@ pub const Font = struct {
         const maxp = findTable(records, "maxp") orelse return error.MissingTable;
         const hmtx = findTable(records, "hmtx") orelse return error.MissingTable;
         const hdmx = findTable(records, "hdmx");
+        const ltsh = findTable(records, "LTSH");
         const loca = findTable(records, "loca");
         const cmap = findTable(records, "cmap") orelse return error.MissingTable;
         const kern = findTable(records, "kern");
@@ -745,6 +752,7 @@ pub const Font = struct {
         if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
         if (kern) |kern_table| try validateKernTable(data, kern_table, glyph_count);
         if (hdmx) |hdmx_table| try validateHdmxTable(data, hdmx_table, glyph_count);
+        if (ltsh) |ltsh_table| try validateLtshTable(data, ltsh_table, glyph_count);
         if (gasp) |gasp_table| try validateGaspTable(data, gasp_table);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
@@ -825,6 +833,7 @@ pub const Font = struct {
             .maxp = maxp,
             .hmtx = hmtx,
             .hdmx = hdmx,
+            .ltsh = ltsh,
             .loca = loca,
             .cmap = cmap,
             .kern = kern,
@@ -1105,6 +1114,26 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, hdmx);
         try validateHdmxTable(self.data, hdmx, self.glyph_count);
         return try readHdmxWidth(self.data, hdmx, self.glyph_count, ppem, glyph_id);
+    }
+
+    /// Read validated linear-threshold metrics from the optional SFNT `LTSH` table.
+    pub fn ltshInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?LtshInfo {
+        const ltsh = self.ltsh orelse return null;
+        try validateSfntTableChecksum(self.data, ltsh);
+        try validateLtshTable(self.data, ltsh, self.glyph_count);
+        return try readLtshInfo(allocator, self.data, ltsh, self.glyph_count);
+    }
+
+    pub fn freeLtshInfo(_: *const Font, allocator: std.mem.Allocator, info: LtshInfo) void {
+        allocator.free(info.thresholds);
+    }
+
+    pub fn linearThreshold(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?u8 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const ltsh = self.ltsh orelse return null;
+        try validateSfntTableChecksum(self.data, ltsh);
+        try validateLtshTable(self.data, ltsh, self.glyph_count);
+        return self.data[ltsh.offset + 4 + glyph_id];
     }
 
     /// Expand the SFNT `hmtx` table into one metric record per glyph.
@@ -3984,6 +4013,21 @@ fn clampI16(value: i32) i16 {
     if (value < std.math.minInt(i16)) return std.math.minInt(i16);
     if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
     return @intCast(value);
+}
+
+fn validateLtshTable(data: []const u8, ltsh: TableRecord, glyph_count: u16) FontError!void {
+    try requireTableLength(ltsh, 4);
+    if (try bin.readU16At(data, ltsh.offset) != 0) return error.BadSfnt;
+    const count = try bin.readU16At(data, ltsh.offset + 2);
+    if (count != glyph_count) return error.BadSfnt;
+    if (ltsh.length != 4 + @as(usize, count)) return error.BadSfnt;
+}
+
+fn readLtshInfo(allocator: std.mem.Allocator, data: []const u8, ltsh: TableRecord, glyph_count: u16) FontError!LtshInfo {
+    const thresholds = try allocator.alloc(u8, glyph_count);
+    errdefer allocator.free(thresholds);
+    @memcpy(thresholds, data[ltsh.offset + 4 .. ltsh.offset + 4 + glyph_count]);
+    return .{ .version = try bin.readU16At(data, ltsh.offset), .thresholds = thresholds };
 }
 
 fn validateHdmxTable(data: []const u8, hdmx: TableRecord, glyph_count: u16) FontError!void {
@@ -17903,6 +17947,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .maxp = dummy_table,
         .hmtx = dummy_table,
         .hdmx = null,
+        .ltsh = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -17953,6 +17998,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .maxp = dummy_table,
         .hmtx = dummy_table,
         .hdmx = null,
+        .ltsh = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18003,6 +18049,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .maxp = dummy_table,
         .hmtx = dummy_table,
         .hdmx = null,
+        .ltsh = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18064,6 +18111,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .maxp = dummy_table,
         .hmtx = dummy_table,
         .hdmx = null,
+        .ltsh = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18114,6 +18162,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .maxp = dummy_table,
         .hmtx = dummy_table,
         .hdmx = null,
+        .ltsh = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18164,6 +18213,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .maxp = dummy_table,
         .hmtx = dummy_table,
         .hdmx = null,
+        .ltsh = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18214,6 +18264,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .maxp = dummy_table,
         .hmtx = dummy_table,
         .hdmx = null,
+        .ltsh = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18284,6 +18335,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .maxp = dummy_table,
         .hmtx = dummy_table,
         .hdmx = null,
+        .ltsh = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = kern_checksum, .offset = 0, .length = data.len },

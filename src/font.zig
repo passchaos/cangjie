@@ -3514,8 +3514,12 @@ pub const Font = struct {
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
         const target_count = try gvarTargetCountForGlyphData(data);
-        const has_delta = try allocator.alloc(bool, target_count);
-        defer allocator.free(has_delta);
+        var inline_has_delta: [64]bool = undefined;
+        const has_delta = if (target_count <= inline_has_delta.len)
+            inline_has_delta[0..target_count]
+        else
+            try allocator.alloc(bool, target_count);
+        defer if (target_count > inline_has_delta.len) allocator.free(has_delta);
         const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
         defer allocator.free(deltas);
         try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
@@ -3684,8 +3688,12 @@ pub const Font = struct {
         const contour_count = try bin.readI16At(data, 0);
         if (contour_count >= 0) {
             const target_count = try gvarTargetCountForGlyphData(data);
-            const has_delta = try outline.allocator.alloc(bool, target_count);
-            defer outline.allocator.free(has_delta);
+            var inline_has_delta: [64]bool = undefined;
+            const has_delta = if (target_count <= inline_has_delta.len)
+                inline_has_delta[0..target_count]
+            else
+                try outline.allocator.alloc(bool, target_count);
+            defer if (target_count > inline_has_delta.len) outline.allocator.free(has_delta);
             const deltas = (try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse {
                 try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null, null);
                 return;

@@ -560,7 +560,7 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expectEqual(@as(u32, 0x00010000), info.version);
     try std.testing.expectEqual(@as(usize, 10), info.constants_offset);
     try std.testing.expectEqual(@as(usize, 224), info.glyph_info_offset);
-    try std.testing.expectEqual(@as(usize, 232), info.variants_offset);
+    try std.testing.expectEqual(@as(usize, 238), info.variants_offset);
     try std.testing.expectEqual(@as(i16, 80), info.constants.script_percent_scale_down);
     try std.testing.expectEqual(@as(i16, 60), info.constants.script_script_percent_scale_down);
     try std.testing.expectEqual(@as(u16, 1000), info.constants.delimited_sub_formula_min_height);
@@ -568,6 +568,8 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expectEqual(@as(usize, 51), info.constants.value_records.len);
     try std.testing.expectEqual(MathValueRecordInfo{ .value = 11, .device_offset = 0 }, info.constants.value_records[0]);
     try std.testing.expectEqual(@as(i16, 55), info.constants.radical_degree_bottom_raise_percent);
+    try std.testing.expectEqual(@as(?usize, 8), info.glyph_info.extended_shape_coverage_offset);
+    try std.testing.expectEqualSlices(u16, &.{3}, info.glyph_info.extended_shape_glyphs);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);

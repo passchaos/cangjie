@@ -3214,19 +3214,23 @@ fn colrV1IndirectPaintColrGlyphCycleTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn mathTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 242);
+    const bytes = try allocator.alloc(u8, 248);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
     writeU16(bytes, 4, 10);
     writeU16(bytes, 6, 224);
-    writeU16(bytes, 8, 232);
+    writeU16(bytes, 8, 238);
     writeI16(bytes, 10, 80);
     writeI16(bytes, 12, 60);
     writeU16(bytes, 14, 1000);
     writeU16(bytes, 16, 1200);
     writeI16(bytes, 18, 11);
     writeI16(bytes, 222, 55);
+    writeU16(bytes, 228, 8);
+    writeU16(bytes, 232, 1);
+    writeU16(bytes, 234, 1);
+    writeU16(bytes, 236, 3);
     return bytes;
 }
 

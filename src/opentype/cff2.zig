@@ -42,6 +42,7 @@ pub const PrivateDictInfo = struct {
 };
 
 pub const CharStringScanInfo = charstring_mod.Info;
+pub const CharStringBoundsInfo = charstring_mod.BoundsInfo;
 
 pub const Info = struct {
     major_version: u8,
@@ -144,6 +145,21 @@ pub fn charStringData(data: []const u8, offset: usize, length: usize, glyph_id: 
 }
 
 pub fn charStringScanInfo(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?CharStringScanInfo {
+    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count)) orelse return null;
+    return try charstring_mod.scan(CharStringScanContext, &execution.context, execution.charstring);
+}
+
+pub fn charStringBoundsInfo(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?CharStringBoundsInfo {
+    var execution = (try charStringExecutionContext(data, offset, length, glyph_id, glyph_count)) orelse return null;
+    return try charstring_mod.bounds(CharStringScanContext, &execution.context, execution.charstring);
+}
+
+const CharStringExecutionContext = struct {
+    charstring: []const u8,
+    context: CharStringScanContext,
+};
+
+fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?CharStringExecutionContext {
     if (glyph_id >= glyph_count) return error.BadSfnt;
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     const table = data[offset .. offset + length];
@@ -162,12 +178,14 @@ pub fn charStringScanInfo(data: []const u8, offset: usize, length: usize, glyph_
         break :blk font_dict.private_dict.local_subrs_index;
     } else null;
 
-    var context = CharStringScanContext{
-        .table = table,
-        .global_subrs_index = parsed.global_subrs_index,
-        .local_subrs_index = local_subrs,
+    return .{
+        .charstring = charstring,
+        .context = .{
+            .table = table,
+            .global_subrs_index = parsed.global_subrs_index,
+            .local_subrs_index = local_subrs,
+        },
     };
-    return try charstring_mod.scan(CharStringScanContext, &context, charstring);
 }
 
 const CharStringScanContext = struct {

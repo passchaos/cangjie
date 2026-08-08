@@ -23,6 +23,18 @@ pub const Info = struct {
     has_vsindex: bool = false,
 };
 
+pub const BoundsInfo = struct {
+    scan: Info = .{},
+    has_bounds: bool = false,
+    x_min: f32 = 0,
+    y_min: f32 = 0,
+    x_max: f32 = 0,
+    y_max: f32 = 0,
+    move_count: usize = 0,
+    line_count: usize = 0,
+    curve_count: usize = 0,
+};
+
 /// Scan a CFF2/Type2 charstring and recursively visit subroutines reachable
 /// through literal `callsubr`/`callgsubr` operands.
 ///
@@ -41,6 +53,19 @@ pub fn scan(comptime Context: type, context: *Context, bytes: []const u8) Error!
     return scanner.info;
 }
 
+/// Execute enough of a CFF2/Type2 charstring to compute conservative outline
+/// bounds and operation counts.
+///
+/// Cubic bounds include control points, matching HarfBuzz's fast CFF extents
+/// path and avoiding expensive cubic-extrema solving in this metadata API. A
+/// later full outline builder can refine exact path geometry while reusing the
+/// same operand/subroutine machinery.
+pub fn bounds(comptime Context: type, context: *Context, bytes: []const u8) Error!BoundsInfo {
+    var executor = BoundsExecutor(Context){ .context = context };
+    _ = try executor.runCharString(bytes, 0);
+    return executor.bounds_info;
+}
+
 const Termination = enum {
     none,
     @"return",
@@ -48,8 +73,25 @@ const Termination = enum {
 };
 
 const Value = struct {
-    value: i32,
+    number: f32,
+    integer_value: i32 = 0,
     integer: bool,
+
+    fn int(value: i32) Value {
+        return .{
+            .number = @as(f32, @floatFromInt(value)),
+            .integer_value = value,
+            .integer = true,
+        };
+    }
+
+    fn fixed(raw: i32) Value {
+        return .{
+            .number = @as(f32, @floatFromInt(raw)) / 65536.0,
+            .integer_value = raw,
+            .integer = false,
+        };
+    }
 };
 
 fn Scanner(comptime Context: type) type {
@@ -196,11 +238,467 @@ fn Scanner(comptime Context: type) type {
             self.stack_len -= 1;
             const value = self.stack[self.stack_len];
             if (!value.integer) return error.BadSfnt;
-            return value.value;
+            return value.integer_value;
         }
 
         fn readStemHints(self: *Self) void {
             self.info.stem_count += self.stack_len / 2;
+            self.clearStack();
+        }
+
+        fn clearStack(self: *Self) void {
+            self.stack_len = 0;
+        }
+    };
+}
+
+fn BoundsExecutor(comptime Context: type) type {
+    return struct {
+        context: *Context,
+        stack: [max_stack]Value = undefined,
+        stack_len: usize = 0,
+        operation_count: usize = 0,
+        x: f32 = 0,
+        y: f32 = 0,
+        contour_open: bool = false,
+        bounds_info: BoundsInfo = .{},
+
+        const Self = @This();
+
+        fn runCharString(self: *Self, bytes: []const u8, depth: u8) Error!Termination {
+            if (depth > max_nesting_depth) return error.BadSfnt;
+            self.bounds_info.scan.charstring_count += 1;
+            self.bounds_info.scan.byte_count += bytes.len;
+            self.bounds_info.scan.max_depth = @max(self.bounds_info.scan.max_depth, depth);
+
+            var offset: usize = 0;
+            while (offset < bytes.len) {
+                self.operation_count += 1;
+                if (self.operation_count > max_operations) return error.BadSfnt;
+
+                const b = bytes[offset];
+                offset += 1;
+                if (b == 28 or b >= 32) {
+                    try self.push(try readNumber(bytes, &offset, b));
+                    self.bounds_info.scan.number_count += 1;
+                    continue;
+                }
+
+                const termination = try self.operator(bytes, &offset, b, depth);
+                switch (termination) {
+                    .none => {},
+                    .@"return", .endchar => return termination,
+                }
+            }
+            return .none;
+        }
+
+        fn operator(self: *Self, bytes: []const u8, offset: *usize, b: u8, depth: u8) Error!Termination {
+            self.bounds_info.scan.operator_count += 1;
+            switch (b) {
+                1, 3, 18, 23 => {
+                    self.readStemHints();
+                    return .none;
+                },
+                4 => {
+                    try self.vmoveto();
+                    return .none;
+                },
+                5 => {
+                    try self.rlineto();
+                    return .none;
+                },
+                6 => {
+                    try self.hlineto();
+                    return .none;
+                },
+                7 => {
+                    try self.vlineto();
+                    return .none;
+                },
+                8 => {
+                    try self.rrcurveto();
+                    return .none;
+                },
+                10 => return try self.callSubr(.local, depth),
+                11 => {
+                    self.bounds_info.scan.has_return = true;
+                    self.clearStack();
+                    return .@"return";
+                },
+                12 => {
+                    if (offset.* >= bytes.len) return error.BadSfnt;
+                    const escaped = bytes[offset.*];
+                    offset.* += 1;
+                    return try self.escapedOperator(escaped);
+                },
+                14 => {
+                    self.bounds_info.scan.has_endchar = true;
+                    self.clearStack();
+                    return .endchar;
+                },
+                15 => {
+                    _ = try self.popInteger();
+                    self.bounds_info.scan.has_vsindex = true;
+                    self.clearStack();
+                    return .none;
+                },
+                16 => return error.BadSfnt,
+                19, 20 => {
+                    self.readStemHints();
+                    const mask_len = (self.bounds_info.scan.stem_count + 7) / 8;
+                    if (mask_len > bytes.len - offset.*) return error.BadSfnt;
+                    offset.* += mask_len;
+                    self.bounds_info.scan.hint_mask_count += 1;
+                    return .none;
+                },
+                21 => {
+                    try self.rmoveto();
+                    return .none;
+                },
+                22 => {
+                    try self.hmoveto();
+                    return .none;
+                },
+                24 => {
+                    try self.rcurveline();
+                    return .none;
+                },
+                25 => {
+                    try self.rlinecurve();
+                    return .none;
+                },
+                26 => {
+                    try self.vvcurveto();
+                    return .none;
+                },
+                27 => {
+                    try self.hhcurveto();
+                    return .none;
+                },
+                29 => return try self.callSubr(.global, depth),
+                30 => {
+                    try self.vhcurveto();
+                    return .none;
+                },
+                31 => {
+                    try self.hvcurveto();
+                    return .none;
+                },
+                else => {
+                    self.bounds_info.scan.unknown_operator_count += 1;
+                    self.clearStack();
+                    return .none;
+                },
+            }
+        }
+
+        fn escapedOperator(self: *Self, op: u8) Error!Termination {
+            switch (op) {
+                0 => self.clearStack(),
+                12 => try self.div(),
+                34 => try self.hflex(),
+                35 => try self.flex(),
+                36 => try self.hflex1(),
+                37 => try self.flex1(),
+                else => {
+                    self.bounds_info.scan.unknown_operator_count += 1;
+                    self.clearStack();
+                },
+            }
+            return .none;
+        }
+
+        const SubrKind = enum { local, global };
+
+        fn callSubr(self: *Self, kind: SubrKind, depth: u8) Error!Termination {
+            const operand = try self.popInteger();
+            const subr = switch (kind) {
+                .local => blk: {
+                    self.bounds_info.scan.local_subr_call_count += 1;
+                    break :blk (try self.context.localSubr(operand)) orelse return error.BadSfnt;
+                },
+                .global => blk: {
+                    self.bounds_info.scan.global_subr_call_count += 1;
+                    break :blk (try self.context.globalSubr(operand)) orelse return error.BadSfnt;
+                },
+            };
+            const termination = try self.runCharString(subr, depth + 1);
+            return switch (termination) {
+                .none => error.BadSfnt,
+                .@"return" => .none,
+                .endchar => .endchar,
+            };
+        }
+
+        fn rmoveto(self: *Self) Error!void {
+            if (self.stack_len != 2) return error.BadSfnt;
+            self.closeOpenContour();
+            self.x += self.stack[0].number;
+            self.y += self.stack[1].number;
+            self.bounds_info.move_count += 1;
+            self.contour_open = true;
+            self.clearStack();
+        }
+
+        fn hmoveto(self: *Self) Error!void {
+            if (self.stack_len != 1) return error.BadSfnt;
+            self.closeOpenContour();
+            self.x += self.stack[0].number;
+            self.bounds_info.move_count += 1;
+            self.contour_open = true;
+            self.clearStack();
+        }
+
+        fn vmoveto(self: *Self) Error!void {
+            if (self.stack_len != 1) return error.BadSfnt;
+            self.closeOpenContour();
+            self.y += self.stack[0].number;
+            self.bounds_info.move_count += 1;
+            self.contour_open = true;
+            self.clearStack();
+        }
+
+        fn rlineto(self: *Self) Error!void {
+            if (self.stack_len < 2 or (self.stack_len & 1) != 0) return error.BadSfnt;
+            var i: usize = 0;
+            while (i < self.stack_len) : (i += 2) {
+                self.lineBy(self.stack[i].number, self.stack[i + 1].number);
+            }
+            self.clearStack();
+        }
+
+        fn hlineto(self: *Self) Error!void {
+            if (self.stack_len == 0) return error.BadSfnt;
+            var horizontal = true;
+            for (self.stack[0..self.stack_len]) |delta| {
+                if (horizontal) self.lineBy(delta.number, 0) else self.lineBy(0, delta.number);
+                horizontal = !horizontal;
+            }
+            self.clearStack();
+        }
+
+        fn vlineto(self: *Self) Error!void {
+            if (self.stack_len == 0) return error.BadSfnt;
+            var vertical = true;
+            for (self.stack[0..self.stack_len]) |delta| {
+                if (vertical) self.lineBy(0, delta.number) else self.lineBy(delta.number, 0);
+                vertical = !vertical;
+            }
+            self.clearStack();
+        }
+
+        fn rrcurveto(self: *Self) Error!void {
+            if (self.stack_len < 6 or self.stack_len % 6 != 0) return error.BadSfnt;
+            var i: usize = 0;
+            while (i < self.stack_len) : (i += 6) {
+                self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
+            }
+            self.clearStack();
+        }
+
+        fn rcurveline(self: *Self) Error!void {
+            if (self.stack_len < 8 or ((self.stack_len - 2) % 6) != 0) return error.BadSfnt;
+            var i: usize = 0;
+            while (i + 2 < self.stack_len) : (i += 6) {
+                self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
+            }
+            self.lineBy(self.stack[self.stack_len - 2].number, self.stack[self.stack_len - 1].number);
+            self.clearStack();
+        }
+
+        fn rlinecurve(self: *Self) Error!void {
+            if (self.stack_len < 8 or ((self.stack_len - 6) & 1) != 0) return error.BadSfnt;
+            var i: usize = 0;
+            while (i + 6 < self.stack_len) : (i += 2) {
+                self.lineBy(self.stack[i].number, self.stack[i + 1].number);
+            }
+            self.curveByDeltas(self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, self.stack[i + 4].number, self.stack[i + 5].number);
+            self.clearStack();
+        }
+
+        fn vvcurveto(self: *Self) Error!void {
+            var i: usize = 0;
+            var dx1: f32 = 0;
+            if ((self.stack_len & 1) != 0) {
+                dx1 = self.stack[0].number;
+                i = 1;
+            }
+            if (self.stack_len - i < 4 or ((self.stack_len - i) % 4) != 0) return error.BadSfnt;
+            while (i < self.stack_len) : (i += 4) {
+                self.curveByDeltas(dx1, self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, 0, self.stack[i + 3].number);
+                dx1 = 0;
+            }
+            self.clearStack();
+        }
+
+        fn hhcurveto(self: *Self) Error!void {
+            var i: usize = 0;
+            var dy1: f32 = 0;
+            if ((self.stack_len & 1) != 0) {
+                dy1 = self.stack[0].number;
+                i = 1;
+            }
+            if (self.stack_len - i < 4 or ((self.stack_len - i) % 4) != 0) return error.BadSfnt;
+            while (i < self.stack_len) : (i += 4) {
+                self.curveByDeltas(self.stack[i].number, dy1, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, 0);
+                dy1 = 0;
+            }
+            self.clearStack();
+        }
+
+        fn vhcurveto(self: *Self) Error!void {
+            try self.alternatingCurve(false);
+        }
+
+        fn hvcurveto(self: *Self) Error!void {
+            try self.alternatingCurve(true);
+        }
+
+        fn alternatingCurve(self: *Self, horizontal_first: bool) Error!void {
+            if (self.stack_len < 4) return error.BadSfnt;
+            var i: usize = 0;
+            var horizontal = horizontal_first;
+            while (i + 4 <= self.stack_len) {
+                const last_curve = self.stack_len - i == 5;
+                const d6 = if (last_curve) self.stack[i + 4].number else 0;
+                if (horizontal) {
+                    self.curveByDeltas(self.stack[i].number, 0, self.stack[i + 1].number, self.stack[i + 2].number, if (last_curve) d6 else 0, self.stack[i + 3].number);
+                } else {
+                    self.curveByDeltas(0, self.stack[i].number, self.stack[i + 1].number, self.stack[i + 2].number, self.stack[i + 3].number, if (last_curve) d6 else 0);
+                }
+                i += if (last_curve) 5 else 4;
+                horizontal = !horizontal;
+            }
+            if (i != self.stack_len) return error.BadSfnt;
+            self.clearStack();
+        }
+
+        fn hflex(self: *Self) Error!void {
+            if (self.stack_len != 7) return error.BadSfnt;
+            const dx1 = self.stack[0].number;
+            const dx2 = self.stack[1].number;
+            const dy2 = self.stack[2].number;
+            const dx3 = self.stack[3].number;
+            const dx4 = self.stack[4].number;
+            const dx5 = self.stack[5].number;
+            const dx6 = self.stack[6].number;
+            self.curveByDeltas(dx1, 0, dx2, dy2, dx3, 0);
+            self.curveByDeltas(dx4, 0, dx5, -dy2, dx6, 0);
+            self.clearStack();
+        }
+
+        fn flex(self: *Self) Error!void {
+            if (self.stack_len != 13) return error.BadSfnt;
+            self.curveByDeltas(self.stack[0].number, self.stack[1].number, self.stack[2].number, self.stack[3].number, self.stack[4].number, self.stack[5].number);
+            self.curveByDeltas(self.stack[6].number, self.stack[7].number, self.stack[8].number, self.stack[9].number, self.stack[10].number, self.stack[11].number);
+            self.clearStack();
+        }
+
+        fn hflex1(self: *Self) Error!void {
+            if (self.stack_len != 9) return error.BadSfnt;
+            const dx1 = self.stack[0].number;
+            const dy1 = self.stack[1].number;
+            const dx2 = self.stack[2].number;
+            const dy2 = self.stack[3].number;
+            const dx3 = self.stack[4].number;
+            const dx4 = self.stack[5].number;
+            const dx5 = self.stack[6].number;
+            const dy5 = self.stack[7].number;
+            const dx6 = self.stack[8].number;
+            self.curveByDeltas(dx1, dy1, dx2, dy2, dx3, 0);
+            self.curveByDeltas(dx4, 0, dx5, dy5, dx6, -(dy1 + dy2 + dy5));
+            self.clearStack();
+        }
+
+        fn flex1(self: *Self) Error!void {
+            if (self.stack_len != 11) return error.BadSfnt;
+            const dx1 = self.stack[0].number;
+            const dy1 = self.stack[1].number;
+            const dx2 = self.stack[2].number;
+            const dy2 = self.stack[3].number;
+            const dx3 = self.stack[4].number;
+            const dy3 = self.stack[5].number;
+            const dx4 = self.stack[6].number;
+            const dy4 = self.stack[7].number;
+            const dx5 = self.stack[8].number;
+            const dy5 = self.stack[9].number;
+            const d6 = self.stack[10].number;
+            const dx_total = dx1 + dx2 + dx3 + dx4 + dx5;
+            const dy_total = dy1 + dy2 + dy3 + dy4 + dy5;
+            const dx6: f32 = if (@abs(dx_total) > @abs(dy_total)) d6 else -dx_total;
+            const dy6: f32 = if (@abs(dx_total) > @abs(dy_total)) -dy_total else d6;
+            self.curveByDeltas(dx1, dy1, dx2, dy2, dx3, dy3);
+            self.curveByDeltas(dx4, dy4, dx5, dy5, dx6, dy6);
+            self.clearStack();
+        }
+
+        fn div(self: *Self) Error!void {
+            if (self.stack_len < 2) return error.BadSfnt;
+            const rhs = self.stack[self.stack_len - 1].number;
+            if (rhs == 0) return error.BadSfnt;
+            const lhs = self.stack[self.stack_len - 2].number;
+            self.stack_len -= 2;
+            try self.push(.{ .number = lhs / rhs, .integer = false });
+        }
+
+        fn lineBy(self: *Self, dx: f32, dy: f32) void {
+            self.includePoint(self.x, self.y);
+            self.x += dx;
+            self.y += dy;
+            self.includePoint(self.x, self.y);
+            self.bounds_info.line_count += 1;
+        }
+
+        fn curveByDeltas(self: *Self, dx1: f32, dy1: f32, dx2: f32, dy2: f32, dx3: f32, dy3: f32) void {
+            self.includePoint(self.x, self.y);
+            const c0_x = self.x + dx1;
+            const c0_y = self.y + dy1;
+            const c1_x = c0_x + dx2;
+            const c1_y = c0_y + dy2;
+            self.x = c1_x + dx3;
+            self.y = c1_y + dy3;
+            self.includePoint(c0_x, c0_y);
+            self.includePoint(c1_x, c1_y);
+            self.includePoint(self.x, self.y);
+            self.bounds_info.curve_count += 1;
+        }
+
+        fn includePoint(self: *Self, x: f32, y: f32) void {
+            if (!self.bounds_info.has_bounds) {
+                self.bounds_info.has_bounds = true;
+                self.bounds_info.x_min = x;
+                self.bounds_info.x_max = x;
+                self.bounds_info.y_min = y;
+                self.bounds_info.y_max = y;
+                return;
+            }
+            self.bounds_info.x_min = @min(self.bounds_info.x_min, x);
+            self.bounds_info.x_max = @max(self.bounds_info.x_max, x);
+            self.bounds_info.y_min = @min(self.bounds_info.y_min, y);
+            self.bounds_info.y_max = @max(self.bounds_info.y_max, y);
+        }
+
+        fn closeOpenContour(self: *Self) void {
+            self.contour_open = false;
+        }
+
+        fn push(self: *Self, value: Value) Error!void {
+            if (self.stack_len == self.stack.len) return error.BadSfnt;
+            self.stack[self.stack_len] = value;
+            self.stack_len += 1;
+        }
+
+        fn popInteger(self: *Self) Error!i32 {
+            if (self.stack_len == 0) return error.BadSfnt;
+            self.stack_len -= 1;
+            const value = self.stack[self.stack_len];
+            if (!value.integer) return error.BadSfnt;
+            return value.integer_value;
+        }
+
+        fn readStemHints(self: *Self) void {
+            self.bounds_info.scan.stem_count += self.stack_len / 2;
             self.clearStack();
         }
 
@@ -216,26 +714,26 @@ fn readNumber(bytes: []const u8, offset: *usize, first: u8) Error!Value {
             if (offset.* + 2 > bytes.len) return error.BadSfnt;
             const value: i32 = @as(i16, @bitCast(std.mem.readInt(u16, bytes[offset.*..][0..2], .big)));
             offset.* += 2;
-            break :blk .{ .value = value, .integer = true };
+            break :blk Value.int(value);
         },
-        32...246 => .{ .value = @as(i32, first) - 139, .integer = true },
+        32...246 => Value.int(@as(i32, first) - 139),
         247...250 => blk: {
             if (offset.* >= bytes.len) return error.BadSfnt;
             const value = (@as(i32, first) - 247) * 256 + bytes[offset.*] + 108;
             offset.* += 1;
-            break :blk .{ .value = value, .integer = true };
+            break :blk Value.int(value);
         },
         251...254 => blk: {
             if (offset.* >= bytes.len) return error.BadSfnt;
             const value = -((@as(i32, first) - 251) * 256 + bytes[offset.*] + 108);
             offset.* += 1;
-            break :blk .{ .value = value, .integer = true };
+            break :blk Value.int(value);
         },
         255 => blk: {
             if (offset.* + 4 > bytes.len) return error.BadSfnt;
             const value = std.mem.readInt(i32, bytes[offset.*..][0..4], .big);
             offset.* += 4;
-            break :blk .{ .value = value, .integer = false };
+            break :blk Value.fixed(value);
         },
         else => unreachable,
     };
@@ -284,4 +782,54 @@ test "CFF2 charstring scanner skips hint masks" {
     try std.testing.expectEqual(@as(usize, 2), parsed.stem_count);
     try std.testing.expectEqual(@as(usize, 1), parsed.hint_mask_count);
     try std.testing.expect(parsed.has_endchar);
+}
+
+test "CFF2 charstring bounds tracks moves and lines" {
+    const Context = struct {
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var context = Context{};
+    // rmoveto(50, 20); rlineto(100, 0, 0, 30); endchar.
+    const parsed = try bounds(Context, &context, &.{ 189, 159, 21, 239, 139, 139, 169, 5, 14 });
+    try std.testing.expect(parsed.has_bounds);
+    try std.testing.expectEqual(@as(f32, 50), parsed.x_min);
+    try std.testing.expectEqual(@as(f32, 20), parsed.y_min);
+    try std.testing.expectEqual(@as(f32, 150), parsed.x_max);
+    try std.testing.expectEqual(@as(f32, 50), parsed.y_max);
+    try std.testing.expectEqual(@as(usize, 1), parsed.move_count);
+    try std.testing.expectEqual(@as(usize, 2), parsed.line_count);
+    try std.testing.expectEqual(@as(usize, 0), parsed.curve_count);
+    try std.testing.expect(parsed.scan.has_endchar);
+}
+
+test "CFF2 charstring bounds includes cubic control points" {
+    const Context = struct {
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var context = Context{};
+    // rmoveto(0, 0); rrcurveto(50, 0, 0, 50, 50, 0); endchar.
+    const parsed = try bounds(Context, &context, &.{ 139, 139, 21, 189, 139, 139, 189, 189, 139, 8, 14 });
+    try std.testing.expect(parsed.has_bounds);
+    try std.testing.expectEqual(@as(f32, 0), parsed.x_min);
+    try std.testing.expectEqual(@as(f32, 0), parsed.y_min);
+    try std.testing.expectEqual(@as(f32, 100), parsed.x_max);
+    try std.testing.expectEqual(@as(f32, 50), parsed.y_max);
+    try std.testing.expectEqual(@as(usize, 1), parsed.move_count);
+    try std.testing.expectEqual(@as(usize, 0), parsed.line_count);
+    try std.testing.expectEqual(@as(usize, 1), parsed.curve_count);
+    try std.testing.expect(parsed.scan.has_endchar);
 }

@@ -111,6 +111,7 @@ pub const Cff2Info = @import("font.zig").Cff2Info;
 pub const Cff2FontDictInfo = @import("font.zig").Cff2FontDictInfo;
 pub const Cff2PrivateDictInfo = @import("font.zig").Cff2PrivateDictInfo;
 pub const Cff2CharStringScanInfo = @import("font.zig").Cff2CharStringScanInfo;
+pub const Cff2CharStringBoundsInfo = @import("font.zig").Cff2CharStringBoundsInfo;
 pub const CvarInfo = @import("font.zig").CvarInfo;
 pub const CvarTupleInfo = @import("font.zig").CvarTupleInfo;
 pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
@@ -585,8 +586,17 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(u8, 1), scanned.max_depth);
     try std.testing.expect(scanned.has_return);
     try std.testing.expect(scanned.has_endchar);
+    const bounds = (try font.cff2CharStringBoundsInfo(0)).?;
+    try std.testing.expect(!bounds.has_bounds);
+    try std.testing.expectEqual(@as(usize, 0), bounds.move_count);
+    try std.testing.expectEqual(@as(usize, 0), bounds.line_count);
+    try std.testing.expectEqual(@as(usize, 0), bounds.curve_count);
+    try std.testing.expectEqual(@as(usize, 3), bounds.scan.charstring_count);
+    try std.testing.expectEqual(@as(usize, 1), bounds.scan.local_subr_call_count);
+    try std.testing.expectEqual(@as(usize, 1), bounds.scan.global_subr_call_count);
     try std.testing.expect((try font.cff2CharStringData(1)) == null);
     try std.testing.expect((try font.cff2CharStringScanInfo(1)) == null);
+    try std.testing.expect((try font.cff2CharStringBoundsInfo(1)) == null);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);
@@ -600,6 +610,7 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expect((try missing.cff2LocalSubrDataForOperand(0, -107)) == null);
     try std.testing.expect((try missing.cff2CharStringData(1)) == null);
     try std.testing.expect((try missing.cff2CharStringScanInfo(1)) == null);
+    try std.testing.expect((try missing.cff2CharStringBoundsInfo(1)) == null);
     try std.testing.expect((try missing.cff2FontDictIndex(1)) == null);
 }
 

@@ -96,6 +96,8 @@ pub const FontFormat = @import("font.zig").FontFormat;
 pub const FontHeaderInfo = @import("font.zig").FontHeaderInfo;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
+pub const HdmxInfo = @import("font.zig").HdmxInfo;
+pub const HdmxRecord = @import("font.zig").HdmxRecord;
 pub const HorizontalMetricInfo = @import("font.zig").HorizontalMetricInfo;
 pub const MetricHeaderInfo = @import("font.zig").MetricHeaderInfo;
 pub const VerticalMetricInfo = @import("font.zig").VerticalMetricInfo;
@@ -468,6 +470,61 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "hdmx metadata and widths are exposed" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildHdmxTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.hdmxInfo(allocator)).?;
+    defer font.freeHdmxInfo(allocator, info);
+    try std.testing.expectEqual(@as(u16, 0), info.version);
+    try std.testing.expectEqual(@as(u32, 4), info.record_size);
+    try std.testing.expectEqual(@as(usize, 2), info.records.len);
+    try std.testing.expectEqual(@as(u8, 10), info.records[0].ppem);
+    try std.testing.expectEqual(@as(u8, 8), info.records[0].max_width);
+    try std.testing.expectEqualSlices(u8, &.{ 5, 8 }, info.records[0].widths);
+    try std.testing.expectEqualSlices(u8, &.{ 6, 12 }, info.records[1].widths);
+
+    try std.testing.expectEqual(@as(?u8, 8), try font.hdmxWidth(10, 1));
+    try std.testing.expectEqual(@as(?u8, 12), try font.hdmxWidth(16, 1));
+    try std.testing.expect((try font.hdmxWidth(11, 1)) == null);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.hdmxInfo(allocator)) == null);
+    try std.testing.expect((try missing.hdmxWidth(10, 1)) == null);
+}
+
+test "lazy hdmx metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildHdmxTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expectEqual(@as(?u8, 8), try font.hdmxWidth(10, 1));
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var hdmx_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "hdmx")) hdmx_offset = table.offset;
+    }
+    bytes[hdmx_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.hdmxWidth(10, 1));
+    try std.testing.expectError(error.BadSfnt, font.hdmxInfo(allocator));
 }
 
 test "gasp metadata and PPEM behavior are exposed" {

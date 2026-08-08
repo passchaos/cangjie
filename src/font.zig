@@ -93,6 +93,18 @@ pub const HorizontalMetricInfo = struct {
     left_side_bearing: i16,
 };
 
+pub const HdmxRecord = struct {
+    ppem: u8,
+    max_width: u8,
+    widths: []u8,
+};
+
+pub const HdmxInfo = struct {
+    version: u16,
+    record_size: u32,
+    records: []HdmxRecord,
+};
+
 pub const VerticalMetricInfo = struct {
     advance_height: u16,
     top_side_bearing: i16,
@@ -559,6 +571,7 @@ pub const Font = struct {
     hhea: TableRecord,
     maxp: TableRecord,
     hmtx: TableRecord,
+    hdmx: ?TableRecord,
     loca: ?TableRecord,
     cmap: TableRecord,
     kern: ?TableRecord,
@@ -647,6 +660,7 @@ pub const Font = struct {
         const hhea = findTable(records, "hhea") orelse return error.MissingTable;
         const maxp = findTable(records, "maxp") orelse return error.MissingTable;
         const hmtx = findTable(records, "hmtx") orelse return error.MissingTable;
+        const hdmx = findTable(records, "hdmx");
         const loca = findTable(records, "loca");
         const cmap = findTable(records, "cmap") orelse return error.MissingTable;
         const kern = findTable(records, "kern");
@@ -710,6 +724,7 @@ pub const Font = struct {
         if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
         if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
         if (kern) |kern_table| try validateKernTable(data, kern_table, glyph_count);
+        if (hdmx) |hdmx_table| try validateHdmxTable(data, hdmx_table, glyph_count);
         if (gasp) |gasp_table| try validateGaspTable(data, gasp_table);
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
@@ -789,6 +804,7 @@ pub const Font = struct {
             .hhea = hhea,
             .maxp = maxp,
             .hmtx = hmtx,
+            .hdmx = hdmx,
             .loca = loca,
             .cmap = cmap,
             .kern = kern,
@@ -1047,6 +1063,27 @@ pub const Font = struct {
         // have produced.
         try validateCmapSubtable(self.data, subtable.offset, subtable.length, subtable.format, subtable.platform_id, subtable.encoding_id);
         try validateCmapGlyphIds(self.data, subtable.offset, subtable.length, subtable.format, self.glyph_count);
+    }
+
+    /// Read validated horizontal device metrics from the optional SFNT `hdmx` table.
+    pub fn hdmxInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?HdmxInfo {
+        const hdmx = self.hdmx orelse return null;
+        try validateSfntTableChecksum(self.data, hdmx);
+        try validateHdmxTable(self.data, hdmx, self.glyph_count);
+        return try readHdmxInfo(allocator, self.data, hdmx, self.glyph_count);
+    }
+
+    pub fn freeHdmxInfo(_: *const Font, allocator: std.mem.Allocator, info: HdmxInfo) void {
+        for (info.records) |record| allocator.free(record.widths);
+        allocator.free(info.records);
+    }
+
+    pub fn hdmxWidth(self: *const Font, ppem: u8, glyph_id: glyph_mod.GlyphId) FontError!?u8 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const hdmx = self.hdmx orelse return null;
+        try validateSfntTableChecksum(self.data, hdmx);
+        try validateHdmxTable(self.data, hdmx, self.glyph_count);
+        return try readHdmxWidth(self.data, hdmx, self.glyph_count, ppem, glyph_id);
     }
 
     /// Expand the SFNT `hmtx` table into one metric record per glyph.
@@ -3918,6 +3955,62 @@ fn clampI16(value: i32) i16 {
     if (value < std.math.minInt(i16)) return std.math.minInt(i16);
     if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
     return @intCast(value);
+}
+
+fn validateHdmxTable(data: []const u8, hdmx: TableRecord, glyph_count: u16) FontError!void {
+    try requireTableLength(hdmx, 8);
+    if (try bin.readU16At(data, hdmx.offset) != 0) return error.BadSfnt;
+    const record_count = try bin.readU16At(data, hdmx.offset + 2);
+    const record_size = try bin.readU32At(data, hdmx.offset + 4);
+    const minimum_record_size = @as(u32, glyph_count) + 2;
+    if (record_size < minimum_record_size or (record_size & 3) != 0) return error.BadSfnt;
+    if (@as(u64, record_count) * record_size != @as(u64, hdmx.length - 8)) return error.BadSfnt;
+
+    var previous_ppem: ?u8 = null;
+    for (0..record_count) |record_index| {
+        const record = hdmx.offset + 8 + @as(usize, record_index) * @as(usize, record_size);
+        const ppem = data[record];
+        if (previous_ppem) |previous| {
+            if (ppem <= previous) return error.BadSfnt;
+        }
+        previous_ppem = ppem;
+    }
+}
+
+fn readHdmxInfo(allocator: std.mem.Allocator, data: []const u8, hdmx: TableRecord, glyph_count: u16) FontError!HdmxInfo {
+    const version = try bin.readU16At(data, hdmx.offset);
+    const record_count = try bin.readU16At(data, hdmx.offset + 2);
+    const record_size = try bin.readU32At(data, hdmx.offset + 4);
+    const records = try allocator.alloc(HdmxRecord, record_count);
+    errdefer {
+        for (records) |record| allocator.free(record.widths);
+        allocator.free(records);
+    }
+    var initialized: usize = 0;
+    errdefer {
+        for (records[0..initialized]) |record| allocator.free(record.widths);
+    }
+    for (records, 0..) |*out, record_index| {
+        const record = hdmx.offset + 8 + record_index * @as(usize, record_size);
+        const widths = try allocator.alloc(u8, glyph_count);
+        @memcpy(widths, data[record + 2 .. record + 2 + glyph_count]);
+        out.* = .{ .ppem = data[record], .max_width = data[record + 1], .widths = widths };
+        initialized += 1;
+    }
+    return .{ .version = version, .record_size = record_size, .records = records };
+}
+
+fn readHdmxWidth(data: []const u8, hdmx: TableRecord, glyph_count: u16, ppem: u8, glyph_id: glyph_mod.GlyphId) FontError!?u8 {
+    const record_count = try bin.readU16At(data, hdmx.offset + 2);
+    const record_size = try bin.readU32At(data, hdmx.offset + 4);
+    for (0..record_count) |record_index| {
+        const record = hdmx.offset + 8 + @as(usize, record_index) * @as(usize, record_size);
+        const record_ppem = data[record];
+        if (ppem < record_ppem) return null;
+        if (ppem == record_ppem) return data[record + 2 + glyph_id];
+    }
+    _ = glyph_count;
+    return null;
 }
 
 fn readMetricHeaderInfo(data: []const u8, header: TableRecord) FontError!MetricHeaderInfo {
@@ -17732,6 +17825,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .hhea = dummy_table,
         .maxp = dummy_table,
         .hmtx = dummy_table,
+        .hdmx = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -17780,6 +17874,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .hhea = dummy_table,
         .maxp = dummy_table,
         .hmtx = dummy_table,
+        .hdmx = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -17828,6 +17923,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .hhea = dummy_table,
         .maxp = dummy_table,
         .hmtx = dummy_table,
+        .hdmx = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -17887,6 +17983,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .hhea = dummy_table,
         .maxp = dummy_table,
         .hmtx = dummy_table,
+        .hdmx = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -17935,6 +18032,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .hhea = dummy_table,
         .maxp = dummy_table,
         .hmtx = dummy_table,
+        .hdmx = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -17983,6 +18081,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .hhea = dummy_table,
         .maxp = dummy_table,
         .hmtx = dummy_table,
+        .hdmx = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18031,6 +18130,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .hhea = dummy_table,
         .maxp = dummy_table,
         .hmtx = dummy_table,
+        .hdmx = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = null,
@@ -18099,6 +18199,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .hhea = dummy_table,
         .maxp = dummy_table,
         .hmtx = dummy_table,
+        .hdmx = null,
         .loca = null,
         .cmap = dummy_table,
         .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = kern_checksum, .offset = 0, .length = data.len },

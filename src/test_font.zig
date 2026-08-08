@@ -16,6 +16,10 @@ pub fn buildGaspTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try gaspTtfTables(allocator));
 }
 
+pub fn buildHdmxTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try hdmxTtfTables(allocator));
+}
+
 pub fn buildScriptMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try scriptMetricsTtfTables(allocator));
 }
@@ -502,6 +506,21 @@ fn gaspTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "gasp", .data = try gaspTable(allocator) };
     tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn hdmxTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "hdmx", .data = try hdmxTable(allocator) };
     tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
@@ -4705,6 +4724,23 @@ fn gaspTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 6, 0x0003);
     writeU16(bytes, 8, 0xffff);
     writeU16(bytes, 10, 0x000f);
+    return bytes;
+}
+
+fn hdmxTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 16);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 2);
+    writeU32(bytes, 4, 4);
+    bytes[8] = 10;
+    bytes[9] = 8;
+    bytes[10] = 5;
+    bytes[11] = 8;
+    bytes[12] = 16;
+    bytes[13] = 12;
+    bytes[14] = 6;
+    bytes[15] = 12;
     return bytes;
 }
 

@@ -3475,8 +3475,8 @@ pub const Font = struct {
 
     pub fn glyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (normalizedVariationCoordinatesAreDefault(normalized_coords)) return try self.glyphOutline(allocator, glyph_id);
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.cff2 != null) {
             return (try self.cff2GlyphOutlineAtCoordsPrepared(allocator, glyph_id, normalized_coords, .revalidate)) orelse error.UnsupportedGlyph;
         }
@@ -3493,8 +3493,8 @@ pub const Font = struct {
     /// loops can avoid revalidating an immutable parsed font once per glyph.
     pub fn glyphOutlineForRasterAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (normalizedVariationCoordinatesAreDefault(normalized_coords)) return try self.glyphOutlineForRaster(allocator, glyph_id);
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.cff2 != null) {
             return (try self.cff2GlyphOutlineAtCoordsPrepared(allocator, glyph_id, normalized_coords, .parsed)) orelse error.UnsupportedGlyph;
         }

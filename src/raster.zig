@@ -656,17 +656,25 @@ pub const Rasterizer = struct {
         else
             try self.allocator.alloc(WindingIntersection, prepared_lines.len);
         defer if (prepared_lines.len > inline_intersections.len) self.allocator.free(intersection_storage);
+        var inline_row_lines: [128]PreparedFillLine = undefined;
+        const row_line_storage = if (prepared_lines.len <= inline_row_lines.len)
+            inline_row_lines[0..prepared_lines.len]
+        else
+            try self.allocator.alloc(PreparedFillLine, prepared_lines.len);
+        defer if (prepared_lines.len > inline_row_lines.len) self.allocator.free(row_line_storage);
 
         var y = min_y;
         while (y <= max_y) : (y += 1) {
+            const row_lines = collectRowFillLines(row_line_storage, prepared_lines, y);
+            if (row_lines.len < 2) continue;
             var row_has_coverage = false;
             var row_min_x = max_x;
             var row_max_x = min_x;
             for (sample_offsets) |sample_offset| {
                 const py = @as(f32, @floatFromInt(y)) + sample_offset;
-                if (prepared_lines.len == 2) {
-                    const first = prepared_lines[0];
-                    const second = prepared_lines[1];
+                if (row_lines.len == 2) {
+                    const first = row_lines[0];
+                    const second = row_lines[1];
                     if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
                     const first_x = first.slope * (py - first.ay) + first.ax;
                     const second_x = second.slope * (py - second.ay) + second.ax;
@@ -687,7 +695,7 @@ pub const Rasterizer = struct {
                 }
 
                 var intersection_count: usize = 0;
-                for (prepared_lines) |line| {
+                for (row_lines) |line| {
                     if (py < line.y_min or py >= line.y_max) continue;
                     const x_intersect = line.slope * (py - line.ay) + line.ax;
                     if (!std.math.isFinite(x_intersect)) continue;
@@ -838,6 +846,23 @@ fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFill
             .slope = (line.b.x - line.a.x) / dy,
             .delta = if (dy > 0.0) 1 else -1,
         };
+        count += 1;
+    }
+    return out[0..count];
+}
+
+fn collectRowFillLines(out: []PreparedFillLine, lines: []const PreparedFillLine, y: i32) []PreparedFillLine {
+    std.debug.assert(out.len >= lines.len);
+    const row_min_y: f32 = @floatFromInt(y);
+    const row_max_y = row_min_y + 1.0;
+    var count: usize = 0;
+    for (lines) |line| {
+        // Each sample row is half-open: an edge contributes when
+        // y_min <= sample_y < y_max. Filtering by the whole pixel row once
+        // avoids rechecking unrelated edges for every supersample while still
+        // leaving the exact half-open test in the sample loop for boundaries.
+        if (line.y_min >= row_max_y or line.y_max <= row_min_y) continue;
+        out[count] = line;
         count += 1;
     }
     return out[0..count];

@@ -8497,7 +8497,7 @@ fn applyGvarGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: 
 }
 
 fn applyGvarSimpleGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: glyph_mod.Bounds, default_metrics: HorizontalMetricInfo, deltas: []const GvarScaledPointDelta, point_count: usize) FontError!void {
-    const phantom = try gvar_mod.phantomPointDeltas(point_count, deltas);
+    const phantom = try gvar_mod.phantomPointDeltasFromDense(point_count, deltas);
     // TrueType's horizontal phantom points define metric deltas:
     // pp1 = xMin - lsb, pp2 = pp1 + advance. Cangjie keeps outline commands in
     // the same design-space coordinate convention as `glyphOutline()`, so only

@@ -407,6 +407,7 @@ pub fn applyPointDeltas(points: []Point, deltas: []const ScaledPointDelta) Error
 /// follow at `[point_count, point_count + 4)`.
 pub fn phantomPointDeltas(point_count: usize, deltas: []const ScaledPointDelta) Error!PhantomPointDeltas {
     if (point_count > std.math.maxInt(u16) - 3) return error.BadSfnt;
+    if (deltas.len >= point_count + 4) return try phantomPointDeltasFromDense(point_count, deltas);
     const left_index: u16 = @intCast(point_count);
     const right_index = left_index + 1;
     const top_index = left_index + 2;
@@ -433,6 +434,26 @@ pub fn phantomPointDeltas(point_count: usize, deltas: []const ScaledPointDelta) 
         target.y += delta.y;
     }
     return result;
+}
+
+pub fn phantomPointDeltasFromDense(point_count: usize, deltas: []const ScaledPointDelta) Error!PhantomPointDeltas {
+    if (point_count > std.math.maxInt(u16) - 3) return error.BadSfnt;
+    if (deltas.len < point_count + 4) return error.BadSfnt;
+    const left_index: u16 = @intCast(point_count);
+    const right_index = left_index + 1;
+    const top_index = left_index + 2;
+    const bottom_index = left_index + 3;
+    const left = deltas[point_count];
+    const right = deltas[point_count + 1];
+    const top = deltas[point_count + 2];
+    const bottom = deltas[point_count + 3];
+    if (left.point != left_index or right.point != right_index or top.point != top_index or bottom.point != bottom_index) return error.BadSfnt;
+    return .{
+        .left = .{ .x = left.x, .y = left.y },
+        .right = .{ .x = right.x, .y = right.y },
+        .top = .{ .x = top.x, .y = top.y },
+        .bottom = .{ .x = bottom.x, .y = bottom.y },
+    };
 }
 
 pub fn validate(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!void {
@@ -1062,6 +1083,27 @@ test "phantom point deltas derive metric deltas" {
     try std.testing.expectEqual(@as(f32, 10), phantom.right.x);
     try std.testing.expectEqual(@as(f32, 9), phantom.horizontalAdvanceDelta());
     try std.testing.expectEqual(@as(f32, 6), phantom.verticalAdvanceDelta());
+}
+
+test "phantom point deltas use dense point-count outputs directly" {
+    const deltas = [_]ScaledPointDelta{
+        .{ .point = 0, .x = 99, .y = 99 },
+        .{ .point = 1, .x = 0, .y = 0 },
+        .{ .point = 2, .x = 0, .y = 0 },
+        .{ .point = 3, .x = 1, .y = 0 },
+        .{ .point = 4, .x = 10, .y = 0 },
+        .{ .point = 5, .x = 0, .y = 4 },
+        .{ .point = 6, .x = 0, .y = -2 },
+    };
+    const phantom = try phantomPointDeltasFromDense(3, &deltas);
+    try std.testing.expectEqual(@as(f32, 1), phantom.left.x);
+    try std.testing.expectEqual(@as(f32, 10), phantom.right.x);
+    try std.testing.expectEqual(@as(f32, 9), phantom.horizontalAdvanceDelta());
+    try std.testing.expectEqual(@as(f32, 6), phantom.verticalAdvanceDelta());
+
+    var wrong = deltas;
+    wrong[4].point = 9;
+    try std.testing.expectError(error.BadSfnt, phantomPointDeltasFromDense(3, &wrong));
 }
 
 test "gvar accumulation target index uses dense point ids directly" {

@@ -89,22 +89,34 @@ pub fn markSourceFeatures(
     source_features: []u32,
     source_syllables: []u8,
     codepoints: []const u21,
+    source_order: []const usize,
 ) !void {
     if (source_features.len != codepoints.len) return error.InvalidUseInput;
     if (source_syllables.len != codepoints.len) return error.InvalidUseInput;
+    if (source_order.len != codepoints.len) return error.InvalidUseInput;
     @memset(source_features, 0);
     @memset(source_syllables, 0);
 
-    const syllables = try find(allocator, codepoints);
+    const syllables = try findInSourceOrder(allocator, codepoints, source_order);
     defer allocator.free(syllables);
 
     for (syllables, 0..) |syllable, syllable_index| {
         const serial: u8 = @intCast((syllable_index % 15) + 1);
-        markSyllableRange(source_syllables, syllable.start, syllable.end, serial, syllable.kind);
-        markRange(source_features, syllable.start, syllable.end, per_syllable_mask);
-        markRphfSources(source_features, codepoints, syllable);
+        markSyllableSources(source_syllables, source_order[syllable.start..syllable.end], serial, syllable.kind);
+        markSourceList(source_features, source_order[syllable.start..syllable.end], per_syllable_mask);
+        markRphfSourcesInOrder(source_features, codepoints, source_order, syllable);
     }
-    markTopographicalSources(source_features, syllables);
+    markTopographicalSourcesInOrder(source_features, source_order, syllables);
+}
+
+fn findInSourceOrder(allocator: std.mem.Allocator, codepoints: []const u21, source_order: []const usize) ![]Syllable {
+    const ordered_codepoints = try allocator.alloc(u21, source_order.len);
+    defer allocator.free(ordered_codepoints);
+    for (source_order, 0..) |source, index| {
+        if (source >= codepoints.len) return error.InvalidUseInput;
+        ordered_codepoints[index] = codepoints[source];
+    }
+    return try find(allocator, ordered_codepoints);
 }
 
 fn appendIncludedCodepoints(
@@ -204,10 +216,9 @@ fn matchSakotTerminatedCluster(items: []const IncludedCodepoint, start: usize) ?
 fn matchBrokenCluster(items: []const IncludedCodepoint, start: usize) ?usize {
     var index = start;
     if (items[index].category == .repha) index += 1;
-    const tail_end = matchTail(items, index) orelse
-        matchNumberJoinerTerminatedClusterTail(items, index) orelse
-        matchNumeralClusterTail(items, index) orelse
-        return null;
+    var tail_end = consumeTail(items, index);
+    if (matchNumberJoinerTerminatedClusterTail(items, index)) |next| tail_end = @max(tail_end, next);
+    if (matchNumeralClusterTail(items, index)) |next| tail_end = @max(tail_end, next);
     // `complex_syllable_tail` is entirely optional in the generated grammar.
     // Ragel's scanner never emits a zero-length token, so mirror that behavior
     // explicitly: an unrelated category such as WORD JOINER must fall through
@@ -215,11 +226,15 @@ fn matchBrokenCluster(items: []const IncludedCodepoint, start: usize) ?usize {
     return if (tail_end > start) tail_end else null;
 }
 
-fn matchTail(items: []const IncludedCodepoint, start: usize) ?usize {
-    if (matchSakotTerminatedClusterTail(items, start)) |next| return next;
-    if (matchSymbolClusterTail(items, start)) |next| return next;
-    if (matchViramaTerminatedClusterTail(items, start)) |next| return next;
-    return consumeComplexSyllableTail(items, start);
+fn consumeTail(items: []const IncludedCodepoint, start: usize) usize {
+    // Ragel resolves these alternatives using the longest accepted token.
+    // Selecting the first match is insufficient because complex_syllable_tail
+    // is nullable and can be a prefix of the terminated-tail alternatives.
+    var end = consumeComplexSyllableTail(items, start);
+    if (matchSakotTerminatedClusterTail(items, start)) |next| end = @max(end, next);
+    if (matchSymbolClusterTail(items, start)) |next| end = @max(end, next);
+    if (matchViramaTerminatedClusterTail(items, start)) |next| end = @max(end, next);
+    return end;
 }
 
 fn matchSakotTerminatedClusterTail(items: []const IncludedCodepoint, start: usize) ?usize {
@@ -336,7 +351,11 @@ fn matchNumeralClusterTail(items: []const IncludedCodepoint, start: usize) ?usiz
 
 fn matchSymbolCluster(items: []const IncludedCodepoint, start: usize) ?usize {
     return switch (items[start].category) {
-        .other, .base_other, .hieroglyph_segment_begin => matchSymbolClusterTail(items, start + 1) orelse start + 1,
+        // The USE grammar is `(O | GB | SB) tail?`, where `tail` includes the
+        // full complex-syllable tail as well as symbol modifiers. Restricting
+        // this to symbol modifiers splits punctuation followed by a dependent
+        // vowel and incorrectly turns the vowel into a broken cluster.
+        .other, .base_other, .hieroglyph_segment_begin => consumeTail(items, start + 1),
         else => null,
     };
 }
@@ -393,27 +412,26 @@ fn isFinalConsonant(category: categories.Category) bool {
     return category == .final_above or category == .final_below or category == .final_post;
 }
 
-fn markRange(source_features: []u32, start: usize, end: usize, mask: u32) void {
-    for (source_features[start..end]) |*feature| {
-        feature.* |= mask;
-    }
+fn markSourceList(source_features: []u32, sources: []const usize, mask: u32) void {
+    for (sources) |source| source_features[source] |= mask;
 }
 
-fn markSyllableRange(source_syllables: []u8, start: usize, end: usize, serial: u8, kind: SyllableType) void {
+fn markSyllableSources(source_syllables: []u8, sources: []const usize, serial: u8, kind: SyllableType) void {
     // Match HarfBuzz's packed syllable byte: the high nibble is a wrapping
-    // serial and the low nibble is the machine's syllable type. GSUB matching
-    // compares the complete byte, while reorder can inspect broken clusters.
+    // serial and the low nibble is the machine's syllable type. Sources may no
+    // longer be numerically contiguous after canonical mark reordering.
     const syllable_id = (serial << 4) | @intFromEnum(kind);
-    for (source_syllables[start..end]) |*syllable| {
-        syllable.* = syllable_id;
-    }
+    for (sources) |source| source_syllables[source] = syllable_id;
 }
 
-fn markRphfSources(source_features: []u32, codepoints: []const u21, syllable: Syllable) void {
+fn markRphfSourcesInOrder(source_features: []u32, codepoints: []const u21, source_order: []const usize, syllable: Syllable) void {
     if (syllable.start >= syllable.end) return;
-    const first_category = categories.forCodepoint(codepoints[syllable.start]);
-    const limit = if (first_category == .repha) syllable.start + 1 else @min(syllable.start + 3, syllable.end);
-    markRange(source_features, syllable.start, limit, rphf_mask);
+    const first_source = source_order[syllable.start];
+    const limit = if (categories.forCodepoint(codepoints[first_source]) == .repha)
+        syllable.start + 1
+    else
+        @min(syllable.start + 3, syllable.end);
+    markSourceList(source_features, source_order[syllable.start..limit], rphf_mask);
 }
 
 const JoiningForm = enum {
@@ -423,7 +441,7 @@ const JoiningForm = enum {
     terminal,
 };
 
-fn markTopographicalSources(source_features: []u32, syllables: []const Syllable) void {
+fn markTopographicalSourcesInOrder(source_features: []u32, source_order: []const usize, syllables: []const Syllable) void {
     var last_start: usize = 0;
     var last_end: usize = 0;
     var last_form: ?JoiningForm = null;
@@ -432,31 +450,28 @@ fn markTopographicalSources(source_features: []u32, syllables: []const Syllable)
         if (syllable.kind == .hieroglyph or syllable.kind == .non_cluster) {
             last_form = null;
         } else {
-            const join = last_form == .terminal or last_form == .isolated;
-            if (join) {
-                const replacement: JoiningForm = if (last_form == .terminal) .medial else .initial;
-                markTopographicalRange(source_features, last_start, last_end, replacement);
+            const form: JoiningForm = if (last_form == .terminal or last_form == .isolated) .terminal else .isolated;
+            if (form == .terminal) {
+                const fixed_previous: JoiningForm = if (last_form == .terminal) .medial else .initial;
+                markTopographicalSourcesRange(source_features, source_order, last_start, last_end, fixed_previous);
             }
-
-            const form: JoiningForm = if (join) .terminal else .isolated;
-            markTopographicalRange(source_features, syllable.start, syllable.end, form);
+            markTopographicalSourcesRange(source_features, source_order, syllable.start, syllable.end, form);
             last_form = form;
         }
-
         last_start = syllable.start;
         last_end = syllable.end;
     }
 }
 
-fn markTopographicalRange(source_features: []u32, start: usize, end: usize, form: JoiningForm) void {
+fn markTopographicalSourcesRange(source_features: []u32, source_order: []const usize, start: usize, end: usize, form: JoiningForm) void {
     const form_mask = switch (form) {
         .isolated => isol_mask,
         .initial => init_mask,
         .medial => medi_mask,
         .terminal => fina_mask,
     };
-    for (source_features[start..end]) |*feature| {
-        feature.* = (feature.* & ~topo_mask) | form_mask;
+    for (source_order[start..end]) |source| {
+        source_features[source] = (source_features[source] & ~topo_mask) | form_mask;
     }
 }
 
@@ -499,6 +514,37 @@ test "USE syllables group a Javanese prebase vowel with its base" {
     );
 }
 
+test "USE syllables attach a dependent vowel to a symbol cluster" {
+    const allocator = std.testing.allocator;
+    const codepoints = [_]u21{ 0x1aad, 0x1a63 };
+    const syllables = try find(allocator, &codepoints);
+    defer allocator.free(syllables);
+
+    try std.testing.expectEqualSlices(
+        Syllable,
+        &.{.{ .start = 0, .end = codepoints.len, .kind = .symbol }},
+        syllables,
+    );
+}
+
+test "USE source features follow canonical mark order" {
+    const allocator = std.testing.allocator;
+    const codepoints = [_]u21{ 0x1a43, 0x1a60, 0x1a7a, 0x1a3c };
+    const source_order = [_]usize{ 0, 2, 1, 3 };
+    var source_features = [_]u32{0} ** codepoints.len;
+    var source_syllables = [_]u8{0} ** codepoints.len;
+
+    try markSourceFeatures(
+        allocator,
+        &source_features,
+        &source_syllables,
+        &codepoints,
+        &source_order,
+    );
+
+    try std.testing.expectEqualSlices(u8, &.{ 0x12, 0x12, 0x12, 0x12 }, &source_syllables);
+}
+
 test "USE syllables identify Brahmi numeral groups" {
     const allocator = std.testing.allocator;
     const codepoints = [_]u21{ 0x11064, 0x1107f, 0x11052, 0x11065, 0x1107f, 0x11053 };
@@ -537,7 +583,8 @@ test "USE source features assign topographical forms per syllable" {
     const codepoints = [_]u21{ 0x1bc02, 0x1bc5b, 0x034f, 0x034f, 0x034f, 0x1bc1c, 0x200c, 0x1bc02 };
     var source_features = [_]u32{0} ** codepoints.len;
     var source_syllables = [_]u8{0} ** codepoints.len;
-    try markSourceFeatures(allocator, &source_features, &source_syllables, &codepoints);
+    const source_order = [_]usize{ 0, 1, 2, 3, 4, 5, 6, 7 };
+    try markSourceFeatures(allocator, &source_features, &source_syllables, &codepoints, &source_order);
 
     try std.testing.expect((source_features[0] & init_mask) == init_mask);
     for (source_features[1..5]) |feature| {

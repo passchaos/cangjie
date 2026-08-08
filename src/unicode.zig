@@ -1,5 +1,6 @@
 const std = @import("std");
 const line_break = @import("text/line_break.zig");
+const canonical_combining_class = @import("unicode/canonical_combining_class.zig");
 
 /// Lightweight Unicode helpers used by the shaping/layout layers.
 /// The tables are intentionally compact and cover the scripts and boundaries
@@ -60,6 +61,7 @@ pub const Script = enum {
     mongolian,
     balinese,
     javanese,
+    tai_tham,
     marchen,
     kayah_li,
     rejang,
@@ -423,6 +425,8 @@ pub fn isDefaultIgnorableForShaping(codepoint: u21) bool {
 }
 
 pub fn arabicModifiedCombiningClassForShaping(codepoint: u21) u8 {
+    // Preserve the focused helper's historical contract for direct callers;
+    // the general shaping pipeline uses modifiedCombiningClassForShaping().
     return switch (codepoint) {
         0x064b => 28, // fathatan
         0x064c => 29, // dammatan
@@ -434,6 +438,62 @@ pub fn arabicModifiedCombiningClassForShaping(codepoint: u21) u8 {
         0x0652 => 34, // sukun
         0x0670 => 35, // superscript alef
         else => 0,
+    };
+}
+
+pub fn canonicalCombiningClass(codepoint: u21) u8 {
+    return canonical_combining_class.forCodepoint(codepoint);
+}
+
+pub fn modifiedCombiningClassForShaping(codepoint: u21) u8 {
+    // These script-specific overrides are part of HarfBuzz's normalization
+    // contract. SAKOT and PADMA intentionally sort after ordinary tone/vowel
+    // marks even though their canonical class is lower.
+    return switch (codepoint) {
+        0x1a60, 0x0fc6 => 254,
+        0x0f39 => 127,
+        else => modifiedCombiningClass(canonicalCombiningClass(codepoint)),
+    };
+}
+
+fn modifiedCombiningClass(class: u8) u8 {
+    return switch (class) {
+        // Hebrew fixed-position classes follow SBL's practical mark order.
+        10 => 22,
+        11 => 15,
+        12 => 16,
+        13 => 17,
+        14 => 23,
+        15 => 18,
+        16 => 19,
+        17 => 20,
+        18 => 21,
+        19 => 14,
+        20 => 24,
+        21 => 12,
+        22 => 25,
+        23 => 13,
+        24 => 10,
+        25 => 11,
+        26 => 26,
+        // Move Arabic shadda (canonical class 33) before the other marks.
+        27 => 28,
+        28 => 29,
+        29 => 30,
+        30 => 31,
+        31 => 32,
+        32 => 33,
+        33 => 27,
+        34 => 34,
+        35 => 35,
+        // Telugu length marks must not reorder around the virama.
+        84, 91 => 0,
+        // Thai below vowels sort before U+0E3A.
+        103 => 3,
+        // Tibetan I/AA/U practical order.
+        130 => 132,
+        132 => 131,
+        else => class,
     };
 }
 
@@ -529,6 +589,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     mong = tag("mong"),
     bali = tag("bali"),
     java = tag("java"),
+    lana = tag("lana"),
     marc = tag("marc"),
     kali = tag("kali"),
     rjng = tag("rjng"),
@@ -621,6 +682,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .mongolian => .mong,
         .balinese => .bali,
         .javanese => .java,
+        .tai_tham => .lana,
         .marchen => .marc,
         .kayah_li => .kali,
         .rejang => .rjng,
@@ -844,6 +906,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isMongolianScriptCodepoint(codepoint)) return .mongolian;
     if (isBalineseScriptCodepoint(codepoint)) return .balinese;
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
+    if (isTaiThamScriptCodepoint(codepoint)) return .tai_tham;
     if (isMarchenScriptCodepoint(codepoint)) return .marchen;
     if (isKayahLiScriptCodepoint(codepoint)) return .kayah_li;
     if (isRejangScriptCodepoint(codepoint)) return .rejang;
@@ -948,6 +1011,12 @@ fn isJavaneseScriptCodepoint(codepoint: u21) bool {
     // block together avoids splitting aksara syllables through DFLT/unknown
     // runs before GSUB/GPOS lookup selection.
     return codepoint >= 0xa980 and codepoint <= 0xa9df;
+}
+
+fn isTaiThamScriptCodepoint(codepoint: u21) bool {
+    // Tai Tham letters, medials, sakot, dependent vowels, tone signs, native
+    // digits, and punctuation share the registered `lana` OpenType tag.
+    return codepoint >= 0x1a20 and codepoint <= 0x1aaf;
 }
 
 fn isMarchenScriptCodepoint(codepoint: u21) bool {
@@ -1801,7 +1870,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .marchen, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
@@ -3943,6 +4012,27 @@ test "Javanese syllables keep marks and select Javanese OpenType script" {
     try std.testing.expectEqualStrings("ꦲꦤꦕꦫꦏ", text[words[2].byte_start..][0..words[2].byte_len]);
 }
 
+test "Tai Tham stacks select the lana OpenType script" {
+    const allocator = std.testing.allocator;
+    const text = "ᨲ᩠ᩅᩫᩡ";
+
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    try std.testing.expectEqual(@as(usize, 1), clusters.len);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.tai_tham, runs[0].script);
+    try std.testing.expectEqual(OpenTypeScriptTag.lana, openTypeScriptTag(runs[0].script));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1a32));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+    try std.testing.expectEqual(@as(usize, 1), words.len);
+    try std.testing.expectEqualStrings(text, text[words[0].byte_start..][0..words[0].byte_len]);
+}
+
 test "Marchen stacks select the Marchen OpenType script" {
     const allocator = std.testing.allocator;
     const text = "𑲊𑲒𑲩";
@@ -4778,6 +4868,7 @@ const WordKind = enum {
     malayalam,
     balinese,
     javanese,
+    tai_tham,
     marchen,
     kayah_li,
     rejang,
@@ -4918,6 +5009,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .malayalam => .malayalam,
         .balinese => .balinese,
         .javanese => .javanese,
+        .tai_tham => .tai_tham,
         .marchen => .marchen,
         .limbu => .limbu,
         .buginese => .buginese,
@@ -4966,6 +5058,7 @@ fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize,
     if (isRegionalIndicator(previous) and isRegionalIndicator(current) and regional_indicator_count % 2 == 1) return true;
     if (isGraphemeExtendCodepoint(current)) return true;
     if (previous == 0x17d2 and isKhmerConsonant(current)) return true;
+    if (previous == 0x1a60 and isTaiThamConsonant(current)) return true;
     if (previous == 0x200d) {
         return (zwj_after_extended_pictographic and isExtendedPictographic(current)) or
             (zwj_after_indic_virama and isIndicConsonant(current));
@@ -5229,6 +5322,14 @@ fn isCombiningMark(codepoint: u21) bool {
         // syllables such as ᨀᨗ and ᨔᨛ split between base and dependent vowel.
         (codepoint >= 0x1a17 and codepoint <= 0x1a18) or
         codepoint == 0x1a1b or
+        // Tai Tham nonspacing medials, sakot, dependent vowels, and tone
+        // marks form one orthographic stack with the preceding letter.
+        codepoint == 0x1a56 or
+        (codepoint >= 0x1a58 and codepoint <= 0x1a60) or
+        codepoint == 0x1a62 or
+        (codepoint >= 0x1a65 and codepoint <= 0x1a6c) or
+        (codepoint >= 0x1a73 and codepoint <= 0x1a7c) or
+        codepoint == 0x1a7f or
         // Sundanese nonspacing dependent signs and pamaeh are typed after the
         // base aksara but shape as one orthographic syllable. Treating them as
         // Extend preserves caret, word, and shaping boundaries for text such as
@@ -5367,6 +5468,12 @@ fn isKhmerConsonant(codepoint: u21) bool {
     // orthographic syllable atomic for caret movement and for any future Khmer
     // shaping pass that consumes one cluster at a time.
     return codepoint >= 0x1780 and codepoint <= 0x17a2;
+}
+
+fn isTaiThamConsonant(codepoint: u21) bool {
+    // U+1A60 SAKOT turns the following Tai Tham consonant into a subjoined
+    // component. This is the script's InCB linker behavior for UAX #29.
+    return codepoint >= 0x1a20 and codepoint <= 0x1a54;
 }
 
 fn isIndicConsonant(codepoint: u21) bool {
@@ -5595,6 +5702,12 @@ fn isSpacingMark(codepoint: u21) bool {
         // but belong to the same orthographic syllable for caret/word/layout
         // primitives.
         (codepoint >= 0x1a19 and codepoint <= 0x1a1a) or
+        // Tai Tham spacing medials and vowels remain in the preceding base's
+        // grapheme and shaping cluster.
+        codepoint == 0x1a55 or
+        codepoint == 0x1a57 or
+        (codepoint >= 0x1a61 and codepoint <= 0x1a64) or
+        (codepoint >= 0x1a6d and codepoint <= 0x1a72) or
         // Sundanese spacing signs include pangwisad/visarga-like signs and
         // visible dependent vowels. They are part of the same aksara syllable
         // even though they occupy spacing glyph cells, so do not expose a

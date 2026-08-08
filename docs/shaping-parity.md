@@ -441,6 +441,19 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `tests/data/chakma-use-tests.txt` gate distinguishes ZWJ, which stays
   transparent to USE syllable matching, from WORD JOINER, which starts a
   broken dependent-vowel cluster and therefore requires a dotted circle.
+- Tai Tham passes `compare-harfbuzz` for all 209 `SHLANA-1..10` rendering-test
+  cases retained in `tests/data/tai-tham-rendering-tests.txt`
+  (`checksum=33ad224cfc0de28f`). This gate covers Unicode 17 USE categories,
+  modified canonical-combining-class reordering (including SAKOT), dynamic
+  contextual `SequenceIndex` growth after MultipleSubst, position-major
+  chaining-subtable priority, `pref`-classified dotted-circle reordering, and
+  ZWNJ-owned Tai Tham stacks. The gate is:
+  ```sh
+  zig build shape-bench -Doptimize=ReleaseFast -- \
+    --engine compare-harfbuzz \
+    --font ~/Work/harfbuzz/test/shape/data/text-rendering-tests/fonts/TestShapeLana.ttf \
+    --text-file tests/data/tai-tham-rendering-tests.txt --direction ltr
+  ```
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -464,9 +477,9 @@ goal is active, not complete.
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
-  Marchen, Cham, Batak, Brahmi, and Chakma gates. Other USE scripts/fonts and
-  fuzz/corpus failures still need retained gates before this can be called
-  broad USE parity.
+  Marchen, Cham, Batak, Brahmi, Chakma, and Tai Tham gates. Other USE
+  scripts/fonts and fuzz/corpus failures still need retained gates before this
+  can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

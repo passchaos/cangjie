@@ -3201,8 +3201,19 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
     }
     const use_shape = use_shaper.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
+    // HarfBuzz normalizes every shaping buffer before script-specific GSUB.
+    // Keep immutable source codepoints in logical order, but reorder the glyph
+    // stream and its parallel metadata by modified combining class. USE then
+    // runs its syllable machine over this canonicalized source permutation.
+    reorderMarksForShaping(
+        glyph_ids,
+        glyph_source_indices,
+        glyph_cluster_indices,
+        glyph_substituted,
+        ligature_components,
+        codepoints.items,
+    );
     if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
-        reorderArabicMarksForShaping(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
         try joining_forms.resize(buffer.allocator, codepoints.items.len);
         try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
         try source_features.resize(buffer.allocator, joining_forms.items.len);
@@ -3270,7 +3281,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
         try source_pref_substituted.resize(buffer.allocator, codepoints.items.len);
         @memset(source_pref_substituted.items, false);
-        try use_shaper.markSourceFeatures(buffer.allocator, source_features.items, source_syllables.items, codepoints.items);
+        try use_shaper.markSourceFeatures(
+            buffer.allocator,
+            source_features.items,
+            source_syllables.items,
+            codepoints.items,
+            glyph_source_indices.items,
+        );
         try use_shaper.assignGraphemeClusterOwners(
             buffer.allocator,
             text,
@@ -3307,6 +3324,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 glyph_substituted,
                 ligature_components,
                 source_syllables.items,
+                source_pref_substituted.items,
                 codepoints.items,
                 dotted_circle_glyph,
             );
@@ -3783,25 +3801,25 @@ fn mirroredCodepointForRtlShaping(font: *const Font, glyph_index_cache: ?*GlyphI
     return if (try glyphIndexWithOptionalCache(font, glyph_index_cache, mirrored) != 0) mirrored else codepoint;
 }
 
-fn reorderArabicMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21) void {
+fn reorderMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21) void {
     var run_start: ?usize = null;
     for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
-        const modified_class = arabicMarkSortClass(source_index, codepoints);
+        const modified_class = markSortClass(source_index, codepoints);
         if (modified_class == 0) {
-            if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_index);
+            if (run_start) |start| reorderMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_index);
             run_start = null;
             continue;
         }
         if (run_start == null) run_start = glyph_index;
     }
-    if (run_start) |start| reorderArabicMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_source_indices.items.len);
+    if (run_start) |start| reorderMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_source_indices.items.len);
 }
 
-fn reorderArabicMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21, start: usize, end: usize) void {
+fn reorderMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *std.ArrayList(gpos.LigatureComponentInfo), codepoints: []const u21, start: usize, end: usize) void {
     var i = start + 1;
     while (i < end) : (i += 1) {
         var j = i;
-        while (j > start and arabicMarkSortClass(glyph_source_indices.items[j - 1], codepoints) > arabicMarkSortClass(glyph_source_indices.items[j], codepoints)) : (j -= 1) {
+        while (j > start and markSortClass(glyph_source_indices.items[j - 1], codepoints) > markSortClass(glyph_source_indices.items[j], codepoints)) : (j -= 1) {
             std.mem.swap(GlyphId, &glyph_ids.items[j - 1], &glyph_ids.items[j]);
             std.mem.swap(usize, &glyph_source_indices.items[j - 1], &glyph_source_indices.items[j]);
             std.mem.swap(usize, &glyph_cluster_indices.items[j - 1], &glyph_cluster_indices.items[j]);
@@ -3811,9 +3829,9 @@ fn reorderArabicMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices
     }
 }
 
-fn arabicMarkSortClass(source_index: usize, codepoints: []const u21) u8 {
+fn markSortClass(source_index: usize, codepoints: []const u21) u8 {
     if (source_index >= codepoints.len) return 0;
-    return unicode.arabicModifiedCombiningClassForShaping(codepoints[source_index]);
+    return unicode.modifiedCombiningClassForShaping(codepoints[source_index]);
 }
 
 fn isDefaultIgnorableForShaping(codepoint: u21) bool {

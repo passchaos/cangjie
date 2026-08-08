@@ -2095,10 +2095,12 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
             try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
             return;
         }
-        // Mixed glyph/class/coverage lookups use the generic ordered subtable
-        // dispatcher below. Only uncached low-level callers need this runtime
-        // format walk; validated accelerators already prove their lookup is
-        // coverage-only at construction time.
+        // Mixed glyph/class/coverage lookups still require position-major
+        // dispatch: subtables are ordered alternatives for one candidate, not
+        // independent whole-run passes. The generic dispatcher preserves that
+        // ordering without requiring a format-specific accelerator.
+        try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
+        return;
     }
     if (lookup_type == 4 and subtable_count == 1) {
         if (ligatureLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
@@ -2119,7 +2121,7 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
             3 => {}, // AlternateSubst needs whole-lookup ordering; handled above.
             4 => try applyLigatureSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
             5 => try applyContextSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
-            6 => try applyChainingContextSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
+            6 => unreachable, // ChainingContextSubst is handled position-major above.
             7 => try applyExtensionSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
             8 => {}, // ReverseChainSingleSubst needs whole-lookup ordering; handled below.
             else => {},
@@ -4786,35 +4788,37 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
     }
     if (try applySingleSubstitutionRecordsMappedFast(table, glyphs, records_offset, record_count, input_indices, options)) return;
 
-    // SequenceLookupRecord sequence indexes are expressed in the input sequence
-    // matched before any nested lookup runs. Keep a mutable index map so a
-    // cardinality-changing nested lookup (notably MultipleSubst) shifts later
-    // records to the glyphs they originally named instead of the now-stale raw
-    // buffer positions. The map also tracks whether an input glyph still has a
-    // replacement in the current buffer: a deletion should not make a repeated
-    // record for the deleted sequence index accidentally operate on the next
-    // glyph that shifted into the same physical slot.
+    // SequenceLookupRecord indexes address a mutable match-position array. It
+    // starts with the input sequence, but OpenType implementations extend it
+    // when a nested MultipleSubst grows the buffer: the inserted positions are
+    // spliced immediately after the current SequenceIndex. Consequently, a
+    // later index that was outside the original input count can become valid,
+    // and an originally valid later index can name a newly inserted glyph.
+    //
+    // Each entry stores its current physical glyph-buffer index. The parallel
+    // live map preserves deletion semantics: a repeated record for a deleted
+    // position must not accidentally target the glyph that shifted into that
+    // physical slot.
     var mapped_buf: [64]usize = undefined;
     var mapped_live_buf: [64]bool = undefined;
     if (input_indices.len > mapped_buf.len) return error.UnsupportedGsub;
     @memcpy(mapped_buf[0..input_indices.len], input_indices);
-    const mapped = mapped_buf[0..input_indices.len];
-    const mapped_live = mapped_live_buf[0..input_indices.len];
-    @memset(mapped_live, true);
+    var mapped_len = input_indices.len;
+    @memset(mapped_live_buf[0..mapped_len], true);
 
     for (0..record_count) |subst_i| {
         const record_offset = records_offset + subst_i * 4;
         const sequence_index = try readU16(table, record_offset);
         const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= mapped.len) return error.BadGsub;
-        if (!mapped_live[sequence_index]) continue;
-        const target_index = mapped[sequence_index];
+        if (sequence_index >= mapped_len) continue;
+        if (!mapped_live_buf[sequence_index]) continue;
+        const target_index = mapped_buf[sequence_index];
         if (target_index >= glyphs.items.len) continue;
         const change = try applyNestedGlyphLookup(table, glyphs, target_index, lookup_index, allocator, options);
         if (change.removed_len == change.inserted_len) continue;
         if (change.component_offsets) |component_offsets| {
-            for (mapped, 0..) |*mapped_index, mapped_i| {
-                if (!mapped_live[mapped_i]) continue;
+            for (mapped_buf[0..mapped_len], 0..) |*mapped_index, mapped_i| {
+                if (!mapped_live_buf[mapped_i]) continue;
                 if (mapped_index.* <= target_index) continue;
                 const relative_index = mapped_index.* - target_index;
                 var removed_before: usize = 0;
@@ -4838,8 +4842,43 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
             }
             continue;
         }
-        for (mapped, 0..) |*mapped_index, mapped_i| {
-            if (!mapped_live[mapped_i]) continue;
+        if (change.inserted_len > change.removed_len) {
+            const added = change.inserted_len - change.removed_len;
+            // First account for the physical insertion in every existing match
+            // position. Then extend the logical match-position array in the
+            // same place as HarfBuzz's apply_lookup(): immediately after the
+            // SequenceIndex whose nested lookup caused the growth.
+            for (mapped_buf[0..mapped_len], 0..) |*mapped_index, mapped_i| {
+                if (!mapped_live_buf[mapped_i]) continue;
+                if (mapped_index.* < target_index) continue;
+                if (mapped_index.* < target_index + change.removed_len) {
+                    mapped_index.* = target_index;
+                } else {
+                    mapped_index.* += added;
+                }
+            }
+
+            const insert_at = @as(usize, sequence_index) + 1;
+            if (mapped_len + added > mapped_buf.len) return error.UnsupportedGsub;
+            std.mem.copyBackwards(
+                usize,
+                mapped_buf[insert_at + added .. mapped_len + added],
+                mapped_buf[insert_at..mapped_len],
+            );
+            std.mem.copyBackwards(
+                bool,
+                mapped_live_buf[insert_at + added .. mapped_len + added],
+                mapped_live_buf[insert_at..mapped_len],
+            );
+            for (0..added) |added_i| {
+                mapped_buf[insert_at + added_i] = target_index + 1 + added_i;
+                mapped_live_buf[insert_at + added_i] = true;
+            }
+            mapped_len += added;
+            continue;
+        }
+        for (mapped_buf[0..mapped_len], 0..) |*mapped_index, mapped_i| {
+            if (!mapped_live_buf[mapped_i]) continue;
             if (mapped_index.* < target_index) continue;
             if (mapped_index.* < target_index + change.removed_len) {
                 // A non-ligature nested lookup consumed this input glyph. If
@@ -4847,14 +4886,14 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
                 // sequence index operate on the first replacement. If it was a
                 // deletion, there is no surviving glyph to target.
                 if (change.inserted_len == 0) {
-                    mapped_live[mapped_i] = false;
+                    mapped_live_buf[mapped_i] = false;
                 } else {
                     mapped_index.* = target_index;
                 }
-            } else if (change.inserted_len > change.removed_len) {
-                mapped_index.* += change.inserted_len - change.removed_len;
             } else {
-                mapped_index.* -= change.removed_len - change.inserted_len;
+                if (change.removed_len > change.inserted_len) {
+                    mapped_index.* -= change.removed_len - change.inserted_len;
+                }
             }
         }
     }
@@ -4880,7 +4919,7 @@ fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList
         const record_offset = records_offset + record_i * 4;
         const sequence_index = try readU16(table, record_offset);
         const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= input_indices.len) return error.BadGsub;
+        if (sequence_index >= input_indices.len) return false;
         if (lookup_index >= lookup_count) return error.BadGsub;
         var single_accelerator = SingleSubstAccelerator{};
         var lookup_offset: usize = 0;
@@ -4944,7 +4983,7 @@ fn applyAcceleratedSingleSubstitutionRecordsMapped(table: Table, glyphs: *std.Ar
         const record_offset = records_offset + record_i * 4;
         const sequence_index = try readU16(table, record_offset);
         const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= input_indices.len) return error.BadGsub;
+        if (sequence_index >= input_indices.len) return false;
         if (lookup_index >= accelerators.len) return error.BadGsub;
         const single_accelerator = accelerators[lookup_index].single_subst;
         if (!single_accelerator.enabled) return false;
@@ -4979,12 +5018,15 @@ fn ensureSubstitutionRecordReferencesWithin(table: Table, records_offset: usize,
     // both fields before the first nested lookup mutates `glyphs`, otherwise a
     // malformed later record could either be silently skipped or leave earlier
     // substitutions visible to the caller.
+    _ = input_count;
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGsub(table, lookup_list_offset);
     for (0..record_count) |record_i| {
         const record_offset = records_offset + record_i * 4;
-        const sequence_index = try readU16BadGsub(table, record_offset);
-        if (sequence_index >= input_count) return error.BadGsub;
+        // HarfBuzz safely ignores an out-of-range SequenceIndex while applying
+        // the remaining records in design order. Such records occur in shipped
+        // fonts (including TestShapeLana.ttf), so validate their lookup target
+        // but do not reject the entire font.
         const lookup_index = try readU16BadGsub(table, record_offset + 2);
         if (lookup_index >= lookup_count) return error.BadGsub;
         const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
@@ -6015,21 +6057,26 @@ fn applyAcceleratedChainingClassSubstitutionAt(table: Table, subtable: ChainingC
     if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs or group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
 
     var window = ChainingClassRuleMatchWindow.init(table, glyphs.items, pos, empty_class_def_offset, subtable.input_class_def, subtable.lookahead_class_def, lookup_flag, options);
-    const input_indices = (try window.inputSlice(group.max_input_count)) orelse return .{};
     var input_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-    for (1..group.max_input_count) |input_i| {
-        input_classes[input_i - 1] = (try window.inputClassAt(input_i)) orelse return .{};
-    }
-
     var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-    for (0..group.max_lookahead_count) |lookahead_i| {
-        lookahead_classes[lookahead_i] = (try window.lookaheadClassAt(group.max_input_count, lookahead_i)) orelse break;
-    }
 
     const rules = subtable.rules[group.start .. group.start + group.len];
     for (rules) |rule| {
         if (rule.input_count == 0 or rule.input_count > group.max_input_count) continue;
         if (rule.lookahead_count > group.max_lookahead_count) continue;
+        // Rules in one class set are tried in font order and may have different
+        // input lengths. Do not prefetch the group's longest window: a short
+        // early rule can match at the end of a syllable even when a later long
+        // rule has more inputs than remain in the run.
+        const input_indices = (try window.inputSlice(rule.input_count)) orelse continue;
+        var input_available = true;
+        for (1..rule.input_count) |input_i| {
+            input_classes[input_i - 1] = (try window.inputClassAt(input_i)) orelse {
+                input_available = false;
+                break;
+            };
+        }
+        if (!input_available) continue;
         if (!try window.ensureLookaheadCount(rule.input_count, rule.lookahead_count)) continue;
         const extra_input_count = @as(usize, rule.input_count) - 1;
         var hash = class_context.sequenceHash(input_classes[0..extra_input_count]);
@@ -7148,6 +7195,96 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
     try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3, 9 }, glyphs.items);
 }
 
+test "GSUB accelerated chaining class matching keeps shorter rules at run end" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 96;
+
+    // The first two glyphs form the short rule's input and the third is its
+    // lookahead. A later rule in the same class set declares four inputs, so
+    // eager collection of the group-wide maximum would incorrectly reject the
+    // whole subtable before trying the short rule.
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 1);
+    writeU16Test(&bytes, 12, 4);
+    writeSingleDeltaLookup(&bytes, 14, 1, 10);
+
+    const coverage = 40;
+    writeCoverage1(&bytes, coverage, 1);
+    const input_class_def = 46;
+    writeU16Test(&bytes, input_class_def + 0, 1);
+    writeU16Test(&bytes, input_class_def + 2, 1);
+    writeU16Test(&bytes, input_class_def + 4, 3);
+    writeU16Test(&bytes, input_class_def + 6, 3);
+    writeU16Test(&bytes, input_class_def + 8, 5);
+    writeU16Test(&bytes, input_class_def + 10, 5);
+    const lookahead_class_def = 60;
+    writeU16Test(&bytes, lookahead_class_def + 0, 1);
+    writeU16Test(&bytes, lookahead_class_def + 2, 1);
+    writeU16Test(&bytes, lookahead_class_def + 4, 3);
+    writeU16Test(&bytes, lookahead_class_def + 6, 9);
+    writeU16Test(&bytes, lookahead_class_def + 8, 1);
+    writeU16Test(&bytes, lookahead_class_def + 10, 7);
+
+    const classes = [_]u16{
+        5, 7, // Short rule: one extra input and one lookahead.
+        5, 5, 5, // Long rule: three extra inputs.
+    };
+    const rules = [_]class_context.Rule{
+        .{
+            .class_set = 3,
+            .input_count = 2,
+            .lookahead_count = 1,
+            .hash = class_context.sequenceHash(classes[0..2]),
+            .order = 0,
+            .lookup_index = 0,
+            .classes_start = 0,
+        },
+        .{
+            .class_set = 3,
+            .input_count = 4,
+            .lookahead_count = 0,
+            .hash = class_context.sequenceHash(classes[2..5]),
+            .order = 1,
+            .lookup_index = 0,
+            .classes_start = 2,
+        },
+    };
+    const groups = [_]class_context.RuleGroup{.{
+        .class_set = 3,
+        .start = 0,
+        .len = rules.len,
+        .max_input_count = 4,
+        .max_lookahead_count = 1,
+    }};
+    const subtable = ChainingClassSubtableAccelerator{
+        .coverage_offset = coverage,
+        .input_class_def = input_class_def,
+        .lookahead_class_def = lookahead_class_def,
+        .rules = &rules,
+        .classes = &classes,
+        .groups = &groups,
+    };
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+
+    const result = try applyAcceleratedChainingClassSubstitutionAt(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        subtable,
+        &glyphs,
+        0,
+        allocator,
+        0,
+        .{},
+    );
+
+    try std.testing.expect(result.matched);
+    try std.testing.expectEqual(@as(usize, 2), result.next_pos);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3 }, glyphs.items);
+}
+
 test "GSUB ContextSubst rejects null required rule offsets" {
     var bytes = [_]u8{0} ** 24;
     writeU16Test(&bytes, 8, 12); // LookupList offset for nested-record preflight.
@@ -7946,6 +8083,63 @@ test "GSUB chaining coverage lookup tries subtables per position" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 99, 2, 1 }, glyphs.items);
 }
 
+test "GSUB chaining class lookup stops after the first matching subtable" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 180;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10); // LookupList.
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 12); // Chaining lookup at 20.
+    writeU16Test(&bytes, 14, 122); // Identity SingleSubst at 130.
+    writeU16Test(&bytes, 16, 146); // Visible SingleSubst at 154.
+
+    writeU16Test(&bytes, 20, 6); // ChainingContextSubst.
+    writeU16Test(&bytes, 24, 2);
+    writeU16Test(&bytes, 26, 10); // First class subtable at 30.
+    writeU16Test(&bytes, 28, 60); // Second class subtable at 80.
+
+    for ([_]usize{ 30, 80 }, 0..) |chain, subtable_index| {
+        writeU16Test(&bytes, chain + 0, 2);
+        writeU16Test(&bytes, chain + 2, 34); // Coverage.
+        writeU16Test(&bytes, chain + 4, 0); // No backtrack ClassDef.
+        writeU16Test(&bytes, chain + 6, 40); // Input ClassDef.
+        writeU16Test(&bytes, chain + 8, 0); // No lookahead ClassDef.
+        writeU16Test(&bytes, chain + 10, 2); // ClassSetCount.
+        writeU16Test(&bytes, chain + 12, 0);
+        writeU16Test(&bytes, chain + 14, 16); // Class 1 set.
+
+        const set = chain + 16;
+        writeU16Test(&bytes, set + 0, 1);
+        writeU16Test(&bytes, set + 2, 4);
+        const rule = set + 4;
+        writeU16Test(&bytes, rule + 0, 0); // BacktrackGlyphCount.
+        writeU16Test(&bytes, rule + 2, 1); // InputGlyphCount.
+        writeU16Test(&bytes, rule + 4, 0); // LookAheadGlyphCount.
+        writeU16Test(&bytes, rule + 6, 1); // SubstCount.
+        writeU16Test(&bytes, rule + 8, 0);
+        writeU16Test(&bytes, rule + 10, @intCast(subtable_index + 1));
+
+        writeCoverage1(&bytes, chain + 34, 1);
+        writeClassDef1(&bytes, chain + 40, 1, 1);
+    }
+
+    // The first nested lookup deliberately substitutes glyph 1 with itself.
+    // It still counts as a successful rule application and prevents the second
+    // chaining subtable from applying its visible 1 -> 11 substitution at the
+    // same position.
+    writeSingleDeltaLookup(&bytes, 130, 1, 0);
+    writeSingleDeltaLookup(&bytes, 154, 1, 10);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 1);
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 20, &glyphs, allocator, .{});
+
+    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
+}
+
 test "GSUB context substitution skips lookup-flag ignored glyphs" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 72;
@@ -8297,7 +8491,7 @@ test "GSUB contextual lookup records reject dangling lookup indexes atomically" 
     try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
 }
 
-test "GSUB contextual lookup records reject sequence indexes outside matched input" {
+test "GSUB contextual lookup records skip sequence indexes outside matched input" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 84;
 
@@ -8339,8 +8533,8 @@ test "GSUB contextual lookup records reject sequence indexes outside matched inp
     try glyphs.append(allocator, 1);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 20));
-    try std.testing.expectError(error.BadGsub, applyLookup(table, context_lookup, &glyphs, allocator, .{}));
+    try validateGlyphBounds(&bytes, 0, bytes.len, 20);
+    try applyLookup(table, context_lookup, &glyphs, allocator, .{});
     try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
 
     // With a valid SequenceIndex, the same context applies its nested lookup.
@@ -8633,6 +8827,69 @@ test "GSUB context substitution can apply nested multiple substitution" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 20, 21, 3 }, glyphs.items);
 }
 
+test "GSUB multiple substitution makes a later sequence index valid" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 124;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 118); // Empty ScriptList.
+    writeU16Test(&bytes, 6, 120); // Empty FeatureList.
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 10); // Context lookup at 20.
+    writeU16Test(&bytes, 14, 52); // Multiple lookup at 62.
+    writeU16Test(&bytes, 16, 88); // Single lookup at 98.
+    writeU16Test(&bytes, 118, 0);
+    writeU16Test(&bytes, 120, 0);
+
+    writeU16Test(&bytes, 20, 5);
+    writeU16Test(&bytes, 24, 1);
+    writeU16Test(&bytes, 26, 8);
+    const context = 28;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 28);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 2);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 2);
+    writeU16Test(&bytes, rule + 6, 0);
+    writeU16Test(&bytes, rule + 8, 1);
+    writeU16Test(&bytes, rule + 10, 2); // Initially past GlyphCount.
+    writeU16Test(&bytes, rule + 12, 2);
+    writeCoverage1(&bytes, context + 28, 1);
+
+    writeU16Test(&bytes, 62, 2);
+    writeU16Test(&bytes, 66, 1);
+    writeU16Test(&bytes, 68, 8);
+    const multiple = 70;
+    writeU16Test(&bytes, multiple + 0, 1);
+    writeU16Test(&bytes, multiple + 2, 8);
+    writeU16Test(&bytes, multiple + 4, 1);
+    writeU16Test(&bytes, multiple + 6, 14);
+    writeCoverage1(&bytes, multiple + 8, 1);
+    const sequence = multiple + 14;
+    writeU16Test(&bytes, sequence + 0, 2);
+    writeU16Test(&bytes, sequence + 2, 10);
+    writeU16Test(&bytes, sequence + 4, 11);
+
+    writeSingleDeltaLookup(&bytes, 98, 2, 10);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2 });
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try validateGlyphBounds(&bytes, 0, bytes.len, 32);
+    try applyLookup(table, 20, &glyphs, allocator, .{});
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 11, 12 }, glyphs.items);
+}
+
 test "GSUB contextual records skip deleted input sequence targets" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 160;
@@ -8881,7 +9138,7 @@ test "GSUB context nested extension ligature uses real glyph run" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
 }
 
-test "GSUB contextual records remap across extension multiple substitution" {
+test "GSUB contextual records extend positions across extension multiple substitution" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 132;
 
@@ -8935,7 +9192,7 @@ test "GSUB contextual records remap across extension multiple substitution" {
     writeU16Test(&bytes, sequence + 2, 20);
     writeU16Test(&bytes, sequence + 4, 21);
 
-    writeSingleDeltaLookup(&bytes, 110, 3, 10);
+    writeSingleDeltaLookup(&bytes, 110, 21, 10);
 
     var glyphs = std.ArrayList(GlyphId).empty;
     defer glyphs.deinit(allocator);
@@ -8944,10 +9201,10 @@ test "GSUB contextual records remap across extension multiple substitution" {
     try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 18, &glyphs, allocator, .{});
 
     // The first record inserts an extra glyph through ExtensionSubst wrapping
-    // MultipleSubst. The second record still names sequenceIndex 2 from the
-    // pre-substitution match, so it must be shifted past both inserted glyphs
-    // and apply to original glyph 3 rather than to replacement glyph 21.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 20, 21, 13 }, glyphs.items);
+    // MultipleSubst. Context application extends its mutable match-position
+    // array immediately after sequenceIndex 1, so the next record's
+    // sequenceIndex 2 names the newly inserted replacement glyph 21.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 20, 31, 3 }, glyphs.items);
 }
 
 test "GSUB contextual ligature remaps records across ignored components" {

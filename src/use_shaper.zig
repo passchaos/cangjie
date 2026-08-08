@@ -9,7 +9,7 @@ const categories = @import("use/categories.zig");
 const syllables = @import("use/syllables.zig");
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cakm or script_tag == .cham or script_tag == .dupl or script_tag == .java or script_tag == .marc;
+    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cakm or script_tag == .cham or script_tag == .dupl or script_tag == .java or script_tag == .lana or script_tag == .marc;
 }
 
 pub const Category = categories.Category;
@@ -29,8 +29,9 @@ pub fn markSourceFeatures(
     source_features: []u32,
     source_syllables: []u8,
     codepoints: []const u21,
+    source_order: []const usize,
 ) !void {
-    try syllables.markSourceFeatures(allocator, source_features, source_syllables, codepoints);
+    try syllables.markSourceFeatures(allocator, source_features, source_syllables, codepoints, source_order);
 }
 
 pub fn assignGraphemeClusterOwners(
@@ -68,15 +69,28 @@ pub fn assignGraphemeClusterOwners(
         }
     }
 
-    // HarfBuzz's monotone-grapheme initialization keeps a WORD JOINER as its
-    // own cluster but assigns immediately following Unicode marks to that
-    // cluster. UAX #29 exposes a break after the control, so this USE-specific
-    // adjustment is needed for broken clusters such as WJ + dependent vowel.
+    // HarfBuzz's monotone-grapheme initialization keeps WORD JOINER and ZWNJ
+    // as independent clusters but assigns immediately following Unicode marks
+    // to that cluster. UAX #29 either exposes a break after the control or
+    // groups ZWNJ into the preceding grapheme, so this USE-specific adjustment
+    // preserves HarfBuzz's shaping-buffer ownership in both cases.
     for (codepoints, 0..) |codepoint, source_index| {
-        if (source_index == 0 or !categories.isUnicodeMarkForUse(codepoint)) continue;
+        if (source_index == 0) continue;
         const previous_owner = owner_by_source[source_index - 1];
-        if (categories.forCodepoint(codepoints[previous_owner]) == .word_joiner) {
-            owner_by_source[source_index] = previous_owner;
+        if (categories.isUnicodeMarkForUse(codepoint)) {
+            const owner_category = categories.forCodepoint(codepoints[previous_owner]);
+            if (owner_category == .word_joiner or owner_category == .zwnj) {
+                owner_by_source[source_index] = previous_owner;
+            }
+        }
+        // When the preceding SAKOT itself inherited a ZWNJ-owned cluster, its
+        // following consonant must continue that adjusted owner. Reusing the
+        // original UAX grapheme owner here would incorrectly jump back across
+        // the ZWNJ to the earlier base.
+        if (codepoints[source_index - 1] == 0x1a60 and
+            codepoint >= 0x1a20 and codepoint <= 0x1a54)
+        {
+            owner_by_source[source_index] = owner_by_source[source_index - 1];
         }
     }
 
@@ -117,6 +131,7 @@ pub fn insertDottedCirclesForBrokenSyllables(
     glyph_substituted: *std.ArrayList(bool),
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     source_syllables: []const u8,
+    source_pref_substituted: []const bool,
     codepoints: []const u21,
     dotted_circle_glyph: GlyphId,
 ) std.mem.Allocator.Error!void {
@@ -142,10 +157,13 @@ pub fn insertDottedCirclesForBrokenSyllables(
         // HarfBuzz inserts before the broken syllable and then reorders a
         // leading VPre ahead of the dotted circle. Insert after that one glyph
         // directly: our source metadata intentionally remains source-level, so
-        // all components of a MultipleSubst share the VPre source category.
+        // the synthetic circle and the source glyph cannot carry distinct USE
+        // categories. Consult the post-pref category here because a successful
+        // `pref` substitution dynamically turns an MPre (or another category)
+        // into VPre before HarfBuzz performs this reorder.
         if (insert_index < glyph_source_indices.items.len) {
             const candidate_source = glyph_source_indices.items[insert_index];
-            if (candidate_source < codepoints.len and categories.isPrebaseVowel(categories.forCodepoint(codepoints[candidate_source]))) {
+            if (categories.isPrebaseVowel(categoryForReordering(candidate_source, source_pref_substituted, codepoints))) {
                 insert_index += 1;
             }
         }
@@ -411,6 +429,7 @@ test "USE shaping includes Balinese" {
     try @import("std").testing.expect(shouldShape(.cham));
     try @import("std").testing.expect(shouldShape(.dupl));
     try @import("std").testing.expect(shouldShape(.java));
+    try @import("std").testing.expect(shouldShape(.lana));
     try @import("std").testing.expect(shouldShape(.marc));
     try @import("std").testing.expect(!shouldShape(.latn));
 }
@@ -437,6 +456,18 @@ test "USE cluster owners preserve ZWNJ identity" {
     try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 3 }, &cluster_owners);
+}
+
+test "USE cluster owners propagate ZWNJ through a Tai Tham stack" {
+    const allocator = std.testing.allocator;
+    const text = "ᨶ᩠ᩅ‌ᩣ᩠ᨿ";
+    const byte_starts = [_]usize{ 0, 3, 6, 9, 12, 15, 18 };
+    const codepoints = [_]u21{ 0x1a36, 0x1a60, 0x1a45, 0x200c, 0x1a63, 0x1a60, 0x1a3f };
+    var cluster_owners = [_]usize{ 0, 1, 2, 3, 4, 5, 6 };
+
+    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 3, 3, 3, 3 }, &cluster_owners);
 }
 
 test "USE cluster owners attach marks after WORD JOINER" {
@@ -532,6 +563,7 @@ test "USE inserts a dotted circle into each broken syllable" {
         try components.append(allocator, info);
     }
     const syllable_serials = [_]u8{ 0x12, 0x12, 0x27 };
+    const pref_substituted = [_]bool{ false, false, false };
     const codepoints = [_]u21{ 0x1b13, 0x1b36, 0x1b3e };
 
     try insertDottedCirclesForBrokenSyllables(
@@ -542,6 +574,7 @@ test "USE inserts a dotted circle into each broken syllable" {
         &substituted,
         &components,
         &syllable_serials,
+        &pref_substituted,
         &codepoints,
         128,
     );
@@ -549,6 +582,51 @@ test "USE inserts a dotted circle into each broken syllable" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 23, 58, 66, 128 }, glyph_ids.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 2 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, cluster_owners.items);
+}
+
+test "USE dotted circle follows a pref-substituted broken-cluster glyph" {
+    const allocator = std.testing.allocator;
+    var glyph_ids = std.ArrayList(GlyphId).empty;
+    defer glyph_ids.deinit(allocator);
+    try glyph_ids.appendSlice(allocator, &.{ 191, 240, 265 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+    var cluster_owners = std.ArrayList(usize).empty;
+    defer cluster_owners.deinit(allocator);
+    try cluster_owners.appendSlice(allocator, &.{ 0, 1, 1 });
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(allocator);
+    try substituted.appendSlice(allocator, &.{ false, true, false });
+    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    defer components.deinit(allocator);
+    for (sources.items) |source| {
+        var info = gpos.LigatureComponentInfo{};
+        info.component_sources[0] = source;
+        try components.append(allocator, info);
+    }
+    const syllable_serials = [_]u8{ 0x12, 0x27, 0x27 };
+    const pref_substituted = [_]bool{ false, true, false };
+    const codepoints = [_]u21{ 0x1a2f, 0x1a55, 0x1a63 };
+
+    try insertDottedCirclesForBrokenSyllables(
+        allocator,
+        &glyph_ids,
+        &sources,
+        &cluster_owners,
+        &substituted,
+        &components,
+        &syllable_serials,
+        &pref_substituted,
+        &codepoints,
+        143,
+    );
+
+    // The source-level metadata cannot distinguish the inserted base-category
+    // circle from the dynamically reclassified VPre glyph. Insert directly in
+    // their final HarfBuzz order rather than letting reorder skip both as one
+    // same-source MultipleSubst-like group.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 191, 240, 143, 265 }, glyph_ids.items);
 }
 
 test {

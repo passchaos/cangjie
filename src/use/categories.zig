@@ -82,6 +82,36 @@ pub fn forCodepoint(codepoint: u21) Category {
         => .vowel_above,
         0x1bf0...0x1bf1 => .final_above,
         0x1bf2...0x1bf3 => .reordering_killer,
+        0x1a20...0x1a54,
+        0x1a80...0x1a89,
+        0x1a90...0x1a99,
+        => .base,
+        0x1a55 => .medial_pre,
+        0x1a56 => .medial_below,
+        0x1a57,
+        0x1a5b...0x1a5e,
+        => .cons_sub,
+        0x1a58...0x1a59 => .final_above,
+        0x1a5a => .medial_above,
+        0x1a60 => .sakot,
+        0x1a61,
+        0x1a63...0x1a64,
+        0x1a6d,
+        => .vowel_post,
+        0x1a62,
+        0x1a65...0x1a68,
+        0x1a6b,
+        0x1a73,
+        0x1a7a,
+        => .vowel_above,
+        0x1a69...0x1a6a,
+        0x1a6c,
+        => .vowel_below,
+        0x1a6e...0x1a72 => .vowel_pre,
+        0x1a74...0x1a79,
+        0x1a7b...0x1a7c,
+        => .vowel_mod_above,
+        0x1a7f => .vowel_mod_below,
         0x200b => .word_joiner,
         0x200c => .zwnj,
         // USE treats ZWJ like CGJ for syllable segmentation: both are filtered
@@ -304,6 +334,15 @@ test "Brahmi USE categories distinguish numbers and joiners" {
 test "Chakma USE categories distinguish stacker and vowels" {
     const codepoints = [_]u21{ 0x11103, 0x11127, 0x1112a, 0x1112c, 0x11133, 0x11134, 0x11145 };
     const expected = [_]Category{ .base, .vowel_below, .vowel_above, .vowel_pre, .invisible_stacker, .consonant_mod_above, .vowel_post };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Tai Tham USE categories distinguish sakot and medials" {
+    const codepoints = [_]u21{ 0x1a20, 0x1a55, 0x1a56, 0x1a57, 0x1a60, 0x1a6e, 0x1a74, 0x1a7f };
+    const expected = [_]Category{ .base, .medial_pre, .medial_below, .cons_sub, .sakot, .vowel_pre, .vowel_mod_above, .vowel_mod_below };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

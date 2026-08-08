@@ -8108,6 +8108,7 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
             point.x = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.x)) + delta.x));
             point.y = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.y)) + delta.y));
         }
+        outline.bounds = boundsForFlaggedPoints(points);
     }
 
     var start: usize = 0;
@@ -8117,6 +8118,23 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
         try appendContour(&builder, points[start .. end + 1], transform);
         start = end + 1;
     }
+}
+
+fn boundsForFlaggedPoints(points: []const FlaggedPoint) glyph_mod.Bounds {
+    if (points.len == 0) return .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
+    var result = glyph_mod.Bounds{
+        .x_min = points[0].x,
+        .y_min = points[0].y,
+        .x_max = points[0].x,
+        .y_max = points[0].y,
+    };
+    for (points[1..]) |point| {
+        result.x_min = @min(result.x_min, point.x);
+        result.y_min = @min(result.y_min, point.y);
+        result.x_max = @max(result.x_max, point.x);
+        result.y_max = @max(result.y_max, point.y);
+    }
+    return result;
 }
 
 fn clampGlyphPointF32ToI16(value: f32) i16 {

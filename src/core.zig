@@ -387,9 +387,36 @@ fn paragraphOptionsForStyle(style: TextStyle) layout.ParagraphOptions {
         .letter_spacing = style.letter_spacing,
         .word_spacing = style.word_spacing,
         .script_tag = if (style.script) |script| unicode.openTypeScriptTag(script) else null,
+        .language_tag = openTypeLanguageTagForLocale(style.locale),
         .features = style.font_features,
         .normalized_variation_coords = style.normalized_variation_coords,
     };
+}
+
+fn openTypeLanguageTagForLocale(locale_tag: ?[]const u8) ?unicode.OpenTypeLanguageTag {
+    const tag_text = locale_tag orelse return null;
+    const parts = (Locale{ .tag = tag_text }).parse() catch return null;
+    const language = canonicalLanguageAlias(parts.language);
+    if (asciiEqlIgnoreCase(language, "ja")) return .jan;
+    if (asciiEqlIgnoreCase(language, "ko")) return .kor;
+    if (asciiEqlIgnoreCase(language, "ar")) return .ara;
+    if (asciiEqlIgnoreCase(language, "hi")) return .hin;
+    if (asciiEqlIgnoreCase(language, "zh")) {
+        if (parts.script) |script| {
+            if (asciiEqlIgnoreCase(script, "Hant")) return .zht;
+            if (asciiEqlIgnoreCase(script, "Hans")) return .zhs;
+        }
+        if (parts.region) |region| {
+            if (asciiEqlIgnoreCase(region, "TW") or
+                asciiEqlIgnoreCase(region, "HK") or
+                asciiEqlIgnoreCase(region, "MO"))
+            {
+                return .zht;
+            }
+        }
+        return .zhs;
+    }
+    return null;
 }
 
 pub const AttributedRunLayout = struct {
@@ -825,6 +852,34 @@ test "attributed text forwards OpenType feature styling" {
     try std.testing.expectEqual(@as(usize, 1), glyph_runs.runs.len);
     try std.testing.expectEqual(@as(usize, 1), glyph_runs.runs[0].glyphs.len);
     try std.testing.expectEqual(@as(@import("glyph.zig").GlyphId, 2), glyph_runs.runs[0].glyphs[0].glyph_id);
+}
+
+test "attributed text forwards locale language styling" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedCjkLanguageGsubTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try @import("font.zig").Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const @import("font.zig").Font{&font};
+    const cascade = layout.FontCascade.init(&fonts);
+    const default_spans = [_]StyleSpan{
+        .{ .byte_range = .{ .start = 0, .len = "一".len }, .style = .{ .font_size = 20 } },
+    };
+    const japanese_spans = [_]StyleSpan{
+        .{ .byte_range = .{ .start = 0, .len = "一".len }, .style = .{ .font_size = 20, .locale = "ja-JP" } },
+    };
+
+    var default_runs = try layoutAttributedGlyphRunsUtf8(allocator, cascade, .{ .text = "一", .spans = &default_spans });
+    defer default_runs.deinit();
+    var japanese_runs = try layoutAttributedGlyphRunsUtf8(allocator, cascade, .{ .text = "一", .spans = &japanese_spans });
+    defer japanese_runs.deinit();
+
+    try std.testing.expectEqual(@as(@import("glyph.zig").GlyphId, 1), default_runs.runs[0].glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(@import("glyph.zig").GlyphId, 2), japanese_runs.runs[0].glyphs[0].glyph_id);
 }
 
 test "measures attributed runs with per span style" {

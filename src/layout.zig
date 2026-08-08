@@ -2270,6 +2270,7 @@ fn buildParagraphLines(
     var y: f32 = 0;
     var index: usize = 0;
     var line_in_paragraph: usize = 0;
+    var terminal_emergency_line_committed = false;
     const max_lines = options.max_lines orelse std.math.maxInt(usize);
     const space_advance = defaultSpaceAdvance(buffer.glyphs.items);
     const tab_stop = @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
@@ -2345,6 +2346,7 @@ fn buildParagraphLines(
             line_start = break_end;
             trimLeadingSoftBreaks(buffer.glyphs.items, &line_start);
             line_width = lineWidth(buffer.glyphs.items[line_start .. index + 1]);
+            terminal_emergency_line_committed = break_end == buffer.glyphs.items.len;
             last_break = null;
             width_at_break = 0;
         }
@@ -2357,7 +2359,12 @@ fn buildParagraphLines(
         }
     }
 
-    try appendParagraphLine(buffer, line_start, buffer.glyphs.items.len, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+    // A final emergency break may consume the complete last shaped atom. In
+    // that case `line_start == glyph_count`; appending again would fabricate an
+    // empty trailing line even though the source contains no hard terminator.
+    if (!terminal_emergency_line_committed) {
+        try appendParagraphLine(buffer, line_start, buffer.glyphs.items.len, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+    }
     try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, false);
 }
 
@@ -2445,7 +2452,15 @@ fn graphemeOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []con
     if (current_cluster_start > line_cluster_start) {
         return .{ .index = glyphIndexForSourceBoundary(glyphs, current_cluster_start, line_start, index) orelse index };
     }
-    if (glyphSourceEnd(glyphs[index]) >= current_cluster_end) {
+    // MultipleSubst and other one-to-many transformations can emit adjacent
+    // glyphs with the same source cluster. Source extent alone cannot tell
+    // whether the current output glyph is the last member of that atom, so do
+    // not commit an emergency line until the following glyph starts another
+    // source cluster. This matches Parley's rule that a shaped atom (including
+    // all glyphs of a ligature/multi-output cluster) is consumed as a whole.
+    const cluster_continues = index + 1 < glyphs.len and
+        glyphClusterStart(glyphs[index + 1]) == current_cluster_start;
+    if (!cluster_continues and glyphSourceEnd(glyphs[index]) >= current_cluster_end) {
         return .{ .index = index + 1 };
     }
     return .{ .index = index, .defer_until_cluster_end = true };

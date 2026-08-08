@@ -6291,6 +6291,31 @@ test "paragraph wrapping keeps combining grapheme clusters atomic" {
     try std.testing.expectEqual(@as(usize, 3), paragraph.glyphs[2].cluster);
 }
 
+test "paragraph wrapping keeps multiple-substitution glyph atoms together" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMultipleGsubTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+        .max_width = 1,
+        .line_height = 24,
+    });
+
+    // Both output glyphs represent the same source scalar. Breaking between
+    // them would create a line boundary with no corresponding source caret.
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines[0].glyph_len);
+    try std.testing.expectEqual(paragraph.glyphs[0].cluster, paragraph.glyphs[1].cluster);
+}
+
 test "paragraph wrapping consumes Unicode line break data" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -6332,6 +6357,29 @@ test "paragraph wrapping consumes Unicode line break data" {
     try std.testing.expectEqual(@as(usize, 0), ivs.glyphs[0].cluster);
     try std.testing.expectEqual(@as(usize, 7), ivs.glyphs[0].source_byte_len);
     try std.testing.expectEqual(@as(usize, 7), ivs.glyphs[1].cluster);
+}
+
+test "paragraph layout preserves an empty caret line after trailing newline" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A\n", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+    });
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 0), paragraph.lines[1].glyph_len);
+    try std.testing.expectEqual(paragraph.glyphs.len, paragraph.lines[1].glyph_start);
 }
 
 test "paragraph wrapping honors UAX 14 punctuation and no-break glue" {

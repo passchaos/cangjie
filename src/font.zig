@@ -8342,32 +8342,31 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
     const instruction_len = try r.readU16();
     try r.skip(instruction_len);
 
-    // The glyf flag stream is run-length encoded; coordinate arrays that follow
-    // it depend on the expanded per-point flags.
-    var flags = try outline.allocator.alloc(u8, total_points);
-    defer outline.allocator.free(flags);
+    // X and Y values are stored as deltas in two separate streams. Expand the
+    // run-length encoded flags into the point records themselves so the hot
+    // outline path does not carry a second per-point allocation.
+    var points = try outline.allocator.alloc(FlaggedPoint, total_points);
+    defer outline.allocator.free(points);
     var i: usize = 0;
     while (i < total_points) : (i += 1) {
         const flag = try r.readU8();
         try validateSimpleGlyphFlag(flag, i);
-        flags[i] = flag;
+        points[i].flags = flag;
         if ((flag & 0x08) != 0) {
             const repeat = try r.readU8();
             for (0..repeat) |_| {
                 i += 1;
                 if (i >= total_points) return error.InvalidGlyph;
                 try validateSimpleGlyphFlag(flag, i);
-                flags[i] = flag;
+                points[i].flags = flag;
             }
         }
     }
 
-    // X and Y values are stored as deltas in two separate streams. Rebuild
-    // absolute point coordinates before contour reconstruction.
-    var points = try outline.allocator.alloc(FlaggedPoint, total_points);
-    defer outline.allocator.free(points);
+    // Rebuild absolute point coordinates before contour reconstruction.
     var x: i16 = 0;
-    for (points, flags) |*point, flag| {
+    for (points) |*point| {
+        const flag = point.flags;
         const dx: i16 = if ((flag & 0x02) != 0)
             if ((flag & 0x10) != 0) try r.readU8() else -@as(i16, try r.readU8())
         else if ((flag & 0x10) != 0)
@@ -8376,10 +8375,10 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
             try r.readI16();
         x += dx;
         point.x = x;
-        point.on_curve = (flag & 0x01) != 0;
     }
     var y: i16 = 0;
-    for (points, flags) |*point, flag| {
+    for (points) |*point| {
+        const flag = point.flags;
         const dy: i16 = if ((flag & 0x04) != 0)
             if ((flag & 0x20) != 0) try r.readU8() else -@as(i16, try r.readU8())
         else if ((flag & 0x20) != 0)
@@ -8511,9 +8510,13 @@ fn clampGlyphPointF32ToI16(value: f32) i16 {
 }
 
 const FlaggedPoint = struct {
-    x: i16,
-    y: i16,
-    on_curve: bool,
+    x: i16 = 0,
+    y: i16 = 0,
+    flags: u8 = 0,
+
+    fn onCurve(self: FlaggedPoint) bool {
+        return (self.flags & 0x01) != 0;
+    }
 
     fn point(self: FlaggedPoint) glyph_mod.Point {
         return .{ .x = @floatFromInt(self.x), .y = @floatFromInt(self.y) };
@@ -8529,10 +8532,10 @@ fn appendContour(builder: *glyph_mod.OutlineBuilder, contour: []const FlaggedPoi
     // TrueType permits contours to start with an off-curve control point. In
     // that case the visible start point is either the final on-curve point or
     // the implied midpoint between the first and last controls.
-    if (first.on_curve) {
+    if (first.onCurve()) {
         current = first.point();
         index = 1;
-    } else if (last.on_curve) {
+    } else if (last.onCurve()) {
         current = last.point();
     } else {
         current = glyph_mod.midpoint(last.point(), first.point());
@@ -8541,7 +8544,7 @@ fn appendContour(builder: *glyph_mod.OutlineBuilder, contour: []const FlaggedPoi
 
     while (index < contour.len) {
         const p = contour[index];
-        if (p.on_curve) {
+        if (p.onCurve()) {
             current = p.point();
             try builder.lineTo(transform.apply(current));
             index += 1;
@@ -8552,10 +8555,10 @@ fn appendContour(builder: *glyph_mod.OutlineBuilder, contour: []const FlaggedPoi
             const control = p.point();
             const next_index = if (index + 1 < contour.len) index + 1 else 0;
             const next = contour[next_index];
-            const end = if (next.on_curve) next.point() else glyph_mod.midpoint(control, next.point());
+            const end = if (next.onCurve()) next.point() else glyph_mod.midpoint(control, next.point());
             try builder.quadTo(transform.apply(control), transform.apply(end));
             current = end;
-            index += if (next.on_curve and next_index != 0) 2 else 1;
+            index += if (next.onCurve() and next_index != 0) 2 else 1;
         }
     }
     try builder.close();

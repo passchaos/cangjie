@@ -122,3 +122,114 @@ test "IFT patch map rejects reserved flags and bad entry offsets" {
     writeU32(&bytes, 25, 35);
     try std.testing.expectError(error.BadSfnt, validate(&bytes, 0, bytes.len));
 }
+
+pub const TableKeyedPatchInfo = struct {
+    format: [4]u8,
+    compatibility_id: [16]u8,
+    patch_offsets: []u32,
+};
+
+pub const GlyphKeyedPatchInfo = struct {
+    format: [4]u8,
+    flags: u8,
+    compatibility_id: [16]u8,
+    max_uncompressed_length: u32,
+    brotli_stream: []const u8,
+};
+
+pub fn tableKeyedPatchInfo(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize) Error!TableKeyedPatchInfo {
+    if (offset > data.len or length > data.len - offset or length < 30) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const format = readTag(table, 0);
+    if (!std.mem.eql(u8, &format, "IFTB")) return error.BadSfnt;
+    if (try bin.readU32At(table, 4) != 0) return error.BadSfnt;
+    var compatibility_id: [16]u8 = undefined;
+    @memcpy(&compatibility_id, table[8..24]);
+    const patch_count: usize = @intCast(try bin.readU16At(table, 24));
+    if (patch_count > (table.len - 26) / 4 - 1) return error.BadSfnt;
+    const offsets = try allocator.alloc(u32, patch_count + 1);
+    errdefer allocator.free(offsets);
+    var previous: u32 = 0;
+    for (offsets, 0..) |*value, index| {
+        value.* = try bin.readU32At(table, 26 + index * 4);
+        if (index == 0) {
+            if (value.* != 0) return error.BadSfnt;
+        } else if (value.* < previous) return error.BadSfnt;
+        if (@as(usize, value.*) > table.len - 26 - offsets.len * 4) return error.BadSfnt;
+        previous = value.*;
+    }
+    return .{ .format = format, .compatibility_id = compatibility_id, .patch_offsets = offsets };
+}
+
+pub fn freeTableKeyedPatchInfo(allocator: std.mem.Allocator, value: TableKeyedPatchInfo) void {
+    allocator.free(value.patch_offsets);
+}
+
+pub fn glyphKeyedPatchInfo(data: []const u8, offset: usize, length: usize) Error!GlyphKeyedPatchInfo {
+    if (offset > data.len or length > data.len - offset or length < 29) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const format = readTag(table, 0);
+    if (!std.mem.eql(u8, &format, "IFTG")) return error.BadSfnt;
+    if (try bin.readU32At(table, 4) != 0) return error.BadSfnt;
+    const flags = table[8];
+    if ((flags & ~@as(u8, 0x01)) != 0) return error.BadSfnt;
+    var compatibility_id: [16]u8 = undefined;
+    @memcpy(&compatibility_id, table[9..25]);
+    const max_uncompressed_length = try bin.readU32At(table, 25);
+    return .{
+        .format = format,
+        .flags = flags,
+        .compatibility_id = compatibility_id,
+        .max_uncompressed_length = max_uncompressed_length,
+        .brotli_stream = table[29..],
+    };
+}
+
+fn readTag(data: []const u8, offset: usize) [4]u8 {
+    return .{ data[offset], data[offset + 1], data[offset + 2], data[offset + 3] };
+}
+
+test "IFT table keyed patch exposes patch offsets" {
+    var bytes: [38]u8 = .{0} ** 38;
+    @memcpy(bytes[0..4], "IFTB");
+    for (0..16) |index| bytes[8 + index] = @intCast(index);
+    writeU16(&bytes, 24, 1);
+    writeU32(&bytes, 26, 0);
+    writeU32(&bytes, 30, 4);
+    @memcpy(bytes[34..38], "abcd");
+
+    const parsed = try tableKeyedPatchInfo(std.testing.allocator, &bytes, 0, bytes.len);
+    defer freeTableKeyedPatchInfo(std.testing.allocator, parsed);
+    try std.testing.expectEqualStrings("IFTB", &parsed.format);
+    try std.testing.expectEqual(@as(u8, 15), parsed.compatibility_id[15]);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 4 }, parsed.patch_offsets);
+}
+
+test "IFT glyph keyed patch exposes stream metadata" {
+    var bytes: [35]u8 = .{0} ** 35;
+    @memcpy(bytes[0..4], "IFTG");
+    bytes[8] = 1;
+    for (0..16) |index| bytes[9 + index] = @intCast(15 - index);
+    writeU32(&bytes, 25, 1024);
+    bytes[29] = 0xaa;
+    bytes[30] = 0xbb;
+
+    const parsed = try glyphKeyedPatchInfo(&bytes, 0, bytes.len);
+    try std.testing.expectEqualStrings("IFTG", &parsed.format);
+    try std.testing.expectEqual(@as(u8, 1), parsed.flags);
+    try std.testing.expectEqual(@as(u8, 0), parsed.compatibility_id[15]);
+    try std.testing.expectEqual(@as(u32, 1024), parsed.max_uncompressed_length);
+    try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xbb, 0, 0, 0, 0 }, parsed.brotli_stream);
+}
+
+test "IFT patch payloads reject reserved fields" {
+    var table_keyed: [30]u8 = .{0} ** 30;
+    @memcpy(table_keyed[0..4], "IFTB");
+    writeU32(&table_keyed, 4, 1);
+    try std.testing.expectError(error.BadSfnt, tableKeyedPatchInfo(std.testing.allocator, &table_keyed, 0, table_keyed.len));
+
+    var glyph_keyed: [33]u8 = .{0} ** 33;
+    @memcpy(glyph_keyed[0..4], "IFTG");
+    glyph_keyed[8] = 0x80;
+    try std.testing.expectError(error.BadSfnt, glyphKeyedPatchInfo(&glyph_keyed, 0, glyph_keyed.len));
+}

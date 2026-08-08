@@ -116,6 +116,8 @@ pub const TrueTypeProgramKind = @import("font.zig").TrueTypeProgramKind;
 pub const FontTableInfo = @import("font.zig").FontTableInfo;
 pub const MaxProfileInfo = @import("font.zig").MaxProfileInfo;
 pub const IftPatchMapInfo = @import("font.zig").IftPatchMapInfo;
+pub const IftTableKeyedPatchInfo = @import("font.zig").IftTableKeyedPatchInfo;
+pub const IftGlyphKeyedPatchInfo = @import("font.zig").IftGlyphKeyedPatchInfo;
 pub const HdmxInfo = @import("font.zig").HdmxInfo;
 pub const HdmxRecord = @import("font.zig").HdmxRecord;
 pub const HvarInfo = @import("font.zig").HvarInfo;
@@ -1770,6 +1772,40 @@ test "parses sbix PNG bitmap glyphs from Apple Color Emoji when available" {
     try std.testing.expect(bitmap.width > 0);
     try std.testing.expect(bitmap.height > 0);
     try std.testing.expect((try font.bestBitmapStrikePpem(40)) != null);
+}
+
+test "IFT table-keyed and glyph-keyed patch metadata decode from supplied bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const font_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(font_bytes);
+    var font = try Font.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    var table_patch: [38]u8 = .{0} ** 38;
+    @memcpy(table_patch[0..4], "IFTB");
+    for (0..16) |index| table_patch[8 + index] = @intCast(index);
+    writeU16Root(&table_patch, 24, 1);
+    writeU32Root(&table_patch, 26, 0);
+    writeU32Root(&table_patch, 30, 4);
+    @memcpy(table_patch[34..38], "data");
+    const table_info = try font.iftTableKeyedPatchInfo(allocator, &table_patch);
+    defer font.freeIftTableKeyedPatchInfo(allocator, table_info);
+    try std.testing.expectEqualStrings("IFTB", &table_info.format);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 4 }, table_info.patch_offsets);
+
+    var glyph_patch: [31]u8 = .{0} ** 31;
+    @memcpy(glyph_patch[0..4], "IFTG");
+    glyph_patch[8] = 1;
+    for (0..16) |index| glyph_patch[9 + index] = @intCast(15 - index);
+    writeU32Root(&glyph_patch, 25, 256);
+    glyph_patch[29] = 0xaa;
+    glyph_patch[30] = 0xbb;
+    const glyph_info = try font.iftGlyphKeyedPatchInfo(&glyph_patch);
+    try std.testing.expectEqualStrings("IFTG", &glyph_info.format);
+    try std.testing.expectEqual(@as(u8, 1), glyph_info.flags);
+    try std.testing.expectEqual(@as(u32, 256), glyph_info.max_uncompressed_length);
+    try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xbb }, glyph_info.brotli_stream);
 }
 
 test "IFT patch map metadata is exposed when present" {
@@ -7050,4 +7086,12 @@ fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
 
 test {
     std.testing.refAllDecls(@This());
+}
+
+fn writeU16Root(bytes: []u8, offset: usize, value: u16) void {
+    std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeU32Root(bytes: []u8, offset: usize, value: u32) void {
+    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
 }

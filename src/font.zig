@@ -118,6 +118,8 @@ pub const HorizontalMetricInfo = struct {
 };
 
 pub const IftPatchMapInfo = ift_mod.Info;
+pub const IftTableKeyedPatchInfo = ift_mod.TableKeyedPatchInfo;
+pub const IftGlyphKeyedPatchInfo = ift_mod.GlyphKeyedPatchInfo;
 
 pub const HdmxRecord = struct {
     ppem: u8,
@@ -1081,6 +1083,20 @@ pub const Font = struct {
 
     pub fn freeMorxInfo(_: *const Font, allocator: std.mem.Allocator, info_value: MorxInfo) void {
         morx_mod.free(allocator, info_value);
+    }
+
+    /// Decode a table-keyed IFT patch payload supplied by the caller.
+    pub fn iftTableKeyedPatchInfo(_: *const Font, allocator: std.mem.Allocator, patch_data: []const u8) FontError!IftTableKeyedPatchInfo {
+        return try ift_mod.tableKeyedPatchInfo(allocator, patch_data, 0, patch_data.len);
+    }
+
+    pub fn freeIftTableKeyedPatchInfo(_: *const Font, allocator: std.mem.Allocator, info_value: IftTableKeyedPatchInfo) void {
+        ift_mod.freeTableKeyedPatchInfo(allocator, info_value);
+    }
+
+    /// Decode a glyph-keyed IFT patch payload supplied by the caller.
+    pub fn iftGlyphKeyedPatchInfo(_: *const Font, patch_data: []const u8) FontError!IftGlyphKeyedPatchInfo {
+        return try ift_mod.glyphKeyedPatchInfo(patch_data, 0, patch_data.len);
     }
 
     /// Read validated top-level metadata from the optional IFT patch map table.

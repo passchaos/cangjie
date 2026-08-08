@@ -1151,6 +1151,7 @@ fn outlineContourCount(outline: *const glyph_mod.GlyphOutline) usize {
 }
 
 fn flattenOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, scale: f32, x: f32, baseline_y: f32) !void {
+    try lines.ensureUnusedCapacity(allocator, flattenedLineCapacity(outline.commands.items));
     var start: ?Point = null;
     var current: ?Point = null;
     for (outline.commands.items) |command| {
@@ -1200,6 +1201,20 @@ fn flattenOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), out
     }
 }
 
+fn flattenedLineCapacity(commands: []const glyph_mod.PathCommand) usize {
+    var result: usize = 0;
+    for (commands) |command| {
+        result += switch (command) {
+            .move_to => 0,
+            .line_to => 1,
+            .quad_to => 16,
+            .cubic_to => 24,
+            .close => 1,
+        };
+    }
+    return result;
+}
+
 fn fontToPixel(point: Point, scale: f32, x: f32, baseline_y: f32) Point {
     return .{ .x = x + point.x * scale, .y = baseline_y - point.y * scale };
 }
@@ -1209,6 +1224,7 @@ fn svgToPixel(point: Point, scale: f32, origin_x: f32, origin_y: f32) Point {
 }
 
 fn flattenSvgOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, transform: SvgTransform, scale: f32, origin_x: f32, origin_y: f32) !void {
+    try lines.ensureUnusedCapacity(allocator, flattenedLineCapacity(outline.commands.items));
     var start: ?Point = null;
     var current: ?Point = null;
     for (outline.commands.items) |command| {

@@ -525,7 +525,7 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(?usize, 15), info.top_dict.charstrings_offset);
     try std.testing.expectEqual(@as(?usize, 23), info.top_dict.fd_array_offset);
     try std.testing.expectEqual(@as(?usize, 31), info.top_dict.fd_select_offset);
-    try std.testing.expectEqual(@as(?usize, 33), info.top_dict.vstore_offset);
+    try std.testing.expectEqual(@as(?usize, 34), info.top_dict.vstore_offset);
     const charstrings = info.charstrings_index.?;
     try std.testing.expectEqual(@as(u32, 1), charstrings.count);
     try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
@@ -535,6 +535,9 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(u32, 1), fd_array.count);
     try std.testing.expectEqual(@as(usize, 30), fd_array.data_offset);
     try std.testing.expectEqual(@as(usize, 1), fd_array.data_length);
+    const fd_select = info.fd_select.?;
+    try std.testing.expectEqual(@as(usize, 31), fd_select.offset);
+    try std.testing.expectEqual(@as(u8, 0), fd_select.format);
     try std.testing.expectEqualSlices(u8, &.{14}, (try font.cff2CharStringData(0)).?);
     try std.testing.expect((try font.cff2CharStringData(1)) == null);
 

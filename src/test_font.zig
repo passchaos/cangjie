@@ -3829,7 +3829,7 @@ fn writeSimpleTriangleGlyph(bytes: []u8, off: usize, first_dx: u16, second_dx: u
 }
 
 fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 34);
+    const bytes = try allocator.alloc(u8, 35);
     @memset(bytes, 0);
     bytes[0] = 2;
     bytes[1] = 0;
@@ -3843,7 +3843,7 @@ fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
     bytes[10] = 170; // FDSelect offset 31.
     bytes[11] = 12;
     bytes[12] = 37;
-    bytes[13] = 172; // vstore offset 33.
+    bytes[13] = 173; // vstore offset 34.
     bytes[14] = 24;
 
     writeU32(bytes, 15, 1); // CFF2 CharStrings INDEX count.
@@ -3857,9 +3857,10 @@ fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
     bytes[28] = 1;
     bytes[29] = 2;
     bytes[30] = 14;
-    bytes[31] = 0x01;
-    bytes[32] = 0x02;
-    bytes[33] = 0x03;
+    bytes[31] = 0; // FDSelect format 0.
+    bytes[32] = 0;
+    bytes[33] = 0;
+    bytes[34] = 0x03;
     return bytes;
 }
 

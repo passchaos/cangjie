@@ -282,18 +282,32 @@ fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
     };
 }
 
+const DictOperand = struct {
+    number: f32,
+    integer_value: i32 = 0,
+    integer: bool,
+
+    fn int(value: i32) DictOperand {
+        return .{ .number = @floatFromInt(value), .integer_value = value, .integer = true };
+    }
+
+    fn numberValue(value: f32) DictOperand {
+        return .{ .number = value, .integer = false };
+    }
+};
+
 const DictParser = struct {
     data: []const u8,
     offset: usize = 0,
-    operands: [48]i32 = undefined,
+    operands: [48]DictOperand = undefined,
     operand_count: usize = 0,
 
-    fn next(self: *DictParser) Error!?struct { op: u16, operands: []const i32 } {
+    fn next(self: *DictParser) Error!?struct { op: u16, operands: []const DictOperand } {
         while (self.offset < self.data.len) {
             const b = self.data[self.offset];
             self.offset += 1;
             switch (b) {
-                0...22, 24 => {
+                0...24 => {
                     const op: u16 = if (b == 12) blk: {
                         if (self.offset >= self.data.len) return error.BadSfnt;
                         const escaped = self.data[self.offset];
@@ -306,33 +320,33 @@ const DictParser = struct {
                 },
                 28 => {
                     if (self.offset + 2 > self.data.len) return error.BadSfnt;
-                    try self.push(@as(i16, @bitCast(std.mem.readInt(u16, self.data[self.offset..][0..2], .big))));
+                    try self.push(.int(@as(i16, @bitCast(std.mem.readInt(u16, self.data[self.offset..][0..2], .big)))));
                     self.offset += 2;
                 },
                 29 => {
                     if (self.offset + 4 > self.data.len) return error.BadSfnt;
-                    try self.push(std.mem.readInt(i32, self.data[self.offset..][0..4], .big));
+                    try self.push(.int(std.mem.readInt(i32, self.data[self.offset..][0..4], .big)));
                     self.offset += 4;
                 },
-                30 => return error.BadSfnt, // real numbers are not offsets and are unnecessary for metadata.
-                32...246 => try self.push(@as(i32, b) - 139),
+                30 => try self.push(.numberValue(try readRealNumber(self.data, &self.offset))),
+                32...246 => try self.push(.int(@as(i32, b) - 139)),
                 247...250 => {
                     if (self.offset >= self.data.len) return error.BadSfnt;
                     const value = (@as(i32, b) - 247) * 256 + self.data[self.offset] + 108;
                     self.offset += 1;
-                    try self.push(value);
+                    try self.push(.int(value));
                 },
                 251...254 => {
                     if (self.offset >= self.data.len) return error.BadSfnt;
                     const value = -((@as(i32, b) - 251) * 256 + self.data[self.offset] + 108);
                     self.offset += 1;
-                    try self.push(value);
+                    try self.push(.int(value));
                 },
                 255 => {
                     if (self.offset + 4 > self.data.len) return error.BadSfnt;
                     const fixed = std.mem.readInt(i32, self.data[self.offset..][0..4], .big);
                     self.offset += 4;
-                    try self.push(fixed >> 16);
+                    try self.push(.numberValue(@as(f32, @floatFromInt(fixed)) / 65536.0));
                 },
                 else => return error.BadSfnt,
             }
@@ -341,7 +355,7 @@ const DictParser = struct {
         return null;
     }
 
-    fn push(self: *DictParser, value: i32) Error!void {
+    fn push(self: *DictParser, value: DictOperand) Error!void {
         if (self.operand_count == self.operands.len) return error.BadSfnt;
         self.operands[self.operand_count] = value;
         self.operand_count += 1;
@@ -547,22 +561,85 @@ fn readSizedOffset(table: []const u8, offset: usize, size: usize) usize {
     return value;
 }
 
-fn readOffsetOperand(operands: []const i32) Error!usize {
+fn readOffsetOperand(operands: []const DictOperand) Error!usize {
     if (operands.len == 0) return error.BadSfnt;
-    const value = operands[operands.len - 1];
+    const value = try readIntegerOperandAt(operands, operands.len - 1);
     if (value < 0) return error.BadSfnt;
     return @intCast(value);
 }
 
-fn readOffsetOperandAt(operands: []const i32, index: usize) Error!usize {
+fn readOffsetOperandAt(operands: []const DictOperand, index: usize) Error!usize {
     const value = try readIntegerOperandAt(operands, index);
     if (value < 0) return error.BadSfnt;
     return @intCast(value);
 }
 
-fn readIntegerOperandAt(operands: []const i32, index: usize) Error!i32 {
+fn readIntegerOperandAt(operands: []const DictOperand, index: usize) Error!i32 {
     if (index >= operands.len) return error.BadSfnt;
-    return operands[index];
+    const value = operands[index];
+    if (!value.integer) return error.BadSfnt;
+    return value.integer_value;
+}
+
+fn readRealNumber(data: []const u8, offset: *usize) Error!f32 {
+    var buf: [64]u8 = undefined;
+    var len: usize = 0;
+    while (offset.* < data.len) {
+        const byte = data[offset.*];
+        offset.* += 1;
+        const nibbles = [_]u4{ @intCast(byte >> 4), @intCast(byte & 0x0f) };
+        for (nibbles) |nibble| {
+            switch (nibble) {
+                0...9 => {
+                    if (len >= buf.len) return error.BadSfnt;
+                    buf[len] = '0' + @as(u8, @intCast(nibble));
+                    len += 1;
+                },
+                0x0a => {
+                    if (len >= buf.len) return error.BadSfnt;
+                    buf[len] = '.';
+                    len += 1;
+                },
+                0x0b => {
+                    if (len >= buf.len) return error.BadSfnt;
+                    buf[len] = 'E';
+                    len += 1;
+                },
+                0x0c => {
+                    if (len + 1 >= buf.len) return error.BadSfnt;
+                    buf[len] = 'E';
+                    buf[len + 1] = '-';
+                    len += 2;
+                },
+                0x0d => return error.BadSfnt,
+                0x0e => {
+                    if (len >= buf.len) return error.BadSfnt;
+                    buf[len] = '-';
+                    len += 1;
+                },
+                0x0f => {
+                    if (len == 0) return error.BadSfnt;
+                    return std.fmt.parseFloat(f32, buf[0..len]) catch error.BadSfnt;
+                },
+            }
+        }
+    }
+    return error.BadSfnt;
+}
+
+test "CFF2 DICT parser accepts real operands for non-address metadata" {
+    var parser = DictParser{ .data = &.{ 30, 0x1a, 0x25, 0xff, 23 } };
+    const entry = (try parser.next()).?;
+    try std.testing.expectEqual(@as(u16, 23), entry.op);
+    try std.testing.expectEqual(@as(usize, 1), entry.operands.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.25), entry.operands[0].number, 0.0001);
+    try std.testing.expect(!entry.operands[0].integer);
+    try std.testing.expect((try parser.next()) == null);
+}
+
+test "CFF2 DICT offset operands remain integer-only" {
+    try std.testing.expectError(error.BadSfnt, readOffsetOperand(&.{DictOperand.numberValue(1.25)}));
+    try std.testing.expectEqual(@as(usize, 42), try readOffsetOperand(&.{DictOperand.int(42)}));
 }
 
 test "CFF2 header exposes top dict, global subrs, and trailing data" {

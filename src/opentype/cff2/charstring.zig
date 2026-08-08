@@ -234,7 +234,12 @@ fn Scanner(comptime Context: type) type {
             };
             const termination = try self.runCharString(subr, depth + 1);
             return switch (termination) {
-                .none => error.BadSfnt,
+                // CFF2 top-level charstrings already end implicitly at byte
+                // stream end. Real variable CFF2 fonts also use the same
+                // implicit-return shape in local subroutines, so treat a
+                // subroutine byte-stream end as `return` instead of rejecting
+                // otherwise valid outlines.
+                .none => .none,
                 .@"return" => .none,
                 .endchar => .endchar,
             };
@@ -451,7 +456,10 @@ fn BoundsExecutor(comptime Context: type) type {
             };
             const termination = try self.runCharString(subr, depth + 1);
             return switch (termination) {
-                .none => error.BadSfnt,
+                // See the scanner path above: CFF2 subroutines in real-world
+                // variable fonts may rely on implicit return at byte-stream
+                // end, matching the top-level implicit endchar behavior.
+                .none => .none,
                 .@"return" => .none,
                 .endchar => .endchar,
             };
@@ -911,6 +919,31 @@ test "CFF2 charstring scanner follows local and global subrs" {
     try std.testing.expectEqual(@as(u8, 1), parsed.max_depth);
     try std.testing.expect(parsed.has_return);
     try std.testing.expect(parsed.has_endchar);
+}
+
+test "CFF2 charstring accepts implicit subr return" {
+    const Context = struct {
+        pub fn localSubr(_: *@This(), operand: i32) Error!?[]const u8 {
+            if (operand != -107) return null;
+            // rlineto(20,0) with no explicit return. Cantarell VF's CFF2
+            // subset uses this compact subroutine shape, and fontations/
+            // FreeType accept it as an implicit return.
+            return &.{ 159, 139, 5 };
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 0, .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 }, 0, 0);
+    defer outline.deinit();
+    var context = Context{};
+    const parsed = try appendOutline(Context, &context, std.testing.allocator, &.{ 139, 139, 21, 32, 10 }, &outline);
+    try std.testing.expect(parsed.scan.has_endchar);
+    try std.testing.expectEqual(@as(usize, 2), parsed.scan.charstring_count);
+    try std.testing.expectEqual(@as(usize, 1), parsed.line_count);
+    try std.testing.expectEqual(@as(f32, 20), parsed.x_max);
 }
 
 test "CFF2 charstring scanner skips hint masks" {

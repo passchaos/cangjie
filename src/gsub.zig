@@ -871,6 +871,10 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
         accelerator.ligature_subst = try buildLigatureSubstAccelerator(table, subtable_offset, allocator);
     }
+    if (lookup_type == 5) {
+        accelerator.context_class_subtables = try buildContextClassSubtableAccelerators(table, lookup_offset, subtable_count, allocator);
+        if (accelerator.context_class_subtables.len != 0) return accelerator;
+    }
     if (lookup_type == 7) {
         accelerator.extension_lookup_type = try extensionLookupType(table, lookup_offset, subtable_count);
         if (accelerator.extension_lookup_type) |wrapped_type| {
@@ -1031,6 +1035,14 @@ fn extensionChainingLookupUsesCoverageOnly(table: Table, lookup_offset: usize, s
 }
 
 fn buildExtensionContextClassSubtableAccelerators(table: Table, lookup_offset: usize, subtable_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]ContextClassSubtableAccelerator {
+    return try buildContextClassSubtableAcceleratorsImpl(table, lookup_offset, subtable_count, true, allocator);
+}
+
+fn buildContextClassSubtableAccelerators(table: Table, lookup_offset: usize, subtable_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]ContextClassSubtableAccelerator {
+    return try buildContextClassSubtableAcceleratorsImpl(table, lookup_offset, subtable_count, false, allocator);
+}
+
+fn buildContextClassSubtableAcceleratorsImpl(table: Table, lookup_offset: usize, subtable_count: u16, extension_wrapped: bool, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]ContextClassSubtableAccelerator {
     const subtables = try allocator.alloc(ContextClassSubtableAccelerator, subtable_count);
     @memset(subtables, .{});
     var built_count: usize = 0;
@@ -1040,8 +1052,11 @@ fn buildExtensionContextClassSubtableAccelerators(table: Table, lookup_offset: u
     }
 
     for (0..subtable_count) |subtable_i| {
-        const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const subtable_offset = try extensionSubtablePayload(table, wrapper_offset, 5);
+        const raw_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const subtable_offset = if (extension_wrapped)
+            try extensionSubtablePayload(table, raw_subtable_offset, 5)
+        else
+            raw_subtable_offset;
         const parsed = try buildContextClassSubtableAccelerator(table, subtable_offset, allocator) orelse {
             deinitContextClassSubtableAcceleratorContents(allocator, subtables[0..built_count]);
             allocator.free(subtables);
@@ -1821,6 +1836,12 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
                 return;
             },
             else => {},
+        }
+    }
+    if (lookup_type == 5) {
+        if (contextClassLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            try applyContextClassSubstitutionLookupAccelerated(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
+            return;
         }
     }
     if (lookup_type == 6 and try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
@@ -2964,6 +2985,11 @@ fn applyExtensionContextSubstitutionLookup(table: Table, lookup_offset: usize, s
 }
 
 fn applyExtensionContextClassSubstitutionLookupAccelerated(table: Table, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
+    return try applyContextClassSubstitutionLookupAccelerated(table, 0, subtable_count, glyphs, allocator, lookup_flag, options, accelerator);
+}
+
+fn applyContextClassSubstitutionLookupAccelerated(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
+    _ = lookup_offset;
     var pos: usize = 0;
     while (pos < glyphs.items.len) {
         var next_pos = pos + 1;

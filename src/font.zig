@@ -3,6 +3,7 @@ const ankr_mod = @import("opentype/ankr.zig");
 const base_mod = @import("opentype/base.zig");
 const bin = @import("binary.zig");
 const cff_mod = @import("cff.zig");
+const cff2_mod = @import("opentype/cff2.zig");
 const cvar_mod = @import("opentype/cvar.zig");
 const glyph_mod = @import("glyph.zig");
 const gpos_mod = @import("gpos.zig");
@@ -44,6 +45,8 @@ pub const FontFormat = enum {
     truetype,
     opentype_cff,
 };
+
+pub const Cff2Info = cff2_mod.Info;
 
 pub const CvarInfo = cvar_mod.Info;
 pub const CvarTupleInfo = cvar_mod.TupleInfo;
@@ -705,6 +708,7 @@ pub const Font = struct {
     ebdt: ?TableRecord,
     glyf: ?TableRecord,
     cff: ?TableRecord,
+    cff2: ?TableRecord,
     cmap_subtables: []CmapSubtable,
     owned_tables: []TableRecord,
     allocator: std.mem.Allocator,
@@ -811,6 +815,7 @@ pub const Font = struct {
         const ebdt = findTable(records, "EBDT");
         const glyf = findTable(records, "glyf");
         const cff = findTable(records, "CFF ");
+        const cff2 = findTable(records, "CFF2");
         const vhea = findTable(records, "vhea");
         const vmtx = findTable(records, "vmtx");
         const gvar = findTable(records, "gvar");
@@ -820,7 +825,7 @@ pub const Font = struct {
         const varc = findTable(records, "VARC");
 
         if (format == .truetype and (glyf == null or loca == null)) return error.MissingTable;
-        if (format == .opentype_cff and cff == null) return error.MissingTable;
+        if (format == .opentype_cff and cff == null and cff2 == null) return error.MissingTable;
 
         // The offsets in the directory have already been checked against the
         // whole SFNT byte slice. These minimum sizes deliberately check the
@@ -874,7 +879,8 @@ pub const Font = struct {
         const descender = try bin.readI16At(data, hhea.offset + 6);
         const line_gap = try bin.readI16At(data, hhea.offset + 8);
         if (format == .opentype_cff) {
-            try validateCffGlyphCount(data, cff.?, glyph_count);
+            if (cff) |cff_table| try validateCffGlyphCount(data, cff_table, glyph_count);
+            if (cff2) |cff2_table| try validateCff2Table(data, cff2_table);
         }
         if (format == .truetype) {
             const max_points = try bin.readU16At(data, maxp.offset + 6);
@@ -993,6 +999,7 @@ pub const Font = struct {
             .ebdt = ebdt,
             .glyf = glyf,
             .cff = cff,
+            .cff2 = cff2,
             .cmap_subtables = cmap_subtables,
             .owned_tables = records,
             .allocator = allocator,
@@ -1003,6 +1010,14 @@ pub const Font = struct {
         self.allocator.free(self.cmap_subtables);
         self.allocator.free(self.owned_tables);
         self.* = undefined;
+    }
+
+    /// Read validated top-level metadata from the optional OpenType `CFF2` table.
+    pub fn cff2Info(self: *const Font) FontError!?Cff2Info {
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        return try cff2_mod.info(self.data, cff2.offset, cff2.length);
     }
 
     pub fn tables(self: *const Font, allocator: std.mem.Allocator) std.mem.Allocator.Error![]FontTableInfo {
@@ -4140,6 +4155,10 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
             if (maxp.length != 6) return error.BadSfnt;
         },
     }
+}
+
+fn validateCff2Table(data: []const u8, cff2: TableRecord) FontError!void {
+    return try cff2_mod.validate(data, cff2.offset, cff2.length);
 }
 
 fn validateCffGlyphCount(data: []const u8, cff: TableRecord, glyph_count: u16) FontError!void {
@@ -18509,6 +18528,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
@@ -18579,6 +18599,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
@@ -18649,6 +18670,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
@@ -18730,6 +18752,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
@@ -18800,6 +18823,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
@@ -18870,6 +18894,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
@@ -18940,6 +18965,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
@@ -19030,6 +19056,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,

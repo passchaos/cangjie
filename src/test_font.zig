@@ -478,6 +478,10 @@ pub fn buildMinimalOtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x4f54544f, try minimalOtfTables(allocator));
 }
 
+pub fn buildCff2Otf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x4f54544f, try cff2OtfTables(allocator));
+}
+
 fn minimalTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 8);
     errdefer allocator.free(tables);
@@ -2127,6 +2131,18 @@ fn minimalOtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn cff2OtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 6);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "CFF2", .data = try cff2Table(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "maxp", .data = try cffMaxpTable(allocator) };
+    return tables;
+}
+
 fn buildSfnt(allocator: std.mem.Allocator, scaler: u32, tables: []Table) ![]u8 {
     defer allocator.free(tables);
     errdefer for (tables) |*table| allocator.free(table.data);
@@ -3681,6 +3697,20 @@ fn writeSimpleTriangleGlyph(bytes: []u8, off: usize, first_dx: u16, second_dx: u
     writeU16(bytes, off + 19, second_dx);
     bytes[off + 21] = peak_dy;
     writeU16(bytes, off + 22, 700);
+}
+
+fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 9);
+    @memset(bytes, 0);
+    bytes[0] = 2;
+    bytes[1] = 0;
+    bytes[2] = 6;
+    writeU16(bytes, 3, 2);
+    bytes[5] = 0xff; // one byte of header padding.
+    bytes[6] = 0x11;
+    bytes[7] = 0x22;
+    bytes[8] = 0x33;
+    return bytes;
 }
 
 fn cffTable(allocator: std.mem.Allocator) ![]u8 {

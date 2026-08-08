@@ -107,6 +107,7 @@ pub const ScaledFontScriptMetrics = @import("font.zig").ScaledFontScriptMetrics;
 pub const FontError = @import("font.zig").FontError;
 pub const FontFormat = @import("font.zig").FontFormat;
 pub const FontHeaderInfo = @import("font.zig").FontHeaderInfo;
+pub const Cff2Info = @import("font.zig").Cff2Info;
 pub const CvarInfo = @import("font.zig").CvarInfo;
 pub const CvarTupleInfo = @import("font.zig").CvarTupleInfo;
 pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
@@ -489,6 +490,53 @@ test "vertical header metadata is exposed when present" {
     try std.testing.expectEqual(@as(usize, 2), vmetrics.len);
     try std.testing.expectEqual(VerticalMetricInfo{ .advance_height = 1000, .top_side_bearing = 0 }, vmetrics[0]);
     try std.testing.expectEqual(VerticalMetricInfo{ .advance_height = 1000, .top_side_bearing = 0 }, vmetrics[1]);
+}
+
+test "CFF2 top-level metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCff2Otf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.cff2Info()).?;
+    try std.testing.expectEqual(@as(u8, 2), info.major_version);
+    try std.testing.expectEqual(@as(u8, 0), info.minor_version);
+    try std.testing.expectEqual(@as(u8, 6), info.header_size);
+    try std.testing.expectEqual(@as(u16, 2), info.top_dict_length);
+    try std.testing.expectEqualSlices(u8, &.{ 0x11, 0x22 }, info.top_dict_data);
+    try std.testing.expectEqualSlices(u8, &.{0x33}, info.trailing_data);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.cff2Info()) == null);
+}
+
+test "lazy CFF2 metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCff2Otf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expect((try font.cff2Info()) != null);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var cff2_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "CFF2")) cff2_offset = table.offset;
+    }
+    bytes[cff2_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.cff2Info());
 }
 
 test "minimal OTF exposes compact maxp metadata" {

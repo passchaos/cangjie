@@ -277,7 +277,7 @@ fn lessThanPreparedFillLineYMin(_: void, lhs: PreparedFillLine, rhs: PreparedFil
 }
 
 fn sortPreparedFillLinesByYMin(lines: []PreparedFillLine) void {
-    if (lines.len <= 32) {
+    if (lines.len <= 128) {
         var index: usize = 1;
         while (index < lines.len) : (index += 1) {
             const value = lines[index];

@@ -744,6 +744,12 @@ test "gvar point deltas are exposed for non-empty glyph data" {
     try std.testing.expectEqual(@as(f32, 0), deltas[0].y);
     try std.testing.expectEqual(@as(u16, 6), deltas[6].point);
     try std.testing.expectEqual(@as(f32, 0), deltas[6].x);
+
+    var default_outline = try font.glyphOutline(allocator, 1);
+    defer default_outline.deinit();
+    var varied_outline = try font.glyphOutlineAtCoords(allocator, 1, &.{0.5});
+    defer varied_outline.deinit();
+    try std.testing.expectEqual(@as(f32, default_outline.commands.items[0].move_to.x + 5), varied_outline.commands.items[0].move_to.x);
 }
 
 test "lazy gvar metadata revalidates borrowed table bytes" {

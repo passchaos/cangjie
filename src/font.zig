@@ -3312,11 +3312,29 @@ pub const Font = struct {
     }
 
     pub fn glyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.cff2 != null) {
             return (try self.cff2GlyphOutlineAtCoords(allocator, glyph_id, normalized_coords)) orelse error.UnsupportedGlyph;
         }
+        if (self.format == .truetype and self.gvar != null) {
+            return try self.glyfGlyphOutlineAtCoords(allocator, glyph_id, normalized_coords);
+        }
         return try self.glyphOutline(allocator, glyph_id);
+    }
+
+    fn glyfGlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
+        const data = try self.glyphData(glyph_id);
+        if (data.len == 0) return try self.glyphOutline(allocator, glyph_id);
+        const contour_count = try bin.readI16At(data, 0);
+        if (contour_count < 0) return try self.glyphOutline(allocator, glyph_id);
+        const metrics = try self.horizontalMetrics(glyph_id);
+        var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, try self.glyphBoundsFromParsedTables(glyph_id), metrics.advance_width, metrics.left_side_bearing);
+        errdefer outline.deinit();
+        const deltas = (try self.gvarPointDeltasAtCoords(allocator, glyph_id, normalized_coords)) orelse return try self.glyphOutline(allocator, glyph_id);
+        defer allocator.free(deltas);
+        try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas);
+        return outline;
     }
 
     pub fn glyphOutlineForRaster(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {
@@ -3429,7 +3447,7 @@ pub const Font = struct {
         if (contour_count >= 0) {
             // Simple glyf outlines store contour end points plus compressed
             // point deltas. Compound outlines recurse into component glyphs.
-            try appendSimpleGlyph(outline, data, @intCast(contour_count), transform);
+            try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null);
         } else {
             try self.appendCompoundGlyph(outline, data, transform, depth + 1);
         }
@@ -8012,7 +8030,7 @@ fn kernFormat0Body(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.G
     return null;
 }
 
-fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour_count: u16, transform: Transform) FontError!void {
+fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour_count: u16, transform: Transform, gvar_deltas: ?[]const GvarScaledPointDelta) FontError!void {
     if (contour_count == 0) return;
     var r = bin.Reader.init(data);
     _ = try r.readI16();
@@ -8083,6 +8101,14 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
         y += dy;
         point.y = y;
     }
+    if (gvar_deltas) |deltas| {
+        for (deltas) |delta| {
+            if (delta.point >= points.len) continue; // Ignore phantom-point deltas for outline geometry.
+            const point = &points[delta.point];
+            point.x = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.x)) + delta.x));
+            point.y = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.y)) + delta.y));
+        }
+    }
 
     var start: usize = 0;
     var builder = glyph_mod.OutlineBuilder{ .outline = outline };
@@ -8091,6 +8117,12 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
         try appendContour(&builder, points[start .. end + 1], transform);
         start = end + 1;
     }
+}
+
+fn clampGlyphPointF32ToI16(value: f32) i16 {
+    if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
+    if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
+    return @intFromFloat(value);
 }
 
 const FlaggedPoint = struct {
@@ -13882,7 +13914,7 @@ test "simple glyf contours reject non-increasing end points" {
     );
     defer outline.deinit();
 
-    try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, &glyph_data, 2, Transform.identity()));
+    try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, &glyph_data, 2, Transform.identity(), null));
 }
 
 test "glyph outline API revalidates borrowed loca and glyf bytes" {

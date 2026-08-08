@@ -8391,16 +8391,14 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
     }
     if (gvar_deltas) |deltas| {
         if (gvar_has_delta) |has_delta| {
+            if (has_delta.len < points.len) return error.BadSfnt;
             var original = try outline.allocator.alloc(gvar_mod.Point, points.len);
             defer outline.allocator.free(original);
             var delta_points = try outline.allocator.alloc(gvar_mod.Point, points.len);
             defer outline.allocator.free(delta_points);
-            var explicit = try outline.allocator.alloc(bool, points.len);
-            defer outline.allocator.free(explicit);
             for (points, 0..) |point, point_index| {
                 original[point_index] = .{ .x = @floatFromInt(point.x), .y = @floatFromInt(point.y) };
                 delta_points[point_index] = .{ .x = 0, .y = 0 };
-                explicit[point_index] = point_index < has_delta.len and has_delta[point_index];
             }
             for (deltas) |delta| {
                 if (delta.point >= points.len) continue; // Ignore phantom-point deltas for outline geometry.
@@ -8409,7 +8407,7 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
             var contour_start: usize = 0;
             for (end_pts) |end_pt| {
                 const contour_end: usize = end_pt;
-                try gvar_mod.interpolateContourDeltas(original[contour_start .. contour_end + 1], explicit[contour_start .. contour_end + 1], delta_points[contour_start .. contour_end + 1]);
+                try gvar_mod.interpolateContourDeltas(original[contour_start .. contour_end + 1], has_delta[contour_start .. contour_end + 1], delta_points[contour_start .. contour_end + 1]);
                 contour_start = contour_end + 1;
             }
             for (points, delta_points) |*point, delta| {

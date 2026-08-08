@@ -72,6 +72,22 @@ pub fn fontDictIndex(data: []const u8, offset: usize, length: usize, glyph_id: u
     return try fdSelectValue(table, fd_select.offset, glyph_id, glyph_count, fd_count);
 }
 
+pub fn subrBias(count: u32) i32 {
+    // Type2/CFF2 subroutine operands do not directly encode array indexes.
+    // The caller adds a count-dependent bias before indexing Global or Local
+    // Subrs; exposing the same rule here lets future interpreters and tests
+    // share the exact boundary behavior used by FreeType/HarfBuzz/fontations.
+    if (count < 1240) return 107;
+    if (count < 33900) return 1131;
+    return 32768;
+}
+
+pub fn subrIndexForOperand(index: IndexInfo, operand: i32) ?usize {
+    const biased = @as(i64, operand) + @as(i64, subrBias(index.count));
+    if (biased < 0 or biased >= @as(i64, index.count)) return null;
+    return @intCast(biased);
+}
+
 pub fn fontDictInfo(data: []const u8, offset: usize, length: usize, font_dict_index: usize) Error!?FontDictInfo {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     const table = data[offset .. offset + length];
@@ -81,12 +97,29 @@ pub fn fontDictInfo(data: []const u8, offset: usize, length: usize, font_dict_in
     return try parseFontDict(table, fd_array, font_dict_index);
 }
 
+pub fn globalSubrDataForOperand(data: []const u8, offset: usize, length: usize, operand: i32) Error!?[]const u8 {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const parsed = try infoView(data, offset, length);
+    const subr_index = subrIndexForOperand(parsed.global_subrs_index, operand) orelse return null;
+    return try indexObject(table, parsed.global_subrs_index, subr_index);
+}
+
 pub fn localSubrData(data: []const u8, offset: usize, length: usize, font_dict_index: usize, subr_index: usize) Error!?[]const u8 {
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
     const table = data[offset .. offset + length];
     const fd_info = (try fontDictInfo(data, offset, length, font_dict_index)) orelse return null;
     const local_subrs = fd_info.private_dict.local_subrs_index orelse return null;
     if (subr_index >= local_subrs.count) return null;
+    return try indexObject(table, local_subrs, subr_index);
+}
+
+pub fn localSubrDataForOperand(data: []const u8, offset: usize, length: usize, font_dict_index: usize, operand: i32) Error!?[]const u8 {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const fd_info = (try fontDictInfo(data, offset, length, font_dict_index)) orelse return null;
+    const local_subrs = fd_info.private_dict.local_subrs_index orelse return null;
+    const subr_index = subrIndexForOperand(local_subrs, operand) orelse return null;
     return try indexObject(table, local_subrs, subr_index);
 }
 
@@ -483,6 +516,23 @@ test "CFF2 exposes Font DICT private metadata and local subrs" {
     try std.testing.expectEqualSlices(u8, &.{11}, (try localSubrData(&bytes, 0, bytes.len, 0, 0)).?);
     try std.testing.expect((try localSubrData(&bytes, 0, bytes.len, 0, 1)) == null);
     try std.testing.expect((try fontDictInfo(&bytes, 0, bytes.len, 1)) == null);
+}
+
+test "CFF2 resolves biased Global and Local Subr operands" {
+    const bytes = testCff2Table();
+    const parsed = try info(&bytes, 0, bytes.len);
+    try std.testing.expectEqual(@as(i32, 107), subrBias(0));
+    try std.testing.expectEqual(@as(i32, 107), subrBias(1239));
+    try std.testing.expectEqual(@as(i32, 1131), subrBias(1240));
+    try std.testing.expectEqual(@as(i32, 1131), subrBias(33899));
+    try std.testing.expectEqual(@as(i32, 32768), subrBias(33900));
+    try std.testing.expectEqual(@as(?usize, 0), subrIndexForOperand(parsed.global_subrs_index, -107));
+    try std.testing.expectEqual(@as(?usize, null), subrIndexForOperand(parsed.global_subrs_index, -108));
+    try std.testing.expectEqual(@as(?usize, null), subrIndexForOperand(parsed.global_subrs_index, -106));
+    try std.testing.expectEqualSlices(u8, &.{11}, (try globalSubrDataForOperand(&bytes, 0, bytes.len, -107)).?);
+    try std.testing.expect((try globalSubrDataForOperand(&bytes, 0, bytes.len, -106)) == null);
+    try std.testing.expectEqualSlices(u8, &.{11}, (try localSubrDataForOperand(&bytes, 0, bytes.len, 0, -107)).?);
+    try std.testing.expect((try localSubrDataForOperand(&bytes, 0, bytes.len, 0, -106)) == null);
 }
 
 test "CFF2 accepts an empty Global Subr INDEX" {

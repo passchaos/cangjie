@@ -1062,6 +1062,14 @@ pub const Font = struct {
         return try cff2_mod.globalSubrData(self.data, cff2.offset, cff2.length, subr_index);
     }
 
+    /// Borrow a raw CFF2 Global Subr using a biased callgsubr operand.
+    pub fn cff2GlobalSubrDataForOperand(self: *const Font, operand: i32) FontError!?[]const u8 {
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        return try cff2_mod.globalSubrDataForOperand(self.data, cff2.offset, cff2.length, operand);
+    }
+
     /// Read CFF2 Font DICT and Private DICT metadata for a font-dict index.
     pub fn cff2FontDictInfo(self: *const Font, font_dict_index: usize) FontError!?Cff2FontDictInfo {
         const cff2 = self.cff2 orelse return null;
@@ -1076,6 +1084,14 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.localSubrData(self.data, cff2.offset, cff2.length, font_dict_index, subr_index);
+    }
+
+    /// Borrow a raw CFF2 Local Subr using a biased callsubr operand.
+    pub fn cff2LocalSubrDataForOperand(self: *const Font, font_dict_index: usize, operand: i32) FontError!?[]const u8 {
+        const cff2 = self.cff2 orelse return null;
+        try validateSfntTableChecksum(self.data, cff2);
+        try validateCff2Table(self.data, cff2);
+        return try cff2_mod.localSubrDataForOperand(self.data, cff2.offset, cff2.length, font_dict_index, operand);
     }
 
     /// Borrow raw CFF2 CharString bytes for a glyph, when the optional CFF2 table is present.

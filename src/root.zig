@@ -568,6 +568,10 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(usize, 1), local_subrs.data_length);
     try std.testing.expectEqualSlices(u8, &.{11}, (try font.cff2LocalSubrData(0, 0)).?);
     try std.testing.expect((try font.cff2LocalSubrData(0, 1)) == null);
+    try std.testing.expectEqualSlices(u8, &.{11}, (try font.cff2GlobalSubrDataForOperand(-107)).?);
+    try std.testing.expect((try font.cff2GlobalSubrDataForOperand(-106)) == null);
+    try std.testing.expectEqualSlices(u8, &.{11}, (try font.cff2LocalSubrDataForOperand(0, -107)).?);
+    try std.testing.expect((try font.cff2LocalSubrDataForOperand(0, -106)) == null);
     try std.testing.expect((try font.cff2FontDictInfo(1)) == null);
     try std.testing.expectEqualSlices(u8, &.{14}, (try font.cff2CharStringData(0)).?);
     try std.testing.expect((try font.cff2CharStringData(1)) == null);
@@ -578,8 +582,10 @@ test "CFF2 top-level metadata is exposed when present" {
     defer missing.deinit();
     try std.testing.expect((try missing.cff2Info()) == null);
     try std.testing.expect((try missing.cff2GlobalSubrData(0)) == null);
+    try std.testing.expect((try missing.cff2GlobalSubrDataForOperand(-107)) == null);
     try std.testing.expect((try missing.cff2FontDictInfo(0)) == null);
     try std.testing.expect((try missing.cff2LocalSubrData(0, 0)) == null);
+    try std.testing.expect((try missing.cff2LocalSubrDataForOperand(0, -107)) == null);
     try std.testing.expect((try missing.cff2CharStringData(1)) == null);
     try std.testing.expect((try missing.cff2FontDictIndex(1)) == null);
 }

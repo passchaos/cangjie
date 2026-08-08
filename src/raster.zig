@@ -801,13 +801,24 @@ fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_axis: i32, st
         @as(f64, start_f) >= @as(f64, @floatFromInt(max_x)) + 1.0) return;
     var x = @max(min_x, floorI32Saturating(start_f));
     const x_end = @min(max_x, ceilI32Saturating(end_f));
+    const full_start = @max(x, ceilI32Saturating(start_f));
+    const full_end = @min(x_end, floorI32Saturating(end_f) - 1);
+    const full_coverage: u8 = @intCast(sample_axis);
     while (x <= x_end) : (x += 1) {
-        var sx: i32 = 0;
-        while (sx < sample_axis) : (sx += 1) {
-            const px = @as(f32, @floatFromInt(x)) + (@as(f32, @floatFromInt(sx)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
-            if (px >= start_f and px < end_f) {
-                coverage_counts[@intCast(x - min_x)] += 1;
-            }
+        if (x >= full_start and x <= full_end) {
+            coverage_counts[@intCast(x - min_x)] += full_coverage;
+            continue;
+        }
+        coverPartialPixel(coverage_counts, min_x, sample_axis, start_f, end_f, x);
+    }
+}
+
+fn coverPartialPixel(coverage_counts: []u8, min_x: i32, sample_axis: i32, start_f: f32, end_f: f32, x: i32) void {
+    var sx: i32 = 0;
+    while (sx < sample_axis) : (sx += 1) {
+        const px = @as(f32, @floatFromInt(x)) + (@as(f32, @floatFromInt(sx)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
+        if (px >= start_f and px < end_f) {
+            coverage_counts[@intCast(x - min_x)] += 1;
         }
     }
 }

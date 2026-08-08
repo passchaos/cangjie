@@ -260,6 +260,17 @@ Current local snapshot after the Nastaliq parity work:
   parity remained unchanged. A follow-up profile reduced
   `applyChainingContextSubstitutionLookup` from about `28.9%` to `20.0%` of
   sampled cycles, though it remains the largest isolated shaping hotspot.
+- Parsing a MarkBasePos format-1 subtable once per run-level collection, rather
+  than once again for every candidate glyph, removes repeated validated header,
+  Coverage-offset, and anchor-array-offset reads while retaining a separately
+  parsed single-target path for contextual PosLookupRecords. A fixed-CPU-30
+  reverse ABBA check with two 21-sample medians per binary reduced Amiri
+  `fa-thelittleprince` from an average `1183.588 ns/glyph` to
+  `1150.684 ns/glyph`, about `2.8%`. A four-median 15-sample Amiri `fa-words`
+  check was effectively flat to slightly better (`1925.188` versus
+  `1920.362 ns/glyph`), and Roboto `en-words` remained within noise
+  (`406.237` versus `406.005 ns/glyph`). Full Amiri long-text and word-list
+  plus Roboto word-list in-process HarfBuzz parity remained unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

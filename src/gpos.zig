@@ -2342,19 +2342,36 @@ fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []c
     return null;
 }
 
-fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+const MarkToBaseSubtable = struct {
+    mark_coverage_offset: usize,
+    base_coverage_offset: usize,
+    class_count: u16,
+    mark_array_offset: usize,
+    base_array_offset: usize,
+};
+
+fn parseMarkToBaseSubtable(table: Table, subtable_offset: usize) GposError!MarkToBaseSubtable {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
-    const class_count = try readU16(table, subtable_offset + 6);
-    if (class_count == 0 or glyphs.len < 2) return;
+    return .{
+        .mark_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
+        .base_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 4)),
+        .class_count = try readU16(table, subtable_offset + 6),
+        .mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 8)),
+        .base_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 10)),
+    };
+}
+
+fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
+    const subtable = try parseMarkToBaseSubtable(table, subtable_offset);
+    if (subtable.class_count == 0 or glyphs.len < 2) return;
 
     const attached_marks = try allocator.alloc(bool, glyphs.len);
     defer allocator.free(attached_marks);
     @memset(attached_marks, false);
 
-    for (glyphs, 0..) |glyph, i| {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        if (try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, i, adjustments, allocator, lookup_flag, options, attached_marks)) {
+    for (0..glyphs.len) |i| {
+        if (try collectMarkToBaseAdjustmentAtParsed(table, subtable, glyphs, i, adjustments, allocator, lookup_flag, options, attached_marks)) {
             attached_marks[i] = true;
         }
     }
@@ -2365,30 +2382,27 @@ fn collectMarkToBaseAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     // input sequence. MarkBasePos still needs the surrounding run to find the
     // preceding base, but it must attach only that named mark instead of
     // rescanning and positioning every mark covered by the nested lookup.
-    const pos_format = try readU16(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
+    const subtable = try parseMarkToBaseSubtable(table, subtable_offset);
+    return try collectMarkToBaseAdjustmentAtParsed(table, subtable, glyphs, mark_position, adjustments, allocator, lookup_flag, options, attached_marks);
+}
+
+fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, mark_position: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, attached_marks: []const bool) (GposError || std.mem.Allocator.Error)!bool {
     if (mark_position >= glyphs.len) return false;
     const glyph = glyphs[mark_position];
     if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+    if (subtable.class_count == 0 or glyphs.len < 2) return false;
 
-    const mark_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const base_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
-    const class_count = try readU16(table, subtable_offset + 6);
-    const mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
-    const base_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 10));
-    if (class_count == 0 or glyphs.len < 2) return false;
-
-    const mark_index = try coverageIndex(table, mark_coverage_offset, glyph) orelse return false;
-    const base_position = try previousCoveredBaseGlyph(table, mark_coverage_offset, base_coverage_offset, glyphs, mark_position, attached_marks, lookup_flag, options) orelse return false;
-    const base_index = try coverageIndex(table, base_coverage_offset, glyphs[base_position]) orelse return false;
-    const mark_record_offset = mark_array_offset + 2 + mark_index * 4;
+    const mark_index = try coverageIndex(table, subtable.mark_coverage_offset, glyph) orelse return false;
+    const base_position = try previousCoveredBaseGlyph(table, subtable.mark_coverage_offset, subtable.base_coverage_offset, glyphs, mark_position, attached_marks, lookup_flag, options) orelse return false;
+    const base_index = try coverageIndex(table, subtable.base_coverage_offset, glyphs[base_position]) orelse return false;
+    const mark_record_offset = subtable.mark_array_offset + 2 + mark_index * 4;
     const mark_class = try readU16(table, mark_record_offset);
-    if (mark_class >= class_count) return false;
-    const mark_anchor_offset = try checkedRequiredPositionOffset(table, mark_array_offset, try readU16(table, mark_record_offset + 2));
-    const base_anchor_record = base_array_offset + 2 + (base_index * class_count + mark_class) * 2;
+    if (mark_class >= subtable.class_count) return false;
+    const mark_anchor_offset = try checkedRequiredPositionOffset(table, subtable.mark_array_offset, try readU16(table, mark_record_offset + 2));
+    const base_anchor_record = subtable.base_array_offset + 2 + (base_index * subtable.class_count + mark_class) * 2;
     const base_anchor_relative = try readU16(table, base_anchor_record);
     if (base_anchor_relative == 0) return false;
-    const base_anchor_offset = base_array_offset + base_anchor_relative;
+    const base_anchor_offset = subtable.base_array_offset + base_anchor_relative;
     const mark_anchor = try readAnchor(table, mark_anchor_offset);
     const base_anchor = try readAnchor(table, base_anchor_offset);
     try appendAdjustmentEx(adjustments, allocator, mark_position, .{

@@ -56,8 +56,20 @@ pub const BuiltinFont = enum {
     }
 };
 
+pub const OutputFormat = enum {
+    text,
+    tsv,
+
+    pub fn fromName(name: []const u8) ?OutputFormat {
+        if (std.mem.eql(u8, name, "text")) return .text;
+        if (std.mem.eql(u8, name, "tsv")) return .tsv;
+        return null;
+    }
+};
+
 pub const Options = struct {
     engine: Engine = .cangjie,
+    output_format: OutputFormat = .text,
     font_path: ?[]const u8 = null,
     harfrust_bin: []const u8 = default_harfrust_bin,
     harfrust_bin_explicit: bool = false,
@@ -125,6 +137,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.engine = Engine.fromName(args[i]) orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--format")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.output_format = OutputFormat.fromName(args[i]) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--font")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -301,6 +317,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\options:
         \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-harfrust|compare-harfbuzz
         \\                               shaping engine, default cangjie
+        \\  --format text|tsv            output format, default text
         \\  --font PATH                  use a real TTF/OTF/TTC font
         \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature

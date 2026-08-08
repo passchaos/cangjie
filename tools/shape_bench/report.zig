@@ -4,6 +4,13 @@ const options_mod = @import("options.zig");
 const runner = @import("runner.zig");
 
 pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
+    switch (options.output_format) {
+        .text => printText(options, result),
+        .tsv => printTsv(options, result),
+    }
+}
+
+fn printText(options: options_mod.Options, result: runner.BenchResult) void {
     const ns_per_iter = divFloat(result.elapsed_ns, options.iterations);
     const ns_per_glyph = if (result.glyph_count == 0) 0 else divFloat(result.elapsed_ns, result.glyph_count);
     const stats = sampleStats(result.samples);
@@ -241,6 +248,60 @@ pub fn print(options: options_mod.Options, result: runner.BenchResult) void {
         printI32Array(" y_offsets", summary.y_offsets);
         std.debug.print("\n", .{});
     }
+}
+
+fn printTsv(options: options_mod.Options, result: runner.BenchResult) void {
+    const ns_per_iter = divFloat(result.elapsed_ns, options.iterations);
+    const ns_per_glyph = if (result.glyph_count == 0) 0 else divFloat(result.elapsed_ns, result.glyph_count);
+    const stats = sampleStats(result.samples);
+    std.debug.print(
+        "engine\tfont\ttext\ttext_bytes\titerations\twarmup\tsamples\tfeature_overrides\tvariation_coords\tuse_caches\tuse_shaped_cache\tprofile\telapsed_ns\tglyphs\tns_per_iter\tns_per_glyph\tsample_min_ns_per_glyph\tsample_median_ns_per_glyph\tsample_max_ns_per_glyph\tchecksum\tglyph_index_cache_hits\tglyph_index_cache_misses\tglyph_metrics_cache_hits\tglyph_metrics_cache_misses\tgdef_cache_hits\tgdef_cache_misses\tgsub_proof_cache_hits\tgsub_proof_cache_misses\tgpos_proof_cache_hits\tgpos_proof_cache_misses\tlookup_selection_cache_hits\tlookup_selection_cache_misses\tshaped_cache_hits\tshaped_cache_misses\n",
+        .{},
+    );
+    std.debug.print(
+        "{s}\t{s}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{any}\t{any}\t{any}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}",
+        .{
+            options.engine.label(),
+            options.fontLabel(),
+            options.textLabel(),
+            options.text.len,
+            options.iterations,
+            options.warmup,
+            options.samples,
+            options.featureOverrideCount(),
+            options.normalizedVariationCoords().len,
+            options.use_caches,
+            options.use_shaped_cache,
+            options.profile,
+            result.elapsed_ns,
+            result.glyph_count,
+            ns_per_iter,
+            ns_per_glyph,
+            stats.min,
+            stats.median,
+            stats.max,
+            result.checksum,
+        },
+    );
+    std.debug.print(
+        "\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n",
+        .{
+            result.glyph_index_cache_hits,
+            result.glyph_index_cache_misses,
+            result.glyph_metrics_cache_hits,
+            result.glyph_metrics_cache_misses,
+            result.gdef_cache_hits,
+            result.gdef_cache_misses,
+            result.gsub_proof_cache_hits,
+            result.gsub_proof_cache_misses,
+            result.gpos_proof_cache_hits,
+            result.gpos_proof_cache_misses,
+            result.lookup_selection_cache_hits,
+            result.lookup_selection_cache_misses,
+            result.shaped_cache_hits,
+            result.shaped_cache_misses,
+        },
+    );
 }
 
 fn printI32Array(label: []const u8, values: []const i32) void {

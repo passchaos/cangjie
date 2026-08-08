@@ -586,22 +586,27 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expectEqual(@as(?usize, 40), info.glyph_info.extended_shape_coverage_offset);
     try std.testing.expectEqual(@as(?usize, 100), info.glyph_info.math_kern_info_offset);
     try std.testing.expectEqual(@as(usize, 1), info.glyph_info.italics_corrections.len);
-    try std.testing.expectEqual(MathGlyphValueRecordInfo{ .glyph_id = 3, .value_record = .{ .value = -12, .device_offset = 0 } }, info.glyph_info.italics_corrections[0]);
-    try std.testing.expectEqual(MathGlyphValueRecordInfo{ .glyph_id = 3, .value_record = .{ .value = 42, .device_offset = 0 } }, info.glyph_info.top_accent_attachments[0]);
-    try std.testing.expectEqualSlices(u16, &.{3}, info.glyph_info.extended_shape_glyphs);
+    try std.testing.expectEqual(MathGlyphValueRecordInfo{ .glyph_id = 1, .value_record = .{ .value = -12, .device_offset = 0 } }, info.glyph_info.italics_corrections[0]);
+    try std.testing.expectEqual(MathGlyphValueRecordInfo{ .glyph_id = 1, .value_record = .{ .value = 42, .device_offset = 0 } }, info.glyph_info.top_accent_attachments[0]);
+    try std.testing.expectEqual(MathValueRecordInfo{ .value = -12, .device_offset = 0 }, (try font.mathItalicsCorrection(1)).?);
+    try std.testing.expectEqual(MathValueRecordInfo{ .value = 42, .device_offset = 0 }, (try font.mathTopAccentAttachment(1)).?);
+    try std.testing.expect((try font.mathItalicsCorrection(0)) == null);
+    try std.testing.expectEqualSlices(u16, &.{1}, info.glyph_info.extended_shape_glyphs);
+    try std.testing.expect(try font.mathIsExtendedShape(1));
+    try std.testing.expect(!try font.mathIsExtendedShape(0));
     try std.testing.expectEqual(@as(u16, 5), info.variants.min_connector_overlap);
-    try std.testing.expectEqualSlices(u16, &.{5}, info.variants.vertical_glyphs);
-    try std.testing.expectEqualSlices(u16, &.{6}, info.variants.horizontal_glyphs);
+    try std.testing.expectEqualSlices(u16, &.{1}, info.variants.vertical_glyphs);
+    try std.testing.expectEqualSlices(u16, &.{0}, info.variants.horizontal_glyphs);
     try std.testing.expectEqual(@as(usize, 2), info.variants.construction_offsets.len);
     try std.testing.expectEqual(@as(?usize, 26), info.variants.construction_offsets[0]);
     try std.testing.expect(info.variants.construction_offsets[1] == null);
     try std.testing.expectEqual(@as(usize, 1), info.variants.constructions.len);
-    try std.testing.expectEqual(@as(u16, 5), info.variants.constructions[0].glyph_id);
+    try std.testing.expectEqual(@as(u16, 1), info.variants.constructions[0].glyph_id);
     try std.testing.expect(info.variants.constructions[0].vertical);
-    try std.testing.expectEqual(MathVariantRecordInfo{ .glyph_id = 7, .advance_measurement = 900 }, info.variants.constructions[0].variants[0]);
+    try std.testing.expectEqual(MathVariantRecordInfo{ .glyph_id = 1, .advance_measurement = 900 }, info.variants.constructions[0].variants[0]);
     const assembly = info.variants.constructions[0].assembly.?;
     try std.testing.expectEqual(MathValueRecordInfo{ .value = -7, .device_offset = 0 }, assembly.italics_correction);
-    try std.testing.expectEqual(MathPartRecordInfo{ .glyph_id = 8, .start_connector_length = 1, .end_connector_length = 2, .full_advance = 3, .flags = 1 }, assembly.parts[0]);
+    try std.testing.expectEqual(MathPartRecordInfo{ .glyph_id = 1, .start_connector_length = 1, .end_connector_length = 2, .full_advance = 3, .flags = 1 }, assembly.parts[0]);
     const kern_info = info.glyph_info.math_kern_info.?;
     try std.testing.expectEqual(@as(usize, 1), kern_info.records.len);
     try std.testing.expectEqual(@as(u16, 3), kern_info.records[0].glyph_id);
@@ -616,6 +621,8 @@ test "MATH constants metadata is exposed when present" {
     defer missing.deinit();
     try std.testing.expect((try missing.mathInfo(allocator)) == null);
     try std.testing.expect((try missing.mathConstantRaw(.math_leading)) == null);
+    try std.testing.expect((try missing.mathItalicsCorrection(1)) == null);
+    try std.testing.expect(!try missing.mathIsExtendedShape(1));
 }
 
 test "lazy MATH metadata revalidates borrowed table bytes" {

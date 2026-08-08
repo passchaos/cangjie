@@ -1287,6 +1287,33 @@ pub const Font = struct {
         return try ltag_mod.records(allocator, self.data, ltag.offset, ltag.length);
     }
 
+    /// Read raw MATH italics correction for a glyph, if MathGlyphInfo covers it.
+    pub fn mathItalicsCorrection(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?MathValueRecordInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const math = self.math orelse return null;
+        try validateSfntTableChecksum(self.data, math);
+        try validateMathTable(self.data, math);
+        return try math_mod.glyphValueRecord(self.data, math.offset, math.length, glyph_id, .italics_correction);
+    }
+
+    /// Read raw MATH top-accent attachment for a glyph, if MathGlyphInfo covers it.
+    pub fn mathTopAccentAttachment(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?MathValueRecordInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const math = self.math orelse return null;
+        try validateSfntTableChecksum(self.data, math);
+        try validateMathTable(self.data, math);
+        return try math_mod.glyphValueRecord(self.data, math.offset, math.length, glyph_id, .top_accent_attachment);
+    }
+
+    /// Return whether MATH marks the glyph as an extended shape.
+    pub fn mathIsExtendedShape(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!bool {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const math = self.math orelse return false;
+        try validateSfntTableChecksum(self.data, math);
+        try validateMathTable(self.data, math);
+        return try math_mod.isExtendedShape(self.data, math.offset, math.length, glyph_id);
+    }
+
     /// Read one raw OpenType `MATH` constant, mirroring HarfBuzz's math constant selector.
     pub fn mathConstantRaw(self: *const Font, constant: MathConstant) FontError!?i32 {
         const math = self.math orelse return null;

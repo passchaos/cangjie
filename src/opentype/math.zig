@@ -163,6 +163,29 @@ pub fn validate(data: []const u8, offset: usize, length: usize) Error!void {
     try validateVariants(data, offset, length, h.variants_offset);
 }
 
+pub const GlyphValueKind = enum { italics_correction, top_accent_attachment };
+
+pub fn glyphValueRecord(data: []const u8, offset: usize, length: usize, glyph_id: u16, kind: GlyphValueKind) Error!?ValueRecord {
+    const h = try header(data, offset, length);
+    try validateGlyphInfo(data, offset, length, h.glyph_info_offset);
+    const glyph_info = offset + h.glyph_info_offset;
+    const child_offset = switch (kind) {
+        .italics_correction => try bin.readU16At(data, glyph_info),
+        .top_accent_attachment => try bin.readU16At(data, glyph_info + 2),
+    };
+    if (child_offset == 0) return null;
+    return try valueRecordForGlyph(data, offset, length, h.glyph_info_offset + @as(usize, child_offset), glyph_id);
+}
+
+pub fn isExtendedShape(data: []const u8, offset: usize, length: usize, glyph_id: u16) Error!bool {
+    const h = try header(data, offset, length);
+    try validateGlyphInfo(data, offset, length, h.glyph_info_offset);
+    const glyph_info = offset + h.glyph_info_offset;
+    const child_offset = try bin.readU16At(data, glyph_info + 4);
+    if (child_offset == 0) return false;
+    return (try coverageIndex(data, offset, length, h.glyph_info_offset + @as(usize, child_offset), glyph_id)) != null;
+}
+
 pub fn constantValue(data: []const u8, offset: usize, length: usize, constant: Constant) Error!i32 {
     const h = try header(data, offset, length);
     try validateConstants(data, offset, length, h.constants_offset);
@@ -619,6 +642,17 @@ fn validateMathValueArraySubtable(data: []const u8, table_offset: usize, table_l
     }
 }
 
+fn valueRecordForGlyph(data: []const u8, table_offset: usize, table_length: usize, subtable_offset: usize, glyph_id: u16) Error!?ValueRecord {
+    try validateMathValueArraySubtable(data, table_offset, table_length, subtable_offset);
+    const start = table_offset + subtable_offset;
+    const coverage_offset: usize = @intCast(try bin.readU16At(data, start));
+    const index = (try coverageIndex(data, table_offset, table_length, subtable_offset + coverage_offset, glyph_id)) orelse return null;
+    const value_count: usize = @intCast(try bin.readU16At(data, start + 2));
+    if (index >= value_count) return error.BadSfnt;
+    const value_record = start + 4 + index * 4;
+    return .{ .value = try bin.readI16At(data, value_record), .device_offset = try bin.readU16At(data, value_record + 2) };
+}
+
 fn readMathValueArraySubtable(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, table_length: usize, subtable_offset: usize) Error![]GlyphValueRecord {
     try validateMathValueArraySubtable(data, table_offset, table_length, subtable_offset);
     const start = table_offset + subtable_offset;
@@ -673,6 +707,35 @@ fn coverageGlyphCount(data: []const u8, table_offset: usize, table_length: usize
                 if (total > std.math.maxInt(u16)) return error.BadSfnt;
             }
             break :count total;
+        },
+        else => error.BadSfnt,
+    };
+}
+
+fn coverageIndex(data: []const u8, table_offset: usize, table_length: usize, coverage_offset: usize, glyph_id: u16) Error!?usize {
+    _ = try coverageGlyphCount(data, table_offset, table_length, coverage_offset);
+    const start = table_offset + coverage_offset;
+    return switch (try bin.readU16At(data, start)) {
+        1 => blk: {
+            const count: usize = @intCast(try bin.readU16At(data, start + 2));
+            for (0..count) |index| {
+                const glyph = try bin.readU16At(data, start + 4 + index * 2);
+                if (glyph == glyph_id) break :blk index;
+                if (glyph > glyph_id) break :blk null;
+            }
+            break :blk null;
+        },
+        2 => blk: {
+            const range_count: usize = @intCast(try bin.readU16At(data, start + 2));
+            for (0..range_count) |range_index| {
+                const record = start + 4 + range_index * 6;
+                const first = try bin.readU16At(data, record);
+                const last = try bin.readU16At(data, record + 2);
+                const start_index: usize = @intCast(try bin.readU16At(data, record + 4));
+                if (glyph_id < first) break :blk null;
+                if (glyph_id <= last) break :blk start_index + @as(usize, glyph_id - first);
+            }
+            break :blk null;
         },
         else => error.BadSfnt,
     };
@@ -756,16 +819,16 @@ test "MATH constants expose scalar and value-record metadata" {
     writeI16(&bytes, 236, -12);
     writeU16(&bytes, 240, 1);
     writeU16(&bytes, 242, 1);
-    writeU16(&bytes, 244, 3);
+    writeU16(&bytes, 244, 1);
     writeU16(&bytes, 248, 8);
     writeU16(&bytes, 250, 1);
     writeI16(&bytes, 252, 42);
     writeU16(&bytes, 256, 1);
     writeU16(&bytes, 258, 1);
-    writeU16(&bytes, 260, 3);
+    writeU16(&bytes, 260, 1);
     writeU16(&bytes, 264, 1);
     writeU16(&bytes, 266, 1);
-    writeU16(&bytes, 268, 3);
+    writeU16(&bytes, 268, 1);
     writeU16(&bytes, 270, 5);
     writeU16(&bytes, 272, 14);
     writeU16(&bytes, 274, 20);
@@ -773,22 +836,22 @@ test "MATH constants expose scalar and value-record metadata" {
     writeU16(&bytes, 278, 1);
     writeU16(&bytes, 284, 1);
     writeU16(&bytes, 286, 1);
-    writeU16(&bytes, 288, 5);
+    writeU16(&bytes, 288, 1);
     writeU16(&bytes, 280, 26);
     writeU16(&bytes, 282, 0);
     writeU16(&bytes, 284, 1);
     writeU16(&bytes, 286, 1);
-    writeU16(&bytes, 288, 5);
+    writeU16(&bytes, 288, 1);
     writeU16(&bytes, 290, 1);
     writeU16(&bytes, 292, 1);
-    writeU16(&bytes, 294, 6);
+    writeU16(&bytes, 294, 0);
     writeU16(&bytes, 296, 8);
     writeU16(&bytes, 298, 1);
-    writeU16(&bytes, 300, 7);
+    writeU16(&bytes, 300, 1);
     writeU16(&bytes, 302, 900);
     writeI16(&bytes, 304, -7);
     writeU16(&bytes, 308, 1);
-    writeU16(&bytes, 310, 8);
+    writeU16(&bytes, 310, 1);
     writeU16(&bytes, 312, 1);
     writeU16(&bytes, 314, 2);
     writeU16(&bytes, 316, 3);
@@ -820,12 +883,17 @@ test "MATH constants expose scalar and value-record metadata" {
     try std.testing.expectEqual(@as(?usize, 24), parsed.glyph_info.top_accent_attachment_offset);
     try std.testing.expectEqual(@as(?usize, 40), parsed.glyph_info.extended_shape_coverage_offset);
     try std.testing.expectEqual(@as(usize, 1), parsed.glyph_info.italics_corrections.len);
-    try std.testing.expectEqual(GlyphValueRecord{ .glyph_id = 3, .value_record = .{ .value = -12, .device_offset = 0 } }, parsed.glyph_info.italics_corrections[0]);
-    try std.testing.expectEqual(GlyphValueRecord{ .glyph_id = 3, .value_record = .{ .value = 42, .device_offset = 0 } }, parsed.glyph_info.top_accent_attachments[0]);
-    try std.testing.expectEqualSlices(u16, &.{3}, parsed.glyph_info.extended_shape_glyphs);
+    try std.testing.expectEqual(GlyphValueRecord{ .glyph_id = 1, .value_record = .{ .value = -12, .device_offset = 0 } }, parsed.glyph_info.italics_corrections[0]);
+    try std.testing.expectEqual(GlyphValueRecord{ .glyph_id = 1, .value_record = .{ .value = 42, .device_offset = 0 } }, parsed.glyph_info.top_accent_attachments[0]);
+    try std.testing.expectEqual(ValueRecord{ .value = -12, .device_offset = 0 }, (try glyphValueRecord(&bytes, 0, bytes.len, 1, .italics_correction)).?);
+    try std.testing.expectEqual(ValueRecord{ .value = 42, .device_offset = 0 }, (try glyphValueRecord(&bytes, 0, bytes.len, 1, .top_accent_attachment)).?);
+    try std.testing.expect((try glyphValueRecord(&bytes, 0, bytes.len, 0, .italics_correction)) == null);
+    try std.testing.expectEqualSlices(u16, &.{1}, parsed.glyph_info.extended_shape_glyphs);
+    try std.testing.expect(try isExtendedShape(&bytes, 0, bytes.len, 1));
+    try std.testing.expect(!try isExtendedShape(&bytes, 0, bytes.len, 0));
     try std.testing.expectEqual(@as(u16, 5), parsed.variants.min_connector_overlap);
-    try std.testing.expectEqualSlices(u16, &.{5}, parsed.variants.vertical_glyphs);
-    try std.testing.expectEqualSlices(u16, &.{6}, parsed.variants.horizontal_glyphs);
+    try std.testing.expectEqualSlices(u16, &.{1}, parsed.variants.vertical_glyphs);
+    try std.testing.expectEqualSlices(u16, &.{0}, parsed.variants.horizontal_glyphs);
     try std.testing.expectEqual(@as(usize, 2), parsed.variants.construction_offsets.len);
 }
 

@@ -3151,11 +3151,22 @@ fn collectChainingCoveragePositioning(table: Table, subtable_offset: usize, glyp
 }
 
 fn collectChainingCoveragePositioningLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!void {
+    // Three digest bit-tests amortize over paragraph-sized runs by avoiding
+    // exact group probes for most glyphs. Word-sized runs usually hit quickly,
+    // so keep them on the old direct path without the extra filter.
+    if (chainingLookupUsesGlyphDigest(glyphs.len)) {
+        return try collectChainingCoveragePositioningLookupImpl(true, table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, options, accelerator);
+    }
+    return try collectChainingCoveragePositioningLookupImpl(false, table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, options, accelerator);
+}
+
+fn collectChainingCoveragePositioningLookupImpl(comptime use_glyph_digest: bool, table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!void {
     var pos: usize = 0;
     while (pos < glyphs.len) {
         var next_pos = pos + 1;
         defer pos = next_pos;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (use_glyph_digest and !accelerator.coverage_digest.mayHave(glyphs[pos])) continue;
         const grouped_subtables = chainingSubtableGroupForGlyph(accelerator.chaining_groups, accelerator.chaining_group_slots, glyphs[pos]) orelse continue;
         const second_glyph_index = nextUnignoredGlyph(glyphs, pos + 1, lookup_flag, options);
         for (grouped_subtables) |subtable_i| {
@@ -3179,6 +3190,8 @@ fn collectChainingCoveragePositioningLookup(table: Table, lookup_offset: usize, 
 
 fn collectNestedChainingCoveragePositioningAt(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!bool {
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    if (chainingLookupUsesGlyphDigest(glyphs.len) and
+        !accelerator.coverage_digest.mayHave(glyphs[pos])) return false;
     const grouped_subtables = chainingSubtableGroupForGlyph(accelerator.chaining_groups, accelerator.chaining_group_slots, glyphs[pos]) orelse return false;
     const second_glyph_index = nextUnignoredGlyph(glyphs, pos + 1, lookup_flag, options);
     for (grouped_subtables) |subtable_i| {
@@ -5216,6 +5229,11 @@ fn buildChainingSubtableGroups(pairs: []ChainingSubtablePair, allocator: std.mem
 }
 
 const min_chaining_groups_for_hash = 8;
+const min_run_glyphs_for_chaining_digest = 16;
+
+fn chainingLookupUsesGlyphDigest(glyph_count: usize) bool {
+    return glyph_count >= min_run_glyphs_for_chaining_digest;
+}
 
 fn buildChainingGroupSlots(groups: []const ChainingSubtableGroup, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u16 {
     if (groups.len < min_chaining_groups_for_hash or groups.len > std.math.maxInt(u16)) return try allocator.alloc(u16, 0);
@@ -5287,6 +5305,32 @@ test "GPOS chaining group slots preserve hits and misses" {
     try std.testing.expectEqual(@as(usize, 0), small_slots.len);
     const fallback = chainingSubtableGroupForGlyph(small_groups, small_slots, small_groups[3].glyph) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualSlices(u16, &group_indices[3], fallback);
+}
+
+test "GPOS chaining glyph digest activates only for amortized runs" {
+    var digest = GlyphDigest.empty();
+    digest.add(20);
+    const definite_miss: GlyphId = 21;
+    try std.testing.expect(!digest.mayHave(definite_miss));
+    try std.testing.expect(!chainingLookupUsesGlyphDigest(min_run_glyphs_for_chaining_digest - 1));
+    try std.testing.expect(chainingLookupUsesGlyphDigest(min_run_glyphs_for_chaining_digest));
+
+    // A digest is approximate: exact group lookup remains authoritative for
+    // survivors, while a definite miss can bypass it on an amortized run.
+    var collision: ?GlyphId = null;
+    var glyph: usize = 0;
+    while (glyph <= std.math.maxInt(GlyphId)) : (glyph += 1) {
+        const candidate: GlyphId = @intCast(glyph);
+        if (candidate != 20 and digest.mayHave(candidate)) {
+            collision = candidate;
+            break;
+        }
+    }
+    try std.testing.expect(collision != null);
+    const groups = [_]ChainingSubtableGroup{
+        .{ .glyph = 20, .subtable_indices = &.{0} },
+    };
+    try std.testing.expect(chainingSubtableGroupForGlyph(&groups, &.{}, collision.?) == null);
 }
 
 fn contextCoverageContains(table: Table, coverage_offset: usize, glyph: GlyphId) GposError!bool {

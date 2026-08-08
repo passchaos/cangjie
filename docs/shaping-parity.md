@@ -306,6 +306,17 @@ Current local snapshot after the Nastaliq parity work:
   `fa-words` check improved from `1866.696` to `1851.023 ns/glyph`, about
   `0.8%`. Roboto `en-words` remained flat (`406.629` versus
   `406.511 ns/glyph`), and full parity for all three corpora was unchanged.
+- GPOS chaining collectors now use the existing first-input Coverage digest as
+  a per-glyph prefilter on runs of at least 16 glyphs, where its three bit tests
+  amortize over avoided exact group probes. Short word-sized runs compile to a
+  separate unfiltered loop and retain the prior hot path. Two reverse-order
+  31-sample medians reduced Amiri `fa-thelittleprince` from
+  `1066.742 ns/glyph` to `1052.593 ns/glyph`, about `1.3%`. Roboto
+  `en-words` improved from `408.582` to `406.415 ns/glyph`, about `0.5%`;
+  Amiri `fa-words` remained effectively flat (`1854.894` versus
+  `1855.722 ns/glyph`, a `0.045%` difference). The digest adds no storage,
+  exact group lookup still resolves false positives, and full parity for all
+  three corpora was unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

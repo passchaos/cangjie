@@ -40,6 +40,10 @@ pub fn buildTrueTypeProgramTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trueTypeProgramTtfTables(allocator));
 }
 
+pub fn buildAnkrTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try ankrTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -659,6 +663,21 @@ fn trueTypeProgramTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[9] = .{ .tag = "prep", .data = try prepTable(allocator) };
+    return tables;
+}
+
+fn ankrTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "ankr", .data = try ankrTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     return tables;
 }
 
@@ -2610,6 +2629,33 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 74, 700.0);
     writeF16Dot16(bytes, 78, 150.0);
     writeU16(bytes, 82, 261);
+    return bytes;
+}
+
+fn ankrTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 52);
+    @memset(bytes, 0);
+    writeU32(bytes, 4, 12);
+    writeU32(bytes, 8, 32);
+    writeU16(bytes, 12, 6); // AAT lookup format 6: single glyph/value records.
+    writeU16(bytes, 14, 4); // unitSize.
+    writeU16(bytes, 16, 2); // nUnits.
+    writeU16(bytes, 18, 8); // searchRange.
+    writeU16(bytes, 20, 1); // entrySelector.
+    writeU16(bytes, 22, 0); // rangeShift.
+    writeU16(bytes, 24, 0); // glyph 0.
+    writeU16(bytes, 26, 0); // anchors at glyph-data offset 0.
+    writeU16(bytes, 28, 1); // glyph 1.
+    writeU16(bytes, 30, 12); // anchors at glyph-data offset 12.
+
+    writeU32(bytes, 32, 2);
+    writeI16(bytes, 36, 10);
+    writeI16(bytes, 38, 20);
+    writeI16(bytes, 40, -5);
+    writeI16(bytes, 42, 7);
+    writeU32(bytes, 44, 1);
+    writeI16(bytes, 48, 100);
+    writeI16(bytes, 50, -50);
     return bytes;
 }
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const ankr_mod = @import("opentype/ankr.zig");
 const base_mod = @import("opentype/base.zig");
 const bin = @import("binary.zig");
 const cff_mod = @import("cff.zig");
@@ -207,6 +208,10 @@ pub const FeatureSettingInfo = feat_mod.Setting;
 pub const TrackInfo = trak_mod.Track;
 pub const TrackTableInfo = trak_mod.Info;
 pub const TrackValueInfo = trak_mod.TrackValue;
+
+pub const AnkrAnchorInfo = ankr_mod.Anchor;
+pub const AnkrGlyphAnchorsInfo = ankr_mod.GlyphAnchors;
+pub const AnkrInfo = ankr_mod.Info;
 
 pub const BaseAxisInfo = base_mod.Axis;
 pub const BaseInfo = base_mod.Info;
@@ -654,6 +659,7 @@ pub const Font = struct {
     gdef: ?TableRecord,
     gpos: ?TableRecord,
     gsub: ?TableRecord,
+    ankr: ?TableRecord,
     feat: ?TableRecord,
     trak: ?TableRecord,
     name: ?TableRecord,
@@ -758,6 +764,7 @@ pub const Font = struct {
         const gdef = findTable(records, "GDEF");
         const gpos = findTable(records, "GPOS");
         const gsub = findTable(records, "GSUB");
+        const ankr = findTable(records, "ankr");
         const feat = findTable(records, "feat");
         const trak = findTable(records, "trak");
         const name = findTable(records, "name");
@@ -815,6 +822,7 @@ pub const Font = struct {
         };
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
+        if (ankr) |ankr_table| try validateAnkrTable(data, ankr_table, glyph_count);
         if (feat) |feat_table| try validateFeatTable(data, feat_table);
         if (trak) |trak_table| try validateTrakTable(data, trak_table);
         if (meta) |meta_table| try validateMetaTable(data, meta_table);
@@ -925,6 +933,7 @@ pub const Font = struct {
             .gdef = gdef,
             .gpos = gpos,
             .gsub = gsub,
+            .ankr = ankr,
             .feat = feat,
             .trak = trak,
             .name = name,
@@ -1002,6 +1011,18 @@ pub const Font = struct {
 
     pub fn freeCvarInfo(_: *const Font, allocator: std.mem.Allocator, info_value: CvarInfo) void {
         cvar_mod.free(allocator, info_value);
+    }
+
+    /// Read validated anchor points from the optional AAT `ankr` table.
+    pub fn ankrInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?AnkrInfo {
+        const ankr = self.ankr orelse return null;
+        try validateSfntTableChecksum(self.data, ankr);
+        try validateAnkrTable(self.data, ankr, self.glyph_count);
+        return try ankr_mod.info(allocator, self.data, ankr.offset, ankr.length, self.glyph_count);
+    }
+
+    pub fn freeAnkrInfo(_: *const Font, allocator: std.mem.Allocator, info_value: AnkrInfo) void {
+        ankr_mod.free(allocator, info_value);
     }
 
     /// Decode the optional TrueType `fpgm` font program as structural bytecode.
@@ -4325,6 +4346,10 @@ fn clampI16(value: i32) i16 {
 
 fn validateBaseTable(data: []const u8, base: TableRecord) FontError!void {
     return try base_mod.validate(data, base.offset, base.length);
+}
+
+fn validateAnkrTable(data: []const u8, ankr: TableRecord, glyph_count: u16) FontError!void {
+    return try ankr_mod.validate(data, ankr.offset, ankr.length, glyph_count);
 }
 
 fn validateTrakTable(data: []const u8, trak: TableRecord) FontError!void {
@@ -18321,6 +18346,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = gdef_checksum, .offset = 0, .length = data.len },
         .gpos = null,
         .gsub = null,
+        .ankr = null,
         .feat = null,
         .trak = null,
         .name = null,
@@ -18385,6 +18411,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .ankr = null,
         .feat = null,
         .trak = null,
         .name = null,
@@ -18449,6 +18476,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .ankr = null,
         .feat = null,
         .trak = null,
         .name = null,
@@ -18524,6 +18552,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .ankr = null,
         .feat = null,
         .trak = null,
         .name = null,
@@ -18588,6 +18617,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .ankr = null,
         .feat = null,
         .trak = null,
         .name = null,
@@ -18652,6 +18682,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .ankr = null,
         .feat = null,
         .trak = null,
         .name = null,
@@ -18716,6 +18747,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .ankr = null,
         .feat = null,
         .trak = null,
         .name = null,
@@ -18800,6 +18832,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .ankr = null,
         .feat = null,
         .trak = null,
         .name = null,

@@ -82,6 +82,9 @@ pub const serializeManifest = @import("database.zig").serializeManifest;
 pub const userFontSourcesForOs = @import("database.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
+pub const AnkrAnchorInfo = @import("font.zig").AnkrAnchorInfo;
+pub const AnkrGlyphAnchorsInfo = @import("font.zig").AnkrGlyphAnchorsInfo;
+pub const AnkrInfo = @import("font.zig").AnkrInfo;
 pub const BaseAxisInfo = @import("font.zig").BaseAxisInfo;
 pub const BaseInfo = @import("font.zig").BaseInfo;
 pub const BaseScriptInfo = @import("font.zig").BaseScriptInfo;
@@ -495,6 +498,60 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "AAT ankr anchor points are exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildAnkrTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.ankrInfo(allocator)).?;
+    defer font.freeAnkrInfo(allocator, info);
+    try std.testing.expectEqual(@as(u16, 0), info.version);
+    try std.testing.expectEqual(@as(u16, 6), info.lookup_format);
+    try std.testing.expectEqual(@as(usize, 12), info.lookup_table_offset);
+    try std.testing.expectEqual(@as(usize, 32), info.glyph_data_table_offset);
+    try std.testing.expectEqual(@as(usize, 2), info.glyphs.len);
+    try std.testing.expectEqual(@as(u16, 0), info.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 2), info.glyphs[0].anchors.len);
+    try std.testing.expectEqual(AnkrAnchorInfo{ .x = 10, .y = 20 }, info.glyphs[0].anchors[0]);
+    try std.testing.expectEqual(AnkrAnchorInfo{ .x = -5, .y = 7 }, info.glyphs[0].anchors[1]);
+    try std.testing.expectEqual(@as(u16, 1), info.glyphs[1].glyph_id);
+    try std.testing.expectEqual(AnkrAnchorInfo{ .x = 100, .y = -50 }, info.glyphs[1].anchors[0]);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.ankrInfo(allocator)) == null);
+}
+
+test "lazy AAT ankr metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildAnkrTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const info = (try font.ankrInfo(allocator)).?;
+    defer font.freeAnkrInfo(allocator, info);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var ankr_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "ankr")) ankr_offset = table.offset;
+    }
+    bytes[ankr_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.ankrInfo(allocator));
 }
 
 test "TrueType fpgm and prep programs expose structural bytecode" {

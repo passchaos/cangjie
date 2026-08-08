@@ -722,6 +722,7 @@ test "gvar metadata is exposed when present" {
     try std.testing.expect((try missing.gvarGlyphInfo(0)) == null);
     try std.testing.expect((try missing.gvarTupleInfo(0, 0)) == null);
     try std.testing.expect((try missing.gvarPointDeltasAtCoords(allocator, 0, &.{0.5})) == null);
+    try std.testing.expect((try missing.gvarGlyphBoundsAtCoords(allocator, 0, &.{0.5})) == null);
 }
 
 test "gvar point deltas are exposed for non-empty glyph data" {
@@ -744,6 +745,10 @@ test "gvar point deltas are exposed for non-empty glyph data" {
     try std.testing.expectEqual(@as(f32, 0), deltas[0].y);
     try std.testing.expectEqual(@as(u16, 6), deltas[6].point);
     try std.testing.expectEqual(@as(f32, 0), deltas[6].x);
+
+    const varied_bounds = (try font.gvarGlyphBoundsAtCoords(allocator, 1, &.{0.5})).?;
+    const default_bounds = try font.glyphBounds(1);
+    try std.testing.expectEqual(default_bounds.x_min + 5, varied_bounds.x_min);
 
     var default_outline = try font.glyphOutline(allocator, 1);
     defer default_outline.deinit();

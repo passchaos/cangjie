@@ -1114,6 +1114,15 @@ pub const Font = struct {
         return try allocator.realloc(out, count);
     }
 
+    /// Return TrueType `gvar`-adjusted glyph bounds at normalized coordinates.
+    pub fn gvarGlyphBoundsAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?glyph_mod.Bounds {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        if (self.gvar == null) return null;
+        var outline = try self.glyphOutlineAtCoords(allocator, glyph_id, normalized_coords);
+        defer outline.deinit();
+        return outline.bounds;
+    }
+
     /// Return the CFF2 font-dict index selected for a glyph, when FDSelect is present.
     pub fn cff2FontDictIndex(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?u16 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;

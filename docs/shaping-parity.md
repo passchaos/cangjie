@@ -214,6 +214,13 @@ Current local snapshot after the Nastaliq parity work:
   `fa-thelittleprince` still pass in-process HarfBuzz parity. A seven-sample
   Amiri no-bidi-reorder check also improved slightly from about
   `1050 ns/glyph` to `1042 ns/glyph`.
+- Predecoding xAdvance-only PairPos format-1 records into sorted native-endian
+  `(first, second, advance)` records reduced the next same-session Roboto
+  `en-words` median from about `627 ns/glyph` to `570 ns/glyph`, about `9%`.
+  GPOS lookup 1 profile time fell from about `22.1 ms` to `18.1 ms`. Ordered
+  subtable alternatives remain intact: a zero-valued format-1 pair still
+  suppresses a later class-pair fallback. Full Roboto `en-words` and Amiri
+  `fa-thelittleprince` continue to pass in-process HarfBuzz parity.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

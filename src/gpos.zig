@@ -134,11 +134,25 @@ pub const LookupAccelerator = struct {
     coverage_groups: []const ChainingSubtableGroup = &.{},
     coverage_group_slots: []const u16 = &.{},
     single_pos_subtables: []const SinglePosSubtable = &.{},
+    pair_pos_subtables: []const PairPosSubtableAccelerator = &.{},
+    pair_pos_records: []const PairPosRecord = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
     chaining_group_slots: []const u16 = &.{},
     chaining_class_subtables: []const ChainingClassSubtableAccelerator = &.{},
+};
+
+const PairPosSubtableAccelerator = struct {
+    /// Empty slices mark a subtable that must use the generic matcher.
+    record_start: usize = 0,
+    record_len: usize = 0,
+};
+
+const PairPosRecord = struct {
+    first: GlyphId,
+    second: GlyphId,
+    x_advance: i16,
 };
 
 const SinglePosSubtable = struct {
@@ -365,6 +379,8 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
         allocator.free(accelerator.coverage_groups);
         allocator.free(accelerator.coverage_group_slots);
         allocator.free(accelerator.single_pos_subtables);
+        allocator.free(accelerator.pair_pos_subtables);
+        allocator.free(accelerator.pair_pos_records);
         for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.chaining_groups);
         allocator.free(accelerator.chaining_group_slots);
@@ -397,6 +413,14 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         try allocator.alloc(SinglePosSubtable, 0);
     errdefer allocator.free(single_pos_subtables);
     @memset(single_pos_subtables, .{});
+    const pair_pos_subtables = if (lookup_type == 2)
+        try allocator.alloc(PairPosSubtableAccelerator, subtable_count)
+    else
+        try allocator.alloc(PairPosSubtableAccelerator, 0);
+    errdefer allocator.free(pair_pos_subtables);
+    @memset(pair_pos_subtables, .{});
+    var pair_pos_records = std.ArrayList(PairPosRecord).empty;
+    errdefer pair_pos_records.deinit(allocator);
     var coverage_pairs = std.ArrayList(ChainingSubtablePair).empty;
     errdefer coverage_pairs.deinit(allocator);
     var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
@@ -415,6 +439,14 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
             if (single_pos_subtables.len != 0) {
                 single_pos_subtables[subtable_i] = try parseSinglePositionSubtable(table, subtable_offset);
             }
+            if (pair_pos_subtables.len != 0) {
+                pair_pos_subtables[subtable_i] = try appendSimplePairPosFormat1Records(
+                    table,
+                    subtable_offset,
+                    &pair_pos_records,
+                    allocator,
+                );
+            }
             if (chaining_subtables.len != 0) {
                 const parsed = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse continue;
                 chaining_subtables[subtable_i] = parsed;
@@ -429,6 +461,9 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     }
     accelerator.coverage_digest = digest;
     accelerator.single_pos_subtables = single_pos_subtables;
+    accelerator.pair_pos_subtables = pair_pos_subtables;
+    accelerator.pair_pos_records = try pair_pos_records.toOwnedSlice(allocator);
+    errdefer allocator.free(accelerator.pair_pos_records);
     if (coverage_pairs.items.len != 0) {
         accelerator.coverage_groups = try buildChainingSubtableGroups(coverage_pairs.items, allocator);
         accelerator.coverage_group_slots = try buildChainingGroupSlots(accelerator.coverage_groups, allocator);
@@ -453,6 +488,72 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     group_pairs.deinit(allocator);
     accelerator.chaining_class_subtables = try buildExtensionChainingClassSubtableAccelerators(table, lookup_offset, lookup_type, subtable_count, allocator);
     return accelerator;
+}
+
+fn appendSimplePairPosFormat1Records(
+    table: Table,
+    subtable_offset: usize,
+    records: *std.ArrayList(PairPosRecord),
+    allocator: std.mem.Allocator,
+) (GposError || std.mem.Allocator.Error)!PairPosSubtableAccelerator {
+    if (try readU16(table, subtable_offset) != 1) return .{};
+    const value_format_1 = try readU16(table, subtable_offset + 4);
+    const value_format_2 = try readU16(table, subtable_offset + 6);
+    if (value_format_1 != 0x0004 or value_format_2 != 0) return .{};
+
+    const coverage_offset = try checkedRequiredCoverageOffset(
+        table,
+        subtable_offset,
+        try readU16(table, subtable_offset + 2),
+    );
+    const pair_set_count = try readU16(table, subtable_offset + 8);
+    const record_start = records.items.len;
+    for (0..pair_set_count) |set_index| {
+        const first = (try coverageGlyphAt(table, coverage_offset, set_index)) orelse return error.BadGpos;
+        const pair_set_offset = try checkedRequiredPositionOffset(
+            table,
+            subtable_offset,
+            try readU16(table, subtable_offset + 10 + set_index * 2),
+        );
+        const pair_value_count = try readU16(table, pair_set_offset);
+        for (0..pair_value_count) |pair_index| {
+            const pair_record = pair_set_offset + 2 + pair_index * 4;
+            try records.append(allocator, .{
+                .first = first,
+                .second = try readU16(table, pair_record),
+                .x_advance = try readI16(table, pair_record + 2),
+            });
+        }
+    }
+    return .{
+        .record_start = record_start,
+        .record_len = records.items.len - record_start,
+    };
+}
+
+fn coverageGlyphAt(table: Table, coverage_offset: usize, index: usize) GposError!?GlyphId {
+    const format = try readU16(table, coverage_offset);
+    return switch (format) {
+        1 => glyph: {
+            const glyph_count = try readU16(table, coverage_offset + 2);
+            if (index >= glyph_count) break :glyph null;
+            break :glyph try readU16(table, coverage_offset + 4 + index * 2);
+        },
+        2 => glyph: {
+            const range_count = try readU16(table, coverage_offset + 2);
+            for (0..range_count) |range_i| {
+                const range_offset = coverage_offset + 4 + range_i * 6;
+                const start = try readU16(table, range_offset);
+                const end = try readU16(table, range_offset + 2);
+                const start_index = try readU16(table, range_offset + 4);
+                const len = @as(usize, end) - @as(usize, start) + 1;
+                if (index < start_index or index >= @as(usize, start_index) + len) continue;
+                break :glyph @intCast(@as(usize, start) + index - @as(usize, start_index));
+            }
+            break :glyph null;
+        },
+        else => error.UnsupportedGpos,
+    };
 }
 
 fn fillFastChainingSinglePosRecords(table: Table, subtable: *ChainingCoverageSubtable) GposError!void {
@@ -908,6 +1009,22 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         return;
     }
     if (lookup_type == 2) {
+        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            if (accelerator.pair_pos_subtables.len == subtable_count and accelerator.pair_pos_records.len != 0) {
+                try collectPairAdjustmentLookupAccelerated(
+                    table,
+                    lookup_offset,
+                    subtable_count,
+                    accelerator,
+                    glyphs,
+                    adjustments,
+                    allocator,
+                    lookup_flag,
+                    lookup_options,
+                );
+                return;
+            }
+        }
         try collectPairAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
         return;
     }
@@ -1152,6 +1269,64 @@ fn collectPairAdjustmentLookup(table: Table, lookup_offset: usize, subtable_coun
             }
         }
     }
+}
+
+fn collectPairAdjustmentLookupAccelerated(
+    table: Table,
+    lookup_offset: usize,
+    subtable_count: u16,
+    accelerator: *const LookupAccelerator,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    options: LookupOptions,
+) (GposError || std.mem.Allocator.Error)!void {
+    if (glyphs.len < 2) return;
+    var first_index: usize = 0;
+    while (first_index + 1 < glyphs.len) : (first_index += 1) {
+        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) continue;
+        const second_index = nextUnignoredGlyph(glyphs, first_index + 1, lookup_flag, options) orelse continue;
+        var subtable_i: usize = 0;
+        while (subtable_i < subtable_count) : (subtable_i += 1) {
+            const simple = accelerator.pair_pos_subtables[subtable_i];
+            if (simple.record_len != 0) {
+                if (simplePairPosRecord(
+                    accelerator.pair_pos_records,
+                    simple,
+                    glyphs[first_index],
+                    glyphs[second_index],
+                )) |record| {
+                    try appendAdjustment(adjustments, allocator, first_index, .{
+                        .index = first_index,
+                        .x_advance = record.x_advance,
+                    }, true);
+                    break;
+                }
+                continue;
+            }
+            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+            if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, first_index, adjustments, allocator, lookup_flag, options)) break;
+        }
+    }
+}
+
+fn simplePairPosRecord(records: []const PairPosRecord, subtable: PairPosSubtableAccelerator, first: GlyphId, second: GlyphId) ?PairPosRecord {
+    const slice = records[subtable.record_start .. subtable.record_start + subtable.record_len];
+    var low: usize = 0;
+    var high: usize = slice.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const record = slice[mid];
+        if (first < record.first or (first == record.first and second < record.second)) {
+            high = mid;
+        } else if (first > record.first or (first == record.first and second > record.second)) {
+            low = mid + 1;
+        } else {
+            return record;
+        }
+    }
+    return null;
 }
 
 fn collectSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -5376,6 +5551,79 @@ test "GPOS validated PairSet lookup binary searches second glyph records" {
     const hit = try findValidatedPairValueRecord(table, pair_set, 3, 2, 0, 12) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, pair_set + 6), hit);
     try std.testing.expectEqual(@as(?usize, null), try findValidatedPairValueRecord(table, pair_set, 3, 2, 0, 11));
+}
+
+test "GPOS simple PairPos accelerator preserves zero adjustment precedence" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 96;
+
+    // Lookup with two PairPos alternatives.
+    writeU16Test(&bytes, 0, 2);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 40);
+
+    // First format-1 subtable explicitly handles (5, 7) with xAdvance=0.
+    const first = 10;
+    writeU16Test(&bytes, first + 0, 1);
+    writeU16Test(&bytes, first + 2, 20);
+    writeU16Test(&bytes, first + 4, 0x0004);
+    writeU16Test(&bytes, first + 6, 0);
+    writeU16Test(&bytes, first + 8, 1);
+    writeU16Test(&bytes, first + 10, 12);
+    const pair_set = first + 12;
+    writeU16Test(&bytes, pair_set + 0, 1);
+    writeU16Test(&bytes, pair_set + 2, 7);
+    writeI16Test(&bytes, pair_set + 4, 0);
+    writeCoverage1Test(&bytes, first + 20, 5);
+
+    // Later format-2 fallback would kern the same pair by -40 if precedence is
+    // lost. It remains generic in the accelerator.
+    const second = 40;
+    writeU16Test(&bytes, second + 0, 2);
+    writeU16Test(&bytes, second + 2, 24);
+    writeU16Test(&bytes, second + 4, 0x0004);
+    writeU16Test(&bytes, second + 6, 0);
+    writeU16Test(&bytes, second + 8, 30);
+    writeU16Test(&bytes, second + 10, 38);
+    writeU16Test(&bytes, second + 12, 2);
+    writeU16Test(&bytes, second + 14, 2);
+    writeI16Test(&bytes, second + 16, 0);
+    writeI16Test(&bytes, second + 18, 0);
+    writeI16Test(&bytes, second + 20, 0);
+    writeI16Test(&bytes, second + 22, -40);
+    writeCoverage1Test(&bytes, second + 24, 5);
+    writeClassDef1Test(&bytes, second + 30, 5, 1);
+    writeClassDef1Test(&bytes, second + 38, 7, 1);
+
+    const table = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const accelerator = try buildLookupAccelerator(table, 0, allocator);
+    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
+    try std.testing.expectEqual(@as(usize, 1), accelerator.pair_pos_records.len);
+    try std.testing.expectEqual(@as(i16, 0), accelerator.pair_pos_records[0].x_advance);
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    const accelerators = [_]LookupAccelerator{accelerator};
+    try collectLookupWithIndex(
+        table,
+        0,
+        0,
+        &.{ 5, 7 },
+        &adjustments,
+        allocator,
+        .{ .lookup_accelerators = &accelerators },
+        null,
+    );
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_advance);
+    try std.testing.expect(adjustments.items[0].pair_positioned);
 }
 
 test "GPOS PairPos format 2 rejects class values outside matrix" {

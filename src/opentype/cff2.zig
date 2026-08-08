@@ -173,10 +173,10 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
     const charstring = try indexObject(table, index, glyph_id);
 
     const selected_fd = (try selectedFontDictIndex(table, parsed, glyph_id, glyph_count)) orelse 0;
-    const local_subrs = if (parsed.fd_array_index) |fd_array| blk: {
+    const private_dict = if (parsed.fd_array_index) |fd_array| blk: {
         if (selected_fd >= fd_array.count) return error.BadSfnt;
         const font_dict = try parseFontDict(table, fd_array, selected_fd);
-        break :blk font_dict.private_dict.local_subrs_index;
+        break :blk font_dict.private_dict;
     } else null;
 
     return .{
@@ -184,8 +184,9 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
         .context = .{
             .table = table,
             .vstore_offset = parsed.top_dict.vstore_offset,
+            .default_vs_index = if (private_dict) |private| private.variation_store_index else null,
             .global_subrs_index = parsed.global_subrs_index,
-            .local_subrs_index = local_subrs,
+            .local_subrs_index = if (private_dict) |private| private.local_subrs_index else null,
         },
     };
 }
@@ -204,8 +205,13 @@ fn selectedFontDictIndex(table: []const u8, parsed: Info, glyph_id: usize, glyph
 const CharStringScanContext = struct {
     table: []const u8,
     vstore_offset: ?usize = null,
+    default_vs_index: ?u16 = null,
     global_subrs_index: IndexInfo,
     local_subrs_index: ?IndexInfo = null,
+
+    pub fn initialVariationStoreIndex(self: *CharStringScanContext) Error!u16 {
+        return self.default_vs_index orelse 0;
+    }
 
     pub fn blendRegionCount(self: *CharStringScanContext, vs_index: u16) Error!usize {
         const offset = self.vstore_offset orelse return error.BadSfnt;
@@ -292,7 +298,7 @@ const DictParser = struct {
             const b = self.data[self.offset];
             self.offset += 1;
             switch (b) {
-                0...21, 24 => {
+                0...22, 24 => {
                     const op: u16 = if (b == 12) blk: {
                         if (self.offset >= self.data.len) return error.BadSfnt;
                         const escaped = self.data[self.offset];
@@ -617,6 +623,21 @@ test "CFF2 multiple Font DICTs require FDSelect" {
     try std.testing.expectError(error.BadSfnt, fontDictIndex(&bytes, 0, bytes.len, 0, 2));
     try std.testing.expectError(error.BadSfnt, charStringScanInfo(&bytes, 0, bytes.len, 0, 2));
     try std.testing.expectError(error.BadSfnt, charStringBoundsInfo(&bytes, 0, bytes.len, 0, 2));
+}
+
+test "CFF2 execution uses Private DICT default vsindex" {
+    var bytes = testCff2Table();
+    // Private DICT: insert vsindex 0 before Local Subrs. Keep total size 6 by
+    // dropping width metadata that is irrelevant for charstring execution here.
+    bytes[56] = 139;
+    bytes[57] = 22;
+    bytes[58] = 145;
+    bytes[59] = 19;
+    bytes[60] = 139;
+    bytes[61] = 20;
+    const font_dict = (try fontDictInfo(&bytes, 0, bytes.len, 0)).?;
+    try std.testing.expectEqual(@as(?u16, 0), font_dict.private_dict.variation_store_index);
+    try std.testing.expect((try charStringBoundsInfo(&bytes, 0, bytes.len, 0, 2)) != null);
 }
 
 test "CFF2 exposes Font DICT private metadata and local subrs" {

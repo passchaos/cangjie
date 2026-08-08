@@ -49,7 +49,10 @@ pub const BoundsInfo = struct {
 /// by the later CFF2 executor. Geometry operators only clear the transient
 /// operand stack because their coordinates are irrelevant for metadata scans.
 pub fn scan(comptime Context: type, context: *Context, bytes: []const u8) Error!Info {
-    var scanner = Scanner(Context){ .context = context };
+    var scanner = Scanner(Context){
+        .context = context,
+        .vs_index = try contextInitialVariationStoreIndex(Context, context),
+    };
     if (try scanner.runCharString(bytes, 0) == .none) scanner.info.has_endchar = true;
     return scanner.info;
 }
@@ -61,7 +64,10 @@ pub fn scan(comptime Context: type, context: *Context, bytes: []const u8) Error!
 /// including control points. That keeps public glyph bounds tight while still
 /// reusing the same operand/subroutine machinery as the outline builder.
 pub fn bounds(comptime Context: type, context: *Context, bytes: []const u8) Error!BoundsInfo {
-    var executor = BoundsExecutor(Context){ .context = context };
+    var executor = BoundsExecutor(Context){
+        .context = context,
+        .vs_index = try contextInitialVariationStoreIndex(Context, context),
+    };
     if (try executor.runCharString(bytes, 0) == .none) try executor.finishImplicitEndchar();
     return executor.bounds_info;
 }
@@ -69,6 +75,7 @@ pub fn bounds(comptime Context: type, context: *Context, bytes: []const u8) Erro
 pub fn appendOutline(comptime Context: type, context: *Context, allocator: std.mem.Allocator, bytes: []const u8, outline: *glyph_mod.GlyphOutline) Error!BoundsInfo {
     var executor = BoundsExecutor(Context){
         .context = context,
+        .vs_index = try contextInitialVariationStoreIndex(Context, context),
         .allocator = allocator,
         .outline = outline,
     };
@@ -775,6 +782,11 @@ fn BoundsExecutor(comptime Context: type) type {
     };
 }
 
+fn contextInitialVariationStoreIndex(comptime Context: type, context: *Context) Error!u16 {
+    if (@hasDecl(Context, "initialVariationStoreIndex")) return try context.initialVariationStoreIndex();
+    return 0;
+}
+
 fn contextBlendRegionCount(comptime Context: type, context: *Context, vs_index: u16) Error!usize {
     if (@hasDecl(Context, "blendRegionCount")) return try context.blendRegionCount(vs_index);
     return error.BadSfnt;
@@ -1051,4 +1063,31 @@ test "CFF2 charstring outline closes missing top-level endchar" {
     try std.testing.expect(parsed.scan.has_endchar);
     try std.testing.expectEqual(@as(usize, 3), outline.commands.items.len);
     try std.testing.expectEqual(.close, outline.commands.items[2]);
+}
+
+test "CFF2 charstring default blend uses initial vsindex" {
+    const Context = struct {
+        pub fn initialVariationStoreIndex(_: *@This()) Error!u16 {
+            return 1;
+        }
+
+        pub fn blendRegionCount(_: *@This(), vs_index: u16) Error!usize {
+            if (vs_index != 1) return error.BadSfnt;
+            return 2;
+        }
+
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var context = Context{};
+    const parsed = try bounds(Context, &context, &.{ 189, 189, 239, 140, 16, 139, 21, 149, 6, 14 });
+    try std.testing.expect(parsed.scan.has_blend);
+    try std.testing.expectEqual(@as(f32, 50), parsed.x_min);
+    try std.testing.expectEqual(@as(f32, 60), parsed.x_max);
 }

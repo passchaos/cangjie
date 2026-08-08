@@ -1236,25 +1236,30 @@ fn flattenOutline(lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOu
             },
             .quad_to => |q| {
                 const a = current orelse continue;
+                const control = fontToPixel(q.control, scale, x, baseline_y);
+                const end = fontToPixel(q.end, scale, x, baseline_y);
                 var prev = a;
                 for (1..17) |i| {
                     const t = @as(f32, @floatFromInt(i)) / 16.0;
-                    const p = quadPoint(a, fontToPixel(q.control, scale, x, baseline_y), fontToPixel(q.end, scale, x, baseline_y), t);
+                    const p = quadPoint(a, control, end, t);
                     lines.appendAssumeCapacity(.{ .a = prev, .b = p });
                     prev = p;
                 }
-                current = fontToPixel(q.end, scale, x, baseline_y);
+                current = end;
             },
             .cubic_to => |c| {
                 const a = current orelse continue;
+                const c0 = fontToPixel(c.c0, scale, x, baseline_y);
+                const c1 = fontToPixel(c.c1, scale, x, baseline_y);
+                const end = fontToPixel(c.end, scale, x, baseline_y);
                 var prev = a;
                 for (1..25) |i| {
                     const t = @as(f32, @floatFromInt(i)) / 24.0;
-                    const p = cubicPoint(a, fontToPixel(c.c0, scale, x, baseline_y), fontToPixel(c.c1, scale, x, baseline_y), fontToPixel(c.end, scale, x, baseline_y), t);
+                    const p = cubicPoint(a, c0, c1, end, t);
                     lines.appendAssumeCapacity(.{ .a = prev, .b = p });
                     prev = p;
                 }
-                current = fontToPixel(c.end, scale, x, baseline_y);
+                current = end;
             },
             .close => {
                 if (current) |a| {
@@ -1309,25 +1314,30 @@ fn flattenSvgOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), 
             },
             .quad_to => |q| {
                 const a = current orelse continue;
+                const control = svgToPixel(transform.apply(q.control), scale, origin_x, origin_y);
+                const end = svgToPixel(transform.apply(q.end), scale, origin_x, origin_y);
                 var prev = a;
                 for (1..17) |i| {
                     const t = @as(f32, @floatFromInt(i)) / 16.0;
-                    const p = quadPoint(a, svgToPixel(transform.apply(q.control), scale, origin_x, origin_y), svgToPixel(transform.apply(q.end), scale, origin_x, origin_y), t);
+                    const p = quadPoint(a, control, end, t);
                     try lines.append(allocator, .{ .a = prev, .b = p });
                     prev = p;
                 }
-                current = svgToPixel(transform.apply(q.end), scale, origin_x, origin_y);
+                current = end;
             },
             .cubic_to => |c| {
                 const a = current orelse continue;
+                const c0 = svgToPixel(transform.apply(c.c0), scale, origin_x, origin_y);
+                const c1 = svgToPixel(transform.apply(c.c1), scale, origin_x, origin_y);
+                const end = svgToPixel(transform.apply(c.end), scale, origin_x, origin_y);
                 var prev = a;
                 for (1..25) |i| {
                     const t = @as(f32, @floatFromInt(i)) / 24.0;
-                    const p = cubicPoint(a, svgToPixel(transform.apply(c.c0), scale, origin_x, origin_y), svgToPixel(transform.apply(c.c1), scale, origin_x, origin_y), svgToPixel(transform.apply(c.end), scale, origin_x, origin_y), t);
+                    const p = cubicPoint(a, c0, c1, end, t);
                     try lines.append(allocator, .{ .a = prev, .b = p });
                     prev = p;
                 }
-                current = svgToPixel(transform.apply(c.end), scale, origin_x, origin_y);
+                current = end;
             },
             .close => {
                 if (current) |a| {

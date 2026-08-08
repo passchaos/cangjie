@@ -598,6 +598,9 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(usize, 3), bounds.scan.charstring_count);
     try std.testing.expectEqual(@as(usize, 1), bounds.scan.local_subr_call_count);
     try std.testing.expectEqual(@as(usize, 1), bounds.scan.global_subr_call_count);
+    const bounds_at_coords = (try font.cff2CharStringBoundsInfoAtCoords(0, &.{0.5})).?;
+    try std.testing.expectEqual(@as(f32, 50), bounds_at_coords.x_min);
+    try std.testing.expectEqual(@as(f32, 150), bounds_at_coords.x_max);
     const public_bounds = try font.glyphBounds(0);
     try std.testing.expectEqual(@as(i16, 50), public_bounds.x_min);
     try std.testing.expectEqual(@as(i16, 20), public_bounds.y_min);
@@ -634,6 +637,7 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expect((try missing.cff2CharStringData(1)) == null);
     try std.testing.expect((try missing.cff2CharStringScanInfo(1)) == null);
     try std.testing.expect((try missing.cff2CharStringBoundsInfo(1)) == null);
+    try std.testing.expect((try missing.cff2CharStringBoundsInfoAtCoords(1, &.{0.5})) == null);
     try std.testing.expect((try missing.cff2FontDictIndex(1)) == null);
 }
 

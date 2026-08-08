@@ -1116,11 +1116,16 @@ pub const Font = struct {
 
     /// Execute a CFF2 glyph charstring enough to compute conservative bounds.
     pub fn cff2CharStringBoundsInfo(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?Cff2CharStringBoundsInfo {
+        return try self.cff2CharStringBoundsInfoAtCoords(glyph_id, &.{});
+    }
+
+    /// Execute CFF2 bounds using caller-supplied normalized variation coordinates.
+    pub fn cff2CharStringBoundsInfoAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?Cff2CharStringBoundsInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const cff2 = self.cff2 orelse return null;
         try validateSfntTableChecksum(self.data, cff2);
         try validateCff2Table(self.data, cff2);
-        return try cff2_mod.charStringBoundsInfo(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count);
+        return try cff2_mod.charStringBoundsInfoAtCoords(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords);
     }
 
     /// Read validated top-level metadata from the optional OpenType `CFF2` table.

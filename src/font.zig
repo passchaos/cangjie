@@ -746,6 +746,17 @@ pub const Font = struct {
     owned_tables: []TableRecord,
     allocator: std.mem.Allocator,
 
+    const OutlineReadMode = enum {
+        /// Public outline APIs re-check borrowed table bytes before returning data.
+        revalidate,
+        /// Raster hot paths trust the grammar and checksums established by Font.parse.
+        parsed,
+
+        fn shouldRevalidate(self: OutlineReadMode) bool {
+            return self == .revalidate;
+        }
+    };
+
     /// Parse the first face of a standalone SFNT or TrueType Collection.
     pub fn parse(allocator: std.mem.Allocator, data: []const u8) FontError!Font {
         return parseFace(allocator, data, 0);
@@ -1100,12 +1111,16 @@ pub const Font = struct {
     /// the compound glyph's own component-count phantom range when no component
     /// requests metric ownership.
     pub fn gvarPhantomPointDeltasAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?GvarPhantomPointDeltas {
+        return try self.gvarPhantomPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, .revalidate);
+    }
+
+    fn gvarPhantomPointDeltasAtCoordsPrepared(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!?GvarPhantomPointDeltas {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         if (self.gvar == null) return null;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
 
         const target = try self.gvarMetricVariationTarget(glyph_id, 0);
-        const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, target.glyph_id, normalized_coords, target.point_count + 4, null)) orelse return null;
+        const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, target.glyph_id, normalized_coords, target.point_count + 4, null, read_mode)) orelse return null;
         defer allocator.free(deltas);
         return try gvar_mod.phantomPointDeltas(target.point_count, deltas);
     }
@@ -1113,14 +1128,14 @@ pub const Font = struct {
     fn gvarPointDeltasAtCoordsWithFlags(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, has_delta: ?[]bool) FontError!?[]GvarScaledPointDelta {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
-        return try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, try self.gvarTargetCount(glyph_id), has_delta);
+        return try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, try self.gvarTargetCount(glyph_id), has_delta, .revalidate);
     }
 
-    fn gvarPointDeltasAtCoordsPrepared(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, target_count: usize, has_delta: ?[]bool) FontError!?[]GvarScaledPointDelta {
+    fn gvarPointDeltasAtCoordsPrepared(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, target_count: usize, has_delta: ?[]bool, read_mode: OutlineReadMode) FontError!?[]GvarScaledPointDelta {
         const gvar = self.gvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
         const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateSfntTableChecksum(self.data, gvar);
+        if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, gvar);
         if (target_count > @as(usize, std.math.maxInt(u16)) + 1) return error.BadSfnt;
         const raw_scratch = try allocator.alloc(gvar_mod.PointDelta, target_count);
         defer allocator.free(raw_scratch);
@@ -1231,12 +1246,18 @@ pub const Font = struct {
 
     /// Build a CFF2 glyph outline using caller-supplied normalized variation coordinates.
     pub fn cff2GlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?glyph_mod.GlyphOutline {
+        return try self.cff2GlyphOutlineAtCoordsPrepared(allocator, glyph_id, normalized_coords, .revalidate);
+    }
+
+    fn cff2GlyphOutlineAtCoordsPrepared(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!?glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
-        try validateCff2Table(self.data, cff2);
-        const metrics = try self.horizontalMetrics(glyph_id);
+        if (read_mode.shouldRevalidate()) {
+            try validateSfntTableChecksum(self.data, cff2);
+            try validateCff2Table(self.data, cff2);
+        }
+        const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 }, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
         if (try cff2_mod.appendGlyphOutlineAtCoords(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords, &outline)) |bounds_info| {
@@ -1942,12 +1963,19 @@ pub const Font = struct {
     /// after `numberOfHMetrics` reuse the last advance width and provide only a
     /// per-glyph left side bearing.
     pub fn horizontalMetrics(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!HorizontalMetricInfo {
-        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         // Horizontal metric tables are borrowed from caller-owned font bytes.
         // Revalidate the hhea/hmtx contract at this lazy API boundary so a
         // post-parse mutation cannot make the cached metric count reinterpret
         // malformed header bytes or read through a now-shortened hmtx record.
-        const metric_count = try self.validateHorizontalMetricsForRead();
+        return try self.horizontalMetricsForReadMode(glyph_id, .revalidate);
+    }
+
+    fn horizontalMetricsForReadMode(self: *const Font, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!HorizontalMetricInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const metric_count = switch (read_mode) {
+            .revalidate => try self.validateHorizontalMetricsForRead(),
+            .parsed => self.number_of_h_metrics,
+        };
         return try readHorizontalMetricAt(self.data, self.hmtx, metric_count, glyph_id);
     }
 
@@ -3418,48 +3446,66 @@ pub const Font = struct {
                 max_component_depth,
             );
         }
-        return self.glyphOutlineFromParsedTables(allocator, glyph_id, true);
+        return self.glyphOutlineFromParsedTables(allocator, glyph_id, .revalidate);
     }
 
     pub fn glyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.cff2 != null) {
-            return (try self.cff2GlyphOutlineAtCoords(allocator, glyph_id, normalized_coords)) orelse error.UnsupportedGlyph;
+            return (try self.cff2GlyphOutlineAtCoordsPrepared(allocator, glyph_id, normalized_coords, .revalidate)) orelse error.UnsupportedGlyph;
         }
         if (self.format == .truetype and self.gvar != null) {
-            return try self.glyfGlyphOutlineAtCoords(allocator, glyph_id, normalized_coords);
+            return try self.glyfGlyphOutlineAtCoords(allocator, glyph_id, normalized_coords, .revalidate);
         }
         return try self.glyphOutline(allocator, glyph_id);
     }
 
-    fn glyfGlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
+    /// Build a variation-aware outline for renderers that already trust Font.parse.
+    ///
+    /// This mirrors `glyphOutlineForRaster()` for variable CFF2/glyf outlines:
+    /// public APIs keep their borrowed-byte checksum defenses, while raster
+    /// loops can avoid revalidating an immutable parsed font once per glyph.
+    pub fn glyphOutlineForRasterAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        if (normalized_coords.len == 0) return try self.glyphOutlineForRaster(allocator, glyph_id);
+        if (self.cff2 != null) {
+            return (try self.cff2GlyphOutlineAtCoordsPrepared(allocator, glyph_id, normalized_coords, .parsed)) orelse error.UnsupportedGlyph;
+        }
+        if (self.format == .truetype and self.gvar != null) {
+            return try self.glyfGlyphOutlineAtCoords(allocator, glyph_id, normalized_coords, .parsed);
+        }
+        return try self.glyphOutlineForRaster(allocator, glyph_id);
+    }
+
+    fn glyfGlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
         const data = try self.glyphData(glyph_id);
-        if (data.len == 0) return try self.glyphOutline(allocator, glyph_id);
+        if (data.len == 0) return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
         const contour_count = try bin.readI16At(data, 0);
-        if (contour_count < 0) return try self.glyfCompoundGlyphOutlineAtCoords(allocator, glyph_id, data, normalized_coords);
-        const metrics = try self.horizontalMetrics(glyph_id);
+        if (contour_count < 0) return try self.glyfCompoundGlyphOutlineAtCoords(allocator, glyph_id, data, normalized_coords, read_mode);
+        const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
         const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
         const target_count = try self.gvarTargetCount(glyph_id);
         const has_delta = try allocator.alloc(bool, target_count);
         defer allocator.free(has_delta);
-        const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, target_count, has_delta)) orelse return try self.glyphOutline(allocator, glyph_id);
+        const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
         defer allocator.free(deltas);
         try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
         try applyGvarSimpleGlyphMetricDeltas(&outline, default_bounds, metrics, deltas, target_count - 4);
         return outline;
     }
 
-    fn glyfCompoundGlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, data: []const u8, normalized_coords: []const f32) FontError!glyph_mod.GlyphOutline {
-        const metrics = try self.horizontalMetrics(glyph_id);
+    fn glyfCompoundGlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, data: []const u8, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
+        const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
         const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
-        try self.appendCompoundGlyphAtCoords(&outline, data, Transform.identity(), 1, glyph_id, normalized_coords);
+        try self.appendCompoundGlyphAtCoords(&outline, data, Transform.identity(), 1, glyph_id, normalized_coords, read_mode);
         outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
-        if (try self.gvarPhantomPointDeltasAtCoords(allocator, glyph_id, normalized_coords)) |phantom| {
+        if (try self.gvarPhantomPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, read_mode)) |phantom| {
             applyGvarGlyphMetricDeltas(&outline, default_bounds, metrics, phantom);
         }
         return outline;
@@ -3474,11 +3520,18 @@ pub const Font = struct {
         // repeated document-level validation work. Keep `glyphOutline()` as the
         // strict defensive API for callers that need post-parse mutation checks,
         // and use this parsed-font fast path for normal rendering.
-        return self.glyphOutlineFromParsedTables(allocator, glyph_id, false);
+        return self.glyphOutlineFromParsedTables(allocator, glyph_id, .parsed);
     }
 
-    fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, strict_revalidate: bool) FontError!glyph_mod.GlyphOutline {
-        const metrics = try self.horizontalMetrics(glyph_id);
+    fn glyphOutlineForReadMode(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
+        return switch (read_mode) {
+            .revalidate => try self.glyphOutline(allocator, glyph_id),
+            .parsed => try self.glyphOutlineFromParsedTables(allocator, glyph_id, .parsed),
+        };
+    }
+
+    fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
+        const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
         const bounds = if (self.format == .truetype)
             try self.glyphBoundsFromParsedTables(glyph_id)
         else
@@ -3488,7 +3541,7 @@ pub const Font = struct {
         if (self.format == .truetype) {
             try self.appendGlyphOutline(&outline, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
         } else if (self.cff2) |cff2| {
-            if (strict_revalidate) {
+            if (read_mode.shouldRevalidate()) {
                 try validateSfntTableChecksum(self.data, cff2);
                 try validateCff2Table(self.data, cff2);
             }
@@ -3595,7 +3648,7 @@ pub const Font = struct {
         }
     }
 
-    fn appendGlyphOutlineAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId, transform: Transform, depth: u8, normalized_coords: []const f32) FontError!void {
+    fn appendGlyphOutlineAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId, transform: Transform, depth: u8, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
         if (depth > 8) return error.CompoundDepthExceeded;
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return;
@@ -3604,14 +3657,14 @@ pub const Font = struct {
             const target_count = try self.gvarTargetCount(glyph_id);
             const has_delta = try outline.allocator.alloc(bool, target_count);
             defer outline.allocator.free(has_delta);
-            const deltas = (try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, has_delta)) orelse {
+            const deltas = (try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse {
                 try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null, null);
                 return;
             };
             defer outline.allocator.free(deltas);
             try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, deltas, has_delta);
         } else {
-            try self.appendCompoundGlyphAtCoords(outline, data, transform, depth + 1, glyph_id, normalized_coords);
+            try self.appendCompoundGlyphAtCoords(outline, data, transform, depth + 1, glyph_id, normalized_coords, read_mode);
         }
     }
 
@@ -3657,9 +3710,9 @@ pub const Font = struct {
         }
     }
 
-    fn appendCompoundGlyphAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, data: []const u8, parent_transform: Transform, depth: u8, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!void {
+    fn appendCompoundGlyphAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, data: []const u8, parent_transform: Transform, depth: u8, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
         const target_count = try self.gvarTargetCount(glyph_id);
-        const maybe_deltas = try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, null);
+        const maybe_deltas = try self.gvarPointDeltasAtCoordsPrepared(outline.allocator, glyph_id, normalized_coords, target_count, null, read_mode);
         defer if (maybe_deltas) |deltas| outline.allocator.free(deltas);
 
         var r = bin.Reader.init(data);
@@ -3701,7 +3754,7 @@ pub const Font = struct {
                 child.xy = f2dot14(try r.readI16());
                 child.yy = f2dot14(try r.readI16());
             }
-            try self.appendGlyphOutlineAtCoords(outline, component_glyph, parent_transform.mul(child), depth, normalized_coords);
+            try self.appendGlyphOutlineAtCoords(outline, component_glyph, parent_transform.mul(child), depth, normalized_coords, read_mode);
             if ((flags & 0x0020) == 0) break;
         }
     }

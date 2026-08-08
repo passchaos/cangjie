@@ -980,6 +980,59 @@ test "CFF2 raster outline uses parsed-font fast path" {
     try std.testing.expectEqual(@as(i16, 50), outline.bounds.y_max);
 }
 
+test "CFF2 variation raster outline uses parsed-font fast path" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCff2VariationOtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var cff2_tail: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "CFF2")) cff2_tail = table.offset + table.length - 1;
+    }
+    bytes[cff2_tail orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.glyphOutlineAtCoords(allocator, 0, &.{0.5}));
+    var outline = try font.glyphOutlineForRasterAtCoords(allocator, 0, &.{0.5});
+    defer outline.deinit();
+    try std.testing.expectEqual(@as(i16, 60), outline.bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 70), outline.bounds.x_max);
+    try std.testing.expectEqual(@as(f32, 60), outline.commands.items[0].move_to.x);
+    try std.testing.expectEqual(@as(f32, 70), outline.commands.items[1].line_to.x);
+}
+
+test "gvar raster outline uses parsed-font fast path" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarDeltaTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var gvar_tail: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "gvar")) gvar_tail = table.offset + table.length - 1;
+    }
+    bytes[gvar_tail orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.glyphOutlineAtCoords(allocator, 1, &.{0.5}));
+    var outline = try font.glyphOutlineForRasterAtCoords(allocator, 1, &.{0.5});
+    defer outline.deinit();
+    try std.testing.expectEqual(@as(i16, 5), outline.bounds.x_min);
+    try std.testing.expectEqual(@as(f32, 5), outline.commands.items[0].move_to.x);
+    try std.testing.expectEqual(@as(u16, 809), outline.advance_width);
+}
+
 test "MATH constants metadata is exposed when present" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

@@ -457,7 +457,7 @@ pub const Rasterizer = struct {
             var outline = if (normalized_variation_coords.len == 0)
                 try run.font.glyphOutlineForRaster(self.allocator, position.glyph_id)
             else
-                try run.font.glyphOutlineAtCoords(self.allocator, position.glyph_id, normalized_variation_coords);
+                try run.font.glyphOutlineForRasterAtCoords(self.allocator, position.glyph_id, normalized_variation_coords);
             defer outline.deinit();
             try self.renderGlyph(target, &outline, pen_x + position.x_offset, baseline_y + position.y_offset, run.font_size, run.font.units_per_em);
             pen_x += position.x_advance;
@@ -579,7 +579,7 @@ pub const Rasterizer = struct {
         return if (normalized_variation_coords.len == 0)
             try font.glyphOutlineForRaster(self.allocator, glyph_id)
         else
-            try font.glyphOutlineAtCoords(self.allocator, glyph_id, normalized_variation_coords);
+            try font.glyphOutlineForRasterAtCoords(self.allocator, glyph_id, normalized_variation_coords);
     }
 
     fn renderSvgGlyphMask(self: *Rasterizer, target: *RenderTarget, outline: *const glyph_mod.GlyphOutline, transform: SvgTransform, view_box: ViewBox, x: f32, baseline_y: f32, font_size: f32) !void {

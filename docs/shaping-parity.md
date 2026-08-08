@@ -165,6 +165,12 @@ Current local snapshot after the Nastaliq parity work:
   baseline and `964 ns/glyph` candidate. A follow-up `perf` sample no longer
   showed the common filter as an out-of-line symbol; only the genuinely complex
   GPOS path remained, at about `0.2%`.
+- Recording whether an accelerated GSUB chaining lookup has any second input
+  avoids resolving the next unignored glyph for its single-input subtables.
+  Amiri contains 26 coverage-only chaining lookups whose every subtable has one
+  input. A same-session nine-sample `fa-thelittleprince` comparison reduced the
+  median from `1612 ns/glyph` to `1602 ns/glyph`, about `0.6%`; Roboto
+  `en-words` remained effectively flat (`962 ns/glyph` in both runs).
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

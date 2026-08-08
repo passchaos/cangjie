@@ -108,6 +108,7 @@ pub const LookupAccelerator = struct {
     ligature_subst: LigatureSubstAccelerator = .{},
     context_class_subtables: []const ContextClassSubtableAccelerator = &.{},
     chaining_coverage_only: bool = false,
+    chaining_needs_second_input: bool = false,
     chaining_input_digest: GlyphDigest = .{},
     chaining_subtable_digests: []const GlyphDigest = &.{},
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
@@ -1020,6 +1021,7 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
     errdefer allocator.free(chaining_subtables);
     @memset(chaining_subtables, .{});
     var saw_input_coverage = false;
+    var needs_second_input = false;
     for (0..subtable_count) |subtable_i| {
         const raw_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
         const subtable_offset = if (extension_wrapped)
@@ -1032,6 +1034,7 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos));
         try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
         if (parsed_subtable.input_count > 1) {
+            needs_second_input = true;
             const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 2));
             chaining_subtables[subtable_i].second_input_coverage_offset = second_coverage_offset;
             chaining_subtables[subtable_i].second_input_digest = try coverageDigest(table, second_coverage_offset);
@@ -1062,6 +1065,7 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         .single_subst = single_subst,
         .extension_lookup_type = extension_lookup_type_value,
         .chaining_coverage_only = true,
+        .chaining_needs_second_input = needs_second_input,
         .chaining_input_digest = digest,
         .chaining_subtable_digests = subtable_digests,
         .chaining_subtables = chaining_subtables,
@@ -3492,6 +3496,69 @@ fn parseChainingCoverageSubtable(table: Table, subtable_offset: usize) GsubError
     };
 }
 
+test "GSUB chaining accelerator records whether a second input is required" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 68;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 1);
+    writeU16Test(&bytes, 12, 4);
+
+    const lookup = 14;
+    writeU16Test(&bytes, lookup + 0, 6);
+    writeU16Test(&bytes, lookup + 2, 0);
+    writeU16Test(&bytes, lookup + 4, 1);
+    writeU16Test(&bytes, lookup + 6, 8);
+
+    const chain = lookup + 8;
+    writeU16Test(&bytes, chain + 0, 3);
+    writeU16Test(&bytes, chain + 2, 0);
+    writeU16Test(&bytes, chain + 4, 1);
+    writeU16Test(&bytes, chain + 6, 12);
+    writeU16Test(&bytes, chain + 8, 0);
+    writeU16Test(&bytes, chain + 10, 0);
+    writeCoverage1(&bytes, chain + 12, 1);
+
+    var accelerator = try buildChainingCoverageLookupAccelerator(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        lookup,
+        1,
+        false,
+        .{},
+        null,
+        allocator,
+    );
+    try std.testing.expect(!accelerator.chaining_needs_second_input);
+    {
+        var accelerators = [_]LookupAccelerator{accelerator};
+        deinitLookupAcceleratorContents(allocator, &accelerators);
+    }
+
+    writeU16Test(&bytes, chain + 4, 2);
+    writeU16Test(&bytes, chain + 6, 14);
+    writeU16Test(&bytes, chain + 8, 20);
+    writeU16Test(&bytes, chain + 10, 0);
+    writeU16Test(&bytes, chain + 12, 0);
+    writeCoverage1(&bytes, chain + 14, 1);
+    writeCoverage1(&bytes, chain + 20, 2);
+
+    accelerator = try buildChainingCoverageLookupAccelerator(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        lookup,
+        1,
+        false,
+        .{},
+        null,
+        allocator,
+    );
+    defer {
+        var accelerators = [_]LookupAccelerator{accelerator};
+        deinitLookupAcceleratorContents(allocator, &accelerators);
+    }
+    try std.testing.expect(accelerator.chaining_needs_second_input);
+}
+
 fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: ?*const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
     var pos: usize = 0;
     while (pos < glyphs.items.len) {
@@ -3502,7 +3569,10 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
             const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, current_glyph) orelse continue;
-            const second_glyph_index = nextUnignoredGlyphIndex(glyphs.items, pos + 1, lookup_flag, options, false, pos);
+            const second_glyph_index = if (accel.chaining_needs_second_input)
+                nextUnignoredGlyphIndex(glyphs.items, pos + 1, lookup_flag, options, false, pos)
+            else
+                null;
             const second_glyph = if (second_glyph_index) |index| glyphs.items[index] else null;
             var third_glyph_index: ?usize = null;
             var third_glyph_resolved = false;

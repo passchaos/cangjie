@@ -108,6 +108,13 @@ without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
+Paragraph shaping now retains glyph atoms in logical source order and applies
+bidi visual ordering only after line ranges are known. Each line builds its own
+bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore
+reorders independently when a width change creates different line boundaries.
+This follows Parley's per-line ordering model while keeping standalone shaping
+APIs in their existing HarfBuzz-compatible visual buffer order.
+
 ## Generated Data And Reproducibility
 
 The runtime table is generated from `unicode-linebreak 0.1.5`'s `tables.rs`:
@@ -165,15 +172,14 @@ Future changes must preserve these rules:
 
 1. Extract generated UAX #29 grapheme analysis from `unicode.zig` and expose a
    streaming boundary API shared by shaping and emergency wrapping.
-2. Move bidi visual reordering from whole-paragraph shaping to final lines.
-3. Add explicit shaping-cluster safety flags modeled after HarfBuzz and merge
+2. Add explicit shaping-cluster safety flags modeled after HarfBuzz and merge
    them with UAX #14 opportunities.
-4. Consolidate plan caches and transient arrays into reusable shaping/layout
+3. Consolidate plan caches and transient arrays into reusable shaping/layout
    contexts, following HarfBuzz and Swash lifetime boundaries.
-5. Add optional dictionary segmentation and hyphenation as tailoring layers;
+4. Add optional dictionary segmentation and hyphenation as tailoring layers;
    do not bake language-specific guesses into the default UAX #14 state
    machine.
-6. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
+5. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
    does not by itself establish end-to-end superiority over reference engines.
 
 The standalone iterator benchmark is:

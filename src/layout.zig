@@ -706,6 +706,7 @@ pub const ShapedParagraph = struct {
     line_breaks: []const unicode.LineBreak,
     default_metrics: BaselineMetrics,
     shape_key: ShapePlanKey,
+    needs_bidi_reorder: bool,
 
     pub fn deinit(self: *ShapedParagraph) void {
         self.allocator.free(self.line_breaks);
@@ -740,6 +741,9 @@ pub const ShapedParagraph = struct {
             self.grapheme_clusters,
             self.line_breaks,
         );
+        if (self.needs_bidi_reorder) {
+            try applyParagraphLineBidiVisualOrder(&reflow.buffer, self.text, options.direction);
+        }
         return reflow.buffer.paragraphLayout();
     }
 };
@@ -1659,7 +1663,7 @@ pub const TextShaper = struct {
         try validateParagraphOptions(options);
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
         const shape_options = shapeOptionsForParagraph(options);
-        const shaped = try shapeUtf8CascadeWithCaches(
+        _ = try shapeUtf8CascadeWithCaches(
             cascade,
             fallback_cache,
             metrics_cache,
@@ -1670,12 +1674,14 @@ pub const TextShaper = struct {
             font_size,
             shape_options,
         );
+        try normalizeParagraphGlyphsToLogicalOrder(buffer);
+        const logical_shaped = buffer.shapedText();
 
         const owned_text = try allocator.dupe(u8, text);
         errdefer allocator.free(owned_text);
-        const owned_glyphs = try allocator.dupe(GlyphPosition, shaped.glyphs);
+        const owned_glyphs = try allocator.dupe(GlyphPosition, logical_shaped.glyphs);
         errdefer allocator.free(owned_glyphs);
-        const owned_runs = try allocator.dupe(CascadeRun, shaped.runs);
+        const owned_runs = try allocator.dupe(CascadeRun, logical_shaped.runs);
         errdefer allocator.free(owned_runs);
         const grapheme_clusters = try unicode.itemizeGraphemeClusters(allocator, text);
         errdefer allocator.free(grapheme_clusters);
@@ -1691,6 +1697,7 @@ pub const TextShaper = struct {
             .line_breaks = line_breaks,
             .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
             .shape_key = ShapePlanKey.fromText(text, shape_options),
+            .needs_bidi_reorder = options.direction == .rtl or textHasRtlBidiClass(text),
         };
     }
 
@@ -1720,14 +1727,22 @@ pub const TextShaper = struct {
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
         _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
+        try normalizeParagraphGlyphsToLogicalOrder(buffer);
         try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null);
+        if (options.direction == .rtl or textHasRtlBidiClass(text)) {
+            try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
+        }
         return buffer.paragraphLayout();
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try validateParagraphOptions(options);
         _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
+        try normalizeParagraphGlyphsToLogicalOrder(buffer);
         try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null);
+        if (options.direction == .rtl or textHasRtlBidiClass(text)) {
+            try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
+        }
         return buffer.paragraphLayout();
     }
 
@@ -1840,6 +1855,12 @@ fn validateParagraphOptions(options: ParagraphOptions) !void {
 fn shapeOptionsForParagraph(options: ParagraphOptions) ShapeOptions {
     return .{
         .direction = options.direction,
+        // Paragraph shaping retains logical source order so line breaking sees
+        // monotonic clusters. Individual script segments still shape in their
+        // OpenType-native direction; visual bidi order is applied after each
+        // line's source range is known.
+        .reorder_bidi = false,
+        .native_direction_shaping = true,
         .script_tag = options.script_tag,
         .language_tag = options.language_tag,
         .features = options.features,
@@ -2078,6 +2099,8 @@ fn applyBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: Text
             glyph_run_indices,
             glyph_cluster_index,
             seen,
+            0,
+            old_glyphs.len,
             item,
             &visual_glyphs,
             &visual_run_indices,
@@ -2116,6 +2139,8 @@ fn appendVisualGlyphsForBidiItem(
     glyph_run_indices: []const usize,
     glyph_cluster_index: []const BidiGlyphClusterEntry,
     seen: []bool,
+    allowed_glyph_start: usize,
+    allowed_glyph_end: usize,
     item: unicode.BidiMapItem,
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
@@ -2126,6 +2151,7 @@ fn appendVisualGlyphsForBidiItem(
         while (entry_index > range.start) {
             entry_index -= 1;
             const glyph_index = glyph_cluster_index[entry_index].glyph_index;
+            if (glyph_index < allowed_glyph_start or glyph_index >= allowed_glyph_end) continue;
             if (seen[glyph_index]) continue;
             const glyph = glyphs[glyph_index];
             const visual_codepoint = if (@max(glyph.source_byte_len, 1) == item.byte_len)
@@ -2139,6 +2165,7 @@ fn appendVisualGlyphsForBidiItem(
 
     for (glyph_cluster_index[range.start..range.end]) |entry| {
         const glyph_index = entry.glyph_index;
+        if (glyph_index < allowed_glyph_start or glyph_index >= allowed_glyph_end) continue;
         if (seen[glyph_index]) continue;
         const glyph = glyphs[glyph_index];
         const visual_codepoint = if (@max(glyph.source_byte_len, 1) == item.byte_len)
@@ -2259,6 +2286,170 @@ fn recomputeRunOffsets(buffer: *LayoutBuffer) void {
             y_offset += glyph.y_advance;
         }
     }
+}
+
+fn normalizeParagraphGlyphsToLogicalOrder(buffer: *LayoutBuffer) !void {
+    if (buffer.glyphs.items.len < 2) return;
+    var monotonic = true;
+    for (buffer.glyphs.items[1..], buffer.glyphs.items[0 .. buffer.glyphs.items.len - 1]) |current, previous| {
+        if (current.cluster < previous.cluster) {
+            monotonic = false;
+            break;
+        }
+    }
+    if (monotonic) return;
+
+    const old_runs = try buffer.allocator.dupe(CascadeRun, buffer.runs.items);
+    defer buffer.allocator.free(old_runs);
+    var glyph_run_indices = try buffer.allocator.alloc(usize, buffer.glyphs.items.len);
+    defer buffer.allocator.free(glyph_run_indices);
+    for (glyph_run_indices) |*slot| slot.* = 0;
+    for (old_runs, 0..) |run, run_index| {
+        const end = @min(buffer.glyphs.items.len, run.glyph_start + run.glyph_len);
+        if (run.glyph_start >= end) continue;
+        for (glyph_run_indices[run.glyph_start..end]) |*slot| slot.* = run_index;
+    }
+
+    const order = try buffer.allocator.alloc(usize, buffer.glyphs.items.len);
+    defer buffer.allocator.free(order);
+    for (order, 0..) |*slot, index| slot.* = index;
+    const Context = struct {
+        glyphs: []const GlyphPosition,
+
+        fn lessThan(context: @This(), lhs: usize, rhs: usize) bool {
+            const lhs_cluster = context.glyphs[lhs].cluster;
+            const rhs_cluster = context.glyphs[rhs].cluster;
+            if (lhs_cluster == rhs_cluster) return lhs < rhs;
+            return lhs_cluster < rhs_cluster;
+        }
+    };
+    std.sort.heap(usize, order, Context{ .glyphs = buffer.glyphs.items }, Context.lessThan);
+
+    const old_glyphs = try buffer.allocator.dupe(GlyphPosition, buffer.glyphs.items);
+    defer buffer.allocator.free(old_glyphs);
+    const reordered_run_indices = try buffer.allocator.alloc(usize, order.len);
+    defer buffer.allocator.free(reordered_run_indices);
+    for (order, 0..) |old_index, new_index| {
+        buffer.glyphs.items[new_index] = old_glyphs[old_index];
+        reordered_run_indices[new_index] = glyph_run_indices[old_index];
+    }
+    try rebuildRunsForVisualGlyphs(buffer, old_runs, reordered_run_indices);
+    recomputeRunOffsets(buffer);
+}
+
+fn applyParagraphLineBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection) !void {
+    if (buffer.glyphs.items.len == 0 or buffer.lines.items.len == 0) return;
+
+    const old_runs = try buffer.allocator.dupe(CascadeRun, buffer.runs.items);
+    defer buffer.allocator.free(old_runs);
+    const old_glyphs = try buffer.allocator.dupe(GlyphPosition, buffer.glyphs.items);
+    defer buffer.allocator.free(old_glyphs);
+    var glyph_run_indices = try buffer.allocator.alloc(usize, old_glyphs.len);
+    defer buffer.allocator.free(glyph_run_indices);
+    for (glyph_run_indices) |*slot| slot.* = 0;
+    for (old_runs, 0..) |run, run_index| {
+        const end = @min(old_glyphs.len, run.glyph_start + run.glyph_len);
+        if (run.glyph_start >= end) continue;
+        for (glyph_run_indices[run.glyph_start..end]) |*slot| slot.* = run_index;
+    }
+    const glyph_cluster_index = try buildBidiGlyphClusterIndex(buffer.allocator, old_glyphs);
+    defer buffer.allocator.free(glyph_cluster_index);
+    const seen = try buffer.allocator.alloc(bool, old_glyphs.len);
+    defer buffer.allocator.free(seen);
+    @memset(seen, false);
+
+    var visual_glyphs: std.ArrayList(GlyphPosition) = .empty;
+    defer visual_glyphs.deinit(buffer.allocator);
+    var visual_run_indices: std.ArrayList(usize) = .empty;
+    defer visual_run_indices.deinit(buffer.allocator);
+
+    const base_direction: unicode.BidiClass = if (direction == .rtl) .rtl else .ltr;
+    for (buffer.lines.items) |*line| {
+        const visual_start = visual_glyphs.items.len;
+        const old_line_start = line.glyph_start;
+        const old_line_end = old_line_start + line.glyph_len;
+        if (line.byte_len != 0 and old_line_start < old_line_end) {
+            var bidi_map = try unicode.buildBidiMap(
+                buffer.allocator,
+                text[line.byte_start..line.byteEnd()],
+                base_direction,
+            );
+            defer bidi_map.deinit();
+            for (bidi_map.items) |item_value| {
+                var item = item_value;
+                item.byte_start += line.byte_start;
+                try appendVisualGlyphsForBidiItem(
+                    buffer.allocator,
+                    old_glyphs,
+                    old_runs,
+                    null,
+                    glyph_run_indices,
+                    glyph_cluster_index,
+                    seen,
+                    old_line_start,
+                    old_line_end,
+                    item,
+                    &visual_glyphs,
+                    &visual_run_indices,
+                );
+            }
+        }
+        // Whitespace discarded by wrapping and multi-scalar source folding can
+        // leave glyphs outside the map. Preserve only unmatched glyphs that
+        // belong to this logical line; discarded whitespace intentionally
+        // stays absent from every visual line.
+        for (old_line_start..old_line_end) |glyph_index| {
+            if (seen[glyph_index]) continue;
+            try appendVisualGlyph(
+                buffer.allocator,
+                old_glyphs,
+                old_runs,
+                null,
+                glyph_run_indices,
+                seen,
+                glyph_index,
+                null,
+                &visual_glyphs,
+                &visual_run_indices,
+            );
+        }
+        line.glyph_start = visual_start;
+        line.glyph_len = visual_glyphs.items.len - visual_start;
+    }
+
+    // Preserve shaped glyphs omitted from visual lines (normally wrap
+    // whitespace) after the visible stream so source/caret metadata remains
+    // available without assigning them to a line.
+    for (old_glyphs, 0..) |_, glyph_index| {
+        if (seen[glyph_index]) continue;
+        try appendVisualGlyph(
+            buffer.allocator,
+            old_glyphs,
+            old_runs,
+            null,
+            glyph_run_indices,
+            seen,
+            glyph_index,
+            null,
+            &visual_glyphs,
+            &visual_run_indices,
+        );
+    }
+    if (visual_glyphs.items.len != old_glyphs.len) return error.InvalidBidiMap;
+
+    buffer.glyphs.clearRetainingCapacity();
+    try buffer.glyphs.appendSlice(buffer.allocator, visual_glyphs.items);
+    try rebuildRunsForVisualGlyphs(buffer, old_runs, visual_run_indices.items);
+    for (buffer.lines.items) |*line| {
+        const run_range = runRangeForGlyphs(
+            buffer.runs.items,
+            line.glyph_start,
+            line.glyph_start + line.glyph_len,
+        );
+        line.run_start = run_range.start;
+        line.run_len = run_range.len;
+    }
+    recomputeRunOffsets(buffer);
 }
 
 fn buildParagraphLines(

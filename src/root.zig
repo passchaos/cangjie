@@ -6201,6 +6201,90 @@ test "maps logical carets onto visually reordered bidi glyphs" {
     try std.testing.expect(digit_selection.x >= 0);
 }
 
+test "mixed bidi paragraphs wrap and reorder each visual line independently" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+
+    const text = "AB אב 12 אב";
+    const cascade = FontCascade.init(&fonts);
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, text, 20, .{
+        .max_width = 60,
+        .line_height = 24,
+        .direction = .ltr,
+    });
+
+    try std.testing.expectEqual(@as(usize, 4), paragraph.lines.len);
+    const expected_codepoints = [_][]const u21{
+        &.{ 'A', 'B' },
+        &.{ 0x05d1, 0x05d0 },
+        &.{ '1', '2' },
+        &.{ 0x05d1, 0x05d0 },
+    };
+    const expected_byte_starts = [_]usize{ 0, 3, 8, 11 };
+    const expected_byte_lens = [_]usize{ 3, 5, 3, 4 };
+    for (paragraph.lines, 0..) |line, line_index| {
+        try std.testing.expectEqual(expected_byte_starts[line_index], line.byte_start);
+        try std.testing.expectEqual(expected_byte_lens[line_index], line.byte_len);
+        const line_glyphs = line.glyphs(paragraph);
+        try std.testing.expectEqual(expected_codepoints[line_index].len, line_glyphs.len);
+        for (line_glyphs, expected_codepoints[line_index]) |glyph, expected| {
+            try std.testing.expectEqual(expected, glyph.codepoint);
+        }
+    }
+    try std.testing.expectEqual(text.len, paragraph.lines[paragraph.lines.len - 1].byteEnd());
+}
+
+test "paragraph shaping retains logical order before per-line bidi reordering" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedBidiMirrorTtfWithNames(
+        allocator,
+        "Logical Hebrew",
+        "Regular",
+        "Logical Hebrew Regular",
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "אב",
+        20,
+        .{ .max_width = 100, .direction = .ltr },
+    );
+    defer paragraph.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2 }, &.{
+        paragraph.glyphs[0].cluster,
+        paragraph.glyphs[1].cluster,
+    });
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const visual = try paragraph.layout(&reflow, .{
+        .max_width = 100,
+        .direction = .ltr,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 2, 0 }, &.{
+        visual.glyphs[0].cluster,
+        visual.glyphs[1].cluster,
+    });
+}
+
 test "defaults right-to-left paragraph alignment to the right edge" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

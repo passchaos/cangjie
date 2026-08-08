@@ -126,6 +126,7 @@ pub const VisibleByteRange = @import("buffer.zig").VisibleByteRange;
 pub const VisibleLineRange = @import("buffer.zig").VisibleLineRange;
 pub const TextBuffer = @import("buffer.zig").TextBuffer;
 pub const TextEditor = @import("editor.zig").TextEditor;
+pub const BitmapGlyphInfo = @import("font.zig").BitmapGlyphInfo;
 pub const BitmapStrikeInfo = @import("font.zig").BitmapStrikeInfo;
 pub const BitmapStrikeSource = @import("font.zig").BitmapStrikeSource;
 pub const ColorLayer = @import("font.zig").ColorLayer;
@@ -777,6 +778,18 @@ test "parses CBDT CBLC PNG bitmap glyphs" {
     try std.testing.expectEqual(@as(GlyphId, 1), strikes[0].end_glyph);
 
     const glyph_id = try font.glyphIndex('A');
+    const bitmap_info = (try font.bitmapGlyphInfo(glyph_id, 16)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.cblc_cbdt, bitmap_info.source);
+    try std.testing.expectEqual(glyph_id, bitmap_info.glyph_id);
+    try std.testing.expectEqual(@as(u16, 16), bitmap_info.ppem);
+    try std.testing.expectEqual(@as(i16, 2), bitmap_info.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 13), bitmap_info.origin_offset_y);
+    try std.testing.expectEqual(@as(u32, 1), bitmap_info.width);
+    try std.testing.expectEqual(@as(u32, 1), bitmap_info.height);
+    try std.testing.expectEqual(@as(?u16, 17), bitmap_info.image_format);
+    try std.testing.expect(bitmap_info.is_png);
+    try std.testing.expect(bitmap_info.data_length > 0);
+
     const bitmap = (try font.bitmapGlyphPng(glyph_id, 16)) orelse return error.MissingBitmapGlyph;
     try std.testing.expectEqual(@as(u16, 16), bitmap.ppem);
     try std.testing.expectEqual(@as(i16, 2), bitmap.origin_offset_x);

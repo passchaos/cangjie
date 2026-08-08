@@ -624,15 +624,15 @@ pub const Rasterizer = struct {
             coverage.* = @intCast(@divTrunc(clamped_count * 255, sample_count));
         }
         const sample_axis_usize: usize = @intCast(sample_axis);
-        var inline_sample_offsets: [16]f32 = undefined;
-        const sample_offsets = if (sample_axis_usize <= inline_sample_offsets.len)
-            inline_sample_offsets[0..sample_axis_usize]
-        else
-            try self.allocator.alloc(f32, sample_axis_usize);
-        defer if (sample_axis_usize > inline_sample_offsets.len) self.allocator.free(sample_offsets);
-        for (sample_offsets, 0..) |*offset, sample_index| {
-            offset.* = (@as(f32, @floatFromInt(sample_index)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
-        }
+        var dynamic_sample_offsets: []f32 = &.{};
+        const sample_offsets: []const f32 = sampleOffsetsForAxis(sample_axis) orelse blk: {
+            dynamic_sample_offsets = try self.allocator.alloc(f32, sample_axis_usize);
+            for (dynamic_sample_offsets, 0..) |*offset, sample_index| {
+                offset.* = (@as(f32, @floatFromInt(sample_index)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
+            }
+            break :blk dynamic_sample_offsets;
+        };
+        defer if (dynamic_sample_offsets.len != 0) self.allocator.free(dynamic_sample_offsets);
         const row_width_i32 = max_x - min_x + 1;
         if (row_width_i32 <= 0) return;
         const row_width: usize = @intCast(row_width_i32);
@@ -822,6 +822,19 @@ const GlyphFillRule = enum {
     non_zero,
     even_odd,
 };
+
+const sample_offsets_1 = [_]f32{0.5};
+const sample_offsets_2 = [_]f32{ 0.25, 0.75 };
+const sample_offsets_4 = [_]f32{ 0.125, 0.375, 0.625, 0.875 };
+
+fn sampleOffsetsForAxis(sample_axis: i32) ?[]const f32 {
+    return switch (sample_axis) {
+        1 => &sample_offsets_1,
+        2 => &sample_offsets_2,
+        4 => &sample_offsets_4,
+        else => null,
+    };
+}
 
 fn lessThanWindingIntersection(_: void, lhs: WindingIntersection, rhs: WindingIntersection) bool {
     return lhs.x < rhs.x;

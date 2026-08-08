@@ -110,6 +110,8 @@ pub const LookupAccelerator = struct {
     context_class_subtables: []const ContextClassSubtableAccelerator = &.{},
     chaining_coverage_only: bool = false,
     chaining_needs_second_input: bool = false,
+    chaining_needs_backtrack: bool = false,
+    chaining_needs_single_input_lookahead: bool = false,
     chaining_input_digest: GlyphDigest = .{},
     chaining_subtable_digests: []const GlyphDigest = &.{},
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
@@ -195,8 +197,10 @@ const ChainingCoverageSubtable = struct {
     second_input_coverage_offset: usize = 0,
     third_input_digest: GlyphDigest = .{},
     third_input_coverage_offset: usize = 0,
+    first_backtrack_digest: GlyphDigest = .{},
     lookahead_offsets_pos: usize = 0,
     lookahead_count: u16 = 0,
+    first_lookahead_digest: GlyphDigest = .{},
     records_pos: usize = 0,
     subst_count: u16 = 0,
     fast_record_count: u16 = 0,
@@ -1053,6 +1057,8 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
     @memset(chaining_subtables, .{});
     var saw_input_coverage = false;
     var needs_second_input = false;
+    var needs_backtrack = false;
+    var needs_single_input_lookahead = false;
     for (0..subtable_count) |subtable_i| {
         const raw_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
         const subtable_offset = if (extension_wrapped)
@@ -1074,6 +1080,16 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
             const third_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 4));
             chaining_subtables[subtable_i].third_input_coverage_offset = third_coverage_offset;
             chaining_subtables[subtable_i].third_input_digest = try coverageDigest(table, third_coverage_offset);
+        }
+        if (parsed_subtable.backtrack_count != 0) {
+            needs_backtrack = true;
+            const first_backtrack_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.backtrack_offsets_pos));
+            chaining_subtables[subtable_i].first_backtrack_digest = try coverageDigest(table, first_backtrack_coverage_offset);
+        }
+        if (parsed_subtable.input_count == 1 and parsed_subtable.lookahead_count != 0) {
+            needs_single_input_lookahead = true;
+            const first_lookahead_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.lookahead_offsets_pos));
+            chaining_subtables[subtable_i].first_lookahead_digest = try coverageDigest(table, first_lookahead_coverage_offset);
         }
         const subtable_digest = try coverageDigest(table, coverage_offset);
         subtable_digests[subtable_i] = subtable_digest;
@@ -1099,6 +1115,8 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         .extension_lookup_type = extension_lookup_type_value,
         .chaining_coverage_only = true,
         .chaining_needs_second_input = needs_second_input,
+        .chaining_needs_backtrack = needs_backtrack,
+        .chaining_needs_single_input_lookahead = needs_single_input_lookahead,
         .chaining_input_digest = digest,
         .chaining_subtable_digests = subtable_digests,
         .chaining_subtables = chaining_subtables,
@@ -3814,7 +3832,7 @@ fn parseChainingCoverageSubtable(table: Table, subtable_offset: usize) GsubError
     };
 }
 
-test "GSUB chaining accelerator records whether a second input is required" {
+test "GSUB chaining accelerator records adjacent context requirements" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 68;
 
@@ -3848,6 +3866,8 @@ test "GSUB chaining accelerator records whether a second input is required" {
         allocator,
     );
     try std.testing.expect(!accelerator.chaining_needs_second_input);
+    try std.testing.expect(!accelerator.chaining_needs_backtrack);
+    try std.testing.expect(!accelerator.chaining_needs_single_input_lookahead);
     {
         var accelerators = [_]LookupAccelerator{accelerator};
         deinitLookupAcceleratorContents(allocator, &accelerators);
@@ -3875,6 +3895,39 @@ test "GSUB chaining accelerator records whether a second input is required" {
         deinitLookupAcceleratorContents(allocator, &accelerators);
     }
     try std.testing.expect(accelerator.chaining_needs_second_input);
+
+    // Convert the same fixture to one input with one backtrack and one
+    // lookahead. The accelerator must retain both adjacent coverage digests
+    // while the lookup-level flags avoid resolving absent regions.
+    {
+        var accelerators = [_]LookupAccelerator{accelerator};
+        deinitLookupAcceleratorContents(allocator, &accelerators);
+    }
+    writeU16Test(&bytes, chain + 2, 1);
+    writeU16Test(&bytes, chain + 4, 16);
+    writeU16Test(&bytes, chain + 6, 1);
+    writeU16Test(&bytes, chain + 8, 22);
+    writeU16Test(&bytes, chain + 10, 1);
+    writeU16Test(&bytes, chain + 12, 28);
+    writeU16Test(&bytes, chain + 14, 0);
+    writeCoverage1(&bytes, chain + 16, 3);
+    writeCoverage1(&bytes, chain + 22, 1);
+    writeCoverage1(&bytes, chain + 28, 4);
+
+    accelerator = try buildChainingCoverageLookupAccelerator(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        lookup,
+        1,
+        false,
+        .{},
+        null,
+        allocator,
+    );
+    try std.testing.expect(!accelerator.chaining_needs_second_input);
+    try std.testing.expect(accelerator.chaining_needs_backtrack);
+    try std.testing.expect(accelerator.chaining_needs_single_input_lookahead);
+    try std.testing.expect(accelerator.chaining_subtables[0].first_backtrack_digest.mayHave(3));
+    try std.testing.expect(accelerator.chaining_subtables[0].first_lookahead_digest.mayHave(4));
 }
 
 fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: ?*const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
@@ -3892,6 +3945,14 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             else
                 null;
             const second_glyph = if (second_glyph_index) |index| glyphs.items[index] else null;
+            const first_backtrack_glyph = if (accel.chaining_needs_backtrack)
+                previousUnignoredGlyph(glyphs.items, pos, lookup_flag, options, true, pos)
+            else
+                null;
+            const single_input_lookahead_glyph = if (accel.chaining_needs_single_input_lookahead)
+                nextUnignoredGlyph(glyphs.items, pos + 1, lookup_flag, options, true, pos)
+            else
+                null;
             var third_glyph_index: ?usize = null;
             var third_glyph_resolved = false;
             for (grouped_subtables) |subtable_i| {
@@ -3915,6 +3976,14 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
                         const index = third_glyph_index orelse continue;
                         const glyph = glyphs.items[index];
                         if (!subtable.third_input_digest.mayHave(glyph)) continue;
+                    }
+                    if (subtable.backtrack_count != 0) {
+                        const glyph = first_backtrack_glyph orelse continue;
+                        if (!subtable.first_backtrack_digest.mayHave(glyph)) continue;
+                    }
+                    if (subtable.input_count == 1 and subtable.lookahead_count != 0) {
+                        const glyph = single_input_lookahead_glyph orelse continue;
+                        if (!subtable.first_lookahead_digest.mayHave(glyph)) continue;
                     }
                     const result = if (subtable.backtrack_count == 0 and subtable.lookahead_count == 0 and subtable.input_count <= 3)
                         try applyAcceleratedChainingCoverageNoContextAt(table, subtable, glyphs, pos, second_glyph_index, third_glyph_index, allocator, options)

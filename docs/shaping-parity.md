@@ -224,6 +224,16 @@ Current local snapshot after the Nastaliq parity work:
   Amiri `fa-thelittleprince` was effectively flat at `1405.212` versus
   `1407.046 ns/glyph` (`+0.13%`, within run noise). Both corpora retained full
   in-process HarfBuzz parity.
+- Format-3 chaining accelerators now predecode the first backtrack and
+  single-input lookahead Coverage digests. Each candidate position resolves
+  those adjacent non-ignored glyphs at most once, then rejects incompatible
+  subtables before the full context matcher. A fixed-CPU-30 ABBA comparison
+  with four 15-sample medians per binary reduced Roboto `en-words` from
+  `432.245 ns/glyph` to `404.817 ns/glyph`, about `6.35%`; Amiri
+  `fa-thelittleprince` remained effectively flat at `1406.159` versus
+  `1408.387 ns/glyph` (`+0.16%`). Roboto lookup 4 profile time fell from about
+  `3.90 ms` to `2.10 ms`, and full Roboto and Amiri HarfBuzz parity remained
+  unchanged.
 - Predecoding xAdvance-only PairPos format-1 records into sorted native-endian
   `(first, second, advance)` records reduced the next same-session Roboto
   `en-words` median from about `627 ns/glyph` to `570 ns/glyph`, about `9%`.

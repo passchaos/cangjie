@@ -221,6 +221,12 @@ Current local snapshot after the Nastaliq parity work:
   subtable alternatives remain intact: a zero-valued format-1 pair still
   suppresses a later class-pair fallback. Full Roboto `en-words` and Amiri
   `fa-thelittleprince` continue to pass in-process HarfBuzz parity.
+- Extending the same accelerator to xAdvance-only PairPos format-2 subtables
+  predecoded first-glyph coverage, sparse class maps (including implicit class
+  zero), and the class matrix. The next eleven-sample Roboto `en-words` median
+  improved from about `569 ns/glyph` to `481 ns/glyph`, about `15.4%`.
+  GPOS lookup 1 profile time fell from about `18.7 ms` to `5.9 ms`; full Roboto
+  and Amiri corpus parity remained unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

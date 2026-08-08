@@ -271,6 +271,19 @@ Current local snapshot after the Nastaliq parity work:
   `1920.362 ns/glyph`), and Roboto `en-words` remained within noise
   (`406.237` versus `406.005 ns/glyph`). Full Amiri long-text and word-list
   plus Roboto word-list in-process HarfBuzz parity remained unchanged.
+- MarkBasePos accelerators now retain native-endian Coverage format-1 glyph
+  arrays and format-2 range records, preserving coverage indexes without
+  expanding large ranges. This removes repeated bounds checks and big-endian
+  reads from both mark and base searches. A fixed-CPU comparison with four
+  medians per binary improved Amiri `fa-thelittleprince` from
+  `1153.733 ns/glyph` to `1112.239 ns/glyph`, about `3.6%`; Roboto
+  `en-words` improved from `409.011 ns/glyph` to `406.619 ns/glyph`, about
+  `0.6%`, and Amiri `fa-words` improved from `1921.269 ns/glyph` to
+  `1907.787 ns/glyph`, about `0.7%`. The accelerator storage is 1,998 bytes
+  for Amiri and 3,712 bytes for Roboto. A follow-up profile reduced generic
+  GPOS `coverageIndex` from about `7.1%` to `3.8%` of sampled cycles and no
+  longer reports MarkBase collection as a separate hotspot. Full parity for
+  all three corpora remained unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

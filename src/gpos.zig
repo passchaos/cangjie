@@ -139,6 +139,7 @@ pub const LookupAccelerator = struct {
     pair_pos_coverage_glyphs: []const GlyphId = &.{},
     pair_pos_class_entries: []const PairClassEntry = &.{},
     pair_pos_class_matrix: []const i16 = &.{},
+    mark_to_base_subtables: []const MarkToBaseSubtable = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
@@ -176,6 +177,45 @@ const PairPosRecord = struct {
 const PairClassEntry = struct {
     glyph: GlyphId,
     class: u16,
+};
+
+const NativeCoverage = union(enum) {
+    glyphs: []const GlyphId,
+    ranges: []const ot_layout.GlyphRangeRecord,
+
+    fn index(self: NativeCoverage, glyph: GlyphId) ?usize {
+        switch (self) {
+            .glyphs => |glyphs| {
+                var lo: usize = 0;
+                var hi = glyphs.len;
+                while (lo < hi) {
+                    const mid = lo + (hi - lo) / 2;
+                    if (glyph < glyphs[mid]) {
+                        hi = mid;
+                    } else if (glyph > glyphs[mid]) {
+                        lo = mid + 1;
+                    } else {
+                        return mid;
+                    }
+                }
+                return null;
+            },
+            .ranges => |ranges| {
+                var lo: usize = 0;
+                var hi = ranges.len;
+                while (lo < hi) {
+                    const mid = lo + (hi - lo) / 2;
+                    if (glyph <= ranges[mid].end) {
+                        hi = mid;
+                    } else {
+                        lo = mid + 1;
+                    }
+                }
+                if (lo >= ranges.len or glyph < ranges[lo].start) return null;
+                return @as(usize, ranges[lo].value) + (@as(usize, glyph) - ranges[lo].start);
+            },
+        }
+    }
 };
 
 const SinglePosSubtable = struct {
@@ -407,6 +447,7 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
         allocator.free(accelerator.pair_pos_coverage_glyphs);
         allocator.free(accelerator.pair_pos_class_entries);
         allocator.free(accelerator.pair_pos_class_matrix);
+        deinitMarkToBaseSubtables(allocator, accelerator.mark_to_base_subtables);
         for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.chaining_groups);
         allocator.free(accelerator.chaining_group_slots);
@@ -453,6 +494,12 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     errdefer pair_pos_class_entries.deinit(allocator);
     var pair_pos_class_matrix = std.ArrayList(i16).empty;
     errdefer pair_pos_class_matrix.deinit(allocator);
+    const mark_to_base_subtables = if (lookup_type == 4)
+        try allocator.alloc(MarkToBaseSubtable, subtable_count)
+    else
+        try allocator.alloc(MarkToBaseSubtable, 0);
+    @memset(mark_to_base_subtables, .{});
+    errdefer deinitMarkToBaseSubtables(allocator, mark_to_base_subtables);
     var coverage_pairs = std.ArrayList(ChainingSubtablePair).empty;
     errdefer coverage_pairs.deinit(allocator);
     var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
@@ -482,6 +529,9 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                     allocator,
                 );
             }
+            if (mark_to_base_subtables.len != 0) {
+                mark_to_base_subtables[subtable_i] = try buildMarkToBaseSubtable(table, subtable_offset, allocator);
+            }
             if (chaining_subtables.len != 0) {
                 const parsed = try parseChainingCoveragePositioningSubtable(table, subtable_offset) orelse continue;
                 chaining_subtables[subtable_i] = parsed;
@@ -505,6 +555,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     errdefer allocator.free(accelerator.pair_pos_class_entries);
     accelerator.pair_pos_class_matrix = try pair_pos_class_matrix.toOwnedSlice(allocator);
     errdefer allocator.free(accelerator.pair_pos_class_matrix);
+    accelerator.mark_to_base_subtables = mark_to_base_subtables;
     if (coverage_pairs.items.len != 0) {
         accelerator.coverage_groups = try buildChainingSubtableGroups(coverage_pairs.items, allocator);
         accelerator.coverage_group_slots = try buildChainingGroupSlots(accelerator.coverage_groups, allocator);
@@ -1281,7 +1332,15 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
             1 => {}, // SinglePos needs whole-lookup subtable ordering; handled above.
             2 => {}, // PairPos needs whole-lookup subtable ordering; handled above.
             3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            4 => if (runMayHaveGdefMarks(glyphs, lookup_options)) try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            4 => if (runMayHaveGdefMarks(glyphs, lookup_options)) {
+                if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                    if (i < accelerator.mark_to_base_subtables.len) {
+                        try collectMarkToBaseAdjustmentParsed(table, accelerator.mark_to_base_subtables[i], glyphs, adjustments, allocator, lookup_flag, lookup_options);
+                        continue;
+                    }
+                }
+                try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+            },
             5 => if (runMayHaveGdefMarks(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             6 => if (runMayHaveGdefMarks(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
@@ -2343,11 +2402,13 @@ fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []c
 }
 
 const MarkToBaseSubtable = struct {
-    mark_coverage_offset: usize,
-    base_coverage_offset: usize,
-    class_count: u16,
-    mark_array_offset: usize,
-    base_array_offset: usize,
+    mark_coverage_offset: usize = 0,
+    base_coverage_offset: usize = 0,
+    class_count: u16 = 0,
+    mark_array_offset: usize = 0,
+    base_array_offset: usize = 0,
+    mark_coverage: ?NativeCoverage = null,
+    base_coverage: ?NativeCoverage = null,
 };
 
 fn parseMarkToBaseSubtable(table: Table, subtable_offset: usize) GposError!MarkToBaseSubtable {
@@ -2362,8 +2423,104 @@ fn parseMarkToBaseSubtable(table: Table, subtable_offset: usize) GposError!MarkT
     };
 }
 
+fn buildMarkToBaseSubtable(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!MarkToBaseSubtable {
+    var subtable = try parseMarkToBaseSubtable(table, subtable_offset);
+    errdefer {
+        if (subtable.mark_coverage) |coverage| deinitNativeCoverage(allocator, coverage);
+    }
+    subtable.mark_coverage = try buildNativeCoverage(table, subtable.mark_coverage_offset, allocator);
+    subtable.base_coverage = try buildNativeCoverage(table, subtable.base_coverage_offset, allocator);
+    return subtable;
+}
+
+fn buildNativeCoverage(table: Table, coverage_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!NativeCoverage {
+    return switch (try readU16(table, coverage_offset)) {
+        1 => coverage: {
+            const count = try readU16(table, coverage_offset + 2);
+            const glyphs = try allocator.alloc(GlyphId, count);
+            errdefer allocator.free(glyphs);
+            for (glyphs, 0..) |*glyph, i| {
+                glyph.* = try readU16(table, coverage_offset + 4 + i * 2);
+            }
+            break :coverage .{ .glyphs = glyphs };
+        },
+        2 => coverage: {
+            const count = try readU16(table, coverage_offset + 2);
+            const ranges = try allocator.alloc(ot_layout.GlyphRangeRecord, count);
+            errdefer allocator.free(ranges);
+            for (ranges, 0..) |*range, i| {
+                const record = coverage_offset + 4 + i * 6;
+                range.* = .{
+                    .start = try readU16(table, record),
+                    .end = try readU16(table, record + 2),
+                    .value = try readU16(table, record + 4),
+                };
+            }
+            break :coverage .{ .ranges = ranges };
+        },
+        else => error.UnsupportedGpos,
+    };
+}
+
+fn deinitNativeCoverage(allocator: std.mem.Allocator, coverage: NativeCoverage) void {
+    switch (coverage) {
+        inline else => |items| allocator.free(items),
+    }
+}
+
+fn deinitMarkToBaseSubtableContents(allocator: std.mem.Allocator, subtables: []const MarkToBaseSubtable) void {
+    for (subtables) |subtable| {
+        if (subtable.mark_coverage) |coverage| deinitNativeCoverage(allocator, coverage);
+        if (subtable.base_coverage) |coverage| deinitNativeCoverage(allocator, coverage);
+    }
+}
+
+fn deinitMarkToBaseSubtables(allocator: std.mem.Allocator, subtables: []const MarkToBaseSubtable) void {
+    deinitMarkToBaseSubtableContents(allocator, subtables);
+    allocator.free(subtables);
+}
+
+test "GPOS native Coverage preserves format 1 and 2 indexes" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 30;
+
+    writeCoverage1ListTest(&bytes, 0, &.{ 3, 8, 20 });
+    writeU16Test(&bytes, 10, 2); // Coverage format 2.
+    writeU16Test(&bytes, 12, 2);
+    writeU16Test(&bytes, 14, 30);
+    writeU16Test(&bytes, 16, 32);
+    writeU16Test(&bytes, 18, 0);
+    writeU16Test(&bytes, 20, 40);
+    writeU16Test(&bytes, 22, 42);
+    writeU16Test(&bytes, 24, 3);
+
+    const table = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const glyph_coverage = try buildNativeCoverage(table, 0, allocator);
+    defer deinitNativeCoverage(allocator, glyph_coverage);
+    try std.testing.expectEqual(@as(?usize, 0), glyph_coverage.index(3));
+    try std.testing.expectEqual(@as(?usize, 2), glyph_coverage.index(20));
+    try std.testing.expectEqual(@as(?usize, null), glyph_coverage.index(9));
+
+    const range_coverage = try buildNativeCoverage(table, 10, allocator);
+    defer deinitNativeCoverage(allocator, range_coverage);
+    try std.testing.expectEqual(@as(?usize, 0), range_coverage.index(30));
+    try std.testing.expectEqual(@as(?usize, 2), range_coverage.index(32));
+    try std.testing.expectEqual(@as(?usize, 3), range_coverage.index(40));
+    try std.testing.expectEqual(@as(?usize, 5), range_coverage.index(42));
+    try std.testing.expectEqual(@as(?usize, null), range_coverage.index(33));
+}
+
 fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const subtable = try parseMarkToBaseSubtable(table, subtable_offset);
+    return try collectMarkToBaseAdjustmentParsed(table, subtable, glyphs, adjustments, allocator, lookup_flag, options);
+}
+
+fn collectMarkToBaseAdjustmentParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (subtable.class_count == 0 or glyphs.len < 2) return;
 
     const attached_marks = try allocator.alloc(bool, glyphs.len);
@@ -2392,9 +2549,16 @@ fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtabl
     if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
     if (subtable.class_count == 0 or glyphs.len < 2) return false;
 
-    const mark_index = try coverageIndex(table, subtable.mark_coverage_offset, glyph) orelse return false;
-    const base_position = try previousCoveredBaseGlyph(table, subtable.mark_coverage_offset, subtable.base_coverage_offset, glyphs, mark_position, attached_marks, lookup_flag, options) orelse return false;
-    const base_index = try coverageIndex(table, subtable.base_coverage_offset, glyphs[base_position]) orelse return false;
+    const mark_index = if (subtable.mark_coverage) |coverage|
+        coverage.index(glyph) orelse return false
+    else
+        try coverageIndex(table, subtable.mark_coverage_offset, glyph) orelse return false;
+    const base_position = try previousCoveredBaseGlyphParsed(table, subtable, glyphs, mark_position, attached_marks, lookup_flag, options) orelse return false;
+    const base_glyph = glyphs[base_position];
+    const base_index = if (subtable.base_coverage) |coverage|
+        coverage.index(base_glyph) orelse return false
+    else
+        try coverageIndex(table, subtable.base_coverage_offset, base_glyph) orelse return false;
     const mark_record_offset = subtable.mark_array_offset + 2 + mark_index * 4;
     const mark_class = try readU16(table, mark_record_offset);
     if (mark_class >= subtable.class_count) return false;
@@ -2413,7 +2577,7 @@ fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtabl
     return true;
 }
 
-fn previousCoveredBaseGlyph(table: Table, mark_coverage_offset: usize, base_coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!?usize {
+fn previousCoveredBaseGlyphParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!?usize {
     var i = mark_index;
     while (i > 0) {
         i -= 1;
@@ -2427,8 +2591,12 @@ fn previousCoveredBaseGlyph(table: Table, mark_coverage_offset: usize, base_cove
         // older covered base. Marks remain transparent for stacked-mark
         // clusters; use GDEF classes when present and fall back to this
         // subtable's MarkCoverage for minimal fonts that omit GDEF.
-        if (try coverageIndex(table, base_coverage_offset, glyphs[i]) != null) return i;
-        if (try markAttachmentSearchSkipsNonCoveredGlyph(table, mark_coverage_offset, glyphs, i, options)) continue;
+        const base_covered = if (subtable.base_coverage) |coverage|
+            coverage.index(glyphs[i]) != null
+        else
+            try coverageIndex(table, subtable.base_coverage_offset, glyphs[i]) != null;
+        if (base_covered) return i;
+        if (try markAttachmentSearchSkipsNonCoveredGlyphParsed(table, subtable, glyphs, i, options)) continue;
         return i;
     }
     return null;
@@ -4601,6 +4769,26 @@ fn markGlyphForAttachmentSearch(table: Table, mark_coverage_offset: usize, glyph
     return try coverageIndex(table, mark_coverage_offset, glyph) != null;
 }
 
+fn markGlyphForAttachmentSearchParsed(table: Table, subtable: MarkToBaseSubtable, glyph: GlyphId, options: LookupOptions) GposError!bool {
+    if (options.glyph_classes) |classes| {
+        return glyph < classes.len and classes[glyph] == 3;
+    }
+    return if (subtable.mark_coverage) |coverage|
+        coverage.index(glyph) != null
+    else
+        try coverageIndex(table, subtable.mark_coverage_offset, glyph) != null;
+}
+
+fn markAttachmentSearchSkipsNonCoveredGlyphParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, index: usize, options: LookupOptions) GposError!bool {
+    if (try markGlyphForAttachmentSearchParsed(table, subtable, glyphs[index], options)) return true;
+    if (index == 0) return false;
+    const sources = options.glyph_source_indices orelse return false;
+    if (index >= sources.len) return false;
+    if (sources[index] != sources[index - 1]) return false;
+    if (try markGlyphForAttachmentSearchParsed(table, subtable, glyphs[index - 1], options)) return false;
+    return true;
+}
+
 fn markAttachmentSearchSkipsNonCoveredGlyph(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, index: usize, options: LookupOptions) GposError!bool {
     if (try markGlyphForAttachmentSearch(table, mark_coverage_offset, glyphs[index], options)) return true;
     return isMultipleSubstContinuationForMarkSearch(table, mark_coverage_offset, glyphs, index, options);
@@ -6250,6 +6438,32 @@ test "GPOS skips direct mark lookups when GDEF classes show no marks" {
     defer fallback_adjustments.deinit(allocator);
     try collectLookup(table, 0, &glyphs, &fallback_adjustments, allocator, .{});
     try std.testing.expectEqual(@as(usize, 1), fallback_adjustments.items.len);
+
+    const accelerator = try buildLookupAccelerator(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, 0, allocator);
+    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
+    try std.testing.expectEqual(@as(usize, 1), accelerator.mark_to_base_subtables.len);
+    try std.testing.expectEqual(@as(?usize, 0), accelerator.mark_to_base_subtables[0].mark_coverage.?.index(22));
+    try std.testing.expectEqual(@as(?usize, 0), accelerator.mark_to_base_subtables[0].base_coverage.?.index(20));
+
+    var accelerated_adjustments = std.ArrayList(Adjustment).empty;
+    defer accelerated_adjustments.deinit(allocator);
+    const accelerators = [_]LookupAccelerator{accelerator};
+    try collectLookupWithIndex(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        0,
+        0,
+        &glyphs,
+        &accelerated_adjustments,
+        allocator,
+        .{ .lookup_accelerators = &accelerators },
+        null,
+    );
+    try std.testing.expectEqualSlices(Adjustment, fallback_adjustments.items, accelerated_adjustments.items);
 
     var glyph_classes = [_]u16{0} ** 24;
     glyph_classes[20] = 1; // Base.

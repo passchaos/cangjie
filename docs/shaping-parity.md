@@ -204,6 +204,16 @@ Current local snapshot after the Nastaliq parity work:
   reverse-order nine-sample Roboto `en-words` check improved from
   `919 ns/glyph` to `913 ns/glyph`. The generic runtime format walk remains for
   uncached low-level calls and mixed-format lookups.
+- Predecoding LigatureSubst definitions and component sequences into
+  native-endian accelerator arrays removed repeated binary table reads from
+  Roboto's dominant `liga` lookup. A same-session nine-sample
+  `en-words` median improved from about `910 ns/glyph` to `615 ns/glyph`,
+  about `32%`; lookup 6 profile time fell from about `33.4 ms` to `13.3 ms`.
+  Font-authored LigatureSet priority and LookupFlag-skipped component offsets
+  have dedicated tests. Full Roboto `en-words` and Amiri
+  `fa-thelittleprince` still pass in-process HarfBuzz parity. A seven-sample
+  Amiri no-bidi-reorder check also improved slightly from about
+  `1050 ns/glyph` to `1042 ns/glyph`.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

@@ -224,6 +224,13 @@ pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, lengt
     };
 }
 
+pub fn constructionForGlyph(value: *const Info, glyph_id: u16, vertical: bool) ?*const Construction {
+    for (value.variants.constructions) |*construction| {
+        if (construction.glyph_id == glyph_id and construction.vertical == vertical) return construction;
+    }
+    return null;
+}
+
 pub fn free(allocator: std.mem.Allocator, value: Info) void {
     freeConstants(allocator, value.constants);
     freeGlyphInfo(allocator, value.glyph_info);

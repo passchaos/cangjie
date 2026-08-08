@@ -1314,6 +1314,46 @@ pub const Font = struct {
         return try math_mod.isExtendedShape(self.data, math.offset, math.length, glyph_id);
     }
 
+    /// Return MATH variant records for a glyph in vertical or horizontal growth direction.
+    pub fn mathGlyphVariants(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, vertical: bool) FontError!?[]MathVariantRecordInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const info_value = (try self.mathInfo(allocator)) orelse return null;
+        defer self.freeMathInfo(allocator, info_value);
+        const construction = math_mod.constructionForGlyph(&info_value, glyph_id, vertical) orelse return null;
+        const out = try allocator.alloc(MathVariantRecordInfo, construction.variants.len);
+        @memcpy(out, construction.variants);
+        return out;
+    }
+
+    pub fn freeMathGlyphVariants(_: *const Font, allocator: std.mem.Allocator, variants: []MathVariantRecordInfo) void {
+        allocator.free(variants);
+    }
+
+    /// Return MATH assembly parts for a glyph in vertical or horizontal growth direction.
+    pub fn mathGlyphAssemblyParts(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, vertical: bool) FontError!?[]MathPartRecordInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const info_value = (try self.mathInfo(allocator)) orelse return null;
+        defer self.freeMathInfo(allocator, info_value);
+        const construction = math_mod.constructionForGlyph(&info_value, glyph_id, vertical) orelse return null;
+        const assembly = construction.assembly orelse return null;
+        const out = try allocator.alloc(MathPartRecordInfo, assembly.parts.len);
+        @memcpy(out, assembly.parts);
+        return out;
+    }
+
+    pub fn freeMathGlyphAssemblyParts(_: *const Font, allocator: std.mem.Allocator, parts: []MathPartRecordInfo) void {
+        allocator.free(parts);
+    }
+
+    pub fn mathGlyphAssemblyItalicsCorrection(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, vertical: bool) FontError!?MathValueRecordInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const info_value = (try self.mathInfo(allocator)) orelse return null;
+        defer self.freeMathInfo(allocator, info_value);
+        const construction = math_mod.constructionForGlyph(&info_value, glyph_id, vertical) orelse return null;
+        const assembly = construction.assembly orelse return null;
+        return assembly.italics_correction;
+    }
+
     /// Read one raw OpenType `MATH` constant, mirroring HarfBuzz's math constant selector.
     pub fn mathConstantRaw(self: *const Font, constant: MathConstant) FontError!?i32 {
         const math = self.math orelse return null;

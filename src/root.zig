@@ -607,6 +607,17 @@ test "MATH constants metadata is exposed when present" {
     const assembly = info.variants.constructions[0].assembly.?;
     try std.testing.expectEqual(MathValueRecordInfo{ .value = -7, .device_offset = 0 }, assembly.italics_correction);
     try std.testing.expectEqual(MathPartRecordInfo{ .glyph_id = 1, .start_connector_length = 1, .end_connector_length = 2, .full_advance = 3, .flags = 1 }, assembly.parts[0]);
+
+    const variants = (try font.mathGlyphVariants(allocator, 1, true)).?;
+    defer font.freeMathGlyphVariants(allocator, variants);
+    try std.testing.expectEqualSlices(MathVariantRecordInfo, &.{.{ .glyph_id = 1, .advance_measurement = 900 }}, variants);
+    try std.testing.expect((try font.mathGlyphVariants(allocator, 0, true)) == null);
+
+    const parts = (try font.mathGlyphAssemblyParts(allocator, 1, true)).?;
+    defer font.freeMathGlyphAssemblyParts(allocator, parts);
+    try std.testing.expectEqualSlices(MathPartRecordInfo, &.{.{ .glyph_id = 1, .start_connector_length = 1, .end_connector_length = 2, .full_advance = 3, .flags = 1 }}, parts);
+    try std.testing.expectEqual(MathValueRecordInfo{ .value = -7, .device_offset = 0 }, (try font.mathGlyphAssemblyItalicsCorrection(allocator, 1, true)).?);
+
     const kern_info = info.glyph_info.math_kern_info.?;
     try std.testing.expectEqual(@as(usize, 1), kern_info.records.len);
     try std.testing.expectEqual(@as(u16, 3), kern_info.records[0].glyph_id);
@@ -623,6 +634,9 @@ test "MATH constants metadata is exposed when present" {
     try std.testing.expect((try missing.mathConstantRaw(.math_leading)) == null);
     try std.testing.expect((try missing.mathItalicsCorrection(1)) == null);
     try std.testing.expect(!try missing.mathIsExtendedShape(1));
+    try std.testing.expect((try missing.mathGlyphVariants(allocator, 1, true)) == null);
+    try std.testing.expect((try missing.mathGlyphAssemblyParts(allocator, 1, true)) == null);
+    try std.testing.expect((try missing.mathGlyphAssemblyItalicsCorrection(allocator, 1, true)) == null);
 }
 
 test "lazy MATH metadata revalidates borrowed table bytes" {

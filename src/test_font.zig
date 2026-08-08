@@ -3079,32 +3079,36 @@ fn mvarTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn hvarTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 72);
-    @memset(bytes, 0);
-    writeU16(bytes, 0, 1);
-    writeU16(bytes, 2, 0);
-    writeU32(bytes, 4, 36); // ItemVariationStore offset.
-    writeU32(bytes, 8, 20); // advanceWidthMappingOffset.
-    writeU32(bytes, 12, 26); // lsbMappingOffset.
-    writeDeltaSetIndexMapWithTwoEntries(bytes, 20);
-    writeDeltaSetIndexMapWithTwoEntries(bytes, 26);
-    writeItemVariationStoreWithItems(bytes, 36, 2);
-    return bytes;
-}
-
-fn vvarTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 78);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
     writeU32(bytes, 4, 42); // ItemVariationStore offset.
+    writeU32(bytes, 8, 20); // advanceWidthMappingOffset.
+    writeU32(bytes, 12, 26); // lsbMappingOffset.
+    writeU32(bytes, 16, 32); // rsbMappingOffset.
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 20);
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 26);
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 32);
+    writeItemVariationStoreWithItems(bytes, 42, 2);
+    return bytes;
+}
+
+fn vvarTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 84);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 48); // ItemVariationStore offset.
     writeU32(bytes, 8, 36); // advanceHeightMappingOffset.
     writeU32(bytes, 12, 24); // tsbMappingOffset.
+    writeU32(bytes, 16, 42); // bsbMappingOffset.
     writeU32(bytes, 20, 30); // vOrgMappingOffset.
     writeDeltaSetIndexMapWithTwoEntries(bytes, 24);
     writeDeltaSetIndexMapWithTwoEntries(bytes, 30);
     writeDeltaSetIndexMapWithTwoEntries(bytes, 36);
-    writeItemVariationStoreWithItems(bytes, 42, 2);
+    writeDeltaSetIndexMapWithTwoEntries(bytes, 42);
+    writeItemVariationStoreWithItems(bytes, 48, 2);
     return bytes;
 }
 

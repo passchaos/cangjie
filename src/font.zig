@@ -1402,13 +1402,7 @@ pub const Font = struct {
 
     /// Read validated metadata from the optional OpenType `HVAR` table.
     pub fn hvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?HvarInfo {
-        const hvar = self.hvar orelse return null;
-        const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, hvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateMetricVariationTable(self.data, hvar, fvar_info.axis_count, 20);
+        const hvar = (try self.metricVariationTableForRead(.hvar)) orelse return null;
         return try metric_variation_mod.hvarInfo(allocator, self.data, hvar.offset, hvar.length);
     }
 
@@ -1420,14 +1414,15 @@ pub const Font = struct {
     pub fn hvarAdvanceWidthDeltaAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?i32 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
-        const hvar = self.hvar orelse return null;
-        const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, hvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateMetricVariationTable(self.data, hvar, fvar_info.axis_count, 20);
+        const hvar = (try self.metricVariationTableForRead(.hvar)) orelse return null;
         return try metric_variation_mod.hvarAdvanceWidthDelta(self.data, hvar.offset, hvar.length, glyph_id, normalized_coords);
+    }
+
+    pub fn hvarRightSideBearingDeltaAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?i32 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const hvar = (try self.metricVariationTableForRead(.hvar)) orelse return null;
+        return try metric_variation_mod.hvarRightSideBearingDelta(self.data, hvar.offset, hvar.length, glyph_id, normalized_coords);
     }
 
     /// Return horizontal metrics with HVAR advance/LSB deltas applied when present.
@@ -1435,13 +1430,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         var metrics = try self.horizontalMetrics(glyph_id);
-        const hvar = self.hvar orelse return metrics;
-        const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, hvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateMetricVariationTable(self.data, hvar, fvar_info.axis_count, 20);
+        const hvar = (try self.metricVariationTableForRead(.hvar)) orelse return metrics;
 
         const advance_delta = try metric_variation_mod.hvarAdvanceWidthDelta(self.data, hvar.offset, hvar.length, glyph_id, normalized_coords);
         metrics.advance_width = clampI32ToU16(@as(i32, metrics.advance_width) + advance_delta);
@@ -1469,13 +1458,7 @@ pub const Font = struct {
 
     /// Read validated metadata from the optional OpenType `VVAR` table.
     pub fn vvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?VvarInfo {
-        const vvar = self.vvar orelse return null;
-        const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, vvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateMetricVariationTable(self.data, vvar, fvar_info.axis_count, 24);
+        const vvar = (try self.metricVariationTableForRead(.vvar)) orelse return null;
         return try metric_variation_mod.vvarInfo(allocator, self.data, vvar.offset, vvar.length);
     }
 
@@ -1487,14 +1470,15 @@ pub const Font = struct {
     pub fn vvarAdvanceHeightDeltaAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?i32 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
-        const vvar = self.vvar orelse return null;
-        const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, vvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateMetricVariationTable(self.data, vvar, fvar_info.axis_count, 24);
+        const vvar = (try self.metricVariationTableForRead(.vvar)) orelse return null;
         return try metric_variation_mod.vvarAdvanceHeightDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords);
+    }
+
+    pub fn vvarBottomSideBearingDeltaAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?i32 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const vvar = (try self.metricVariationTableForRead(.vvar)) orelse return null;
+        return try metric_variation_mod.vvarBottomSideBearingDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords);
     }
 
     /// Return vertical metrics with VVAR advance/TSB deltas applied when present.
@@ -1502,13 +1486,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         var metrics = (try self.verticalMetrics(glyph_id)) orelse return null;
-        const vvar = self.vvar orelse return metrics;
-        const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, vvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateMetricVariationTable(self.data, vvar, fvar_info.axis_count, 24);
+        const vvar = (try self.metricVariationTableForRead(.vvar)) orelse return metrics;
 
         const advance_delta = try metric_variation_mod.vvarAdvanceHeightDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords);
         metrics.advance_height = clampI32ToU16(@as(i32, metrics.advance_height) + advance_delta);
@@ -1516,6 +1494,22 @@ pub const Font = struct {
             metrics.top_side_bearing = clampI32ToI16(@as(i32, metrics.top_side_bearing) + tsb_delta);
         }
         return metrics;
+    }
+
+    const MetricVariationKind = enum { hvar, vvar };
+
+    fn metricVariationTableForRead(self: *const Font, kind: MetricVariationKind) FontError!?TableRecord {
+        const table, const minimum_length = switch (kind) {
+            .hvar => .{ self.hvar orelse return null, @as(usize, 20) },
+            .vvar => .{ self.vvar orelse return null, @as(usize, 24) },
+        };
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, fvar);
+        try validateFvarTable(self.data, fvar);
+        try validateSfntTableChecksum(self.data, table);
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateMetricVariationTable(self.data, table, fvar_info.axis_count, minimum_length);
+        return table;
     }
 
     /// Read validated metadata from the optional OpenType `BASE` table.
@@ -3095,13 +3089,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         var origin = (try self.verticalOriginY(glyph_id)) orelse return null;
-        const vvar = self.vvar orelse return origin;
-        const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, vvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateMetricVariationTable(self.data, vvar, fvar_info.axis_count, 24);
+        const vvar = (try self.metricVariationTableForRead(.vvar)) orelse return origin;
         if (try metric_variation_mod.vvarVerticalOriginDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords)) |delta| {
             origin = clampI32ToI16(@as(i32, origin) + delta);
         }

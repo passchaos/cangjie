@@ -195,6 +195,24 @@ pub fn forCodepoint(codepoint: u21) Category {
         0x11133 => .invisible_stacker,
         0x11134 => .consonant_mod_above,
         0x11145...0x11146 => .vowel_post,
+        0x11400...0x11434,
+        0x11447,
+        0x11450...0x11459,
+        0x1145f,
+        => .base,
+        0x11435,
+        0x11437,
+        0x11440...0x11441,
+        => .vowel_post,
+        0x11436 => .vowel_pre,
+        0x11438...0x1143d => .vowel_below,
+        0x1143e...0x1143f => .vowel_above,
+        0x11442 => .halant,
+        0x11443...0x11444 => .vowel_mod_above,
+        0x11445 => .vowel_mod_post,
+        0x11446 => .consonant_mod_below,
+        0x1145e => .final_mod_above,
+        0x11460...0x11461 => .cons_with_stacker,
         0x11c72...0x11c8f => .base,
         0x11c92...0x11ca7,
         0x11ca9...0x11caf,
@@ -343,6 +361,15 @@ test "Chakma USE categories distinguish stacker and vowels" {
 test "Tai Tham USE categories distinguish sakot and medials" {
     const codepoints = [_]u21{ 0x1a20, 0x1a55, 0x1a56, 0x1a57, 0x1a60, 0x1a6e, 0x1a74, 0x1a7f };
     const expected = [_]Category{ .base, .medial_pre, .medial_below, .cons_sub, .sakot, .vowel_pre, .vowel_mod_above, .vowel_mod_below };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Newa USE categories distinguish virama and dependent signs" {
+    const codepoints = [_]u21{ 0x1140e, 0x11436, 0x11438, 0x1143e, 0x11442, 0x11443, 0x11445, 0x11446, 0x1145e, 0x11460 };
+    const expected = [_]Category{ .base, .vowel_pre, .vowel_below, .vowel_above, .halant, .vowel_mod_above, .vowel_mod_post, .consonant_mod_below, .final_mod_above, .cons_with_stacker };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

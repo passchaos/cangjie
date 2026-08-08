@@ -454,6 +454,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
     --font ~/Work/harfbuzz/test/shape/data/text-rendering-tests/fonts/TestShapeLana.ttf \
     --text-file tests/data/tai-tham-rendering-tests.txt --direction ltr
   ```
+- Newa passes all five script-specific cases retained from upstream
+  `in-house/use-syllable.tests` across three fixture fonts. The slice covers
+  virama+ZWNJ termination, CGJ transparency in contextual and nested ligature
+  matching, dynamic `rphf` Repha classification/reordering, and Newa sandhi
+  mark placement. Retained corpora and checksums are
+  `tests/data/newa-use-font1.txt` (`c0ab8e641843aee8`),
+  `tests/data/newa-use-font2.txt` (`394d6a8cec84554c`), and
+  `tests/data/newa-use-font3.txt` (`826e22dd15be8028`).
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -477,7 +485,7 @@ goal is active, not complete.
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
-  Marchen, Cham, Batak, Brahmi, Chakma, and Tai Tham gates. Other USE
+  Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, and Newa gates. Other USE
   scripts/fonts and fuzz/corpus failures still need retained gates before this
   can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`

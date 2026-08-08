@@ -3110,6 +3110,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const joining_forms = &scratch.joining_forms;
     const source_features = &scratch.source_features;
     const source_syllables = &scratch.source_syllables;
+    const source_rphf_substituted = &scratch.source_rphf_substituted;
     const source_pref_substituted = &scratch.source_pref_substituted;
     const glyph_output_indices = &scratch.glyph_output_indices;
 
@@ -3279,7 +3280,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     } else if (use_shape) {
         try source_features.resize(buffer.allocator, codepoints.items.len);
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
+        try source_rphf_substituted.resize(buffer.allocator, codepoints.items.len);
         try source_pref_substituted.resize(buffer.allocator, codepoints.items.len);
+        @memset(source_rphf_substituted.items, false);
         @memset(source_pref_substituted.items, false);
         try use_shaper.markSourceFeatures(
             buffer.allocator,
@@ -3301,7 +3304,19 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         use_options.source_syllables = source_syllables.items;
 
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.defaultPreprocessingFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.rphfFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
+        @memset(glyph_stage_substituted.items, false);
+        var rphf_options = use_options;
+        rphf_options.glyph_stage_substituted = glyph_stage_substituted;
+        try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.rphfFeatureApplications(), glyph_ids, rphf_options, gdef_metadata.*);
+        use_shaper.recordRphfSubstitutions(
+            glyph_source_indices.items,
+            glyph_stage_substituted.items,
+            source_features.items,
+            source_syllables.items,
+            source_rphf_substituted.items,
+        );
+        glyph_stage_substituted.clearRetainingCapacity();
         try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
         @memset(glyph_stage_substituted.items, false);
         var pref_options = use_options;
@@ -3324,18 +3339,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 glyph_substituted,
                 ligature_components,
                 source_syllables.items,
+                source_rphf_substituted.items,
                 source_pref_substituted.items,
                 codepoints.items,
                 dotted_circle_glyph,
             );
         }
-        use_shaper.reorderPrebaseGlyphs(
+        use_shaper.reorderGlyphs(
             glyph_ids.items,
             glyph_source_indices.items,
             glyph_cluster_indices.items,
             glyph_substituted.items,
             ligature_components.items,
             source_syllables.items,
+            source_rphf_substituted.items,
             source_pref_substituted.items,
             codepoints.items,
         );

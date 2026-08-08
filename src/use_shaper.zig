@@ -9,7 +9,7 @@ const categories = @import("use/categories.zig");
 const syllables = @import("use/syllables.zig");
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cakm or script_tag == .cham or script_tag == .dupl or script_tag == .java or script_tag == .lana or script_tag == .marc;
+    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cakm or script_tag == .cham or script_tag == .dupl or script_tag == .java or script_tag == .lana or script_tag == .marc or script_tag == .newa;
 }
 
 pub const Category = categories.Category;
@@ -123,6 +123,33 @@ pub fn recordPrefSubstitutions(
     }
 }
 
+pub fn recordRphfSubstitutions(
+    glyph_source_indices: []const usize,
+    glyph_stage_substituted: []const bool,
+    source_features: []const u32,
+    source_syllables: []const u8,
+    source_rphf_substituted: []bool,
+) void {
+    std.debug.assert(glyph_source_indices.len == glyph_stage_substituted.len);
+    const rphf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("rphf")).?;
+    var previous_syllable: u8 = 0;
+    var found_in_syllable = false;
+    for (glyph_source_indices, glyph_stage_substituted) |source, substituted| {
+        if (source >= source_syllables.len) continue;
+        const syllable = source_syllables[source];
+        if (syllable != previous_syllable) {
+            previous_syllable = syllable;
+            found_in_syllable = false;
+        }
+        if (found_in_syllable or source >= source_features.len) continue;
+        if ((source_features[source] & rphf_mask) == 0) continue;
+        if (substituted and source < source_rphf_substituted.len) {
+            source_rphf_substituted[source] = true;
+            found_in_syllable = true;
+        }
+    }
+}
+
 pub fn insertDottedCirclesForBrokenSyllables(
     allocator: std.mem.Allocator,
     glyph_ids: *std.ArrayList(GlyphId),
@@ -131,6 +158,7 @@ pub fn insertDottedCirclesForBrokenSyllables(
     glyph_substituted: *std.ArrayList(bool),
     ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
     source_syllables: []const u8,
+    source_rphf_substituted: []const bool,
     source_pref_substituted: []const bool,
     codepoints: []const u21,
     dotted_circle_glyph: GlyphId,
@@ -151,7 +179,10 @@ pub fn insertDottedCirclesForBrokenSyllables(
         while (insert_index < glyph_source_indices.items.len) : (insert_index += 1) {
             const candidate_source = glyph_source_indices.items[insert_index];
             if (candidate_source >= source_syllables.len or source_syllables[candidate_source] != syllable_id) break;
-            if (candidate_source >= codepoints.len or categories.forCodepoint(codepoints[candidate_source]) != .repha) break;
+            const dynamic_repha = candidate_source < source_rphf_substituted.len and
+                source_rphf_substituted[candidate_source] and
+                (insert_index == glyph_index or glyph_source_indices.items[insert_index - 1] != candidate_source);
+            if (!dynamic_repha and categoryForReordering(candidate_source, source_pref_substituted, codepoints) != .repha) break;
         }
 
         // HarfBuzz inserts before the broken syllable and then reorders a
@@ -184,13 +215,14 @@ pub fn insertDottedCirclesForBrokenSyllables(
     }
 }
 
-pub fn reorderPrebaseGlyphs(
+pub fn reorderGlyphs(
     glyph_ids: []GlyphId,
     glyph_source_indices: []usize,
     glyph_cluster_indices: []usize,
     glyph_substituted: []bool,
     ligature_components: []gpos.LigatureComponentInfo,
     source_syllables: []const u8,
+    source_rphf_substituted: []const bool,
     source_pref_substituted: []const bool,
     codepoints: []const u21,
 ) void {
@@ -213,6 +245,18 @@ pub fn reorderPrebaseGlyphs(
             const next_source = glyph_source_indices[syllable_end];
             if (next_source >= source_syllables.len or source_syllables[next_source] != syllable_id) break;
         }
+        reorderRephaGlyphInSyllable(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            source_rphf_substituted,
+            source_pref_substituted,
+            codepoints,
+            syllable_start,
+            syllable_end,
+        );
         reorderPrebaseGlyphsInSyllable(
             glyph_ids,
             glyph_source_indices,
@@ -225,6 +269,52 @@ pub fn reorderPrebaseGlyphs(
             syllable_end,
         );
         syllable_start = syllable_end;
+    }
+}
+
+fn reorderRephaGlyphInSyllable(
+    glyph_ids: []GlyphId,
+    glyph_source_indices: []usize,
+    glyph_cluster_indices: []usize,
+    glyph_substituted: []bool,
+    ligature_components: []gpos.LigatureComponentInfo,
+    source_rphf_substituted: []const bool,
+    source_pref_substituted: []const bool,
+    codepoints: []const u21,
+    start: usize,
+    end: usize,
+) void {
+    if (end - start <= 1) return;
+    const first_source = glyph_source_indices[start];
+    const first_is_dynamic_repha = first_source < source_rphf_substituted.len and
+        source_rphf_substituted[first_source];
+    if (!first_is_dynamic_repha and categoryForReordering(first_source, source_pref_substituted, codepoints) != .repha) return;
+
+    for (start + 1..end) |index| {
+        const source = glyph_source_indices[index];
+        const category = categoryForReordering(source, source_pref_substituted, codepoints);
+        const is_post_base = categories.isPostbase(category) or
+            (categories.isHalantLike(category) and ligature_components[index].component_count <= 1);
+        if (!is_post_base and index != end - 1) continue;
+
+        // Repha moves before the first post-base glyph, or to the end when the
+        // syllable contains no post-base item. This is HarfBuzz's forward
+        // reorder and must move all source/cluster/ligature metadata together.
+        const destination = if (is_post_base) index - 1 else index;
+        mergeClusterRange(glyph_cluster_indices, start, destination + 1);
+        var current = start;
+        while (current < destination) : (current += 1) {
+            shaping_metadata.swap(
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                current,
+                current + 1,
+            );
+        }
+        return;
     }
 }
 
@@ -431,6 +521,7 @@ test "USE shaping includes Balinese" {
     try @import("std").testing.expect(shouldShape(.java));
     try @import("std").testing.expect(shouldShape(.lana));
     try @import("std").testing.expect(shouldShape(.marc));
+    try @import("std").testing.expect(shouldShape(.newa));
     try @import("std").testing.expect(!shouldShape(.latn));
 }
 
@@ -493,16 +584,18 @@ test "USE reordering moves only the first split prebase component" {
         .{ .component_sources = [_]usize{1} ** gpos.max_ligature_components },
     };
     const syllable_serials = [_]u8{ 0x12, 0x12 };
+    const rphf_substituted = [_]bool{ false, false };
     const pref_substituted = [_]bool{ false, false };
     const codepoints = [_]u21{ 0x1b19, 0x1b40 };
 
-    reorderPrebaseGlyphs(
+    reorderGlyphs(
         &glyph_ids,
         &sources,
         &cluster_owners,
         &substituted,
         &components,
         &syllable_serials,
+        &rphf_substituted,
         &pref_substituted,
         &codepoints,
     );
@@ -523,22 +616,83 @@ test "USE pref substitutions reorder as prebase glyphs" {
         .{ .component_sources = [_]usize{1} ** gpos.max_ligature_components },
     };
     const syllable_serials = [_]u8{ 0x12, 0x12 };
+    const rphf_substituted = [_]bool{ false, false };
     const pref_substituted = [_]bool{ false, true };
     const codepoints = [_]u21{ 0xa99f, 0xa9c0 };
 
-    reorderPrebaseGlyphs(
+    reorderGlyphs(
         &glyph_ids,
         &sources,
         &cluster_owners,
         &substituted,
         &components,
         &syllable_serials,
+        &rphf_substituted,
         &pref_substituted,
         &codepoints,
     );
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 20, 10 }, &glyph_ids);
     try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, &sources);
+}
+
+test "USE records only the first rphf substitution in each syllable" {
+    const rphf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("rphf")).?;
+    const sources = [_]usize{ 0, 0, 2, 3, 4 };
+    const stage_substituted = [_]bool{ true, true, false, true, true };
+    const source_features = [_]u32{
+        rphf_mask,
+        rphf_mask,
+        rphf_mask,
+        rphf_mask,
+        rphf_mask,
+    };
+    const source_syllables = [_]u8{ 0x12, 0x12, 0x12, 0x22, 0x22 };
+    var rphf_substituted = [_]bool{false} ** source_features.len;
+
+    recordRphfSubstitutions(
+        &sources,
+        &stage_substituted,
+        &source_features,
+        &source_syllables,
+        &rphf_substituted,
+    );
+
+    // Multiple outputs with source 0 still identify one Repha. The next
+    // syllable independently records its first substituted rphf source.
+    try std.testing.expectEqualSlices(bool, &.{ true, false, false, true, false }, &rphf_substituted);
+}
+
+test "USE rphf substitutions reorder as repha glyphs" {
+    var glyph_ids = [_]GlyphId{ 50, 10, 20 };
+    var sources = [_]usize{ 0, 2, 3 };
+    var cluster_owners = [_]usize{ 0, 2, 3 };
+    var substituted = [_]bool{ true, false, false };
+    var components = [_]gpos.LigatureComponentInfo{
+        .{ .component_sources = [_]usize{0} ** gpos.max_ligature_components },
+        .{ .component_sources = [_]usize{2} ** gpos.max_ligature_components },
+        .{ .component_sources = [_]usize{3} ** gpos.max_ligature_components },
+    };
+    const syllable_serials = [_]u8{ 0x12, 0x12, 0x12, 0x12 };
+    const rphf_substituted = [_]bool{ true, false, false, false };
+    const pref_substituted = [_]bool{ false, false, false, false };
+    const codepoints = [_]u21{ 0x1142c, 0x11442, 0x1140e, 0x1145e };
+
+    reorderGlyphs(
+        &glyph_ids,
+        &sources,
+        &cluster_owners,
+        &substituted,
+        &components,
+        &syllable_serials,
+        &rphf_substituted,
+        &pref_substituted,
+        &codepoints,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 50, 20 }, &glyph_ids);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 0, 3 }, &sources);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 3 }, &cluster_owners);
 }
 
 test "USE inserts a dotted circle into each broken syllable" {
@@ -563,6 +717,7 @@ test "USE inserts a dotted circle into each broken syllable" {
         try components.append(allocator, info);
     }
     const syllable_serials = [_]u8{ 0x12, 0x12, 0x27 };
+    const rphf_substituted = [_]bool{ false, false, false };
     const pref_substituted = [_]bool{ false, false, false };
     const codepoints = [_]u21{ 0x1b13, 0x1b36, 0x1b3e };
 
@@ -574,6 +729,7 @@ test "USE inserts a dotted circle into each broken syllable" {
         &substituted,
         &components,
         &syllable_serials,
+        &rphf_substituted,
         &pref_substituted,
         &codepoints,
         128,
@@ -606,6 +762,7 @@ test "USE dotted circle follows a pref-substituted broken-cluster glyph" {
         try components.append(allocator, info);
     }
     const syllable_serials = [_]u8{ 0x12, 0x27, 0x27 };
+    const rphf_substituted = [_]bool{ false, false, false };
     const pref_substituted = [_]bool{ false, true, false };
     const codepoints = [_]u21{ 0x1a2f, 0x1a55, 0x1a63 };
 
@@ -617,6 +774,7 @@ test "USE dotted circle follows a pref-substituted broken-cluster glyph" {
         &substituted,
         &components,
         &syllable_serials,
+        &rphf_substituted,
         &pref_substituted,
         &codepoints,
         143,

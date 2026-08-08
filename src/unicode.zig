@@ -63,6 +63,7 @@ pub const Script = enum {
     javanese,
     tai_tham,
     marchen,
+    newa,
     kayah_li,
     rejang,
     limbu,
@@ -591,6 +592,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     java = tag("java"),
     lana = tag("lana"),
     marc = tag("marc"),
+    newa = tag("newa"),
     kali = tag("kali"),
     rjng = tag("rjng"),
     limb = tag("limb"),
@@ -684,6 +686,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .javanese => .java,
         .tai_tham => .lana,
         .marchen => .marc,
+        .newa => .newa,
         .kayah_li => .kali,
         .rejang => .rjng,
         .limbu => .limb,
@@ -908,6 +911,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isJavaneseScriptCodepoint(codepoint)) return .javanese;
     if (isTaiThamScriptCodepoint(codepoint)) return .tai_tham;
     if (isMarchenScriptCodepoint(codepoint)) return .marchen;
+    if (isNewaScriptCodepoint(codepoint)) return .newa;
     if (isKayahLiScriptCodepoint(codepoint)) return .kayah_li;
     if (isRejangScriptCodepoint(codepoint)) return .rejang;
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
@@ -1026,6 +1030,23 @@ fn isMarchenScriptCodepoint(codepoint: u21) bool {
     return (codepoint >= 0x11c70 and codepoint <= 0x11c8f) or
         (codepoint >= 0x11c92 and codepoint <= 0x11ca7) or
         (codepoint >= 0x11ca9 and codepoint <= 0x11cb6);
+}
+
+fn isNewaScriptCodepoint(codepoint: u21) bool {
+    // Unicode assigns U+11400..U+11461 to Newa; U+11462..U+1147F remains
+    // reserved, as is the single gap U+1145C. Restricting this to assigned
+    // scalars avoids routing future additions through the current `newa`
+    // shaping model prematurely.
+    return codepoint >= 0x11400 and codepoint <= 0x11461 and codepoint != 0x1145c;
+}
+
+fn isNewaWordCodepoint(codepoint: u21) bool {
+    // Letters, dependent signs, native digits, and the sandhi/Vedic signs form
+    // normal space-delimited words. Dandas and the punctuation ranges
+    // U+11448..U+1144F/U+1145A..U+1145D remain separators.
+    return (codepoint >= 0x11400 and codepoint <= 0x11447) or
+        (codepoint >= 0x11450 and codepoint <= 0x11459) or
+        (codepoint >= 0x1145e and codepoint <= 0x11461);
 }
 
 fn isKayahLiScriptCodepoint(codepoint: u21) bool {
@@ -1870,7 +1891,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .rejang, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
@@ -4033,6 +4054,40 @@ test "Tai Tham stacks select the lana OpenType script" {
     try std.testing.expectEqualStrings(text, text[words[0].byte_start..][0..words[0].byte_len]);
 }
 
+test "Newa conjuncts select the newa OpenType script" {
+    const allocator = std.testing.allocator;
+    const text = "𑐬𑑂𑐎𑑞 𑐐𑑋𑐑";
+
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    try std.testing.expectEqual(@as(usize, 5), clusters.len);
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+    try std.testing.expectEqualSlices(
+        ScriptRun,
+        &.{.{ .script = .newa, .byte_start = 0, .byte_len = text.len }},
+        runs,
+    );
+    try std.testing.expectEqual(OpenTypeScriptTag.newa, openTypeScriptTag(.newa));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1140e));
+    try std.testing.expectEqual(Script.newa, scriptForCodepoint(0x1144b));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x1145c));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x11462));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+    try std.testing.expectEqualSlices(
+        WordSegment,
+        &.{
+            .{ .byte_start = 0, .byte_len = "𑐬𑑂𑐎𑑞".len },
+            .{ .byte_start = "𑐬𑑂𑐎𑑞 ".len, .byte_len = "𑐐".len },
+            .{ .byte_start = "𑐬𑑂𑐎𑑞 𑐐𑑋".len, .byte_len = "𑐑".len },
+        },
+        words,
+    );
+}
+
 test "Marchen stacks select the Marchen OpenType script" {
     const allocator = std.testing.allocator;
     const text = "𑲊𑲒𑲩";
@@ -4870,6 +4925,7 @@ const WordKind = enum {
     javanese,
     tai_tham,
     marchen,
+    newa,
     kayah_li,
     rejang,
     limbu,
@@ -4992,6 +5048,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isRejangWordCodepoint(codepoint)) return .rejang;
     if (isKaithiWordCodepoint(codepoint)) return .kaithi;
     if (isChakmaWordCodepoint(codepoint)) return .chakma;
+    if (isNewaWordCodepoint(codepoint)) return .newa;
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
@@ -5059,6 +5116,7 @@ fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize,
     if (isGraphemeExtendCodepoint(current)) return true;
     if (previous == 0x17d2 and isKhmerConsonant(current)) return true;
     if (previous == 0x1a60 and isTaiThamConsonant(current)) return true;
+    if (previous == 0x11442 and isNewaConsonant(current)) return true;
     if (previous == 0x200d) {
         return (zwj_after_extended_pictographic and isExtendedPictographic(current)) or
             (zwj_after_indic_virama and isIndicConsonant(current));
@@ -5295,6 +5353,12 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x11caa and codepoint <= 0x11cb0) or
         (codepoint >= 0x11cb2 and codepoint <= 0x11cb3) or
         (codepoint >= 0x11cb5 and codepoint <= 0x11cb6) or
+        // Newa dependent vowels, virama/anusvara, nukta, and sandhi mark use
+        // Grapheme_Cluster_Break=Extend and remain with the preceding akshara.
+        (codepoint >= 0x11438 and codepoint <= 0x1143f) or
+        (codepoint >= 0x11442 and codepoint <= 0x11444) or
+        codepoint == 0x11446 or
+        codepoint == 0x1145e or
         (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
         // Kayah Li dependent vowels and tones are nonspacing marks. Keeping
         // them attached preserves one caret/word/shaping unit for syllables
@@ -5459,6 +5523,7 @@ fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
         codepoint == 0x11046 or // Brahmi virama.
         codepoint == 0x110b9 or // Kaithi sign virama.
         codepoint == 0x11133 or // Chakma sign virama.
+        codepoint == 0x11442 or // Newa sign virama.
         codepoint == 0x11070; // Brahmi old Tamil virama.
 }
 
@@ -5474,6 +5539,10 @@ fn isTaiThamConsonant(codepoint: u21) bool {
     // U+1A60 SAKOT turns the following Tai Tham consonant into a subjoined
     // component. This is the script's InCB linker behavior for UAX #29.
     return codepoint >= 0x1a20 and codepoint <= 0x1a54;
+}
+
+fn isNewaConsonant(codepoint: u21) bool {
+    return codepoint >= 0x1140e and codepoint <= 0x11434;
 }
 
 fn isIndicConsonant(codepoint: u21) bool {
@@ -5507,7 +5576,8 @@ fn isIndicConsonant(codepoint: u21) bool {
         (codepoint >= 0x1108d and codepoint <= 0x110af) or
         (codepoint >= 0x11107 and codepoint <= 0x11126) or
         codepoint == 0x11144 or
-        codepoint == 0x11147;
+        codepoint == 0x11147 or
+        isNewaConsonant(codepoint);
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {
@@ -5687,6 +5757,11 @@ fn isSpacingMark(codepoint: u21) bool {
         codepoint == 0x11ca9 or
         codepoint == 0x11cb1 or
         codepoint == 0x11cb4 or
+        // Newa's visible dependent vowels and visarga are spacing marks within
+        // the same grapheme and shaping cluster as their base.
+        (codepoint >= 0x11435 and codepoint <= 0x11437) or
+        (codepoint >= 0x11440 and codepoint <= 0x11441) or
+        codepoint == 0x11445 or
         // Rejang final H and virama are visible spacing signs but still belong
         // to the previous base for grapheme, word, and shaping boundaries.
         (codepoint >= 0xa952 and codepoint <= 0xa953) or

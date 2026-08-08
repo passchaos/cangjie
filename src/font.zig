@@ -57,6 +57,7 @@ pub const Cff2CharStringBoundsInfo = cff2_mod.CharStringBoundsInfo;
 pub const GvarInfo = gvar_mod.Info;
 pub const GvarGlyphInfo = gvar_mod.GlyphInfo;
 pub const GvarTupleInfo = gvar_mod.TupleInfo;
+pub const GvarScaledPointDelta = gvar_mod.ScaledPointDelta;
 pub const MathConstant = math_mod.Constant;
 pub const MathInfo = math_mod.Info;
 pub const MathConstantsInfo = math_mod.Constants;
@@ -1081,6 +1082,29 @@ pub const Font = struct {
         const fvar_info = try readFvarInfo(self.data, fvar);
         try validateSfntTableChecksum(self.data, gvar);
         return try gvar_mod.tupleInfo(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id, tuple_index);
+    }
+
+    /// Decode accumulated `gvar` point deltas for a glyph at normalized coordinates.
+    pub fn gvarPointDeltasAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?[]GvarScaledPointDelta {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const gvar = self.gvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateSfntTableChecksum(self.data, gvar);
+        const target_count = try self.gvarTargetCount(glyph_id);
+        if (target_count > std.math.maxInt(u16)) return error.BadSfnt;
+        const all_points = try allocator.alloc(u16, target_count);
+        defer allocator.free(all_points);
+        for (all_points, 0..) |*point, index| point.* = @intCast(index);
+        const raw_scratch = try allocator.alloc(gvar_mod.PointDelta, target_count);
+        defer allocator.free(raw_scratch);
+        const scaled_scratch = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
+        defer allocator.free(scaled_scratch);
+        const out = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
+        errdefer allocator.free(out);
+        const count = try gvar_mod.accumulateGlyphPointDeltas(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id, normalized_coords, all_points, raw_scratch, scaled_scratch, out);
+        return try allocator.realloc(out, count);
     }
 
     /// Return the CFF2 font-dict index selected for a glyph, when FDSelect is present.
@@ -3337,6 +3361,17 @@ pub const Font = struct {
             try cff_mod.appendGlyphOutline(allocator, self.data[cff.offset .. cff.offset + cff.length], info, &outline, glyph_id);
         }
         return outline;
+    }
+
+    fn gvarTargetCount(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!usize {
+        if (self.format != .truetype) return error.UnsupportedGlyph;
+        const loca = self.loca orelse return error.MissingTable;
+        const glyf = self.glyf orelse return error.MissingTable;
+        return try gvarGlyphTargetCount(self.data, .{
+            .loca = loca,
+            .glyf = glyf,
+            .index_to_loc_format = self.index_to_loc_format,
+        }, glyph_id);
     }
 
     fn glyphBoundsFromParsedTables(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {

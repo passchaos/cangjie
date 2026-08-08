@@ -115,6 +115,7 @@ pub const Cff2CharStringBoundsInfo = @import("font.zig").Cff2CharStringBoundsInf
 pub const GvarInfo = @import("font.zig").GvarInfo;
 pub const GvarGlyphInfo = @import("font.zig").GvarGlyphInfo;
 pub const GvarTupleInfo = @import("font.zig").GvarTupleInfo;
+pub const GvarScaledPointDelta = @import("font.zig").GvarScaledPointDelta;
 pub const CvarInfo = @import("font.zig").CvarInfo;
 pub const CvarTupleInfo = @import("font.zig").CvarTupleInfo;
 pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
@@ -709,6 +710,9 @@ test "gvar metadata is exposed when present" {
     try std.testing.expectEqual(@as(usize, 0), info.glyph_variation_data_count);
     try std.testing.expect((try font.gvarGlyphInfo(0)) == null);
     try std.testing.expect((try font.gvarTupleInfo(0, 0)) == null);
+    const deltas = (try font.gvarPointDeltasAtCoords(allocator, 0, &.{0.5})).?;
+    defer allocator.free(deltas);
+    try std.testing.expectEqual(@as(usize, 0), deltas.len);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);
@@ -717,6 +721,7 @@ test "gvar metadata is exposed when present" {
     try std.testing.expect((try missing.gvarInfo()) == null);
     try std.testing.expect((try missing.gvarGlyphInfo(0)) == null);
     try std.testing.expect((try missing.gvarTupleInfo(0, 0)) == null);
+    try std.testing.expect((try missing.gvarPointDeltasAtCoords(allocator, 0, &.{0.5})) == null);
 }
 
 test "lazy gvar metadata revalidates borrowed table bytes" {

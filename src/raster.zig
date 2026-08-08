@@ -475,25 +475,37 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderColorRun(self: *Rasterizer, target: *ColorRenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, palette_index: u16) !void {
+        return try self.renderColorRunAtCoords(target, run, x, baseline_y, palette_index, &.{});
+    }
+
+    pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
         for (run.glyphs) |position| {
-            try self.renderColorGlyph(target, run.font, position.glyph_id, run.font_size, pen_x + position.x_offset, baseline_y + position.y_offset, palette_index);
+            try self.renderColorGlyphAtCoords(target, run.font, position.glyph_id, run.font_size, pen_x + position.x_offset, baseline_y + position.y_offset, palette_index, normalized_variation_coords);
             pen_x += position.x_advance;
         }
     }
 
     pub fn renderColorShapedText(self: *Rasterizer, target: *ColorRenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, palette_index: u16) !void {
+        return try self.renderColorShapedTextAtCoords(target, shaped, x, baseline_y, palette_index, &.{});
+    }
+
+    pub fn renderColorShapedTextAtCoords(self: *Rasterizer, target: *ColorRenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         for (shaped.runs) |run| {
-            try self.renderColorRun(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, palette_index);
+            try self.renderColorRunAtCoords(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, palette_index, normalized_variation_coords);
         }
     }
 
     pub fn renderColorGlyph(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16) !void {
+        return try self.renderColorGlyphAtCoords(target, font, glyph_id, font_size, x, baseline_y, palette_index, &.{});
+    }
+
+    pub fn renderColorGlyphAtCoords(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         const layers = try font.colorLayers(self.allocator, glyph_id);
         defer self.allocator.free(layers);
         if (layers.len == 0) {
             if (try font.colorPaint(glyph_id)) |paint| {
-                try self.renderColorPaint(target, font, paint, glyph_id, font_size, x, baseline_y, palette_index);
+                try self.renderColorPaint(target, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
                 return;
             }
             if (try font.svgDocument(glyph_id)) |document| {
@@ -515,7 +527,7 @@ pub const Rasterizer = struct {
                     return;
                 }
             }
-            var outline = try font.glyphOutlineForRaster(self.allocator, glyph_id);
+            var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
             defer outline.deinit();
             var mask = try RenderTarget.init(self.allocator, target.width, target.height);
             defer mask.deinit();
@@ -526,7 +538,7 @@ pub const Rasterizer = struct {
 
         for (layers) |layer| {
             const color = (try font.paletteColor(palette_index, layer.palette_index)) orelse continue;
-            var outline = try font.glyphOutlineForRaster(self.allocator, layer.glyph_id);
+            var outline = try self.glyphOutlineForRenderAtCoords(font, layer.glyph_id, normalized_variation_coords);
             defer outline.deinit();
             var mask = try RenderTarget.init(self.allocator, target.width, target.height);
             defer mask.deinit();
@@ -535,22 +547,22 @@ pub const Rasterizer = struct {
         }
     }
 
-    fn renderColorPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, paint: font_mod.ColorPaint, fallback_glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16) !void {
+    fn renderColorPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, paint: font_mod.ColorPaint, fallback_glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         switch (paint) {
-            .solid => |solid| try self.renderSolidPaint(target, font, fallback_glyph_id, solid, font_size, x, baseline_y, palette_index),
-            .glyph => |glyph_paint| try self.renderSolidPaint(target, font, glyph_paint.glyph_id, glyph_paint.solid, font_size, x, baseline_y, palette_index),
+            .solid => |solid| try self.renderSolidPaint(target, font, fallback_glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+            .glyph => |glyph_paint| try self.renderSolidPaint(target, font, glyph_paint.glyph_id, glyph_paint.solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
             .layers => |layers| {
                 for (0..layers.layer_count) |offset| {
                     const child = (try font.colorPaintLayer(layers.first_layer_index + @as(u32, @intCast(offset)))) orelse continue;
-                    try self.renderColorPaint(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index);
+                    try self.renderColorPaint(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
                 }
             },
         }
     }
 
-    fn renderSolidPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, solid: font_mod.ColorPaint.Solid, font_size: f32, x: f32, baseline_y: f32, palette_index: u16) !void {
+    fn renderSolidPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, solid: font_mod.ColorPaint.Solid, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         const base_color = (try font.paletteColor(palette_index, solid.palette_index)) orelse return;
-        var outline = try font.glyphOutlineForRaster(self.allocator, glyph_id);
+        var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
         defer outline.deinit();
         var mask = try RenderTarget.init(self.allocator, target.width, target.height);
         defer mask.deinit();
@@ -561,6 +573,13 @@ pub const Rasterizer = struct {
             .blue = base_color.blue,
             .alpha = @intCast((@as(u32, base_color.alpha) * @as(u32, @intFromFloat(@round(solid.alpha * 255.0)))) / 255),
         });
+    }
+
+    fn glyphOutlineForRenderAtCoords(self: *Rasterizer, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, normalized_variation_coords: []const f32) !glyph_mod.GlyphOutline {
+        return if (normalized_variation_coords.len == 0)
+            try font.glyphOutlineForRaster(self.allocator, glyph_id)
+        else
+            try font.glyphOutlineAtCoords(self.allocator, glyph_id, normalized_variation_coords);
     }
 
     fn renderSvgGlyphMask(self: *Rasterizer, target: *RenderTarget, outline: *const glyph_mod.GlyphOutline, transform: SvgTransform, view_box: ViewBox, x: f32, baseline_y: f32, font_size: f32) !void {

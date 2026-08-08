@@ -845,11 +845,44 @@ test "rasterizer renders variable outlines at normalized coordinates" {
     try std.testing.expect(renderTargetPixelDifference(&default_target, &varied_target) > 0);
 }
 
+test "color rasterizer renders variable outlines at normalized coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarCompoundTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var default_target = try ColorRenderTarget.init(allocator, 220, 220);
+    defer default_target.deinit();
+    var varied_target = try ColorRenderTarget.init(allocator, 220, 220);
+    defer varied_target.deinit();
+
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.hint_size_px = 200;
+    rasterizer.embolden_small_glyphs = false;
+    try rasterizer.renderColorGlyph(&default_target, &font, 2, 200, 20, 180, 0);
+    try rasterizer.renderColorGlyphAtCoords(&varied_target, &font, 2, 200, 20, 180, 0, &.{0.5});
+
+    try std.testing.expect(colorRenderTargetPixelDifference(&default_target, &varied_target) > 0);
+}
+
 fn renderTargetPixelDifference(a: *const RenderTarget, b: *const RenderTarget) usize {
     if (a.width != b.width or a.height != b.height or a.pixels.len != b.pixels.len) return std.math.maxInt(usize);
     var diff: usize = 0;
     for (a.pixels, b.pixels) |lhs, rhs| {
         if (lhs != rhs) diff += 1;
+    }
+    return diff;
+}
+
+fn colorRenderTargetPixelDifference(a: *const ColorRenderTarget, b: *const ColorRenderTarget) usize {
+    if (a.width != b.width or a.height != b.height or a.pixels.len != b.pixels.len) return std.math.maxInt(usize);
+    var diff: usize = 0;
+    for (a.pixels, b.pixels) |lhs, rhs| {
+        if (lhs.r != rhs.r or lhs.g != rhs.g or lhs.b != rhs.b or lhs.a != rhs.a) diff += 1;
     }
     return diff;
 }

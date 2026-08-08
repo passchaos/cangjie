@@ -124,6 +124,10 @@ pub fn buildGvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try gvarTtfTables(allocator));
 }
 
+pub fn buildGvarDeltaTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try gvarDeltaTtfTables(allocator));
+}
+
 pub fn buildVariableStatTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try variableStatTtfTables(allocator));
 }
@@ -657,6 +661,23 @@ fn gvarTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
     tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[3] = .{ .tag = "gvar", .data = try gvarTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[8] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    return tables;
+}
+
+fn gvarDeltaTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 11);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "gvar", .data = try gvarDeltaTable(allocator) };
     tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
@@ -2779,6 +2800,38 @@ fn gvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 20, 0);
     writeU16(bytes, 22, 0);
     writeU16(bytes, 24, 0); // all glyphs have empty variation data.
+    return bytes;
+}
+
+fn gvarDeltaTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 51);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 4, 1); // axisCount.
+    writeU16(bytes, 6, 0); // sharedTupleCount.
+    writeU32(bytes, 8, 0); // sharedTupleOffset.
+    writeU16(bytes, 12, 2); // glyphCount.
+    writeU16(bytes, 14, 1); // long offsets.
+    writeU32(bytes, 16, 32); // glyphVariationDataArrayOffset after offset array.
+    writeU32(bytes, 20, 0);
+    writeU32(bytes, 24, 0);
+    writeU32(bytes, 28, 19);
+
+    writeU16(bytes, 32, 1); // one tuple.
+    writeU16(bytes, 34, 10); // tuple data starts after one 6-byte header.
+    writeU16(bytes, 36, 9); // tuple payload size.
+    writeU16(bytes, 38, 0x8000); // embedded peak, all points.
+    writeF2Dot14(bytes, 40, 1.0);
+    bytes[42] = 0x06; // seven x deltas.
+    bytes[43] = 10;
+    bytes[44] = 0;
+    bytes[45] = 0;
+    bytes[46] = 0;
+    bytes[47] = 0;
+    bytes[48] = 0;
+    bytes[49] = 0;
+    bytes[50] = 0x86; // seven y deltas are zero.
     return bytes;
 }
 

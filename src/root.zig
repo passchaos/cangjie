@@ -710,7 +710,7 @@ test "gvar metadata is exposed when present" {
     try std.testing.expectEqual(@as(usize, 0), info.glyph_variation_data_count);
     try std.testing.expect((try font.gvarGlyphInfo(0)) == null);
     try std.testing.expect((try font.gvarTupleInfo(0, 0)) == null);
-    const deltas = (try font.gvarPointDeltasAtCoords(allocator, 0, &.{0.5})).?;
+    const deltas = (try font.gvarPointDeltasAtCoords(allocator, 1, &.{0.5})).?;
     defer allocator.free(deltas);
     try std.testing.expectEqual(@as(usize, 0), deltas.len);
 
@@ -722,6 +722,28 @@ test "gvar metadata is exposed when present" {
     try std.testing.expect((try missing.gvarGlyphInfo(0)) == null);
     try std.testing.expect((try missing.gvarTupleInfo(0, 0)) == null);
     try std.testing.expect((try missing.gvarPointDeltasAtCoords(allocator, 0, &.{0.5})) == null);
+}
+
+test "gvar point deltas are exposed for non-empty glyph data" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarDeltaTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.gvarInfo()).?;
+    try std.testing.expectEqual(@as(usize, 1), info.glyph_variation_data_count);
+    const deltas = (try font.gvarPointDeltasAtCoords(allocator, 1, &.{0.5})).?;
+    defer allocator.free(deltas);
+    try std.testing.expectEqual(@as(usize, 7), deltas.len);
+    try std.testing.expectEqual(@as(u16, 0), deltas[0].point);
+    try std.testing.expectEqual(@as(f32, 5), deltas[0].x);
+    try std.testing.expectEqual(@as(f32, 0), deltas[0].y);
+    try std.testing.expectEqual(@as(u16, 6), deltas[6].point);
+    try std.testing.expectEqual(@as(f32, 0), deltas[6].x);
 }
 
 test "lazy gvar metadata revalidates borrowed table bytes" {

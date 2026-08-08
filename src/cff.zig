@@ -25,6 +25,13 @@ pub const Info = struct {
     nominal_width_x: f32 = 0,
 };
 
+pub const Parsed = struct {
+    info: Info,
+    charstrings: Index,
+    global_subrs: Index,
+    local_subrs: ?Index,
+};
+
 /// Parse the CFF header and the small amount of top/private DICT state needed
 /// to locate CharStrings and subroutine indexes.
 pub fn parseInfo(data: []const u8) CffError!Info {
@@ -66,24 +73,40 @@ pub fn parseInfo(data: []const u8) CffError!Info {
     return info;
 }
 
+pub fn parse(data: []const u8) CffError!Parsed {
+    return try prepare(data, try parseInfo(data));
+}
+
+pub fn prepare(data: []const u8, info: Info) CffError!Parsed {
+    return .{
+        .info = info,
+        .charstrings = try readIndex(data, info.charstrings_offset),
+        .global_subrs = try readIndex(data, info.global_subrs_offset),
+        .local_subrs = if (info.local_subrs_offset != 0) try readIndex(data, info.local_subrs_offset) else null,
+    };
+}
+
 /// Interpret one Type2 charstring into the shared GlyphOutline representation.
 pub fn appendGlyphOutline(allocator: std.mem.Allocator, data: []const u8, info: Info, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId) CffError!void {
-    const charstrings = try readIndex(data, info.charstrings_offset);
-    if (glyph_id >= charstrings.count) return error.InvalidGlyph;
-    const bytes = try charstrings.object(data, glyph_id);
+    try appendGlyphOutlinePrepared(allocator, data, try prepare(data, info), outline, glyph_id);
+}
+
+pub fn appendGlyphOutlinePrepared(allocator: std.mem.Allocator, data: []const u8, parsed: Parsed, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId) CffError!void {
+    if (glyph_id >= parsed.charstrings.count) return error.InvalidGlyph;
+    const bytes = try parsed.charstrings.object(data, glyph_id);
     var interpreter = Type2Interpreter{
         .allocator = allocator,
         .outline = outline,
-        .nominal_width_x = info.nominal_width_x,
-        .default_width_x = info.default_width_x,
+        .nominal_width_x = parsed.info.nominal_width_x,
+        .default_width_x = parsed.info.default_width_x,
         .cff_data = data,
-        .global_subrs = try readIndex(data, info.global_subrs_offset),
-        .local_subrs = if (info.local_subrs_offset != 0) try readIndex(data, info.local_subrs_offset) else null,
+        .global_subrs = parsed.global_subrs,
+        .local_subrs = parsed.local_subrs,
     };
     try interpreter.run(bytes);
 }
 
-const Index = struct {
+pub const Index = struct {
     count: u16,
     off_size: u8,
     offsets_pos: usize,

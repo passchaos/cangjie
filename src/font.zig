@@ -52,6 +52,7 @@ pub const FontFormat = enum {
 pub const Cff2Info = cff2_mod.Info;
 pub const Cff2FontDictInfo = cff2_mod.FontDictInfo;
 pub const Cff2PrivateDictInfo = cff2_mod.PrivateDictInfo;
+const CffParsedInfo = cff_mod.Parsed;
 pub const Cff2CharStringScanInfo = cff2_mod.CharStringScanInfo;
 pub const Cff2CharStringBoundsInfo = cff2_mod.CharStringBoundsInfo;
 pub const GvarInfo = gvar_mod.Info;
@@ -745,6 +746,7 @@ pub const Font = struct {
     ebdt: ?TableRecord,
     glyf: ?TableRecord,
     cff: ?TableRecord,
+    cff_parsed: ?CffParsedInfo,
     cff2: ?TableRecord,
     cmap_subtables: []CmapSubtable,
     owned_tables: []TableRecord,
@@ -933,10 +935,13 @@ pub const Font = struct {
         const ascender = try bin.readI16At(data, hhea.offset + 4);
         const descender = try bin.readI16At(data, hhea.offset + 6);
         const line_gap = try bin.readI16At(data, hhea.offset + 8);
-        if (format == .opentype_cff) {
-            if (cff) |cff_table| try validateCffGlyphCount(data, cff_table, glyph_count);
-            if (cff2) |cff2_table| try validateCff2Table(data, cff2_table);
-        }
+        const cff_parsed: ?CffParsedInfo = if (format == .opentype_cff and cff != null) blk: {
+            const cff_table = cff.?;
+            const parsed = try cff_mod.parse(data[cff_table.offset .. cff_table.offset + cff_table.length]);
+            if (parsed.info.charstrings_count != glyph_count) return error.BadSfnt;
+            break :blk parsed;
+        } else null;
+        if (format == .opentype_cff and cff2 != null) try validateCff2Table(data, cff2.?);
         if (format == .truetype) {
             const max_points = try bin.readU16At(data, maxp.offset + 6);
             const max_contours = try bin.readU16At(data, maxp.offset + 8);
@@ -1061,6 +1066,7 @@ pub const Font = struct {
             .ebdt = ebdt,
             .glyf = glyf,
             .cff = cff,
+            .cff_parsed = cff_parsed,
             .cff2 = cff2,
             .cmap_subtables = cmap_subtables,
             .owned_tables = records,
@@ -3595,14 +3601,17 @@ pub const Font = struct {
             }
         } else {
             const cff = self.cff orelse return error.MissingTable;
-            // CFF outlines are addressed lazily from borrowed SFNT bytes.
-            // Re-check the maxp/CharStrings contract before serving even a
-            // single glyph so a post-parse mutation cannot hide a truncated
-            // CharStrings INDEX behind requests for still-present glyph ids.
-            try validateSfntTableChecksum(self.data, cff);
-            try validateCffGlyphCount(self.data, cff, self.glyph_count);
-            const info = try cff_mod.parseInfo(self.data[cff.offset .. cff.offset + cff.length]);
-            try cff_mod.appendGlyphOutline(allocator, self.data[cff.offset .. cff.offset + cff.length], info, &outline, glyph_id);
+            const cff_data = self.data[cff.offset .. cff.offset + cff.length];
+            if (read_mode.shouldRevalidate()) {
+                // Public outline APIs re-check borrowed CFF bytes before
+                // serving a glyph so post-parse mutation cannot hide a
+                // truncated CharStrings INDEX behind still-present glyph ids.
+                try validateSfntTableChecksum(self.data, cff);
+                try validateCffGlyphCount(self.data, cff, self.glyph_count);
+                try cff_mod.appendGlyphOutline(allocator, cff_data, try cff_mod.parseInfo(cff_data), &outline, glyph_id);
+            } else {
+                try cff_mod.appendGlyphOutlinePrepared(allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(cff_data), &outline, glyph_id);
+            }
         }
         return outline;
     }
@@ -19366,6 +19375,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff_parsed = null,
         .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
@@ -19441,6 +19451,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff_parsed = null,
         .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
@@ -19516,6 +19527,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff_parsed = null,
         .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
@@ -19602,6 +19614,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff_parsed = null,
         .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
@@ -19677,6 +19690,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff_parsed = null,
         .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
@@ -19752,6 +19766,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff_parsed = null,
         .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
@@ -19827,6 +19842,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff_parsed = null,
         .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,
@@ -19922,6 +19938,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .ebdt = null,
         .glyf = null,
         .cff = null,
+        .cff_parsed = null,
         .cff2 = null,
         .cmap_subtables = empty_cmaps,
         .owned_tables = empty_tables,

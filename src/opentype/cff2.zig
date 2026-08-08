@@ -26,6 +26,7 @@ pub const Info = struct {
     trailing_data: []const u8,
     top_dict: TopDictInfo,
     charstrings_index: ?IndexInfo = null,
+    fd_array_index: ?IndexInfo = null,
 };
 
 pub fn validate(data: []const u8, offset: usize, length: usize) Error!void {
@@ -60,6 +61,7 @@ fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
     const top_dict_data = table[top_start..top_end];
     const top_dict = try parseTopDict(top_dict_data, table.len);
     const charstrings_index = if (top_dict.charstrings_offset) |charstrings_offset| try indexInfo(table, charstrings_offset) else null;
+    const fd_array_index = if (top_dict.fd_array_offset) |fd_array_offset| try indexInfo(table, fd_array_offset) else null;
     return .{
         .major_version = major,
         .minor_version = minor,
@@ -69,6 +71,7 @@ fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
         .trailing_data = table[top_end..],
         .top_dict = top_dict,
         .charstrings_index = charstrings_index,
+        .fd_array_index = fd_array_index,
     };
 }
 
@@ -209,21 +212,25 @@ fn readOffsetOperand(operands: []const i32) Error!usize {
 }
 
 test "CFF2 header exposes top dict and trailing data" {
-    const bytes = [_]u8{ 2, 0, 5, 0, 10, 154, 17, 162, 12, 36, 168, 12, 37, 170, 24, 0, 0, 0, 1, 1, 1, 2, 14, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01, 0x02, 0x03 };
+    const bytes = [_]u8{ 2, 0, 5, 0, 10, 154, 17, 162, 12, 36, 170, 12, 37, 172, 24, 0, 0, 0, 1, 1, 1, 2, 14, 0, 0, 0, 1, 1, 1, 2, 14, 0x01, 0x02, 0x03 };
     const parsed = try info(&bytes, 0, bytes.len);
     try std.testing.expectEqual(@as(u8, 2), parsed.major_version);
     try std.testing.expectEqual(@as(u8, 5), parsed.header_size);
     try std.testing.expectEqual(@as(u16, 10), parsed.top_dict_length);
     try std.testing.expectEqual(@as(?usize, 15), parsed.top_dict.charstrings_offset);
     try std.testing.expectEqual(@as(?usize, 23), parsed.top_dict.fd_array_offset);
-    try std.testing.expectEqual(@as(?usize, 29), parsed.top_dict.fd_select_offset);
-    try std.testing.expectEqual(@as(?usize, 31), parsed.top_dict.vstore_offset);
+    try std.testing.expectEqual(@as(?usize, 31), parsed.top_dict.fd_select_offset);
+    try std.testing.expectEqual(@as(?usize, 33), parsed.top_dict.vstore_offset);
     const charstrings = parsed.charstrings_index.?;
     try std.testing.expectEqual(@as(u32, 1), charstrings.count);
     try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
     try std.testing.expectEqual(@as(usize, 22), charstrings.data_offset);
     try std.testing.expectEqual(@as(usize, 1), charstrings.data_length);
     try std.testing.expectEqualSlices(u8, &.{14}, (try charStringData(&bytes, 0, bytes.len, 0)).?);
+    const fd_array = parsed.fd_array_index.?;
+    try std.testing.expectEqual(@as(u32, 1), fd_array.count);
+    try std.testing.expectEqual(@as(usize, 30), fd_array.data_offset);
+    try std.testing.expectEqual(@as(usize, 1), fd_array.data_length);
     try std.testing.expect((try charStringData(&bytes, 0, bytes.len, 1)) == null);
 }
 

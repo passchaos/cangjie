@@ -524,13 +524,17 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expectEqual(@as(u16, 10), info.top_dict_length);
     try std.testing.expectEqual(@as(?usize, 15), info.top_dict.charstrings_offset);
     try std.testing.expectEqual(@as(?usize, 23), info.top_dict.fd_array_offset);
-    try std.testing.expectEqual(@as(?usize, 29), info.top_dict.fd_select_offset);
-    try std.testing.expectEqual(@as(?usize, 31), info.top_dict.vstore_offset);
+    try std.testing.expectEqual(@as(?usize, 31), info.top_dict.fd_select_offset);
+    try std.testing.expectEqual(@as(?usize, 33), info.top_dict.vstore_offset);
     const charstrings = info.charstrings_index.?;
     try std.testing.expectEqual(@as(u32, 1), charstrings.count);
     try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
     try std.testing.expectEqual(@as(usize, 22), charstrings.data_offset);
     try std.testing.expectEqual(@as(usize, 1), charstrings.data_length);
+    const fd_array = info.fd_array_index.?;
+    try std.testing.expectEqual(@as(u32, 1), fd_array.count);
+    try std.testing.expectEqual(@as(usize, 30), fd_array.data_offset);
+    try std.testing.expectEqual(@as(usize, 1), fd_array.data_length);
     try std.testing.expectEqualSlices(u8, &.{14}, (try font.cff2CharStringData(0)).?);
     try std.testing.expect((try font.cff2CharStringData(1)) == null);
 

@@ -384,6 +384,7 @@ fn featureApplicationsEqual(a: []const gsub.FeatureApplication, b: []const gsub.
 const GlyphMetricsKey = struct {
     font_addr: usize,
     glyph_id: GlyphId,
+    variation_hash: u64 = 0,
 };
 
 pub const GlyphMetricsCache = struct {
@@ -415,13 +416,20 @@ pub const GlyphMetricsCache = struct {
     }
 
     pub fn horizontalMetrics(self: *GlyphMetricsCache, font: *const Font, glyph_id: GlyphId) !GlyphMetrics {
-        const key = glyphMetricsKey(font, glyph_id);
+        return try self.horizontalMetricsAtCoords(font, glyph_id, &.{});
+    }
+
+    pub fn horizontalMetricsAtCoords(self: *GlyphMetricsCache, font: *const Font, glyph_id: GlyphId, normalized_variation_coords: []const f32) !GlyphMetrics {
+        const key = glyphMetricsKey(font, glyph_id, normalized_variation_coords);
         if (self.entries.get(key)) |metrics| {
             self.hits += 1;
             return metrics;
         }
         self.misses += 1;
-        const raw = try font.horizontalMetrics(glyph_id);
+        const raw = if (normalized_variation_coords.len == 0)
+            try font.horizontalMetrics(glyph_id)
+        else
+            try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords);
         const metrics = GlyphMetrics{
             .advance_width = raw.advance_width,
             .left_side_bearing = raw.left_side_bearing,
@@ -431,13 +439,20 @@ pub const GlyphMetricsCache = struct {
     }
 
     pub fn verticalMetrics(self: *GlyphMetricsCache, font: *const Font, glyph_id: GlyphId) !?VerticalGlyphMetrics {
-        const key = glyphMetricsKey(font, glyph_id);
+        return try self.verticalMetricsAtCoords(font, glyph_id, &.{});
+    }
+
+    pub fn verticalMetricsAtCoords(self: *GlyphMetricsCache, font: *const Font, glyph_id: GlyphId, normalized_variation_coords: []const f32) !?VerticalGlyphMetrics {
+        const key = glyphMetricsKey(font, glyph_id, normalized_variation_coords);
         if (self.vertical_entries.get(key)) |metrics| {
             self.hits += 1;
             return metrics;
         }
         self.misses += 1;
-        const raw = try font.verticalMetrics(glyph_id);
+        const raw = if (normalized_variation_coords.len == 0)
+            try font.verticalMetrics(glyph_id)
+        else
+            try font.verticalMetricsAtCoords(glyph_id, normalized_variation_coords);
         const metrics: ?VerticalGlyphMetrics = if (raw) |value| .{
             .advance_height = value.advance_height,
             .top_side_bearing = value.top_side_bearing,
@@ -521,9 +536,21 @@ pub const GlyphIndexCache = struct {
     }
 };
 
-fn glyphMetricsKey(font: *const Font, glyph_id: GlyphId) GlyphMetricsKey {
+fn glyphMetricsKey(font: *const Font, glyph_id: GlyphId, normalized_variation_coords: []const f32) GlyphMetricsKey {
     return .{
         .font_addr = @intFromPtr(font),
         .glyph_id = glyph_id,
+        .variation_hash = variationCoordsHash(normalized_variation_coords),
     };
+}
+
+fn variationCoordsHash(coords: []const f32) u64 {
+    if (coords.len == 0) return 0;
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(std.mem.asBytes(&coords.len));
+    for (coords) |coord| {
+        const bits: u32 = @bitCast(coord);
+        hasher.update(std.mem.asBytes(&bits));
+    }
+    return hasher.final();
 }

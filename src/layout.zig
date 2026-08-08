@@ -3212,15 +3212,11 @@ fn runHasGdefMarks(glyphs: []const GlyphId, metadata: GdefLookupMetadata) bool {
 }
 
 fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId, normalized_variation_coords: []const f32) !GlyphMetrics {
-    if (normalized_variation_coords.len != 0) {
-        const raw = try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords);
-        return .{
-            .advance_width = raw.advance_width,
-            .left_side_bearing = raw.left_side_bearing,
-        };
-    }
-    if (cache) |metrics_cache| return try metrics_cache.horizontalMetrics(font, glyph_id);
-    const raw = try font.horizontalMetrics(glyph_id);
+    if (cache) |metrics_cache| return try metrics_cache.horizontalMetricsAtCoords(font, glyph_id, normalized_variation_coords);
+    const raw = if (normalized_variation_coords.len == 0)
+        try font.horizontalMetrics(glyph_id)
+    else
+        try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords);
     return .{
         .advance_width = raw.advance_width,
         .left_side_bearing = raw.left_side_bearing,
@@ -3228,18 +3224,8 @@ fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCa
 }
 
 fn verticalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId, normalized_variation_coords: []const f32) !?VerticalGlyphMetrics {
-    if (normalized_variation_coords.len != 0) {
-        const raw = font.verticalMetricsAtCoords(glyph_id, normalized_variation_coords) catch |err| switch (err) {
-            error.InvalidMetrics => null,
-            else => return err,
-        };
-        return if (raw) |value| .{
-            .advance_height = value.advance_height,
-            .top_side_bearing = value.top_side_bearing,
-        } else null;
-    }
     if (cache) |metrics_cache| {
-        return metrics_cache.verticalMetrics(font, glyph_id) catch |err| switch (err) {
+        return metrics_cache.verticalMetricsAtCoords(font, glyph_id, normalized_variation_coords) catch |err| switch (err) {
             // Some deployed CJK fonts advertise optional vhea/vmtx tables with
             // unusable header line metrics. Vertical shaping must still retain
             // its y-axis contract and vert substitutions; fall back to one em
@@ -3248,7 +3234,10 @@ fn verticalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCach
             else => return err,
         };
     }
-    const raw = font.verticalMetrics(glyph_id) catch |err| switch (err) {
+    const raw = (if (normalized_variation_coords.len == 0)
+        font.verticalMetrics(glyph_id)
+    else
+        font.verticalMetricsAtCoords(glyph_id, normalized_variation_coords)) catch |err| switch (err) {
         error.InvalidMetrics => null,
         else => return err,
     };

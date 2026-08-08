@@ -6535,6 +6535,41 @@ test "caches glyph metrics by font and glyph id during shaping" {
     try std.testing.expectEqual(@as(usize, 0), metrics_cache.misses);
 }
 
+test "caches glyph metrics by variation coordinates during shaping" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var metrics_cache = GlyphMetricsCache.init(allocator);
+    defer metrics_cache.deinit();
+
+    const default_metrics = try metrics_cache.horizontalMetricsAtCoords(&font, 1, &.{});
+    const varied_metrics = try metrics_cache.horizontalMetricsAtCoords(&font, 1, &.{0.5});
+    const varied_again = try metrics_cache.horizontalMetricsAtCoords(&font, 1, &.{0.5});
+    try std.testing.expectEqual(@as(u16, 800), default_metrics.advance_width);
+    try std.testing.expectEqual(@as(u16, 804), varied_metrics.advance_width);
+    try std.testing.expectEqual(varied_metrics.advance_width, varied_again.advance_width);
+    try std.testing.expectEqual(@as(usize, 1), metrics_cache.hits);
+    try std.testing.expectEqual(@as(usize, 2), metrics_cache.misses);
+    try std.testing.expectEqual(@as(usize, 2), metrics_cache.entries.count());
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const shaped = try TextShaper.shapeUtf8CascadeFullyCachedWithOptions(cascade, null, &metrics_cache, null, &layout_buffer, "AAA", 20, .{
+        .normalized_variation_coords = &.{0.5},
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 44.24), shaped.width(), 0.001);
+    try std.testing.expect(metrics_cache.hits >= 3);
+    try std.testing.expectEqual(@as(usize, 2), metrics_cache.misses);
+}
+
 test "caches glyph indices by font and codepoint during shaping" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

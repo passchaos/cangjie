@@ -618,11 +618,11 @@ pub const Rasterizer = struct {
 
         const sample_axis: i32 = @max(1, @as(i32, self.samples_per_axis));
         const sample_count = sample_axis * sample_axis;
-        var coverage_lut: [256]u8 = undefined;
-        for (&coverage_lut, 0..) |*coverage, count| {
-            const clamped_count = @min(@as(i32, @intCast(count)), sample_count);
-            coverage.* = @intCast(@divTrunc(clamped_count * 255, sample_count));
-        }
+        var dynamic_coverage_lut: [256]u8 = undefined;
+        const coverage_lut = coverageLutForSampleCount(sample_count) orelse blk: {
+            fillCoverageLut(&dynamic_coverage_lut, sample_count);
+            break :blk dynamic_coverage_lut[0..];
+        };
         const sample_axis_usize: usize = @intCast(sample_axis);
         var dynamic_sample_offsets: []f32 = &.{};
         const sample_offsets: []const f32 = sampleOffsetsForAxis(sample_axis) orelse blk: {
@@ -826,6 +826,9 @@ const GlyphFillRule = enum {
 const sample_offsets_1 = [_]f32{0.5};
 const sample_offsets_2 = [_]f32{ 0.25, 0.75 };
 const sample_offsets_4 = [_]f32{ 0.125, 0.375, 0.625, 0.875 };
+const coverage_lut_1 = makeCoverageLut(1);
+const coverage_lut_4 = makeCoverageLut(4);
+const coverage_lut_16 = makeCoverageLut(16);
 
 fn sampleOffsetsForAxis(sample_axis: i32) ?[]const f32 {
     return switch (sample_axis) {
@@ -834,6 +837,28 @@ fn sampleOffsetsForAxis(sample_axis: i32) ?[]const f32 {
         4 => &sample_offsets_4,
         else => null,
     };
+}
+
+fn coverageLutForSampleCount(sample_count: i32) ?[]const u8 {
+    return switch (sample_count) {
+        1 => &coverage_lut_1,
+        4 => &coverage_lut_4,
+        16 => &coverage_lut_16,
+        else => null,
+    };
+}
+
+fn makeCoverageLut(comptime sample_count: i32) [256]u8 {
+    var lut: [256]u8 = undefined;
+    fillCoverageLut(&lut, sample_count);
+    return lut;
+}
+
+fn fillCoverageLut(lut: *[256]u8, sample_count: i32) void {
+    for (lut, 0..) |*coverage, count| {
+        const clamped_count = @min(@as(i32, @intCast(count)), sample_count);
+        coverage.* = @intCast(@divTrunc(clamped_count * @as(i32, 255), sample_count));
+    }
 }
 
 fn lessThanWindingIntersection(_: void, lhs: WindingIntersection, rhs: WindingIntersection) bool {

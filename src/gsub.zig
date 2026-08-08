@@ -113,6 +113,7 @@ pub const LookupAccelerator = struct {
     chaining_subtable_digests: []const GlyphDigest = &.{},
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const ChainingSubtableGroup = &.{},
+    chaining_group_slots: []const u16 = &.{},
     chaining_class_subtables: []const ChainingClassSubtableAccelerator = &.{},
     reverse_chaining_subtables: []const ReverseChainingSingleSubtable = &.{},
     reverse_chaining_groups: []const ChainingSubtableGroup = &.{},
@@ -892,6 +893,7 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
             allocator.free(group.subtable_indices);
         }
         allocator.free(accelerator.chaining_groups);
+        allocator.free(accelerator.chaining_group_slots);
         deinitChainingClassSubtableAccelerators(allocator, accelerator.chaining_class_subtables);
         allocator.free(accelerator.reverse_chaining_subtables);
         allocator.free(accelerator.reverse_chaining_exact_contexts);
@@ -1061,6 +1063,8 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         for (chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(chaining_groups);
     }
+    const chaining_group_slots = try buildChainingGroupSlots(chaining_groups, allocator);
+    errdefer allocator.free(chaining_group_slots);
     return .{
         .single_subst = single_subst,
         .extension_lookup_type = extension_lookup_type_value,
@@ -1070,6 +1074,7 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         .chaining_subtable_digests = subtable_digests,
         .chaining_subtables = chaining_subtables,
         .chaining_groups = chaining_groups,
+        .chaining_group_slots = chaining_group_slots,
     };
 }
 
@@ -3568,7 +3573,7 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
         if (accelerator) |accel| {
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
-            const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, current_glyph) orelse continue;
+            const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, accel.chaining_group_slots, current_glyph) orelse continue;
             const second_glyph_index = if (accel.chaining_needs_second_input)
                 nextUnignoredGlyphIndex(glyphs.items, pos + 1, lookup_flag, options, false, pos)
             else
@@ -3699,7 +3704,7 @@ fn applyExtensionReverseChainingSingleSubstitutionLookup(table: Table, lookup_of
                 markGlyphSubstituted(options, pos);
                 continue;
             }
-            const grouped_subtables = chainingSubtableGroupForGlyph(accel.reverse_chaining_groups, glyph) orelse continue;
+            const grouped_subtables = chainingSubtableGroupForGlyph(accel.reverse_chaining_groups, &.{}, glyph) orelse continue;
             for (grouped_subtables) |subtable_i| {
                 if (subtable_i >= accel.reverse_chaining_subtables.len) return error.BadGsub;
                 if (try applyParsedReverseChainingSingleSubstitutionAt(table, accel.reverse_chaining_subtables[subtable_i], glyphs, pos, lookup_flag, options)) break;
@@ -5847,7 +5852,34 @@ fn buildChainingSubtableGroups(pairs: []ChainingSubtablePair, allocator: std.mem
     return groups;
 }
 
-fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, glyph: GlyphId) ?[]const u16 {
+const min_chaining_groups_for_hash = 8;
+
+fn buildChainingGroupSlots(groups: []const ChainingSubtableGroup, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u16 {
+    if (groups.len < min_chaining_groups_for_hash or groups.len > std.math.maxInt(u16)) return try allocator.alloc(u16, 0);
+    // A 50% maximum load factor bounds unsuccessful probes while keeping the
+    // accelerator proportional to unique first-input glyphs, not glyph-id
+    // span. Slot zero denotes empty; populated slots store group_index + 1.
+    const slot_count = std.math.ceilPowerOfTwo(usize, groups.len * 2) catch return error.OutOfMemory;
+    const slots = try allocator.alloc(u16, slot_count);
+    @memset(slots, 0);
+    for (groups, 0..) |group, group_i| {
+        var slot = chainingGroupHash(group.glyph) & (slots.len - 1);
+        while (slots[slot] != 0) slot = (slot + 1) & (slots.len - 1);
+        slots[slot] = @intCast(group_i + 1);
+    }
+    return slots;
+}
+
+fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, slots: []const u16, glyph: GlyphId) ?[]const u16 {
+    if (slots.len != 0) {
+        var slot = chainingGroupHash(glyph) & (slots.len - 1);
+        while (slots[slot] != 0) : (slot = (slot + 1) & (slots.len - 1)) {
+            const group = groups[slots[slot] - 1];
+            if (group.glyph == glyph) return group.subtable_indices;
+        }
+        return null;
+    }
+
     var lo: usize = 0;
     var hi: usize = groups.len;
     while (lo < hi) {
@@ -5862,6 +5894,31 @@ fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, glyph: G
         }
     }
     return null;
+}
+
+fn chainingGroupHash(glyph: GlyphId) usize {
+    return @as(usize, glyph) *% 0x9e37;
+}
+
+test "GSUB chaining group slots preserve hits and misses" {
+    const allocator = std.testing.allocator;
+    var groups: [min_chaining_groups_for_hash]ChainingSubtableGroup = undefined;
+    var group_indices: [min_chaining_groups_for_hash][1]u16 = undefined;
+    for (&groups, 0..) |*group, i| {
+        group_indices[i][0] = @intCast(i);
+        group.* = .{
+            .glyph = @intCast(10 + i * 17),
+            .subtable_indices = &group_indices[i],
+        };
+    }
+    const slots = try buildChainingGroupSlots(&groups, allocator);
+    defer allocator.free(slots);
+    try std.testing.expect(slots.len >= groups.len * 2);
+    for (groups, 0..) |group, i| {
+        const indices = chainingSubtableGroupForGlyph(&groups, slots, group.glyph) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualSlices(u16, &.{@intCast(i)}, indices);
+    }
+    try std.testing.expect(chainingSubtableGroupForGlyph(&groups, slots, 9) == null);
 }
 
 fn validateCoverageFormat1Order(table: Table, coverage_offset: usize, glyph_count: u16) GsubError!void {

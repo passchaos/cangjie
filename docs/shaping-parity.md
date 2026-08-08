@@ -171,6 +171,15 @@ Current local snapshot after the Nastaliq parity work:
   input. A same-session nine-sample `fa-thelittleprince` comparison reduced the
   median from `1612 ns/glyph` to `1602 ns/glyph`, about `0.6%`; Roboto
   `en-words` remained effectively flat (`962 ns/glyph` in both runs).
+- Replacing binary search over accelerated GSUB first-input groups with a
+  bounded open-addressed `u16` slot table reduced a subsequent same-session
+  nine-sample Amiri `fa-thelittleprince` median from `1600 ns/glyph` to
+  `1448 ns/glyph`, about `9.5%`. Lookups with fewer than eight groups retain
+  binary search; larger lookups use a power-of-two table at no more than 50%
+  load, totaling only 14,912 bytes for Amiri. The associated `perf` run
+  measured `1443 ns/glyph`, reduced the chaining lookup share from about
+  `28.9%` to `21.8%`, and no longer reported the group-search function
+  separately.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

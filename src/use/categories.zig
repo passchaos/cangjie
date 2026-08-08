@@ -124,6 +124,25 @@ pub fn forCodepoint(codepoint: u21) Category {
         0xaa4c,
         => .final_above,
         0xaa4d => .final_post,
+        0x11000,
+        0x11002,
+        => .vowel_mod_post,
+        0x11001 => .vowel_mod_above,
+        0x11003...0x11004 => .cons_with_stacker,
+        0x11005...0x11037,
+        0x11066...0x1106f,
+        0x11071...0x11072,
+        0x11075,
+        => .base,
+        0x11038...0x1103b,
+        0x11042...0x11045,
+        0x11070,
+        0x11073...0x11074,
+        => .vowel_above,
+        0x1103c...0x11041 => .vowel_below,
+        0x11046 => .halant,
+        0x11052...0x11065 => .base_num,
+        0x1107f => .halant_num,
         0x11c72...0x11c8f => .base,
         0x11c92...0x11ca7,
         0x11ca9...0x11caf,
@@ -247,6 +266,15 @@ test "Cham USE categories distinguish medial positions" {
 test "Batak USE categories distinguish vowels and reordering killers" {
     const codepoints = [_]u21{ 0x1bc7, 0x1be6, 0x1bea, 0x1bed, 0x1bf0, 0x1bf3 };
     const expected = [_]Category{ .base, .consonant_mod_above, .vowel_post, .vowel_above, .final_above, .reordering_killer };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Brahmi USE categories distinguish numbers and joiners" {
+    const codepoints = [_]u21{ 0x11003, 0x11013, 0x1103c, 0x11046, 0x11052, 0x1107f };
+    const expected = [_]Category{ .cons_with_stacker, .base, .vowel_below, .halant, .base_num, .halant_num };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

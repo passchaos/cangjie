@@ -9,7 +9,7 @@ const categories = @import("use/categories.zig");
 const syllables = @import("use/syllables.zig");
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .bali or script_tag == .batk or script_tag == .cham or script_tag == .dupl or script_tag == .java or script_tag == .marc;
+    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cham or script_tag == .dupl or script_tag == .java or script_tag == .marc;
 }
 
 pub const Category = categories.Category;
@@ -394,6 +394,7 @@ test "USE category covers Duployan sample codepoints" {
 test "USE shaping includes Balinese" {
     try @import("std").testing.expect(shouldShape(.bali));
     try @import("std").testing.expect(shouldShape(.batk));
+    try @import("std").testing.expect(shouldShape(.brah));
     try @import("std").testing.expect(shouldShape(.cham));
     try @import("std").testing.expect(shouldShape(.dupl));
     try @import("std").testing.expect(shouldShape(.java));

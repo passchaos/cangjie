@@ -430,6 +430,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   cmap EncodingRecord with an unknown platform-0 encoding ID and repeated
   reordering killers that each require a dotted circle. The corpus is retained
   in `tests/data/batak-use-tests.txt`.
+- Brahmi passes all four script-specific cases extracted from upstream
+  `in-house/use-syllable.tests` across two fixture fonts. These cover numeral
+  joiners, consonant-with-stacker bases, dependent vowels, and explicit virama
+  clusters. Retained corpora are `tests/data/brahmi-use-font1.txt`
+  (`checksum=b27f31c50b8dfdbc`) and `tests/data/brahmi-use-font2.txt`
+  (`checksum=f386e68d32dec96b`).
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -453,9 +459,9 @@ goal is active, not complete.
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
-  Marchen, Cham, and Batak gates. Other USE scripts/fonts and fuzz/corpus
-  failures still need retained gates before this can be called broad USE
-  parity.
+  Marchen, Cham, Batak, and Brahmi gates. Other USE scripts/fonts and
+  fuzz/corpus failures still need retained gates before this can be called
+  broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

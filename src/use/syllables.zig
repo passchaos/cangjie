@@ -495,6 +495,22 @@ test "USE syllables group a Javanese prebase vowel with its base" {
     );
 }
 
+test "USE syllables identify Brahmi numeral groups" {
+    const allocator = std.testing.allocator;
+    const codepoints = [_]u21{ 0x11064, 0x1107f, 0x11052, 0x11065, 0x1107f, 0x11053 };
+    const syllables = try find(allocator, &codepoints);
+    defer allocator.free(syllables);
+
+    try std.testing.expectEqualSlices(
+        Syllable,
+        &.{
+            .{ .start = 0, .end = 3, .kind = .numeral },
+            .{ .start = 3, .end = 6, .kind = .numeral },
+        },
+        syllables,
+    );
+}
+
 test "USE source features assign topographical forms per syllable" {
     const allocator = std.testing.allocator;
     const codepoints = [_]u21{ 0x1bc02, 0x1bc5b, 0x034f, 0x034f, 0x034f, 0x1bc1c, 0x200c, 0x1bc02 };

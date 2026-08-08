@@ -24,8 +24,12 @@ pub fn print(options: options_mod.Options, result: Result) void {
 pub fn printComparison(options: options_mod.Options, cangjie: Result, freetype: Result) void {
     const cangjie_ns = nsPerIter(options, cangjie);
     const freetype_ns = nsPerIter(options, freetype);
+    const cangjie_stats = sampleStats(cangjie.samples, options.iterations);
+    const freetype_stats = sampleStats(freetype.samples, options.iterations);
     const speedup = if (cangjie_ns == 0) 0 else freetype_ns / cangjie_ns;
+    const median_speedup = if (cangjie_stats.median == 0) 0 else freetype_stats.median / cangjie_stats.median;
     const faster = if (cangjie_ns <= freetype_ns) "cangjie" else "freetype";
+    const median_faster = if (cangjie_stats.median <= freetype_stats.median) "cangjie" else "freetype";
     switch (options.output_format) {
         .text => std.debug.print(
             \\comparison=cangjie-vs-freetype
@@ -34,12 +38,16 @@ pub fn printComparison(options: options_mod.Options, cangjie: Result, freetype: 
             \\freetype_ns_per_iter={d:.3}
             \\cangjie_speedup_vs_freetype={d:.3}
             \\faster={s}
+            \\cangjie_median_ns_per_iter={d:.3}
+            \\freetype_median_ns_per_iter={d:.3}
+            \\cangjie_median_speedup_vs_freetype={d:.3}
+            \\median_faster={s}
             \\
-        , .{ options.mode.label(), cangjie_ns, freetype_ns, speedup, faster }),
+        , .{ options.mode.label(), cangjie_ns, freetype_ns, speedup, faster, cangjie_stats.median, freetype_stats.median, median_speedup, median_faster }),
         .tsv => std.debug.print(
-            "comparison\tmode\tcangjie_ns_per_iter\tfreetype_ns_per_iter\tcangjie_speedup_vs_freetype\tfaster\n" ++
-                "cangjie-vs-freetype\t{s}\t{d:.3}\t{d:.3}\t{d:.3}\t{s}\n",
-            .{ options.mode.label(), cangjie_ns, freetype_ns, speedup, faster },
+            "comparison\tmode\tcangjie_ns_per_iter\tfreetype_ns_per_iter\tcangjie_speedup_vs_freetype\tfaster\tcangjie_median_ns_per_iter\tfreetype_median_ns_per_iter\tcangjie_median_speedup_vs_freetype\tmedian_faster\n" ++
+                "cangjie-vs-freetype\t{s}\t{d:.3}\t{d:.3}\t{d:.3}\t{s}\t{d:.3}\t{d:.3}\t{d:.3}\t{s}\n",
+            .{ options.mode.label(), cangjie_ns, freetype_ns, speedup, faster, cangjie_stats.median, freetype_stats.median, median_speedup, median_faster },
         ),
     }
 }

@@ -2926,6 +2926,14 @@ fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
 
 fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, glyph_index: usize, removed_len: usize, inserted_len: usize, source: usize) std.mem.Allocator.Error!void {
     const cluster = clusterForGlyph(options, glyph_index);
+    var component_info = if (options.ligature_components) |components|
+        if (glyph_index < components.items.len)
+            components.items[glyph_index]
+        else
+            defaultLigatureComponentInfo(source)
+    else
+        defaultLigatureComponentInfo(source);
+    if (inserted_len > 1) component_info.multiplied = true;
     if (options.glyph_source_indices) |sources| {
         if (glyph_index <= sources.items.len) {
             const remove_count = @min(removed_len, sources.items.len - glyph_index);
@@ -2958,7 +2966,13 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
             const remove_count = @min(removed_len, components.items.len - glyph_index);
             const replacements = try allocator.alloc(gpos.LigatureComponentInfo, inserted_len);
             defer allocator.free(replacements);
-            @memset(replacements, defaultLigatureComponentInfo(source));
+            // MultipleSubst can decompose a glyph produced by a ligature. Each
+            // output remains ligated in HarfBuzz, which matters to script
+            // reorder (a decomposed halant-looking glyph is not a live
+            // halant) and later mark attachment. Preserve that provenance
+            // across every replacement component instead of resetting it to a
+            // one-source glyph.
+            @memset(replacements, component_info);
             try components.replaceRange(allocator, glyph_index, remove_count, replacements);
         }
     }
@@ -7437,6 +7451,58 @@ test "GSUB source-scoped feature gates multiple substitutions" {
         .source_features = &source_features,
     });
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 3, 1 }, scoped.items);
+}
+
+test "GSUB multiple substitution preserves ligature provenance" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 32;
+
+    writeU16Test(&bytes, 0, 2); // MultipleSubst lookup.
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+    const multiple = 8;
+    writeU16Test(&bytes, multiple + 0, 1);
+    writeU16Test(&bytes, multiple + 2, 12);
+    writeU16Test(&bytes, multiple + 4, 1);
+    writeU16Test(&bytes, multiple + 6, 18);
+    writeCoverage1(&bytes, multiple + 12, 10);
+    const sequence = multiple + 18;
+    writeU16Test(&bytes, sequence + 0, 2);
+    writeU16Test(&bytes, sequence + 2, 20);
+    writeU16Test(&bytes, sequence + 4, 21);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 10);
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.append(allocator, 3);
+
+    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    defer components.deinit(allocator);
+    var ligature_info = gpos.LigatureComponentInfo{ .component_count = 2 };
+    ligature_info.component_sources[0] = 3;
+    ligature_info.component_sources[1] = 4;
+    try components.append(allocator, ligature_info);
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .glyph_source_indices = &sources,
+        .ligature_components = &components,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 20, 21 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 3 }, sources.items);
+    try std.testing.expectEqual(@as(u8, 2), components.items[0].component_count);
+    try std.testing.expectEqual(@as(u8, 2), components.items[1].component_count);
+    try std.testing.expect(components.items[0].multiplied);
+    try std.testing.expect(components.items[1].multiplied);
+    try std.testing.expectEqualSlices(
+        usize,
+        components.items[0].component_sources[0..2],
+        components.items[1].component_sources[0..2],
+    );
 }
 
 test "GSUB LangSys required feature bypasses optional feature filtering" {

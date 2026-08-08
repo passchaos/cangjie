@@ -381,6 +381,17 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   ordering and CursivePos placement/advance chaining. The remaining USE work is
   to validate other USE scripts and fonts before making a broader USE parity
   claim.
+- NotoSansBalinese passes `compare-harfbuzz` for all 43 SHBALI rendering-test
+  cases retained in `tests/data/balinese-rendering-tests.txt`, covering USE
+  category assignment, syllable cluster ownership, split pre-base vowels,
+  broken-syllable dotted circles, ligature decomposition, and GPOS output
+  (`checksum=b7767f522a7f1ef`). The gate is:
+  ```sh
+  zig build shape-bench -Doptimize=ReleaseFast -- \
+    --engine compare-harfbuzz \
+    --font ~/Work/harfbuzz/test/shape/data/text-rendering-tests/fonts/NotoSansBalinese-Regular.ttf \
+    --text-file tests/data/balinese-rendering-tests.txt --direction ltr
+  ```
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -403,9 +414,9 @@ goal is active, not complete.
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
-- Expand USE shaping parity beyond Duployan. The full local `duployan.txt`
-  gate now passes, but other USE scripts/fonts and fuzz/corpus failures still
-  need retained gates before this can be called broad USE parity.
+- Expand USE shaping parity beyond the retained Duployan and Balinese gates.
+  Other USE scripts/fonts and fuzz/corpus failures still need retained gates
+  before this can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

@@ -50,6 +50,26 @@ pub const Category = enum(u8) {
 pub fn forCodepoint(codepoint: u21) Category {
     return switch (codepoint) {
         0x034f => .cg_joiner,
+        // Keep these ranges in sync with the generated Unicode USE table.
+        // Unlike general categories, USE categories encode the grammatical
+        // role of each sign in the syllable state machine and reordering pass.
+        0x1b00...0x1b02 => .vowel_mod_above,
+        0x1b03 => .final_above,
+        0x1b04 => .vowel_mod_post,
+        0x1b05...0x1b33,
+        0x1b45...0x1b4c,
+        0x1b50...0x1b59,
+        => .base,
+        0x1b34 => .consonant_mod_above,
+        0x1b35 => .vowel_post,
+        0x1b36...0x1b37,
+        0x1b3c...0x1b3d,
+        0x1b42...0x1b43,
+        => .vowel_above,
+        0x1b38...0x1b3b => .vowel_below,
+        0x1b3e...0x1b41 => .vowel_pre,
+        0x1b44 => .halant,
+        0x1b6b...0x1b73 => .symbol_mod_above,
         0x200c => .zwnj,
         0x2060 => .word_joiner,
         0x1bc00...0x1bc6a,
@@ -123,4 +143,13 @@ test "Duployan affixes use HarfBuzz consonant category" {
     try @import("std").testing.expectEqual(Category.base, forCodepoint(0x1bc70));
     try @import("std").testing.expectEqual(Category.base, forCodepoint(0x1bc88));
     try @import("std").testing.expectEqual(Category.base, forCodepoint(0x1bc99));
+}
+
+test "Balinese USE categories distinguish a stacked consonant syllable" {
+    const codepoints = [_]u21{ 0x1b15, 0x1b44, 0x1b16, 0x1b02 };
+    const expected = [_]Category{ .base, .halant, .base, .vowel_mod_above };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
 }

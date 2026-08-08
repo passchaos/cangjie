@@ -14,6 +14,11 @@ pub const LigatureComponentInfo = struct {
     /// ligature glyph. Non-ligature glyphs may leave component_count at 1.
     component_count: u8 = 1,
     component_sources: [max_ligature_components]usize = [_]usize{0} ** max_ligature_components,
+    /// True when MultipleSubst decomposed this glyph after ligation. The
+    /// component sources still matter to attachment and USE must still treat
+    /// the result as ligated, but Indic reph detection must not mistake an
+    /// individual multiplied component for an intact ligature.
+    multiplied: bool = false,
 };
 
 /// GPOS produces additive adjustments instead of mutating glyph ids. The caller

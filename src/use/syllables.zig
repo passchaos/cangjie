@@ -100,7 +100,7 @@ pub fn markSourceFeatures(
 
     for (syllables, 0..) |syllable, syllable_index| {
         const serial: u8 = @intCast((syllable_index % 15) + 1);
-        markSyllableRange(source_syllables, syllable.start, syllable.end, serial);
+        markSyllableRange(source_syllables, syllable.start, syllable.end, serial, syllable.kind);
         markRange(source_features, syllable.start, syllable.end, per_syllable_mask);
         markRphfSources(source_features, codepoints, syllable);
     }
@@ -395,9 +395,13 @@ fn markRange(source_features: []u32, start: usize, end: usize, mask: u32) void {
     }
 }
 
-fn markSyllableRange(source_syllables: []u8, start: usize, end: usize, serial: u8) void {
+fn markSyllableRange(source_syllables: []u8, start: usize, end: usize, serial: u8, kind: SyllableType) void {
+    // Match HarfBuzz's packed syllable byte: the high nibble is a wrapping
+    // serial and the low nibble is the machine's syllable type. GSUB matching
+    // compares the complete byte, while reorder can inspect broken clusters.
+    const syllable_id = (serial << 4) | @intFromEnum(kind);
     for (source_syllables[start..end]) |*syllable| {
-        syllable.* = serial;
+        syllable.* = syllable_id;
     }
 }
 
@@ -465,6 +469,19 @@ test "USE syllables keep CGJ with surrounding Duployan source range" {
     try std.testing.expectEqual(Syllable{ .start = 7, .end = 8, .kind = .standard }, syllables[3]);
 }
 
+test "USE syllables group a Balinese stacked consonant and modifier" {
+    const allocator = std.testing.allocator;
+    const codepoints = [_]u21{ 0x1b15, 0x1b44, 0x1b16, 0x1b02 };
+    const syllables = try find(allocator, &codepoints);
+    defer allocator.free(syllables);
+
+    try std.testing.expectEqualSlices(
+        Syllable,
+        &.{.{ .start = 0, .end = codepoints.len, .kind = .standard }},
+        syllables,
+    );
+}
+
 test "USE source features assign topographical forms per syllable" {
     const allocator = std.testing.allocator;
     const codepoints = [_]u21{ 0x1bc02, 0x1bc5b, 0x034f, 0x034f, 0x034f, 0x1bc1c, 0x200c, 0x1bc02 };
@@ -483,5 +500,18 @@ test "USE source features assign topographical forms per syllable" {
         try std.testing.expect((feature & locl_mask) == locl_mask);
         try std.testing.expect((feature & cjct_mask) == cjct_mask);
     }
-    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 2, 2, 2, 3, 3, 4 }, &source_syllables);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0x12,
+            0x22,
+            0x22,
+            0x22,
+            0x22,
+            0x32,
+            0x32,
+            0x42,
+        },
+        &source_syllables,
+    );
 }

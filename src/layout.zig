@@ -3266,6 +3266,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try source_features.resize(buffer.allocator, codepoints.items.len);
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
         try use_shaper.markSourceFeatures(buffer.allocator, source_features.items, source_syllables.items, codepoints.items);
+        use_shaper.mergeSyllableClusters(
+            glyph_source_indices.items,
+            glyph_cluster_indices.items,
+            source_syllables.items,
+        );
         var use_options = gsub_options;
         use_options.source_features = source_features.items;
         use_options.source_syllables = source_syllables.items;
@@ -3274,6 +3279,29 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.rphfFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.prefFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        if (use_shaper.hasBrokenSyllable(source_syllables.items)) {
+            const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+            try use_shaper.insertDottedCirclesForBrokenSyllables(
+                buffer.allocator,
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                source_syllables.items,
+                codepoints.items,
+                dotted_circle_glyph,
+            );
+        }
+        use_shaper.reorderPrebaseGlyphs(
+            glyph_ids.items,
+            glyph_source_indices.items,
+            glyph_cluster_indices.items,
+            glyph_substituted.items,
+            ligature_components.items,
+            source_syllables.items,
+            codepoints.items,
+        );
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.topographicalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyMergedGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyMergedGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
@@ -3299,6 +3327,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 buffer.allocator,
                 glyph_ids,
                 glyph_source_indices,
+                glyph_cluster_indices,
                 glyph_substituted,
                 ligature_components,
                 codepoints.items,
@@ -3311,9 +3340,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
-            indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_substituted, ligature_components, codepoints.items);
+            indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
-            indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_substituted, ligature_components, codepoints.items);
+            indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
         }
     }

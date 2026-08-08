@@ -184,14 +184,14 @@ zig build line-break-bench -Doptimize=ReleaseFast -- \
 ```
 
 On the initial mixed-script 123-byte fixture, 100,000 iterations measured about
-`2.7–2.8 ns/byte` for Cangjie's checked public constructor and about
-`1.6–1.9 ns/byte` for an equivalent Release-mode `unicode-linebreak 0.1.5`
-harness, with identical break counts and checksums. The public Cangjie benchmark
-also validates UTF-8 on each reconstruction and is intentionally stricter than
-Rust's already-valid `&str` input. Validation does not run inside the
-per-scalar iterator step. The iterator is correct and allocation-free, but does
-not yet beat the reference performance bar; this result must not be presented
-as a performance win.
+`2.26 ns/byte` for Cangjie's checked public constructor and about
+`1.69 ns/byte` for its validated iterator-only path. An equivalent Release-mode
+`unicode-linebreak 0.1.5` harness measured about `1.54–1.59 ns/byte`, with
+identical break counts and checksums. Cangjie's constructor validates UTF-8,
+whereas Rust's `&str` carries validity in its type; the benchmark reports both
+contracts explicitly. Moving valid-scalar decoding to a branch-minimal hot path
+improved the prior checked result by about 18%, but mixed-script iteration still
+trails the reference slightly and must not be presented as an overall win.
 
 Repeated reflow can be compared with the legacy shape-on-every-layout path:
 

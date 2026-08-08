@@ -167,10 +167,7 @@ pub const Iterator = struct {
         while (!self.emitted_end) {
             const byte_offset: usize, const class: u8 = if (self.cursor < self.text.len) decoded: {
                 const start = self.cursor;
-                const byte_len = std.unicode.utf8ByteSequenceLength(self.text[start]) catch unreachable;
-                const end = start + byte_len;
-                const codepoint = std.unicode.utf8Decode(self.text[start..end]) catch unreachable;
-                self.cursor = end;
+                const codepoint = decodeValidScalar(self.text, &self.cursor);
                 break :decoded .{ start, @intFromEnum(classForCodepoint(codepoint)) };
             } else end: {
                 self.emitted_end = true;
@@ -210,6 +207,39 @@ pub fn breaks(text: []const u8) Error!Iterator {
 /// the package root exports the checked `breaks` constructor.
 pub fn breaksAssumeValid(text: []const u8) Iterator {
     return .initAssumeValid(text);
+}
+
+/// Decode one scalar from a byte stream already checked by `breaks`.
+///
+/// Zig's general UTF-8 helpers validate the leading and continuation bytes on
+/// every call. The iterator constructor establishes those invariants once, so
+/// repeating the checks in this per-scalar hot path only adds branches.
+inline fn decodeValidScalar(text: []const u8, cursor: *usize) u21 {
+    const start = cursor.*;
+    const first = text[start];
+    if (first < 0x80) {
+        cursor.* = start + 1;
+        return first;
+    }
+    const second = text[start + 1];
+    if (first < 0xe0) {
+        cursor.* = start + 2;
+        return (@as(u21, first & 0x1f) << 6) |
+            @as(u21, second & 0x3f);
+    }
+    const third = text[start + 2];
+    if (first < 0xf0) {
+        cursor.* = start + 3;
+        return (@as(u21, first & 0x0f) << 12) |
+            (@as(u21, second & 0x3f) << 6) |
+            @as(u21, third & 0x3f);
+    }
+    const fourth = text[start + 3];
+    cursor.* = start + 4;
+    return (@as(u21, first & 0x07) << 18) |
+        (@as(u21, second & 0x3f) << 12) |
+        (@as(u21, third & 0x3f) << 6) |
+        @as(u21, fourth & 0x3f);
 }
 
 inline fn pairValue(state: u8, class: u8) u8 {

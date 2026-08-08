@@ -57,7 +57,14 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "cangjie", .module = mod },
+                .{
+                    .name = "line_break",
+                    .module = b.createModule(.{
+                        .root_source_file = b.path("src/text/line_break.zig"),
+                        .target = target,
+                        .optimize = optimize,
+                    }),
+                },
             },
         }),
     });

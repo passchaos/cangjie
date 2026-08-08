@@ -604,6 +604,16 @@ pub const Rasterizer = struct {
 
         const sample_axis: i32 = @max(1, @as(i32, self.samples_per_axis));
         const sample_count = sample_axis * sample_axis;
+        const sample_axis_usize: usize = @intCast(sample_axis);
+        var inline_sample_offsets: [16]f32 = undefined;
+        const sample_offsets = if (sample_axis_usize <= inline_sample_offsets.len)
+            inline_sample_offsets[0..sample_axis_usize]
+        else
+            try self.allocator.alloc(f32, sample_axis_usize);
+        defer if (sample_axis_usize > inline_sample_offsets.len) self.allocator.free(sample_offsets);
+        for (sample_offsets, 0..) |*offset, sample_index| {
+            offset.* = (@as(f32, @floatFromInt(sample_index)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
+        }
         const row_width_i32 = max_x - min_x + 1;
         if (row_width_i32 <= 0) return;
         const row_width: usize = @intCast(row_width_i32);
@@ -631,9 +641,8 @@ pub const Rasterizer = struct {
         while (y <= max_y) : (y += 1) {
             @memset(coverage_counts, 0);
             var row_has_coverage = false;
-            var sy: i32 = 0;
-            while (sy < sample_axis) : (sy += 1) {
-                const py = @as(f32, @floatFromInt(y)) + (@as(f32, @floatFromInt(sy)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
+            for (sample_offsets) |sample_offset| {
+                const py = @as(f32, @floatFromInt(y)) + sample_offset;
                 var intersection_count: usize = 0;
                 for (prepared_lines) |line| {
                     if ((line.ay > py) == (line.by > py)) continue;
@@ -659,7 +668,7 @@ pub const Rasterizer = struct {
                             if (previous_x) |start_f| {
                                 const end_f = current_x;
                                 if (winding != 0) {
-                                    coverSpan(coverage_counts, min_x, max_x, sample_axis, start_f, end_f);
+                                    coverSpan(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f);
                                     row_has_coverage = true;
                                 }
                             }
@@ -675,7 +684,7 @@ pub const Rasterizer = struct {
                     .even_odd => {
                         var pair: usize = 0;
                         while (pair + 1 < intersections.len) : (pair += 2) {
-                            coverSpan(coverage_counts, min_x, max_x, sample_axis, intersections[pair].x, intersections[pair + 1].x);
+                            coverSpan(coverage_counts, min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x);
                             row_has_coverage = true;
                         }
                     },
@@ -795,7 +804,7 @@ fn sortWindingIntersections(intersections: []WindingIntersection) void {
     std.sort.heap(WindingIntersection, intersections, {}, lessThanWindingIntersection);
 }
 
-fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_axis: i32, start_f: f32, end_f: f32) void {
+fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) void {
     if (!std.math.isFinite(start_f) or !std.math.isFinite(end_f)) return;
     if (@as(f64, end_f) <= @as(f64, @floatFromInt(min_x)) or
         @as(f64, start_f) >= @as(f64, @floatFromInt(max_x)) + 1.0) return;
@@ -803,20 +812,19 @@ fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_axis: i32, st
     const x_end = @min(max_x, ceilI32Saturating(end_f));
     const full_start = @max(x, ceilI32Saturating(start_f));
     const full_end = @min(x_end, floorI32Saturating(end_f) - 1);
-    const full_coverage: u8 = @intCast(sample_axis);
+    const full_coverage: u8 = @intCast(sample_offsets.len);
     while (x <= x_end) : (x += 1) {
         if (x >= full_start and x <= full_end) {
             coverage_counts[@intCast(x - min_x)] += full_coverage;
             continue;
         }
-        coverPartialPixel(coverage_counts, min_x, sample_axis, start_f, end_f, x);
+        coverPartialPixel(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
     }
 }
 
-fn coverPartialPixel(coverage_counts: []u8, min_x: i32, sample_axis: i32, start_f: f32, end_f: f32, x: i32) void {
-    var sx: i32 = 0;
-    while (sx < sample_axis) : (sx += 1) {
-        const px = @as(f32, @floatFromInt(x)) + (@as(f32, @floatFromInt(sx)) + 0.5) / @as(f32, @floatFromInt(sample_axis));
+fn coverPartialPixel(coverage_counts: []u8, min_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32, x: i32) void {
+    for (sample_offsets) |sample_offset| {
+        const px = @as(f32, @floatFromInt(x)) + sample_offset;
         if (px >= start_f and px < end_f) {
             coverage_counts[@intCast(x - min_x)] += 1;
         }

@@ -3829,24 +3829,37 @@ fn writeSimpleTriangleGlyph(bytes: []u8, off: usize, first_dx: u16, second_dx: u
 }
 
 fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 17);
+    const bytes = try allocator.alloc(u8, 32);
     @memset(bytes, 0);
     bytes[0] = 2;
     bytes[1] = 0;
     bytes[2] = 5;
     writeU16(bytes, 3, 10);
-    bytes[5] = 149; // CharStrings offset 10.
+    bytes[5] = 154; // CharStrings offset 15.
     bytes[6] = 17;
-    bytes[7] = 151; // FDArray offset 12.
+    bytes[7] = 162; // FDArray offset 23.
     bytes[8] = 12;
     bytes[9] = 36;
-    bytes[10] = 153; // FDSelect offset 14.
+    bytes[10] = 168; // FDSelect offset 29.
     bytes[11] = 12;
     bytes[12] = 37;
-    bytes[13] = 155; // vstore offset 16.
+    bytes[13] = 170; // vstore offset 31.
     bytes[14] = 24;
-    bytes[15] = 0xaa;
-    bytes[16] = 0xbb;
+
+    writeU32(bytes, 15, 1); // CFF2 CharStrings INDEX count.
+    bytes[19] = 1; // offSize.
+    bytes[20] = 1;
+    bytes[21] = 2;
+    bytes[22] = 14; // one tiny charstring payload.
+    bytes[23] = 0xaa;
+    bytes[24] = 0xbb;
+    bytes[25] = 0xcc;
+    bytes[26] = 0xdd;
+    bytes[27] = 0xee;
+    bytes[28] = 0xff;
+    bytes[29] = 0x01;
+    bytes[30] = 0x02;
+    bytes[31] = 0x03;
     return bytes;
 }
 

@@ -9,6 +9,14 @@ pub const TopDictInfo = struct {
     vstore_offset: ?usize = null,
 };
 
+pub const IndexInfo = struct {
+    offset: usize,
+    count: u32,
+    off_size: u8,
+    data_offset: usize,
+    data_length: usize,
+};
+
 pub const Info = struct {
     major_version: u8,
     minor_version: u8,
@@ -17,6 +25,7 @@ pub const Info = struct {
     top_dict_data: []const u8,
     trailing_data: []const u8,
     top_dict: TopDictInfo,
+    charstrings_index: ?IndexInfo = null,
 };
 
 pub fn validate(data: []const u8, offset: usize, length: usize) Error!void {
@@ -41,6 +50,7 @@ fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
     const top_end = top_start + @as(usize, top_dict_length);
     const top_dict_data = table[top_start..top_end];
     const top_dict = try parseTopDict(top_dict_data, table.len);
+    const charstrings_index = if (top_dict.charstrings_offset) |charstrings_offset| try indexInfo(table, charstrings_offset) else null;
     return .{
         .major_version = major,
         .minor_version = minor,
@@ -49,6 +59,7 @@ fn infoView(data: []const u8, offset: usize, length: usize) Error!Info {
         .top_dict_data = top_dict_data,
         .trailing_data = table[top_end..],
         .top_dict = top_dict,
+        .charstrings_index = charstrings_index,
     };
 }
 
@@ -138,6 +149,37 @@ fn parseTopDict(data: []const u8, table_len: usize) Error!TopDictInfo {
     return result;
 }
 
+fn indexInfo(table: []const u8, offset: usize) Error!IndexInfo {
+    if (offset > table.len or table.len - offset < 5) return error.BadSfnt;
+    const count = std.mem.readInt(u32, table[offset..][0..4], .big);
+    const off_size = table[offset + 4];
+    if (off_size < 1 or off_size > 4) return error.BadSfnt;
+    const offset_array_len = (@as(usize, count) + 1) * @as(usize, off_size);
+    if (offset_array_len > table.len - offset - 5) return error.BadSfnt;
+    const offsets_start = offset + 5;
+    const data_start = offsets_start + offset_array_len;
+    var previous: usize = 1;
+    for (0..@as(usize, count) + 1) |index| {
+        const value = readSizedOffset(table, offsets_start + index * @as(usize, off_size), off_size);
+        if (value < previous) return error.BadSfnt;
+        if (value - 1 > table.len - data_start) return error.BadSfnt;
+        previous = value;
+    }
+    return .{
+        .offset = offset,
+        .count = count,
+        .off_size = off_size,
+        .data_offset = data_start,
+        .data_length = previous - 1,
+    };
+}
+
+fn readSizedOffset(table: []const u8, offset: usize, size: usize) usize {
+    var value: usize = 0;
+    for (0..size) |index| value = (value << 8) | table[offset + index];
+    return value;
+}
+
 fn readOffsetOperand(operands: []const i32) Error!usize {
     if (operands.len == 0) return error.BadSfnt;
     const value = operands[operands.len - 1];
@@ -146,15 +188,20 @@ fn readOffsetOperand(operands: []const i32) Error!usize {
 }
 
 test "CFF2 header exposes top dict and trailing data" {
-    const bytes = [_]u8{ 2, 0, 5, 0, 8, 149, 17, 151, 12, 36, 153, 12, 37, 0xaa, 0xbb };
+    const bytes = [_]u8{ 2, 0, 5, 0, 10, 154, 17, 162, 12, 36, 168, 12, 37, 170, 24, 0, 0, 0, 1, 1, 1, 2, 14, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01, 0x02, 0x03 };
     const parsed = try info(&bytes, 0, bytes.len);
     try std.testing.expectEqual(@as(u8, 2), parsed.major_version);
     try std.testing.expectEqual(@as(u8, 5), parsed.header_size);
-    try std.testing.expectEqual(@as(u16, 8), parsed.top_dict_length);
-    try std.testing.expectEqual(@as(?usize, 10), parsed.top_dict.charstrings_offset);
-    try std.testing.expectEqual(@as(?usize, 12), parsed.top_dict.fd_array_offset);
-    try std.testing.expectEqual(@as(?usize, 14), parsed.top_dict.fd_select_offset);
-    try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xbb }, parsed.trailing_data);
+    try std.testing.expectEqual(@as(u16, 10), parsed.top_dict_length);
+    try std.testing.expectEqual(@as(?usize, 15), parsed.top_dict.charstrings_offset);
+    try std.testing.expectEqual(@as(?usize, 23), parsed.top_dict.fd_array_offset);
+    try std.testing.expectEqual(@as(?usize, 29), parsed.top_dict.fd_select_offset);
+    try std.testing.expectEqual(@as(?usize, 31), parsed.top_dict.vstore_offset);
+    const charstrings = parsed.charstrings_index.?;
+    try std.testing.expectEqual(@as(u32, 1), charstrings.count);
+    try std.testing.expectEqual(@as(u8, 1), charstrings.off_size);
+    try std.testing.expectEqual(@as(usize, 22), charstrings.data_offset);
+    try std.testing.expectEqual(@as(usize, 1), charstrings.data_length);
 }
 
 test "CFF2 rejects bad versions and oversized top dicts" {

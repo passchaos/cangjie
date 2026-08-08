@@ -8323,8 +8323,12 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
     var r = bin.Reader.init(data);
     _ = try r.readI16();
     try r.skip(8);
-    const end_pts = try outline.allocator.alloc(u16, contour_count);
-    defer outline.allocator.free(end_pts);
+    var inline_end_pts: [8]u16 = undefined;
+    const end_pts = if (contour_count <= inline_end_pts.len)
+        inline_end_pts[0..contour_count]
+    else
+        try outline.allocator.alloc(u16, contour_count);
+    defer if (contour_count > inline_end_pts.len) outline.allocator.free(end_pts);
     var total_points: usize = 0;
     var previous_end: ?u16 = null;
     for (end_pts) |*end| {

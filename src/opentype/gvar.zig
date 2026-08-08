@@ -341,8 +341,40 @@ pub fn decodeTuplePointDeltas(data: []const u8, offset: usize, length: usize, ex
     return count;
 }
 
+pub fn decodeTuplePointDeltasForPointCount(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, point_count: usize, out: []PointDelta) Error!usize {
+    const payload = (try tuplePayloadInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph, point_count)) orelse return 0;
+    const count = if (payload.point_numbers.all_points) point_count else payload.point_numbers.count;
+    if (out.len < count) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    if (payload.point_numbers.all_points) {
+        for (0..count) |index| {
+            if (index > std.math.maxInt(u16)) return error.BadSfnt;
+            out[index].point = @intCast(index);
+        }
+    } else {
+        try decodePackedPointNumbers(table, payload.point_numbers_offset orelse return error.BadSfnt, payload.x_deltas_offset, out[0..count]);
+    }
+    _ = try decodePackedDeltasIntoPointField(table, payload.x_deltas_offset, payload.y_deltas_offset, out[0..count], .x);
+    _ = try decodePackedDeltasIntoPointField(table, payload.y_deltas_offset, payload.tuple_data_offset + payload.tuple_data_length, out[0..count], .y);
+    return count;
+}
+
 pub fn decodeScaledTuplePointDeltas(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, normalized_coords: []const f32, all_points: []const u16, scratch: []PointDelta, out: []ScaledPointDelta) Error!usize {
     const count = try decodeTuplePointDeltas(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph, all_points, scratch);
+    if (out.len < count) return error.BadSfnt;
+    const scalar = try tupleScalar(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph, normalized_coords);
+    for (scratch[0..count], 0..) |delta, index| {
+        out[index] = .{
+            .point = delta.point,
+            .x = @as(f32, @floatFromInt(delta.x)) * scalar,
+            .y = @as(f32, @floatFromInt(delta.y)) * scalar,
+        };
+    }
+    return count;
+}
+
+pub fn decodeScaledTuplePointDeltasForPointCount(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, normalized_coords: []const f32, point_count: usize, scratch: []PointDelta, out: []ScaledPointDelta) Error!usize {
+    const count = try decodeTuplePointDeltasForPointCount(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph, point_count, scratch);
     if (out.len < count) return error.BadSfnt;
     const scalar = try tupleScalar(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph, normalized_coords);
     for (scratch[0..count], 0..) |delta, index| {
@@ -849,4 +881,32 @@ test "gvar accumulates scaled glyph point deltas" {
     try std.testing.expectEqual(@as(u16, 5), out[0].point);
     try std.testing.expectEqual(@as(f32, 6), out[0].x);
     try std.testing.expectEqual(@as(f32, 1), out[0].y);
+}
+
+test "gvar tuple payload decodes contiguous all-point deltas" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 8, // offsets: 0, 16.
+        0, 1, 0, 10, // GlyphVariationData header.
+        0, 5, 0x80, 0x00, // Tuple header: variationDataSize=5, embedded peak, all points.
+        0x40, 0x00, // peak = 1.
+        0x02, 1, 2, 3, // x deltas for points 0,1,2.
+        0x82, // y deltas zero run for three points.
+        0, // padding after tuple payload.
+    };
+    var raw: [3]PointDelta = undefined;
+    var scaled: [3]ScaledPointDelta = undefined;
+    const count = try decodeScaledTuplePointDeltasForPointCount(&bytes, 0, bytes.len, 1, 1, 0, 0, &.{0.5}, 3, &raw, &scaled);
+    try std.testing.expectEqual(@as(usize, 3), count);
+    try std.testing.expectEqual(@as(u16, 0), scaled[0].point);
+    try std.testing.expectEqual(@as(f32, 0.5), scaled[0].x);
+    try std.testing.expectEqual(@as(u16, 2), scaled[2].point);
+    try std.testing.expectEqual(@as(f32, 1.5), scaled[2].x);
+    try std.testing.expectEqual(@as(f32, 0), scaled[2].y);
 }

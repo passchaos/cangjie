@@ -139,6 +139,37 @@ pub fn packedDeltasInfo(data: []const u8, offset: usize, limit: usize, delta_cou
     };
 }
 
+pub fn decodePackedDeltas(data: []const u8, offset: usize, limit: usize, out: []i32) Error!usize {
+    if (offset > data.len or limit > data.len or offset > limit) return error.BadSfnt;
+    var cursor = offset;
+    var written: usize = 0;
+    while (written < out.len) {
+        if (cursor >= limit) return error.BadSfnt;
+        const control = data[cursor];
+        cursor += 1;
+        const run_count = @as(usize, control & 0x3f) + 1;
+        if (run_count > out.len - written) return error.BadSfnt;
+        if ((control & 0x80) != 0) {
+            @memset(out[written .. written + run_count], 0);
+        } else if ((control & 0x40) != 0) {
+            const run_bytes = run_count * 2;
+            if (run_bytes > limit - cursor) return error.BadSfnt;
+            for (0..run_count) |index| {
+                out[written + index] = std.mem.readInt(i16, data[cursor + index * 2 ..][0..2], .big);
+            }
+            cursor += run_bytes;
+        } else {
+            if (run_count > limit - cursor) return error.BadSfnt;
+            for (0..run_count) |index| {
+                out[written + index] = @as(i8, @bitCast(data[cursor + index]));
+            }
+            cursor += run_count;
+        }
+        written += run_count;
+    }
+    return cursor - offset;
+}
+
 pub fn validate(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!void {
     _ = try info(data, offset, length, expected_glyph_count, expected_axis_count);
 }
@@ -487,4 +518,18 @@ test "gvar packed deltas expose run counts" {
 test "gvar packed deltas reject truncated runs" {
     try std.testing.expectError(error.BadSfnt, packedDeltasInfo(&.{ 0x41, 0, 1 }, 0, 3, 2));
     try std.testing.expectError(error.BadSfnt, packedDeltasInfo(&.{ 0x02, 1, 2 }, 0, 3, 3));
+}
+
+test "gvar packed deltas decode values" {
+    var out: [4]i32 = undefined;
+    const consumed = try decodePackedDeltas(&.{ 0x01, 1, 255, 0x80, 0x40, 0, 10 }, 0, 7, &out);
+    try std.testing.expectEqual(@as(usize, 7), consumed);
+    try std.testing.expectEqualSlices(i32, &.{ 1, -1, 0, 10 }, &out);
+}
+
+test "gvar packed deltas decode rejects count mismatch" {
+    var too_small: [1]i32 = undefined;
+    try std.testing.expectError(error.BadSfnt, decodePackedDeltas(&.{ 0x01, 1, 2 }, 0, 3, &too_small));
+    var too_large: [3]i32 = undefined;
+    try std.testing.expectError(error.BadSfnt, decodePackedDeltas(&.{ 0x01, 1, 2 }, 0, 3, &too_large));
 }

@@ -490,6 +490,10 @@ pub fn buildCff2Otf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x4f54544f, try cff2OtfTables(allocator));
 }
 
+pub fn buildCff2VariationOtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x4f54544f, try cff2VariationOtfTables(allocator));
+}
+
 fn minimalTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 8);
     errdefer allocator.free(tables);
@@ -2173,6 +2177,18 @@ fn cff2OtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 6);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "CFF2", .data = try cff2Table(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "maxp", .data = try cffMaxpTable(allocator) };
+    return tables;
+}
+
+fn cff2VariationOtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 6);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "CFF2", .data = try cff2VariationTable(allocator) };
     tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
@@ -3895,6 +3911,77 @@ fn cff2Table(allocator: std.mem.Allocator) ![]u8 {
     bytes[68] = 2;
     bytes[69] = 11;
     bytes[70] = 0x03;
+    return bytes;
+}
+
+fn cff2VariationTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 98);
+    @memset(bytes, 0);
+    bytes[0] = 2;
+    bytes[2] = 5;
+    writeU16(bytes, 3, 7);
+    bytes[5] = 159; // CharStrings offset 20.
+    bytes[6] = 17;
+    bytes[7] = 178; // FDArray offset 39.
+    bytes[8] = 12;
+    bytes[9] = 36;
+    bytes[10] = 194; // vstore offset 55.
+    bytes[11] = 24;
+
+    writeU32(bytes, 12, 0); // Empty Global Subrs INDEX.
+
+    writeU32(bytes, 20, 1); // CFF2 CharStrings INDEX count.
+    bytes[24] = 1;
+    bytes[25] = 1;
+    bytes[26] = 13;
+    bytes[27] = 189; // default x 50.
+    bytes[28] = 159; // delta x 20.
+    bytes[29] = 140; // blend count 1.
+    bytes[30] = 16;
+    bytes[31] = 139; // y 0.
+    bytes[32] = 21; // rmoveto.
+    bytes[33] = 149; // hlineto 10.
+    bytes[34] = 6;
+    bytes[35] = 14;
+
+    writeU32(bytes, 39, 1); // CFF2 FDArray INDEX count.
+    bytes[43] = 1;
+    bytes[44] = 1;
+    bytes[45] = 4;
+    bytes[46] = 140; // Private DICT size 1.
+    bytes[47] = 193; // Private DICT offset 54.
+    bytes[48] = 18;
+
+    bytes[49] = 0; // FDSelect format 0.
+    bytes[50] = 0;
+    bytes[54] = 0x0e; // Private DICT object: ignored operator with empty operands.
+
+    bytes[55] = 0;
+    bytes[56] = 43; // CFF2 VariationStore length, including this length field.
+    bytes[57] = 0;
+    bytes[58] = 1; // ItemVariationStore format.
+    writeU32(bytes, 59, 20); // VariationRegionList offset.
+    bytes[63] = 0;
+    bytes[64] = 1; // One ItemVariationData subtable.
+    writeU32(bytes, 65, 12); // ItemVariationData offset.
+    bytes[69] = 0;
+    bytes[70] = 1; // itemCount.
+    bytes[71] = 0;
+    bytes[72] = 0; // wordDeltaCount.
+    bytes[73] = 0;
+    bytes[74] = 1; // regionIndexCount.
+    bytes[75] = 0;
+    bytes[76] = 0; // region index 0.
+    bytes[77] = 0;
+    bytes[78] = 1; // axisCount.
+    bytes[79] = 0;
+    bytes[80] = 1; // regionCount.
+    bytes[81] = 0;
+    bytes[82] = 0; // start 0.
+    bytes[83] = 0x40;
+    bytes[84] = 0; // peak 1.
+    bytes[85] = 0x40;
+    bytes[86] = 0; // end 1.
     return bytes;
 }
 

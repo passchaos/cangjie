@@ -656,6 +656,30 @@ test "CFF2 top-level metadata is exposed when present" {
     try std.testing.expect((try missing.cff2FontDictIndex(1)) == null);
 }
 
+test "CFF2 variation outline changes with normalized coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCff2VariationOtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const default_bounds = (try font.cff2GlyphBoundsAtCoords(0, &.{})).?;
+    try std.testing.expectEqual(@as(i16, 50), default_bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 60), default_bounds.x_max);
+    const varied_bounds = (try font.cff2GlyphBoundsAtCoords(0, &.{0.5})).?;
+    try std.testing.expectEqual(@as(i16, 60), varied_bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 70), varied_bounds.x_max);
+
+    var outline = (try font.cff2GlyphOutlineAtCoords(allocator, 0, &.{0.5})).?;
+    defer outline.deinit();
+    try std.testing.expectEqual(@as(usize, 3), outline.commands.items.len);
+    try std.testing.expectEqual(@as(f32, 60), outline.commands.items[0].move_to.x);
+    try std.testing.expectEqual(@as(f32, 70), outline.commands.items[1].line_to.x);
+}
+
 test "lazy CFF2 metadata revalidates borrowed table bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

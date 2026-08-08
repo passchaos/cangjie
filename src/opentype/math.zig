@@ -8,6 +8,11 @@ pub const ValueRecord = struct {
     device_offset: u16,
 };
 
+pub const GlyphValueRecord = struct {
+    glyph_id: u16,
+    value_record: ValueRecord,
+};
+
 pub const Constants = struct {
     script_percent_scale_down: i16,
     script_script_percent_scale_down: i16,
@@ -22,6 +27,8 @@ pub const GlyphInfo = struct {
     top_accent_attachment_offset: ?usize,
     extended_shape_coverage_offset: ?usize,
     math_kern_info_offset: ?usize,
+    italics_corrections: []GlyphValueRecord,
+    top_accent_attachments: []GlyphValueRecord,
     extended_shape_glyphs: []u16,
 };
 
@@ -64,6 +71,8 @@ pub fn free(allocator: std.mem.Allocator, value: Info) void {
 }
 
 fn freeGlyphInfo(allocator: std.mem.Allocator, value: GlyphInfo) void {
+    allocator.free(value.italics_corrections);
+    allocator.free(value.top_accent_attachments);
     allocator.free(value.extended_shape_glyphs);
 }
 
@@ -116,8 +125,8 @@ fn validateGlyphInfo(data: []const u8, table_offset: usize, table_length: usize,
     const accent_offset = try bin.readU16At(data, start + 2);
     const extended_offset = try bin.readU16At(data, start + 4);
     const kern_offset = try bin.readU16At(data, start + 6);
-    if (italic_offset != 0) try validateChildWithinParent(italic_offset, table_length, glyph_info_offset, 4);
-    if (accent_offset != 0) try validateChildWithinParent(accent_offset, table_length, glyph_info_offset, 4);
+    if (italic_offset != 0) try validateMathValueArraySubtable(data, table_offset, table_length, glyph_info_offset + @as(usize, italic_offset));
+    if (accent_offset != 0) try validateMathValueArraySubtable(data, table_offset, table_length, glyph_info_offset + @as(usize, accent_offset));
     if (extended_offset != 0) _ = try coverageGlyphCount(data, table_offset, table_length, glyph_info_offset + @as(usize, extended_offset));
     if (kern_offset != 0) try validateChildWithinParent(kern_offset, table_length, glyph_info_offset, 2);
 }
@@ -153,6 +162,16 @@ fn readGlyphInfo(allocator: std.mem.Allocator, data: []const u8, table_offset: u
     const accent_offset = try bin.readU16At(data, start + 2);
     const extended_offset = try bin.readU16At(data, start + 4);
     const kern_offset = try bin.readU16At(data, start + 6);
+    const italics = if (italic_offset != 0)
+        try readMathValueArraySubtable(allocator, data, table_offset, table_length, glyph_info_offset + @as(usize, italic_offset))
+    else
+        try allocator.alloc(GlyphValueRecord, 0);
+    errdefer allocator.free(italics);
+    const top_accents = if (accent_offset != 0)
+        try readMathValueArraySubtable(allocator, data, table_offset, table_length, glyph_info_offset + @as(usize, accent_offset))
+    else
+        try allocator.alloc(GlyphValueRecord, 0);
+    errdefer allocator.free(top_accents);
     const extended_shape_glyphs = if (extended_offset != 0)
         try coverageGlyphs(allocator, data, table_offset, table_length, glyph_info_offset + @as(usize, extended_offset))
     else
@@ -163,12 +182,51 @@ fn readGlyphInfo(allocator: std.mem.Allocator, data: []const u8, table_offset: u
         .top_accent_attachment_offset = nullableOffset(accent_offset),
         .extended_shape_coverage_offset = nullableOffset(extended_offset),
         .math_kern_info_offset = nullableOffset(kern_offset),
+        .italics_corrections = italics,
+        .top_accent_attachments = top_accents,
         .extended_shape_glyphs = extended_shape_glyphs,
     };
 }
 
 fn nullableOffset(value: u16) ?usize {
     return if (value == 0) null else @intCast(value);
+}
+
+fn validateMathValueArraySubtable(data: []const u8, table_offset: usize, table_length: usize, subtable_offset: usize) Error!void {
+    try validateChildOffset(subtable_offset, table_length, 4);
+    const start = table_offset + subtable_offset;
+    const coverage_offset: usize = @intCast(try bin.readU16At(data, start));
+    if (coverage_offset == 0) return error.BadSfnt;
+    const coverage_count = try coverageGlyphCount(data, table_offset, table_length, subtable_offset + coverage_offset);
+    const value_count: usize = @intCast(try bin.readU16At(data, start + 2));
+    if (value_count != coverage_count) return error.BadSfnt;
+    if (value_count > (table_length - subtable_offset - 4) / 4) return error.BadSfnt;
+    for (0..value_count) |index| {
+        const value_record = start + 4 + index * 4;
+        const device_offset = try bin.readU16At(data, value_record + 2);
+        if (device_offset != 0) try validateDeviceTable(data, table_offset, table_length, subtable_offset, device_offset);
+    }
+}
+
+fn readMathValueArraySubtable(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, table_length: usize, subtable_offset: usize) Error![]GlyphValueRecord {
+    try validateMathValueArraySubtable(data, table_offset, table_length, subtable_offset);
+    const start = table_offset + subtable_offset;
+    const coverage_offset: usize = @intCast(try bin.readU16At(data, start));
+    const glyphs = try coverageGlyphs(allocator, data, table_offset, table_length, subtable_offset + coverage_offset);
+    defer allocator.free(glyphs);
+    const records = try allocator.alloc(GlyphValueRecord, glyphs.len);
+    errdefer allocator.free(records);
+    for (records, 0..) |*record, index| {
+        const value_record = start + 4 + index * 4;
+        record.* = .{
+            .glyph_id = glyphs[index],
+            .value_record = .{
+                .value = try bin.readI16At(data, value_record),
+                .device_offset = try bin.readU16At(data, value_record + 2),
+            },
+        };
+    }
+    return records;
 }
 
 fn coverageGlyphCount(data: []const u8, table_offset: usize, table_length: usize, coverage_offset: usize) Error!usize {
@@ -267,21 +325,35 @@ fn writeI16(bytes: []u8, offset: usize, value: i16) void {
 }
 
 test "MATH constants expose scalar and value-record metadata" {
-    var bytes: [248]u8 = .{0} ** 248;
+    var bytes: [280]u8 = .{0} ** 280;
     writeU16(&bytes, 0, 1);
     writeU16(&bytes, 4, 10);
     writeU16(&bytes, 6, 224);
-    writeU16(&bytes, 8, 238);
+    writeU16(&bytes, 8, 270);
     writeI16(&bytes, 10, 80);
     writeI16(&bytes, 12, 60);
     writeU16(&bytes, 14, 1000);
     writeU16(&bytes, 16, 1200);
     writeI16(&bytes, 18, 11);
     writeI16(&bytes, 222, 55);
-    writeU16(&bytes, 228, 8);
-    writeU16(&bytes, 232, 1);
+    writeU16(&bytes, 224, 8);
+    writeU16(&bytes, 226, 24);
+    writeU16(&bytes, 228, 40);
+    writeU16(&bytes, 232, 8);
     writeU16(&bytes, 234, 1);
-    writeU16(&bytes, 236, 3);
+    writeI16(&bytes, 236, -12);
+    writeU16(&bytes, 240, 1);
+    writeU16(&bytes, 242, 1);
+    writeU16(&bytes, 244, 3);
+    writeU16(&bytes, 248, 8);
+    writeU16(&bytes, 250, 1);
+    writeI16(&bytes, 252, 42);
+    writeU16(&bytes, 256, 1);
+    writeU16(&bytes, 258, 1);
+    writeU16(&bytes, 260, 3);
+    writeU16(&bytes, 264, 1);
+    writeU16(&bytes, 266, 1);
+    writeU16(&bytes, 268, 3);
 
     try validate(&bytes, 0, bytes.len);
     const parsed = try info(std.testing.allocator, &bytes, 0, bytes.len);
@@ -291,7 +363,12 @@ test "MATH constants expose scalar and value-record metadata" {
     try std.testing.expectEqual(@as(u16, 1200), parsed.constants.display_operator_min_height);
     try std.testing.expectEqual(@as(i16, 11), parsed.constants.value_records[0].value);
     try std.testing.expectEqual(@as(i16, 55), parsed.constants.radical_degree_bottom_raise_percent);
-    try std.testing.expectEqual(@as(?usize, 8), parsed.glyph_info.extended_shape_coverage_offset);
+    try std.testing.expectEqual(@as(?usize, 8), parsed.glyph_info.italics_correction_info_offset);
+    try std.testing.expectEqual(@as(?usize, 24), parsed.glyph_info.top_accent_attachment_offset);
+    try std.testing.expectEqual(@as(?usize, 40), parsed.glyph_info.extended_shape_coverage_offset);
+    try std.testing.expectEqual(@as(usize, 1), parsed.glyph_info.italics_corrections.len);
+    try std.testing.expectEqual(GlyphValueRecord{ .glyph_id = 3, .value_record = .{ .value = -12, .device_offset = 0 } }, parsed.glyph_info.italics_corrections[0]);
+    try std.testing.expectEqual(GlyphValueRecord{ .glyph_id = 3, .value_record = .{ .value = 42, .device_offset = 0 } }, parsed.glyph_info.top_accent_attachments[0]);
     try std.testing.expectEqualSlices(u16, &.{3}, parsed.glyph_info.extended_shape_glyphs);
 }
 

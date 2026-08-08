@@ -3214,23 +3214,37 @@ fn colrV1IndirectPaintColrGlyphCycleTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn mathTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 248);
+    const bytes = try allocator.alloc(u8, 280);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
     writeU16(bytes, 4, 10);
     writeU16(bytes, 6, 224);
-    writeU16(bytes, 8, 238);
+    writeU16(bytes, 8, 270);
     writeI16(bytes, 10, 80);
     writeI16(bytes, 12, 60);
     writeU16(bytes, 14, 1000);
     writeU16(bytes, 16, 1200);
     writeI16(bytes, 18, 11);
     writeI16(bytes, 222, 55);
-    writeU16(bytes, 228, 8);
-    writeU16(bytes, 232, 1);
+    writeU16(bytes, 224, 8);
+    writeU16(bytes, 226, 24);
+    writeU16(bytes, 228, 40);
+    writeU16(bytes, 232, 8);
     writeU16(bytes, 234, 1);
-    writeU16(bytes, 236, 3);
+    writeI16(bytes, 236, -12);
+    writeU16(bytes, 240, 1);
+    writeU16(bytes, 242, 1);
+    writeU16(bytes, 244, 3);
+    writeU16(bytes, 248, 8);
+    writeU16(bytes, 250, 1);
+    writeI16(bytes, 252, 42);
+    writeU16(bytes, 256, 1);
+    writeU16(bytes, 258, 1);
+    writeU16(bytes, 260, 3);
+    writeU16(bytes, 264, 1);
+    writeU16(bytes, 266, 1);
+    writeU16(bytes, 268, 3);
     return bytes;
 }
 

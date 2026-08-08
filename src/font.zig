@@ -52,6 +52,7 @@ pub const Cff2Info = cff2_mod.Info;
 pub const MathInfo = math_mod.Info;
 pub const MathConstantsInfo = math_mod.Constants;
 pub const MathValueRecordInfo = math_mod.ValueRecord;
+pub const MathGlyphValueRecordInfo = math_mod.GlyphValueRecord;
 
 pub const CvarInfo = cvar_mod.Info;
 pub const CvarTupleInfo = cvar_mod.TupleInfo;

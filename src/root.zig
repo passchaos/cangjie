@@ -82,6 +82,9 @@ pub const serializeManifest = @import("database.zig").serializeManifest;
 pub const userFontSourcesForOs = @import("database.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
+pub const BaseAxisInfo = @import("font.zig").BaseAxisInfo;
+pub const BaseInfo = @import("font.zig").BaseInfo;
+pub const BaseScriptInfo = @import("font.zig").BaseScriptInfo;
 pub const FeatureNameInfo = @import("font.zig").FeatureNameInfo;
 pub const FeatureSettingInfo = @import("font.zig").FeatureSettingInfo;
 pub const TrackInfo = @import("font.zig").TrackInfo;
@@ -481,6 +484,60 @@ test "minimal OTF exposes compact maxp metadata" {
     try std.testing.expectEqual(@as(u16, 2), maxp.glyph_count);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_points);
     try std.testing.expectEqual(@as(?u16, null), maxp.max_zones);
+}
+
+test "BASE baseline metadata is exposed when present" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildBaseTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.baseInfo(allocator)).?;
+    defer font.freeBaseInfo(allocator, info);
+    try std.testing.expectEqual(@as(u32, 0x00010000), info.version);
+    const horizontal = info.horizontal.?;
+    try std.testing.expectEqual(@as(usize, 2), horizontal.baseline_tags.len);
+    try std.testing.expectEqualStrings("ideo", &horizontal.baseline_tags[0]);
+    try std.testing.expectEqualStrings("romn", &horizontal.baseline_tags[1]);
+    try std.testing.expectEqual(@as(usize, 1), horizontal.scripts.len);
+    try std.testing.expectEqualStrings("latn", &horizontal.scripts[0].tag);
+    try std.testing.expectEqual(@as(?u16, 1), horizontal.scripts[0].default_baseline_index);
+    try std.testing.expectEqual(@as(?i16, 0), horizontal.scripts[0].coordinates[0]);
+    try std.testing.expectEqual(@as(?i16, 500), horizontal.scripts[0].coordinates[1]);
+    try std.testing.expect(info.vertical == null);
+
+    const missing_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(missing_bytes);
+    var missing = try Font.parse(allocator, missing_bytes);
+    defer missing.deinit();
+    try std.testing.expect((try missing.baseInfo(allocator)) == null);
+}
+
+test "lazy BASE metadata revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildBaseTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const info = (try font.baseInfo(allocator)).?;
+    defer font.freeBaseInfo(allocator, info);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var base_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "BASE")) base_offset = table.offset;
+    }
+    bytes[base_offset orelse return error.MissingTable] +%= 1;
+
+    try std.testing.expectError(error.BadSfnt, font.baseInfo(allocator));
 }
 
 test "AAT trak records are exposed when present" {

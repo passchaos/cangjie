@@ -1,4 +1,5 @@
 const std = @import("std");
+const base_mod = @import("opentype/base.zig");
 const bin = @import("binary.zig");
 const cff_mod = @import("cff.zig");
 const glyph_mod = @import("glyph.zig");
@@ -189,6 +190,10 @@ pub const FeatureSettingInfo = feat_mod.Setting;
 pub const TrackInfo = trak_mod.Track;
 pub const TrackTableInfo = trak_mod.Info;
 pub const TrackValueInfo = trak_mod.TrackValue;
+
+pub const BaseAxisInfo = base_mod.Axis;
+pub const BaseInfo = base_mod.Info;
+pub const BaseScriptInfo = base_mod.Script;
 
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
@@ -643,6 +648,7 @@ pub const Font = struct {
     avar: ?TableRecord,
     colr: ?TableRecord,
     cpal: ?TableRecord,
+    base: ?TableRecord,
     dsig: ?TableRecord,
     vorg: ?TableRecord,
     svg: ?TableRecord,
@@ -739,6 +745,7 @@ pub const Font = struct {
         const avar = findTable(records, "avar");
         const colr = findTable(records, "COLR");
         const cpal = findTable(records, "CPAL");
+        const base = findTable(records, "BASE");
         const dsig = findTable(records, "DSIG");
         const vorg = findTable(records, "VORG");
         const svg = findTable(records, "SVG ");
@@ -849,6 +856,7 @@ pub const Font = struct {
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
         }
+        if (base) |base_table| try validateBaseTable(data, base_table);
         if (dsig) |dsig_table| try validateDsigTable(data, dsig_table);
         if (vorg) |vorg_table| try validateVorgTable(data, vorg_table, glyph_count);
         if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
@@ -897,6 +905,7 @@ pub const Font = struct {
             .avar = avar,
             .colr = colr,
             .cpal = cpal,
+            .base = base,
             .dsig = dsig,
             .vorg = vorg,
             .svg = svg,
@@ -928,6 +937,17 @@ pub const Font = struct {
             };
         }
         return infos;
+    }
+
+    /// Read validated metadata from the optional OpenType `BASE` table.
+    pub fn baseInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?BaseInfo {
+        const base = self.base orelse return null;
+        try validateSfntTableChecksum(self.data, base);
+        return try base_mod.info(allocator, self.data, base.offset, base.length);
+    }
+
+    pub fn freeBaseInfo(_: *const Font, allocator: std.mem.Allocator, info_value: BaseInfo) void {
+        base_mod.free(allocator, info_value);
     }
 
     /// Borrow the raw bytes of an SFNT table by four-byte tag.
@@ -4168,6 +4188,10 @@ fn clampI16(value: i32) i16 {
     if (value < std.math.minInt(i16)) return std.math.minInt(i16);
     if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
     return @intCast(value);
+}
+
+fn validateBaseTable(data: []const u8, base: TableRecord) FontError!void {
+    return try base_mod.validate(data, base.offset, base.length);
 }
 
 fn validateTrakTable(data: []const u8, trak: TableRecord) FontError!void {
@@ -18135,6 +18159,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .base = null,
         .dsig = null,
         .vorg = null,
         .svg = null,
@@ -18191,6 +18216,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .base = null,
         .dsig = null,
         .vorg = null,
         .svg = null,
@@ -18247,6 +18273,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
         .cpal = null,
+        .base = null,
         .dsig = null,
         .vorg = null,
         .svg = null,
@@ -18314,6 +18341,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
+        .base = null,
         .dsig = null,
         .vorg = null,
         .svg = null,
@@ -18370,6 +18398,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .base = null,
         .dsig = null,
         .vorg = null,
         .svg = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = svg_checksum, .offset = 0, .length = data.len },
@@ -18426,6 +18455,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .base = null,
         .dsig = null,
         .vorg = null,
         .svg = null,
@@ -18482,6 +18512,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .base = null,
         .dsig = null,
         .vorg = null,
         .svg = null,
@@ -18558,6 +18589,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .avar = null,
         .colr = null,
         .cpal = null,
+        .base = null,
         .dsig = null,
         .vorg = null,
         .svg = null,

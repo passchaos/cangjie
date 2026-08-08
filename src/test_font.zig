@@ -20,6 +20,10 @@ pub fn buildFeatTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try featTtfTables(allocator));
 }
 
+pub fn buildBaseTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try baseTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -548,6 +552,21 @@ fn featTtfTables(allocator: std.mem.Allocator) ![]Table {
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "feat", .data = try featTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn baseTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "BASE", .data = try baseTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
     tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
@@ -4876,6 +4895,31 @@ fn featTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 26, 301);
     writeU16(bytes, 28, 1);
     writeU16(bytes, 30, 302);
+    return bytes;
+}
+
+fn baseTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 62);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 8); // horizontal axis
+    writeU16(bytes, 8, 4); // BaseTagList from axis
+    writeU16(bytes, 10, 18); // BaseScriptList from axis
+    writeU16(bytes, 12, 2);
+    writeTag(bytes, 14, "ideo");
+    writeTag(bytes, 18, "romn");
+    writeU16(bytes, 26, 1);
+    writeTag(bytes, 28, "latn");
+    writeU16(bytes, 32, 12); // BaseScript from script list
+    writeU16(bytes, 38, 6); // BaseValues from BaseScript
+    writeU16(bytes, 44, 1); // defaultBaselineIndex -> romn
+    writeU16(bytes, 46, 2);
+    writeU16(bytes, 48, 10);
+    writeU16(bytes, 50, 14);
+    writeU16(bytes, 54, 1);
+    writeI16(bytes, 56, 0);
+    writeU16(bytes, 58, 1);
+    writeI16(bytes, 60, 500);
     return bytes;
 }
 

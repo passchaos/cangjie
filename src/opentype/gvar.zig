@@ -387,8 +387,11 @@ pub fn validate(data: []const u8, offset: usize, length: usize, expected_glyph_c
 
 pub fn glyphInfo(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize) Error!?GlyphInfo {
     const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    return try glyphInfoFromParsed(data[offset .. offset + length], parsed, glyph_id);
+}
+
+fn glyphInfoFromParsed(table: []const u8, parsed: Info, glyph_id: usize) Error!?GlyphInfo {
     if (glyph_id >= parsed.glyph_count) return error.BadSfnt;
-    const table = data[offset .. offset + length];
     const glyph_data_limit = table.len - parsed.glyph_data_offset;
     const start = try glyphDataOffset(table, 20 + glyph_id * @as(usize, parsed.offset_size), parsed.offset_size, glyph_data_limit);
     const end = try glyphDataOffset(table, 20 + (glyph_id + 1) * @as(usize, parsed.offset_size), parsed.offset_size, glyph_data_limit);
@@ -439,8 +442,12 @@ pub fn tuplePayloadInfo(data: []const u8, offset: usize, length: usize, expected
         const previous = (try tupleInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, index)) orelse return error.BadSfnt;
         tuple_data_offset += previous.variation_data_size;
     }
+    return try tuplePayloadInfoFromTuple(table, tuple, tuple_data_offset, all_points_delta_count);
+}
+
+fn tuplePayloadInfoFromTuple(table: []const u8, tuple: TupleInfo, tuple_data_offset: usize, all_points_delta_count: ?usize) Error!TuplePayloadInfo {
+    if (tuple_data_offset > table.len or tuple.variation_data_size > table.len - tuple_data_offset) return error.BadSfnt;
     const tuple_data_end = tuple_data_offset + tuple.variation_data_size;
-    if (tuple_data_end > table.len) return error.BadSfnt;
 
     var cursor = tuple_data_offset;
     const point_numbers_offset: ?usize = if (tuple.private_point_numbers) cursor else null;
@@ -491,9 +498,18 @@ pub fn decodeTuplePointDeltas(data: []const u8, offset: usize, length: usize, ex
 
 pub fn decodeTuplePointDeltasForPointCount(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, tuple_index_in_glyph: usize, point_count: usize, out: []PointDelta) Error!usize {
     const payload = (try tuplePayloadInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph, point_count)) orelse return 0;
+    const table = data[offset .. offset + length];
+    return try decodeTuplePointDeltasForPointCountFromPayload(table, payload, point_count, out);
+}
+
+fn decodeTuplePointDeltasForPointCountFromTuple(table: []const u8, tuple: TupleInfo, tuple_data_offset: usize, point_count: usize, out: []PointDelta) Error!usize {
+    const payload = try tuplePayloadInfoFromTuple(table, tuple, tuple_data_offset, point_count);
+    return try decodeTuplePointDeltasForPointCountFromPayload(table, payload, point_count, out);
+}
+
+fn decodeTuplePointDeltasForPointCountFromPayload(table: []const u8, payload: TuplePayloadInfo, point_count: usize, out: []PointDelta) Error!usize {
     const count = if (payload.point_numbers.all_points) point_count else payload.point_numbers.count;
     if (out.len < count) return error.BadSfnt;
-    const table = data[offset .. offset + length];
     if (payload.point_numbers.all_points) {
         for (0..count) |index| {
             if (index > std.math.maxInt(u16)) return error.BadSfnt;
@@ -596,7 +612,9 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
         if (flags.len < point_count) return error.BadSfnt;
         @memset(flags[0..point_count], false);
     }
-    const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return 0;
+    const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    const table = data[offset .. offset + length];
+    const glyph = (try glyphInfoFromParsed(table, parsed, glyph_id)) orelse return 0;
     if (out.len < point_count) return error.BadSfnt;
 
     var initialized_out = false;
@@ -605,17 +623,27 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
         initialized_out = true;
     }
 
+    var header_offset = glyph.data_offset + 4;
+    const tuple_data_base = glyph.data_offset + glyph.tuple_data_offset;
+    var tuple_data_bytes: usize = 0;
     for (0..glyph.tuple_count) |tuple_index| {
+        const tuple = try readTupleInfo(table, parsed, glyph, header_offset, tuple_index, tuple_data_bytes);
+        if (tuple_data_bytes > std.math.maxInt(usize) - tuple_data_base) return error.BadSfnt;
+        const tuple_data_offset = tuple_data_base + tuple_data_bytes;
         const delta_count = switch (mode) {
-            .decode_all => try decodeScaledTuplePointDeltasForPointCount(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index, normalized_coords, point_count, raw_scratch, scaled_scratch),
+            .decode_all => blk: {
+                const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(table, tuple, tuple_data_offset, point_count, raw_scratch);
+                const scalar = try tupleScalarFromTuple(table, parsed, tuple, normalized_coords);
+                break :blk try scalePointDeltas(raw_scratch[0..raw_count], scalar, scaled_scratch);
+            },
             .skip_inactive => blk: {
-                const scalar = try tupleScalar(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index, normalized_coords);
+                const scalar = try tupleScalarFromTuple(table, parsed, tuple, normalized_coords);
                 if (scalar == 0) break :blk 0;
                 if (!initialized_out) {
                     initializeDensePointDeltas(out, point_count);
                     initialized_out = true;
                 }
-                const raw_count = try decodeTuplePointDeltasForPointCount(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index, point_count, raw_scratch);
+                const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(table, tuple, tuple_data_offset, point_count, raw_scratch);
                 break :blk try scalePointDeltas(raw_scratch[0..raw_count], scalar, scaled_scratch);
             },
         };
@@ -626,6 +654,8 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
             out[target_index].y += delta.y;
             if (has_delta) |flags| flags[target_index] = true;
         }
+        header_offset += tuple.header_size;
+        tuple_data_bytes += tuple.variation_data_size;
     }
     return if (initialized_out) point_count else 0;
 }
@@ -655,6 +685,10 @@ pub fn tupleScalar(data: []const u8, offset: usize, length: usize, expected_glyp
     const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
     const tuple = (try tupleInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph)) orelse return error.BadSfnt;
     const table = data[offset .. offset + length];
+    return try tupleScalarFromTuple(table, parsed, tuple, normalized_coords);
+}
+
+fn tupleScalarFromTuple(table: []const u8, parsed: Info, tuple: TupleInfo, normalized_coords: []const f32) Error!f32 {
     var result: f32 = 1.0;
     for (0..parsed.axis_count) |axis| {
         const peak = try tuplePeakCoordinate(table, parsed, tuple, axis);

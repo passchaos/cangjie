@@ -80,6 +80,55 @@ pub const Point = struct {
     y: f32,
 };
 
+pub const PhantomPointDeltas = struct {
+    /// Horizontal origin-side phantom delta (`pp1` in FreeType terminology).
+    left: Point,
+    /// Horizontal advance-side phantom delta (`pp2`).
+    right: Point,
+    /// Vertical origin-side phantom delta (`pp3`).
+    top: Point,
+    /// Vertical advance-side phantom delta (`pp4`).
+    bottom: Point,
+
+    pub fn horizontalAdvanceDelta(self: PhantomPointDeltas) f32 {
+        return self.right.x - self.left.x;
+    }
+
+    pub fn verticalAdvanceDelta(self: PhantomPointDeltas) f32 {
+        return self.top.y - self.bottom.y;
+    }
+};
+
+pub const GlyfMetricTarget = union(enum) {
+    /// The requested glyph owns its metric phantom points; the payload is the
+    /// real simple-point count or compound-component count before the four
+    /// phantom points.
+    self: usize,
+    /// A compound glyph delegates metrics to the last USE_MY_METRICS component.
+    component: u16,
+};
+
+pub fn glyfVariationPointCount(glyph_data: []const u8) Error!usize {
+    if (glyph_data.len == 0) return 0;
+    if (glyph_data.len < 10) return error.BadSfnt;
+    const contour_count = readI16(glyph_data, 0);
+    return if (contour_count >= 0)
+        try simpleGlyfPointCount(glyph_data, @intCast(contour_count))
+    else
+        try compoundGlyfComponentCount(glyph_data);
+}
+
+pub fn glyfMetricTarget(glyph_data: []const u8, glyph_count: usize) Error!GlyfMetricTarget {
+    if (glyph_data.len == 0) return .{ .self = 0 };
+    if (glyph_data.len < 10) return error.BadSfnt;
+    const contour_count = readI16(glyph_data, 0);
+    if (contour_count >= 0) return .{ .self = try simpleGlyfPointCount(glyph_data, @intCast(contour_count)) };
+
+    const metrics = try compoundGlyfMetricsInfo(glyph_data, glyph_count);
+    if (metrics.metrics_glyph) |component| return .{ .component = component };
+    return .{ .self = metrics.component_count };
+}
+
 pub fn packedPointNumbersInfo(data: []const u8, offset: usize, limit: usize) Error!PointNumbersInfo {
     if (offset > data.len or limit > data.len or offset >= limit) return error.BadSfnt;
     var cursor = offset;
@@ -296,6 +345,40 @@ pub fn applyPointDeltas(points: []Point, deltas: []const ScaledPointDelta) Error
         points[delta.point].x += delta.x;
         points[delta.point].y += delta.y;
     }
+}
+
+/// Extract the four TrueType phantom-point deltas from an accumulated `gvar`
+/// delta set. `point_count` is the number of real simple-glyph points or,
+/// for compound glyphs, component records; the phantom points immediately
+/// follow at `[point_count, point_count + 4)`.
+pub fn phantomPointDeltas(point_count: usize, deltas: []const ScaledPointDelta) Error!PhantomPointDeltas {
+    if (point_count > std.math.maxInt(u16) - 3) return error.BadSfnt;
+    const left_index: u16 = @intCast(point_count);
+    const right_index = left_index + 1;
+    const top_index = left_index + 2;
+    const bottom_index = left_index + 3;
+    var result = PhantomPointDeltas{
+        .left = .{ .x = 0, .y = 0 },
+        .right = .{ .x = 0, .y = 0 },
+        .top = .{ .x = 0, .y = 0 },
+        .bottom = .{ .x = 0, .y = 0 },
+    };
+
+    for (deltas) |delta| {
+        const target = if (delta.point == left_index)
+            &result.left
+        else if (delta.point == right_index)
+            &result.right
+        else if (delta.point == top_index)
+            &result.top
+        else if (delta.point == bottom_index)
+            &result.bottom
+        else
+            continue;
+        target.x += delta.x;
+        target.y += delta.y;
+    }
+    return result;
 }
 
 pub fn validate(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!void {
@@ -689,8 +772,58 @@ fn readU16(data: []const u8, offset: usize) u16 {
     return std.mem.readInt(u16, data[offset..][0..2], .big);
 }
 
+fn readI16(data: []const u8, offset: usize) i16 {
+    return std.mem.readInt(i16, data[offset..][0..2], .big);
+}
+
 fn readU32(data: []const u8, offset: usize) usize {
     return @intCast(std.mem.readInt(u32, data[offset..][0..4], .big));
+}
+
+fn simpleGlyfPointCount(glyph_data: []const u8, contour_count: u16) Error!usize {
+    if (contour_count == 0) return 0;
+    const last_end_offset = 10 + (@as(usize, contour_count) - 1) * 2;
+    if (last_end_offset + 2 > glyph_data.len) return error.BadSfnt;
+    return @as(usize, readU16(glyph_data, last_end_offset)) + 1;
+}
+
+fn compoundGlyfComponentCount(glyph_data: []const u8) Error!usize {
+    return (try compoundGlyfMetricsInfo(glyph_data, null)).component_count;
+}
+
+const CompoundGlyfMetricsInfo = struct {
+    component_count: usize,
+    metrics_glyph: ?u16,
+};
+
+fn compoundGlyfMetricsInfo(glyph_data: []const u8, glyph_count: ?usize) Error!CompoundGlyfMetricsInfo {
+    var offset: usize = 10; // numberOfContours + x/y bounds.
+    var component_count: usize = 0;
+    var metrics_glyph: ?u16 = null;
+    while (true) {
+        if (offset + 4 > glyph_data.len) return error.BadSfnt;
+        const flags = readU16(glyph_data, offset);
+        const component_glyph = readU16(glyph_data, offset + 2);
+        if (glyph_count) |count| {
+            if (component_glyph >= count) return error.BadSfnt;
+        }
+        offset += 4;
+        component_count += 1;
+        if ((flags & 0x0200) != 0) metrics_glyph = component_glyph;
+
+        const argument_bytes: usize = if ((flags & 0x0001) != 0) 4 else 2;
+        if (argument_bytes > glyph_data.len - offset) return error.BadSfnt;
+        offset += argument_bytes;
+
+        const has_scale = (flags & 0x0008) != 0;
+        const has_xy_scale = (flags & 0x0040) != 0;
+        const has_two_by_two = (flags & 0x0080) != 0;
+        const scale_bytes: usize = if (has_scale) 2 else if (has_xy_scale) 4 else if (has_two_by_two) 8 else 0;
+        if (scale_bytes > glyph_data.len - offset) return error.BadSfnt;
+        offset += scale_bytes;
+
+        if ((flags & 0x0020) == 0) return .{ .component_count = component_count, .metrics_glyph = metrics_glyph };
+    }
 }
 
 test "gvar metadata parses offset arrays" {
@@ -710,6 +843,41 @@ test "gvar metadata parses offset arrays" {
     try std.testing.expectEqual(@as(u16, 2), parsed.glyph_count);
     try std.testing.expectEqual(@as(u8, 2), parsed.offset_size);
     try std.testing.expectEqual(@as(usize, 1), parsed.glyph_variation_data_count);
+}
+
+test "glyf metric targets count phantom point starts" {
+    var simple: [16]u8 = .{0} ** 16;
+    std.mem.writeInt(i16, simple[0..2], 1, .big);
+    std.mem.writeInt(u16, simple[10..12], 2, .big);
+    try std.testing.expectEqual(@as(usize, 3), try glyfVariationPointCount(&simple));
+    try std.testing.expectEqual(GlyfMetricTarget{ .self = 3 }, try glyfMetricTarget(&simple, 3));
+
+    var compound: [22]u8 = .{0} ** 22;
+    std.mem.writeInt(i16, compound[0..2], -1, .big);
+    // First component has USE_MY_METRICS, but the second flagged component wins
+    // per FreeType/fontations and the OpenType gvar composite-glyph rules.
+    std.mem.writeInt(u16, compound[10..12], 0x0020 | 0x0200 | 0x0002, .big);
+    std.mem.writeInt(u16, compound[12..14], 1, .big);
+    std.mem.writeInt(u16, compound[16..18], 0x0200 | 0x0002, .big);
+    std.mem.writeInt(u16, compound[18..20], 2, .big);
+    try std.testing.expectEqual(@as(usize, 2), try glyfVariationPointCount(&compound));
+    try std.testing.expectEqual(GlyfMetricTarget{ .component = 2 }, try glyfMetricTarget(&compound, 3));
+    try std.testing.expectError(error.BadSfnt, glyfMetricTarget(&compound, 2));
+}
+
+test "phantom point deltas derive metric deltas" {
+    const deltas = [_]ScaledPointDelta{
+        .{ .point = 0, .x = 99, .y = 99 },
+        .{ .point = 3, .x = 1, .y = 0 },
+        .{ .point = 4, .x = 10, .y = 0 },
+        .{ .point = 5, .x = 0, .y = 4 },
+        .{ .point = 6, .x = 0, .y = -2 },
+    };
+    const phantom = try phantomPointDeltas(3, &deltas);
+    try std.testing.expectEqual(@as(f32, 1), phantom.left.x);
+    try std.testing.expectEqual(@as(f32, 10), phantom.right.x);
+    try std.testing.expectEqual(@as(f32, 9), phantom.horizontalAdvanceDelta());
+    try std.testing.expectEqual(@as(f32, 6), phantom.verticalAdvanceDelta());
 }
 
 test "gvar glyph metadata exposes tuple headers" {

@@ -2804,7 +2804,7 @@ fn gvarTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn gvarDeltaTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 48);
+    const bytes = try allocator.alloc(u8, 61);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
@@ -2816,19 +2816,32 @@ fn gvarDeltaTable(allocator: std.mem.Allocator) ![]u8 {
     writeU32(bytes, 16, 32); // glyphVariationDataArrayOffset after offset array.
     writeU32(bytes, 20, 0);
     writeU32(bytes, 24, 0);
-    writeU32(bytes, 28, 16);
+    writeU32(bytes, 28, 29);
 
     writeU16(bytes, 32, 1); // one tuple.
     writeU16(bytes, 34, 10); // tuple data starts after one 6-byte header.
-    writeU16(bytes, 36, 6); // tuple payload size.
+    writeU16(bytes, 36, 19); // tuple payload size.
     writeU16(bytes, 38, 0xa000); // embedded peak + private point numbers.
     writeF2Dot14(bytes, 40, 1.0);
-    bytes[42] = 1; // one private point.
-    bytes[43] = 0; // one byte run.
+    bytes[42] = 5; // private points: one real contour point plus four phantom points.
+    bytes[43] = 4; // one byte run with five point-number deltas.
     bytes[44] = 0; // point id 0.
-    bytes[45] = 0; // one x delta.
-    bytes[46] = 10;
-    bytes[47] = 0x80; // one y delta is zero.
+    bytes[45] = 3; // left phantom point id 3.
+    bytes[46] = 1; // right phantom point id 4.
+    bytes[47] = 1; // top phantom point id 5.
+    bytes[48] = 1; // bottom phantom point id 6.
+    bytes[49] = 4; // five x deltas.
+    bytes[50] = 10; // point 0 outline delta.
+    bytes[51] = 2; // left phantom x delta.
+    bytes[52] = 20; // right phantom x delta.
+    bytes[53] = 0; // top phantom x delta.
+    bytes[54] = 0; // bottom phantom x delta.
+    bytes[55] = 4; // five y deltas.
+    bytes[56] = 0; // point 0 outline delta.
+    bytes[57] = 0; // left phantom y delta.
+    bytes[58] = 0; // right phantom y delta.
+    bytes[59] = 8; // top phantom y delta.
+    bytes[60] = 0xfc; // bottom phantom y delta (-4).
     return bytes;
 }
 

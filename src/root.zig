@@ -116,6 +116,7 @@ pub const GvarInfo = @import("font.zig").GvarInfo;
 pub const GvarGlyphInfo = @import("font.zig").GvarGlyphInfo;
 pub const GvarTupleInfo = @import("font.zig").GvarTupleInfo;
 pub const GvarScaledPointDelta = @import("font.zig").GvarScaledPointDelta;
+pub const GvarPhantomPointDeltas = @import("font.zig").GvarPhantomPointDeltas;
 pub const CvarInfo = @import("font.zig").CvarInfo;
 pub const CvarTupleInfo = @import("font.zig").CvarTupleInfo;
 pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
@@ -722,6 +723,7 @@ test "gvar metadata is exposed when present" {
     try std.testing.expect((try missing.gvarGlyphInfo(0)) == null);
     try std.testing.expect((try missing.gvarTupleInfo(0, 0)) == null);
     try std.testing.expect((try missing.gvarPointDeltasAtCoords(allocator, 0, &.{0.5})) == null);
+    try std.testing.expect((try missing.gvarPhantomPointDeltasAtCoords(allocator, 0, &.{0.5})) == null);
     try std.testing.expect((try missing.gvarGlyphBoundsAtCoords(allocator, 0, &.{0.5})) == null);
 }
 
@@ -743,8 +745,20 @@ test "gvar point deltas are exposed for non-empty glyph data" {
     try std.testing.expectEqual(@as(u16, 0), deltas[0].point);
     try std.testing.expectEqual(@as(f32, 5), deltas[0].x);
     try std.testing.expectEqual(@as(f32, 0), deltas[0].y);
+    try std.testing.expectEqual(@as(f32, 1), deltas[3].x);
+    try std.testing.expectEqual(@as(f32, 10), deltas[4].x);
+    try std.testing.expectEqual(@as(f32, 4), deltas[5].y);
+    try std.testing.expectEqual(@as(f32, -2), deltas[6].y);
     try std.testing.expectEqual(@as(u16, 6), deltas[6].point);
     try std.testing.expectEqual(@as(f32, 0), deltas[6].x);
+
+    const phantom = (try font.gvarPhantomPointDeltasAtCoords(allocator, 1, &.{0.5})).?;
+    try std.testing.expectEqual(@as(f32, 1), phantom.left.x);
+    try std.testing.expectEqual(@as(f32, 10), phantom.right.x);
+    try std.testing.expectEqual(@as(f32, 9), phantom.horizontalAdvanceDelta());
+    try std.testing.expectEqual(@as(f32, 4), phantom.top.y);
+    try std.testing.expectEqual(@as(f32, -2), phantom.bottom.y);
+    try std.testing.expectEqual(@as(f32, 6), phantom.verticalAdvanceDelta());
 
     const varied_bounds = (try font.gvarGlyphBoundsAtCoords(allocator, 1, &.{0.5})).?;
     const default_bounds = try font.glyphBounds(1);
@@ -757,6 +771,8 @@ test "gvar point deltas are exposed for non-empty glyph data" {
     try std.testing.expectEqual(@as(f32, default_outline.commands.items[0].move_to.x + 5), varied_outline.commands.items[0].move_to.x);
     try std.testing.expectEqual(@as(f32, default_outline.commands.items[1].line_to.x + 5), varied_outline.commands.items[1].line_to.x);
     try std.testing.expectEqual(default_outline.bounds.x_min + 5, varied_outline.bounds.x_min);
+    try std.testing.expectEqual(@as(u16, 809), varied_outline.advance_width);
+    try std.testing.expectEqual(@as(i16, 4), varied_outline.left_side_bearing);
 }
 
 test "lazy gvar metadata revalidates borrowed table bytes" {

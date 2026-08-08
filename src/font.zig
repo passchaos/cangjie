@@ -58,6 +58,7 @@ pub const GvarInfo = gvar_mod.Info;
 pub const GvarGlyphInfo = gvar_mod.GlyphInfo;
 pub const GvarTupleInfo = gvar_mod.TupleInfo;
 pub const GvarScaledPointDelta = gvar_mod.ScaledPointDelta;
+pub const GvarPhantomPointDeltas = gvar_mod.PhantomPointDeltas;
 pub const MathConstant = math_mod.Constant;
 pub const MathInfo = math_mod.Info;
 pub const MathConstantsInfo = math_mod.Constants;
@@ -1087,6 +1088,26 @@ pub const Font = struct {
     /// Decode accumulated `gvar` point deltas for a glyph at normalized coordinates.
     pub fn gvarPointDeltasAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?[]GvarScaledPointDelta {
         return try self.gvarPointDeltasAtCoordsWithFlags(allocator, glyph_id, normalized_coords, null);
+    }
+
+    /// Decode the four TrueType phantom-point deltas for `glyph_id`.
+    ///
+    /// The return order matches FreeType/fontations terminology:
+    /// `.left`, `.right`, `.top`, `.bottom`. Horizontal advance variation is
+    /// `right.x - left.x`; vertical advance variation is `top.y - bottom.y`.
+    /// Compound glyphs follow the same `USE_MY_METRICS` ownership rule as
+    /// FreeType/fontations: use the last flagged component's glyph data, or
+    /// the compound glyph's own component-count phantom range when no component
+    /// requests metric ownership.
+    pub fn gvarPhantomPointDeltasAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?GvarPhantomPointDeltas {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        if (self.gvar == null) return null;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+
+        const target = try self.gvarMetricVariationTarget(glyph_id, 0);
+        const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, target.glyph_id, normalized_coords, target.point_count + 4, null)) orelse return null;
+        defer allocator.free(deltas);
+        return try gvar_mod.phantomPointDeltas(target.point_count, deltas);
     }
 
     fn gvarPointDeltasAtCoordsWithFlags(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, has_delta: ?[]bool) FontError!?[]GvarScaledPointDelta {
@@ -3345,7 +3366,8 @@ pub const Font = struct {
         const contour_count = try bin.readI16At(data, 0);
         if (contour_count < 0) return try self.glyphOutline(allocator, glyph_id);
         const metrics = try self.horizontalMetrics(glyph_id);
-        var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, try self.glyphBoundsFromParsedTables(glyph_id), metrics.advance_width, metrics.left_side_bearing);
+        const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
+        var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
         const target_count = try self.gvarTargetCount(glyph_id);
         const has_delta = try allocator.alloc(bool, target_count);
@@ -3353,6 +3375,7 @@ pub const Font = struct {
         const deltas = (try self.gvarPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, target_count, has_delta)) orelse return try self.glyphOutline(allocator, glyph_id);
         defer allocator.free(deltas);
         try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
+        try applyGvarSimpleGlyphMetricDeltas(&outline, default_bounds, metrics, deltas, target_count - 4);
         return outline;
     }
 
@@ -3409,6 +3432,20 @@ pub const Font = struct {
             .glyf = glyf,
             .index_to_loc_format = self.index_to_loc_format,
         }, glyph_id);
+    }
+
+    const GvarMetricVariationTarget = struct {
+        glyph_id: glyph_mod.GlyphId,
+        point_count: usize,
+    };
+
+    fn gvarMetricVariationTarget(self: *const Font, glyph_id: glyph_mod.GlyphId, depth: u8) FontError!GvarMetricVariationTarget {
+        if (depth > 64) return error.CompoundDepthExceeded;
+        const data = try self.glyphData(glyph_id);
+        return switch (try gvar_mod.glyfMetricTarget(data, self.glyph_count)) {
+            .self => |point_count| .{ .glyph_id = glyph_id, .point_count = point_count },
+            .component => |component_glyph| try self.gvarMetricVariationTarget(component_glyph, depth + 1),
+        };
     }
 
     fn glyphBoundsFromParsedTables(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
@@ -8184,6 +8221,25 @@ fn boundsForFlaggedPoints(points: []const FlaggedPoint) glyph_mod.Bounds {
     return result;
 }
 
+fn applyGvarSimpleGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: glyph_mod.Bounds, default_metrics: HorizontalMetricInfo, deltas: []const GvarScaledPointDelta, point_count: usize) FontError!void {
+    const phantom = try gvar_mod.phantomPointDeltas(point_count, deltas);
+    // TrueType's horizontal phantom points define metric deltas:
+    // pp1 = xMin - lsb, pp2 = pp1 + advance. Cangjie keeps outline commands in
+    // the same design-space coordinate convention as `glyphOutline()`, so only
+    // the metric fields are adjusted here; point-coordinate variation is already
+    // applied by appendSimpleGlyph().
+    const default_left_phantom = @as(f32, @floatFromInt(@as(i32, default_bounds.x_min) - @as(i32, default_metrics.left_side_bearing)));
+    const varied_left_phantom = default_left_phantom + phantom.left.x;
+    outline.left_side_bearing = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(outline.bounds.x_min)) - varied_left_phantom));
+    outline.advance_width = clampF32ToU16(@round(@as(f32, @floatFromInt(default_metrics.advance_width)) + phantom.horizontalAdvanceDelta()));
+}
+
+fn clampF32ToU16(value: f32) u16 {
+    if (value <= 0) return 0;
+    if (value >= @as(f32, @floatFromInt(std.math.maxInt(u16)))) return std.math.maxInt(u16);
+    return @intFromFloat(value);
+}
+
 fn clampGlyphPointF32ToI16(value: f32) i16 {
     if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
     if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
@@ -9027,43 +9083,7 @@ fn gvarGlyphTargetCount(data: []const u8, context: GvarGlyphTargetContext, glyph
     if (end < start or end > context.glyf.length) return error.InvalidLoca;
 
     const glyph_data = data[context.glyf.offset + start .. context.glyf.offset + end];
-    if (glyph_data.len < 10) return error.InvalidGlyph;
-    const contour_count = try bin.readI16At(glyph_data, 0);
-    return if (contour_count >= 0)
-        (try simpleGlyphPointCount(glyph_data, @intCast(contour_count))) + 4
-    else
-        (try compoundGlyphComponentCount(glyph_data)) + 4;
-}
-
-fn simpleGlyphPointCount(glyph_data: []const u8, contour_count: u16) FontError!usize {
-    if (contour_count == 0) return 0;
-    const last_end_offset = 10 + (@as(usize, contour_count) - 1) * 2;
-    if (last_end_offset + 2 > glyph_data.len) return error.InvalidGlyph;
-    return @as(usize, try bin.readU16At(glyph_data, last_end_offset)) + 1;
-}
-
-fn compoundGlyphComponentCount(glyph_data: []const u8) FontError!usize {
-    var offset: usize = 10; // numberOfContours + x/y bounds.
-    var component_count: usize = 0;
-    while (true) {
-        if (offset + 4 > glyph_data.len) return error.InvalidGlyph;
-        const flags = try bin.readU16At(glyph_data, offset);
-        offset += 4;
-        component_count += 1;
-
-        const argument_bytes: usize = if ((flags & 0x0001) != 0) 4 else 2;
-        if (argument_bytes > glyph_data.len - offset) return error.InvalidGlyph;
-        offset += argument_bytes;
-
-        const has_scale = (flags & 0x0008) != 0;
-        const has_xy_scale = (flags & 0x0040) != 0;
-        const has_two_by_two = (flags & 0x0080) != 0;
-        const scale_bytes: usize = if (has_scale) 2 else if (has_xy_scale) 4 else if (has_two_by_two) 8 else 0;
-        if (scale_bytes > glyph_data.len - offset) return error.InvalidGlyph;
-        offset += scale_bytes;
-
-        if ((flags & 0x0020) == 0) return component_count;
-    }
+    return (try gvar_mod.glyfVariationPointCount(glyph_data)) + 4;
 }
 
 const GvarPointSelection = union(enum) {

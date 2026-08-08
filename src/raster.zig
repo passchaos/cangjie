@@ -39,6 +39,10 @@ pub const RenderTarget = struct {
 
     fn blendUnchecked(self: *RenderTarget, x: i32, y: i32, coverage: u8) void {
         const idx = @as(usize, @intCast(y)) * self.width + @as(usize, @intCast(x));
+        if (coverage == 255) {
+            self.pixels[idx] = 255;
+            return;
+        }
         self.pixels[idx] = @max(self.pixels[idx], coverage);
     }
 };

@@ -716,6 +716,10 @@ pub const Font = struct {
     pclt: ?TableRecord,
     stat: ?TableRecord,
     fvar: ?TableRecord,
+    /// Cached parse-time fvar axis count for variation hot paths that already
+    /// trust Font.parse. Public metadata APIs still revalidate fvar before
+    /// reading mutable borrowed bytes.
+    fvar_axis_count: ?u16 = null,
     avar: ?TableRecord,
     cvt: ?TableRecord,
     cvar: ?TableRecord,
@@ -909,7 +913,10 @@ pub const Font = struct {
                 else => return err,
             };
         }
-        if (fvar) |fvar_table| try validateFvarTable(data, fvar_table);
+        const fvar_axis_count: ?u16 = if (fvar) |fvar_table| blk: {
+            try validateFvarTable(data, fvar_table);
+            break :blk @intCast((try readFvarInfo(data, fvar_table)).axis_count);
+        } else null;
         if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
         const cvt_value_count = if (cvt) |cvt_table| try validateCvtTable(cvt_table) else null;
         if (fpgm) |fpgm_table| try validateTrueTypeProgramTable(data, fpgm_table);
@@ -1028,6 +1035,7 @@ pub const Font = struct {
             .pclt = pclt,
             .stat = stat,
             .fvar = fvar,
+            .fvar_axis_count = fvar_axis_count,
             .avar = avar,
             .cvt = cvt,
             .cvar = cvar,
@@ -1133,8 +1141,7 @@ pub const Font = struct {
 
     fn gvarPointDeltasAtCoordsPrepared(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, target_count: usize, has_delta: ?[]bool, read_mode: OutlineReadMode) FontError!?[]GvarScaledPointDelta {
         const gvar = self.gvar orelse return null;
-        const fvar = self.fvar orelse return error.BadSfnt;
-        const fvar_info = try readFvarInfo(self.data, fvar);
+        const axis_count = try self.fvarAxisCountForReadMode(read_mode);
         if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, gvar);
         if (target_count > @as(usize, std.math.maxInt(u16)) + 1) return error.BadSfnt;
         const raw_scratch = try allocator.alloc(gvar_mod.PointDelta, target_count);
@@ -1143,8 +1150,16 @@ pub const Font = struct {
         defer allocator.free(scaled_scratch);
         const out = try allocator.alloc(gvar_mod.ScaledPointDelta, target_count);
         errdefer allocator.free(out);
-        const count = try gvar_mod.accumulateGlyphPointDeltasForPointCountWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id, normalized_coords, target_count, raw_scratch, scaled_scratch, out, has_delta);
+        const count = try gvar_mod.accumulateGlyphPointDeltasForPointCountWithFlags(self.data, gvar.offset, gvar.length, self.glyph_count, axis_count, glyph_id, normalized_coords, target_count, raw_scratch, scaled_scratch, out, has_delta);
         return try allocator.realloc(out, count);
+    }
+
+    fn fvarAxisCountForReadMode(self: *const Font, read_mode: OutlineReadMode) FontError!usize {
+        const fvar = self.fvar orelse return error.BadSfnt;
+        return switch (read_mode) {
+            .revalidate => (try readFvarInfo(self.data, fvar)).axis_count,
+            .parsed => self.fvar_axis_count orelse error.BadSfnt,
+        };
     }
 
     /// Return TrueType `gvar`-adjusted glyph bounds at normalized coordinates.

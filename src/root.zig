@@ -1033,6 +1033,37 @@ test "gvar raster outline uses parsed-font fast path" {
     try std.testing.expectEqual(@as(u16, 809), outline.advance_width);
 }
 
+test "gvar raster outline reuses parsed fvar axis count" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarDeltaTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var fvar_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "fvar")) fvar_offset = table.offset;
+    }
+
+    // The parsed-font raster path should not re-read the fvar header on every
+    // glyph. Mutating axisCount after parse makes defensive public APIs reject
+    // the now-inconsistent borrowed bytes, while the raster fast path continues
+    // to use the parse-time axis count paired with the already-validated gvar.
+    writeU16Test(bytes, (fvar_offset orelse return error.MissingTable) + 8, 2);
+
+    try std.testing.expectError(error.BadSfnt, font.glyphOutlineAtCoords(allocator, 1, &.{0.5}));
+    var outline = try font.glyphOutlineForRasterAtCoords(allocator, 1, &.{0.5});
+    defer outline.deinit();
+    try std.testing.expectEqual(@as(i16, 5), outline.bounds.x_min);
+    try std.testing.expectEqual(@as(f32, 5), outline.commands.items[0].move_to.x);
+    try std.testing.expectEqual(@as(u16, 809), outline.advance_width);
+}
+
 test "MATH constants metadata is exposed when present" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

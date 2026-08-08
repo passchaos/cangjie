@@ -15,8 +15,45 @@ pub const Info = struct {
     glyph_variation_data_count: usize,
 };
 
+pub const GlyphInfo = struct {
+    glyph_id: u16,
+    data_offset: usize,
+    data_length: usize,
+    tuple_count: u16,
+    uses_shared_point_numbers: bool,
+    tuple_data_offset: usize,
+};
+
 pub fn validate(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!void {
     _ = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+}
+
+pub fn glyphInfo(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize) Error!?GlyphInfo {
+    const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    if (glyph_id >= parsed.glyph_count) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const glyph_data_limit = table.len - parsed.glyph_data_offset;
+    const start = try glyphDataOffset(table, 20 + glyph_id * @as(usize, parsed.offset_size), parsed.offset_size, glyph_data_limit);
+    const end = try glyphDataOffset(table, 20 + (glyph_id + 1) * @as(usize, parsed.offset_size), parsed.offset_size, glyph_data_limit);
+    if (end < start) return error.BadSfnt;
+    if (end == start) return null;
+    const data_start = parsed.glyph_data_offset + start;
+    const data_length = end - start;
+    if (data_length < 4 or data_length > table.len - data_start) return error.BadSfnt;
+    const raw_tuple_count = readU16(table, data_start);
+    if ((raw_tuple_count & 0x7000) != 0) return error.BadSfnt;
+    const tuple_count = raw_tuple_count & 0x0fff;
+    if (tuple_count == 0) return error.BadSfnt;
+    const tuple_data_offset = readU16(table, data_start + 2);
+    if (tuple_data_offset < 4 or tuple_data_offset > data_length) return error.BadSfnt;
+    return .{
+        .glyph_id = @intCast(glyph_id),
+        .data_offset = data_start,
+        .data_length = data_length,
+        .tuple_count = tuple_count,
+        .uses_shared_point_numbers = (raw_tuple_count & 0x8000) != 0,
+        .tuple_data_offset = tuple_data_offset,
+    };
 }
 
 pub fn info(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize) Error!Info {
@@ -106,4 +143,25 @@ test "gvar metadata parses offset arrays" {
     try std.testing.expectEqual(@as(u16, 2), parsed.glyph_count);
     try std.testing.expectEqual(@as(u8, 2), parsed.offset_size);
     try std.testing.expectEqual(@as(usize, 1), parsed.glyph_variation_data_count);
+}
+
+test "gvar glyph metadata exposes tuple headers" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 2, // offsets: 0, 4.
+        0, 1, 0, 4, // GlyphVariationData header: one tuple, dataOffset 4.
+    };
+    const parsed = (try glyphInfo(&bytes, 0, bytes.len, 1, 1, 0)).?;
+    try std.testing.expectEqual(@as(u16, 0), parsed.glyph_id);
+    try std.testing.expectEqual(@as(usize, 24), parsed.data_offset);
+    try std.testing.expectEqual(@as(usize, 4), parsed.data_length);
+    try std.testing.expectEqual(@as(u16, 1), parsed.tuple_count);
+    try std.testing.expectEqual(@as(usize, 4), parsed.tuple_data_offset);
+    try std.testing.expect(!parsed.uses_shared_point_numbers);
 }

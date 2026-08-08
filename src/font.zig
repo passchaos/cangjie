@@ -55,6 +55,7 @@ pub const Cff2PrivateDictInfo = cff2_mod.PrivateDictInfo;
 pub const Cff2CharStringScanInfo = cff2_mod.CharStringScanInfo;
 pub const Cff2CharStringBoundsInfo = cff2_mod.CharStringBoundsInfo;
 pub const GvarInfo = gvar_mod.Info;
+pub const GvarGlyphInfo = gvar_mod.GlyphInfo;
 pub const MathConstant = math_mod.Constant;
 pub const MathInfo = math_mod.Info;
 pub const MathConstantsInfo = math_mod.Constants;
@@ -1059,6 +1060,16 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, gvar);
         try gvar_mod.validate(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count);
         return try gvar_mod.info(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count);
+    }
+
+    /// Read per-glyph metadata from the optional TrueType `gvar` table.
+    pub fn gvarGlyphInfo(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?GvarGlyphInfo {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const gvar = self.gvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        const fvar_info = try readFvarInfo(self.data, fvar);
+        try validateSfntTableChecksum(self.data, gvar);
+        return try gvar_mod.glyphInfo(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id);
     }
 
     /// Return the CFF2 font-dict index selected for a glyph, when FDSelect is present.

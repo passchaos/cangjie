@@ -113,6 +113,7 @@ pub const Cff2PrivateDictInfo = @import("font.zig").Cff2PrivateDictInfo;
 pub const Cff2CharStringScanInfo = @import("font.zig").Cff2CharStringScanInfo;
 pub const Cff2CharStringBoundsInfo = @import("font.zig").Cff2CharStringBoundsInfo;
 pub const GvarInfo = @import("font.zig").GvarInfo;
+pub const GvarGlyphInfo = @import("font.zig").GvarGlyphInfo;
 pub const CvarInfo = @import("font.zig").CvarInfo;
 pub const CvarTupleInfo = @import("font.zig").CvarTupleInfo;
 pub const TrueTypeProgramInfo = @import("font.zig").TrueTypeProgramInfo;
@@ -705,12 +706,14 @@ test "gvar metadata is exposed when present" {
     try std.testing.expectEqual(@as(u16, 2), info.glyph_count);
     try std.testing.expectEqual(@as(u8, 2), info.offset_size);
     try std.testing.expectEqual(@as(usize, 0), info.glyph_variation_data_count);
+    try std.testing.expect((try font.gvarGlyphInfo(0)) == null);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);
     var missing = try Font.parse(allocator, missing_bytes);
     defer missing.deinit();
     try std.testing.expect((try missing.gvarInfo()) == null);
+    try std.testing.expect((try missing.gvarGlyphInfo(0)) == null);
 }
 
 test "lazy gvar metadata revalidates borrowed table bytes" {

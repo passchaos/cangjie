@@ -89,22 +89,26 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
         try allocator.alloc(PreparedFillLine, lines.len);
     defer if (lines.len > inline_prepared_lines.len) allocator.free(prepared_storage);
     const prepared_lines = prepareFillLines(prepared_storage, lines);
+    if (prepared_lines.len < 2) return;
+    sortPreparedFillLinesByYMin(prepared_lines);
     var inline_intersections: [128]WindingIntersection = undefined;
     const intersection_storage = if (prepared_lines.len <= inline_intersections.len)
         inline_intersections[0..prepared_lines.len]
     else
         try allocator.alloc(WindingIntersection, prepared_lines.len);
     defer if (prepared_lines.len > inline_intersections.len) allocator.free(intersection_storage);
-    var inline_row_lines: [128]PreparedFillLine = undefined;
-    const row_line_storage = if (prepared_lines.len <= inline_row_lines.len)
-        inline_row_lines[0..prepared_lines.len]
+    var inline_active_lines: [128]PreparedFillLine = undefined;
+    const active_storage = if (prepared_lines.len <= inline_active_lines.len)
+        inline_active_lines[0..prepared_lines.len]
     else
         try allocator.alloc(PreparedFillLine, prepared_lines.len);
-    defer if (prepared_lines.len > inline_row_lines.len) allocator.free(row_line_storage);
+    defer if (prepared_lines.len > inline_active_lines.len) allocator.free(active_storage);
 
+    var next_line: usize = 0;
+    var active_count: usize = 0;
     var y = min_y;
     while (y <= max_y) : (y += 1) {
-        const row_lines = collectRowFillLines(row_line_storage, prepared_lines, y);
+        const row_lines = updateActiveFillLines(active_storage, &active_count, prepared_lines, &next_line, y);
         if (row_lines.len < 2) continue;
         var row_has_coverage = false;
         var row_min_x = max_x;
@@ -268,21 +272,51 @@ fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFill
     return out[0..count];
 }
 
-fn collectRowFillLines(out: []PreparedFillLine, lines: []const PreparedFillLine, y: i32) []PreparedFillLine {
-    std.debug.assert(out.len >= lines.len);
+fn lessThanPreparedFillLineYMin(_: void, lhs: PreparedFillLine, rhs: PreparedFillLine) bool {
+    return lhs.y_min < rhs.y_min;
+}
+
+fn sortPreparedFillLinesByYMin(lines: []PreparedFillLine) void {
+    if (lines.len <= 32) {
+        var index: usize = 1;
+        while (index < lines.len) : (index += 1) {
+            const value = lines[index];
+            var cursor = index;
+            while (cursor > 0 and lines[cursor - 1].y_min > value.y_min) : (cursor -= 1) {
+                lines[cursor] = lines[cursor - 1];
+            }
+            lines[cursor] = value;
+        }
+        return;
+    }
+    std.sort.heap(PreparedFillLine, lines, {}, lessThanPreparedFillLineYMin);
+}
+
+fn updateActiveFillLines(active_storage: []PreparedFillLine, active_count: *usize, sorted_lines: []const PreparedFillLine, next_line: *usize, y: i32) []PreparedFillLine {
+    std.debug.assert(active_storage.len >= sorted_lines.len);
     const row_min_y: f32 = @floatFromInt(y);
     const row_max_y = row_min_y + 1.0;
-    var count: usize = 0;
-    for (lines) |line| {
+
+    var kept: usize = 0;
+    for (active_storage[0..active_count.*]) |line| {
         // Each sample row is half-open: an edge contributes when
-        // y_min <= sample_y < y_max. Filtering by the whole pixel row once
-        // avoids rechecking unrelated edges for every supersample while still
-        // leaving the exact half-open test in the sample loop for boundaries.
-        if (line.y_min >= row_max_y or line.y_max <= row_min_y) continue;
-        out[count] = line;
-        count += 1;
+        // y_min <= sample_y < y_max. Keeping only edges that may cross the
+        // current pixel row preserves the exact per-sample boundary test while
+        // avoiding a full edge-list scan on every row.
+        if (line.y_max <= row_min_y) continue;
+        active_storage[kept] = line;
+        kept += 1;
     }
-    return out[0..count];
+    active_count.* = kept;
+
+    while (next_line.* < sorted_lines.len and sorted_lines[next_line.*].y_min < row_max_y) : (next_line.* += 1) {
+        const line = sorted_lines[next_line.*];
+        if (line.y_max <= row_min_y) continue;
+        active_storage[active_count.*] = line;
+        active_count.* += 1;
+    }
+
+    return active_storage[0..active_count.*];
 }
 
 const sample_offsets_1 = [_]f32{0.5};

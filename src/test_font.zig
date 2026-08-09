@@ -172,6 +172,22 @@ pub fn buildColorV1VariableClipTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1VariableClipTtfTables(allocator));
 }
 
+pub fn buildColorV1VariablePaintTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1VariablePaintTtfTables(allocator));
+}
+
+pub fn buildColorV1VariableLinearGradientTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1VariableGradientTtfTables(allocator, .linear));
+}
+
+pub fn buildColorV1VariableRadialGradientTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1VariableGradientTtfTables(allocator, .radial));
+}
+
+pub fn buildColorV1VariableSweepGradientTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1VariableGradientTtfTables(allocator, .sweep));
+}
+
 pub fn buildColorV1RadialGradientTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1RadialGradientTtfTables(allocator));
 }
@@ -1230,6 +1246,26 @@ fn colorV1VariableClipTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
     tables[11] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn colorV1VariablePaintTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try colorV1VariableClipTtfTables(allocator);
+    allocator.free(tables[0].data);
+    tables[0].data = try colrV1VariablePaintTable(allocator);
+    return tables;
+}
+
+const VariableGradientKind = enum {
+    linear,
+    radial,
+    sweep,
+};
+
+fn colorV1VariableGradientTtfTables(allocator: std.mem.Allocator, kind: VariableGradientKind) ![]Table {
+    const tables = try colorV1VariableClipTtfTables(allocator);
+    allocator.free(tables[0].data);
+    tables[0].data = try colrV1VariableGradientTable(allocator, kind);
     return tables;
 }
 
@@ -3636,6 +3672,132 @@ fn colrV1VariableClipTable(allocator: std.mem.Allocator) ![]u8 {
     writeItemVariationStoreWithItems(bytes, 100, 2);
     writeI16(bytes, 132, 500);
     writeI16(bytes, 134, -500);
+    return bytes;
+}
+
+fn colrV1VariablePaintTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 105);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34); // BaseGlyphList.
+    writeU32(bytes, 26, 59); // VarIndexMap.
+    writeU32(bytes, 30, 71); // ItemVariationStore.
+
+    writeU32(bytes, 34, 1);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 10);
+
+    bytes[44] = 10; // PaintGlyph.
+    writeU24(bytes, 45, 6);
+    writeU16(bytes, 48, 1);
+    bytes[50] = 3; // PaintVarSolid.
+    writeU16(bytes, 51, 0);
+    writeF2Dot14(bytes, 53, 1);
+    writeU32(bytes, 55, 1);
+
+    // The no-variation sentinel is a valid sparse mapping entry. PaintVarSolid
+    // starts at logical index zero and maps through the second entry.
+    bytes[59] = 0;
+    bytes[60] = 0x3f; // Four-byte entries with 16 inner-index bits.
+    writeU16(bytes, 61, 2);
+    writeU32(bytes, 63, 0xffff_ffff);
+    writeU32(bytes, 67, 0);
+
+    // Keep the ItemVariationStore disjoint from the PaintVarSolid header and
+    // map. The row delta -16384 lowers alpha from 1.0 to 0.5 at coord 0.5.
+    writeItemVariationStoreWithOneItem(bytes, 71);
+    writeI16(bytes, 103, -16384);
+    return bytes;
+}
+
+fn colrV1VariableGradientTable(allocator: std.mem.Allocator, kind: VariableGradientKind) ![]u8 {
+    const bytes = try allocator.alloc(u8, 148);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34); // BaseGlyphList.
+    writeU32(bytes, 30, 96); // ItemVariationStore.
+
+    writeU32(bytes, 34, 1);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 10);
+    bytes[44] = 10; // PaintGlyph.
+    writeU24(bytes, 45, 6);
+    writeU16(bytes, 48, 1);
+
+    const paint = 50;
+    const paint_size: usize = if (kind == .sweep) 16 else 20;
+    bytes[paint] = switch (kind) {
+        .linear => 5,
+        .radial => 7,
+        .sweep => 9,
+    };
+    writeU24(bytes, paint + 1, @intCast(paint_size));
+    switch (kind) {
+        .linear => {
+            writeI16(bytes, paint + 4, 0);
+            writeI16(bytes, paint + 6, 0);
+            writeI16(bytes, paint + 8, 700);
+            writeI16(bytes, paint + 10, 0);
+            writeI16(bytes, paint + 12, 0);
+            writeI16(bytes, paint + 14, 100);
+            writeU32(bytes, paint + 16, 0);
+        },
+        .radial => {
+            writeI16(bytes, paint + 4, 350);
+            writeI16(bytes, paint + 6, 100);
+            writeU16(bytes, paint + 8, 0);
+            writeI16(bytes, paint + 10, 350);
+            writeI16(bytes, paint + 12, 100);
+            writeU16(bytes, paint + 14, 350);
+            writeU32(bytes, paint + 16, 0);
+        },
+        .sweep => {
+            writeI16(bytes, paint + 4, 350);
+            writeI16(bytes, paint + 6, 100);
+            writeF2Dot14(bytes, paint + 8, -1);
+            writeF2Dot14(bytes, paint + 10, 1);
+            writeU32(bytes, paint + 12, 0);
+        },
+    }
+
+    const color_line = paint + paint_size;
+    const stop_var_index_base: u32 = if (kind == .sweep) 4 else 6;
+    bytes[color_line] = 0;
+    writeU16(bytes, color_line + 1, 2);
+    writeF2Dot14(bytes, color_line + 3, 0);
+    writeU16(bytes, color_line + 5, 0);
+    writeF2Dot14(bytes, color_line + 7, 1);
+    writeU32(bytes, color_line + 9, stop_var_index_base);
+    writeF2Dot14(bytes, color_line + 13, 1);
+    writeU16(bytes, color_line + 15, 1);
+    writeF2Dot14(bytes, color_line + 17, 1);
+    writeU32(bytes, color_line + 19, stop_var_index_base + 2);
+
+    writeItemVariationStoreWithItems(bytes, 96, 10);
+    const deltas = bytes[128..148];
+    @memset(deltas, 0);
+    switch (kind) {
+        .linear => {
+            writeI16(bytes, 128, 200); // x0.
+            writeI16(bytes, 132, -200); // x1.
+        },
+        .radial => {
+            writeI16(bytes, 132, 200); // radius0.
+            writeI16(bytes, 138, -200); // radius1.
+        },
+        .sweep => {
+            writeI16(bytes, 128, 200); // centerX.
+            writeI16(bytes, 130, -200); // centerY.
+            writeI16(bytes, 132, 8192); // startAngle.
+            writeI16(bytes, 134, -8192); // endAngle.
+        },
+    }
+    const stop_delta_start = 128 + @as(usize, stop_var_index_base) * 2;
+    // At coord 0.5 these two offset deltas move the first stop to 0.75 and
+    // the last to 0.25, exercising required post-variation stable sorting.
+    writeI16(bytes, stop_delta_start, 24576); // First stop offset.
+    writeI16(bytes, stop_delta_start + 2, -16384); // First stop alpha.
+    writeI16(bytes, stop_delta_start + 4, -24576); // Last stop offset.
     return bytes;
 }
 

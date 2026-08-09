@@ -891,7 +891,7 @@ pub const Rasterizer = struct {
         const layers = try font.colorLayers(self.allocator, glyph_id);
         defer self.allocator.free(layers);
         if (layers.len == 0) {
-            if (try font.colorPaint(glyph_id)) |paint| {
+            if (try font.colorPaintAtCoords(glyph_id, normalized_variation_coords)) |paint| {
                 if (try font.colorClipBoxAtCoords(glyph_id, normalized_variation_coords)) |clip| {
                     var clipped = try ColorRenderTarget.init(self.allocator, target.width, target.height);
                     defer clipped.deinit();
@@ -959,7 +959,10 @@ pub const Rasterizer = struct {
             },
             .layers => |layers| {
                 for (0..layers.layer_count) |offset| {
-                    const child = (try font.colorPaintLayer(layers.first_layer_index + @as(u32, @intCast(offset)))) orelse continue;
+                    const child = (try font.colorPaintLayerAtCoords(
+                        layers.first_layer_index + @as(u32, @intCast(offset)),
+                        normalized_variation_coords,
+                    )) orelse continue;
                     try self.renderColorPaint(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
                 }
             },
@@ -976,11 +979,12 @@ pub const Rasterizer = struct {
         var mask = try RenderTarget.init(self.allocator, target.width, target.height);
         defer mask.deinit();
         try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
+        const alpha = std.math.clamp(solid.alpha, 0.0, 1.0);
         target.blendMask(&mask, .{
             .red = base_color.red,
             .green = base_color.green,
             .blue = base_color.blue,
-            .alpha = @intCast((@as(u32, base_color.alpha) * @as(u32, @intFromFloat(@round(solid.alpha * 255.0)))) / 255),
+            .alpha = @intCast((@as(u32, base_color.alpha) * @as(u32, @intFromFloat(@round(alpha * 255.0)))) / 255),
         });
     }
 
@@ -996,7 +1000,7 @@ pub const Rasterizer = struct {
         palette_index: u16,
         normalized_variation_coords: []const f32,
     ) !void {
-        const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index);
+        const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index, normalized_variation_coords);
         defer self.allocator.free(stops);
 
         var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
@@ -1027,7 +1031,7 @@ pub const Rasterizer = struct {
         palette_index: u16,
         normalized_variation_coords: []const f32,
     ) !void {
-        const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index);
+        const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index, normalized_variation_coords);
         defer self.allocator.free(stops);
         var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
         defer outline.deinit();
@@ -1049,7 +1053,7 @@ pub const Rasterizer = struct {
         palette_index: u16,
         normalized_variation_coords: []const f32,
     ) !void {
-        const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index);
+        const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index, normalized_variation_coords);
         defer self.allocator.free(stops);
         var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
         defer outline.deinit();
@@ -1064,11 +1068,13 @@ pub const Rasterizer = struct {
         font: *const font_mod.Font,
         color_line: font_mod.ColorPaint.ColorLine,
         palette_index: u16,
+        normalized_variation_coords: []const f32,
     ) ![]SvgGradientStop {
-        const stops = try self.allocator.alloc(SvgGradientStop, color_line.stop_count);
+        const color_stops = try font.colorStopsAtCoords(self.allocator, color_line, normalized_variation_coords);
+        defer self.allocator.free(color_stops);
+        const stops = try self.allocator.alloc(SvgGradientStop, color_stops.len);
         errdefer self.allocator.free(stops);
-        for (stops, 0..) |*resolved, index| {
-            const stop = color_line.stop(index) orelse return error.BadSfnt;
+        for (stops, color_stops) |*resolved, stop| {
             const base_color = if (stop.palette_index == 0xffff)
                 font_mod.PaletteColor{ .red = 255, .green = 255, .blue = 255, .alpha = 255 }
             else
@@ -1080,7 +1086,7 @@ pub const Rasterizer = struct {
                     .green = base_color.green,
                     .blue = base_color.blue,
                     .alpha = @intCast((@as(u32, base_color.alpha) *
-                        @as(u32, @intFromFloat(@round(stop.alpha * 255.0)))) / 255),
+                        @as(u32, @intFromFloat(@round(std.math.clamp(stop.alpha, 0.0, 1.0) * 255.0)))) / 255),
                 },
             };
         }

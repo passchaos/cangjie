@@ -4665,6 +4665,101 @@ test "COLR v1 variable ClipBox resolves and clips at normalized coordinates" {
     try std.testing.expect(varied_opaque < default_opaque);
 }
 
+test "COLR v1 variable paints resolve and render at normalized coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildColorV1VariablePaintTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const default_paint = (try font.colorPaint(1)).?;
+    const varied_paint = (try font.colorPaintAtCoords(1, &.{0.5})).?;
+    const default_alpha = switch (default_paint) {
+        .glyph => |glyph_paint| switch (glyph_paint.brush) {
+            .solid => |solid| solid.alpha,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    const varied_alpha = switch (varied_paint) {
+        .glyph => |glyph_paint| switch (glyph_paint.brush) {
+            .solid => |solid| solid.alpha,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(f32, 1), default_alpha);
+    try std.testing.expectEqual(@as(f32, 0.5), varied_alpha);
+
+    var default_target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer default_target.deinit();
+    var varied_target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer varied_target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&default_target, &font, 1, 24, 8, 32, 0);
+    try rasterizer.renderColorGlyphAtCoords(&varied_target, &font, 1, 24, 8, 32, 0, &.{0.5});
+
+    var default_max_alpha: u8 = 0;
+    var varied_max_alpha: u8 = 0;
+    for (default_target.pixels, varied_target.pixels) |default_pixel, varied_pixel| {
+        default_max_alpha = @max(default_max_alpha, default_pixel.a);
+        varied_max_alpha = @max(varied_max_alpha, varied_pixel.a);
+    }
+    try std.testing.expect(default_max_alpha > 0);
+    try std.testing.expect(varied_max_alpha > 0);
+    try std.testing.expect(varied_max_alpha < default_max_alpha);
+}
+
+test "COLR v1 variable gradients resolve geometry and stops" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const linear_bytes = try test_font.buildColorV1VariableLinearGradientTtf(allocator);
+    defer allocator.free(linear_bytes);
+    var linear_font = try Font.parse(allocator, linear_bytes);
+    defer linear_font.deinit();
+    const linear = (try linear_font.colorPaintAtCoords(1, &.{0.5})).?.glyph.brush.linear_gradient;
+    try std.testing.expectEqual(@as(f32, 100), linear.p0.x);
+    try std.testing.expectEqual(@as(f32, 600), linear.p1.x);
+    const linear_stops = try linear_font.colorStopsAtCoords(allocator, linear.color_line, &.{0.5});
+    defer allocator.free(linear_stops);
+    try std.testing.expectEqual(@as(usize, 2), linear_stops.len);
+    try std.testing.expectEqual(@as(f32, 0.25), linear_stops[0].offset);
+    try std.testing.expectEqual(@as(u16, 1), linear_stops[0].palette_index);
+    try std.testing.expectEqual(@as(f32, 0.75), linear_stops[1].offset);
+    try std.testing.expectEqual(@as(u16, 0), linear_stops[1].palette_index);
+    try std.testing.expectEqual(@as(f32, 0.5), linear_stops[1].alpha);
+
+    const radial_bytes = try test_font.buildColorV1VariableRadialGradientTtf(allocator);
+    defer allocator.free(radial_bytes);
+    var radial_font = try Font.parse(allocator, radial_bytes);
+    defer radial_font.deinit();
+    const radial = (try radial_font.colorPaintAtCoords(1, &.{0.5})).?.glyph.brush.radial_gradient;
+    try std.testing.expectEqual(@as(f32, 100), radial.r0);
+    try std.testing.expectEqual(@as(f32, 250), radial.r1);
+
+    const sweep_bytes = try test_font.buildColorV1VariableSweepGradientTtf(allocator);
+    defer allocator.free(sweep_bytes);
+    var sweep_font = try Font.parse(allocator, sweep_bytes);
+    defer sweep_font.deinit();
+    const sweep = (try sweep_font.colorPaintAtCoords(1, &.{0.5})).?.glyph.brush.sweep_gradient;
+    try std.testing.expectEqual(@as(f32, 450), sweep.center.x);
+    try std.testing.expectEqual(@as(f32, 0), sweep.center.y);
+    try std.testing.expectEqual(@as(f32, 45), sweep.start_angle);
+    try std.testing.expectEqual(@as(f32, 315), sweep.end_angle);
+
+    var default_target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer default_target.deinit();
+    var varied_target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer varied_target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&default_target, &linear_font, 1, 24, 8, 32, 0);
+    try rasterizer.renderColorGlyphAtCoords(&varied_target, &linear_font, 1, 24, 8, 32, 0, &.{0.5});
+    try std.testing.expect(colorRenderTargetPixelDifference(&default_target, &varied_target) > 0);
+}
+
 test "COLR v1 foreground palette sentinel renders current color" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

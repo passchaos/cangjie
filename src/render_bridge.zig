@@ -13,6 +13,7 @@ pub const BridgeOptions = struct {
     origin_x: f32 = 0,
     origin_y: f32 = 0,
     palette_index: u16 = 0,
+    normalized_variation_coords: []const f32 = &.{},
     include_path_requests: bool = true,
     include_color_glyphs: bool = true,
     render_mode: GlyphRenderMode = .atlas_mask,
@@ -26,6 +27,8 @@ pub const GlyphAtlasCacheKey = struct {
     glyph_id: glyph_mod.GlyphId,
     font_size_bits: u32,
     palette_index: ?u16 = null,
+    variation_hash: u64 = 0,
+    variation_coord_count: usize = 0,
     render_mode: GlyphRenderMode,
 };
 
@@ -34,6 +37,8 @@ pub const GlyphAtlasRequest = struct {
     glyph_id: glyph_mod.GlyphId,
     font_size: f32,
     palette_index: ?u16 = null,
+    normalized_variation_coords: []const f32 = &.{},
+    variation_hash: u64 = 0,
     render_mode: GlyphRenderMode = .atlas_mask,
 
     pub fn cacheKey(self: GlyphAtlasRequest) GlyphAtlasCacheKey {
@@ -42,6 +47,8 @@ pub const GlyphAtlasRequest = struct {
             .glyph_id = self.glyph_id,
             .font_size_bits = @bitCast(self.font_size),
             .palette_index = self.palette_index,
+            .variation_hash = self.variation_hash,
+            .variation_coord_count = self.normalized_variation_coords.len,
             .render_mode = self.render_mode,
         };
     }
@@ -58,6 +65,8 @@ pub const GlyphPathCacheKey = struct {
     font_addr: usize,
     glyph_id: glyph_mod.GlyphId,
     font_size_bits: u32,
+    variation_hash: u64 = 0,
+    variation_coord_count: usize = 0,
     render_mode: GlyphRenderMode,
 };
 
@@ -65,6 +74,8 @@ pub const GlyphPathRequest = struct {
     font: *const font_mod.Font,
     glyph_id: glyph_mod.GlyphId,
     font_size: f32,
+    normalized_variation_coords: []const f32 = &.{},
+    variation_hash: u64 = 0,
     render_mode: GlyphRenderMode = .path_outline,
     source: GlyphPathSource = .{ .glyph_index = 0, .codepoint = 0, .cluster = 0 },
 
@@ -73,6 +84,8 @@ pub const GlyphPathRequest = struct {
             .font_addr = @intFromPtr(self.font),
             .glyph_id = self.glyph_id,
             .font_size_bits = @bitCast(self.font_size),
+            .variation_hash = self.variation_hash,
+            .variation_coord_count = self.normalized_variation_coords.len,
             .render_mode = self.render_mode,
         };
     }
@@ -128,6 +141,8 @@ pub const ColorGlyphDrawCommand = struct {
     glyph_index: usize,
     layer_start: usize,
     layer_len: usize,
+    color_stop_start: usize = 0,
+    color_stop_len: usize = 0,
     svg_document: ?[]const u8 = null,
     has_colr_v1_paint: bool = false,
     paint: ColorGlyphPaint = .none,
@@ -150,11 +165,15 @@ pub const GlyphDrawList = struct {
     path_requests: []GlyphPathRequest,
     color_glyphs: []ColorGlyphDrawCommand,
     color_layers: []ColorGlyphLayerCommand,
+    color_stops: []font_mod.ColorPaint.ColorStop,
+    normalized_variation_coords: []f32,
     cursor: ?TextCursorGeometry,
     selection: []TextSelectionGeometry,
 
     pub fn deinit(self: *GlyphDrawList) void {
         self.allocator.free(self.selection);
+        self.allocator.free(self.normalized_variation_coords);
+        self.allocator.free(self.color_stops);
         self.allocator.free(self.color_layers);
         self.allocator.free(self.color_glyphs);
         self.allocator.free(self.path_requests);
@@ -166,6 +185,9 @@ pub const GlyphDrawList = struct {
 };
 
 pub fn buildGlyphDrawList(allocator: std.mem.Allocator, paragraph: layout.ParagraphLayout, options: BridgeOptions) !GlyphDrawList {
+    for (options.normalized_variation_coords) |coord| {
+        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
+    }
     var builder = BridgeBuilder.init(allocator, paragraph, options);
     defer builder.deinitScratch();
     try builder.build();
@@ -182,19 +204,23 @@ const BridgeBuilder = struct {
     path_requests: std.ArrayList(GlyphPathRequest) = .empty,
     color_glyphs: std.ArrayList(ColorGlyphDrawCommand) = .empty,
     color_layers: std.ArrayList(ColorGlyphLayerCommand) = .empty,
+    color_stops: std.ArrayList(font_mod.ColorPaint.ColorStop) = .empty,
     selection: std.ArrayList(TextSelectionGeometry) = .empty,
     cursor: ?TextCursorGeometry = null,
+    variation_hash: u64,
 
     fn init(allocator: std.mem.Allocator, paragraph: layout.ParagraphLayout, options: BridgeOptions) BridgeBuilder {
         return .{
             .allocator = allocator,
             .paragraph = paragraph,
             .options = options,
+            .variation_hash = normalizedVariationHash(options.normalized_variation_coords),
         };
     }
 
     fn deinitScratch(self: *BridgeBuilder) void {
         self.selection.deinit(self.allocator);
+        self.color_stops.deinit(self.allocator);
         self.color_layers.deinit(self.allocator);
         self.color_glyphs.deinit(self.allocator);
         self.path_requests.deinit(self.allocator);
@@ -260,6 +286,8 @@ const BridgeBuilder = struct {
                 .font = run.font,
                 .glyph_id = glyph.glyph_id,
                 .font_size = run.font_size,
+                .normalized_variation_coords = self.options.normalized_variation_coords,
+                .variation_hash = self.variation_hash,
                 .render_mode = self.options.render_mode,
             });
             var path_index: ?usize = null;
@@ -268,6 +296,8 @@ const BridgeBuilder = struct {
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,
                     .font_size = run.font_size,
+                    .normalized_variation_coords = self.options.normalized_variation_coords,
+                    .variation_hash = self.variation_hash,
                     .render_mode = pathRequestMode(self.options.render_mode),
                     .source = .{
                         .glyph_index = output_index,
@@ -310,6 +340,8 @@ const BridgeBuilder = struct {
                 .glyph_id = layer.glyph_id,
                 .font_size = font_size,
                 .palette_index = layer.palette_index,
+                .normalized_variation_coords = self.options.normalized_variation_coords,
+                .variation_hash = self.variation_hash,
                 .render_mode = self.options.render_mode,
             });
             try self.color_layers.append(self.allocator, .{
@@ -321,7 +353,15 @@ const BridgeBuilder = struct {
         }
 
         const svg_document = try font.svgDocument(glyph_id);
-        const color_paint = try font.colorPaint(glyph_id);
+        const color_paint = try font.colorPaintAtCoords(glyph_id, self.options.normalized_variation_coords);
+        const color_stop_start = self.color_stops.items.len;
+        if (color_paint) |paint| {
+            if (colorPaintLine(paint)) |color_line| {
+                const resolved = try font.colorStopsAtCoords(self.allocator, color_line, self.options.normalized_variation_coords);
+                defer self.allocator.free(resolved);
+                try self.color_stops.appendSlice(self.allocator, resolved);
+            }
+        }
         const layer_len = self.color_layers.items.len - layer_start;
         if (layer_len == 0 and svg_document == null and color_paint == null) return null;
 
@@ -330,6 +370,8 @@ const BridgeBuilder = struct {
             .glyph_index = glyph_index,
             .layer_start = layer_start,
             .layer_len = layer_len,
+            .color_stop_start = color_stop_start,
+            .color_stop_len = self.color_stops.items.len - color_stop_start,
             .svg_document = svg_document,
             .has_colr_v1_paint = color_paint != null,
             .paint = colorGlyphPaint(layer_start, layer_len, svg_document, color_paint),
@@ -347,14 +389,24 @@ const BridgeBuilder = struct {
 
     fn pathRequestIndex(self: *BridgeBuilder, request: GlyphPathRequest) !usize {
         for (self.path_requests.items, 0..) |existing, index| {
-            if (existing.font == request.font and existing.glyph_id == request.glyph_id and existing.font_size == request.font_size and existing.render_mode == request.render_mode) return index;
+            if (existing.font == request.font and
+                existing.glyph_id == request.glyph_id and
+                existing.font_size == request.font_size and
+                existing.variation_hash == request.variation_hash and
+                variationCoordinatesEqual(existing.normalized_variation_coords, request.normalized_variation_coords) and
+                existing.render_mode == request.render_mode)
+            {
+                return index;
+            }
         }
         try self.path_requests.append(self.allocator, request);
         return self.path_requests.items.len - 1;
     }
 
     fn toOwnedList(self: *BridgeBuilder) !GlyphDrawList {
-        return .{
+        const normalized_variation_coords = try self.allocator.dupe(f32, self.options.normalized_variation_coords);
+        errdefer self.allocator.free(normalized_variation_coords);
+        const result = GlyphDrawList{
             .allocator = self.allocator,
             .glyphs = try self.glyphs.toOwnedSlice(self.allocator),
             .runs = try self.runs.toOwnedSlice(self.allocator),
@@ -362,18 +414,65 @@ const BridgeBuilder = struct {
             .path_requests = try self.path_requests.toOwnedSlice(self.allocator),
             .color_glyphs = try self.color_glyphs.toOwnedSlice(self.allocator),
             .color_layers = try self.color_layers.toOwnedSlice(self.allocator),
+            .color_stops = try self.color_stops.toOwnedSlice(self.allocator),
+            .normalized_variation_coords = normalized_variation_coords,
             .cursor = self.cursor,
             .selection = try self.selection.toOwnedSlice(self.allocator),
         };
+        // Requests live as long as the draw list, not as long as the caller's
+        // BridgeOptions. Rebind every borrowed location to the single owned
+        // coordinate copy after all request slices have reached stable storage.
+        for (result.atlas_requests) |*request| request.normalized_variation_coords = normalized_variation_coords;
+        for (result.path_requests) |*request| request.normalized_variation_coords = normalized_variation_coords;
+        return result;
     }
 };
+
+fn colorPaintLine(paint: font_mod.ColorPaint) ?font_mod.ColorPaint.ColorLine {
+    return switch (paint) {
+        .linear_gradient => |gradient| gradient.color_line,
+        .radial_gradient => |gradient| gradient.color_line,
+        .sweep_gradient => |gradient| gradient.color_line,
+        .glyph => |glyph_paint| switch (glyph_paint.brush) {
+            .linear_gradient => |gradient| gradient.color_line,
+            .radial_gradient => |gradient| gradient.color_line,
+            .sweep_gradient => |gradient| gradient.color_line,
+            .solid => null,
+        },
+        .solid, .layers => null,
+    };
+}
 
 fn sameAtlasRequest(a: GlyphAtlasRequest, b: GlyphAtlasRequest) bool {
     return a.font == b.font and
         a.glyph_id == b.glyph_id and
         a.font_size == b.font_size and
         a.palette_index == b.palette_index and
+        a.variation_hash == b.variation_hash and
+        variationCoordinatesEqual(a.normalized_variation_coords, b.normalized_variation_coords) and
         a.render_mode == b.render_mode;
+}
+
+fn variationCoordinatesEqual(a: []const f32, b: []const f32) bool {
+    return a.len == b.len and std.mem.eql(u8, std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b));
+}
+
+fn normalizedVariationHash(coords: []const f32) u64 {
+    var has_non_default = false;
+    for (coords) |coord| {
+        if (coord != 0) {
+            has_non_default = true;
+            break;
+        }
+    }
+    if (!has_non_default) return 0;
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(std.mem.asBytes(&coords.len));
+    for (coords) |coord| {
+        const bits: u32 = @bitCast(coord);
+        hasher.update(std.mem.asBytes(&bits));
+    }
+    return hasher.final();
 }
 
 fn pathRequestMode(render_mode: GlyphRenderMode) GlyphRenderMode {
@@ -623,4 +722,86 @@ test "render bridge emits COLR v1 PaintColrLayers metadata" {
     try std.testing.expect(draw_list.color_glyphs[0].has_colr_v1_paint);
     try std.testing.expectEqual(@as(u8, 2), draw_list.color_glyphs[0].paint.colr_v1_layers.layer_count);
     try std.testing.expectEqual(@as(u32, 0), draw_list.color_glyphs[0].paint.colr_v1_layers.first_layer_index);
+}
+
+test "render bridge resolves variable COLR paint and color stops" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildColorV1VariableLinearGradientTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const fonts = [_]*const font_mod.Font{&font};
+    const cascade = layout.FontCascade.init(&fonts);
+    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+        .max_width = 100,
+        .line_height = 24,
+        .normalized_variation_coords = &.{0.5},
+    });
+
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{
+        .normalized_variation_coords = &.{0.5},
+    });
+    defer draw_list.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), draw_list.color_glyphs.len);
+    const command = draw_list.color_glyphs[0];
+    try std.testing.expectEqual(@as(usize, 0), command.color_stop_start);
+    try std.testing.expectEqual(@as(usize, 2), command.color_stop_len);
+    const expected_variation_hash = normalizedVariationHash(&.{0.5});
+    try std.testing.expectEqual(expected_variation_hash, draw_list.atlas_requests[0].variation_hash);
+    try std.testing.expectEqual(expected_variation_hash, draw_list.path_requests[0].variation_hash);
+    try std.testing.expectEqual(expected_variation_hash, draw_list.atlas_requests[0].cacheKey().variation_hash);
+    try std.testing.expectEqual(expected_variation_hash, draw_list.path_requests[0].cacheKey().variation_hash);
+    try std.testing.expectEqual(@as(usize, 1), draw_list.atlas_requests[0].cacheKey().variation_coord_count);
+    try std.testing.expectEqual(@as(usize, 1), draw_list.path_requests[0].cacheKey().variation_coord_count);
+    try std.testing.expectEqual(@as(f32, 0.5), draw_list.normalized_variation_coords[0]);
+    try std.testing.expectEqual(draw_list.normalized_variation_coords.ptr, draw_list.atlas_requests[0].normalized_variation_coords.ptr);
+    try std.testing.expectEqual(draw_list.normalized_variation_coords.ptr, draw_list.path_requests[0].normalized_variation_coords.ptr);
+    const gradient = command.paint.colr_v1_glyph.brush.linear_gradient;
+    try std.testing.expectEqual(@as(f32, 100), gradient.p0.x);
+    try std.testing.expectEqual(@as(f32, 600), gradient.p1.x);
+    try std.testing.expectEqual(@as(f32, 0.25), draw_list.color_stops[0].offset);
+    try std.testing.expectEqual(@as(u16, 1), draw_list.color_stops[0].palette_index);
+    try std.testing.expectEqual(@as(f32, 0.75), draw_list.color_stops[1].offset);
+    try std.testing.expectEqual(@as(u16, 0), draw_list.color_stops[1].palette_index);
+    try std.testing.expectEqual(@as(f32, 0.5), draw_list.color_stops[1].alpha);
+}
+
+test "render bridge variation cache identity preserves coordinates" {
+    try std.testing.expectEqual(@as(u64, 0), normalizedVariationHash(&.{}));
+    try std.testing.expectEqual(@as(u64, 0), normalizedVariationHash(&.{ 0, 0 }));
+    try std.testing.expect(normalizedVariationHash(&.{0.5}) != 0);
+    try std.testing.expect(normalizedVariationHash(&.{0.5}) != normalizedVariationHash(&.{0.25}));
+
+    const font_ptr: *const font_mod.Font = @ptrFromInt(4096);
+    const a = GlyphAtlasRequest{
+        .font = font_ptr,
+        .glyph_id = 1,
+        .font_size = 20,
+        .normalized_variation_coords = &.{0.5},
+        .variation_hash = normalizedVariationHash(&.{0.5}),
+    };
+    var b = a;
+    b.normalized_variation_coords = &.{0.25};
+    b.variation_hash = normalizedVariationHash(&.{0.25});
+    try std.testing.expect(!sameAtlasRequest(a, b));
+    try std.testing.expect(a.cacheKey().variation_hash != b.cacheKey().variation_hash);
+}
+
+test "render bridge rejects invalid variation coordinates" {
+    const empty = layout.ParagraphLayout{
+        .glyphs = &.{},
+        .runs = &.{},
+        .lines = &.{},
+        .width = 0,
+        .height = 0,
+    };
+    try std.testing.expectError(error.BadSfnt, buildGlyphDrawList(std.testing.allocator, empty, .{
+        .normalized_variation_coords = &.{1.01},
+    }));
 }

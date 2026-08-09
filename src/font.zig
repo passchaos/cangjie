@@ -583,11 +583,13 @@ pub const ColorPaint = union(enum) {
         extend: Extend,
         stop_count: u16,
         stops_data: []const u8,
+        variable: bool = false,
 
         pub fn stop(self: ColorLine, index: usize) ?ColorStop {
             if (index >= self.stop_count) return null;
-            const start = index * 6;
-            if (start + 6 > self.stops_data.len) return null;
+            const stop_size: usize = if (self.variable) 10 else 6;
+            const start = index * stop_size;
+            if (start + stop_size > self.stops_data.len) return null;
             return .{
                 .offset = f2dot14(std.mem.readInt(i16, self.stops_data[start..][0..2], .big)),
                 .palette_index = std.mem.readInt(u16, self.stops_data[start + 2 ..][0..2], .big),
@@ -3245,7 +3247,13 @@ pub const Font = struct {
     }
 
     pub fn colorPaint(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorPaint {
+        return try self.colorPaintAtCoords(glyph_id, &.{});
+    }
+
+    /// Resolve a COLR v1 base paint at normalized variation coordinates.
+    pub fn colorPaintAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?ColorPaint {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const colr = self.colr orelse return null;
         try validateSfntTableChecksum(self.data, colr);
         if (colr.length < 34) return null;
@@ -3262,6 +3270,16 @@ pub const Font = struct {
         // another reachable paint names a missing CPAL slot would diverge from
         // the parser's accepted-font invariant.
         try validateColrPaletteBounds(self.data, colr, self.cpal);
+        if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
+        }
+        const read_context = ColorPaintReadContext{
+            .normalized_coords = normalized_coords,
+            .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
+                null
+            else
+                try readColrVariationContext(self.data, colr),
+        };
         const base_glyph_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 14));
         if (base_glyph_list_offset == 0) return null;
         try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
@@ -3284,7 +3302,7 @@ pub const Font = struct {
             const paint_start = list_start + paint_offset;
             var graph_guard = ColorPaintGraphGuard{};
             try validateColorPaintGraph(self, paint_start, &graph_guard);
-            return try readColorPaint(self, paint_start);
+            return try readColorPaint(self, paint_start, read_context);
         }
         return null;
     }
@@ -3420,6 +3438,12 @@ pub const Font = struct {
     }
 
     pub fn colorPaintLayer(self: *const Font, layer_index: u32) FontError!?ColorPaint {
+        return try self.colorPaintLayerAtCoords(layer_index, &.{});
+    }
+
+    /// Resolve a LayerList paint at normalized variation coordinates.
+    pub fn colorPaintLayerAtCoords(self: *const Font, layer_index: u32, normalized_coords: []const f32) FontError!?ColorPaint {
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const colr = self.colr orelse return null;
         try validateSfntTableChecksum(self.data, colr);
         if (colr.length < 34) return null;
@@ -3434,12 +3458,88 @@ pub const Font = struct {
         // CPAL. Validate the complete graph so post-parse mutations in sibling
         // layers cannot hide behind the requested layer index.
         try validateColrPaletteBounds(self.data, colr, self.cpal);
+        if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
+        }
         const layer_list = (try colrLayerList(self.data, colr)) orelse return null;
         if (layer_index >= layer_list.layer_count) return null;
         const paint_start = try colrLayerPaintOffset(self.data, colr, layer_list, layer_index);
         var graph_guard = ColorPaintGraphGuard{};
         try validateColorPaintLayer(self, layer_list, layer_index, &graph_guard);
-        return try readColorPaint(self, paint_start);
+        return try readColorPaint(self, paint_start, .{
+            .normalized_coords = normalized_coords,
+            .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
+                null
+            else
+                try readColrVariationContext(self.data, colr),
+        });
+    }
+
+    /// Resolve one ColorStop/VarColorStop from a previously returned color
+    /// line. The line borrows only COLR bytes; keeping the Font and coordinates
+    /// explicit avoids embedding a pointer to a possibly stack-allocated Font
+    /// value in long-lived render metadata.
+    pub fn colorStopAtCoords(self: *const Font, color_line: ColorPaint.ColorLine, index: usize, normalized_coords: []const f32) FontError!?ColorPaint.ColorStop {
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        var context: ?ColrVariationContext = null;
+        if (color_line.variable and !normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            const colr = self.colr orelse return error.BadSfnt;
+            try validateSfntTableChecksum(self.data, colr);
+            try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
+            context = try readColrVariationContext(self.data, colr);
+        }
+        return try self.colorStopAtCoordsValidated(color_line, index, normalized_coords, context);
+    }
+
+    fn colorStopAtCoordsValidated(
+        self: *const Font,
+        color_line: ColorPaint.ColorLine,
+        index: usize,
+        normalized_coords: []const f32,
+        context: ?ColrVariationContext,
+    ) FontError!?ColorPaint.ColorStop {
+        var result = color_line.stop(index) orelse return null;
+        if (!color_line.variable or normalizedVariationCoordinatesAreDefault(normalized_coords)) return result;
+
+        const colr = self.colr orelse return error.BadSfnt;
+        const variation = context orelse return error.BadSfnt;
+        const start = index * colrColorStopSize(true);
+        if (start + 10 > color_line.stops_data.len) return error.BadSfnt;
+        const var_index_base = std.mem.readInt(u32, color_line.stops_data[start + 6 ..][0..4], .big);
+        result.offset += @floatCast((try colrVariationDelta(self.data, colr, variation, var_index_base, 0, normalized_coords)) / 16384.0);
+        result.alpha += @floatCast((try colrVariationDelta(self.data, colr, variation, var_index_base, 1, normalized_coords)) / 16384.0);
+        return result;
+    }
+
+    /// Resolve a color line into caller-owned stops and sort by varied offset.
+    ///
+    /// Variation deltas may reorder stops even though the encoded base offsets
+    /// are sorted. Returning an owned slice gives render bridges and other
+    /// retained consumers the same stable, resolved representation used by the
+    /// rasterizer without storing variation coordinates in borrowed metadata.
+    pub fn colorStopsAtCoords(self: *const Font, allocator: std.mem.Allocator, color_line: ColorPaint.ColorLine, normalized_coords: []const f32) FontError![]ColorPaint.ColorStop {
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        var context: ?ColrVariationContext = null;
+        if (color_line.variable and !normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            const colr = self.colr orelse return error.BadSfnt;
+            try validateSfntTableChecksum(self.data, colr);
+            try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
+            context = try readColrVariationContext(self.data, colr);
+        }
+        const stops = try allocator.alloc(ColorPaint.ColorStop, color_line.stop_count);
+        errdefer allocator.free(stops);
+        for (stops, 0..) |*stop, index| {
+            stop.* = (try self.colorStopAtCoordsValidated(color_line, index, normalized_coords, context)) orelse return error.BadSfnt;
+        }
+        for (1..stops.len) |index| {
+            const current = stops[index];
+            var destination = index;
+            while (destination > 0 and current.offset < stops[destination - 1].offset) : (destination -= 1) {
+                stops[destination] = stops[destination - 1];
+            }
+            stops[destination] = current;
+        }
+        return stops;
     }
 
     pub fn svgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
@@ -11478,6 +11578,11 @@ const ColrVariationContext = struct {
 
 const no_colr_variation_index = std.math.maxInt(u32);
 
+const ColorPaintReadContext = struct {
+    normalized_coords: []const f32,
+    variation: ?ColrVariationContext,
+};
+
 fn readColrVariationContext(data: []const u8, colr: TableRecord) FontError!?ColrVariationContext {
     if (colr.length < 34) return error.BadSfnt;
     const store_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 30));
@@ -11536,6 +11641,11 @@ fn colrVariationDelta(
         .{ .outer = outer_index, .inner = inner_index },
         normalized_coords,
     );
+}
+
+fn colorPaintDelta(font: *const Font, colr: TableRecord, context: ColorPaintReadContext, var_index_base: u32, sequence_index: usize) FontError!f64 {
+    const variation = context.variation orelse return 0;
+    return try colrVariationDelta(font.data, colr, variation, var_index_base, sequence_index, context.normalized_coords);
 }
 
 const ColrV1BaseGlyphSet = struct {
@@ -12454,18 +12564,22 @@ fn validateColorPaintGraph(font: *const Font, offset: usize, guard: *ColorPaintG
     }
 }
 
-fn readColorPaint(font: *const Font, offset: usize) FontError!ColorPaint {
+fn readColorPaint(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint {
     const colr = font.colr orelse return error.BadSfnt;
     const data = font.data;
     if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
     const format = data[offset];
     return switch (format) {
-        2 => blk: {
+        2, 3 => blk: {
             const palette_index = try bin.readU16At(data, offset + 1);
             try font.validateColorPaletteIndex(palette_index);
+            const alpha_delta = if (format == 3)
+                try colorPaintDelta(font, colr, context, try bin.readU32At(data, offset + 5), 0)
+            else
+                0;
             break :blk .{ .solid = .{
                 .palette_index = palette_index,
-                .alpha = f2dot14(try bin.readI16At(data, offset + 3)),
+                .alpha = f2dot14(try bin.readI16At(data, offset + 3)) + @as(f32, @floatCast(alpha_delta / 16384.0)),
             } };
         },
         1 => blk: {
@@ -12484,7 +12598,7 @@ fn readColorPaint(font: *const Font, offset: usize) FontError!ColorPaint {
             // offset zero would recurse into the same PaintGlyph forever.
             if (child_offset < 6) return error.BadSfnt;
             if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
-            const child = try readColorPaint(font, offset + child_offset);
+            const child = try readColorPaint(font, offset + child_offset, context);
             break :blk switch (child) {
                 .solid => |solid| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .solid = solid } } },
                 .linear_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .linear_gradient = gradient } } },
@@ -12493,83 +12607,92 @@ fn readColorPaint(font: *const Font, offset: usize) FontError!ColorPaint {
                 else => error.UnsupportedGlyph,
             };
         },
-        4 => .{ .linear_gradient = try readColorLinearGradient(font, offset) },
-        6 => .{ .radial_gradient = try readColorRadialGradient(font, offset) },
-        8 => .{ .sweep_gradient = try readColorSweepGradient(font, offset) },
+        4, 5 => .{ .linear_gradient = try readColorLinearGradient(font, offset, context) },
+        6, 7 => .{ .radial_gradient = try readColorRadialGradient(font, offset, context) },
+        8, 9 => .{ .sweep_gradient = try readColorSweepGradient(font, offset, context) },
         else => error.UnsupportedGlyph,
     };
 }
 
-fn readColorSweepGradient(font: *const Font, offset: usize) FontError!ColorPaint.SweepGradient {
+fn readColorSweepGradient(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.SweepGradient {
     const colr = font.colr orelse return error.BadSfnt;
-    const info = colorPaintFormatInfo(8).?;
+    const format = font.data[offset];
+    const info = colorPaintFormatInfo(format).?;
     const color_line_offset = try colorPaintChildOffset(font.data, colr, offset, info.min_size, 1);
+    const var_index_base = if (format == 9) try bin.readU32At(font.data, offset + 12) else no_colr_variation_index;
+    const center_x_delta = try colorPaintDelta(font, colr, context, var_index_base, 0);
+    const center_y_delta = try colorPaintDelta(font, colr, context, var_index_base, 1);
+    const start_delta = try colorPaintDelta(font, colr, context, var_index_base, 2);
+    const end_delta = try colorPaintDelta(font, colr, context, var_index_base, 3);
     return .{
         .center = .{
-            .x = @floatFromInt(try bin.readI16At(font.data, offset + 4)),
-            .y = @floatFromInt(try bin.readI16At(font.data, offset + 6)),
+            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 4))) + @as(f32, @floatCast(center_x_delta)),
+            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) + @as(f32, @floatCast(center_y_delta)),
         },
         // OpenType 1.9.1 shifts the F2Dot14 angle domain so -1 and +1
         // conveniently encode 0° and 360° respectively.
-        .start_angle = f2dot14(try bin.readI16At(font.data, offset + 8)) * 180.0 + 180.0,
-        .end_angle = f2dot14(try bin.readI16At(font.data, offset + 10)) * 180.0 + 180.0,
-        .color_line = try readColorLine(font, colr, color_line_offset),
+        .start_angle = (f2dot14(try bin.readI16At(font.data, offset + 8)) + @as(f32, @floatCast(start_delta / 16384.0))) * 180.0 + 180.0,
+        .end_angle = (f2dot14(try bin.readI16At(font.data, offset + 10)) + @as(f32, @floatCast(end_delta / 16384.0))) * 180.0 + 180.0,
+        .color_line = try readColorLine(font, colr, color_line_offset, format == 9),
     };
 }
 
-fn readColorRadialGradient(font: *const Font, offset: usize) FontError!ColorPaint.RadialGradient {
+fn readColorRadialGradient(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.RadialGradient {
     const colr = font.colr orelse return error.BadSfnt;
-    const info = colorPaintFormatInfo(6).?;
+    const format = font.data[offset];
+    const info = colorPaintFormatInfo(format).?;
     const color_line_offset = try colorPaintChildOffset(font.data, colr, offset, info.min_size, 1);
-    const color_line = try readColorLine(font, colr, color_line_offset);
+    const var_index_base = if (format == 7) try bin.readU32At(font.data, offset + 16) else no_colr_variation_index;
     return .{
         .c0 = .{
-            .x = @floatFromInt(try bin.readI16At(font.data, offset + 4)),
-            .y = @floatFromInt(try bin.readI16At(font.data, offset + 6)),
+            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 4))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 0))),
+            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 1))),
         },
-        .r0 = @floatFromInt(try bin.readU16At(font.data, offset + 8)),
+        .r0 = @as(f32, @floatFromInt(try bin.readU16At(font.data, offset + 8))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 2))),
         .c1 = .{
-            .x = @floatFromInt(try bin.readI16At(font.data, offset + 10)),
-            .y = @floatFromInt(try bin.readI16At(font.data, offset + 12)),
+            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 10))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 3))),
+            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 12))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 4))),
         },
-        .r1 = @floatFromInt(try bin.readU16At(font.data, offset + 14)),
-        .color_line = color_line,
+        .r1 = @as(f32, @floatFromInt(try bin.readU16At(font.data, offset + 14))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 5))),
+        .color_line = try readColorLine(font, colr, color_line_offset, format == 7),
     };
 }
 
-fn readColorLine(font: *const Font, colr: TableRecord, color_line_offset: usize) FontError!ColorPaint.ColorLine {
+fn readColorLine(font: *const Font, colr: TableRecord, color_line_offset: usize, variable: bool) FontError!ColorPaint.ColorLine {
     const extend = std.enums.fromInt(ColorPaint.Extend, font.data[color_line_offset]) orelse return error.BadSfnt;
     const stop_count = try bin.readU16At(font.data, color_line_offset + 1);
     if (stop_count == 0) return error.BadSfnt;
     const stops_start = color_line_offset + 3;
-    const stops_len = @as(usize, stop_count) * 6;
+    const stops_len = @as(usize, stop_count) * colrColorStopSize(variable);
     if (stops_len > colr.offset + colr.length - stops_start) return error.BadSfnt;
     return .{
         .extend = extend,
         .stop_count = stop_count,
         .stops_data = font.data[stops_start .. stops_start + stops_len],
+        .variable = variable,
     };
 }
 
-fn readColorLinearGradient(font: *const Font, offset: usize) FontError!ColorPaint.LinearGradient {
+fn readColorLinearGradient(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.LinearGradient {
     const colr = font.colr orelse return error.BadSfnt;
-    const info = colorPaintFormatInfo(4).?;
+    const format = font.data[offset];
+    const info = colorPaintFormatInfo(format).?;
     const color_line_offset = try colorPaintChildOffset(font.data, colr, offset, info.min_size, 1);
-    const color_line = try readColorLine(font, colr, color_line_offset);
+    const var_index_base = if (format == 5) try bin.readU32At(font.data, offset + 16) else no_colr_variation_index;
     return .{
         .p0 = .{
-            .x = @floatFromInt(try bin.readI16At(font.data, offset + 4)),
-            .y = @floatFromInt(try bin.readI16At(font.data, offset + 6)),
+            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 4))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 0))),
+            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 1))),
         },
         .p1 = .{
-            .x = @floatFromInt(try bin.readI16At(font.data, offset + 8)),
-            .y = @floatFromInt(try bin.readI16At(font.data, offset + 10)),
+            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 8))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 2))),
+            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 10))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 3))),
         },
         .p2 = .{
-            .x = @floatFromInt(try bin.readI16At(font.data, offset + 12)),
-            .y = @floatFromInt(try bin.readI16At(font.data, offset + 14)),
+            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 12))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 4))),
+            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 14))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 5))),
         },
-        .color_line = color_line,
+        .color_line = try readColorLine(font, colr, color_line_offset, format == 5),
     };
 }
 

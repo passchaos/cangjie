@@ -2436,6 +2436,16 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, gpos);
     }
 
+    /// Report whether this face has an OpenType positioning table.
+    ///
+    /// Shape-plan decisions sometimes depend on the presence of GPOS even when
+    /// no lookup matches the current run. Keep that distinction separate from
+    /// an empty adjustment result, and avoid re-reading the SFNT directory on
+    /// every glyph while final positions are assembled.
+    pub fn hasGposTableForShaping(self: *const Font) bool {
+        return self.gpos != null;
+    }
+
     pub fn collectGposAdjustmentsWithOptionsUsingGdefAfterProof(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
         try self.validateGlyphRun(glyphs);
         const gpos = self.gpos orelse return;

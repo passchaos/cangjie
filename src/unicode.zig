@@ -1,6 +1,7 @@
 const std = @import("std");
 const line_break = @import("text/line_break.zig");
 const canonical_combining_class = @import("unicode/canonical_combining_class.zig");
+const nonspacing_mark = @import("unicode/nonspacing_mark.zig");
 
 /// Lightweight Unicode helpers used by the shaping/layout layers.
 /// The tables are intentionally compact and cover the scripts and boundaries
@@ -69,6 +70,7 @@ pub const Script = enum {
     rejang,
     grantha,
     limbu,
+    sharada,
     lepcha,
     buginese,
     sundanese,
@@ -600,6 +602,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     rjng = tag("rjng"),
     gran = tag("gran"),
     limb = tag("limb"),
+    shrd = tag("shrd"),
     lepc = tag("lepc"),
     bugi = tag("bugi"),
     sund = tag("sund"),
@@ -696,6 +699,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .rejang => .rjng,
         .grantha => .gran,
         .limbu => .limb,
+        .sharada => .shrd,
         .lepcha => .lepc,
         .buginese => .bugi,
         .sundanese => .sund,
@@ -928,6 +932,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isRejangScriptCodepoint(codepoint)) return .rejang;
     if (isGranthaScriptCodepoint(codepoint)) return .grantha;
     if (isLimbuScriptCodepoint(codepoint)) return .limbu;
+    if (isSharadaScriptCodepoint(codepoint)) return .sharada;
     if (isLepchaScriptCodepoint(codepoint)) return .lepcha;
     if (isBugineseScriptCodepoint(codepoint)) return .buginese;
     if (isSundaneseScriptCodepoint(codepoint)) return .sundanese;
@@ -1136,6 +1141,19 @@ fn isLimbuScriptCodepoint(codepoint: u21) bool {
     // under the `limb` ScriptList entry, so keep the block in one run instead
     // of routing combining pieces through DFLT/unknown before layout.
     return codepoint >= 0x1900 and codepoint <= 0x194f;
+}
+
+fn isSharadaScriptCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x11180 and codepoint <= 0x111df) or
+        (codepoint >= 0x11b60 and codepoint <= 0x11b67);
+}
+
+fn isSharadaWordCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x11180 and codepoint <= 0x111c4) or
+        (codepoint >= 0x111c9 and codepoint <= 0x111cc) or
+        (codepoint >= 0x111ce and codepoint <= 0x111da) or
+        codepoint == 0x111dc or
+        (codepoint >= 0x11b60 and codepoint <= 0x11b67);
 }
 
 fn isLepchaScriptCodepoint(codepoint: u21) bool {
@@ -1941,7 +1959,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
@@ -4203,6 +4221,39 @@ test "Grantha marks select the gran OpenType script" {
     );
 }
 
+test "Sharada additions keep the shrd script and mark boundaries" {
+    const allocator = std.testing.allocator;
+    const text = "𑆠𑭠𑭡";
+
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    try std.testing.expectEqualSlices(
+        GraphemeCluster,
+        &.{.{ .byte_start = 0, .byte_len = text.len }},
+        clusters,
+    );
+
+    const runs = try itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+    try std.testing.expectEqualSlices(
+        ScriptRun,
+        &.{.{ .script = .sharada, .byte_start = 0, .byte_len = text.len }},
+        runs,
+    );
+    try std.testing.expectEqual(OpenTypeScriptTag.shrd, openTypeScriptTag(.sharada));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x11b60));
+    try std.testing.expect(isNonspacingMarkCodepoint(0x11b60));
+    try std.testing.expect(!isNonspacingMarkCodepoint(0x11b61));
+
+    const words = try itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+    try std.testing.expectEqualSlices(
+        WordSegment,
+        &.{.{ .byte_start = 0, .byte_len = text.len }},
+        words,
+    );
+}
+
 test "Marchen stacks select the Marchen OpenType script" {
     const allocator = std.testing.allocator;
     const text = "𑲊𑲒𑲩";
@@ -5046,6 +5097,7 @@ const WordKind = enum {
     rejang,
     grantha,
     limbu,
+    sharada,
     lepcha,
     buginese,
     sundanese,
@@ -5165,6 +5217,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     if (isSaurashtraWordCodepoint(codepoint)) return .saurashtra;
     if (isRejangWordCodepoint(codepoint)) return .rejang;
     if (isGranthaWordCodepoint(codepoint)) return .grantha;
+    if (isSharadaWordCodepoint(codepoint)) return .sharada;
     if (isKaithiWordCodepoint(codepoint)) return .kaithi;
     if (isChakmaWordCodepoint(codepoint)) return .chakma;
     if (isNewaWordCodepoint(codepoint)) return .newa;
@@ -5238,6 +5291,7 @@ fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize,
     if (previous == 0x11442 and isNewaConsonant(current)) return true;
     if (previous == 0xa8c4 and isSaurashtraConsonant(current)) return true;
     if (previous == 0x1134d and isGranthaConsonant(current)) return true;
+    if (previous == 0x111c0 and isSharadaConsonant(current)) return true;
     if (previous == 0x200d) {
         return (zwj_after_extended_pictographic and isExtendedPictographic(current)) or
             (zwj_after_indic_virama and isIndicConsonant(current));
@@ -5491,6 +5545,15 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x11357 or
         (codepoint >= 0x11366 and codepoint <= 0x1136c) or
         (codepoint >= 0x11370 and codepoint <= 0x11374) or
+        // Sharada nonspacing vowels, sandhi/nukta, extra-short marks, and
+        // Unicode 17 dependent-vowel additions use Grapheme_Cluster_Break=Extend.
+        (codepoint >= 0x11180 and codepoint <= 0x11181) or
+        (codepoint >= 0x111b6 and codepoint <= 0x111be) or
+        (codepoint >= 0x111c9 and codepoint <= 0x111cc) or
+        codepoint == 0x111cf or
+        codepoint == 0x11b60 or
+        (codepoint >= 0x11b62 and codepoint <= 0x11b64) or
+        codepoint == 0x11b66 or
         (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
         // Kayah Li dependent vowels and tones are nonspacing marks. Keeping
         // them attached preserves one caret/word/shaping unit for syllables
@@ -5632,6 +5695,15 @@ pub fn isSpacingMarkCodepoint(codepoint: u21) bool {
     return isSpacingMark(codepoint);
 }
 
+/// Return whether Unicode assigns General_Category=Nonspacing_Mark (Mn).
+///
+/// This is intentionally independent from grapheme Extend. OpenType shapers
+/// use Mn to synthesize glyph classes when GDEF lacks a GlyphClassDef, whereas
+/// Extend also includes spacing modifier letters and default-ignorables.
+pub fn isNonspacingMarkCodepoint(codepoint: u21) bool {
+    return nonspacing_mark.contains(codepoint);
+}
+
 pub fn isUnicodeMarkCodepoint(codepoint: u21) bool {
     return isCombiningMark(codepoint) or isSpacingMark(codepoint);
 }
@@ -5658,6 +5730,7 @@ fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
         codepoint == 0x11442 or // Newa sign virama.
         codepoint == 0xa8c4 or // Saurashtra sign virama.
         codepoint == 0x1134d or // Grantha sign virama.
+        codepoint == 0x111c0 or // Sharada sign virama.
         codepoint == 0x11070; // Brahmi old Tamil virama.
 }
 
@@ -5688,6 +5761,10 @@ fn isGranthaConsonant(codepoint: u21) bool {
         (codepoint >= 0x1132a and codepoint <= 0x11330) or
         (codepoint >= 0x11332 and codepoint <= 0x11333) or
         (codepoint >= 0x11335 and codepoint <= 0x11339);
+}
+
+fn isSharadaConsonant(codepoint: u21) bool {
+    return codepoint >= 0x11191 and codepoint <= 0x111b2;
 }
 
 fn isIndicConsonant(codepoint: u21) bool {
@@ -5724,7 +5801,8 @@ fn isIndicConsonant(codepoint: u21) bool {
         codepoint == 0x11147 or
         isNewaConsonant(codepoint) or
         isSaurashtraConsonant(codepoint) or
-        isGranthaConsonant(codepoint);
+        isGranthaConsonant(codepoint) or
+        isSharadaConsonant(codepoint);
 }
 
 fn isGraphemePrependCodepoint(codepoint: u21) bool {
@@ -5921,6 +5999,15 @@ fn isSpacingMark(codepoint: u21) bool {
         (codepoint >= 0x11347 and codepoint <= 0x11348) or
         (codepoint >= 0x1134b and codepoint <= 0x1134d) or
         (codepoint >= 0x11362 and codepoint <= 0x11363) or
+        // Sharada visarga, spacing vowels, virama, prishthamatra E, and
+        // Unicode 17 spacing vowel additions remain in their base's cluster.
+        codepoint == 0x11182 or
+        (codepoint >= 0x111b3 and codepoint <= 0x111b5) or
+        (codepoint >= 0x111bf and codepoint <= 0x111c0) or
+        codepoint == 0x111ce or
+        codepoint == 0x11b61 or
+        codepoint == 0x11b65 or
+        codepoint == 0x11b67 or
         // Rejang final H and virama are visible spacing signs but still belong
         // to the previous base for grapheme, word, and shaping boundaries.
         (codepoint >= 0xa952 and codepoint <= 0xa953) or

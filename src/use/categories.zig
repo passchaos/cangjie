@@ -247,6 +247,38 @@ pub fn forCodepoint(codepoint: u21) Category {
         0x11366...0x1136c,
         0x11370...0x11374,
         => .vowel_mod_above,
+        0x11180...0x11181 => .vowel_mod_above,
+        0x11182 => .vowel_mod_post,
+        0x11183...0x111b2,
+        0x111c1,
+        0x111d0...0x111da,
+        => .base,
+        0x111b3,
+        0x111b5,
+        => .vowel_post,
+        0x111b4,
+        0x111ce,
+        => .vowel_pre,
+        0x111b6...0x111bb,
+        0x111cc,
+        => .vowel_below,
+        0x111bc...0x111bf,
+        0x111cb,
+        => .vowel_above,
+        0x111c0 => .halant,
+        0x111c2...0x111c3 => .repha,
+        0x111c9 => .final_mod_below,
+        0x111ca => .consonant_mod_below,
+        0x111cf => .vowel_mod_above,
+        0x11b60,
+        0x11b64,
+        0x11b66,
+        => .vowel_above,
+        0x11b61,
+        0x11b65,
+        0x11b67,
+        => .vowel_post,
+        0x11b62...0x11b63 => .vowel_below,
         0x11c72...0x11c8f => .base,
         0x11c92...0x11ca7,
         0x11ca9...0x11caf,
@@ -422,6 +454,15 @@ test "Saurashtra USE categories distinguish haaru and virama" {
 test "Grantha USE categories distinguish vowels and virama" {
     const codepoints = [_]u21{ 0x00b2, 0x11320, 0x1133b, 0x1133e, 0x11340, 0x11347, 0x1134d, 0x11367, 0x20f0 };
     const expected = [_]Category{ .final_mod_post, .base, .consonant_mod_below, .vowel_post, .vowel_above, .vowel_pre, .halant, .vowel_mod_above, .vowel_mod_above };
+
+    for (codepoints, expected) |codepoint, category| {
+        try @import("std").testing.expectEqual(category, forCodepoint(codepoint));
+    }
+}
+
+test "Sharada USE categories distinguish separator and sandhi mark" {
+    const codepoints = [_]u21{ 0x11183, 0x111b4, 0x111b6, 0x111bc, 0x111c0, 0x111c2, 0x111c8, 0x111c9, 0x11b60, 0x11b61, 0x11b62 };
+    const expected = [_]Category{ .base, .vowel_pre, .vowel_below, .vowel_above, .halant, .repha, .other, .final_mod_below, .vowel_above, .vowel_post, .vowel_below };
 
     for (codepoints, expected) |codepoint, category| {
         try @import("std").testing.expectEqual(category, forCodepoint(codepoint));

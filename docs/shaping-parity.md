@@ -476,6 +476,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   than a broken cluster requiring a dotted circle
   (`tests/data/grantha-use-font2.txt`, HarfRust checksum
   `5ec68188a3d8a683`).
+- Sharada passes the final script-specific case retained from upstream
+  `in-house/use-syllable.tests` against both HarfBuzz and HarfRust
+  (`tests/data/sharada-use-tests.txt`, checksum `669777826db1047a`). The
+  no-GDEF fixture verifies that Unicode `General_Category=Mn` synthesizes USE
+  mark classes, zeroes both sandhi-mark advances, and shifts each mark by its
+  original advance when no GPOS table can position it. The Mn data is generated
+  from Unicode 17 rather than inferred from grapheme Extend, which would also
+  capture spacing modifiers and default-ignorables.
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
@@ -499,9 +507,9 @@ goal is active, not complete.
   stages; the current `hi-words.txt` gate only covers the active Devanagari
   word corpus, not full HarfBuzz Indic script parity.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
-  Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, and Grantha
-  gates. Other USE scripts/fonts and fuzz/corpus failures still need retained
-  gates before this can be called broad USE parity.
+  Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
+  and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still
+  need retained gates before this can be called broad USE parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

@@ -3435,6 +3435,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, adjustmentIndexLessThan);
     // GPOS adjustments and legacy kern are accumulated in font units, then
     // scaled into user-space coordinates for the final GlyphPosition stream.
+    const has_gdef_glyph_classes = gdef_metadata.glyph_classes != null;
+    const has_gpos_positioning = font.hasGposTableForShaping();
     var previous_glyph: ?GlyphId = null;
     var adjustment_cursor: usize = 0;
     const kern_lookup = if (!lookup_options.writing_mode.isVertical() and shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true))
@@ -3480,7 +3482,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
         else
             @as(f32, @floatFromInt(adjustment.x_advance));
-        const x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
+        const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
         const mark_attachment = adjustment.attachment_type == .mark;
         if (mark_attachment) {
             adjustment_x_advance = -@as(f32, @floatFromInt(metrics.advance_width));
@@ -3497,10 +3499,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             continue;
         }
         const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
-        const zero_mark_advance = glyph_class == .mark and
-            !mark_attachment and
-            !unicode.isSpacingMarkCodepoint(source_codepoint);
-        const base_advance = if (hide_default_ignorable or zero_mark_advance) 0 else metrics.advance_width;
+        const mark_zeroing = markAdvanceZeroingPolicy(
+            use_shape,
+            glyph_class,
+            has_gdef_glyph_classes,
+            source_codepoint,
+            mark_attachment,
+            has_gpos_positioning,
+            lookup_options,
+        );
+        const base_advance = if (hide_default_ignorable or mark_zeroing.zero_advance) 0 else metrics.advance_width;
         const horizontal_advance = if (hide_default_ignorable)
             0
         else
@@ -3511,7 +3519,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             try verticalMetricsWithOptionalCache(font, metrics_cache, glyph_id, lookup_options.normalized_variation_coords)
         else
             null;
-        const vertical_advance = if (use_sideways_vertical_advance)
+        const unzeroed_vertical_advance = if (use_sideways_vertical_advance)
+            (@as(f32, @floatFromInt(metrics.advance_width)) + adjustment_x_advance) * scale
+        else if (vertical_metrics) |value|
+            @as(f32, @floatFromInt(value.advance_height)) * scale
+        else
+            font_size;
+        const vertical_advance = if (mark_zeroing.zero_advance)
+            0
+        else if (use_sideways_vertical_advance)
             horizontal_advance
         else if (vertical_metrics) |value|
             @as(f32, @floatFromInt(value.advance_height)) * scale
@@ -3528,6 +3544,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @as(f32, @floatFromInt(value.top_side_bearing)) * scale
         else
             0.0;
+        // USE zeroes marks before GPOS. Without a positioning table, HarfBuzz
+        // preserves the visual origin of a forward-direction mark by moving it
+        // back by its original advance before clearing that advance.
+        const zeroed_mark_x_offset = if (mark_zeroing.adjust_offsets and !lookup_options.writing_mode.isVertical())
+            -@as(f32, @floatFromInt(metrics.advance_width)) * scale
+        else
+            0.0;
+        const zeroed_mark_y_offset = if (mark_zeroing.adjust_offsets and lookup_options.writing_mode.isVertical())
+            -unzeroed_vertical_advance
+        else
+            0.0;
         glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
         try buffer.glyphs.append(buffer.allocator, .{
             .glyph_id = output_glyph_id,
@@ -3536,8 +3563,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .source_byte_len = source_span.end - source_span.start,
             .x_advance = if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
             .y_advance = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
-            .x_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_x_offset + @as(f32, @floatFromInt(adjustment.x_placement)) * scale else x_offset,
-            .y_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale else @as(f32, @floatFromInt(adjustment.y_placement)) * scale,
+            .x_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_x_offset + gpos_x_offset + zeroed_mark_x_offset else gpos_x_offset + zeroed_mark_x_offset,
+            .y_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset else @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
         if (!hide_default_ignorable) {
@@ -3789,6 +3816,115 @@ fn shapingDirectionForGpos(options: LookupOptions) TextDirection {
         return textDirectionFromBidiClass(native);
     }
     return options.direction;
+}
+
+const MarkAdvanceZeroing = struct {
+    zero_advance: bool = false,
+    adjust_offsets: bool = false,
+};
+
+fn markAdvanceZeroingPolicy(
+    use_shape: bool,
+    glyph_class: GlyphClass,
+    has_gdef_glyph_classes: bool,
+    source_codepoint: u21,
+    mark_attachment: bool,
+    has_gpos_positioning: bool,
+    options: LookupOptions,
+) MarkAdvanceZeroing {
+    if (mark_attachment) return .{};
+
+    const gdef_mark = glyph_class == .mark and !unicode.isSpacingMarkCodepoint(source_codepoint);
+    // HarfBuzz only synthesizes classes when the face has no GlyphClassDef at
+    // all. An unclassified glyph in a present ClassDef remains unclassified;
+    // falling back per glyph would override an explicit font-author decision.
+    const synthesized_use_mark = use_shape and
+        !has_gdef_glyph_classes and
+        unicode.isNonspacingMarkCodepoint(source_codepoint) and
+        !unicode.isDefaultIgnorableForShaping(source_codepoint);
+    const zero_advance = gdef_mark or synthesized_use_mark;
+    if (!zero_advance) return .{};
+
+    const forward_direction = options.writing_mode.isVertical() or
+        shapingDirectionForGpos(options) == .ltr;
+    return .{
+        .zero_advance = true,
+        // USE's early-zero mode shifts marks only when later GPOS cannot
+        // replace the provisional placement. Other shapers retain the previous
+        // Cangjie policy until their early/late/fallback plans are represented.
+        .adjust_offsets = use_shape and !has_gpos_positioning and forward_direction,
+    };
+}
+
+test "USE mark zeroing synthesizes only nonspacing marks without GDEF classes" {
+    const options = LookupOptions{ .script_tag = .brah };
+
+    const nonspacing = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11038, false, false, options);
+    try std.testing.expect(nonspacing.zero_advance);
+    try std.testing.expect(nonspacing.adjust_offsets);
+
+    const spacing = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11000, false, false, options);
+    try std.testing.expectEqual(MarkAdvanceZeroing{}, spacing);
+
+    const explicit_unclassified = markAdvanceZeroingPolicy(true, .unclassified, true, 0x11038, false, false, options);
+    try std.testing.expectEqual(MarkAdvanceZeroing{}, explicit_unclassified);
+}
+
+test "USE mark zeroing leaves offset adjustment to GPOS and honors native direction" {
+    const with_gpos = markAdvanceZeroingPolicy(
+        true,
+        .unclassified,
+        false,
+        0x11038,
+        false,
+        true,
+        .{ .script_tag = .brah },
+    );
+    try std.testing.expect(with_gpos.zero_advance);
+    try std.testing.expect(!with_gpos.adjust_offsets);
+
+    // A forced RTL request is normalized to Brahmi's native LTR shaping
+    // direction before positioning, so it remains a forward buffer.
+    const native_ltr = markAdvanceZeroingPolicy(
+        true,
+        .unclassified,
+        false,
+        0x11038,
+        false,
+        false,
+        .{
+            .script_tag = .brah,
+            .direction = .rtl,
+            .native_direction_shaping = true,
+        },
+    );
+    try std.testing.expect(native_ltr.adjust_offsets);
+}
+
+test "USE shaping zeroes synthesized nonspacing marks without a GDEF table" {
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const features = [_]unicode.FeatureOverride{
+        .{ .tag = unicode.tag("kern"), .enabled = false },
+    };
+    const run = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "𑀅𑀸", // BRAHMI LETTER A + Mn VOWEL SIGN AA.
+        1000,
+        .{ .script_tag = .brah, .features = &features },
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 800), run.glyphs[0].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -800), run.glyphs[1].x_offset, 0.001);
 }
 
 fn glyphUsesSidewaysAdvance(_: u21, orientation: TextOrientation) bool {

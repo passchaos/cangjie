@@ -9,7 +9,7 @@ const categories = @import("use/categories.zig");
 const syllables = @import("use/syllables.zig");
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cakm or script_tag == .cham or script_tag == .dupl or script_tag == .gran or script_tag == .java or script_tag == .lana or script_tag == .marc or script_tag == .newa or script_tag == .saur;
+    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cakm or script_tag == .cham or script_tag == .dupl or script_tag == .gran or script_tag == .java or script_tag == .lana or script_tag == .marc or script_tag == .newa or script_tag == .saur or script_tag == .shrd;
 }
 
 pub const Category = categories.Category;
@@ -524,6 +524,7 @@ test "USE shaping includes Balinese" {
     try @import("std").testing.expect(shouldShape(.newa));
     try @import("std").testing.expect(shouldShape(.saur));
     try @import("std").testing.expect(shouldShape(.gran));
+    try @import("std").testing.expect(shouldShape(.shrd));
     try @import("std").testing.expect(!shouldShape(.latn));
 }
 

@@ -1895,17 +1895,23 @@ fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []cons
             script_run.byte_start,
             pen,
             .{
-                .script = script_run.script,
-                .script_tag = options.script_tag orelse unicode.openTypeScriptTag(script_run.script),
-                .script_tag_explicit = options.script_tag != null,
-                .language_tag = effectiveLanguageTag(run_text, options),
-                .direction = options.direction,
-                .reorder_bidi = options.reorder_bidi,
-                .native_direction_shaping = options.native_direction_shaping,
-                .features = options.features,
-                .writing_mode = options.writing_mode,
-                .text_orientation = options.text_orientation,
-                .normalized_variation_coords = options.normalized_variation_coords,
+                .lookup = .{
+                    .script = script_run.script,
+                    .script_tag = options.script_tag orelse unicode.openTypeScriptTag(script_run.script),
+                    .script_tag_explicit = options.script_tag != null,
+                    .language_tag = effectiveLanguageTag(run_text, options),
+                    // Script-run itemization already decoded this slice, but does
+                    // not currently retain an ASCII summary. Keep this path
+                    // conservative rather than introducing another scan.
+                    .direction = options.direction,
+                    .reorder_bidi = options.reorder_bidi,
+                    .native_direction_shaping = options.native_direction_shaping,
+                    .features = options.features,
+                    .writing_mode = options.writing_mode,
+                    .text_orientation = options.text_orientation,
+                    .normalized_variation_coords = options.normalized_variation_coords,
+                },
+                .all_ascii = false,
             },
         );
     }
@@ -1966,7 +1972,7 @@ test "RTL presence scan ignores ASCII without hiding RTL scripts" {
     try std.testing.expect(textHasRtlBidiClass("فارسی"));
 }
 
-fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: LookupOptions) !PenPosition {
+fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {
     // Script itemization happens outside this helper. This pass only performs
     // fallback segmentation inside that script run, so each append keeps the
     // same OpenType script/language lookup selection.
@@ -3034,7 +3040,7 @@ fn metricsForLineHeight(default_metrics: BaselineMetrics, line_height: f32) Base
     };
 }
 
-fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, font_index: usize, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: LookupOptions) !PenPosition {
+fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, font_index: usize, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {
     const glyph_start = buffer.glyphs.items.len;
     try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, cluster_base, lookup_options);
     const glyph_len = buffer.glyphs.items.len - glyph_start;
@@ -3070,14 +3076,19 @@ const LookupOptions = struct {
     normalized_variation_coords: []const f32 = &.{},
 };
 
-fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
+const ResolvedLookupOptions = struct {
+    lookup: LookupOptions,
+    all_ascii: bool,
+};
+
+fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupOptions {
     const infer_language = options.language_tag == null;
     const inferred = if (infer_language)
         unicode.inferOpenTypeProperties(text)
     else
         undefined;
     const script = if (infer_language) inferred.script else unicode.inferOpenTypeScript(text);
-    return .{
+    return .{ .lookup = .{
         .script = script,
         .script_tag = options.script_tag orelse unicode.openTypeScriptTag(script),
         .script_tag_explicit = options.script_tag != null,
@@ -3090,7 +3101,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
         .writing_mode = options.writing_mode,
         .text_orientation = options.text_orientation,
         .normalized_variation_coords = options.normalized_variation_coords,
-    };
+    }, .all_ascii = infer_language and inferred.all_ascii };
 }
 
 fn effectiveLanguageTag(text: []const u8, options: ShapeOptions) unicode.OpenTypeLanguageTag {
@@ -3166,16 +3177,16 @@ fn cascadeHash(cascade: FontCascade) u64 {
     return hasher.final();
 }
 
-fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, base_lookup_options: LookupOptions) !void {
+fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, resolved_lookup_options: ResolvedLookupOptions) !void {
     const scale = font_size / @as(f32, @floatFromInt(font.units_per_em));
-    var selected_lookup_options = base_lookup_options;
-    const explicit_script_tag = if (base_lookup_options.script_tag_explicit) base_lookup_options.script_tag else null;
+    var selected_lookup_options = resolved_lookup_options.lookup;
+    const explicit_script_tag = if (resolved_lookup_options.lookup.script_tag_explicit) resolved_lookup_options.lookup.script_tag else null;
     const layout_scripts: layout_cache.LayoutScriptSelections = if (buffer.lookup_selection_cache) |cache|
-        try cache.layoutScripts(font, base_lookup_options.script, explicit_script_tag)
+        try cache.layoutScripts(font, resolved_lookup_options.lookup.script, explicit_script_tag)
     else
         .{
-            .gsub = try font.selectGsubScriptForShaping(base_lookup_options.script, explicit_script_tag),
-            .gpos = try font.selectGposScriptForShaping(base_lookup_options.script, explicit_script_tag),
+            .gsub = try font.selectGsubScriptForShaping(resolved_lookup_options.lookup.script, explicit_script_tag),
+            .gpos = try font.selectGposScriptForShaping(resolved_lookup_options.lookup.script, explicit_script_tag),
         };
     const gsub_script = layout_scripts.gsub;
     const gpos_script = layout_scripts.gpos;
@@ -3221,45 +3232,63 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     try glyph_substituted.ensureUnusedCapacity(buffer.allocator, text.len);
     try ligature_components.infos.ensureUnusedCapacity(buffer.allocator, text.len);
 
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     var has_default_ignorable = false;
-    while (it.i < text.len) {
-        const cluster = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        if (isVariationSelector(codepoint)) {
-            if (glyph_ids.items.len != 0) {
-                if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
-                    glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
-                }
-                source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
-            }
-            // Variation selectors refine the preceding scalar and do not
-            // advance text themselves. Keeping them out of the glyph stream
-            // preserves caret/cluster identity on the base character while
-            // still allowing cmap format 14 to select emoji/text or IVS glyphs.
-            continue;
+    if (resolved_lookup_options.all_ascii and lookup_options.direction == .ltr) {
+        // `lookupOptionsForText` already scanned the complete validated run to
+        // infer script/language. Reuse its all-ASCII proof: one byte is one
+        // source scalar, no variation selector/default-ignorable exists, and
+        // LTR shaping needs neither bidi mirroring nor inherited clustering.
+        for (text, 0..) |byte, cluster| {
+            const glyph_id = try glyphIndexWithOptionalCache(font, glyph_index_cache, byte);
+            glyph_ids.appendAssumeCapacity(glyph_id);
+            codepoints.appendAssumeCapacity(byte);
+            clusters.appendAssumeCapacity(cluster_base + cluster);
+            source_ends.appendAssumeCapacity(cluster_base + cluster + 1);
+            glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
+            glyph_cluster_indices.appendAssumeCapacity(glyph_cluster_indices.items.len);
+            glyph_substituted.appendAssumeCapacity(false);
+            ligature_components.infos.appendAssumeCapacity(.{});
         }
-        has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
-        const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
-        const source_cluster = if (lookup_options.direction == .rtl and
-            unicode.inheritsPreviousClusterInRtlShaping(codepoint) and
-            clusters.items.len != 0)
-            clusters.items[clusters.items.len - 1] - cluster_base
-        else
-            cluster;
-        const glyph_id = try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
-        glyph_ids.appendAssumeCapacity(glyph_id);
-        codepoints.appendAssumeCapacity(codepoint);
-        clusters.appendAssumeCapacity(cluster_base + source_cluster);
-        source_ends.appendAssumeCapacity(cluster_base + it.i);
-        glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
-        const cluster_owner_index = if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
-            glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
-        else
-            glyph_cluster_indices.items.len;
-        glyph_cluster_indices.appendAssumeCapacity(cluster_owner_index);
-        glyph_substituted.appendAssumeCapacity(false);
-        ligature_components.infos.appendAssumeCapacity(.{});
+    } else {
+        var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+        while (it.i < text.len) {
+            const cluster = it.i;
+            const codepoint = it.nextCodepoint() orelse break;
+            if (isVariationSelector(codepoint)) {
+                if (glyph_ids.items.len != 0) {
+                    if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
+                        glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
+                    }
+                    source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
+                }
+                // Variation selectors refine the preceding scalar and do not
+                // advance text themselves. Keeping them out of the glyph stream
+                // preserves caret/cluster identity on the base character while
+                // still allowing cmap format 14 to select emoji/text or IVS glyphs.
+                continue;
+            }
+            has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
+            const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
+            const source_cluster = if (lookup_options.direction == .rtl and
+                unicode.inheritsPreviousClusterInRtlShaping(codepoint) and
+                clusters.items.len != 0)
+                clusters.items[clusters.items.len - 1] - cluster_base
+            else
+                cluster;
+            const glyph_id = try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
+            glyph_ids.appendAssumeCapacity(glyph_id);
+            codepoints.appendAssumeCapacity(codepoint);
+            clusters.appendAssumeCapacity(cluster_base + source_cluster);
+            source_ends.appendAssumeCapacity(cluster_base + it.i);
+            glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
+            const cluster_owner_index = if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
+                glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
+            else
+                glyph_cluster_indices.items.len;
+            glyph_cluster_indices.appendAssumeCapacity(cluster_owner_index);
+            glyph_substituted.appendAssumeCapacity(false);
+            ligature_components.infos.appendAssumeCapacity(.{});
+        }
     }
     if (shape_profile) |p| {
         p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);

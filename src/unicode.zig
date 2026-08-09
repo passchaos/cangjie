@@ -891,6 +891,7 @@ pub fn openTypeScriptHorizontalDirection(script_tag: OpenTypeScriptTag) ?BidiCla
 pub const InferredOpenTypeProperties = struct {
     script: Script,
     language: OpenTypeLanguageTag,
+    all_ascii: bool,
 };
 
 /// Infer only the first strong script, for callers that already have an
@@ -915,6 +916,7 @@ pub fn inferOpenTypeScript(text: []const u8) Script {
 pub fn inferOpenTypeProperties(text: []const u8) InferredOpenTypeProperties {
     var text_script: Script = .common;
     var saw_han = false;
+    var all_ascii = true;
     var cursor: usize = 0;
     while (cursor < text.len) {
         if (text[cursor] < 0x80) {
@@ -929,9 +931,11 @@ pub fn inferOpenTypeProperties(text: []const u8) InferredOpenTypeProperties {
             continue;
         }
 
+        all_ascii = false;
         const decoded = decodeCodepointAt(text, cursor) orelse return .{
             .script = text_script,
             .language = .dflt,
+            .all_ascii = false,
         };
         const codepoint = decoded.codepoint;
         cursor = decoded.next;
@@ -940,11 +944,11 @@ pub fn inferOpenTypeProperties(text: []const u8) InferredOpenTypeProperties {
             text_script = script;
         }
         switch (script) {
-            .hiragana, .katakana => return .{ .script = text_script, .language = .jan },
-            .hangul => return .{ .script = text_script, .language = .kor },
-            .arabic => return .{ .script = text_script, .language = .ara },
-            .devanagari => return .{ .script = text_script, .language = .hin },
-            .bengali, .odia, .gurmukhi, .telugu, .kannada, .tamil, .thai, .lao => return .{ .script = text_script, .language = .dflt },
+            .hiragana, .katakana => return .{ .script = text_script, .language = .jan, .all_ascii = false },
+            .hangul => return .{ .script = text_script, .language = .kor, .all_ascii = false },
+            .arabic => return .{ .script = text_script, .language = .ara, .all_ascii = false },
+            .devanagari => return .{ .script = text_script, .language = .hin, .all_ascii = false },
+            .bengali, .odia, .gurmukhi, .telugu, .kannada, .tamil, .thai, .lao => return .{ .script = text_script, .language = .dflt, .all_ascii = false },
             .han => saw_han = true,
             else => {},
         }
@@ -952,6 +956,7 @@ pub fn inferOpenTypeProperties(text: []const u8) InferredOpenTypeProperties {
     return .{
         .script = text_script,
         .language = if (saw_han) .zhs else .dflt,
+        .all_ascii = all_ascii,
     };
 }
 

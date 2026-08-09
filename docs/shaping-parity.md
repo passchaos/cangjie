@@ -671,6 +671,19 @@ Current local snapshot after the Nastaliq parity work:
   `Wyhash.final`, previously about `3.46%` in Roboto sampling, disappeared
   from the post-change profile. Full HarfBuzz parity for all three corpora and
   Roboto HarfRust parity remained unchanged.
+- Default property inference now also reports whether it consumed an all-ASCII
+  run. The LTR cmap pass reuses that existing whole-run proof and maps one byte
+  per source directly, avoiding a second UTF-8 decode plus variation-selector,
+  default-ignorable, bidi-mirroring, and inherited-cluster checks. The proof is
+  kept outside the frequently copied OpenType lookup options; non-ASCII and
+  forced-RTL text retain the original scalar loop. Fixed-P-core interleaved
+  `perf stat` comparisons reduced Roboto `en-words` retired instructions by
+  about `2.57%` and cycles by `1.96%`. Amiri `fa-words` remained flat to
+  slightly faster (`-0.04%` instructions, `-0.31%` cycles), while Amiri
+  `fa-thelittleprince` improved `0.14%` and `0.54%`. Post-change Roboto
+  sampling no longer attributes any `utf8Decode` cycles to the cmap pass.
+  Full HarfBuzz parity for all three corpora and Roboto HarfRust parity
+  remained unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

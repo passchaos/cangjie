@@ -55,6 +55,33 @@ pub const Component = struct {
     decomposed_transform: DecomposedTransform,
 };
 
+/// Cached sparse-region scalars for one VARC table and one normalized location.
+///
+/// A cache must be reset when either the table or coordinate slice changes.
+/// Callers expanding nested components may share it only while child
+/// coordinates remain identical to the parent's coordinates.
+pub const RegionScalarCache = struct {
+    // Most current VARC fonts use only a few dozen sparse regions. Cache those
+    // directly without allocation; larger stores remain correct and simply
+    // compute region scalars above this capacity on demand.
+    const capacity = 64;
+
+    values: [capacity]f32 = undefined,
+    valid_mask: u64 = 0,
+
+    fn get(self: *const RegionScalarCache, region_index: usize) ?f32 {
+        if (region_index >= capacity) return null;
+        const bit = @as(u64, 1) << @intCast(region_index);
+        return if ((self.valid_mask & bit) != 0) self.values[region_index] else null;
+    }
+
+    fn put(self: *RegionScalarCache, region_index: usize, scalar: f32) void {
+        if (region_index >= capacity) return;
+        self.values[region_index] = scalar;
+        self.valid_mask |= @as(u64, 1) << @intCast(region_index);
+    }
+};
+
 pub fn staticTransform(transform: DecomposedTransform) StaticTransform {
     var result = StaticTransform{
         .dx = transform.translate_x + transform.center_x,
@@ -201,13 +228,26 @@ pub fn conditionMatches(data: []const u8, offset: usize, length: usize, conditio
 }
 
 pub fn conditionMatchesWithAllocator(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, condition_index: u32, normalized_coords: []const f32) Error!bool {
+    _ = allocator;
+    var cache = RegionScalarCache{};
+    return try conditionMatchesWithCache(data, offset, length, condition_index, normalized_coords, &cache);
+}
+
+pub fn conditionMatchesWithCache(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    condition_index: u32,
+    normalized_coords: []const f32,
+    cache: *RegionScalarCache,
+) Error!bool {
     const h = try header(data, offset, length);
     const list_offset = h.condition_list_offset orelse return error.BadSfnt;
     const count = try bin.readU32At(data, offset + list_offset);
     if (condition_index >= count) return error.BadSfnt;
     const relative: usize = @intCast(try bin.readU32At(data, offset + list_offset + 4 + @as(usize, condition_index) * 4));
     if (relative == 0 or relative > length - list_offset) return error.BadSfnt;
-    return try conditionAtMatches(allocator, data, offset, length, list_offset + relative, normalized_coords, 0);
+    return try conditionAtMatches(data, offset, length, list_offset + relative, normalized_coords, cache, 0);
 }
 
 pub fn componentCoordinates(
@@ -252,6 +292,33 @@ pub fn componentCoordinatesInto(
     font_axis_count: usize,
     coords: []f32,
 ) Error!void {
+    var cache = RegionScalarCache{};
+    return try componentCoordinatesIntoWithCache(
+        allocator,
+        data,
+        offset,
+        length,
+        component,
+        current_coords,
+        font_coords,
+        font_axis_count,
+        coords,
+        &cache,
+    );
+}
+
+pub fn componentCoordinatesIntoWithCache(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    component: Component,
+    current_coords: []const f32,
+    font_coords: []const f32,
+    font_axis_count: usize,
+    coords: []f32,
+    cache: *RegionScalarCache,
+) Error!void {
     const required = componentCoordinateCount(current_coords, font_coords, font_axis_count);
     if (coords.len < required) return error.BadSfnt;
     @memset(coords, 0);
@@ -291,6 +358,7 @@ pub fn componentCoordinatesInto(
             var_index,
             current_coords,
             deltas,
+            cache,
         );
         // Tuple deltas are floating-point because multiple active regions can
         // contribute fractional values. Round only after adding a delta to its
@@ -315,6 +383,18 @@ pub fn componentTransform(
     component: Component,
     normalized_coords: []const f32,
 ) Error!StaticTransform {
+    var cache = RegionScalarCache{};
+    return try componentTransformWithCache(data, offset, length, component, normalized_coords, &cache);
+}
+
+pub fn componentTransformWithCache(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    component: Component,
+    normalized_coords: []const f32,
+    cache: *RegionScalarCache,
+) Error!StaticTransform {
     var transform = component.decomposed_transform;
     if (component.transform_var_index) |var_index| {
         const transform_mask = ComponentFlags.have_translate_x |
@@ -329,7 +409,7 @@ pub fn componentTransform(
         const field_count: usize = @popCount(component.flags & transform_mask);
         var delta_storage: [9]f32 = undefined;
         const deltas = delta_storage[0..field_count];
-        try variationDeltasInto(data, offset, length, var_index, normalized_coords, deltas);
+        try variationDeltasInto(data, offset, length, var_index, normalized_coords, deltas, cache);
         var delta_index: usize = 0;
         if ((component.flags & ComponentFlags.have_translate_x) != 0) {
             transform.translate_x += deltas[delta_index];
@@ -821,7 +901,15 @@ fn validateConditionAt(data: []const u8, table_offset: usize, table_length: usiz
     }
 }
 
-fn conditionAtMatches(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, table_length: usize, condition_offset: usize, normalized_coords: []const f32, depth: u8) Error!bool {
+fn conditionAtMatches(
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    condition_offset: usize,
+    normalized_coords: []const f32,
+    cache: *RegionScalarCache,
+    depth: u8,
+) Error!bool {
     if (depth >= 64 or condition_offset > table_length or table_length - condition_offset < 2) return error.BadSfnt;
     const absolute = table_offset + condition_offset;
     return switch (try bin.readU16At(data, absolute)) {
@@ -838,14 +926,14 @@ fn conditionAtMatches(allocator: std.mem.Allocator, data: []const u8, table_offs
             const default_value: f32 = @floatFromInt(try bin.readI16At(data, absolute + 2));
             const var_index = try bin.readU32At(data, absolute + 4);
             var deltas: [1]f32 = undefined;
-            try variationDeltasInto(data, table_offset, table_length, var_index, normalized_coords, &deltas);
+            try variationDeltasInto(data, table_offset, table_length, var_index, normalized_coords, &deltas, cache);
             break :result default_value + deltas[0] > 0;
         },
         3 => result: {
             const count = data[absolute + 2];
             for (0..count) |child_index| {
                 const child = try readU24At(data, absolute + 3 + child_index * 3);
-                if (!try conditionAtMatches(allocator, data, table_offset, table_length, condition_offset + child, normalized_coords, depth + 1)) break :result false;
+                if (!try conditionAtMatches(data, table_offset, table_length, condition_offset + child, normalized_coords, cache, depth + 1)) break :result false;
             }
             break :result true;
         },
@@ -853,11 +941,11 @@ fn conditionAtMatches(allocator: std.mem.Allocator, data: []const u8, table_offs
             const count = data[absolute + 2];
             for (0..count) |child_index| {
                 const child = try readU24At(data, absolute + 3 + child_index * 3);
-                if (try conditionAtMatches(allocator, data, table_offset, table_length, condition_offset + child, normalized_coords, depth + 1)) break :result true;
+                if (try conditionAtMatches(data, table_offset, table_length, condition_offset + child, normalized_coords, cache, depth + 1)) break :result true;
             }
             break :result false;
         },
-        5 => !try conditionAtMatches(allocator, data, table_offset, table_length, condition_offset + try readU24At(data, absolute + 2), normalized_coords, depth + 1),
+        5 => !try conditionAtMatches(data, table_offset, table_length, condition_offset + try readU24At(data, absolute + 2), normalized_coords, cache, depth + 1),
         else => error.BadSfnt,
     };
 }
@@ -878,6 +966,7 @@ fn variationDeltasInto(
     var_index: u32,
     normalized_coords: []const f32,
     output: []f32,
+    cache: *RegionScalarCache,
 ) Error!void {
     @memset(output, 0);
     if (output.len == 0 or var_index == 0xffff_ffff) return;
@@ -917,7 +1006,11 @@ fn variationDeltasInto(
         if (region_index >= region_count) return error.BadSfnt;
         const region_relative: usize = @intCast(try bin.readU32At(data, table_offset + region_list_offset + 2 + @as(usize, region_index) * 4));
         if (region_relative == 0 or region_relative > table_length - region_list_offset) return error.BadSfnt;
-        const scalar = try sparseRegionScalar(data, table_offset, table_length, region_list_offset + region_relative, normalized_coords);
+        const scalar = cache.get(region_index) orelse value: {
+            const computed = try sparseRegionScalar(data, table_offset, table_length, region_list_offset + region_relative, normalized_coords);
+            cache.put(region_index, computed);
+            break :value computed;
+        };
         if (scalar == 0)
             try delta_fetcher.skip(output.len)
         else
@@ -1251,9 +1344,18 @@ test "VARC multi-item variation store evaluates region-major tuples" {
     writeSingleRegionVarcFixture(&bytes, &.{ 1, 10, @bitCast(@as(i8, -20)) });
 
     var deltas: [2]f32 = undefined;
-    try variationDeltasInto(&bytes, 0, bytes.len, 0, &.{0.5}, &deltas);
+    var cache = RegionScalarCache{};
+    try variationDeltasInto(&bytes, 0, bytes.len, 0, &.{0.5}, &deltas, &cache);
     try std.testing.expectApproxEqAbs(@as(f32, 5), deltas[0], 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, -10), deltas[1], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), cache.get(0).?, 0.0001);
+
+    // A second tuple at the same location reuses the cached region scalar.
+    // Corrupting the support peak after the first evaluation makes that reuse
+    // directly observable without exposing cache internals in the public API.
+    writeU16(&bytes, 48, 0x2000);
+    try variationDeltasInto(&bytes, 0, bytes.len, 0, &.{0.5}, &deltas, &cache);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), deltas[0], 0.0001);
 }
 
 test "VARC packed delta fetcher streams mixed runs" {

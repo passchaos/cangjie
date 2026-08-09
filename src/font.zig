@@ -3697,7 +3697,8 @@ pub const Font = struct {
             if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id)) |_| {
                 var stack: [64]glyph_mod.GlyphId = undefined;
                 const axis_count = if (self.fvar != null) try self.fvarAxisCountForReadMode(read_mode) else 0;
-                try self.appendVarcGlyphOutline(&outline, glyph_id, Transform.identity(), &.{}, &.{}, axis_count, read_mode, &stack, 0);
+                var scalar_cache = varc_mod.RegionScalarCache{};
+                try self.appendVarcGlyphOutline(&outline, glyph_id, Transform.identity(), &.{}, &.{}, axis_count, read_mode, &stack, &scalar_cache, 0);
                 outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
                 return outline;
             }
@@ -3764,6 +3765,7 @@ pub const Font = struct {
         else
             normalized_coords.len;
         var stack: [64]glyph_mod.GlyphId = undefined;
+        var scalar_cache = varc_mod.RegionScalarCache{};
         try self.appendVarcGlyphOutline(
             &outline,
             glyph_id,
@@ -3773,6 +3775,7 @@ pub const Font = struct {
             axis_count,
             read_mode,
             &stack,
+            &scalar_cache,
             0,
         );
         outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
@@ -3789,6 +3792,7 @@ pub const Font = struct {
         font_axis_count: usize,
         read_mode: OutlineReadMode,
         stack: *[64]glyph_mod.GlyphId,
+        scalar_cache: *varc_mod.RegionScalarCache,
         depth: usize,
     ) FontError!void {
         if (depth >= stack.len) return error.CompoundDepthExceeded;
@@ -3802,23 +3806,24 @@ pub const Font = struct {
         var components = try varc_mod.componentIterator(self.data, varc.offset, varc.length, self.glyph_count, coverage_index);
         while (try components.next()) |component| {
             if (component.condition_index) |condition_index| {
-                if (!(try varc_mod.conditionMatchesWithAllocator(
-                    outline.allocator,
+                if (!(try varc_mod.conditionMatchesWithCache(
                     self.data,
                     varc.offset,
                     varc.length,
                     condition_index,
                     normalized_coords,
+                    scalar_cache,
                 ))) continue;
             }
             if (component.glyph_id > std.math.maxInt(glyph_mod.GlyphId)) return error.InvalidGlyph;
             const child_glyph: glyph_mod.GlyphId = @intCast(component.glyph_id);
-            const component_transform = try varc_mod.componentTransform(
+            const component_transform = try varc_mod.componentTransformWithCache(
                 self.data,
                 varc.offset,
                 varc.length,
                 component,
                 normalized_coords,
+                scalar_cache,
             );
             const child_transform = parent_transform.mul(transformFromVarc(component_transform));
             const coordinates_unchanged = (component.flags &
@@ -3839,7 +3844,7 @@ pub const Font = struct {
                 if (child_coord_count > inline_child_coords.len) outline.allocator.free(coords);
             };
             if (child_coord_storage) |coords| {
-                try varc_mod.componentCoordinatesInto(
+                try varc_mod.componentCoordinatesIntoWithCache(
                     outline.allocator,
                     self.data,
                     varc.offset,
@@ -3849,12 +3854,15 @@ pub const Font = struct {
                     font_coords,
                     font_axis_count,
                     coords,
+                    scalar_cache,
                 );
             }
             const child_coords = child_coord_storage orelse normalized_coords;
             if (child_glyph == glyph_id) {
                 try self.appendBaseOutlineTransformed(outline, child_glyph, child_transform, child_coords, read_mode);
             } else {
+                var child_scalar_cache = varc_mod.RegionScalarCache{};
+                const recursion_cache = if (coordinates_unchanged) scalar_cache else &child_scalar_cache;
                 try self.appendVarcGlyphOutline(
                     outline,
                     child_glyph,
@@ -3864,6 +3872,7 @@ pub const Font = struct {
                     font_axis_count,
                     read_mode,
                     stack,
+                    recursion_cache,
                     depth + 1,
                 );
             }

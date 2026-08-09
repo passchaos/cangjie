@@ -962,3 +962,14 @@ not complete.
   the four complex glyphs reduced cycles by roughly 16.7–22.0%. Direct and
   prepared target checksums are byte-identical, with differential tests for
   1/2/3/4 samples, repeated calls, empty outlines, and small-size emboldening.
+- Predecoded PairPos format 2 accelerators now merge coverage membership and
+  class1 into one sorted `(glyph, class)` table. Every covered first glyph gets
+  its explicit or implicit-zero class during accelerator construction, so the
+  hot adjacent-pair path performs one binary search instead of separate
+  coverage and class1 searches; class2 and matrix indexing retain their prior
+  semantics. Fixed-P-core HEAD/current comparisons kept retired instructions
+  flat and improved median cycles by about `0.40%` for Roboto `en-words`,
+  `0.11%` for Amiri `fa-words`, and `0.32%` for Amiri
+  `fa-thelittleprince`. All three full in-process HarfBuzz parity checks remain
+  unchanged (`fd03166ae7017b20`, `246e98435cc9c642`, and
+  `f2da7bb39eb7323a`).

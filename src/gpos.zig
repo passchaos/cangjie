@@ -141,7 +141,7 @@ pub const LookupAccelerator = struct {
     single_pos_subtables: []const SinglePosSubtable = &.{},
     pair_pos_subtables: []const PairPosSubtableAccelerator = &.{},
     pair_pos_records: []const PairPosRecord = &.{},
-    pair_pos_coverage_glyphs: []const GlyphId = &.{},
+    pair_pos_coverage_classes: []const PairClassEntry = &.{},
     pair_pos_class_entries: []const PairClassEntry = &.{},
     pair_pos_class_matrix: []const i16 = &.{},
     mark_to_base_subtables: []const MarkToBaseSubtable = &.{},
@@ -164,8 +164,6 @@ const PairPosSubtableAccelerator = struct {
     record_len: usize = 0,
     coverage_start: usize = 0,
     coverage_len: usize = 0,
-    class_1_start: usize = 0,
-    class_1_len: usize = 0,
     class_2_start: usize = 0,
     class_2_len: usize = 0,
     class_1_count: u16 = 0,
@@ -465,7 +463,7 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
         allocator.free(accelerator.single_pos_subtables);
         allocator.free(accelerator.pair_pos_subtables);
         allocator.free(accelerator.pair_pos_records);
-        allocator.free(accelerator.pair_pos_coverage_glyphs);
+        allocator.free(accelerator.pair_pos_coverage_classes);
         allocator.free(accelerator.pair_pos_class_entries);
         allocator.free(accelerator.pair_pos_class_matrix);
         deinitMarkToBaseSubtables(allocator, accelerator.mark_to_base_subtables);
@@ -519,8 +517,8 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     @memset(pair_pos_subtables, .{});
     var pair_pos_records = std.ArrayList(PairPosRecord).empty;
     errdefer pair_pos_records.deinit(allocator);
-    var pair_pos_coverage_glyphs = std.ArrayList(GlyphId).empty;
-    errdefer pair_pos_coverage_glyphs.deinit(allocator);
+    var pair_pos_coverage_classes = std.ArrayList(PairClassEntry).empty;
+    errdefer pair_pos_coverage_classes.deinit(allocator);
     var pair_pos_class_entries = std.ArrayList(PairClassEntry).empty;
     errdefer pair_pos_class_entries.deinit(allocator);
     var pair_pos_class_matrix = std.ArrayList(i16).empty;
@@ -554,7 +552,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                     table,
                     subtable_offset,
                     &pair_pos_records,
-                    &pair_pos_coverage_glyphs,
+                    &pair_pos_coverage_classes,
                     &pair_pos_class_entries,
                     &pair_pos_class_matrix,
                     allocator,
@@ -574,8 +572,8 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     accelerator.pair_pos_subtables = pair_pos_subtables;
     accelerator.pair_pos_records = try pair_pos_records.toOwnedSlice(allocator);
     errdefer allocator.free(accelerator.pair_pos_records);
-    accelerator.pair_pos_coverage_glyphs = try pair_pos_coverage_glyphs.toOwnedSlice(allocator);
-    errdefer allocator.free(accelerator.pair_pos_coverage_glyphs);
+    accelerator.pair_pos_coverage_classes = try pair_pos_coverage_classes.toOwnedSlice(allocator);
+    errdefer allocator.free(accelerator.pair_pos_coverage_classes);
     accelerator.pair_pos_class_entries = try pair_pos_class_entries.toOwnedSlice(allocator);
     errdefer allocator.free(accelerator.pair_pos_class_entries);
     accelerator.pair_pos_class_matrix = try pair_pos_class_matrix.toOwnedSlice(allocator);
@@ -614,7 +612,7 @@ fn appendSimplePairPosRecords(
     table: Table,
     subtable_offset: usize,
     records: *std.ArrayList(PairPosRecord),
-    coverage_glyphs: *std.ArrayList(GlyphId),
+    coverage_classes: *std.ArrayList(PairClassEntry),
     class_entries: *std.ArrayList(PairClassEntry),
     class_matrix: *std.ArrayList(i16),
     allocator: std.mem.Allocator,
@@ -628,7 +626,7 @@ fn appendSimplePairPosRecords(
         2 => try appendSimplePairPosFormat2Records(
             table,
             subtable_offset,
-            coverage_glyphs,
+            coverage_classes,
             class_entries,
             class_matrix,
             allocator,
@@ -677,7 +675,7 @@ fn appendSimplePairPosFormat1Records(
 fn appendSimplePairPosFormat2Records(
     table: Table,
     subtable_offset: usize,
-    coverage_glyphs: *std.ArrayList(GlyphId),
+    coverage_classes: *std.ArrayList(PairClassEntry),
     class_entries: *std.ArrayList(PairClassEntry),
     class_matrix: *std.ArrayList(i16),
     allocator: std.mem.Allocator,
@@ -702,26 +700,18 @@ fn appendSimplePairPosFormat2Records(
     const matrix_len = @as(usize, class_1_count) * @as(usize, class_2_count);
     if (matrix_len > max_predecoded_pair_class_matrix) return .{};
 
-    const coverage_start = coverage_glyphs.items.len;
+    const coverage_start = coverage_classes.items.len;
     const coverage_count = try coverageGlyphCount(table, coverage_offset);
     if (coverage_count > max_predecoded_pair_class_glyphs) return .{};
     for (0..coverage_count) |coverage_index| {
-        try coverage_glyphs.append(
-            allocator,
-            (try coverageGlyphAt(table, coverage_offset, coverage_index)) orelse return error.BadGpos,
-        );
+        const glyph = (try coverageGlyphAt(table, coverage_offset, coverage_index)) orelse return error.BadGpos;
+        const class = try classValue(table, class_def_1, glyph);
+        if (class >= class_1_count) return error.BadGpos;
+        try coverage_classes.append(allocator, .{ .glyph = glyph, .class = class });
     }
-
-    const class_1_start = class_entries.items.len;
-    if (!(try appendClassDefEntries(table, class_def_1, class_entries, allocator))) {
-        coverage_glyphs.shrinkRetainingCapacity(coverage_start);
-        return .{};
-    }
-    const class_1_len = class_entries.items.len - class_1_start;
     const class_2_start = class_entries.items.len;
     if (!(try appendClassDefEntries(table, class_def_2, class_entries, allocator))) {
-        coverage_glyphs.shrinkRetainingCapacity(coverage_start);
-        class_entries.shrinkRetainingCapacity(class_1_start);
+        coverage_classes.shrinkRetainingCapacity(coverage_start);
         return .{};
     }
     const class_2_len = class_entries.items.len - class_2_start;
@@ -737,8 +727,6 @@ fn appendSimplePairPosFormat2Records(
         .kind = .format_2_x_advance,
         .coverage_start = coverage_start,
         .coverage_len = coverage_count,
-        .class_1_start = class_1_start,
-        .class_1_len = class_1_len,
         .class_2_start = class_2_start,
         .class_2_len = class_2_len,
         .class_1_count = class_1_count,
@@ -1732,12 +1720,10 @@ fn simplePairPosRecord(records: []const PairPosRecord, subtable: PairPosSubtable
 }
 
 fn acceleratedClassPairAdvance(accelerator: *const LookupAccelerator, subtable: PairPosSubtableAccelerator, first: GlyphId, second: GlyphId) ?i16 {
-    const coverage = accelerator.pair_pos_coverage_glyphs[subtable.coverage_start .. subtable.coverage_start + subtable.coverage_len];
-    if (!sortedGlyphSliceContains(coverage, first)) return null;
-    const class_1 = pairClassForGlyph(
-        accelerator.pair_pos_class_entries[subtable.class_1_start .. subtable.class_1_start + subtable.class_1_len],
+    const class_1 = coveredPairClassForGlyph(
+        accelerator.pair_pos_coverage_classes[subtable.coverage_start .. subtable.coverage_start + subtable.coverage_len],
         first,
-    );
+    ) orelse return null;
     const class_2 = pairClassForGlyph(
         accelerator.pair_pos_class_entries[subtable.class_2_start .. subtable.class_2_start + subtable.class_2_len],
         second,
@@ -1748,20 +1734,20 @@ fn acceleratedClassPairAdvance(accelerator: *const LookupAccelerator, subtable: 
     ];
 }
 
-fn sortedGlyphSliceContains(glyphs: []const GlyphId, glyph: GlyphId) bool {
+fn coveredPairClassForGlyph(entries: []const PairClassEntry, glyph: GlyphId) ?u16 {
     var low: usize = 0;
-    var high = glyphs.len;
+    var high = entries.len;
     while (low < high) {
         const mid = low + (high - low) / 2;
-        if (glyph < glyphs[mid]) {
+        if (glyph < entries[mid].glyph) {
             high = mid;
-        } else if (glyph > glyphs[mid]) {
+        } else if (glyph > entries[mid].glyph) {
             low = mid + 1;
         } else {
-            return true;
+            return entries[mid].class;
         }
     }
-    return false;
+    return null;
 }
 
 fn pairClassForGlyph(entries: []const PairClassEntry, glyph: GlyphId) u16 {
@@ -6502,7 +6488,7 @@ test "GPOS class PairPos accelerator honors coverage and implicit class zero" {
     };
     var records = std.ArrayList(PairPosRecord).empty;
     defer records.deinit(allocator);
-    var coverage = std.ArrayList(GlyphId).empty;
+    var coverage = std.ArrayList(PairClassEntry).empty;
     defer coverage.deinit(allocator);
     var classes = std.ArrayList(PairClassEntry).empty;
     defer classes.deinit(allocator);
@@ -6518,18 +6504,22 @@ test "GPOS class PairPos accelerator honors coverage and implicit class zero" {
         allocator,
     );
     try std.testing.expectEqual(PairPosAcceleratorKind.format_2_x_advance, accelerator.kind);
+    try std.testing.expectEqual(@as(usize, 1), coverage.items.len);
+    try std.testing.expectEqual(PairClassEntry{ .glyph = 5, .class = 1 }, coverage.items[0]);
+    try std.testing.expectEqual(@as(?u16, 1), coveredPairClassForGlyph(coverage.items, 5));
+    try std.testing.expectEqual(@as(?u16, null), coveredPairClassForGlyph(coverage.items, 6));
     try std.testing.expectEqual(@as(?i16, -35), acceleratedClassPairAdvance(&.{
-        .pair_pos_coverage_glyphs = coverage.items,
+        .pair_pos_coverage_classes = coverage.items,
         .pair_pos_class_entries = classes.items,
         .pair_pos_class_matrix = matrix.items,
     }, accelerator, 5, 7));
     try std.testing.expectEqual(@as(?i16, -15), acceleratedClassPairAdvance(&.{
-        .pair_pos_coverage_glyphs = coverage.items,
+        .pair_pos_coverage_classes = coverage.items,
         .pair_pos_class_entries = classes.items,
         .pair_pos_class_matrix = matrix.items,
     }, accelerator, 5, 8));
     try std.testing.expectEqual(@as(?i16, null), acceleratedClassPairAdvance(&.{
-        .pair_pos_coverage_glyphs = coverage.items,
+        .pair_pos_coverage_classes = coverage.items,
         .pair_pos_class_entries = classes.items,
         .pair_pos_class_matrix = matrix.items,
     }, accelerator, 6, 7));

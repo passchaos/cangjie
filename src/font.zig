@@ -1197,7 +1197,7 @@ pub const Font = struct {
         if (dsig) |dsig_table| try validateDsigTable(data, dsig_table);
         if (vorg) |vorg_table| try validateVorgTable(data, vorg_table, glyph_count);
         if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
-        if (sbix) |sbix_table| try validateSbixTable(data, sbix_table, glyph_count);
+        if (sbix) |sbix_table| try validateSbixTable(allocator, data, sbix_table, glyph_count);
         if (cblc != null and cbdt != null) try validateCblcCbdtTables(data, cblc.?, cbdt.?, glyph_count);
         if (eblc != null and ebdt != null) try validateCblcCbdtTables(data, eblc.?, ebdt.?, glyph_count);
         if (!is_ttc_face) try validateSfntTableChecksums(data, records);
@@ -3812,7 +3812,7 @@ pub const Font = struct {
 
         if (self.sbix) |sbix| {
             try validateSfntTableChecksum(self.data, sbix);
-            try validateSbixTable(self.data, sbix, self.glyph_count);
+            try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             try strikes.ensureUnusedCapacity(allocator, strike_count);
             for (0..strike_count) |strike_index| {
@@ -3848,7 +3848,7 @@ pub const Font = struct {
             // Re-run the full parse-time sbix contract at the public API
             // boundary so post-parse byte mutations cannot hide a corrupt
             // unselected glyph or strike behind a valid requested size.
-            try validateSbixTable(self.data, sbix, self.glyph_count);
+            try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             for (0..strike_count) |strike_index| {
                 const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
@@ -3880,11 +3880,11 @@ pub const Font = struct {
 
         if (self.sbix) |sbix| {
             try validateSfntTableChecksum(self.data, sbix);
-            try validateSbixTable(self.data, sbix, self.glyph_count);
+            try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             for (0..strike_count) |strike_index| {
                 const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-                if (try sbixGlyphInfo(self.data, strike, glyph_id)) |info| recordBestBitmapInfo(info, size_px, &best, &best_distance);
+                if (try sbixGlyphInfo(self.data, strike, glyph_id, self.glyph_count)) |info| recordBestBitmapInfo(info, size_px, &best, &best_distance);
             }
             if (best) |info| return info;
         }
@@ -3914,13 +3914,13 @@ pub const Font = struct {
 
         if (self.sbix) |sbix| {
             try validateSfntTableChecksum(self.data, sbix);
-            try validateSbixTable(self.data, sbix, self.glyph_count);
+            try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             var best: ?BitmapGlyphPng = null;
             var best_distance: f32 = std.math.inf(f32);
             for (0..strike_count) |strike_index| {
                 const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-                const maybe_glyph = try sbixGlyphPng(self.data, strike, glyph_id);
+                const maybe_glyph = try sbixGlyphPng(self.data, strike, glyph_id, self.glyph_count);
                 if (maybe_glyph) |glyph| {
                     const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
                     if (best == null or distance < best_distance) {
@@ -4860,7 +4860,16 @@ fn sbixStrike(data: []const u8, sbix: TableRecord, glyph_count: u16, strike_inde
     };
 }
 
-fn sbixGlyphInfo(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId) FontError!?BitmapGlyphInfo {
+const SbixGlyphRecord = struct {
+    glyph_start: usize,
+    origin_offset_x: i16,
+    origin_offset_y: i16,
+    graphic_type: [4]u8,
+    payload: []const u8,
+};
+
+fn sbixGlyphRecord(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId, glyph_count: u16) FontError!?SbixGlyphRecord {
+    if (glyph_id >= glyph_count) return error.BadSfnt;
     const glyph_offset_pos = strike.offset + 4 + @as(usize, glyph_id) * 4;
     const start = try bin.readU32At(data, glyph_offset_pos);
     const end = try bin.readU32At(data, glyph_offset_pos + 4);
@@ -4871,11 +4880,41 @@ fn sbixGlyphInfo(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.Glyph
 
     const glyph_start = strike.offset + start;
     const glyph_end = strike.offset + end;
-    const graphic_type = try bin.readTagAt(data, glyph_start + 4);
-    const payload = data[glyph_start + 8 .. glyph_end];
-    const is_png = bin.tagEq(graphic_type, "png ");
+    return .{
+        .glyph_start = glyph_start,
+        .origin_offset_x = try bin.readI16At(data, glyph_start),
+        .origin_offset_y = try bin.readI16At(data, glyph_start + 2),
+        .graphic_type = try bin.readTagAt(data, glyph_start + 4),
+        .payload = data[glyph_start + 8 .. glyph_end],
+    };
+}
+
+fn resolveSbixGlyphRecord(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId, glyph_count: u16) FontError!?SbixGlyphRecord {
+    var current = glyph_id;
+    var remaining: usize = glyph_count;
+    while (true) {
+        const record = (try sbixGlyphRecord(data, strike, current, glyph_count)) orelse return null;
+        if (!bin.tagEq(record.graphic_type, "dupe")) return record;
+
+        // `dupe` is exactly one big-endian glyph ID. Requiring exact payload
+        // length avoids treating private trailing bytes as a second grammar.
+        if (record.payload.len != 2) return error.BadSfnt;
+        current = try bin.readU16At(record.payload, 0);
+        if (current >= glyph_count) return error.BadSfnt;
+
+        // Every edge has one target in the finite glyph set. Following more
+        // than glyph_count edges proves that some active node repeated, which
+        // rejects both direct and indirect cycles without allocating per read.
+        if (remaining == 0) return error.BadSfnt;
+        remaining -= 1;
+    }
+}
+
+fn sbixGlyphInfo(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId, glyph_count: u16) FontError!?BitmapGlyphInfo {
+    const record = (try resolveSbixGlyphRecord(data, strike, glyph_id, glyph_count)) orelse return null;
+    const is_png = bin.tagEq(record.graphic_type, "png ");
     const dimensions = if (is_png)
-        try validatePngBitmapPayload(payload)
+        try validatePngBitmapPayload(record.payload)
     else
         PngDimensions{ .width = 0, .height = 0 };
     return .{
@@ -4883,49 +4922,37 @@ fn sbixGlyphInfo(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.Glyph
         .glyph_id = glyph_id,
         .ppem = strike.ppem,
         .ppi = strike.ppi,
-        .origin_offset_x = try bin.readI16At(data, glyph_start),
-        .origin_offset_y = try bin.readI16At(data, glyph_start + 2),
+        // A `dupe` says to use the target glyph's bitmap data. Following
+        // HarfBuzz/FreeType, placement comes from that final image record too.
+        .origin_offset_x = record.origin_offset_x,
+        .origin_offset_y = record.origin_offset_y,
         .width = dimensions.width,
         .height = dimensions.height,
-        .data_offset = glyph_start + 8,
-        .data_length = payload.len,
+        .data_offset = record.glyph_start + 8,
+        .data_length = record.payload.len,
         .is_png = is_png,
     };
 }
 
-fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId) FontError!?BitmapGlyphPng {
-    const glyph_offset_pos = strike.offset + 4 + @as(usize, glyph_id) * 4;
-    const start = try bin.readU32At(data, glyph_offset_pos);
-    const end = try bin.readU32At(data, glyph_offset_pos + 4);
-    // Glyph data offsets must start after the strike header and the complete
-    // glyph-offset array.  Offsets into that metadata are malformed even when
-    // equal, because "missing glyph" markers should still point at a legal
-    // data boundary rather than hiding a corrupt offset array.
-    if (start < strike.bitmap_data_offset or end < strike.bitmap_data_offset) return error.BadSfnt;
-    if (end < start or end > strike.length) return error.BadSfnt;
-    if (end == start) return null;
-    if (end - start < 8) return error.BadSfnt;
-
-    const glyph_start = strike.offset + start;
-    const glyph_end = strike.offset + end;
-    const graphic_type = try bin.readTagAt(data, glyph_start + 4);
-    if (!bin.tagEq(graphic_type, "png ")) return null;
+fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId, glyph_count: u16) FontError!?BitmapGlyphPng {
+    const record = (try resolveSbixGlyphRecord(data, strike, glyph_id, glyph_count)) orelse return null;
+    if (!bin.tagEq(record.graphic_type, "png ")) return null;
     return try bitmapGlyphPngFromData(
-        data[glyph_start + 8 .. glyph_end],
+        record.payload,
         .sbix,
         strike.ppem,
         strike.ppi,
-        try bin.readI16At(data, glyph_start),
-        try bin.readI16At(data, glyph_start + 2),
+        record.origin_offset_x,
+        record.origin_offset_y,
     );
 }
 
-fn validateSbixTable(data: []const u8, sbix: TableRecord, glyph_count: u16) FontError!void {
+fn validateSbixTable(allocator: std.mem.Allocator, data: []const u8, sbix: TableRecord, glyph_count: u16) FontError!void {
     const strike_count = try sbixStrikeCount(data, sbix);
     for (0..strike_count) |strike_index| {
         const strike = try sbixStrike(data, sbix, glyph_count, strike_index);
         try validateSbixStrikeGlyphOffsets(data, strike, glyph_count);
-        try validateSbixStrikeBitmapPayloads(data, strike, glyph_count);
+        try validateSbixStrikeBitmapPayloads(allocator, data, strike, glyph_count);
     }
 }
 
@@ -4947,18 +4974,65 @@ fn validateSbixStrikeGlyphOffsets(data: []const u8, strike: SbixStrike, glyph_co
     }
 }
 
-fn validateSbixStrikeBitmapPayloads(data: []const u8, strike: SbixStrike, glyph_count: u16) FontError!void {
-    for (0..glyph_count) |glyph_index| {
-        const glyph_offset_pos = strike.offset + 4 + glyph_index * 4;
-        const start = try bin.readU32At(data, glyph_offset_pos);
-        const end = try bin.readU32At(data, glyph_offset_pos + 4);
-        if (end == start) continue;
+fn validateSbixStrikeBitmapPayloads(allocator: std.mem.Allocator, data: []const u8, strike: SbixStrike, glyph_count: u16) FontError!void {
+    // Direct-image-only sbix is the overwhelmingly common case. Allocate graph
+    // scratch lazily so adding strict `dupe` validation does not add heap work
+    // to ordinary strike validation and bitmap lookup.
+    var maybe_dupe_nodes: ?[]SbixDupeNode = null;
+    defer if (maybe_dupe_nodes) |nodes| allocator.free(nodes);
 
-        const glyph_start = strike.offset + start;
-        const glyph_end = strike.offset + end;
-        const graphic_type = try bin.readTagAt(data, glyph_start + 4);
-        if (bin.tagEq(graphic_type, "png ")) {
-            _ = try validatePngBitmapPayload(data[glyph_start + 8 .. glyph_end]);
+    for (0..glyph_count) |glyph_index| {
+        const record = (try sbixGlyphRecord(data, strike, @intCast(glyph_index), glyph_count)) orelse continue;
+        if (bin.tagEq(record.graphic_type, "png ")) {
+            _ = try validatePngBitmapPayload(record.payload);
+        } else if (bin.tagEq(record.graphic_type, "dupe")) {
+            if (record.payload.len != 2) return error.BadSfnt;
+            const target = try bin.readU16At(record.payload, 0);
+            if (target >= glyph_count) return error.BadSfnt;
+            if (maybe_dupe_nodes == null) {
+                const nodes = try allocator.alloc(SbixDupeNode, glyph_count);
+                @memset(nodes, .{});
+                maybe_dupe_nodes = nodes;
+            }
+            maybe_dupe_nodes.?[glyph_index].target = target;
+        }
+    }
+
+    if (maybe_dupe_nodes) |nodes| try validateSbixDupeGraph(nodes);
+}
+
+const SbixDupeNode = struct {
+    target: ?glyph_mod.GlyphId = null,
+    state: enum(u2) {
+        unseen,
+        active,
+        resolved,
+    } = .unseen,
+};
+
+fn validateSbixDupeGraph(nodes: []SbixDupeNode) FontError!void {
+    // 0 = unseen, 1 = active in this DFS chain, 2 = fully resolved. This accepts
+    // exact DAG sharing while rejecting only cycles, matching the table's
+    // reference semantics without imposing HarfBuzz/FreeType's shallow cap.
+    // Target and state share one scratch allocation because public bitmap APIs
+    // deliberately repeat whole-table validation for borrowed font bytes.
+    for (nodes, 0..) |_, start_index| {
+        if (nodes[start_index].state == .resolved) continue;
+        var current: glyph_mod.GlyphId = @intCast(start_index);
+        while (true) {
+            if (nodes[current].state == .resolved) break;
+            if (nodes[current].state == .active) return error.BadSfnt;
+            nodes[current].state = .active;
+            current = nodes[current].target orelse break;
+        }
+
+        // The graph is functional (at most one edge per node), so replay the
+        // same chain to finish it rather than keeping a second O(glyph_count)
+        // stack. Reaching a previously-finished node terminates the replay.
+        current = @intCast(start_index);
+        while (nodes[current].state == .active) {
+            nodes[current].state = .resolved;
+            current = nodes[current].target orelse break;
         }
     }
 }
@@ -13995,7 +14069,7 @@ test "sbix offsets cannot overlap table or strike metadata" {
     writeU32Test(&glyph_overlap, 20, 20);
 
     const strike = try sbixStrike(&glyph_overlap, sbix, 1, 0);
-    try std.testing.expectError(error.BadSfnt, sbixGlyphPng(&glyph_overlap, strike, 0));
+    try std.testing.expectError(error.BadSfnt, sbixGlyphPng(&glyph_overlap, strike, 0, 1));
 }
 
 test "sbix parse validation checks every strike glyph offset" {
@@ -14014,13 +14088,69 @@ test "sbix parse validation checks every strike glyph offset" {
     writeU32Test(&bytes, 16, 24);
     writeU32Test(&bytes, 20, 32);
     writeU32Test(&bytes, 24, 28);
-    try std.testing.expectError(error.BadSfnt, validateSbixTable(&bytes, sbix, 2));
+    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
 
     writeU32Test(&bytes, 24, 36); // Non-empty glyph payload is shorter than the sbix origin+type header.
-    try std.testing.expectError(error.BadSfnt, validateSbixTable(&bytes, sbix, 2));
+    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
 
     writeU32Test(&bytes, 24, 40);
-    try validateSbixTable(&bytes, sbix, 2);
+    try validateSbixTable(std.testing.allocator, &bytes, sbix, 2);
+}
+
+test "sbix dupe graph accepts shared chains and rejects cycles" {
+    // Longer than HarfBuzz's current retry cap: a finite, acyclic chain is
+    // valid regardless of depth and should not be rejected arbitrarily.
+    var valid = [_]SbixDupeNode{
+        .{ .target = 2 },
+        .{ .target = 2 },
+        .{ .target = 3 },
+        .{ .target = 4 },
+        .{ .target = 5 },
+        .{ .target = 6 },
+        .{ .target = 7 },
+        .{ .target = 8 },
+        .{ .target = 9 },
+        .{ .target = 10 },
+        .{ .target = 11 },
+        .{},
+    };
+    try validateSbixDupeGraph(&valid);
+
+    var self_cycle = [_]SbixDupeNode{.{ .target = 0 }};
+    try std.testing.expectError(error.BadSfnt, validateSbixDupeGraph(&self_cycle));
+
+    var indirect_cycle = [_]SbixDupeNode{ .{ .target = 1 }, .{ .target = 2 }, .{ .target = 0 } };
+    try std.testing.expectError(error.BadSfnt, validateSbixDupeGraph(&indirect_cycle));
+}
+
+test "sbix dupe records require one in-range glyph id" {
+    var bytes: [64]u8 = .{0} ** 64;
+    writeU16Test(&bytes, 0, 1);
+    writeU32Test(&bytes, 4, 1);
+    writeU32Test(&bytes, 8, 12);
+    writeU16Test(&bytes, 12, 16);
+    writeU16Test(&bytes, 14, 72);
+    writeU32Test(&bytes, 16, 16);
+    writeU32Test(&bytes, 20, 26);
+    writeU32Test(&bytes, 24, 36);
+    writeTagTest(&bytes, 28 + 4, "dupe");
+    writeU16Test(&bytes, 28 + 8, 1);
+    writeTagTest(&bytes, 38 + 4, "dupe");
+    writeU16Test(&bytes, 38 + 8, 0);
+
+    const sbix = TableRecord{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = 52 };
+    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
+
+    // Break the cycle, but make the remaining reference out of range.
+    writeTagTest(&bytes, 38 + 4, "jpg ");
+    writeU16Test(&bytes, 28 + 8, 2);
+    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
+
+    // A dupe payload must not carry ignored trailing bytes.
+    writeU16Test(&bytes, 28 + 8, 1);
+    writeU32Test(&bytes, 20, 28);
+    writeU32Test(&bytes, 24, 38);
+    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
 }
 
 test "sbix public bitmap APIs revalidate borrowed strike offsets" {

@@ -228,6 +228,10 @@ pub fn buildBitmapOnlyCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try bitmapOnlyCbdtPngTtfTables(allocator));
 }
 
+pub fn buildSbixDupePngTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try sbixDupePngTtfTables(allocator));
+}
+
 pub fn buildEbdtBitmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ebdtBitmapTtfTables(allocator));
 }
@@ -1391,6 +1395,19 @@ fn bitmapOnlyCbdtPngTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn sbixDupePngTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 7);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[2] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[3] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[4] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[5] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[6] = .{ .tag = "sbix", .data = try sbixDupePngTable(allocator) };
     return tables;
 }
 
@@ -4345,6 +4362,43 @@ fn cbdtPngTable(allocator: std.mem.Allocator) ![]u8 {
     bytes[off + 4] = 12;
     writeU32(bytes, off + 5, @intCast(png.len));
     @memcpy(bytes[off + 9 .. off + 9 + png.len], png);
+    return bytes;
+}
+
+fn sbixDupePngTable(allocator: std.mem.Allocator) ![]u8 {
+    const png = cbdtFixturePng();
+    const strike_offset: usize = 12;
+    const glyph_data_offset: usize = 4 + 3 * 4;
+    const direct_record_len: usize = 8 + png.len;
+    const dupe_record_len: usize = 8 + 2;
+    const strike_len = glyph_data_offset + direct_record_len + dupe_record_len;
+    const bytes = try allocator.alloc(u8, strike_offset + strike_len);
+    @memset(bytes, 0);
+
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, strike_offset);
+
+    writeU16(bytes, strike_offset, 16);
+    writeU16(bytes, strike_offset + 2, 72);
+    writeU32(bytes, strike_offset + 4, @intCast(glyph_data_offset));
+    writeU32(bytes, strike_offset + 8, @intCast(glyph_data_offset + direct_record_len));
+    writeU32(bytes, strike_offset + 12, @intCast(strike_len));
+
+    const direct = strike_offset + glyph_data_offset;
+    writeI16(bytes, direct, 3);
+    writeI16(bytes, direct + 2, -2);
+    writeTag(bytes, direct + 4, "png ");
+    @memcpy(bytes[direct + 8 .. direct + 8 + png.len], png);
+
+    // Glyph 1 ('A') shares glyph 0's PNG and, as required by sbix consumers,
+    // resolves the target record's placement metrics along with its image.
+    const duplicate = direct + direct_record_len;
+    writeI16(bytes, duplicate, 99);
+    writeI16(bytes, duplicate + 2, 99);
+    writeTag(bytes, duplicate + 4, "dupe");
+    writeU16(bytes, duplicate + 8, 0);
     return bytes;
 }
 

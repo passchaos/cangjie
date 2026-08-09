@@ -2998,6 +2998,39 @@ test "renders indexed sbix PNG with bottom-left origin when available" {
     try std.testing.expectEqual(@as(u8, 0), target.at(23, 59).a);
 }
 
+test "resolves and renders sbix dupe PNG glyphs" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildSbixDupePngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex('A');
+    try std.testing.expectEqual(@as(GlyphId, 1), glyph_id);
+
+    const info = (try font.bitmapGlyphInfo(glyph_id, 16)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.sbix, info.source);
+    try std.testing.expect(info.is_png);
+    // Placement and bytes come from the final direct record, not from the
+    // intermediate dupe header's deliberately-distinct 99/99 offsets.
+    try std.testing.expectEqual(@as(i16, 3), info.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, -2), info.origin_offset_y);
+
+    const bitmap = (try font.bitmapGlyphPng(glyph_id, 16)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(i16, 3), bitmap.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, -2), bitmap.origin_offset_y);
+    try std.testing.expectEqual(@as(u32, 1), bitmap.width);
+    try std.testing.expectEqual(@as(u32, 1), bitmap.height);
+
+    var target = try ColorRenderTarget.init(allocator, 32, 32);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, glyph_id, 16, 5, 20, 0);
+    // sbix uses bottom-left placement: left=5+3, top=20-(1-2)=21.
+    try std.testing.expectEqual(Rgba{ .r = 128, .g = 0, .b = 0, .a = 128 }, target.at(8, 21));
+}
+
 test "maps many-to-one cmap format 13 last-resort ranges" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

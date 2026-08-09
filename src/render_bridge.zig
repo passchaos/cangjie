@@ -733,6 +733,34 @@ test "render bridge emits embedded PNG color atlas metadata" {
     try std.testing.expectEqual(bitmap, command.paint.embedded_png);
 }
 
+test "render bridge resolves sbix dupe records before atlas emission" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildSbixDupePngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const font_mod.Font{&font};
+    const cascade = layout.FontCascade.init(&fonts);
+    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
+        .max_width = 100,
+        .line_height = 20,
+    });
+
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{});
+    defer draw_list.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), draw_list.color_glyphs.len);
+    const bitmap = draw_list.color_glyphs[0].paint.embedded_png;
+    try std.testing.expectEqual(font_mod.BitmapStrikeSource.sbix, bitmap.source);
+    try std.testing.expectEqual(@as(i16, 3), bitmap.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, -2), bitmap.origin_offset_y);
+    try std.testing.expectEqual(GlyphAtlasContent.premultiplied_rgba, draw_list.atlas_requests[0].content);
+}
+
 test "render bridge skips atlas and path work for empty bitmap-only glyphs" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

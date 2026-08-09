@@ -859,6 +859,23 @@ Current local snapshot after the Nastaliq parity work:
   HarfBuzz/HarfRust checksum `da5f74de3edfe093`; all ten retained USE
   fixtures, Roboto, SourceSerifVariable, and both Amiri corpora also retained
   dual-reference parity.
+- ChainContextSubst format-2 accelerators now append an exact
+  `(first glyph, RuleGroup)` index to their existing class sidecar. The hot
+  matcher therefore replaces Coverage parsing, input ClassDef lookup, and
+  class-group binary search with one exact probe; small indexes stay sorted,
+  while indexes with at least eight glyphs use a 50%-load open-addressed table.
+  Appending to the existing allocation and reusing the former Coverage-offset
+  word keeps the accelerator struct and allocation count unchanged. Legal
+  overlapping Coverage format-2 ranges are sorted and deduplicated, and
+  covered classes without rules remain exact misses. Against `b096ec4`, fixed
+  CPU-8 P-core A/B/B/A means reduced NotoSansDevanagari `hi-words`
+  instructions by `4.42%`, branches by `4.18%`, and cycles by `7.48%`; fixed
+  CPU-30 E-core reproduced `4.39%`, `4.15%`, and `5.23%` reductions.
+  Roboto, Amiri, and the 503,948-glyph Duployan corpus remained flat in
+  retired work, and a reverse-order long Amiri run kept cycles within `0.1%`.
+  The complete Devanagari corpus, all ten retained USE fixtures, Roboto,
+  SourceSerifVariable, and both Amiri corpora retained HarfBuzz/HarfRust
+  parity.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

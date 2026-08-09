@@ -616,26 +616,43 @@ pub fn applyFeatureSequenceWithOptions(
     // script plan names only the well-known stages it needs to interleave.
     // Required tags already present in the explicit plan are handled there so
     // position-scoped form features do not run once globally and once scoped.
-    var feature_indices = std.ArrayList(FeatureSelection).empty;
-    defer feature_indices.deinit(allocator);
+    var feature_indices_stack: [64]FeatureSelection = undefined;
+    var feature_indices_stack_len: usize = 0;
+    var owned_feature_indices = std.ArrayList(FeatureSelection).empty;
+    defer owned_feature_indices.deinit(allocator);
     const script_list_offset = try checkedRequiredScriptListOffset(table);
     const script_count = try readU16(table, script_list_offset);
     const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(shaping_options.script_tag)) orelse
         try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
         0;
-    if (script_offset != 0) try collectScriptFeatures(table, script_offset, shaping_options.language_tag, &feature_indices, allocator);
+    if (script_offset != 0) {
+        if (try selectedLangSysOffset(table, script_offset, shaping_options.language_tag)) |lang_sys_offset| {
+            try collectLangSysFeaturesStackFirst(
+                table,
+                lang_sys_offset,
+                &feature_indices_stack,
+                &feature_indices_stack_len,
+                &owned_feature_indices,
+                allocator,
+            );
+        }
+    }
+    const feature_indices = if (owned_feature_indices.items.len != 0)
+        owned_feature_indices.items
+    else
+        feature_indices_stack[0..feature_indices_stack_len];
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16(table, feature_list_offset);
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    for (feature_indices.items) |selection| {
+    for (feature_indices) |selection| {
         if (!selection.required or selection.index >= feature_count) continue;
         const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
         const required_tag = try readU32(table, feature_record);
         if (featurePlanContains(applications, required_tag)) continue;
         var required_options = shaping_options;
         required_options.active_source_feature = null;
-        try applySelectedFeatureFromPlan(table, required_tag, feature_indices.items, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, required_options, &run_digest_cache);
+        try applySelectedFeatureFromPlan(table, required_tag, feature_indices, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, required_options, &run_digest_cache);
     }
 
     for (applications) |application| {
@@ -644,7 +661,7 @@ pub fn applyFeatureSequenceWithOptions(
         selected_options.match_source_syllable = application.match_source_syllable;
         selected_options.active_auto_zwnj = application.auto_zwnj;
         selected_options.active_auto_zwj = application.auto_zwj;
-        try applySelectedFeatureFromPlan(table, application.tag, feature_indices.items, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, selected_options, &run_digest_cache);
+        try applySelectedFeatureFromPlan(table, application.tag, feature_indices, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
 
@@ -2332,18 +2349,23 @@ fn findScriptOffset(table: Table, script_list_offset: usize, script_count: u16, 
 }
 
 fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
+    const lang_sys_offset = (try selectedLangSysOffset(table, script_offset, language_tag)) orelse return;
+    try collectLangSysFeatures(table, lang_sys_offset, feature_indices, allocator);
+}
+
+fn selectedLangSysOffset(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag) GsubError!?usize {
     const default_lang_sys_offset = try readU16(table, script_offset);
     const lang_sys_count = try readU16(table, script_offset + 2);
     try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
     if (language_tag != .dflt) {
         if (try findLangSysOffset(table, script_offset, lang_sys_count, @intFromEnum(language_tag))) |lang_sys_offset| {
-            try collectLangSysFeatures(table, lang_sys_offset, feature_indices, allocator);
-            return;
+            return lang_sys_offset;
         }
     }
     if (default_lang_sys_offset != 0) {
-        try collectLangSysFeatures(table, script_offset + default_lang_sys_offset, feature_indices, allocator);
+        return script_offset + default_lang_sys_offset;
     }
+    return null;
 }
 
 fn findLangSysOffset(table: Table, script_offset: usize, lang_sys_count: u16, language_tag: u32) GsubError!?usize {
@@ -2367,6 +2389,34 @@ fn collectLangSysFeatures(table: Table, lang_sys_offset: usize, feature_indices:
     }
 }
 
+fn collectLangSysFeaturesStackFirst(
+    table: Table,
+    lang_sys_offset: usize,
+    stack: []FeatureSelection,
+    stack_len: *usize,
+    owned: *std.ArrayList(FeatureSelection),
+    allocator: std.mem.Allocator,
+) (GsubError || std.mem.Allocator.Error)!void {
+    const required_feature_index = try readU16(table, lang_sys_offset + 2);
+    const feature_count = try readU16(table, lang_sys_offset + 4);
+    const max_selection_count = @as(usize, feature_count) + @intFromBool(required_feature_index != 0xffff);
+    if (max_selection_count > stack.len) {
+        try collectLangSysFeatures(table, lang_sys_offset, owned, allocator);
+        return;
+    }
+    if (required_feature_index != 0xffff) {
+        appendFeatureSelectionToBuffer(stack, stack_len, required_feature_index, true);
+    }
+    for (0..feature_count) |feature_i| {
+        appendFeatureSelectionToBuffer(
+            stack,
+            stack_len,
+            try readU16(table, lang_sys_offset + 6 + feature_i * 2),
+            false,
+        );
+    }
+}
+
 fn appendFeatureSelection(feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator, index: u16, required: bool) std.mem.Allocator.Error!void {
     for (feature_indices.items) |*selection| {
         if (selection.index != index) continue;
@@ -2374,6 +2424,17 @@ fn appendFeatureSelection(feature_indices: *std.ArrayList(FeatureSelection), all
         return;
     }
     try feature_indices.append(allocator, .{ .index = index, .required = required });
+}
+
+fn appendFeatureSelectionToBuffer(feature_indices: []FeatureSelection, len: *usize, index: u16, required: bool) void {
+    for (feature_indices[0..len.*]) |*selection| {
+        if (selection.index != index) continue;
+        selection.required = selection.required or required;
+        return;
+    }
+    std.debug.assert(len.* < feature_indices.len);
+    feature_indices[len.*] = .{ .index = index, .required = required };
+    len.* += 1;
 }
 
 fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
@@ -9235,6 +9296,42 @@ test "GSUB LangSys required feature bypasses optional feature filtering" {
     defer lookups.deinit(allocator);
 
     try std.testing.expectEqualSlices(u16, &.{0}, lookups.items);
+}
+
+test "GSUB LangSys feature collection uses stack and preserves required duplicates" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 144;
+
+    // Required feature 7 is repeated in the optional array; collection must
+    // retain one entry with the required bit set.
+    writeU16Test(&bytes, 0, 0);
+    writeU16Test(&bytes, 2, 7);
+    writeU16Test(&bytes, 4, 3);
+    writeU16Test(&bytes, 6, 7);
+    writeU16Test(&bytes, 8, 9);
+    writeU16Test(&bytes, 10, 9);
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    var stack: [64]FeatureSelection = undefined;
+    var stack_len: usize = 0;
+    var owned = std.ArrayList(FeatureSelection).empty;
+    defer owned.deinit(allocator);
+    try collectLangSysFeaturesStackFirst(table, 0, &stack, &stack_len, &owned, allocator);
+    try std.testing.expectEqual(@as(usize, 0), owned.items.len);
+    try std.testing.expectEqualSlices(FeatureSelection, &.{
+        .{ .index = 7, .required = true },
+        .{ .index = 9, .required = false },
+    }, stack[0..stack_len]);
+
+    // 65 optional entries cannot fit the fixed stack and must retain the
+    // allocator-backed parser path without truncation.
+    writeU16Test(&bytes, 2, 0xffff);
+    writeU16Test(&bytes, 4, 65);
+    for (0..65) |i| writeU16Test(&bytes, 6 + i * 2, @intCast(i));
+    stack_len = 0;
+    try collectLangSysFeaturesStackFirst(table, 0, &stack, &stack_len, &owned, allocator);
+    try std.testing.expectEqual(@as(usize, 0), stack_len);
+    try std.testing.expectEqual(@as(usize, 65), owned.items.len);
+    try std.testing.expectEqual(@as(u16, 64), owned.items[64].index);
 }
 
 test "GSUB lookup selection sorts and deduplicates repeated feature lookups" {

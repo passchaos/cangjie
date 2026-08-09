@@ -887,6 +887,18 @@ Current local snapshot after the Nastaliq parity work:
   and `1.26%` reductions. Roboto and Amiri retired work remained flat, and the
   full Devanagari/USE/Latin/variable/Arabic dual-reference parity matrix was
   unchanged.
+- Explicit GSUB feature sequences now collect the selected LangSys feature
+  indexes in a 64-entry stack buffer. Required/optional duplicates still
+  collapse with the required bit preserved; larger LangSys tables keep the
+  allocator-backed path without truncation. This removes one grow/free cycle
+  from every Indic feature stage while retaining the original ScriptList,
+  language fallback, required-feature, and FeatureList parsing semantics.
+  Against `aa45bda`, fixed CPU-8 P-core A/B/B/A means reduced
+  NotoSansDevanagari `hi-words` instructions by about `6.51%`, branches by
+  `5.15%`, and cycles by about `6.0%`; fixed CPU-30 E-core reproduced about
+  `6.50%`, `5.14%`, and `3.6%` reductions. Roboto and Amiri retired work
+  remained flat, and the retained Devanagari/USE/Latin/variable/Arabic
+  HarfBuzz/HarfRust parity matrix was unchanged.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

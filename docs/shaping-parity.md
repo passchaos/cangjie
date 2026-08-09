@@ -842,12 +842,23 @@ Current local snapshot after the Nastaliq parity work:
 - The existing conservative ChainContextSubst format-2 class accelerator now
   also builds for direct lookup type 6, not only ExtensionSubst wrappers.
   Direct and wrapped builders share the same matcher and accept only its proven
-  subset: no backtrack classes, bounded input/lookahead, and one nested record
-  at sequence index zero; other rules retain the generic parser. A builder
-  regression proves direct/extension rule-class-group parity and backtrack
-  fallback. Fixed P/E-core comparisons reduced Devanagari retired instructions
-  by about `1.8%`; Roboto and Amiri instructions remained flat, and all
-  retained Devanagari/USE/Arabic/Latin parity gates remained unchanged.
+  subset: bounded backtrack/input/lookahead regions and one nested record at
+  sequence index zero; other rules retain the generic parser. Backtrack
+  classes stay in OpenType's nearest-first order and reuse the existing
+  IgnoreMarks/default-ignorable and source-syllable-aware match window. The
+  enlarged matcher is kept out of line so it does not inflate the lookup scan
+  used by fonts without these rules. Regressions cover direct/extension
+  builder parity, backtrack direction, ignored marks, lookahead, syllable
+  boundaries, nested SingleSubst, and conservative fallback. Against commit
+  `c281812`, fixed CPU-8 P-core A/B/B/A means reduced NotoSansDevanagari
+  `hi-words` retired instructions by `2.75%`, branches by `3.08%`, cycles by
+  `5.38%`, and L1I misses by `2.09%`; fixed CPU-30 E-core reproduced
+  `2.76%`, `3.09%`, `4.35%`, and `9.82%` reductions. Roboto, Amiri, and the
+  503,948-glyph Duployan USE corpus remained effectively flat in retired
+  instructions and branches. The complete Devanagari corpus retained
+  HarfBuzz/HarfRust checksum `da5f74de3edfe093`; all ten retained USE
+  fixtures, Roboto, SourceSerifVariable, and both Amiri corpora also retained
+  dual-reference parity.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

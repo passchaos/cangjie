@@ -258,14 +258,22 @@ const FastSingleRecord = struct {
 };
 
 const ChainingClassSubtableAccelerator = struct {
-    subtable_offset: usize = 0,
     coverage_offset: usize = 0,
+    backtrack_class_def: usize = 0,
     input_class_def: usize = 0,
     lookahead_class_def: usize = 0,
     rules: []const class_context.Rule = &.{},
     classes: []const u16 = &.{},
     groups: []const class_context.RuleGroup = &.{},
 };
+
+fn chainingClassRuleBacktrackCount(rule: class_context.Rule) u16 {
+    // ChainingClassSubtableAccelerator's conservative subset applies its sole
+    // nested lookup directly, so it has no substitution-record table offset.
+    // Reuse that otherwise idle sidecar field instead of widening the Rule
+    // shared by ContextSubst and GPOS or instantiating a second sorting path.
+    return @intCast(rule.records_offset);
+}
 
 const ReverseChainingSingleSubtable = struct {
     subtable_offset: usize = 0,
@@ -1662,14 +1670,20 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
             var cursor = rule_offset;
 
             const backtrack_count = try readU16(table, cursor);
-            cursor += 2 + @as(usize, backtrack_count) * 2;
-            if (backtrack_count != 0) return null;
+            cursor += 2;
+            if (backtrack_count > max_chaining_class_region_glyphs) return null;
+            const classes_start = classes.items.len;
+            var hash = class_context.sequenceHashEmpty();
+            for (0..backtrack_count) |backtrack_i| {
+                const class = try readU16(table, cursor + backtrack_i * 2);
+                try classes.append(allocator, class);
+                hash = class_context.sequenceHashAppend(hash, class);
+            }
+            cursor += @as(usize, backtrack_count) * 2;
 
             const input_count = try readU16(table, cursor);
             cursor += 2;
             if (input_count == 0 or input_count > max_chaining_class_region_glyphs) return null;
-            const classes_start = classes.items.len;
-            var hash = class_context.sequenceHashEmpty();
             for (1..input_count) |input_i| {
                 const class = try readU16(table, cursor + (input_i - 1) * 2);
                 try classes.append(allocator, class);
@@ -1694,7 +1708,6 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
             if (sequence_index != 0) return null;
             const nested_lookup_index = try readU16(table, cursor + 2);
 
-            _ = backtrack_class_def;
             try rules.append(allocator, .{
                 .class_set = @intCast(set_i),
                 .input_count = input_count,
@@ -1703,6 +1716,7 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
                 .order = order,
                 .lookup_index = nested_lookup_index,
                 .classes_start = @intCast(classes_start),
+                .records_offset = backtrack_count,
             });
             order += 1;
         }
@@ -1738,8 +1752,8 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
     success = true;
 
     return .{
-        .subtable_offset = subtable_offset,
         .coverage_offset = coverage_offset,
+        .backtrack_class_def = backtrack_class_def,
         .input_class_def = input_class_def,
         .lookahead_class_def = lookahead_class_def,
         .rules = rules_slice,
@@ -4879,7 +4893,7 @@ fn applyChainingClassSubstitutionLookupAccelerated(
         while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
             const subtable = accelerator.chaining_class_subtables[subtable_i];
             if (subtable.rules.len == 0) continue;
-            const result = try applyAcceleratedChainingClassSubstitutionAt(table, subtable, glyphs, pos, allocator, lookup_flag, options);
+            const result = try applyAcceleratedChainingClassSubstitutionWithBacktrackAt(table, subtable, glyphs, pos, allocator, lookup_flag, options);
             if (result.matched) {
                 next_pos = @max(next_pos, result.next_pos);
                 break;
@@ -6890,6 +6904,79 @@ fn applyAcceleratedChainingClassSubstitutionAt(table: Table, subtable: ChainingC
     return .{};
 }
 
+noinline fn applyAcceleratedChainingClassSubstitutionWithBacktrackAt(table: Table, subtable: ChainingClassSubtableAccelerator, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
+    if (try coverageIndex(table, subtable.coverage_offset, glyphs.items[pos]) == null) return .{};
+    const input_class = try classValue(table, subtable.input_class_def, glyphs.items[pos]);
+    const group = class_context.groupForClass(subtable.groups, input_class) orelse return .{};
+    if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs or group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
+
+    var window = ChainingClassRuleMatchWindow.init(table, glyphs.items, pos, subtable.backtrack_class_def, subtable.input_class_def, subtable.lookahead_class_def, lookup_flag, options);
+    var backtrack_classes: [max_chaining_class_region_glyphs]u16 = undefined;
+    var input_classes: [max_chaining_class_region_glyphs]u16 = undefined;
+    var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
+
+    const rules = subtable.rules[group.start .. group.start + group.len];
+    for (rules) |rule| {
+        const backtrack_count = chainingClassRuleBacktrackCount(rule);
+        if (backtrack_count > max_chaining_class_region_glyphs) continue;
+        if (rule.input_count == 0 or rule.input_count > group.max_input_count) continue;
+        if (rule.lookahead_count > group.max_lookahead_count) continue;
+        // Rules in one class set are tried in font order and may have different
+        // input lengths. Do not prefetch the group's longest window: a short
+        // early rule can match at the end of a syllable even when a later long
+        // rule has more inputs than remain in the run.
+        const input_indices = (try window.inputSlice(rule.input_count)) orelse continue;
+        var backtrack_available = true;
+        for (0..backtrack_count) |backtrack_i| {
+            backtrack_classes[backtrack_i] = (try window.backtrackClassAt(backtrack_i)) orelse {
+                backtrack_available = false;
+                break;
+            };
+        }
+        if (!backtrack_available) continue;
+        var input_available = true;
+        for (1..rule.input_count) |input_i| {
+            input_classes[input_i - 1] = (try window.inputClassAt(input_i)) orelse {
+                input_available = false;
+                break;
+            };
+        }
+        if (!input_available) continue;
+        if (!try window.ensureLookaheadCount(rule.input_count, rule.lookahead_count)) continue;
+        var hash = class_context.sequenceHash(backtrack_classes[0..backtrack_count]);
+        const extra_input_count = @as(usize, rule.input_count) - 1;
+        for (input_classes[0..extra_input_count]) |class| {
+            hash = class_context.sequenceHashAppend(hash, class);
+        }
+        for (0..rule.lookahead_count) |lookahead_i| {
+            const class = (try window.lookaheadClassAt(rule.input_count, lookahead_i)) orelse {
+                hash = 0;
+                break;
+            };
+            lookahead_classes[lookahead_i] = class;
+            hash = class_context.sequenceHashAppend(hash, class);
+        }
+        if (rule.hash != hash) continue;
+        const expected_backtrack = subtable.classes[rule.classes_start .. rule.classes_start + backtrack_count];
+        if (!std.mem.eql(u16, expected_backtrack, backtrack_classes[0..backtrack_count])) continue;
+        const input_start = rule.classes_start + backtrack_count;
+        const expected_input = subtable.classes[input_start .. input_start + extra_input_count];
+        if (!std.mem.eql(u16, expected_input, input_classes[0..extra_input_count])) continue;
+        const lookahead_start = input_start + extra_input_count;
+        const expected_lookahead = subtable.classes[lookahead_start .. lookahead_start + rule.lookahead_count];
+        if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
+
+        const glyph_count_before = glyphs.items.len;
+        _ = try applyNestedGlyphLookup(table, glyphs, input_indices[0], rule.lookup_index, allocator, options);
+        const original_next = input_indices[rule.input_count - 1] + 1;
+        return .{
+            .matched = true,
+            .next_pos = contextNextPosAfterMutation(original_next, pos, glyph_count_before, glyphs.items.len),
+        };
+    }
+    return .{};
+}
+
 fn applyReverseChainingSingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
     const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
     return try applyParsedReverseChainingSingleSubstitutionAt(table, parsed, glyphs, pos, lookup_flag, options);
@@ -8115,7 +8202,114 @@ test "GSUB accelerated chaining class matching keeps shorter rules at run end" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3 }, glyphs.items);
 }
 
-test "GSUB direct and extension chaining class builders share the conservative subset" {
+test "GSUB accelerated chaining class matching preserves backtrack order and boundaries" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 96;
+
+    // Nested lookup 0 replaces the current input glyph. The contextual table
+    // itself is represented by the accelerator fixture below.
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10);
+    writeU16Test(&bytes, 10, 1);
+    writeU16Test(&bytes, 12, 4);
+    writeSingleDeltaLookup(&bytes, 14, 1, 10);
+
+    const coverage = 40;
+    writeCoverage1(&bytes, coverage, 1);
+    const backtrack_class_def = 46;
+    writeU16Test(&bytes, backtrack_class_def + 0, 1);
+    writeU16Test(&bytes, backtrack_class_def + 2, 4);
+    writeU16Test(&bytes, backtrack_class_def + 4, 2);
+    writeU16Test(&bytes, backtrack_class_def + 6, 6); // Far glyph 4.
+    writeU16Test(&bytes, backtrack_class_def + 8, 2); // Near glyph 5.
+    const input_class_def = 58;
+    writeClassDef1(&bytes, input_class_def, 1, 3);
+    const lookahead_class_def = 66;
+    writeClassDef1(&bytes, lookahead_class_def, 3, 7);
+
+    // OpenType stores backtrack classes nearest to the input first. Keeping
+    // that order in the sidecar avoids reversing either the font data or the
+    // lazily collected backtrack window.
+    const classes = [_]u16{ 2, 6, 7 };
+    const rules = [_]class_context.Rule{.{
+        .class_set = 3,
+        .input_count = 1,
+        .lookahead_count = 1,
+        .hash = class_context.sequenceHash(&classes),
+        .order = 0,
+        .lookup_index = 0,
+        .classes_start = 0,
+        .records_offset = 2,
+    }};
+    const groups = [_]class_context.RuleGroup{.{
+        .class_set = 3,
+        .start = 0,
+        .len = rules.len,
+        .max_input_count = 1,
+        .max_lookahead_count = 1,
+    }};
+    const subtable = ChainingClassSubtableAccelerator{
+        .coverage_offset = coverage,
+        .backtrack_class_def = backtrack_class_def,
+        .input_class_def = input_class_def,
+        .lookahead_class_def = lookahead_class_def,
+        .rules = &rules,
+        .classes = &classes,
+        .groups = &groups,
+    };
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    // Marks 9 and 8 are transparent in the backtrack and lookahead regions.
+    try glyphs.appendSlice(allocator, &.{ 4, 9, 5, 1, 8, 3 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2, 3, 4, 5 });
+    var glyph_classes = [_]u16{0} ** 10;
+    glyph_classes[8] = 3;
+    glyph_classes[9] = 3;
+
+    // The farther backtrack glyph belongs to another source syllable. Matching
+    // must stop there rather than leaking context across the shaping boundary.
+    const split_syllables = [_]u8{ 1, 1, 2, 2, 2, 2 };
+    var result = try applyAcceleratedChainingClassSubstitutionWithBacktrackAt(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        subtable,
+        &glyphs,
+        3,
+        allocator,
+        0x0008,
+        .{
+            .glyph_classes = &glyph_classes,
+            .glyph_source_indices = &sources,
+            .source_syllables = &split_syllables,
+            .match_source_syllable = true,
+        },
+    );
+    try std.testing.expect(!result.matched);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 4, 9, 5, 1, 8, 3 }, glyphs.items);
+
+    const one_syllable = [_]u8{2} ** 6;
+    result = try applyAcceleratedChainingClassSubstitutionWithBacktrackAt(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        subtable,
+        &glyphs,
+        3,
+        allocator,
+        0x0008,
+        .{
+            .glyph_classes = &glyph_classes,
+            .glyph_source_indices = &sources,
+            .source_syllables = &one_syllable,
+            .match_source_syllable = true,
+        },
+    );
+    try std.testing.expect(result.matched);
+    try std.testing.expectEqual(@as(usize, 4), result.next_pos);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 4, 9, 5, 11, 8, 3 }, glyphs.items);
+}
+
+test "GSUB direct and extension chaining class builders preserve backtrack rules" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 128;
 
@@ -8134,7 +8328,7 @@ test "GSUB direct and extension chaining class builders share the conservative s
     const chain = 32;
     writeU16Test(&bytes, chain + 0, 2);
     writeU16Test(&bytes, chain + 2, 44);
-    writeU16Test(&bytes, chain + 4, 0); // Optional empty backtrack ClassDef.
+    writeU16Test(&bytes, chain + 4, 66);
     writeU16Test(&bytes, chain + 6, 50);
     writeU16Test(&bytes, chain + 8, 58);
     writeU16Test(&bytes, chain + 10, 2);
@@ -8144,16 +8338,18 @@ test "GSUB direct and extension chaining class builders share the conservative s
     writeU16Test(&bytes, set + 0, 1);
     writeU16Test(&bytes, set + 2, 4);
     const rule = set + 4;
-    writeU16Test(&bytes, rule + 0, 0); // No backtrack.
-    writeU16Test(&bytes, rule + 2, 1); // One input (the class-set glyph).
-    writeU16Test(&bytes, rule + 4, 1); // One lookahead.
-    writeU16Test(&bytes, rule + 6, 1); // Lookahead class 1.
-    writeU16Test(&bytes, rule + 8, 1); // One nested record.
-    writeU16Test(&bytes, rule + 10, 0); // SequenceIndex 0.
-    writeU16Test(&bytes, rule + 12, 0); // Lookup index.
+    writeU16Test(&bytes, rule + 0, 1); // One backtrack.
+    writeU16Test(&bytes, rule + 2, 2); // Backtrack class 2.
+    writeU16Test(&bytes, rule + 4, 1); // One input (the class-set glyph).
+    writeU16Test(&bytes, rule + 6, 1); // One lookahead.
+    writeU16Test(&bytes, rule + 8, 3); // Lookahead class 3.
+    writeU16Test(&bytes, rule + 10, 1); // One nested record.
+    writeU16Test(&bytes, rule + 12, 0); // SequenceIndex 0.
+    writeU16Test(&bytes, rule + 14, 0); // Lookup index.
     writeCoverage1(&bytes, chain + 44, 5);
     writeClassDef1(&bytes, chain + 50, 5, 1);
-    writeClassDef1(&bytes, chain + 58, 7, 1);
+    writeClassDef1(&bytes, chain + 58, 7, 3);
+    writeClassDef1(&bytes, chain + 66, 4, 2);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
     const direct = try buildDirectChainingClassSubtableAccelerators(table, 0, 1, allocator);
@@ -8165,11 +8361,13 @@ test "GSUB direct and extension chaining class builders share the conservative s
     try std.testing.expectEqualSlices(class_context.Rule, direct[0].rules, extension[0].rules);
     try std.testing.expectEqualSlices(u16, direct[0].classes, extension[0].classes);
     try std.testing.expectEqualSlices(class_context.RuleGroup, direct[0].groups, extension[0].groups);
+    try std.testing.expectEqual(@as(usize, chain + 66), direct[0].backtrack_class_def);
+    try std.testing.expectEqual(@as(u16, 1), chainingClassRuleBacktrackCount(direct[0].rules[0]));
+    try std.testing.expectEqualSlices(u16, &.{ 2, 3 }, direct[0].classes);
 
-    // A backtrack class falls outside this accelerator's deliberately narrow
-    // matcher and must retain the generic direct path.
-    writeU16Test(&bytes, rule + 0, 1);
-    writeU16Test(&bytes, rule + 2, 1);
+    // Multiple nested records remain outside the deliberately narrow
+    // accelerator and must retain the generic direct path.
+    writeU16Test(&bytes, rule + 10, 2);
     const unsupported = try buildDirectChainingClassSubtableAccelerators(table, 0, 1, allocator);
     defer deinitChainingClassSubtableAccelerators(allocator, unsupported);
     try std.testing.expectEqual(@as(usize, 0), unsupported.len);

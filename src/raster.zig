@@ -48,6 +48,27 @@ pub const Rgba = struct {
     a: u8,
 };
 
+const max_color_glyph_traversal_depth = 64;
+
+const ColorGlyphTraversalGuard = struct {
+    stack: [max_color_glyph_traversal_depth]glyph_mod.GlyphId = undefined,
+    depth: usize = 0,
+
+    fn enter(self: *ColorGlyphTraversalGuard, glyph_id: glyph_mod.GlyphId) !void {
+        for (self.stack[0..self.depth]) |active| {
+            if (active == glyph_id) return error.BadSfnt;
+        }
+        if (self.depth == self.stack.len) return error.BadSfnt;
+        self.stack[self.depth] = glyph_id;
+        self.depth += 1;
+    }
+
+    fn leave(self: *ColorGlyphTraversalGuard) void {
+        std.debug.assert(self.depth > 0);
+        self.depth -= 1;
+    }
+};
+
 const SvgPathPaint = struct {
     paint: SvgPaintStyle,
     transform: SvgTransform = .identity,
@@ -956,6 +977,9 @@ pub const Rasterizer = struct {
     }
 
     fn renderColorPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, paint: font_mod.ColorPaint, fallback_glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
+        var guard = ColorGlyphTraversalGuard{};
+        try guard.enter(fallback_glyph_id);
+        defer guard.leave();
         return try self.renderColorPaintTransformed(
             target,
             font,
@@ -967,6 +991,7 @@ pub const Rasterizer = struct {
             palette_index,
             normalized_variation_coords,
             .identity,
+            &guard,
         );
     }
 
@@ -982,6 +1007,7 @@ pub const Rasterizer = struct {
         palette_index: u16,
         normalized_variation_coords: []const f32,
         transform: font_mod.ColorAffine,
+        guard: *ColorGlyphTraversalGuard,
     ) !void {
         switch (paint) {
             .solid => |solid| try self.renderSolidPaint(target, font, fallback_glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
@@ -1001,7 +1027,7 @@ pub const Rasterizer = struct {
                 // PaintGlyph establishes its clip before traversing the child.
                 // A terminal child therefore paints an infinite brush into this
                 // temporary layer; only the clip mask below gives it geometry.
-                try self.renderColorPaintTransformed(&clipped, font, child, null, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform);
+                try self.renderColorPaintTransformed(&clipped, font, child, null, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
 
                 var outline = try self.glyphOutlineForRenderAtCoords(font, clip_glyph.glyph_id, normalized_variation_coords);
                 defer outline.deinit();
@@ -1017,7 +1043,7 @@ pub const Rasterizer = struct {
                         layers.first_layer_index + @as(u32, @intCast(offset)),
                         normalized_variation_coords,
                     )) orelse continue;
-                    try self.renderColorPaintTransformed(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform);
+                    try self.renderColorPaintTransformed(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
                 }
             },
             .transform => |transform_paint| {
@@ -1025,7 +1051,22 @@ pub const Rasterizer = struct {
                 // A nested transform is applied in the child's local space
                 // before the already-active parent transform.
                 const child_transform = font_mod.ColorAffine.mul(transform, transform_paint.affine);
-                try self.renderColorPaintTransformed(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, child_transform);
+                try self.renderColorPaintTransformed(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, child_transform, guard);
+            },
+            .colr_glyph => |colr_glyph| {
+                try guard.enter(colr_glyph.glyph_id);
+                defer guard.leave();
+                const child = (try font.colorGlyphPaintAtCoords(colr_glyph.glyph_id, normalized_variation_coords)) orelse return error.BadSfnt;
+
+                if (try font.colorClipBoxAtCoords(colr_glyph.glyph_id, normalized_variation_coords)) |clip| {
+                    var clipped = try ColorRenderTarget.init(self.allocator, target.width, target.height);
+                    defer clipped.deinit();
+                    try self.renderColorPaintTransformed(&clipped, font, child, colr_glyph.glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
+                    applyColrClipBoxTransformed(&clipped, clip, transform, font.units_per_em, x, baseline_y, font_size);
+                    blendColorTarget(target, &clipped);
+                } else {
+                    try self.renderColorPaintTransformed(target, font, child, colr_glyph.glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
+                }
             },
         }
     }
@@ -1356,6 +1397,40 @@ fn applyColrClipBox(
         const px = @as(f32, @floatFromInt(index % target.width)) + 0.5;
         const py = @as(f32, @floatFromInt(index / target.width)) + 0.5;
         if (px < min_x or px >= max_x or py < min_y or py >= max_y) {
+            pixel.* = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        }
+    }
+}
+
+fn applyColrClipBoxTransformed(
+    target: *ColorRenderTarget,
+    clip: font_mod.ColorClipBox,
+    transform: font_mod.ColorAffine,
+    units_per_em: u16,
+    x: f32,
+    baseline_y: f32,
+    font_size: f32,
+) void {
+    if (std.meta.eql(transform, font_mod.ColorAffine.identity)) {
+        return applyColrClipBox(target, clip, units_per_em, x, baseline_y, font_size);
+    }
+    if (units_per_em == 0) {
+        @memset(target.pixels, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+        return;
+    }
+    const inverse = transform.inverse() orelse {
+        @memset(target.pixels, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+        return;
+    };
+    const scale = font_size / @as(f32, @floatFromInt(units_per_em));
+    for (target.pixels, 0..) |*pixel, index| {
+        const px = @as(f32, @floatFromInt(index % target.width)) + 0.5;
+        const py = @as(f32, @floatFromInt(index / target.width)) + 0.5;
+        const sample = inverse.apply(.{
+            .x = (px - x) / scale,
+            .y = (baseline_y - py) / scale,
+        });
+        if (sample.x < clip.x_min or sample.x >= clip.x_max or sample.y < clip.y_min or sample.y >= clip.y_max) {
             pixel.* = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
         }
     }

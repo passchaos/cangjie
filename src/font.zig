@@ -587,6 +587,7 @@ pub const ColorPaint = union(enum) {
     sweep_gradient: SweepGradient,
     glyph: Glyph,
     clip_glyph: ClipGlyph,
+    colr_glyph: ColrGlyph,
     layers: Layers,
     transform: TransformPaint,
 
@@ -603,6 +604,10 @@ pub const ColorPaint = union(enum) {
     pub const ClipGlyph = struct {
         glyph_id: glyph_mod.GlyphId,
         child: ChildRef,
+    };
+
+    pub const ColrGlyph = struct {
+        glyph_id: glyph_mod.GlyphId,
     };
 
     pub const Layers = struct {
@@ -3566,6 +3571,37 @@ pub const Font = struct {
         defer graph_guard.leave();
         try graph_guard.claimPaintRecord(self.data, colr, child.offset, info);
         return try readColorPaint(self, child.offset, .{
+            .normalized_coords = normalized_coords,
+            .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
+                null
+            else
+                try readColrVariationContext(self.data, colr),
+        });
+    }
+
+    /// Resolve the root paint of a COLR v1 base glyph referenced by
+    /// PaintColrGlyph. Unlike `colorPaintAtCoords`, this assumes the outer
+    /// traversal has already established its graph validation contract.
+    pub fn colorGlyphPaintAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?ColorPaint {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const colr = self.colr orelse return null;
+        try validateSfntTableChecksum(self.data, colr);
+        if (colr.length < 34 or try bin.readU16At(self.data, colr.offset) != 1) return null;
+        try validateColrGlyphBounds(self.data, colr, self.glyph_count);
+        try validateColrPaletteBounds(self.data, colr, self.cpal);
+        if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
+        }
+
+        const base_glyph_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 14));
+        if (base_glyph_list_offset == 0) return null;
+        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
+        const list_start = colr.offset + base_glyph_list_offset;
+        const record_count: usize = @intCast(try bin.readU32At(self.data, list_start));
+        const set = ColrV1BaseGlyphSet{ .list_start = list_start, .record_count = record_count };
+        const paint_offset = (try set.paintOffsetForGlyph(self.data, colr, glyph_id)) orelse return null;
+        return try readColorPaint(self, paint_offset, .{
             .normalized_coords = normalized_coords,
             .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
                 null
@@ -12711,6 +12747,7 @@ fn readColorPaint(font: *const Font, offset: usize, context: ColorPaintReadConte
                 } },
             };
         },
+        11 => .{ .colr_glyph = .{ .glyph_id = try bin.readU16At(data, offset + 1) } },
         4, 5 => .{ .linear_gradient = try readColorLinearGradient(font, offset, context) },
         6, 7 => .{ .radial_gradient = try readColorRadialGradient(font, offset, context) },
         8, 9 => .{ .sweep_gradient = try readColorSweepGradient(font, offset, context) },

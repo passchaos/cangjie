@@ -216,6 +216,10 @@ pub fn buildColorV1IndirectPaintColrGlyphCycleTtf(allocator: std.mem.Allocator) 
     return buildSfnt(allocator, 0x00010000, try colorV1IndirectPaintColrGlyphCycleTtfTables(allocator));
 }
 
+pub fn buildColorV1PaintColrGlyphTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1PaintColrGlyphTtfTables(allocator));
+}
+
 pub fn buildCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cbdtPngTtfTables(allocator));
 }
@@ -1346,6 +1350,13 @@ fn colorV1IndirectPaintColrGlyphCycleTtfTables(allocator: std.mem.Allocator) ![]
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
     tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn colorV1PaintColrGlyphTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try colorV1GlyphTtfTables(allocator);
+    allocator.free(tables[0].data);
+    tables[0].data = try colrV1PaintColrGlyphTable(allocator);
     return tables;
 }
 
@@ -3996,6 +4007,43 @@ fn colrV1IndirectPaintColrGlyphCycleTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 51, 2);
     bytes[53] = 11;
     writeU16(bytes, 54, 1);
+    return bytes;
+}
+
+fn colrV1PaintColrGlyphTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 90);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34); // BaseGlyphList.
+    writeU32(bytes, 22, 64); // ClipList.
+
+    writeU32(bytes, 34, 2);
+    writeU16(bytes, 38, 0);
+    writeU32(bytes, 40, 16); // PaintColrGlyph at byte 50.
+    writeU16(bytes, 44, 1);
+    writeU32(bytes, 46, 19); // PaintGlyph at byte 53.
+
+    bytes[50] = 11;
+    writeU16(bytes, 51, 1);
+    bytes[53] = 10;
+    writeU24(bytes, 54, 6);
+    writeU16(bytes, 57, 1);
+    bytes[59] = 2;
+    writeU16(bytes, 60, 0);
+    writeF2Dot14(bytes, 62, 1);
+
+    // The referenced glyph owns a clip that removes the lower part of the
+    // shared paint. This proves PaintColrGlyph applies the target glyph's clip.
+    bytes[64] = 1;
+    writeU32(bytes, 65, 1);
+    writeU16(bytes, 69, 1);
+    writeU16(bytes, 71, 1);
+    writeU24(bytes, 73, 12);
+    bytes[76] = 1;
+    writeI16(bytes, 77, 0);
+    writeI16(bytes, 79, 350);
+    writeI16(bytes, 81, 700);
+    writeI16(bytes, 83, 700);
     return bytes;
 }
 

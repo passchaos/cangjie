@@ -130,6 +130,7 @@ pub const ColorGlyphPaint = union(enum) {
     colr_v0_layers: struct { layer_start: usize, layer_len: usize },
     colr_v1_solid: font_mod.ColorPaint.Solid,
     colr_v1_glyph: font_mod.ColorPaint.Glyph,
+    colr_v1_colr_glyph: font_mod.ColorPaint.ColrGlyph,
     colr_v1_layers: font_mod.ColorPaint.Layers,
     colr_v1_linear_gradient: font_mod.ColorPaint.LinearGradient,
     colr_v1_radial_gradient: font_mod.ColorPaint.RadialGradient,
@@ -440,7 +441,7 @@ fn colorPaintLine(paint: font_mod.ColorPaint) ?font_mod.ColorPaint.ColorLine {
             .sweep_gradient => |gradient| gradient.color_line,
             .solid => null,
         },
-        .solid, .clip_glyph, .layers, .transform => null,
+        .solid, .clip_glyph, .colr_glyph, .layers, .transform => null,
     };
 }
 
@@ -497,6 +498,7 @@ fn colorGlyphPaint(layer_start: usize, layer_len: usize, svg_document: ?[]const 
             .solid => |solid| .{ .colr_v1_solid = solid },
             .glyph => |glyph| .{ .colr_v1_glyph = glyph },
             .clip_glyph => .none,
+            .colr_glyph => |glyph| .{ .colr_v1_colr_glyph = glyph },
             .layers => |layers| .{ .colr_v1_layers = layers },
             .linear_gradient => |gradient| .{ .colr_v1_linear_gradient = gradient },
             .radial_gradient => |gradient| .{ .colr_v1_radial_gradient = gradient },

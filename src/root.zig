@@ -4943,6 +4943,71 @@ test "accepts fonts containing isolated COLR v1 PaintColrGlyph cycles" {
 
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
+
+    const paint = (try font.colorPaint(1)).?;
+    try std.testing.expectEqual(@as(GlyphId, 2), paint.colr_glyph.glyph_id);
+
+    var target = try ColorRenderTarget.init(allocator, 32, 32);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try std.testing.expectError(error.BadSfnt, rasterizer.renderColorGlyph(&target, &font, 1, 20, 4, 24, 0));
+}
+
+test "COLR v1 PaintColrGlyph traverses referenced paints and clips" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildColorV1PaintColrGlyphTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const paint = (try font.colorPaint(0)).?;
+    try std.testing.expectEqual(@as(GlyphId, 1), paint.colr_glyph.glyph_id);
+
+    var referenced = try ColorRenderTarget.init(allocator, 48, 48);
+    defer referenced.deinit();
+    var caller = try ColorRenderTarget.init(allocator, 48, 48);
+    defer caller.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&referenced, &font, 1, 24, 8, 32, 0);
+    try rasterizer.renderColorGlyph(&caller, &font, 0, 24, 8, 32, 0);
+
+    try std.testing.expectEqualSlices(Rgba, referenced.pixels, caller.pixels);
+    // The referenced glyph's ClipBox starts at y=350 font units, so the lower
+    // triangle tip is removed in both direct and PaintColrGlyph traversal.
+    try std.testing.expectEqual(@as(u8, 0), caller.at(16, 31).a);
+}
+
+test "COLR v1 PaintColrGlyph matches live Skrifa referenced clip traversal" {
+    const allocator = std.testing.allocator;
+    const path = "/home/passchaos/Work/fontations/font-test-data/test_data/ttf/test_glyphs-glyf_colr_1_variable.ttf";
+    const bytes = std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(4 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const paint = (try font.colorPaint(166)).?;
+    try std.testing.expectEqual(@as(GlyphId, 95), paint.colr_glyph.glyph_id);
+    const referenced_clip = (try font.colorClipBox(95)).?;
+    try std.testing.expectEqual(@as(f32, 0), referenced_clip.x_min);
+    try std.testing.expectEqual(@as(f32, 0), referenced_clip.y_min);
+    try std.testing.expectEqual(@as(f32, 1000), referenced_clip.x_max);
+    try std.testing.expectEqual(@as(f32, 1000), referenced_clip.y_max);
+
+    var referenced = try ColorRenderTarget.init(allocator, 256, 256);
+    defer referenced.deinit();
+    var caller = try ColorRenderTarget.init(allocator, 256, 256);
+    defer caller.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&referenced, &font, 95, 200, 20, 220, 0);
+    try rasterizer.renderColorGlyph(&caller, &font, 166, 200, 20, 220, 0);
+    // Skrifa traversal first applies glyph 166's inset clip, then glyph 95's
+    // own 0..1000 clip around the referenced radial paint.
+    try std.testing.expect(colorRenderTargetPixelDifference(&referenced, &caller) > 0);
 }
 
 test "reads OpenType SVG glyph document metadata" {

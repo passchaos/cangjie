@@ -2140,12 +2140,7 @@ pub fn paragraphDirection(text: []const u8) error{InvalidUtf8}!BidiClass {
 pub fn itemizeBidiRuns(allocator: std.mem.Allocator, text: []const u8, base_direction: BidiClass) ![]BidiRun {
     var runs = std.ArrayList(BidiRun).empty;
     errdefer runs.deinit(allocator);
-
-    var current_direction: ?BidiClass = null;
-    var run_start: usize = 0;
-    var run_end: usize = 0;
-    var neutral_start: ?usize = null;
-    var neutral_end: usize = 0;
+    var builder = BidiRunBuilder{};
 
     // Neutral spans are attached to the surrounding run when possible. If text
     // starts with neutrals, use the paragraph base direction as their run.
@@ -2157,32 +2152,52 @@ pub fn itemizeBidiRuns(allocator: std.mem.Allocator, text: []const u8, base_dire
         const next_index = decoded.next;
         cursor = next_index;
         const bidi_class = bidiClassForCodepoint(codepoint);
+        try builder.add(allocator, &runs, base_direction, cluster, next_index, bidi_class);
+    }
+    try builder.finish(allocator, &runs);
+    return try runs.toOwnedSlice(allocator);
+}
+
+const BidiRunBuilder = struct {
+    current_direction: ?BidiClass = null,
+    run_start: usize = 0,
+    run_end: usize = 0,
+    neutral_start: ?usize = null,
+
+    fn add(
+        self: *BidiRunBuilder,
+        allocator: std.mem.Allocator,
+        runs: *std.ArrayList(BidiRun),
+        base_direction: BidiClass,
+        cluster: usize,
+        next_index: usize,
+        bidi_class: BidiClass,
+    ) std.mem.Allocator.Error!void {
         if (bidi_class == .neutral) {
-            if (neutral_start == null) neutral_start = cluster;
-            neutral_end = next_index;
-            if (current_direction == null) {
-                current_direction = baseDirectionOrLtr(base_direction);
-                run_start = cluster;
+            if (self.neutral_start == null) self.neutral_start = cluster;
+            if (self.current_direction == null) {
+                self.current_direction = baseDirectionOrLtr(base_direction);
+                self.run_start = cluster;
             }
-            run_end = next_index;
-            continue;
+            self.run_end = next_index;
+            return;
         }
 
-        if (current_direction == null) {
-            current_direction = bidi_class;
-            run_start = neutral_start orelse cluster;
-            run_end = next_index;
-            neutral_start = null;
-            continue;
+        if (self.current_direction == null) {
+            self.current_direction = bidi_class;
+            self.run_start = self.neutral_start orelse cluster;
+            self.run_end = next_index;
+            self.neutral_start = null;
+            return;
         }
 
-        if (current_direction.? == bidi_class) {
-            run_end = next_index;
-            neutral_start = null;
-            continue;
+        if (self.current_direction.? == bidi_class) {
+            self.run_end = next_index;
+            self.neutral_start = null;
+            return;
         }
 
-        if (current_direction.? == .rtl and bidi_class == .number) {
+        if (self.current_direction.? == .rtl and bidi_class == .number) {
             // In an RTL paragraph, whitespace between RTL text and a following
             // number remains visually between those two runs.  If it is moved
             // to the beginning of the number run, left-to-right materialization
@@ -2192,52 +2207,52 @@ pub fn itemizeBidiRuns(allocator: std.mem.Allocator, text: []const u8, base_dire
             // reversing that run places the space after the digits instead.
             const split_at = cluster;
             try runs.append(allocator, .{
-                .direction = current_direction.?,
-                .byte_start = run_start,
-                .byte_len = split_at - run_start,
+                .direction = self.current_direction.?,
+                .byte_start = self.run_start,
+                .byte_len = split_at - self.run_start,
             });
-            current_direction = .number;
-            run_start = cluster;
-            run_end = next_index;
-            neutral_start = null;
-            continue;
+            self.current_direction = .number;
+            self.run_start = cluster;
+            self.run_end = next_index;
+            self.neutral_start = null;
+            return;
         }
 
-        if (current_direction.? == .number and bidi_class == .rtl) {
-            const split_at = neutral_start orelse cluster;
+        if (self.current_direction.? == .number and bidi_class == .rtl) {
+            const split_at = self.neutral_start orelse cluster;
             try runs.append(allocator, .{
-                .direction = current_direction.?,
-                .byte_start = run_start,
-                .byte_len = split_at - run_start,
+                .direction = self.current_direction.?,
+                .byte_start = self.run_start,
+                .byte_len = split_at - self.run_start,
             });
-            current_direction = .rtl;
-            run_start = neutral_start orelse cluster;
-            run_end = next_index;
-            neutral_start = null;
-            continue;
+            self.current_direction = .rtl;
+            self.run_start = self.neutral_start orelse cluster;
+            self.run_end = next_index;
+            self.neutral_start = null;
+            return;
         }
 
-        const split_at = neutral_start orelse cluster;
+        const split_at = self.neutral_start orelse cluster;
         try runs.append(allocator, .{
-            .direction = current_direction.?,
-            .byte_start = run_start,
-            .byte_len = split_at - run_start,
+            .direction = self.current_direction.?,
+            .byte_start = self.run_start,
+            .byte_len = split_at - self.run_start,
         });
-        current_direction = bidi_class;
-        run_start = neutral_start orelse cluster;
-        run_end = next_index;
-        neutral_start = null;
+        self.current_direction = bidi_class;
+        self.run_start = self.neutral_start orelse cluster;
+        self.run_end = next_index;
+        self.neutral_start = null;
     }
 
-    if (current_direction) |direction| {
+    fn finish(self: BidiRunBuilder, allocator: std.mem.Allocator, runs: *std.ArrayList(BidiRun)) std.mem.Allocator.Error!void {
+        const direction = self.current_direction orelse return;
         try runs.append(allocator, .{
             .direction = direction,
-            .byte_start = run_start,
-            .byte_len = run_end - run_start,
+            .byte_start = self.run_start,
+            .byte_len = self.run_end - self.run_start,
         });
     }
-    return try runs.toOwnedSlice(allocator);
-}
+};
 
 pub fn visualOrderBidiRuns(allocator: std.mem.Allocator, runs: []const BidiRun, base_direction: BidiClass) ![]usize {
     // This is a deliberately small bidi reordering model: paragraph RTL reverses
@@ -2293,7 +2308,7 @@ pub fn buildBidiMap(allocator: std.mem.Allocator, text: []const u8, base_directi
     // editor code move between byte offsets and rendered caret positions.
     const logical = try collectLogicalBidiItems(allocator, text);
     defer allocator.free(logical);
-    const runs = try itemizeBidiRuns(allocator, text, base_direction);
+    const runs = try bidiRunsForLogicalItems(allocator, logical, base_direction);
     defer allocator.free(runs);
     const order = try visualOrderBidiRuns(allocator, runs, base_direction);
     defer allocator.free(order);
@@ -2321,6 +2336,47 @@ pub fn buildBidiMap(allocator: std.mem.Allocator, text: []const u8, base_directi
         .items = try items.toOwnedSlice(allocator),
         .logical_to_visual = logical_to_visual,
     };
+}
+
+fn bidiRunsForLogicalItems(allocator: std.mem.Allocator, logical: []const BidiMapItem, base_direction: BidiClass) ![]BidiRun {
+    var runs = std.ArrayList(BidiRun).empty;
+    errdefer runs.deinit(allocator);
+    var builder = BidiRunBuilder{};
+    for (logical) |item| {
+        try builder.add(
+            allocator,
+            &runs,
+            base_direction,
+            item.byte_start,
+            item.byte_start + item.byte_len,
+            item.direction,
+        );
+    }
+    try builder.finish(allocator, &runs);
+    return try runs.toOwnedSlice(allocator);
+}
+
+test "bidi map reuses logical item classes without changing run boundaries" {
+    const allocator = std.testing.allocator;
+    const samples = [_]struct {
+        text: []const u8,
+        base_direction: BidiClass,
+    }{
+        .{ .text = "abc בגד 12 xyz", .base_direction = .ltr },
+        .{ .text = "ابت 12 xyz", .base_direction = .rtl },
+        .{ .text = "  ב", .base_direction = .rtl },
+        .{ .text = "א 12ב", .base_direction = .rtl },
+    };
+
+    for (samples) |sample| {
+        const logical = try collectLogicalBidiItems(allocator, sample.text);
+        defer allocator.free(logical);
+        const expected = try itemizeBidiRuns(allocator, sample.text, sample.base_direction);
+        defer allocator.free(expected);
+        const actual = try bidiRunsForLogicalItems(allocator, logical, sample.base_direction);
+        defer allocator.free(actual);
+        try std.testing.expectEqualSlices(BidiRun, expected, actual);
+    }
 }
 
 pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) ![]GraphemeCluster {

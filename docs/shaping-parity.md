@@ -430,6 +430,19 @@ Current local snapshot after the Nastaliq parity work:
   same-session HarfBuzz median was `796.355 ns/glyph`, leaving Cangjie about
   `11.4%` behind on this Amiri workload; the broad performance goal is still
   open.
+- `buildBidiMap` now feeds its already-decoded and already-classified logical
+  items into the same `BidiRunBuilder` used by public run itemization. It
+  previously decoded the UTF-8 and ran `bidiClassForCodepoint` /
+  `scriptForCodepoint` a second time solely to rebuild run boundaries. Direct
+  mixed LTR/RTL/number/neutral tests prove logical-item runs match the public
+  text itemizer. A fixed-CPU-30 A/B/B/A comparison with 31-sample medians
+  reduced Amiri `fa-thelittleprince` from `889.111` to
+  `881.534 ns/glyph`, about `0.85%`, and Roboto `en-words` from `437.294` to
+  `434.705 ns/glyph`, about `0.59%`. Amiri `fa-words` was effectively flat
+  (`1854.735` versus `1856.595 ns/glyph`, `+0.10%`) because each short line
+  amortizes little duplicate classification. Profiled bidi time fell from
+  about `9.24 ms` to `8.72 ms`, about `5.6%`, while output checksums remained
+  unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

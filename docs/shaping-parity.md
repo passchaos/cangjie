@@ -808,6 +808,21 @@ Current local snapshot after the Nastaliq parity work:
   Cangjie lead of about `1.54%`, and `168.077` versus `171.115 ns/glyph` on
   CPU 30, about `1.78%`. Full SourceSerifVariable, Roboto, and Amiri HarfBuzz
   parity plus SourceSerifVariable HarfRust parity remained unchanged.
+- GSUB accelerators now retain the validated FeatureList as immutable
+  `(tag, lookup-slice)` records. Explicit script-shaper stages can borrow a
+  canonical unique record directly instead of rereading FeatureList and
+  allocating/sorting lookup indexes for every word; duplicate feature tags,
+  non-canonical lookup order, unvalidated calls, detached LookupList-only
+  fixtures, and foreign table identities retain the original owned fallback.
+  Fixed-P-core CPU 8 A/B/B/A comparisons reduced NotoSansDevanagari
+  `hi-words` retired instructions by `10.15%`, branches by `7.59%`, and
+  cycles by `12.08%`; fixed E-core CPU 30 reproduced `10.16%` fewer
+  instructions and `11.19%` fewer cycles. Roboto and Amiri instructions
+  remained flat. The complete 10,000-line Devanagari corpus retained
+  HarfBuzz/HarfRust parity checksum `da5f74de3edfe093`, and all ten retained
+  USE fixtures continued to pass both references. Devanagari remains roughly
+  `2.6x` slower than HarfBuzz after this change, so contextual coverage/class
+  acceleration is still a major open performance task.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

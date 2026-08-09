@@ -112,6 +112,8 @@ pub const LookupAccelerator = struct {
     lookup_flag: u16 = 0,
     subtable_count: u16 = 0,
     mark_filtering_set: ?u16 = null,
+    /// Stored on entry zero because feature selection is table-wide.
+    feature_index: ?*const FeatureLookupIndex = null,
     /// Stored on entry zero for an O(1) table-level capability check. Shaping
     /// runs use this to avoid mutation-epoch bookkeeping for fonts whose GSUB
     /// has no lookup accelerator that consumes a shared run digest.
@@ -135,6 +137,22 @@ pub const LookupAccelerator = struct {
     reverse_chaining_subtables: []const ReverseChainingSingleSubtable = &.{},
     reverse_chaining_groups: []const ChainingSubtableGroup = &.{},
     reverse_chaining_exact_contexts: []const ReverseChainingContextEntry = &.{},
+};
+
+const FeatureLookupRecord = struct {
+    tag: u32,
+    lookup_start: usize,
+    lookup_len: usize,
+    borrowable: bool,
+};
+
+const FeatureLookupIndex = struct {
+    data_ptr: [*]const u8,
+    data_len: usize,
+    table_offset: usize,
+    table_length: usize,
+    records: []FeatureLookupRecord,
+    lookups: []u16,
 };
 
 const SingleSubstAccelerator = struct {
@@ -832,9 +850,58 @@ fn applySelectedFeatureFromPlan(
     options: LookupOptions,
     run_digest_cache: ?*RunDigestCache,
 ) (GsubError || std.mem.Allocator.Error)!void {
+    if (borrowedSelectedFeatureLookups(
+        table,
+        feature_tag,
+        feature_indices,
+        feature_count,
+        options,
+    )) |selected_lookups| {
+        try applyLookupIndices(table, lookup_list_offset, lookup_count, selected_lookups, glyphs, allocator, options, run_digest_cache);
+        return;
+    }
     const selected_lookups = try selectedFeatureLookupsFromPlanOwned(table, feature_tag, feature_indices, feature_list_offset, feature_count, lookup_count, allocator);
     defer allocator.free(selected_lookups);
     try applyLookupIndices(table, lookup_list_offset, lookup_count, selected_lookups, glyphs, allocator, options, run_digest_cache);
+}
+
+fn borrowedSelectedFeatureLookups(
+    table: Table,
+    feature_tag: u32,
+    feature_indices: []const FeatureSelection,
+    feature_count: u16,
+    options: LookupOptions,
+) ?[]const u16 {
+    if (!table.assume_validated or feature_indices.len == 0) return null;
+    const accelerators = options.lookup_accelerators orelse return null;
+    if (accelerators.len == 0) return null;
+    const feature_index = accelerators[0].feature_index orelse return null;
+    if (feature_index.data_ptr != table.data.ptr or
+        feature_index.data_len != table.data.len or
+        feature_index.table_offset != table.offset or
+        feature_index.table_length != table.length or
+        feature_index.records.len != feature_count)
+    {
+        return null;
+    }
+
+    var matched_record: ?FeatureLookupRecord = null;
+    for (feature_indices) |selection| {
+        if (selection.index >= feature_count) continue;
+        const record = feature_index.records[selection.index];
+        if (record.tag != feature_tag) continue;
+        // Multiple LangSys FeatureRecord indexes with one tag require the
+        // fallback's union/sort/dedup semantics.
+        if (matched_record != null or !record.borrowable) return null;
+        matched_record = record;
+    }
+    const record = matched_record orelse return &.{};
+    if (record.lookup_start > feature_index.lookups.len or
+        record.lookup_len > feature_index.lookups.len - record.lookup_start)
+    {
+        return null;
+    }
+    return feature_index.lookups[record.lookup_start .. record.lookup_start + record.lookup_len];
 }
 
 fn selectedFeatureLookupsFromPlanOwned(
@@ -940,7 +1007,29 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
     // lookups amortize one mutation-aware run digest across their independent
     // first-component coverages, which is common in Latin `ccmp`/`liga`.
     table_uses_run_digest_cache = table_uses_run_digest_cache or ligature_digest_lookup_count >= 2;
-    if (accelerators.len != 0) accelerators[0].table_uses_run_digest_cache = table_uses_run_digest_cache;
+    if (accelerators.len != 0) {
+        accelerators[0].table_uses_run_digest_cache = table_uses_run_digest_cache;
+        // Detached low-level GSUB fixtures may intentionally expose only a
+        // LookupList. Feature indexing is optional for those callers; a
+        // present non-zero FeatureList offset is still parsed strictly.
+        if (try readU16(table, 6) != 0) {
+            const feature_data = try buildFeatureLookupRecords(table, lookup_count, allocator);
+            errdefer {
+                allocator.free(feature_data.records);
+                allocator.free(feature_data.lookups);
+            }
+            const feature_index = try allocator.create(FeatureLookupIndex);
+            feature_index.* = .{
+                .data_ptr = table.data.ptr,
+                .data_len = table.data.len,
+                .table_offset = table.offset,
+                .table_length = table.length,
+                .records = feature_data.records,
+                .lookups = feature_data.lookups,
+            };
+            accelerators[0].feature_index = feature_index;
+        }
+    }
     return accelerators;
 }
 
@@ -949,8 +1038,62 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
     allocator.free(accelerators);
 }
 
+const FeatureLookupData = struct {
+    records: []FeatureLookupRecord,
+    lookups: []u16,
+};
+
+fn buildFeatureLookupRecords(table: Table, lookup_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!FeatureLookupData {
+    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
+    const feature_count = try readU16(table, feature_list_offset);
+    const records = try allocator.alloc(FeatureLookupRecord, feature_count);
+    errdefer allocator.free(records);
+    var lookups = std.ArrayList(u16).empty;
+    errdefer lookups.deinit(allocator);
+
+    for (records, 0..) |*record, feature_index| {
+        const feature_record = feature_list_offset + 2 + feature_index * 6;
+        const tag = try readU32(table, feature_record);
+        const feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
+        const lookup_len = try readU16(table, feature_offset + 2);
+        const lookup_start = lookups.items.len;
+        try lookups.ensureUnusedCapacity(allocator, lookup_len);
+        var previous_lookup: ?u16 = null;
+        var borrowable = true;
+        for (0..lookup_len) |lookup_i| {
+            const lookup_index = try readU16(table, feature_offset + 4 + lookup_i * 2);
+            if (lookup_index >= lookup_count) return error.BadGsub;
+            if (previous_lookup) |previous| {
+                // The owned fallback sorts and deduplicates arbitrary producer
+                // output. Borrow only when this record already has that exact
+                // canonical order.
+                if (lookup_index <= previous) borrowable = false;
+            }
+            previous_lookup = lookup_index;
+            lookups.appendAssumeCapacity(lookup_index);
+        }
+        record.* = .{
+            .tag = tag,
+            .lookup_start = lookup_start,
+            .lookup_len = lookup_len,
+            .borrowable = borrowable,
+        };
+    }
+    return .{
+        .records = records,
+        .lookups = try lookups.toOwnedSlice(allocator),
+    };
+}
+
 fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
-    for (accelerators) |accelerator| {
+    for (accelerators, 0..) |accelerator, accelerator_index| {
+        if (accelerator_index == 0) {
+            if (accelerator.feature_index) |feature_index| {
+                allocator.free(feature_index.records);
+                allocator.free(feature_index.lookups);
+                allocator.destroy(feature_index);
+            }
+        }
         allocator.free(accelerator.single_subst_entries);
         allocator.free(accelerator.multiple_subst.entries);
         allocator.free(accelerator.ligature_subst.sets);
@@ -8266,6 +8409,86 @@ test "GSUB lookup selection sorts and deduplicates repeated feature lookups" {
     defer lookups.deinit(allocator);
 
     try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, lookups.items);
+}
+
+test "GSUB feature lookup accelerator borrows canonical unique records only" {
+    const allocator = std.testing.allocator;
+
+    var unique_bytes = [_]u8{0} ** 72;
+    writeRequiredFeatureSelectionTable(&unique_bytes, unicode.tag("ordn"), unicode.tag("liga"));
+    const unique_table = Table{
+        .data = &unique_bytes,
+        .offset = 0,
+        .length = unique_bytes.len,
+        .assume_validated = true,
+    };
+    const unique_data = try buildFeatureLookupRecords(unique_table, 2, allocator);
+    defer allocator.free(unique_data.records);
+    defer allocator.free(unique_data.lookups);
+    const unique_index = FeatureLookupIndex{
+        .data_ptr = unique_bytes[0..].ptr,
+        .data_len = unique_bytes.len,
+        .table_offset = 0,
+        .table_length = unique_bytes.len,
+        .records = unique_data.records,
+        .lookups = unique_data.lookups,
+    };
+    const unique_accelerators = [_]LookupAccelerator{.{ .feature_index = &unique_index }};
+    const unique_features = [_]FeatureSelection{.{ .index = 0 }};
+    const borrowed = borrowedSelectedFeatureLookups(
+        unique_table,
+        unicode.tag("liga"),
+        &unique_features,
+        2,
+        .{ .lookup_accelerators = &unique_accelerators },
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u16, &.{1}, borrowed);
+
+    // Unvalidated or foreign table identity must retain parser ownership.
+    try std.testing.expect(borrowedSelectedFeatureLookups(
+        .{ .data = &unique_bytes, .offset = 0, .length = unique_bytes.len },
+        unicode.tag("liga"),
+        &unique_features,
+        2,
+        .{ .lookup_accelerators = &unique_accelerators },
+    ) == null);
+    var foreign_bytes = unique_bytes;
+    try std.testing.expect(borrowedSelectedFeatureLookups(
+        .{ .data = &foreign_bytes, .offset = 0, .length = foreign_bytes.len, .assume_validated = true },
+        unicode.tag("liga"),
+        &unique_features,
+        2,
+        .{ .lookup_accelerators = &unique_accelerators },
+    ) == null);
+
+    var repeated_bytes = [_]u8{0} ** 78;
+    writeRepeatedLookupSelectionTable(&repeated_bytes, unicode.tag("liga"));
+    const repeated_table = Table{
+        .data = &repeated_bytes,
+        .offset = 0,
+        .length = repeated_bytes.len,
+        .assume_validated = true,
+    };
+    const repeated_data = try buildFeatureLookupRecords(repeated_table, 4, allocator);
+    defer allocator.free(repeated_data.records);
+    defer allocator.free(repeated_data.lookups);
+    const repeated_index = FeatureLookupIndex{
+        .data_ptr = repeated_bytes[0..].ptr,
+        .data_len = repeated_bytes.len,
+        .table_offset = 0,
+        .table_length = repeated_bytes.len,
+        .records = repeated_data.records,
+        .lookups = repeated_data.lookups,
+    };
+    const repeated_accelerators = [_]LookupAccelerator{.{ .feature_index = &repeated_index }};
+    const repeated_features = [_]FeatureSelection{ .{ .index = 0 }, .{ .index = 1 } };
+    try std.testing.expect(borrowedSelectedFeatureLookups(
+        repeated_table,
+        unicode.tag("liga"),
+        &repeated_features,
+        2,
+        .{ .lookup_accelerators = &repeated_accelerators },
+    ) == null);
 }
 
 test "GSUB chaining class substitution applies nested lookup" {

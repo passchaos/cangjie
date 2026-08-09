@@ -1331,6 +1331,15 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
             }
         }
     }
+    if (lookup_type == 6) {
+        accelerator.chaining_class_subtables = try buildDirectChainingClassSubtableAccelerators(
+            table,
+            lookup_offset,
+            subtable_count,
+            allocator,
+        );
+        if (accelerator.chaining_class_subtables.len != 0) return accelerator;
+    }
     if (lookup_type != 6 or !try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) return accelerator;
 
     var chaining = try buildChainingCoverageLookupAccelerator(table, lookup_offset, subtable_count, false, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
@@ -1585,6 +1594,20 @@ fn buildContextClassSubtableAccelerator(table: Table, subtable_offset: usize, al
 }
 
 fn buildExtensionChainingClassSubtableAccelerators(table: Table, lookup_offset: usize, subtable_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]ChainingClassSubtableAccelerator {
+    return try buildChainingClassSubtableAcceleratorsImpl(table, lookup_offset, subtable_count, true, allocator);
+}
+
+fn buildDirectChainingClassSubtableAccelerators(table: Table, lookup_offset: usize, subtable_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]ChainingClassSubtableAccelerator {
+    return try buildChainingClassSubtableAcceleratorsImpl(table, lookup_offset, subtable_count, false, allocator);
+}
+
+fn buildChainingClassSubtableAcceleratorsImpl(
+    table: Table,
+    lookup_offset: usize,
+    subtable_count: u16,
+    extension_wrapped: bool,
+    allocator: std.mem.Allocator,
+) (GsubError || std.mem.Allocator.Error)![]ChainingClassSubtableAccelerator {
     const subtables = try allocator.alloc(ChainingClassSubtableAccelerator, subtable_count);
     @memset(subtables, .{});
     var built_count: usize = 0;
@@ -1594,8 +1617,11 @@ fn buildExtensionChainingClassSubtableAccelerators(table: Table, lookup_offset: 
     }
 
     for (0..subtable_count) |subtable_i| {
-        const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const subtable_offset = try extensionSubtablePayload(table, wrapper_offset, 6);
+        const raw_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+        const subtable_offset = if (extension_wrapped)
+            try extensionSubtablePayload(table, raw_subtable_offset, 6)
+        else
+            raw_subtable_offset;
         const parsed = try buildChainingClassSubtableAccelerator(table, subtable_offset, allocator) orelse {
             deinitChainingClassSubtableAcceleratorContents(allocator, subtables[0..built_count]);
             allocator.free(subtables);
@@ -2507,6 +2533,18 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         return;
     }
     if (lookup_type == 6) {
+        if (chainingClassLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            try applyChainingClassSubstitutionLookupAccelerated(
+                table,
+                subtable_count,
+                glyphs,
+                allocator,
+                lookup_flag,
+                lookup_options,
+                accelerator,
+            );
+            return;
+        }
         if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
             const run_digest = if (run_digest_cache) |cache|
                 cache.get(glyphs.items, lookup_flag, lookup_options)
@@ -4811,6 +4849,26 @@ fn applyExtensionChainingContextSubstitutionLookup(table: Table, lookup_offset: 
 }
 
 fn applyExtensionChainingClassSubstitutionLookupAccelerated(table: Table, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
+    return try applyChainingClassSubstitutionLookupAccelerated(
+        table,
+        subtable_count,
+        glyphs,
+        allocator,
+        lookup_flag,
+        options,
+        accelerator,
+    );
+}
+
+fn applyChainingClassSubstitutionLookupAccelerated(
+    table: Table,
+    subtable_count: u16,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    options: LookupOptions,
+    accelerator: *const LookupAccelerator,
+) (GsubError || std.mem.Allocator.Error)!void {
     var pos: usize = 0;
     while (pos < glyphs.items.len) {
         var next_pos = pos + 1;
@@ -8055,6 +8113,66 @@ test "GSUB accelerated chaining class matching keeps shorter rules at run end" {
     try std.testing.expect(result.matched);
     try std.testing.expectEqual(@as(usize, 2), result.next_pos);
     try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3 }, glyphs.items);
+}
+
+test "GSUB direct and extension chaining class builders share the conservative subset" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 128;
+
+    // Direct lookup 0 and ExtensionSubst lookup 1 both point at the same
+    // ChainContextSubst format-2 payload.
+    writeU16Test(&bytes, 0, 6);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 32);
+    writeU16Test(&bytes, 8, 7);
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 8);
+    writeU16Test(&bytes, 16, 1);
+    writeU16Test(&bytes, 18, 6);
+    writeU32Test(&bytes, 20, 16);
+
+    const chain = 32;
+    writeU16Test(&bytes, chain + 0, 2);
+    writeU16Test(&bytes, chain + 2, 44);
+    writeU16Test(&bytes, chain + 4, 0); // Optional empty backtrack ClassDef.
+    writeU16Test(&bytes, chain + 6, 50);
+    writeU16Test(&bytes, chain + 8, 58);
+    writeU16Test(&bytes, chain + 10, 2);
+    writeU16Test(&bytes, chain + 12, 0);
+    writeU16Test(&bytes, chain + 14, 16);
+    const set = chain + 16;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 0); // No backtrack.
+    writeU16Test(&bytes, rule + 2, 1); // One input (the class-set glyph).
+    writeU16Test(&bytes, rule + 4, 1); // One lookahead.
+    writeU16Test(&bytes, rule + 6, 1); // Lookahead class 1.
+    writeU16Test(&bytes, rule + 8, 1); // One nested record.
+    writeU16Test(&bytes, rule + 10, 0); // SequenceIndex 0.
+    writeU16Test(&bytes, rule + 12, 0); // Lookup index.
+    writeCoverage1(&bytes, chain + 44, 5);
+    writeClassDef1(&bytes, chain + 50, 5, 1);
+    writeClassDef1(&bytes, chain + 58, 7, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
+    const direct = try buildDirectChainingClassSubtableAccelerators(table, 0, 1, allocator);
+    defer deinitChainingClassSubtableAccelerators(allocator, direct);
+    const extension = try buildExtensionChainingClassSubtableAccelerators(table, 8, 1, allocator);
+    defer deinitChainingClassSubtableAccelerators(allocator, extension);
+    try std.testing.expectEqual(@as(usize, 1), direct.len);
+    try std.testing.expectEqual(@as(usize, 1), extension.len);
+    try std.testing.expectEqualSlices(class_context.Rule, direct[0].rules, extension[0].rules);
+    try std.testing.expectEqualSlices(u16, direct[0].classes, extension[0].classes);
+    try std.testing.expectEqualSlices(class_context.RuleGroup, direct[0].groups, extension[0].groups);
+
+    // A backtrack class falls outside this accelerator's deliberately narrow
+    // matcher and must retain the generic direct path.
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 1);
+    const unsupported = try buildDirectChainingClassSubtableAccelerators(table, 0, 1, allocator);
+    defer deinitChainingClassSubtableAccelerators(allocator, unsupported);
+    try std.testing.expectEqual(@as(usize, 0), unsupported.len);
 }
 
 test "GSUB ContextSubst rejects null required rule offsets" {

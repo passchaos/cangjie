@@ -839,6 +839,15 @@ Current local snapshot after the Nastaliq parity work:
   Devanagari corpus and all ten retained USE fixtures continued to pass both
   HarfBuzz and HarfRust; Devanagari still trails HarfBuzz materially, so the
   complex-script performance objective remains open.
+- The existing conservative ChainContextSubst format-2 class accelerator now
+  also builds for direct lookup type 6, not only ExtensionSubst wrappers.
+  Direct and wrapped builders share the same matcher and accept only its proven
+  subset: no backtrack classes, bounded input/lookahead, and one nested record
+  at sequence index zero; other rules retain the generic parser. A builder
+  regression proves direct/extension rule-class-group parity and backtrack
+  fallback. Fixed P/E-core comparisons reduced Devanagari retired instructions
+  by about `1.8%`; Roboto and Amiri instructions remained flat, and all
+  retained Devanagari/USE/Arabic/Latin parity gates remained unchanged.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

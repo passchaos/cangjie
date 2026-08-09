@@ -647,6 +647,18 @@ Current local snapshot after the Nastaliq parity work:
   `perf stat` run, retired instructions fell about `0.38%` and branches about
   `0.37%`; all three HarfBuzz corpus checksums and Roboto HarfRust parity
   remained unchanged.
+- Accelerated PairPos now uses adjacent glyphs directly when the cmap pass
+  proves the run has no default-ignorables and the lookup has no glyph-filter
+  flags. The general skip-aware loop remains separate for default-ignorables,
+  marks, and other LookupFlag behavior, so the common loop contains no source
+  index or Unicode-property checks. Combined fixed-CPU-30 forward/reverse
+  comparisons improved four Roboto `en-words` medians from `289.977` to
+  `286.149 ns/glyph`, about `1.32%`, and Amiri `fa-words` from `1274.177`
+  to `1268.538 ns/glyph`, about `0.44%`; Amiri `fa-thelittleprince` remained
+  flat (`741.827` versus `741.989 ns/glyph`, about `0.02%`). Post-change
+  Roboto sampling no longer reports `gpos.nextUnignoredGlyph`, previously
+  about `1.75%`. Full HarfBuzz parity for all three corpora and Roboto
+  HarfRust parity remained unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

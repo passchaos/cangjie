@@ -3544,6 +3544,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .features = lookup_options.features,
         .apply_all_if_unselected = false,
         .run_has_gdef_marks = runHasGdefMarks(glyph_ids.items, gdef_metadata.*),
+        .run_has_default_ignorables = has_default_ignorable,
         .glyph_source_indices = glyph_source_indices.items,
         .source_codepoints = codepoints.items,
         .glyph_substituted = glyph_substituted.items,

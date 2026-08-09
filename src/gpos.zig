@@ -89,6 +89,10 @@ pub const LookupOptions = struct {
     /// Cached run-level GDEF mark presence after GSUB. When supplied, direct
     /// mark attachment lookups can skip without rescanning every glyph.
     run_has_gdef_marks: ?bool = null,
+    /// Cached source-level default-ignorable presence. A known-false value
+    /// proves that LookupFlag=0 matching can advance to the adjacent glyph
+    /// without consulting source metadata or Unicode properties.
+    run_has_default_ignorables: ?bool = null,
     /// Optional source-order index per shaped glyph. MarkLigPos uses this with
     /// `ligature_components` to attach marks to the logical component whose
     /// source position most closely precedes the mark. Without this metadata,
@@ -1621,11 +1625,54 @@ fn collectPairAdjustmentLookupAccelerated(
     lookup_flag: u16,
     options: LookupOptions,
 ) (GposError || std.mem.Allocator.Error)!void {
+    if (lookup_flag == 0 and options.run_has_default_ignorables == false) {
+        return try collectPairAdjustmentLookupAcceleratedImpl(
+            true,
+            table,
+            lookup_offset,
+            subtable_count,
+            accelerator,
+            glyphs,
+            adjustments,
+            allocator,
+            lookup_flag,
+            options,
+        );
+    }
+    return try collectPairAdjustmentLookupAcceleratedImpl(
+        false,
+        table,
+        lookup_offset,
+        subtable_count,
+        accelerator,
+        glyphs,
+        adjustments,
+        allocator,
+        lookup_flag,
+        options,
+    );
+}
+
+fn collectPairAdjustmentLookupAcceleratedImpl(
+    comptime adjacent_pairs: bool,
+    table: Table,
+    lookup_offset: usize,
+    subtable_count: u16,
+    accelerator: *const LookupAccelerator,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    options: LookupOptions,
+) (GposError || std.mem.Allocator.Error)!void {
     if (glyphs.len < 2) return;
     var first_index: usize = 0;
     while (first_index + 1 < glyphs.len) : (first_index += 1) {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) continue;
-        const second_index = nextUnignoredGlyph(glyphs, first_index + 1, lookup_flag, options) orelse continue;
+        if (!adjacent_pairs and lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) continue;
+        const second_index = if (adjacent_pairs)
+            first_index + 1
+        else
+            nextUnignoredGlyph(glyphs, first_index + 1, lookup_flag, options) orelse continue;
         var subtable_i: usize = 0;
         while (subtable_i < subtable_count) : (subtable_i += 1) {
             const pair_accelerator = accelerator.pair_pos_subtables[subtable_i];
@@ -1960,6 +2007,7 @@ fn glyphWasSubstituted(options: LookupOptions, glyph_index: usize) bool {
 }
 
 fn markAttachmentSearchSkipsGlyph(options: LookupOptions, glyph_index: usize) bool {
+    if (options.run_has_default_ignorables == false) return false;
     const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
     return unicode.isDefaultIgnorableForShaping(codepoint) and !glyphWasSubstituted(options, glyph_index);
 }
@@ -6347,6 +6395,81 @@ test "GPOS simple PairPos accelerator preserves zero adjustment precedence" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_advance);
     try std.testing.expect(adjustments.items[0].pair_positioned);
+}
+
+test "GPOS adjacent PairPos fast path respects the run default-ignorable proof" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 40;
+
+    // One xAdvance-only PairPos lookup for glyph pair (5, 7).
+    writeU16Test(&bytes, 0, 2);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+    const pair = 8;
+    writeU16Test(&bytes, pair + 0, 1);
+    writeU16Test(&bytes, pair + 2, 18);
+    writeU16Test(&bytes, pair + 4, 0x0004);
+    writeU16Test(&bytes, pair + 6, 0);
+    writeU16Test(&bytes, pair + 8, 1);
+    writeU16Test(&bytes, pair + 10, 12);
+    writeU16Test(&bytes, pair + 12, 1);
+    writeU16Test(&bytes, pair + 14, 7);
+    writeI16Test(&bytes, pair + 16, -25);
+    writeCoverage1Test(&bytes, pair + 18, 5);
+
+    const table = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const accelerator = try buildLookupAccelerator(table, 0, allocator);
+    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
+    const accelerators = [_]LookupAccelerator{accelerator};
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try collectLookupWithIndex(
+        table,
+        0,
+        0,
+        &.{ 5, 7 },
+        &adjustments,
+        allocator,
+        .{
+            .lookup_accelerators = &accelerators,
+            .run_has_default_ignorables = false,
+        },
+        null,
+    );
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(i16, -25), adjustments.items[0].x_advance);
+
+    // When the source metadata says a middle glyph is default-ignorable, the
+    // same lookup must retain the general skip-aware path and kern across it.
+    adjustments.clearRetainingCapacity();
+    const sources = [_]usize{ 0, 1, 2 };
+    const codepoints = [_]u21{ 'A', 0x034f, 'B' };
+    const substituted = [_]bool{ false, false, false };
+    try collectLookupWithIndex(
+        table,
+        0,
+        0,
+        &.{ 5, 9, 7 },
+        &adjustments,
+        allocator,
+        .{
+            .lookup_accelerators = &accelerators,
+            .run_has_default_ignorables = true,
+            .glyph_source_indices = &sources,
+            .source_codepoints = &codepoints,
+            .glyph_substituted = &substituted,
+        },
+        null,
+    );
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(i16, -25), adjustments.items[0].x_advance);
 }
 
 test "GPOS class PairPos accelerator honors coverage and implicit class zero" {

@@ -2016,6 +2016,101 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
 }
 
 fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*RunDigestCache) (GsubError || std.mem.Allocator.Error)!void {
+    // The cached Font path overwhelmingly dispatches predecoded ligature and
+    // chaining lookups. Keep those cases outside the generic function below:
+    // its support for every lookup kind, nested contextual mutation, and
+    // profiling windows otherwise forces a roughly 10 KiB stack frame on each
+    // tiny lookup invocation even when none of that state is used.
+    if (options.shape_profile == null and table.assume_validated) {
+        if (try applyValidatedAcceleratedLookup(
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            run_digest_cache,
+        )) return;
+    }
+    return applyLookupWithIndexGeneric(
+        table,
+        lookup_offset,
+        lookup_index,
+        glyphs,
+        allocator,
+        options,
+        run_digest_cache,
+    );
+}
+
+fn applyValidatedAcceleratedLookup(
+    table: Table,
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+    run_digest_cache: ?*RunDigestCache,
+) (GsubError || std.mem.Allocator.Error)!bool {
+    const accelerator = lookupAcceleratorAny(lookup_index, options) orelse return false;
+    if (accelerator.lookup_offset != lookup_offset or accelerator.lookup_type == 0) return false;
+
+    var lookup_options = options;
+    if ((accelerator.lookup_flag & 0x0010) != 0) {
+        lookup_options.active_mark_filtering_set = accelerator.mark_filtering_set;
+        try validateMarkFilteringSetIndex(lookup_options);
+    }
+    lookup_options.match_source_syllable = lookupMatchesSourceSyllable(lookup_index, options);
+
+    if (accelerator.lookup_type == 4 and
+        accelerator.subtable_count == 1 and
+        accelerator.ligature_subst.sets.len != 0)
+    {
+        if (accelerator.ligature_subst.prefilter_second) {
+            try applyLigatureSubstitutionPrefiltered(
+                table,
+                accelerator.ligature_subst,
+                glyphs,
+                allocator,
+                accelerator.lookup_flag,
+                lookup_options,
+            );
+        } else {
+            try applyLigatureSubstitutionAccelerated(
+                table,
+                accelerator.ligature_subst,
+                glyphs,
+                allocator,
+                accelerator.lookup_flag,
+                lookup_options,
+            );
+        }
+        return true;
+    }
+
+    if (accelerator.lookup_type == 6 and accelerator.chaining_coverage_only) {
+        const run_digest = if (run_digest_cache) |cache|
+            cache.get(glyphs.items, accelerator.lookup_flag, lookup_options)
+        else
+            glyphRunDigest(glyphs.items, accelerator.lookup_flag, lookup_options);
+        if (run_digest.isEmpty() or !accelerator.chaining_input_digest.mayIntersect(run_digest)) return true;
+        try applyChainingContextSubstitutionLookup(
+            table,
+            lookup_offset,
+            accelerator.subtable_count,
+            glyphs,
+            allocator,
+            accelerator.lookup_flag,
+            lookup_options,
+            accelerator,
+        );
+        return true;
+    }
+
+    return false;
+}
+
+noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*RunDigestCache) (GsubError || std.mem.Allocator.Error)!void {
     const profiling = options.shape_profile != null;
     const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
     const glyph_count_before = if (profiling) glyphs.items.len else 0;
@@ -9967,6 +10062,31 @@ test "GSUB ligature accelerator preserves preference and ignored component offse
     try std.testing.expectEqual(@as(usize, 2), match.component_count);
     try std.testing.expectEqual(@as(usize, 2), match.component_offsets[1]);
     try std.testing.expectEqual(@as(usize, 3), match.match_end);
+
+    var accelerated_glyphs = std.ArrayList(GlyphId).empty;
+    defer accelerated_glyphs.deinit(allocator);
+    try accelerated_glyphs.appendSlice(allocator, &glyphs);
+    const lookup_accelerators = [_]LookupAccelerator{.{
+        .lookup_offset = 0,
+        .lookup_type = 4,
+        .lookup_flag = 0x0008,
+        .subtable_count = 1,
+        .ligature_subst = accelerator,
+    }};
+    try std.testing.expect(try applyValidatedAcceleratedLookup(
+        table,
+        0,
+        0,
+        &accelerated_glyphs,
+        allocator,
+        .{
+            .glyph_classes = &glyph_classes,
+            .lookup_accelerators = &lookup_accelerators,
+            .assume_validated = true,
+        },
+        null,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 4, 3 }, accelerated_glyphs.items);
 }
 
 test "GSUB ligature second prefilter cost model counts competing definitions" {

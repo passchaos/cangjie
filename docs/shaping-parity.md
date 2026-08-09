@@ -518,6 +518,19 @@ Current local snapshot after the Nastaliq parity work:
   checksums. Post-change Roboto `perf` reduced generic `memset` from about
   `7.0%` to `0.8%`; the two Font-wrapper cache clears disappeared from the
   sampled stacks.
+- Validated, non-profiled GSUB now dispatches predecoded ligature and
+  coverage-only chaining lookups through a small fast wrapper. The generic
+  dispatcher still owns every unvalidated, profiled, unsupported, and
+  mismatched-accelerator path, but no longer imposes its roughly 10 KiB unified
+  stack frame on each tiny cached lookup. Fixed-CPU-30 A/B/B/A and reverse
+  B/A/A/B comparisons with 31-sample medians improved Roboto `en-words` by
+  about `1.3–1.8%` and Amiri `fa-words` by about `0.3%`. Four additional
+  interleaved medians showed Amiri `fa-thelittleprince` effectively flat
+  (`766.525` versus `766.267 ns/glyph`, about `0.03%` faster). Post-change
+  Roboto `perf` reduced top-level `applyLookupWithIndex` from about `22%` to
+  `4.5%`; the remaining GSUB share is now the actual accelerated ligature
+  matching work. Dedicated tests exercise both accelerated chaining and
+  ligature dispatch, while all corpus checksums remain unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

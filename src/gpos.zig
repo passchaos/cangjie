@@ -123,6 +123,14 @@ pub const LookupOptions = struct {
 };
 
 pub const LookupAccelerator = struct {
+    /// Dispatch fields decoded once from the validated Lookup table. Runtime
+    /// use is guarded by the lookup offset so mismatched cache entries fall
+    /// back to normal bounds-checked parsing.
+    lookup_offset: usize = 0,
+    lookup_type: u16 = 0,
+    lookup_flag: u16 = 0,
+    subtable_count: u16 = 0,
+    mark_filtering_set: ?u16 = null,
     coverage_digest: GlyphDigest = .{},
     coverage_groups: []const ChainingSubtableGroup = &.{},
     coverage_group_slots: []const u16 = &.{},
@@ -421,6 +429,10 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
     }
     for (accelerators, 0..) |*accelerator, lookup_i| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + lookup_i * 2));
+        // Cached dispatch bypasses runtime header reads. Re-prove the complete
+        // fixed header here so malformed direct accelerator input cannot turn
+        // that optimization into a trust-boundary change.
+        try ensurePositionLookupHeaderWithin(table, lookup_offset);
         accelerator.* = try buildLookupAccelerator(table, lookup_offset, allocator);
         built_count += 1;
     }
@@ -467,9 +479,19 @@ fn deinitChainingClassSubtableAcceleratorContents(allocator: std.mem.Allocator, 
 
 fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!LookupAccelerator {
     const lookup_type = try readU16(table, lookup_offset);
+    const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
     var digest = GlyphDigest.empty();
-    var accelerator = LookupAccelerator{};
+    var accelerator = LookupAccelerator{
+        .lookup_offset = lookup_offset,
+        .lookup_type = lookup_type,
+        .lookup_flag = lookup_flag,
+        .subtable_count = subtable_count,
+        .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
+            try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2)
+        else
+            null,
+    };
     const single_pos_subtables = if (lookup_type == 1)
         try allocator.alloc(SinglePosSubtable, subtable_count)
     else
@@ -1225,10 +1247,10 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
     // assume_validated. Keep this hot-path proof to fixed Lookup header fields;
     // full direct/ExtensionPos payload validation below is only needed for
     // untrusted tables and parse-time glyph-bound walks.
-    try ensurePositionLookupHeaderWithin(table, lookup_offset);
-    const lookup_type = try readU16(table, lookup_offset);
-    const lookup_flag = try readU16(table, lookup_offset + 2);
-    const subtable_count = try readU16(table, lookup_offset + 4);
+    const dispatch = try lookupDispatch(lookup_offset, lookup_index, table, options);
+    const lookup_type = dispatch.lookup_type;
+    const lookup_flag = dispatch.lookup_flag;
+    const subtable_count = dispatch.subtable_count;
     recordGposLookupProfile(options.shape_profile, lookup_type);
     // Positioning results are appended incrementally, but OpenType lookups are
     // atomic units. Preflight supported direct subtables before collecting any
@@ -1239,7 +1261,7 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         // UseMarkFilteringSet stores its set index after the variable-length
         // SubTable offset array. The high byte remains reserved for the older
         // MarkAttachmentType mechanism when bit 4 is clear.
-        lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
+        lookup_options.active_mark_filtering_set = dispatch.mark_filtering_set;
         try validateMarkFilteringSetIndex(lookup_options);
     }
     if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
@@ -1351,13 +1373,57 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
     }
 }
 
+const LookupDispatch = struct {
+    lookup_type: u16,
+    lookup_flag: u16,
+    subtable_count: u16,
+    mark_filtering_set: ?u16,
+};
+
+fn lookupDispatch(
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    table: Table,
+    options: LookupOptions,
+) GposError!LookupDispatch {
+    if (table.assume_validated) {
+        if (lookupAcceleratorAny(lookup_index, options)) |accelerator| {
+            if (accelerator.lookup_offset == lookup_offset and accelerator.lookup_type != 0) {
+                return .{
+                    .lookup_type = accelerator.lookup_type,
+                    .lookup_flag = accelerator.lookup_flag,
+                    .subtable_count = accelerator.subtable_count,
+                    .mark_filtering_set = accelerator.mark_filtering_set,
+                };
+            }
+        }
+    }
+
+    try ensurePositionLookupHeaderWithin(table, lookup_offset);
+    const lookup_flag = try readU16(table, lookup_offset + 2);
+    const subtable_count = try readU16(table, lookup_offset + 4);
+    return .{
+        .lookup_type = try readU16(table, lookup_offset),
+        .lookup_flag = lookup_flag,
+        .subtable_count = subtable_count,
+        .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
+            try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2)
+        else
+            null,
+    };
+}
+
 fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
+    const accelerator = lookupAcceleratorAny(lookup_index, options) orelse return null;
+    if (accelerator.coverage_digest.isEmpty()) return null;
+    return accelerator;
+}
+
+fn lookupAcceleratorAny(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
     const accelerators = options.lookup_accelerators orelse return null;
     const index = lookup_index orelse return null;
     if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index];
-    if (accelerator.coverage_digest.isEmpty()) return null;
-    return accelerator;
+    return &accelerators[index];
 }
 
 fn lookupCoverageGroupsMayMatchRun(groups: []const ChainingSubtableGroup, slots: []const u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) bool {
@@ -5595,6 +5661,51 @@ test "GPOS class format 1 handles upper glyph boundary" {
     try std.testing.expectEqual(@as(u16, 0), try classValue(table, 0, 0xfffd));
 }
 
+test "GPOS cached lookup dispatch requires validated matching metadata" {
+    var bytes = [_]u8{0} ** 12;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0x0010);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 0xffff);
+
+    const accelerators = [_]LookupAccelerator{.{
+        .lookup_offset = 0,
+        .lookup_type = 8,
+        .lookup_flag = 0,
+        .subtable_count = 4,
+        .mark_filtering_set = 7,
+    }};
+    const cached = try lookupDispatch(0, 0, .{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, .{ .lookup_accelerators = &accelerators });
+    try std.testing.expectEqual(@as(u16, 8), cached.lookup_type);
+    try std.testing.expectEqual(@as(u16, 4), cached.subtable_count);
+    try std.testing.expectEqual(@as(?u16, 7), cached.mark_filtering_set);
+
+    const parsed = try lookupDispatch(0, 0, .{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    }, .{ .lookup_accelerators = &accelerators });
+    try std.testing.expectEqual(@as(u16, 1), parsed.lookup_type);
+    try std.testing.expectEqual(@as(u16, 0x0010), parsed.lookup_flag);
+    try std.testing.expectEqual(@as(?u16, 0xffff), parsed.mark_filtering_set);
+
+    var stale = accelerators;
+    stale[0].lookup_offset = 2;
+    const stale_fallback = try lookupDispatch(0, 0, .{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, .{ .lookup_accelerators = &stale });
+    try std.testing.expectEqual(@as(u16, 1), stale_fallback.lookup_type);
+}
+
 test "GPOS rejects reserved LookupFlag bits" {
     var bytes = [_]u8{0} ** 42;
     writeU32Test(&bytes, 0, 0x00010000);
@@ -7015,6 +7126,33 @@ test "GPOS lookup flags honor GDEF mark filtering sets" {
 
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 33), adjustments.items[0].x_placement);
+
+    // Exercise the cached dispatch path used after Font validation.
+    adjustments.clearRetainingCapacity();
+    const accelerator = try buildLookupAccelerator(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, 0, allocator);
+    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
+    const accelerators = [_]LookupAccelerator{accelerator};
+    try collectLookupWithIndex(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        0,
+        0,
+        &glyphs,
+        &adjustments,
+        allocator,
+        .{
+            .mark_filtering_sets = &mark_sets,
+            .lookup_accelerators = &accelerators,
+            .assume_validated = true,
+        },
+        null,
+    );
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(i16, 33), adjustments.items[0].x_placement);
 }
 

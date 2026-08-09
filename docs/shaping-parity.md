@@ -459,6 +459,25 @@ Current local snapshot after the Nastaliq parity work:
   from about `3.30%` in the independent baseline; compact provenance-array
   growth was about `0.25%`. Full Amiri long-text/word-list, Roboto, HarfRust
   Indic, and retained USE parity checksums remained unchanged.
+- Validated GSUB/GPOS lookup accelerators now retain each Lookup's offset,
+  type, flag, subtable count, and optional mark-filtering-set index. The shaping
+  hot path previously reparsed and revalidated that variable-length header for
+  every lookup on every line despite already owning one accelerator per lookup.
+  Unvalidated low-level calls and stale/mismatched accelerators still use the
+  bounds-checked parser; focused tests cover that fallback, the `0xffff`
+  mark-set index, and cached mark-filtering semantics. A final serial
+  fixed-CPU-30 B/A/A/B comparison with 31-sample medians reduced Amiri
+  `fa-thelittleprince` from `839.309` to `816.077 ns/glyph`, about `2.8%`;
+  Amiri `fa-words` from `1827.177` to `1360.967 ns/glyph`, about `25.5%`; and
+  Roboto `en-words` from `404.441` to `359.231 ns/glyph`, about `11.2%`.
+  The larger short-line gains reflect amortizing the same selected lookup
+  schedule across thousands of separately shaped words. Accelerator size grows
+  by 16 bytes per lookup (about 4.5 KiB for Amiri and 784 bytes for Roboto).
+  Post-change `perf` no longer reports GSUB fixed-header validation, previously
+  about `1.5%`; all three corpus checksums and the retained USE gate remain
+  unchanged. The same-session Amiri HarfBuzz median was `796.567 ns/glyph`
+  versus Cangjie's `815.637 ns/glyph`, narrowing the remaining long-text gap to
+  about `2.4%`.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

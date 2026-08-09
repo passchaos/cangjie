@@ -104,6 +104,14 @@ pub const LookupOptions = struct {
 };
 
 pub const LookupAccelerator = struct {
+    /// Dispatch fields decoded once from the validated Lookup table. The
+    /// shaping path checks `lookup_offset` before using them, so a stale or
+    /// foreign accelerator slice falls back to the defensive table parser.
+    lookup_offset: usize = 0,
+    lookup_type: u16 = 0,
+    lookup_flag: u16 = 0,
+    subtable_count: u16 = 0,
+    mark_filtering_set: ?u16 = null,
     /// Stored on entry zero for an O(1) table-level capability check. Shaping
     /// runs use this to avoid mutation-epoch bookkeeping for fonts whose GSUB
     /// has no format-3 chaining lookup that consumes a run digest.
@@ -900,6 +908,11 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
     var table_uses_run_digest_cache = false;
     for (accelerators, 0..) |*accelerator, lookup_i| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + lookup_i * 2));
+        // Dispatch fields are trusted by the shaping hot path. Prove the fixed
+        // header here even though the caller normally parsed the full font
+        // already, so direct accelerator builders retain the same validation
+        // contract as uncached lookup application.
+        try ensureLookupHeaderWithin(table, lookup_offset);
         accelerator.* = try buildLookupAccelerator(table, lookup_offset, allocator);
         table_uses_run_digest_cache = table_uses_run_digest_cache or
             (accelerator.chaining_coverage_only and !accelerator.chaining_input_digest.isEmpty());
@@ -969,7 +982,16 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
-    var accelerator = LookupAccelerator{};
+    var accelerator = LookupAccelerator{
+        .lookup_offset = lookup_offset,
+        .lookup_type = lookup_type,
+        .lookup_flag = lookup_flag,
+        .subtable_count = subtable_count,
+        .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
+            try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2)
+        else
+            null,
+    };
     if (lookup_type == 1 and subtable_count == 1) {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
         accelerator.single_subst_entries = try buildSingleSubstEntries(table, subtable_offset, allocator);
@@ -994,7 +1016,9 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         accelerator.extension_lookup_type = try extensionLookupType(table, lookup_offset, subtable_count);
         if (accelerator.extension_lookup_type) |wrapped_type| {
             if (wrapped_type == 6 and try extensionChainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
-                return try buildChainingCoverageLookupAccelerator(table, lookup_offset, subtable_count, true, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
+                var chaining = try buildChainingCoverageLookupAccelerator(table, lookup_offset, subtable_count, true, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
+                copyLookupDispatch(&chaining, accelerator);
+                return chaining;
             }
             if (wrapped_type == 5) {
                 accelerator.context_class_subtables = try buildExtensionContextClassSubtableAccelerators(table, lookup_offset, subtable_count, allocator);
@@ -1048,7 +1072,17 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     }
     if (lookup_type != 6 or !try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) return accelerator;
 
-    return try buildChainingCoverageLookupAccelerator(table, lookup_offset, subtable_count, false, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
+    var chaining = try buildChainingCoverageLookupAccelerator(table, lookup_offset, subtable_count, false, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
+    copyLookupDispatch(&chaining, accelerator);
+    return chaining;
+}
+
+fn copyLookupDispatch(target: *LookupAccelerator, source: LookupAccelerator) void {
+    target.lookup_offset = source.lookup_offset;
+    target.lookup_type = source.lookup_type;
+    target.lookup_flag = source.lookup_flag;
+    target.subtable_count = source.subtable_count;
+    target.mark_filtering_set = source.mark_filtering_set;
 }
 
 fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, subtable_count: u16, extension_wrapped: bool, single_subst: SingleSubstAccelerator, extension_lookup_type_value: ?u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LookupAccelerator {
@@ -1987,10 +2021,10 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
             profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, glyphRunHash(glyphs.items), first_diff, window_start, before_window, after_window);
         }
     }
-    try ensureLookupHeaderWithin(table, lookup_offset);
-    const lookup_type = try readU16(table, lookup_offset);
-    const lookup_flag = try readU16(table, lookup_offset + 2);
-    const subtable_count = try readU16(table, lookup_offset + 4);
+    const dispatch = try lookupDispatch(lookup_offset, lookup_index, table, options);
+    const lookup_type = dispatch.lookup_type;
+    const lookup_flag = dispatch.lookup_flag;
+    const subtable_count = dispatch.subtable_count;
     recordGsubLookupProfile(options.shape_profile, lookup_type);
     // A GSUB lookup is an ordered list of alternative subtables and must apply
     // as one unit. Validate every supported direct subtable before touching the
@@ -2002,7 +2036,7 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
         // UseMarkFilteringSet stores its set index after the variable-length
         // SubTable offset array. The high byte remains reserved for the older
         // MarkAttachmentType mechanism when bit 4 is clear.
-        lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
+        lookup_options.active_mark_filtering_set = dispatch.mark_filtering_set;
         try validateMarkFilteringSetIndex(lookup_options);
     }
     lookup_options.match_source_syllable = lookupMatchesSourceSyllable(lookup_index, options);
@@ -2133,6 +2167,46 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
     }
 }
 
+const LookupDispatch = struct {
+    lookup_type: u16,
+    lookup_flag: u16,
+    subtable_count: u16,
+    mark_filtering_set: ?u16,
+};
+
+fn lookupDispatch(
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    table: Table,
+    options: LookupOptions,
+) GsubError!LookupDispatch {
+    if (table.assume_validated) {
+        if (lookupAcceleratorAny(lookup_index, options)) |accelerator| {
+            if (accelerator.lookup_offset == lookup_offset and accelerator.lookup_type != 0) {
+                return .{
+                    .lookup_type = accelerator.lookup_type,
+                    .lookup_flag = accelerator.lookup_flag,
+                    .subtable_count = accelerator.subtable_count,
+                    .mark_filtering_set = accelerator.mark_filtering_set,
+                };
+            }
+        }
+    }
+
+    try ensureLookupHeaderWithin(table, lookup_offset);
+    const lookup_flag = try readU16(table, lookup_offset + 2);
+    const subtable_count = try readU16(table, lookup_offset + 4);
+    return .{
+        .lookup_type = try readU16(table, lookup_offset),
+        .lookup_flag = lookup_flag,
+        .subtable_count = subtable_count,
+        .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
+            try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2)
+        else
+            null,
+    };
+}
+
 fn glyphRunHash(glyphs: []const GlyphId) u64 {
     var hash: u64 = 0xcbf29ce484222325;
     for (glyphs) |glyph| {
@@ -2161,12 +2235,16 @@ fn lookupMatchesSourceSyllable(lookup_index: ?u16, options: LookupOptions) bool 
 }
 
 fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
+    const accelerator = lookupAcceleratorAny(lookup_index, options) orelse return null;
+    if (!accelerator.chaining_coverage_only) return null;
+    return accelerator;
+}
+
+fn lookupAcceleratorAny(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
     const accelerators = options.lookup_accelerators orelse return null;
     const index = lookup_index orelse return null;
     if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index];
-    if (!accelerator.chaining_coverage_only) return null;
-    return accelerator;
+    return &accelerators[index];
 }
 
 fn reverseChainingLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
@@ -6689,6 +6767,51 @@ test "GSUB class format 1 handles upper glyph boundary" {
     try std.testing.expectEqual(@as(u16, 0), try classValue(table, 0, 0xfffd));
 }
 
+test "GSUB cached lookup dispatch requires validated matching metadata" {
+    var bytes = [_]u8{0} ** 12;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0x0010);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 0xffff);
+
+    const accelerators = [_]LookupAccelerator{.{
+        .lookup_offset = 0,
+        .lookup_type = 7,
+        .lookup_flag = 0,
+        .subtable_count = 3,
+        .mark_filtering_set = 9,
+    }};
+    const cached = try lookupDispatch(0, 0, .{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, .{ .lookup_accelerators = &accelerators });
+    try std.testing.expectEqual(@as(u16, 7), cached.lookup_type);
+    try std.testing.expectEqual(@as(u16, 3), cached.subtable_count);
+    try std.testing.expectEqual(@as(?u16, 9), cached.mark_filtering_set);
+
+    const parsed = try lookupDispatch(0, 0, .{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    }, .{ .lookup_accelerators = &accelerators });
+    try std.testing.expectEqual(@as(u16, 1), parsed.lookup_type);
+    try std.testing.expectEqual(@as(u16, 0x0010), parsed.lookup_flag);
+    try std.testing.expectEqual(@as(?u16, 0xffff), parsed.mark_filtering_set);
+
+    var stale = accelerators;
+    stale[0].lookup_offset = 2;
+    const stale_fallback = try lookupDispatch(0, 0, .{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, .{ .lookup_accelerators = &stale });
+    try std.testing.expectEqual(@as(u16, 1), stale_fallback.lookup_type);
+}
+
 test "GSUB parse-time contextual records avoid recursively validating lookup payloads" {
     var bytes = [_]u8{0} ** 120;
     writeU32Test(&bytes, 0, 0x00010000);
@@ -10279,6 +10402,32 @@ test "GSUB lookup flags honor GDEF mark filtering sets" {
         .mark_filtering_sets = &mark_sets,
     });
 
+    try std.testing.expectEqualSlices(GlyphId, &.{ 15, 7 }, glyphs.items);
+
+    // The validated Font path serves LookupFlag metadata from the accelerator
+    // rather than rereading the variable-length header on every run.
+    glyphs.items[0] = 5;
+    const accelerator = try buildLookupAccelerator(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, 0, allocator);
+    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
+    const accelerators = [_]LookupAccelerator{accelerator};
+    try applyLookupWithIndex(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        0,
+        0,
+        &glyphs,
+        allocator,
+        .{
+            .mark_filtering_sets = &mark_sets,
+            .lookup_accelerators = &accelerators,
+            .assume_validated = true,
+        },
+        null,
+    );
     try std.testing.expectEqualSlices(GlyphId, &.{ 15, 7 }, glyphs.items);
 }
 

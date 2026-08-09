@@ -3383,6 +3383,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const lig_set_count = try readU16(table, subtable_offset + 4);
 
+    var component_offsets: [max_ligature_components]usize = undefined;
     var i: usize = 0;
     while (i < glyphs.items.len) : (i += 1) {
         if (!sourceFeatureAllowsGlyph(options, i)) continue;
@@ -3391,7 +3392,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         const covered = try coverageIndex(table, coverage_offset, first) orelse continue;
         if (covered >= lig_set_count) continue;
         const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2));
-        if (try ligatureAt(table, set_offset, glyphs.items[i..], i, lookup_flag, options)) |match| {
+        if (try ligatureAt(table, set_offset, glyphs.items[i..], i, lookup_flag, options, &component_offsets)) |match| {
             const component_info = try ligatureComponentInfoForMatch(allocator, options, i, match);
             mergeLigatureClusterMetadata(options, i, match);
             glyphs.items[i] = match.ligature;
@@ -3419,6 +3420,7 @@ fn applyLigatureSubstitutionPrefiltered(table: Table, accelerator: LigatureSubst
 
 fn applyLigatureSubstitutionAcceleratedImpl(comptime prefilter_second: bool, table: Table, accelerator: LigatureSubstAccelerator, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     _ = table;
+    var component_offsets: [max_ligature_components]usize = undefined;
     var i: usize = 0;
     while (i < glyphs.items.len) : (i += 1) {
         if (!sourceFeatureAllowsGlyph(options, i)) continue;
@@ -3426,9 +3428,9 @@ fn applyLigatureSubstitutionAcceleratedImpl(comptime prefilter_second: bool, tab
         if (lookupIgnoresGlyph(lookup_flag, options, first)) continue;
         const set = ligatureSetForGlyph(accelerator.sets, first) orelse continue;
         const match = if (prefilter_second)
-            ligatureAtAcceleratedPrefiltered(accelerator, set, glyphs.items[i..], i, lookup_flag, options)
+            ligatureAtAcceleratedPrefiltered(accelerator, set, glyphs.items[i..], i, lookup_flag, options, &component_offsets)
         else
-            ligatureAtAccelerated(accelerator, set, glyphs.items[i..], i, lookup_flag, options);
+            ligatureAtAccelerated(accelerator, set, glyphs.items[i..], i, lookup_flag, options, &component_offsets);
         if (match) |matched| {
             const component_info = try ligatureComponentInfoForMatch(allocator, options, i, matched);
             mergeLigatureClusterMetadata(options, i, matched);
@@ -3464,10 +3466,10 @@ fn ligatureSetForGlyph(sets: []const LigatureSetEntry, glyph: GlyphId) ?Ligature
     return null;
 }
 
-fn ligatureAtAccelerated(accelerator: LigatureSubstAccelerator, set: LigatureSetEntry, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions) ?LigatureMatch {
+fn ligatureAtAccelerated(accelerator: LigatureSubstAccelerator, set: LigatureSetEntry, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) ?LigatureMatch {
     const definition_end = set.definition_start + set.definition_len;
     for (accelerator.definitions[set.definition_start..definition_end]) |definition| {
-        var component_offsets = [_]usize{0} ** max_ligature_components;
+        component_offsets[0] = 0;
         var cursor: usize = 1;
         var matched = true;
         const component_count: usize = definition.component_count;
@@ -3494,7 +3496,7 @@ fn ligatureAtAccelerated(accelerator: LigatureSubstAccelerator, set: LigatureSet
     return null;
 }
 
-fn ligatureAtAcceleratedPrefiltered(accelerator: LigatureSubstAccelerator, set: LigatureSetEntry, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions) ?LigatureMatch {
+fn ligatureAtAcceleratedPrefiltered(accelerator: LigatureSubstAccelerator, set: LigatureSetEntry, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) ?LigatureMatch {
     var second_offset: ?usize = null;
     if (glyphs.len > 1) {
         var cursor: usize = 1;
@@ -3502,7 +3504,6 @@ fn ligatureAtAcceleratedPrefiltered(accelerator: LigatureSubstAccelerator, set: 
         if (cursor < glyphs.len) second_offset = cursor;
     }
 
-    var component_offsets: [max_ligature_components]usize = undefined;
     component_offsets[0] = 0;
     const definition_end = set.definition_start + set.definition_len;
     for (accelerator.definitions[set.definition_start..definition_end]) |definition| {
@@ -3589,7 +3590,8 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     const covered = try coverageIndex(table, coverage_offset, first) orelse return null;
     if (covered >= lig_set_count) return null;
     const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2));
-    const match = try ligatureAt(table, set_offset, glyphs.items[glyph_index..], glyph_index, lookup_flag, options) orelse return null;
+    var component_offsets: [max_ligature_components]usize = undefined;
+    const match = try ligatureAt(table, set_offset, glyphs.items[glyph_index..], glyph_index, lookup_flag, options, &component_offsets) orelse return null;
     const component_info = try ligatureComponentInfoForMatch(allocator, options, glyph_index, match);
     mergeLigatureClusterMetadata(options, glyph_index, match);
     glyphs.items[glyph_index] = match.ligature;
@@ -3606,7 +3608,7 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     return .{
         .removed_len = match.component_count,
         .inserted_len = 1,
-        .component_offsets = match.component_offsets,
+        .component_offsets = component_offsets,
         .component_count = match.component_count,
     };
 }
@@ -6402,20 +6404,20 @@ fn reverseCoverageMatches(table: Table, subtable_offset: usize, glyphs: []const 
 const LigatureMatch = struct {
     ligature: GlyphId,
     component_count: usize,
-    component_offsets: [max_ligature_components]usize = [_]usize{0} ** max_ligature_components,
+    component_offsets: *const [max_ligature_components]usize,
     match_end: usize = 1,
 };
 
 const max_ligature_components = 64;
 
-fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions) GsubError!?LigatureMatch {
+fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) GsubError!?LigatureMatch {
     const ligature_count = try readU16(table, set_offset);
     for (0..ligature_count) |i| {
         const lig_offset = try checkedRequiredSubtableOffset(table, set_offset, try readU16(table, set_offset + 2 + i * 2));
         const ligature = try readU16(table, lig_offset);
         const component_count = try readU16(table, lig_offset + 2);
         if (component_count == 0 or component_count > max_ligature_components) continue;
-        var component_offsets = [_]usize{0} ** max_ligature_components;
+        component_offsets[0] = 0;
         var ok = true;
         var cursor: usize = 1;
         for (1..component_count) |component_index| {
@@ -10050,6 +10052,7 @@ test "GSUB ligature accelerator preserves preference and ignored component offse
     const set = ligatureSetForGlyph(accelerator.sets, 1).?;
     const glyphs = [_]GlyphId{ 1, 4, 2, 3 };
     const glyph_classes = [_]u16{ 0, 1, 1, 1, 3 };
+    var component_offsets: [max_ligature_components]usize = undefined;
     const match = ligatureAtAcceleratedPrefiltered(
         accelerator,
         set,
@@ -10057,6 +10060,7 @@ test "GSUB ligature accelerator preserves preference and ignored component offse
         0,
         0x0008,
         .{ .glyph_classes = &glyph_classes },
+        &component_offsets,
     ).?;
     try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
     try std.testing.expectEqual(@as(usize, 2), match.component_count);
@@ -10109,6 +10113,7 @@ test "GSUB ligature matching skips CGJ without IgnoreMarks" {
     try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
     const codepoints = [_]u21{ 'X', 'A', 0x034f, 'B' };
 
+    var component_offsets: [max_ligature_components]usize = undefined;
     const match = (try ligatureAt(
         .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
         0,
@@ -10119,6 +10124,7 @@ test "GSUB ligature matching skips CGJ without IgnoreMarks" {
             .glyph_source_indices = &sources,
             .source_codepoints = &codepoints,
         },
+        &component_offsets,
     )).?;
 
     try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);

@@ -531,6 +531,17 @@ Current local snapshot after the Nastaliq parity work:
   `4.5%`; the remaining GSUB share is now the actual accelerated ligature
   matching work. Dedicated tests exercise both accelerated chaining and
   ligature dispatch, while all corpus checksums remain unchanged.
+- Ligature matchers now write component offsets into one caller-owned scratch
+  array and return a compact match containing a pointer to that storage.
+  Previously every optional match embedded a 64-entry `usize` array, causing
+  failed candidates to construct/clear a roughly 512-byte payload and successful
+  matches to copy it. Nested lookup results still copy offsets only after a real
+  match must outlive the scratch. Fixed-CPU-30 A/B/B/A and serial reverse
+  B/A/A/B runs with 31-sample medians improved Roboto `en-words` by about
+  `3.2–3.9%` and Amiri `fa-thelittleprince` by about `0.3%`. An additional
+  eight-median complementary Amiri `fa-words` check improved the mean by
+  `1.0%` and median by `1.25%`. Matcher assembly/perf no longer shows the
+  repeated 64-slot zero stores, and all parity checksums remain unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

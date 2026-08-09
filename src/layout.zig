@@ -845,6 +845,19 @@ pub const FontCascade = struct {
         }
         return 0;
     }
+
+    /// Pick one font for an entire extended grapheme cluster.
+    ///
+    /// Modern layout engines keep combining sequences, emoji ZWJ sequences,
+    /// and Indic conjunct requests atomic while choosing fallback. Splitting at
+    /// scalar boundaries prevents GSUB/GPOS from seeing the sequence and can
+    /// strand marks in a font unrelated to their base. Default-ignorables do
+    /// not require nominal cmap coverage, but a variation selector requires an
+    /// explicit/default UVS record in the same font as its base.
+    pub fn selectFontForCluster(self: FontCascade, cluster: []const u8) !usize {
+        if (!std.unicode.utf8ValidateSlice(cluster)) return error.InvalidUtf8;
+        return try selectFontForClusterWithGlyphCache(self, null, cluster);
+    }
 };
 
 /// Deterministic per-cluster fallback decision used by headless tests,
@@ -1010,54 +1023,48 @@ pub fn diagnoseFontFallbackUtf8(allocator: std.mem.Allocator, cascade: FontCasca
     var decisions = std.ArrayList(FontFallbackDecision).empty;
     errdefer decisions.deinit(allocator);
 
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.i < text.len) {
-        const byte_start = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        if (isVariationSelector(codepoint)) {
-            // A leading or otherwise detached variation selector shapes to no
-            // glyph in Cangjie. Diagnostics follow that visible cluster model
-            // instead of emitting a synthetic `.notdef` decision.
-            continue;
-        }
+    var clusters = unicode.graphemeClustersAssumeValid(text);
+    while (clusters.next()) |cluster| {
+        const cluster_end = cluster.byte_start + cluster.byte_len;
+        const cluster_text = text[cluster.byte_start..cluster_end];
+        const font_index = try selectFontForClusterWithGlyphCache(cascade, null, cluster_text);
+        const font = cascade.fonts[font_index];
 
-        var byte_len = it.i - byte_start;
-        var variation_selector: ?u21 = null;
-        var used_variation_mapping = false;
-        var font_index: usize = 0;
-
-        if (nextVariationSelector(text, it.i)) |selector| {
-            variation_selector = selector;
-            _ = it.nextCodepoint();
-            byte_len = it.i - byte_start;
-
-            for (cascade.fonts, 0..) |font, index| {
-                if (try font.variationGlyphIndex(codepoint, selector) != null) {
-                    font_index = index;
-                    used_variation_mapping = true;
-                    break;
-                }
-            } else {
-                font_index = try cascade.selectFont(codepoint);
+        var it = std.unicode.Utf8Iterator{ .bytes = cluster_text, .i = 0 };
+        while (it.i < cluster_text.len) {
+            const local_start = it.i;
+            const codepoint = it.nextCodepoint() orelse break;
+            if (isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) {
+                // Detached selectors and join controls participate in cluster
+                // selection but do not produce visible fallback decisions.
+                continue;
             }
-        } else {
-            font_index = try cascade.selectFont(codepoint);
+
+            var byte_len = it.i - local_start;
+            var variation_selector: ?u21 = null;
+            var used_variation_mapping = false;
+            if (nextVariationSelector(cluster_text, it.i)) |selector| {
+                variation_selector = selector;
+                _ = it.nextCodepoint();
+                byte_len = it.i - local_start;
+                used_variation_mapping = try font.variationGlyphIndex(codepoint, selector) != null;
+            }
+
+            const glyph_id = if (variation_selector) |selector|
+                try font.glyphIndexWithVariation(codepoint, selector)
+            else
+                try font.glyphIndex(codepoint);
+
+            try decisions.append(allocator, .{
+                .byte_start = cluster.byte_start + local_start,
+                .byte_len = byte_len,
+                .codepoint = codepoint,
+                .variation_selector = variation_selector,
+                .font_index = font_index,
+                .glyph_id = glyph_id,
+                .used_variation_mapping = used_variation_mapping,
+            });
         }
-
-        const glyph_id = if (variation_selector) |selector|
-            try cascade.fonts[font_index].glyphIndexWithVariation(codepoint, selector)
-        else
-            try cascade.fonts[font_index].glyphIndex(codepoint);
-
-        try decisions.append(allocator, .{
-            .byte_start = byte_start,
-            .byte_len = byte_len,
-            .codepoint = codepoint,
-            .variation_selector = variation_selector,
-            .font_index = font_index,
-            .glyph_id = glyph_id,
-            .used_variation_mapping = used_variation_mapping,
-        });
     }
 
     return try decisions.toOwnedSlice(allocator);
@@ -1398,6 +1405,7 @@ fn scriptRunQualityDiagnostic(run: ScriptedRun, scripted: ScriptedText) ShapeQua
 pub const FontFallbackCache = struct {
     allocator: std.mem.Allocator,
     entries: std.AutoHashMap(u21, usize),
+    cluster_entries: std.StringHashMap(usize),
     hits: usize = 0,
     misses: usize = 0,
 
@@ -1405,15 +1413,20 @@ pub const FontFallbackCache = struct {
         return .{
             .allocator = allocator,
             .entries = std.AutoHashMap(u21, usize).init(allocator),
+            .cluster_entries = std.StringHashMap(usize).init(allocator),
         };
     }
 
     pub fn deinit(self: *FontFallbackCache) void {
+        self.freeClusterKeys();
+        self.cluster_entries.deinit();
         self.entries.deinit();
         self.* = undefined;
     }
 
     pub fn clear(self: *FontFallbackCache) void {
+        self.freeClusterKeys();
+        self.cluster_entries.clearRetainingCapacity();
         self.entries.clearRetainingCapacity();
         self.hits = 0;
         self.misses = 0;
@@ -1439,6 +1452,29 @@ pub const FontFallbackCache = struct {
         const font_index = try selectFontUsingGlyphCache(cascade, glyph_index_cache, codepoint);
         try self.entries.put(codepoint, font_index);
         return font_index;
+    }
+
+    pub fn selectFontForCluster(self: *FontFallbackCache, cascade: FontCascade, glyph_index_cache: ?*GlyphIndexCache, cluster: []const u8) !usize {
+        if (cluster.len == 1 and cluster[0] < 0x80) {
+            if (glyph_index_cache) |cache| return try self.selectFontWithGlyphCache(cascade, cache, cluster[0]);
+            return try self.selectFont(cascade, cluster[0]);
+        }
+        if (self.cluster_entries.get(cluster)) |font_index| {
+            self.hits += 1;
+            return font_index;
+        }
+
+        self.misses += 1;
+        const font_index = try selectFontForClusterWithGlyphCache(cascade, glyph_index_cache, cluster);
+        const owned_cluster = try self.allocator.dupe(u8, cluster);
+        errdefer self.allocator.free(owned_cluster);
+        try self.cluster_entries.put(owned_cluster, font_index);
+        return font_index;
+    }
+
+    fn freeClusterKeys(self: *FontFallbackCache) void {
+        var iterator = self.cluster_entries.iterator();
+        while (iterator.next()) |entry| self.allocator.free(entry.key_ptr.*);
     }
 };
 
@@ -1563,50 +1599,75 @@ pub const TextShaper = struct {
         buffer.clear();
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
 
-        // Split only when the selected fallback font changes. Each segment can
-        // then be shaped independently through its own font while preserving a
-        // single flat glyph stream for paragraph layout and rendering.
-        var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+        // Select fallback for complete grapheme/shaping clusters. Keeping a
+        // combining sequence or emoji ZWJ chain in one segment lets the chosen
+        // font's GSUB/GPOS observe the whole sequence instead of producing
+        // unrelated glyph runs for the base and its continuations.
         var segment_start: usize = 0;
         var segment_font_index: ?usize = null;
         var pen_x: f32 = 0;
         var pen_y: f32 = 0;
 
-        while (it.i < text.len) {
-            const cluster = it.i;
-            const codepoint = it.nextCodepoint() orelse break;
-            if (isVariationSelector(codepoint)) {
-                // Keep variation selectors in the current segment so cmap
-                // format 14 can be applied by the font that shaped the base
-                // scalar. Selecting fallback for the selector itself would
-                // split the run and discard the variation relationship.
-                continue;
+        if (textIsAscii(text)) {
+            // ASCII is one grapheme per byte (CRLF still chooses the same font
+            // for both controls). Preserve the old one-pass fallback loop so
+            // the dominant Latin/UI path does not pay for Unicode clustering.
+            for (text, 0..) |codepoint, cluster_start| {
+                const font_index = try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
+                if (segment_font_index == null) {
+                    segment_start = cluster_start;
+                    segment_font_index = font_index;
+                } else if (segment_font_index.? != font_index) {
+                    const next_pen = try appendCascadeRun(
+                        cascade.fonts[segment_font_index.?],
+                        metrics_cache,
+                        glyph_index_cache,
+                        segment_font_index.?,
+                        buffer,
+                        text[segment_start..cluster_start],
+                        font_size,
+                        segment_start,
+                        .{ .x = pen_x, .y = pen_y },
+                        lookupOptionsForText(text[segment_start..cluster_start], options),
+                    );
+                    pen_x = next_pen.x;
+                    pen_y = next_pen.y;
+                    segment_start = cluster_start;
+                    segment_font_index = font_index;
+                }
             }
-            const variation_selector = nextVariationSelector(text, it.i);
-            const font_index = if (variation_selector) |selector|
-                try selectFontForVariation(cascade, fallback_cache, glyph_index_cache, codepoint, selector)
-            else
-                try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
-            if (segment_font_index == null) {
-                segment_start = cluster;
-                segment_font_index = font_index;
-            } else if (segment_font_index.? != font_index) {
-                const next_pen = try appendCascadeRun(
-                    cascade.fonts[segment_font_index.?],
-                    metrics_cache,
+        } else {
+            var clusters = unicode.graphemeClustersAssumeValid(text);
+            while (clusters.next()) |cluster| {
+                const cluster_end = cluster.byte_start + cluster.byte_len;
+                const cluster_text = text[cluster.byte_start..cluster_end];
+                const font_index = try selectFontForCluster(
+                    cascade,
+                    fallback_cache,
                     glyph_index_cache,
-                    segment_font_index.?,
-                    buffer,
-                    text[segment_start..cluster],
-                    font_size,
-                    segment_start,
-                    .{ .x = pen_x, .y = pen_y },
-                    lookupOptionsForText(text[segment_start..cluster], options),
+                    cluster_text,
                 );
-                pen_x = next_pen.x;
-                pen_y = next_pen.y;
-                segment_start = cluster;
-                segment_font_index = font_index;
+                if (segment_font_index == null) {
+                    segment_start = cluster.byte_start;
+                    segment_font_index = font_index;
+                } else if (segment_font_index.? != font_index) {
+                    const next_pen = try appendCascadeRun(
+                        cascade.fonts[segment_font_index.?],
+                        metrics_cache,
+                        glyph_index_cache,
+                        segment_font_index.?,
+                        buffer,
+                        text[segment_start..cluster.byte_start],
+                        font_size,
+                        segment_start,
+                        .{ .x = pen_x, .y = pen_y },
+                        lookupOptionsForText(text[segment_start..cluster.byte_start], options),
+                    );
+                    pen_x = next_pen.x;
+                    pen_y = next_pen.y;
+                    segment_start = cluster.byte_start;
+                    segment_font_index = font_index;
+                }
             }
         }
 
@@ -1976,27 +2037,35 @@ fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []
     // Script itemization happens outside this helper. This pass only performs
     // fallback segmentation inside that script run, so each append keeps the
     // same OpenType script/language lookup selection.
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     var segment_start: usize = 0;
     var segment_font_index: ?usize = null;
     var next_pen = pen;
 
-    while (it.i < text.len) {
-        const cluster = it.i;
-        const codepoint = it.nextCodepoint() orelse break;
-        if (isVariationSelector(codepoint)) continue;
-        const variation_selector = nextVariationSelector(text, it.i);
-        const font_index = if (variation_selector) |selector|
-            try selectFontForVariation(cascade, null, null, codepoint, selector)
-        else
-            try cascade.selectFont(codepoint);
-        if (segment_font_index == null) {
-            segment_start = cluster;
-            segment_font_index = font_index;
-        } else if (segment_font_index.? != font_index) {
-            next_pen = try appendCascadeRun(cascade.fonts[segment_font_index.?], null, null, segment_font_index.?, buffer, text[segment_start..cluster], font_size, cluster_base + segment_start, next_pen, lookup_options);
-            segment_start = cluster;
-            segment_font_index = font_index;
+    if (textIsAscii(text)) {
+        for (text, 0..) |codepoint, cluster_start| {
+            const font_index = try cascade.selectFont(codepoint);
+            if (segment_font_index == null) {
+                segment_start = cluster_start;
+                segment_font_index = font_index;
+            } else if (segment_font_index.? != font_index) {
+                next_pen = try appendCascadeRun(cascade.fonts[segment_font_index.?], null, null, segment_font_index.?, buffer, text[segment_start..cluster_start], font_size, cluster_base + segment_start, next_pen, lookup_options);
+                segment_start = cluster_start;
+                segment_font_index = font_index;
+            }
+        }
+    } else {
+        var clusters = unicode.graphemeClustersAssumeValid(text);
+        while (clusters.next()) |cluster| {
+            const cluster_end = cluster.byte_start + cluster.byte_len;
+            const font_index = try cascade.selectFontForCluster(text[cluster.byte_start..cluster_end]);
+            if (segment_font_index == null) {
+                segment_start = cluster.byte_start;
+                segment_font_index = font_index;
+            } else if (segment_font_index.? != font_index) {
+                next_pen = try appendCascadeRun(cascade.fonts[segment_font_index.?], null, null, segment_font_index.?, buffer, text[segment_start..cluster.byte_start], font_size, cluster_base + segment_start, next_pen, lookup_options);
+                segment_start = cluster.byte_start;
+                segment_font_index = font_index;
+            }
         }
     }
 
@@ -2013,12 +2082,98 @@ fn nextVariationSelector(text: []const u8, byte_index: usize) ?u21 {
     return if (isVariationSelector(selector)) selector else null;
 }
 
-fn selectFontForVariation(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21, variation_selector: u21) !usize {
+fn selectFontForCluster(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    cluster: []const u8,
+) !usize {
     if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-    for (cascade.fonts, 0..) |font, index| {
-        if (try font.variationGlyphIndex(codepoint, variation_selector) != null) return index;
+    if (cascade.fonts.len == 1) return 0;
+
+    // One-byte clusters dominate Latin/UI shaping. Preserve the existing
+    // codepoint fallback cache and its direct ASCII glyph cache for this case.
+    if (cluster.len == 1 and cluster[0] < 0x80) {
+        return try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, cluster[0]);
     }
-    return try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
+
+    if (fallback_cache) |cache| {
+        return try cache.selectFontForCluster(cascade, glyph_index_cache, cluster);
+    }
+    return try selectFontForClusterWithGlyphCache(cascade, glyph_index_cache, cluster);
+}
+
+fn textIsAscii(text: []const u8) bool {
+    for (text) |byte| {
+        if (byte >= 0x80) return false;
+    }
+    return true;
+}
+
+fn selectFontForClusterWithGlyphCache(
+    cascade: FontCascade,
+    glyph_index_cache: ?*GlyphIndexCache,
+    cluster: []const u8,
+) !usize {
+    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+
+    const has_variation_selector = clusterHasVariationSelector(cluster);
+    if (has_variation_selector) {
+        // Prefer a font that explicitly supports every UVS in the cluster.
+        // Only if no such font exists do we apply OpenType's normal fallback of
+        // ignoring an unsupported selector and using the base cmap glyph.
+        for (cascade.fonts, 0..) |font, index| {
+            if (try fontCoversCluster(font, glyph_index_cache, cluster, true)) return index;
+        }
+    }
+    for (cascade.fonts, 0..) |font, index| {
+        if (try fontCoversCluster(font, glyph_index_cache, cluster, false)) return index;
+    }
+
+    // No font covers every visible scalar. Keep the cluster atomic in the font
+    // selected for its first visible scalar; missing continuations remain
+    // explicit `.notdef` glyphs for diagnostics instead of being silently
+    // detached into another font run.
+    var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
+    while (it.nextCodepoint()) |codepoint| {
+        if (isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) continue;
+        if (glyph_index_cache) |cache| return try selectFontUsingGlyphCache(cascade, cache, codepoint);
+        return try cascade.selectFont(codepoint);
+    }
+    return 0;
+}
+
+fn clusterHasVariationSelector(cluster: []const u8) bool {
+    var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
+    while (it.nextCodepoint()) |codepoint| {
+        if (isVariationSelector(codepoint)) return true;
+    }
+    return false;
+}
+
+fn fontCoversCluster(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, cluster: []const u8, require_variation_mapping: bool) !bool {
+    var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
+    var previous_visible: ?u21 = null;
+    while (it.nextCodepoint()) |codepoint| {
+        if (isVariationSelector(codepoint)) {
+            if (!require_variation_mapping) continue;
+            const base = previous_visible orelse return false;
+            const glyph_id = (try font.variationGlyphIndex(base, codepoint)) orelse return false;
+            if (glyph_id == 0) return false;
+            continue;
+        }
+        if (isClusterCoverageIgnorable(codepoint)) continue;
+        if (try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint) == 0) return false;
+        previous_visible = codepoint;
+    }
+    return true;
+}
+
+fn isClusterCoverageIgnorable(codepoint: u21) bool {
+    // Join controls and other default-ignorables participate in shaping but do
+    // not need nominal cmap glyphs. Variation selectors are handled separately
+    // because they refine the preceding scalar through cmap format 14.
+    return !isVariationSelector(codepoint) and unicode.isDefaultIgnorableForShaping(codepoint);
 }
 
 fn selectFontUsingGlyphCache(cascade: FontCascade, glyph_index_cache: *GlyphIndexCache, codepoint: u21) !usize {
@@ -3044,6 +3199,11 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const glyph_start = buffer.glyphs.items.len;
     try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, cluster_base, lookup_options);
     const glyph_len = buffer.glyphs.items.len - glyph_start;
+    // A segment made solely of default-ignorables/variation selectors may
+    // legitimately emit no glyphs. Do not retain a zero-length font run: it
+    // has no owner in the flat glyph stream and destabilizes diagnostics and
+    // line-to-run range calculations.
+    if (glyph_len == 0) return pen;
     try buffer.runs.append(buffer.allocator, .{
         .font = font,
         .font_index = font_index,
@@ -4289,6 +4449,119 @@ test "font fallback diagnostics expose deterministic variation and missing glyph
     }
 }
 
+test "font fallback keeps combining graphemes in a fully covering font" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const primary_bytes = try test_font.buildCodepointSetTtf(allocator, &.{'A'});
+    defer allocator.free(primary_bytes);
+    const fallback_bytes = try test_font.buildCodepointSetTtf(allocator, &.{ 'A', 'B', 0x0301 });
+    defer allocator.free(fallback_bytes);
+
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var fallback = try Font.parse(allocator, fallback_bytes);
+    defer fallback.deinit();
+
+    const fonts = [_]*const Font{ &primary, &fallback };
+    const cascade = FontCascade.init(&fonts);
+    try std.testing.expectEqual(@as(usize, 1), try cascade.selectFontForCluster("A\u{0301}"));
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const shaped = try TextShaper.shapeUtf8Cascade(cascade, &buffer, "A\u{0301}B", 20);
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs[0].font_index);
+    try std.testing.expectEqual(@as(usize, 3), shaped.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 0), shaped.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, "A\u{0301}".len), shaped.glyphs[2].cluster);
+    try std.testing.expect(shaped.glyphs[1].glyph_id != 0);
+
+    const decisions = try diagnoseFontFallbackUtf8(allocator, cascade, "A\u{0301}B");
+    defer allocator.free(decisions);
+    try std.testing.expectEqual(@as(usize, 3), decisions.len);
+    for (decisions) |decision| try std.testing.expectEqual(@as(usize, 1), decision.font_index);
+    try std.testing.expect(!decisions[0].missingGlyph());
+    try std.testing.expect(!decisions[1].missingGlyph());
+
+    var fallback_cache = FontFallbackCache.init(allocator);
+    defer fallback_cache.deinit();
+    var glyph_cache = GlyphIndexCache.init(allocator);
+    defer glyph_cache.deinit();
+    try std.testing.expectEqual(@as(usize, 1), try fallback_cache.selectFontForCluster(cascade, &glyph_cache, "A\u{0301}"));
+    try std.testing.expectEqual(@as(usize, 1), try fallback_cache.selectFontForCluster(cascade, &glyph_cache, "A\u{0301}"));
+    try std.testing.expectEqual(@as(usize, 1), fallback_cache.hits);
+    try std.testing.expectEqual(@as(usize, 1), fallback_cache.misses);
+}
+
+test "font fallback keeps emoji ZWJ sequences atomic" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+    const woman: u21 = 0x1f469;
+    const laptop: u21 = 0x1f4bb;
+
+    const primary_bytes = try test_font.buildCodepointSetTtf(allocator, &.{woman});
+    defer allocator.free(primary_bytes);
+    const emoji_bytes = try test_font.buildCodepointSetTtf(allocator, &.{ woman, laptop });
+    defer allocator.free(emoji_bytes);
+
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var emoji = try Font.parse(allocator, emoji_bytes);
+    defer emoji.deinit();
+
+    const fonts = [_]*const Font{ &primary, &emoji };
+    const cascade = FontCascade.init(&fonts);
+    const sequence = "\u{1f469}\u{200d}\u{1f4bb}";
+    try std.testing.expectEqual(@as(usize, 1), try cascade.selectFontForCluster(sequence));
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const shaped = try TextShaper.shapeUtf8Cascade(cascade, &buffer, sequence, 20);
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs[0].font_index);
+    // ZWJ participates in shaping but emits no visible fallback glyph when it
+    // is not substituted.
+    try std.testing.expectEqual(@as(usize, 2), shaped.glyphs.len);
+    try std.testing.expect(shaped.glyphs[0].glyph_id != 0);
+    try std.testing.expect(shaped.glyphs[1].glyph_id != 0);
+
+    const decisions = try diagnoseFontFallbackUtf8(allocator, cascade, sequence);
+    defer allocator.free(decisions);
+    try std.testing.expectEqual(@as(usize, 2), decisions.len);
+    for (decisions) |decision| {
+        try std.testing.expectEqual(@as(usize, 1), decision.font_index);
+        try std.testing.expect(!decision.missingGlyph());
+    }
+}
+
+test "font fallback does not split a partially covered grapheme" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const base_bytes = try test_font.buildCodepointSetTtf(allocator, &.{'A'});
+    defer allocator.free(base_bytes);
+    const mark_bytes = try test_font.buildCodepointSetTtf(allocator, &.{0x0301});
+    defer allocator.free(mark_bytes);
+
+    var base_font = try Font.parse(allocator, base_bytes);
+    defer base_font.deinit();
+    var mark_font = try Font.parse(allocator, mark_bytes);
+    defer mark_font.deinit();
+
+    const fonts = [_]*const Font{ &base_font, &mark_font };
+    const cascade = FontCascade.init(&fonts);
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const shaped = try TextShaper.shapeUtf8Cascade(cascade, &buffer, "A\u{0301}", 20);
+
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
+    try std.testing.expectEqual(@as(usize, 0), shaped.runs[0].font_index);
+    try std.testing.expectEqual(@as(usize, 2), shaped.glyphs.len);
+    try std.testing.expect(shaped.glyphs[0].glyph_id != 0);
+    try std.testing.expectEqual(@as(GlyphId, 0), shaped.glyphs[1].glyph_id);
+}
+
 test "shape quality diagnostics summarize fallback coverage and missing glyphs" {
     const test_font = @import("test_font.zig");
     const allocator = std.testing.allocator;
@@ -4321,7 +4594,8 @@ test "shape quality diagnostics summarize fallback coverage and missing glyphs" 
     try std.testing.expectEqual(@as(usize, 0), report.missing_glyphs[0].font_index);
     try std.testing.expectEqual(@as(GlyphId, 0), report.missing_glyphs[0].glyph_id);
     try std.testing.expectEqual(@as(usize, 3), report.font_runs.len);
-    try std.testing.expectEqual(@as(usize, 2), report.script_runs.len);
+    // FE0F is Script=Inherited and remains inside the surrounding Latin run.
+    try std.testing.expectEqual(@as(usize, 1), report.script_runs.len);
     var script_fallback_glyphs: usize = 0;
     var script_missing_glyphs: usize = 0;
     for (report.script_runs) |script_run| {

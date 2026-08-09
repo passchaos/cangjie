@@ -96,6 +96,10 @@ pub fn buildSingleCodepointTtf(allocator: std.mem.Allocator, codepoint: u16) ![]
     return buildSfnt(allocator, 0x00010000, try singleCodepointTtfTables(allocator, codepoint));
 }
 
+pub fn buildCodepointSetTtf(allocator: std.mem.Allocator, codepoints: []const u32) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try codepointSetTtfTables(allocator, codepoints));
+}
+
 pub fn buildNamedTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildNamedTtfWithNames(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular");
 }
@@ -994,6 +998,20 @@ fn singleCodepointTtfTables(allocator: std.mem.Allocator, codepoint: u16) ![]Tab
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn codepointSetTtfTables(allocator: std.mem.Allocator, codepoints: []const u32) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat12SequentialTable(allocator, codepoints) };
+    tables[1] = .{ .tag = "glyf", .data = try emptyGlyfTable(allocator, codepoints.len + 1) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, @intCast(codepoints.len + 1)) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, codepoints.len + 1) };
+    tables[5] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, codepoints.len + 1) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, @intCast(codepoints.len + 1)) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
@@ -2587,6 +2605,29 @@ fn cmapFormat12GlyphArrayTable(allocator: std.mem.Allocator, codepoints: []const
         writeU32(bytes, group + 0, codepoint);
         writeU32(bytes, group + 4, codepoint);
         writeU32(bytes, group + 8, glyph_id);
+    }
+    return bytes;
+}
+
+fn cmapFormat12SequentialTable(allocator: std.mem.Allocator, codepoints: []const u32) ![]u8 {
+    const bytes = try allocator.alloc(u8, 28 + codepoints.len * 12);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 1);
+    writeU16(bytes, 4, 3);
+    writeU16(bytes, 6, 10);
+    writeU32(bytes, 8, 12);
+    const off = 12;
+    writeU16(bytes, off + 0, 12);
+    writeU16(bytes, off + 2, 0);
+    writeU32(bytes, off + 4, @intCast(16 + codepoints.len * 12));
+    writeU32(bytes, off + 8, 0);
+    writeU32(bytes, off + 12, @intCast(codepoints.len));
+    for (codepoints, 0..) |codepoint, index| {
+        const group = off + 16 + index * 12;
+        writeU32(bytes, group + 0, codepoint);
+        writeU32(bytes, group + 4, codepoint);
+        writeU32(bytes, group + 8, @intCast(index + 1));
     }
     return bytes;
 }
@@ -4458,6 +4499,11 @@ fn hmtxTableWithGlyphCount(allocator: std.mem.Allocator, glyph_count: usize) ![]
     return bytes;
 }
 
+fn emptyGlyfTable(allocator: std.mem.Allocator, glyph_count: usize) ![]u8 {
+    _ = glyph_count;
+    return try allocator.alloc(u8, 0);
+}
+
 fn hmtxTableWithTwoExtraGlyphs(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 16);
     writeU16(bytes, 0, 500);
@@ -4550,6 +4596,12 @@ fn locaTableWithThreeOutlinedGlyphs(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 6, 34);
     writeU16(bytes, 8, 48);
     writeU16(bytes, 10, 48);
+    return bytes;
+}
+
+fn emptyLocaTable(allocator: std.mem.Allocator, glyph_count: usize) ![]u8 {
+    const bytes = try allocator.alloc(u8, (glyph_count + 1) * 2);
+    @memset(bytes, 0);
     return bytes;
 }
 

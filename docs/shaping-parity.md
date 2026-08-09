@@ -939,3 +939,14 @@ not complete.
   smoke runs reliably.
 - Avoid retaining optimizations that only improve a single noisy run or regress
   Roboto/word-list smoke cases.
+- Font cascade selection now treats each extended grapheme/shaping cluster as
+  one fallback unit. A font must cover every visible scalar, explicit cmap-14
+  UVS support wins when present, and default-ignorable join controls do not
+  require nominal glyphs. If no font fully covers a sequence, the base font
+  retains the cluster so missing marks remain diagnosable instead of being
+  detached. The zero-allocation grapheme iterator has a direct ASCII path, and
+  fixed-P-core HEAD/current probes over a cached two-font 1024-byte ASCII
+  cascade reduced retired instructions from about 316.7M to 289.6M and cycles
+  from roughly 90.5M to 70.8M median, rather than regressing the common path.
+  Full Roboto `en-words` (`checksum=fd03166ae7017b20`) and Amiri `fa-words`
+  (`checksum=246e98435cc9c642`) still pass in-process HarfBuzz parity.

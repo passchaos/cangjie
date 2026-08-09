@@ -115,6 +115,16 @@ reorders independently when a width change creates different line boundaries.
 This follows Parley's per-line ordering model while keeping standalone shaping
 APIs in their existing HarfBuzz-compatible visual buffer order.
 
+Font fallback is selected per extended grapheme/shaping cluster rather than per
+scalar. The first cascade font covering every visible scalar owns the complete
+cluster; variation-selector mappings are preferred explicitly, while join
+controls and other default-ignorables do not require nominal cmap entries. If
+no font fully covers the cluster, the base scalar's font retains the whole
+sequence and missing continuation glyphs remain visible to diagnostics instead
+of splitting marks or ZWJ sequences into unrelated font runs. A zero-allocation
+grapheme iterator feeds this path; the common ASCII path keeps its direct
+per-byte fallback/cache loop.
+
 ## Generated Data And Reproducibility
 
 The runtime table is generated from `unicode-linebreak 0.1.5`'s `tables.rs`:
@@ -170,8 +180,9 @@ Future changes must preserve these rules:
 
 ## Next Structural Steps
 
-1. Extract generated UAX #29 grapheme analysis from `unicode.zig` and expose a
-   streaming boundary API shared by shaping and emergency wrapping.
+1. Replace the current compact UAX #29 approximation with generated property
+   data while preserving the streaming `graphemeClusters` API now shared by
+   fallback and the allocating compatibility collector.
 2. Add explicit shaping-cluster safety flags modeled after HarfBuzz and merge
    them with UAX #14 opportunities.
 3. Consolidate plan caches and transient arrays into reusable shaping/layout

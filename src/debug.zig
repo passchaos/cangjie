@@ -444,8 +444,10 @@ pub fn dumpShapedRunCacheStats(writer: *std.Io.Writer, cache: layout.ShapedRunCa
 }
 
 pub fn dumpFontFallbackCacheStats(writer: *std.Io.Writer, cache: layout.FontFallbackCache) !void {
-    try writer.print("font_fallback_cache entries={d} hits={d} misses={d}\n", .{
+    try writer.print("font_fallback_cache entries={d} scalar_entries={d} cluster_entries={d} hits={d} misses={d}\n", .{
+        cache.entries.count() + cache.cluster_entries.count(),
         cache.entries.count(),
+        cache.cluster_entries.count(),
         cache.hits,
         cache.misses,
     });

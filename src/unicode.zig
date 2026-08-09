@@ -596,6 +596,128 @@ pub const GraphemeCluster = struct {
     byte_len: usize,
 };
 
+/// Zero-allocation forward iterator over Cangjie's extended grapheme clusters.
+///
+/// The iterator borrows an already-valid UTF-8 slice. Public callers should use
+/// `graphemeClusters`, while shaping paths that have already validated their
+/// input can use `graphemeClustersAssumeValid` and avoid a duplicate scan.
+pub const GraphemeClusterIterator = struct {
+    text: []const u8,
+    cursor: usize = 0,
+    pending: ?DecodedCodepoint = null,
+
+    pub fn next(self: *GraphemeClusterIterator) ?GraphemeCluster {
+        if (self.cursor >= self.text.len) return null;
+
+        const cluster_start = self.cursor;
+        const first = self.pending orelse decodeCodepointAt(self.text, self.cursor) orelse unreachable;
+        self.pending = null;
+        self.cursor = first.next;
+
+        var previous_codepoint = first.codepoint;
+        var last_non_extend_codepoint: ?u21 = if (isGraphemeExtendCodepoint(first.codepoint) or first.codepoint == 0x200d)
+            null
+        else
+            first.codepoint;
+        var zwj_after_extended_pictographic = false;
+        var zwj_after_indic_virama = false;
+        var regional_indicator_count: usize = if (isRegionalIndicator(first.codepoint)) 1 else 0;
+
+        // Every ASCII scalar except CR followed by LF is an entire grapheme
+        // whenever the next scalar is also ASCII. Keep ordinary Latin fallback
+        // itemization to one predictable byte check instead of entering the
+        // full Unicode property cascade for every pair.
+        if (first.codepoint < 0x80 and self.cursor < self.text.len and self.text[self.cursor] < 0x80 and
+            !(first.codepoint == '\r' and self.text[self.cursor] == '\n'))
+        {
+            return .{ .byte_start = cluster_start, .byte_len = self.cursor - cluster_start };
+        }
+
+        while (self.cursor < self.text.len) {
+            const decoded = decodeCodepointAt(self.text, self.cursor) orelse unreachable;
+            const codepoint = decoded.codepoint;
+            if (!extendsGrapheme(
+                previous_codepoint,
+                codepoint,
+                regional_indicator_count,
+                zwj_after_extended_pictographic,
+                zwj_after_indic_virama,
+            )) {
+                // Retain the already-decoded boundary scalar so single-codepoint
+                // CJK and mixed-script runs decode every scalar exactly once.
+                self.pending = decoded;
+                break;
+            }
+
+            self.cursor = decoded.next;
+            if (codepoint == 0x200d) {
+                // GB11 only suppresses the break after ZWJ for emoji ZWJ
+                // sequences. A generic "letter + ZWJ + letter" should keep the
+                // ZWJ with the previous cluster (GB9) but still break before
+                // the following non-emoji letter.
+                zwj_after_extended_pictographic = if (last_non_extend_codepoint) |last|
+                    isExtendedPictographic(last)
+                else
+                    false;
+                // UAX #29's InCB rule keeps virama+ZWJ Indic conjuncts at a
+                // single caret stop.
+                zwj_after_indic_virama = isIndicViramaForZwjConjunct(previous_codepoint);
+            } else {
+                zwj_after_extended_pictographic = false;
+                zwj_after_indic_virama = false;
+                if (!isGraphemeExtendCodepoint(codepoint)) {
+                    last_non_extend_codepoint = codepoint;
+                }
+            }
+            previous_codepoint = codepoint;
+            if (isRegionalIndicator(codepoint)) {
+                regional_indicator_count += 1;
+            } else if (codepoint != 0x200d) {
+                regional_indicator_count = 0;
+            }
+        }
+
+        return .{
+            .byte_start = cluster_start,
+            .byte_len = self.cursor - cluster_start,
+        };
+    }
+};
+
+pub fn graphemeClusters(text: []const u8) error{InvalidUtf8}!GraphemeClusterIterator {
+    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
+    return graphemeClustersAssumeValid(text);
+}
+
+pub fn graphemeClustersAssumeValid(text: []const u8) GraphemeClusterIterator {
+    std.debug.assert(std.unicode.utf8ValidateSlice(text));
+    return .{ .text = text };
+}
+
+test "streaming grapheme iterator matches allocating collector" {
+    const allocator = std.testing.allocator;
+    const samples = [_][]const u8{
+        "",
+        "ASCII\r\ntext",
+        "A\u{0301}B",
+        "\u{1f469}\u{200d}\u{1f4bb}",
+        "\u{0915}\u{094d}\u{200d}\u{0937}",
+        "\u{1f1fa}\u{1f1f8}\u{1f1e8}",
+    };
+    for (samples) |sample| {
+        const collected = try itemizeGraphemeClusters(allocator, sample);
+        defer allocator.free(collected);
+        var iterator = try graphemeClusters(sample);
+        var index: usize = 0;
+        while (iterator.next()) |cluster| : (index += 1) {
+            try std.testing.expect(index < collected.len);
+            try std.testing.expectEqual(collected[index], cluster);
+        }
+        try std.testing.expectEqual(collected.len, index);
+    }
+    try std.testing.expectError(error.InvalidUtf8, graphemeClusters("\xff"));
+}
+
 pub const WordSegment = struct {
     byte_start: usize,
     byte_len: usize,
@@ -1073,6 +1195,10 @@ pub fn tag(comptime bytes: *const [4]u8) u32 {
 pub fn scriptForCodepoint(codepoint: u21) Script {
     if ((codepoint >= 'A' and codepoint <= 'Z') or (codepoint >= 'a' and codepoint <= 'z')) return .latin;
     if (isLatinScriptCodepoint(codepoint)) return .latin;
+    // Unicode variation selectors have Script=Inherited. Classify them before
+    // block-specific tests so FE0E/FE0F and supplementary IVS selectors stay
+    // attached to the base script run as well as its grapheme cluster.
+    if (isVariationSelector(codepoint)) return .inherited;
     if (isCopticScriptCodepoint(codepoint)) return .coptic;
     if (isGreekScriptCodepoint(codepoint)) return .greek;
     if (isCyrillicScriptCodepoint(codepoint)) return .cyrillic;
@@ -2508,87 +2634,8 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
     var clusters = std.ArrayList(GraphemeCluster).empty;
     errdefer clusters.deinit(allocator);
 
-    var cursor: usize = 0;
-    var cluster_start: ?usize = null;
-    var cluster_end: usize = 0;
-    var previous_codepoint: ?u21 = null;
-    var last_non_extend_codepoint: ?u21 = null;
-    var zwj_after_extended_pictographic = false;
-    var zwj_after_indic_virama = false;
-    var regional_indicator_count: usize = 0;
-    // Approximate UAX #29 extended grapheme clusters for the scripts supported
-    // here: combining marks, variation selectors, emoji modifiers, emoji ZWJ
-    // chains, Indic virama conjuncts, regional-indicator pairs, and Hangul Jamo
-    // syllable sequences.
-    while (cursor < text.len) {
-        const byte_start = cursor;
-        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
-        const codepoint = decoded.codepoint;
-        const byte_end = decoded.next;
-        cursor = byte_end;
-
-        if (cluster_start == null) {
-            cluster_start = byte_start;
-            cluster_end = byte_end;
-            previous_codepoint = codepoint;
-            last_non_extend_codepoint = if (isGraphemeExtendCodepoint(codepoint) or codepoint == 0x200d) null else codepoint;
-            zwj_after_extended_pictographic = false;
-            zwj_after_indic_virama = false;
-            regional_indicator_count = if (isRegionalIndicator(codepoint)) 1 else 0;
-            continue;
-        }
-
-        if (extendsGrapheme(previous_codepoint.?, codepoint, regional_indicator_count, zwj_after_extended_pictographic, zwj_after_indic_virama)) {
-            cluster_end = byte_end;
-            if (codepoint == 0x200d) {
-                // GB11 only suppresses the break after ZWJ for emoji ZWJ
-                // sequences. A generic "letter + ZWJ + letter" should keep the
-                // ZWJ with the previous cluster (GB9) but still break before the
-                // following non-emoji letter.
-                zwj_after_extended_pictographic = if (last_non_extend_codepoint) |last|
-                    isExtendedPictographic(last)
-                else
-                    false;
-                // UAX #29's InCB rule keeps virama+ZWJ Indic conjuncts at a
-                // single caret stop. Without this side state, "क्‍ष" splits
-                // before the final consonant even though the ZWJ requests a
-                // conjunct glyph.
-                zwj_after_indic_virama = isIndicViramaForZwjConjunct(previous_codepoint.?);
-            } else {
-                zwj_after_extended_pictographic = false;
-                zwj_after_indic_virama = false;
-                if (!isGraphemeExtendCodepoint(codepoint)) {
-                    last_non_extend_codepoint = codepoint;
-                }
-            }
-            previous_codepoint = codepoint;
-            if (isRegionalIndicator(codepoint)) {
-                regional_indicator_count += 1;
-            } else if (codepoint != 0x200d) {
-                regional_indicator_count = 0;
-            }
-            continue;
-        }
-
-        try clusters.append(allocator, .{
-            .byte_start = cluster_start.?,
-            .byte_len = cluster_end - cluster_start.?,
-        });
-        cluster_start = byte_start;
-        cluster_end = byte_end;
-        previous_codepoint = codepoint;
-        last_non_extend_codepoint = if (isGraphemeExtendCodepoint(codepoint) or codepoint == 0x200d) null else codepoint;
-        zwj_after_extended_pictographic = false;
-        zwj_after_indic_virama = false;
-        regional_indicator_count = if (isRegionalIndicator(codepoint)) 1 else 0;
-    }
-
-    if (cluster_start) |start| {
-        try clusters.append(allocator, .{
-            .byte_start = start,
-            .byte_len = cluster_end - start,
-        });
-    }
+    var iterator = try graphemeClusters(text);
+    while (iterator.next()) |cluster| try clusters.append(allocator, cluster);
     return try clusters.toOwnedSlice(allocator);
 }
 

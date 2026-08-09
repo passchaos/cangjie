@@ -2,14 +2,37 @@ const std = @import("std");
 
 const gsub = @import("gsub.zig");
 const gpos = @import("gpos.zig");
+const Font = @import("font.zig").Font;
 const GlyphId = @import("glyph.zig").GlyphId;
 const shaping_metadata = @import("shaping_metadata.zig");
 const unicode = @import("unicode.zig");
 const categories = @import("use/categories.zig");
 const syllables = @import("use/syllables.zig");
+const vowel_constraints = @import("use/vowel_constraints.zig");
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .bali or script_tag == .batk or script_tag == .brah or script_tag == .cakm or script_tag == .cham or script_tag == .dupl or script_tag == .gran or script_tag == .java or script_tag == .lana or script_tag == .marc or script_tag == .newa or script_tag == .saur or script_tag == .shrd;
+    return @intFromEnum(script_tag) & 0xff == '3' or switch (script_tag) {
+        .bali,
+        .batk,
+        .brah,
+        .cakm,
+        .cham,
+        .dupl,
+        .gran,
+        .java,
+        .lana,
+        .marc,
+        .newa,
+        .saur,
+        .shrd,
+        .sind,
+        .sinh,
+        .tirh,
+        .modi,
+        .takr,
+        => true,
+        else => false,
+    };
 }
 
 pub const Category = categories.Category;
@@ -108,6 +131,190 @@ pub fn hasBrokenSyllable(source_syllables: []const u8) bool {
         if (syllableKindIs(syllable_id, .broken)) return true;
     }
     return false;
+}
+
+pub fn insertVowelConstraintDottedCircles(
+    allocator: std.mem.Allocator,
+    glyph_ids: *std.ArrayList(GlyphId),
+    codepoints: *std.ArrayList(u21),
+    clusters: *std.ArrayList(usize),
+    source_ends: *std.ArrayList(usize),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    dotted_circle_glyph: GlyphId,
+) std.mem.Allocator.Error!void {
+    if (dotted_circle_glyph == 0) return;
+
+    var source_index: usize = 0;
+    while (source_index < codepoints.items.len) {
+        const match_len = vowel_constraints.matchLength(codepoints.items, source_index);
+        if (match_len == 0) {
+            source_index += 1;
+            continue;
+        }
+
+        const constrained_source = source_index + @as(usize, match_len) - 1;
+        const source_start = clusters.items[constrained_source];
+        const source_end = source_ends.items[constrained_source];
+        // Reserve every parallel list before changing source indexes. Once the
+        // first list mutates, an allocation failure must not leave shaping
+        // metadata at different cardinalities.
+        try codepoints.ensureUnusedCapacity(allocator, 1);
+        try clusters.ensureUnusedCapacity(allocator, 1);
+        try source_ends.ensureUnusedCapacity(allocator, 1);
+        try glyph_ids.ensureUnusedCapacity(allocator, 1);
+        try glyph_source_indices.ensureUnusedCapacity(allocator, 1);
+        try glyph_cluster_indices.ensureUnusedCapacity(allocator, 1);
+        try glyph_substituted.ensureUnusedCapacity(allocator, 1);
+        try ligature_components.ensureUnusedCapacity(allocator, 1);
+
+        for (glyph_source_indices.items) |*source| {
+            if (source.* >= constrained_source) source.* += 1;
+        }
+        for (glyph_cluster_indices.items) |*owner| {
+            if (owner.* >= constrained_source) owner.* += 1;
+        }
+        for (ligature_components.items) |*info| {
+            const component_count = @min(info.component_count, gpos.max_ligature_components);
+            for (info.component_sources[0..component_count]) |*source| {
+                if (source.* >= constrained_source) source.* += 1;
+            }
+        }
+
+        try codepoints.replaceRange(allocator, constrained_source, 0, &.{0x25cc});
+        try clusters.replaceRange(allocator, constrained_source, 0, &.{source_start});
+        try source_ends.replaceRange(allocator, constrained_source, 0, &.{source_end});
+
+        var glyph_index: usize = 0;
+        const shifted_source = constrained_source + 1;
+        while (glyph_index < glyph_source_indices.items.len and glyph_source_indices.items[glyph_index] < shifted_source) : (glyph_index += 1) {}
+        if (glyph_index >= glyph_source_indices.items.len or glyph_source_indices.items[glyph_index] != shifted_source) {
+            source_index = shifted_source + 1;
+            continue;
+        }
+
+        // Vowel constraints insert immediately before the final scalar and
+        // clear its grapheme continuation bit. Model that by giving the circle
+        // a distinct synthetic source and making both glyphs own their source
+        // starts rather than the preceding independent vowel's grapheme.
+        glyph_cluster_indices.items[glyph_index] = shifted_source;
+        try shaping_metadata.insert(
+            allocator,
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            glyph_index,
+            dotted_circle_glyph,
+            constrained_source,
+            constrained_source,
+        );
+        source_index = shifted_source + 1;
+    }
+}
+
+pub fn decomposeCanonicalSources(
+    allocator: std.mem.Allocator,
+    font: *const Font,
+    glyph_ids: *std.ArrayList(GlyphId),
+    codepoints: *std.ArrayList(u21),
+    clusters: *std.ArrayList(usize),
+    source_ends: *std.ArrayList(usize),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+) !void {
+    var source_index: usize = 0;
+    while (source_index < codepoints.items.len) {
+        const components = unicode.canonicalDecomposition(codepoints.items[source_index]) orelse {
+            source_index += 1;
+            continue;
+        };
+        // The generated table contains only decompositions whose first
+        // component is a Unicode mark—the split-matra class USE refuses to
+        // recompose. Base+mark mappings are filtered out at generation time.
+        if (components.len <= 1) {
+            source_index += 1;
+            continue;
+        }
+
+        // HarfBuzz only decomposes when every emitted component is present in
+        // the selected font. Preserve the original scalar otherwise.
+        var component_glyphs: [4]GlyphId = undefined;
+        var all_present = true;
+        for (components, 0..) |component, component_index| {
+            const glyph = try font.glyphIndex(component);
+            if (glyph == 0) {
+                all_present = false;
+                break;
+            }
+            component_glyphs[component_index] = glyph;
+        }
+        if (!all_present) {
+            source_index += 1;
+            continue;
+        }
+
+        const extra = components.len - 1;
+        try codepoints.ensureUnusedCapacity(allocator, extra);
+        try clusters.ensureUnusedCapacity(allocator, extra);
+        try source_ends.ensureUnusedCapacity(allocator, extra);
+        try glyph_ids.ensureUnusedCapacity(allocator, extra);
+        try glyph_source_indices.ensureUnusedCapacity(allocator, extra);
+        try glyph_cluster_indices.ensureUnusedCapacity(allocator, extra);
+        try glyph_substituted.ensureUnusedCapacity(allocator, extra);
+        try ligature_components.ensureUnusedCapacity(allocator, extra);
+
+        const source_start = clusters.items[source_index];
+        const source_end = source_ends.items[source_index];
+        for (glyph_source_indices.items) |*source| {
+            if (source.* > source_index) source.* += extra;
+        }
+        for (glyph_cluster_indices.items) |*owner| {
+            if (owner.* > source_index) owner.* += extra;
+        }
+        for (ligature_components.items) |*info| {
+            const component_count = @min(info.component_count, gpos.max_ligature_components);
+            for (info.component_sources[0..component_count]) |*source| {
+                if (source.* > source_index) source.* += extra;
+            }
+        }
+
+        try codepoints.replaceRange(allocator, source_index, 1, components);
+        var source_starts: [4]usize = undefined;
+        var source_end_values: [4]usize = undefined;
+        @memset(source_starts[0..components.len], source_start);
+        @memset(source_end_values[0..components.len], source_end);
+        try clusters.replaceRange(allocator, source_index, 1, source_starts[0..components.len]);
+        try source_ends.replaceRange(allocator, source_index, 1, source_end_values[0..components.len]);
+
+        var glyph_index: usize = 0;
+        while (glyph_index < glyph_source_indices.items.len and glyph_source_indices.items[glyph_index] < source_index) : (glyph_index += 1) {}
+        if (glyph_index >= glyph_source_indices.items.len or glyph_source_indices.items[glyph_index] != source_index) {
+            source_index += components.len;
+            continue;
+        }
+        try glyph_ids.replaceRange(allocator, glyph_index, 1, component_glyphs[0..components.len]);
+        var sources: [4]usize = undefined;
+        var owners: [4]usize = undefined;
+        var substituted: [4]bool = .{ false, false, false, false };
+        var infos: [4]gpos.LigatureComponentInfo = undefined;
+        for (0..components.len) |component_index| {
+            sources[component_index] = source_index + component_index;
+            owners[component_index] = source_index + component_index;
+            infos[component_index] = .{};
+            infos[component_index].component_sources[0] = source_index + component_index;
+        }
+        try glyph_source_indices.replaceRange(allocator, glyph_index, 1, sources[0..components.len]);
+        try glyph_cluster_indices.replaceRange(allocator, glyph_index, 1, owners[0..components.len]);
+        try glyph_substituted.replaceRange(allocator, glyph_index, 1, substituted[0..components.len]);
+        try ligature_components.replaceRange(allocator, glyph_index, 1, infos[0..components.len]);
+        source_index += components.len;
+    }
 }
 
 pub fn recordPrefSubstitutions(
@@ -509,6 +716,52 @@ test "USE category covers Duployan sample codepoints" {
     try @import("std").testing.expectEqual(Category.cg_joiner, categoryForCodepoint(0x034f));
     try @import("std").testing.expectEqual(Category.zwnj, categoryForCodepoint(0x200c));
     try @import("std").testing.expectEqual(Category.other, categoryForCodepoint(0x002e));
+}
+
+test "USE vowel constraints insert a distinct synthetic source" {
+    const allocator = std.testing.allocator;
+    var glyph_ids = std.ArrayList(GlyphId).empty;
+    defer glyph_ids.deinit(allocator);
+    try glyph_ids.appendSlice(allocator, &.{ 1, 7 });
+    var codepoints = std.ArrayList(u21).empty;
+    defer codepoints.deinit(allocator);
+    try codepoints.appendSlice(allocator, &.{ 0x0905, 0x093a });
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(allocator);
+    try clusters.appendSlice(allocator, &.{ 0, 3 });
+    var source_ends = std.ArrayList(usize).empty;
+    defer source_ends.deinit(allocator);
+    try source_ends.appendSlice(allocator, &.{ 3, 6 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1 });
+    var owners = std.ArrayList(usize).empty;
+    defer owners.deinit(allocator);
+    try owners.appendSlice(allocator, &.{ 0, 0 });
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(allocator);
+    try substituted.appendSlice(allocator, &.{ false, false });
+    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    defer components.deinit(allocator);
+    try components.appendSlice(allocator, &.{ .{}, .{} });
+
+    try insertVowelConstraintDottedCircles(
+        allocator,
+        &glyph_ids,
+        &codepoints,
+        &clusters,
+        &source_ends,
+        &sources,
+        &owners,
+        &substituted,
+        &components,
+        87,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 87, 7 }, glyph_ids.items);
+    try std.testing.expectEqualSlices(u21, &.{ 0x0905, 0x25cc, 0x093a }, codepoints.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, owners.items);
 }
 
 test "USE shaping includes Balinese" {

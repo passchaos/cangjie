@@ -484,6 +484,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   original advance when no GPOS table can position it. The Mn data is generated
   from Unicode 17 rather than inferred from grapheme Extend, which would also
   capture spacing modifiers and default-ignorables.
+- All 94 upstream `in-house/use-vowel-letter-spoofing.tests` cases pass both
+  HarfBuzz and HarfRust (`tests/data/use-vowel-letter-spoofing.txt`, checksum
+  `3081b548579c2cfc`). This multi-script gate covers font-dependent Indic
+  ScriptList negotiation (`v3` → `v2` → legacy), USE vowel-constraint dotted
+  circles, Unicode canonical split-matra decomposition, and Unicode 17
+  grapheme/category data through Devanagari, Bengali, Gurmukhi, Gujarati,
+  Odia, Telugu, Kannada, Malayalam, Sinhala, Brahmi, Khudawadi, Tirhuta, Modi,
+  and Takri.
 
 Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
 ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad

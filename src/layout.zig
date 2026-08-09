@@ -1889,7 +1889,9 @@ fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []cons
             script_run.byte_start,
             pen,
             .{
-                .script_tag = unicode.openTypeScriptTag(script_run.script),
+                .script = script_run.script,
+                .script_tag = options.script_tag orelse unicode.openTypeScriptTag(script_run.script),
+                .script_tag_explicit = options.script_tag != null,
                 .language_tag = effectiveLanguageTag(run_text, options),
                 .direction = options.direction,
                 .reorder_bidi = options.reorder_bidi,
@@ -3000,7 +3002,9 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 }
 
 const LookupOptions = struct {
+    script: unicode.Script = .common,
     script_tag: unicode.OpenTypeScriptTag = .dflt,
+    script_tag_explicit: bool = false,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     direction: TextDirection = .ltr,
     reorder_bidi: bool = true,
@@ -3013,8 +3017,11 @@ const LookupOptions = struct {
 };
 
 fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
+    const script = scriptForText(text);
     return .{
-        .script_tag = effectiveScriptTag(text, options),
+        .script = script,
+        .script_tag = options.script_tag orelse unicode.openTypeScriptTag(script),
+        .script_tag_explicit = options.script_tag != null,
         .language_tag = effectiveLanguageTag(text, options),
         .direction = options.direction,
         .reorder_bidi = options.reorder_bidi,
@@ -3094,8 +3101,24 @@ fn scriptForText(text: []const u8) unicode.Script {
     return .common;
 }
 
-fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, lookup_options: LookupOptions) !void {
+fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, base_lookup_options: LookupOptions) !void {
     const scale = font_size / @as(f32, @floatFromInt(font.units_per_em));
+    var selected_lookup_options = base_lookup_options;
+    const explicit_script_tag = if (base_lookup_options.script_tag_explicit) base_lookup_options.script_tag else null;
+    const layout_scripts: layout_cache.LayoutScriptSelections = if (buffer.lookup_selection_cache) |cache|
+        try cache.layoutScripts(font, base_lookup_options.script, explicit_script_tag)
+    else
+        .{
+            .gsub = try font.selectGsubScriptForShaping(base_lookup_options.script, explicit_script_tag),
+            .gpos = try font.selectGposScriptForShaping(base_lookup_options.script, explicit_script_tag),
+        };
+    const gsub_script = layout_scripts.gsub;
+    const gpos_script = layout_scripts.gpos;
+    if (gsub_script.tag) |selected_tag| {
+        selected_lookup_options.script_tag = selected_tag;
+    }
+    const gpos_script_tag = gpos_script.tag orelse selected_lookup_options.script_tag;
+    const lookup_options = selected_lookup_options;
     const scratch = &buffer.shape_scratch;
     scratch.clear();
     const glyph_ids = &scratch.glyph_ids;
@@ -3202,6 +3225,45 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
     }
     const use_shape = use_shaper.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
+    if (use_shape) {
+        // Cluster ownership for source text must be established before vowel
+        // constraints inject synthetic U+25CC sources that do not exist in the
+        // original UTF-8 byte stream.
+        try use_shaper.assignGraphemeClusterOwners(
+            buffer.allocator,
+            text,
+            cluster_base,
+            clusters.items,
+            codepoints.items,
+            glyph_cluster_indices.items,
+        );
+        const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+        try use_shaper.insertVowelConstraintDottedCircles(
+            buffer.allocator,
+            glyph_ids,
+            codepoints,
+            clusters,
+            source_ends,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            dotted_circle_glyph,
+        );
+        try use_shaper.decomposeCanonicalSources(
+            buffer.allocator,
+            font,
+            glyph_ids,
+            codepoints,
+            clusters,
+            source_ends,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+        );
+        gsub_options.source_codepoints = codepoints.items;
+    }
     // HarfBuzz normalizes every shaping buffer before script-specific GSUB.
     // Keep immutable source codepoints in logical order, but reorder the glyph
     // stream and its parallel metadata by modified combining class. USE then
@@ -3290,14 +3352,6 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             source_syllables.items,
             codepoints.items,
             glyph_source_indices.items,
-        );
-        try use_shaper.assignGraphemeClusterOwners(
-            buffer.allocator,
-            text,
-            cluster_base,
-            clusters.items,
-            codepoints.items,
-            glyph_cluster_indices.items,
         );
         var use_options = gsub_options;
         use_options.source_features = source_features.items;
@@ -3406,7 +3460,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const gpos_adjustments = &scratch.gpos_adjustments;
     const gpos_start = shapeProfileNow(shape_profile, profile_io);
     var gpos_options = gpos.LookupOptions{
-        .script_tag = lookup_options.script_tag,
+        .script_tag = gpos_script_tag,
         .language_tag = lookup_options.language_tag,
         .direction = if (shapingDirectionForGpos(lookup_options) == .rtl) .rtl else .ltr,
         .features = lookup_options.features,
@@ -3657,8 +3711,22 @@ fn scriptPositionFeatureApplication(position: ScriptPosition) ?gsub.FeatureAppli
 fn shouldShapeInNativeDirection(options: LookupOptions) bool {
     if (!options.reorder_bidi and !options.native_direction_shaping) return false;
     if (options.writing_mode.isVertical()) return false;
-    const native_direction = textDirectionFromBidiClass(unicode.openTypeScriptHorizontalDirection(options.script_tag) orelse return false);
+    const native_direction = textDirectionFromBidiClass(nativeHorizontalDirection(options) orelse return false);
     return options.direction != native_direction;
+}
+
+fn nativeHorizontalDirection(options: LookupOptions) ?unicode.BidiClass {
+    // ScriptList negotiation may select DFLT/latn or a generation-specific
+    // OpenType tag. Text direction remains a Unicode-script property, not a
+    // property of whichever font table entry happened to provide lookups.
+    // An explicit caller override is authoritative, however.
+    const direction_tag = if (options.script_tag_explicit)
+        options.script_tag
+    else if (options.script != .common and options.script != .inherited and options.script != .unknown)
+        unicode.openTypeScriptTag(options.script)
+    else
+        options.script_tag;
+    return unicode.openTypeScriptHorizontalDirection(direction_tag);
 }
 
 fn textDirectionFromBidiClass(direction: unicode.BidiClass) TextDirection {
@@ -3812,7 +3880,7 @@ fn propagateGlyphAttachmentOffsets(glyphs: []GlyphPosition, links: []attachment.
 
 fn shapingDirectionForGpos(options: LookupOptions) TextDirection {
     if (shouldShapeInNativeDirection(options)) {
-        const native = unicode.openTypeScriptHorizontalDirection(options.script_tag) orelse return options.direction;
+        const native = nativeHorizontalDirection(options) orelse return options.direction;
         return textDirectionFromBidiClass(native);
     }
     return options.direction;
@@ -3916,7 +3984,7 @@ test "USE shaping zeroes synthesized nonspacing marks without a GDEF table" {
     const run = try TextShaper.shapeUtf8WithOptions(
         &font,
         &buffer,
-        "𑀅𑀸", // BRAHMI LETTER A + Mn VOWEL SIGN AA.
+        "𑀓𑀸", // BRAHMI LETTER KA + Mn VOWEL SIGN AA.
         1000,
         .{ .script_tag = .brah, .features = &features },
     );

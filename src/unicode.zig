@@ -1,6 +1,7 @@
 const std = @import("std");
 const line_break = @import("text/line_break.zig");
 const canonical_combining_class = @import("unicode/canonical_combining_class.zig");
+const canonical_decomposition = @import("unicode/canonical_decomposition.zig");
 const nonspacing_mark = @import("unicode/nonspacing_mark.zig");
 
 /// Lightweight Unicode helpers used by the shaping/layout layers.
@@ -81,6 +82,10 @@ pub const Script = enum {
     brahmi,
     kaithi,
     chakma,
+    khudawadi,
+    tirhuta,
+    modi,
+    takri,
     nushu,
     runic,
     coptic,
@@ -450,6 +455,10 @@ pub fn canonicalCombiningClass(codepoint: u21) u8 {
     return canonical_combining_class.forCodepoint(codepoint);
 }
 
+pub fn canonicalDecomposition(codepoint: u21) ?[]const u21 {
+    return canonical_decomposition.forCodepoint(codepoint);
+}
+
 pub fn modifiedCombiningClassForShaping(codepoint: u21) u8 {
     // These script-specific overrides are part of HarfBuzz's normalization
     // contract. SAKOT and PADMA intentionally sort after ordinary tone/vowel
@@ -542,6 +551,7 @@ pub fn lineBreakClassForCodepoint(codepoint: u21) LineBreakClass {
 
 pub const OpenTypeScriptTag = enum(u32) {
     dflt = tag("DFLT"),
+    dflt_lower = tag("dflt"),
     latn = tag("latn"),
     grek = tag("grek"),
     cyrl = tag("cyrl"),
@@ -573,6 +583,16 @@ pub const OpenTypeScriptTag = enum(u32) {
     lao = tag("lao "),
     khmr = tag("khmr"),
     mym2 = tag("mym2"),
+    mymr = tag("mymr"),
+    dev3 = tag("dev3"),
+    bng3 = tag("bng3"),
+    ory3 = tag("ory3"),
+    gur3 = tag("gur3"),
+    gjr3 = tag("gjr3"),
+    tel3 = tag("tel3"),
+    knd3 = tag("knd3"),
+    mlm3 = tag("mlm3"),
+    tml3 = tag("tml3"),
     dev2 = tag("dev2"),
     bng2 = tag("bng2"),
     ory2 = tag("ory2"),
@@ -583,6 +603,15 @@ pub const OpenTypeScriptTag = enum(u32) {
     sinh = tag("sinh"),
     taml = tag("taml"),
     mlm2 = tag("mlm2"),
+    tml2 = tag("tml2"),
+    deva = tag("deva"),
+    beng = tag("beng"),
+    orya = tag("orya"),
+    guru = tag("guru"),
+    gujr = tag("gujr"),
+    telu = tag("telu"),
+    knda = tag("knda"),
+    mlym = tag("mlym"),
     ethi = tag("ethi"),
     geor = tag("geor"),
     cher = tag("cher"),
@@ -613,12 +642,48 @@ pub const OpenTypeScriptTag = enum(u32) {
     brah = tag("brah"),
     kthi = tag("kthi"),
     cakm = tag("cakm"),
+    sind = tag("sind"),
+    tirh = tag("tirh"),
+    modi = tag("modi"),
+    takr = tag("takr"),
     nshu = tag("nshu"),
     runr = tag("runr"),
     copt = tag("copt"),
     ogam = tag("ogam"),
     dupl = tag("dupl"),
 };
+
+pub const ScriptTagCandidates = struct {
+    tags: [3]OpenTypeScriptTag,
+    len: u2,
+
+    pub fn slice(self: *const ScriptTagCandidates) []const OpenTypeScriptTag {
+        return self.tags[0..self.len];
+    }
+};
+
+/// Return OpenType ScriptList candidates in HarfBuzz preference order.
+///
+/// Indic-v3 fonts deliberately select USE, while v2 and legacy tags select the
+/// traditional Indic shaper. Keeping all candidates beside the semantic
+/// Unicode script lets layout negotiate against each concrete font instead of
+/// baking one OpenType generation into script itemization.
+pub fn openTypeScriptTagCandidates(script: Script) ScriptTagCandidates {
+    const primary = openTypeScriptTag(script);
+    return switch (script) {
+        .devanagari => .{ .tags = .{ .dev3, .dev2, .deva }, .len = 3 },
+        .bengali => .{ .tags = .{ .bng3, .bng2, .beng }, .len = 3 },
+        .odia => .{ .tags = .{ .ory3, .ory2, .orya }, .len = 3 },
+        .gurmukhi => .{ .tags = .{ .gur3, .gur2, .guru }, .len = 3 },
+        .gujarati => .{ .tags = .{ .gjr3, .gjr2, .gujr }, .len = 3 },
+        .telugu => .{ .tags = .{ .tel3, .tel2, .telu }, .len = 3 },
+        .kannada => .{ .tags = .{ .knd3, .knd2, .knda }, .len = 3 },
+        .tamil => .{ .tags = .{ .tml3, .tml2, .taml }, .len = 3 },
+        .malayalam => .{ .tags = .{ .mlm3, .mlm2, .mlym }, .len = 3 },
+        .myanmar => .{ .tags = .{ .mym2, .mymr, .mymr }, .len = 2 },
+        else => .{ .tags = .{ primary, primary, primary }, .len = 1 },
+    };
+}
 
 pub const OpenTypeLanguageTag = enum(u32) {
     dflt = tag("dflt"),
@@ -710,6 +775,10 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .brahmi => .brah,
         .kaithi => .kthi,
         .chakma => .cakm,
+        .khudawadi => .sind,
+        .tirhuta => .tirh,
+        .modi => .modi,
+        .takri => .takr,
         .nushu => .nshu,
         .runic => .runr,
         .coptic => .copt,
@@ -943,6 +1012,10 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isBrahmiScriptCodepoint(codepoint)) return .brahmi;
     if (isKaithiScriptCodepoint(codepoint)) return .kaithi;
     if (isChakmaScriptCodepoint(codepoint)) return .chakma;
+    if (isKhudawadiScriptCodepoint(codepoint)) return .khudawadi;
+    if (isTirhutaScriptCodepoint(codepoint)) return .tirhuta;
+    if (isModiScriptCodepoint(codepoint)) return .modi;
+    if (isTakriScriptCodepoint(codepoint)) return .takri;
     if (isNushuScriptCodepoint(codepoint)) return .nushu;
     if (isRunicScriptCodepoint(codepoint)) return .runic;
     if (isOghamScriptCodepoint(codepoint)) return .ogham;
@@ -1268,6 +1341,26 @@ fn isChakmaScriptCodepoint(codepoint: u21) bool {
     // reserved U+11135 slot and block tail unknown for malformed/private data.
     return (codepoint >= 0x11100 and codepoint <= 0x11134) or
         (codepoint >= 0x11136 and codepoint <= 0x11147);
+}
+
+fn isKhudawadiScriptCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x112b0 and codepoint <= 0x112ea) or
+        (codepoint >= 0x112f0 and codepoint <= 0x112f9);
+}
+
+fn isTirhutaScriptCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x11480 and codepoint <= 0x114c7) or
+        (codepoint >= 0x114d0 and codepoint <= 0x114d9);
+}
+
+fn isModiScriptCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x11600 and codepoint <= 0x11644) or
+        (codepoint >= 0x11650 and codepoint <= 0x11659);
+}
+
+fn isTakriScriptCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x11680 and codepoint <= 0x116b9) or
+        (codepoint >= 0x116c0 and codepoint <= 0x116c9);
 }
 
 fn isChakmaWordCodepoint(codepoint: u21) bool {
@@ -1959,7 +2052,7 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     const script = scriptForCodepoint(codepoint);
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
@@ -4254,6 +4347,49 @@ test "Sharada additions keep the shrd script and mark boundaries" {
     );
 }
 
+test "modern USE scripts retain assigned signs and reject reserved gaps" {
+    const allocator = std.testing.allocator;
+    const samples = [_]struct {
+        text: []const u8,
+        script: Script,
+        tag_value: OpenTypeScriptTag,
+    }{
+        .{ .text = "𑊰𑋠", .script = .khudawadi, .tag_value = .sind },
+        .{ .text = "𑒁𑒰", .script = .tirhuta, .tag_value = .tirh },
+        .{ .text = "𑘀𑘹", .script = .modi, .tag_value = .modi },
+        .{ .text = "𑚀𑚭", .script = .takri, .tag_value = .takr },
+    };
+
+    for (samples) |sample| {
+        const runs = try itemizeScriptRuns(allocator, sample.text);
+        defer allocator.free(runs);
+        try std.testing.expectEqual(@as(usize, 1), runs.len);
+        try std.testing.expectEqual(sample.script, runs[0].script);
+        try std.testing.expectEqual(sample.tag_value, openTypeScriptTag(sample.script));
+
+        const graphemes = try itemizeGraphemeClusters(allocator, sample.text);
+        defer allocator.free(graphemes);
+        try std.testing.expectEqual(@as(usize, 1), graphemes.len);
+    }
+
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x112eb));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x114c8));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x11645));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x116ba));
+}
+
+test "Indic OpenType candidates prefer v3 then v2 then legacy" {
+    const devanagari = openTypeScriptTagCandidates(.devanagari);
+    try std.testing.expectEqualSlices(
+        OpenTypeScriptTag,
+        &.{ .dev3, .dev2, .deva },
+        devanagari.slice(),
+    );
+
+    const brahmi = openTypeScriptTagCandidates(.brahmi);
+    try std.testing.expectEqualSlices(OpenTypeScriptTag, &.{.brah}, brahmi.slice());
+}
+
 test "Marchen stacks select the Marchen OpenType script" {
     const allocator = std.testing.allocator;
     const text = "𑲊𑲒𑲩";
@@ -5247,6 +5383,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .canadian_aboriginal => .canadian_aboriginal,
         .cham => .cham,
         .brahmi => .brahmi,
+        .khudawadi, .tirhuta, .modi, .takri => .single,
         else => .none,
     };
 }
@@ -5554,6 +5691,21 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x11b60 or
         (codepoint >= 0x11b62 and codepoint <= 0x11b64) or
         codepoint == 0x11b66 or
+        // Khudawadi, Tirhuta, Modi, and Takri dependent signs use GCB=Extend.
+        codepoint == 0x112df or
+        (codepoint >= 0x112e3 and codepoint <= 0x112ea) or
+        codepoint == 0x114b0 or
+        (codepoint >= 0x114b3 and codepoint <= 0x114b8) or
+        codepoint == 0x114ba or
+        codepoint == 0x114bd or
+        (codepoint >= 0x114bf and codepoint <= 0x114c0) or
+        (codepoint >= 0x114c2 and codepoint <= 0x114c3) or
+        (codepoint >= 0x11633 and codepoint <= 0x1163a) or
+        codepoint == 0x1163d or
+        (codepoint >= 0x1163f and codepoint <= 0x11640) or
+        codepoint == 0x116ab or
+        codepoint == 0x116ad or
+        (codepoint >= 0x116b0 and codepoint <= 0x116b7) or
         (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
         // Kayah Li dependent vowels and tones are nonspacing marks. Keeping
         // them attached preserves one caret/word/shaping unit for syllables
@@ -6008,6 +6160,18 @@ fn isSpacingMark(codepoint: u21) bool {
         codepoint == 0x11b61 or
         codepoint == 0x11b65 or
         codepoint == 0x11b67 or
+        // Visible dependent signs for Khudawadi, Tirhuta, Modi, and Takri.
+        (codepoint >= 0x112e0 and codepoint <= 0x112e2) or
+        (codepoint >= 0x114b1 and codepoint <= 0x114b2) or
+        codepoint == 0x114b9 or
+        (codepoint >= 0x114bb and codepoint <= 0x114bc) or
+        codepoint == 0x114be or
+        codepoint == 0x114c1 or
+        (codepoint >= 0x11630 and codepoint <= 0x11632) or
+        (codepoint >= 0x1163b and codepoint <= 0x1163c) or
+        codepoint == 0x1163e or
+        codepoint == 0x116ac or
+        (codepoint >= 0x116ae and codepoint <= 0x116af) or
         // Rejang final H and virama are visible spacing signs but still belong
         // to the previous base for grapheme, word, and shaping boundaries.
         (codepoint >= 0xa952 and codepoint <= 0xa953) or

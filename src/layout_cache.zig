@@ -162,6 +162,11 @@ const LookupSelectionKey = struct {
     run_has_gdef_marks: ?bool,
 };
 
+pub const LayoutScriptSelections = struct {
+    gsub: Font.LayoutScriptSelection,
+    gpos: Font.LayoutScriptSelection,
+};
+
 pub const LookupSelectionCache = struct {
     const Entry = struct {
         key: LookupSelectionKey,
@@ -176,6 +181,13 @@ pub const LookupSelectionCache = struct {
         font_addr: usize,
         accelerators: []gpos.LookupAccelerator,
     };
+    const ScriptSelectionEntry = struct {
+        font_addr: usize,
+        script: unicode.Script,
+        explicit_tag: ?unicode.OpenTypeScriptTag,
+        gsub: Font.LayoutScriptSelection,
+        gpos: Font.LayoutScriptSelection,
+    };
     const FeaturePlanEntry = struct {
         key: LookupSelectionKey,
         features: []unicode.FeatureOverride,
@@ -187,6 +199,7 @@ pub const LookupSelectionCache = struct {
     entries: std.ArrayList(Entry) = .empty,
     gsub_accelerator_entries: std.ArrayList(GsubAcceleratorEntry) = .empty,
     gpos_accelerator_entries: std.ArrayList(GposAcceleratorEntry) = .empty,
+    script_selection_entries: std.ArrayList(ScriptSelectionEntry) = .empty,
     gsub_feature_plan_entries: std.ArrayList(FeaturePlanEntry) = .empty,
     hits: usize = 0,
     misses: usize = 0,
@@ -197,6 +210,7 @@ pub const LookupSelectionCache = struct {
 
     pub fn deinit(self: *LookupSelectionCache) void {
         self.clear();
+        self.script_selection_entries.deinit(self.allocator);
         self.gsub_feature_plan_entries.deinit(self.allocator);
         self.gpos_accelerator_entries.deinit(self.allocator);
         self.gsub_accelerator_entries.deinit(self.allocator);
@@ -218,6 +232,7 @@ pub const LookupSelectionCache = struct {
             gpos.deinitLookupAccelerators(self.allocator, entry.accelerators);
         }
         self.gpos_accelerator_entries.clearRetainingCapacity();
+        self.script_selection_entries.clearRetainingCapacity();
         for (self.gsub_feature_plan_entries.items) |*entry| {
             self.allocator.free(entry.features);
             self.allocator.free(entry.applications);
@@ -317,6 +332,29 @@ pub const LookupSelectionCache = struct {
         errdefer self.allocator.free(features);
         try self.entries.append(self.allocator, .{ .key = key, .features = features, .lookups = lookups });
         return self.entries.items[self.entries.items.len - 1].lookups;
+    }
+
+    pub fn layoutScripts(
+        self: *LookupSelectionCache,
+        font: *const Font,
+        script: unicode.Script,
+        explicit_tag: ?unicode.OpenTypeScriptTag,
+    ) !LayoutScriptSelections {
+        const font_addr = @intFromPtr(font);
+        for (self.script_selection_entries.items) |entry| {
+            if (entry.font_addr == font_addr and entry.script == script and entry.explicit_tag == explicit_tag) {
+                return .{ .gsub = entry.gsub, .gpos = entry.gpos };
+            }
+        }
+        const entry = ScriptSelectionEntry{
+            .font_addr = font_addr,
+            .script = script,
+            .explicit_tag = explicit_tag,
+            .gsub = try font.selectGsubScriptForShaping(script, explicit_tag),
+            .gpos = try font.selectGposScriptForShaping(script, explicit_tag),
+        };
+        try self.script_selection_entries.append(self.allocator, entry);
+        return .{ .gsub = entry.gsub, .gpos = entry.gpos };
     }
 
     fn lookup(self: *LookupSelectionCache, key: LookupSelectionKey, features: []const unicode.FeatureOverride) ?[]const u16 {

@@ -22,8 +22,10 @@ const metric_variation_mod = @import("opentype/metric_variation.zig");
 const mvar_mod = @import("opentype/mvar.zig");
 const morx_mod = @import("opentype/morx.zig");
 const name_mod = @import("opentype/name.zig");
+const ot_layout = @import("opentype/layout.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
+const unicode_mod = @import("unicode.zig");
 const varc_mod = @import("opentype/varc.zig");
 
 /// Errors intentionally preserve the table family that failed. Callers such as
@@ -2288,6 +2290,62 @@ pub const Font = struct {
     pub fn proveGsubTableForShaping(self: *const Font) FontError!void {
         const gsub = self.gsub orelse return;
         try validateSfntTableChecksum(self.data, gsub);
+    }
+
+    pub const LayoutScriptSelection = struct {
+        tag: ?unicode_mod.OpenTypeScriptTag = null,
+        requested: bool = false,
+    };
+
+    /// Select the concrete OpenType Layout ScriptList tag for a Unicode script.
+    ///
+    /// The returned tag is font-dependent: Indic scripts can choose v3, v2,
+    /// or legacy entries, and the chosen generation determines which shaping
+    /// engine is valid. Explicit caller tags bypass candidate expansion.
+    fn selectLayoutScriptForShaping(
+        self: *const Font,
+        table_record: ?TableRecord,
+        script: unicode_mod.Script,
+        explicit_tag: ?unicode_mod.OpenTypeScriptTag,
+    ) FontError!LayoutScriptSelection {
+        const record = table_record orelse return .{};
+        try validateSfntTableChecksum(self.data, record);
+        const table = self.data[record.offset .. record.offset + record.length];
+
+        var tag_buf: [3]u32 = undefined;
+        const requested_tags = if (explicit_tag) |value| tags: {
+            tag_buf[0] = @intFromEnum(value);
+            break :tags tag_buf[0..1];
+        } else tags: {
+            const candidates = unicode_mod.openTypeScriptTagCandidates(script);
+            for (candidates.slice(), 0..) |candidate, index| {
+                tag_buf[index] = @intFromEnum(candidate);
+            }
+            break :tags tag_buf[0..candidates.len];
+        };
+        const selection = ot_layout.selectScriptTag(table, requested_tags) catch |err| switch (err) {
+            error.EndOfStream, error.InvalidLayoutTable => return error.BadSfnt,
+        };
+        return .{
+            .tag = if (selection.tag) |tag_value| std.enums.fromInt(unicode_mod.OpenTypeScriptTag, tag_value) else null,
+            .requested = selection.requested,
+        };
+    }
+
+    pub fn selectGsubScriptForShaping(
+        self: *const Font,
+        script: unicode_mod.Script,
+        explicit_tag: ?unicode_mod.OpenTypeScriptTag,
+    ) FontError!LayoutScriptSelection {
+        return self.selectLayoutScriptForShaping(self.gsub, script, explicit_tag);
+    }
+
+    pub fn selectGposScriptForShaping(
+        self: *const Font,
+        script: unicode_mod.Script,
+        explicit_tag: ?unicode_mod.OpenTypeScriptTag,
+    ) FontError!LayoutScriptSelection {
+        return self.selectLayoutScriptForShaping(self.gpos, script, explicit_tag);
     }
 
     pub fn applyGsubWithOptionsUsingGdefAfterProof(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {

@@ -715,6 +715,15 @@ Current local snapshot after the Nastaliq parity work:
   Cangjie/FreeType median ratios were about `1.82x` for `A`, `2.09x` for
   `g`, and `1.65x` for `é` (geometric mean `1.84x`), so the broader raster
   objective remains open.
+- Internal scan conversion now routes already-finite edge intersections through
+  a dedicated covered-span path. Off-target endpoints are clamped before
+  integer conversion, while overlapping endpoints use direct floor/ceil
+  conversion instead of repeating finite checks and four generic saturating
+  conversions per span; the defensive wrapper remains for external/unchecked
+  inputs. Fixed-P-core `raster-reuse` probes reduced cycles by about `6.7%`
+  for Roboto `A`, `4.6%` for `g`, `4.3%` for `é`, `2.9%` for Amiri `س`,
+  and `4.8%` for `م`. All five target checksums remained byte-identical, and
+  boundary/huge-finite differential tests cover the fast and defensive paths.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

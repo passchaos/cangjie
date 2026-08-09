@@ -128,7 +128,7 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
                 else
                     .{ second_x, first_x, second.delta };
                 if (fill_rule == .even_odd or left_delta != 0) {
-                    if (coverSpan(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f)) |span| {
+                    if (coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f)) |span| {
                         row_has_coverage = true;
                         row_min_x = @min(row_min_x, span.min_x);
                         row_max_x = @max(row_max_x, span.max_x);
@@ -154,7 +154,7 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
 
             if (intersections.len == 2 and @abs(intersections[1].x - intersections[0].x) > 0.000001) {
                 if (fill_rule == .even_odd or intersections[0].delta != 0) {
-                    if (coverSpan(coverage_counts, min_x, max_x, sample_offsets, intersections[0].x, intersections[1].x)) |span| {
+                    if (coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, intersections[0].x, intersections[1].x)) |span| {
                         row_has_coverage = true;
                         row_min_x = @min(row_min_x, span.min_x);
                         row_max_x = @max(row_max_x, span.max_x);
@@ -173,7 +173,7 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
                         if (previous_x) |start_f| {
                             const end_f = current_x;
                             if (winding != 0) {
-                                if (coverSpan(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f)) |span| {
+                                if (coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f)) |span| {
                                     row_has_coverage = true;
                                     row_min_x = @min(row_min_x, span.min_x);
                                     row_max_x = @max(row_max_x, span.max_x);
@@ -192,7 +192,7 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
                 .even_odd => {
                     var pair: usize = 0;
                     while (pair + 1 < intersections.len) : (pair += 2) {
-                        if (coverSpan(coverage_counts, min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x)) |span| {
+                        if (coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x)) |span| {
                             row_has_coverage = true;
                             row_min_x = @min(row_min_x, span.min_x);
                             row_max_x = @max(row_max_x, span.max_x);
@@ -384,13 +384,36 @@ const CoveredSpan = struct {
 
 fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) ?CoveredSpan {
     if (!std.math.isFinite(start_f) or !std.math.isFinite(end_f)) return null;
-    if (@as(f64, end_f) <= @as(f64, start_f)) return null;
-    if (@as(f64, end_f) <= @as(f64, @floatFromInt(min_x)) or
-        @as(f64, start_f) >= @as(f64, @floatFromInt(max_x)) + 1.0) return null;
-    const x_start = @max(min_x, floorI32Saturating(start_f));
-    const x_end = @min(max_x, ceilI32Saturating(end_f));
-    const full_start = @max(x_start, ceilI32Saturating(start_f));
-    const full_end = @min(x_end, floorI32Saturating(end_f) - 1);
+    return coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f);
+}
+
+fn coverSpanFinite(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) ?CoveredSpan {
+    std.debug.assert(std.math.isFinite(start_f) and std.math.isFinite(end_f));
+    const start64: f64 = start_f;
+    const end64: f64 = end_f;
+    const min64: f64 = @floatFromInt(min_x);
+    const max64: f64 = @floatFromInt(max_x);
+    if (end64 <= start64) return null;
+    if (end64 <= min64 or start64 >= max64 + 1.0) return null;
+    // Off-target endpoints may be arbitrarily large but finite. Clamp those
+    // before integer conversion; overlapping endpoints are then guaranteed to
+    // be in the representable target range and need no generic saturation.
+    const x_start = if (start64 <= min64)
+        min_x
+    else
+        @as(i32, @intFromFloat(@floor(start64)));
+    const x_end = if (end64 >= max64)
+        max_x
+    else
+        @as(i32, @intFromFloat(@ceil(end64)));
+    const full_start = if (start64 <= min64)
+        min_x
+    else
+        @as(i32, @intFromFloat(@ceil(start64)));
+    const full_end = if (end64 >= max64 + 1.0)
+        max_x
+    else
+        @as(i32, @intFromFloat(@floor(end64))) - 1;
     const full_coverage: u8 = @intCast(sample_offsets.len);
 
     var x = x_start;
@@ -453,6 +476,23 @@ test "four-sample partial coverage matches the generic loop at boundaries" {
                 coverPartialPixel4(&specialized, 0, start, end, x);
             }
             try std.testing.expectEqual(generic, specialized);
+        }
+    }
+}
+
+test "finite cover span fast path matches defensive clipping" {
+    const boundaries = [_]f32{
+        -1.0e30, -2.0,  -0.125, 0.0,   0.125, 0.875,
+        1.0,     1.125, 2.0,    2.875, 3.0,   1.0e30,
+    };
+    for (boundaries) |start| {
+        for (boundaries) |end| {
+            var defensive = [_]u8{0} ** 3;
+            var fast = [_]u8{0} ** 3;
+            const defensive_span = coverSpan(&defensive, 0, 2, &sample_offsets_4, start, end);
+            const fast_span = coverSpanFinite(&fast, 0, 2, &sample_offsets_4, start, end);
+            try std.testing.expectEqual(defensive_span, fast_span);
+            try std.testing.expectEqual(defensive, fast);
         }
     }
 }

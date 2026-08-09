@@ -764,6 +764,25 @@ Current local snapshot after the Nastaliq parity work:
   HarfBuzz parity for Roboto and both Amiri corpora, Roboto HarfRust parity,
   and all ten retained USE fixtures against both references remained
   unchanged.
+- Homogeneous ExtensionPos(PairPos) lookups now build and consume the same
+  predecoded sparse/class-pair accelerators as direct PairPos. The wrapper
+  still preserves authored subtable alternatives and falls back per generic
+  subtable, while xAdvance records with trailing Device/VariationIndex offset
+  fields use their complete ValueRecord stride; those offsets remain validated
+  and intentionally ignored exactly as in the generic value reader. This
+  removes repeated wrapper, coverage, ClassDef, and matrix parsing for
+  SourceSerifVariable's five-subtable `kern` lookup. Fixed-P-core CPU 8
+  A/B/B/A `perf stat` comparisons reduced SourceSerifVariable `en-words`
+  retired instructions by `47.66%`, branches by `45.26%`, and cycles by
+  `60.71%`, improving timing from `453.456` to `173.778 ns/glyph`. Fixed
+  E-core CPU 30 reproduced `47.65%` fewer instructions and `56.54%` fewer
+  cycles. Roboto and Amiri instructions remained flat. Full HarfBuzz parity
+  remained unchanged for SourceSerifVariable `en-words`,
+  `en-thelittleprince`, and `react-dom`, Roboto and both Amiri corpora;
+  SourceSerifVariable/Roboto HarfRust parity and all ten retained USE fixtures
+  against both references also remained unchanged. The optimized
+  SourceSerifVariable word list is now within roughly `8%` of HarfBuzz on the
+  less noisy fixed-CPU comparisons, down from about `2.8x` slower.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

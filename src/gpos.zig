@@ -144,6 +144,7 @@ pub const LookupAccelerator = struct {
     pair_pos_coverage_classes: []const PairClassEntry = &.{},
     pair_pos_class_entries: []const PairClassEntry = &.{},
     pair_pos_class_matrix: []const i16 = &.{},
+    pair_pos_extension: bool = false,
     mark_to_base_subtables: []const MarkToBaseSubtable = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
@@ -492,6 +493,11 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
+    const extension_type = if (lookup_type == 9)
+        try extensionPositionLookupType(table, lookup_offset, subtable_count)
+    else
+        null;
+    const accelerates_pair_pos = lookup_type == 2 or extension_type == 2;
     var digest = GlyphDigest.empty();
     var accelerator = LookupAccelerator{
         .lookup_offset = lookup_offset,
@@ -509,7 +515,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         try allocator.alloc(SinglePosSubtable, 0);
     errdefer allocator.free(single_pos_subtables);
     @memset(single_pos_subtables, .{});
-    const pair_pos_subtables = if (lookup_type == 2)
+    const pair_pos_subtables = if (accelerates_pair_pos)
         try allocator.alloc(PairPosSubtableAccelerator, subtable_count)
     else
         try allocator.alloc(PairPosSubtableAccelerator, 0);
@@ -548,9 +554,13 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                 single_pos_subtables[subtable_i] = try parseSinglePositionSubtable(table, subtable_offset);
             }
             if (pair_pos_subtables.len != 0) {
+                const pair_subtable_offset = if (extension_type == 2)
+                    try extensionPositionSubtablePayload(table, subtable_offset, 2)
+                else
+                    subtable_offset;
                 pair_pos_subtables[subtable_i] = try appendSimplePairPosRecords(
                     table,
-                    subtable_offset,
+                    pair_subtable_offset,
                     &pair_pos_records,
                     &pair_pos_coverage_classes,
                     &pair_pos_class_entries,
@@ -577,6 +587,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     accelerator.pair_pos_class_entries = try pair_pos_class_entries.toOwnedSlice(allocator);
     errdefer allocator.free(accelerator.pair_pos_class_entries);
     accelerator.pair_pos_class_matrix = try pair_pos_class_matrix.toOwnedSlice(allocator);
+    accelerator.pair_pos_extension = extension_type == 2;
     errdefer allocator.free(accelerator.pair_pos_class_matrix);
     accelerator.mark_to_base_subtables = mark_to_base_subtables;
     if (coverage_pairs.items.len != 0) {
@@ -620,12 +631,22 @@ fn appendSimplePairPosRecords(
     const pos_format = try readU16(table, subtable_offset);
     const value_format_1 = try readU16(table, subtable_offset + 4);
     const value_format_2 = try readU16(table, subtable_offset + 6);
-    if (value_format_1 != 0x0004 or value_format_2 != 0) return .{};
+    // Device/VariationIndex fields are currently validated but ignored by
+    // readValueRecord. They follow the scalar fields, so an xAdvance-only
+    // record remains safe to predecode as long as no other scalar is present.
+    if ((value_format_1 & 0x000f) != 0x0004 or
+        (value_format_1 & 0xff00) != 0 or
+        value_format_2 != 0)
+    {
+        return .{};
+    }
+    const value_size_1 = try valueRecordSize(value_format_1);
     return switch (pos_format) {
-        1 => try appendSimplePairPosFormat1Records(table, subtable_offset, records, allocator),
+        1 => try appendSimplePairPosFormat1Records(table, subtable_offset, value_size_1, records, allocator),
         2 => try appendSimplePairPosFormat2Records(
             table,
             subtable_offset,
+            value_size_1,
             coverage_classes,
             class_entries,
             class_matrix,
@@ -638,6 +659,7 @@ fn appendSimplePairPosRecords(
 fn appendSimplePairPosFormat1Records(
     table: Table,
     subtable_offset: usize,
+    value_size_1: usize,
     records: *std.ArrayList(PairPosRecord),
     allocator: std.mem.Allocator,
 ) (GposError || std.mem.Allocator.Error)!PairPosSubtableAccelerator {
@@ -657,7 +679,7 @@ fn appendSimplePairPosFormat1Records(
         );
         const pair_value_count = try readU16(table, pair_set_offset);
         for (0..pair_value_count) |pair_index| {
-            const pair_record = pair_set_offset + 2 + pair_index * 4;
+            const pair_record = pair_set_offset + 2 + pair_index * (2 + value_size_1);
             try records.append(allocator, .{
                 .first = first,
                 .second = try readU16(table, pair_record),
@@ -675,6 +697,7 @@ fn appendSimplePairPosFormat1Records(
 fn appendSimplePairPosFormat2Records(
     table: Table,
     subtable_offset: usize,
+    value_size_1: usize,
     coverage_classes: *std.ArrayList(PairClassEntry),
     class_entries: *std.ArrayList(PairClassEntry),
     class_matrix: *std.ArrayList(i16),
@@ -720,7 +743,7 @@ fn appendSimplePairPosFormat2Records(
     for (0..matrix_len) |record_index| {
         try class_matrix.append(
             allocator,
-            try readI16(table, subtable_offset + 16 + record_index * 2),
+            try readI16(table, subtable_offset + 16 + record_index * value_size_1),
         );
     }
     return .{
@@ -1320,6 +1343,24 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
                     return;
                 },
                 2 => {
+                    if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                        if (accelerator.pair_pos_extension and
+                            accelerator.pair_pos_subtables.len == subtable_count)
+                        {
+                            try collectPairAdjustmentLookupAccelerated(
+                                table,
+                                lookup_offset,
+                                subtable_count,
+                                accelerator,
+                                glyphs,
+                                adjustments,
+                                allocator,
+                                lookup_flag,
+                                lookup_options,
+                            );
+                            return;
+                        }
+                    }
                     try collectExtensionPairAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
                     return;
                 },
@@ -1695,8 +1736,12 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
                 },
                 .generic => {},
             }
-            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, first_index, adjustments, allocator, lookup_flag, options)) break;
+            const lookup_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
+            const pair_subtable_offset = if (accelerator.pair_pos_extension)
+                try extensionPositionSubtablePayload(table, lookup_subtable_offset, 2)
+            else
+                lookup_subtable_offset;
+            if (try collectPairAdjustmentAt(table, pair_subtable_offset, glyphs, first_index, adjustments, allocator, lookup_flag, options)) break;
         }
     }
 }
@@ -6379,6 +6424,97 @@ test "GPOS simple PairPos accelerator preserves zero adjustment precedence" {
         null,
     );
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_advance);
+    try std.testing.expect(adjustments.items[0].pair_positioned);
+}
+
+test "GPOS ExtensionPos PairPos accelerator preserves device stride and precedence" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 106;
+
+    // One homogeneous ExtensionPos lookup wrapping two ordered PairPos
+    // alternatives.
+    writeU16Test(&bytes, 0, 9);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 2);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 44);
+
+    const first_extension = 10;
+    writeU16Test(&bytes, first_extension + 0, 1);
+    writeU16Test(&bytes, first_extension + 2, 2);
+    writeU32Test(&bytes, first_extension + 4, 8);
+    const first_pair = first_extension + 8;
+    writeU16Test(&bytes, first_pair + 0, 1);
+    writeU16Test(&bytes, first_pair + 2, 20);
+    // xAdvance plus a nullable xAdvanceDeviceOffset. The latter makes each
+    // ValueRecord four bytes rather than two and exercises predecoded strides.
+    writeU16Test(&bytes, first_pair + 4, 0x0044);
+    writeU16Test(&bytes, first_pair + 6, 0);
+    writeU16Test(&bytes, first_pair + 8, 1);
+    writeU16Test(&bytes, first_pair + 10, 12);
+    const first_set = first_pair + 12;
+    writeU16Test(&bytes, first_set + 0, 1);
+    writeU16Test(&bytes, first_set + 2, 7);
+    writeI16Test(&bytes, first_set + 4, 0);
+    writeU16Test(&bytes, first_set + 6, 0);
+    writeCoverage1Test(&bytes, first_pair + 20, 5);
+
+    const second_extension = 44;
+    writeU16Test(&bytes, second_extension + 0, 1);
+    writeU16Test(&bytes, second_extension + 2, 2);
+    writeU32Test(&bytes, second_extension + 4, 8);
+    const second_pair = second_extension + 8;
+    writeU16Test(&bytes, second_pair + 0, 2);
+    writeU16Test(&bytes, second_pair + 2, 32);
+    writeU16Test(&bytes, second_pair + 4, 0x0044);
+    writeU16Test(&bytes, second_pair + 6, 0);
+    writeU16Test(&bytes, second_pair + 8, 38);
+    writeU16Test(&bytes, second_pair + 10, 46);
+    writeU16Test(&bytes, second_pair + 12, 2);
+    writeU16Test(&bytes, second_pair + 14, 2);
+    // Four class matrix records, each xAdvance followed by a null device
+    // offset. The final record would apply -40 to class (1, 1).
+    for (0..4) |record_index| {
+        writeI16Test(&bytes, second_pair + 16 + record_index * 4, if (record_index == 3) -40 else 0);
+        writeU16Test(&bytes, second_pair + 18 + record_index * 4, 0);
+    }
+    writeCoverage1Test(&bytes, second_pair + 32, 5);
+    writeClassDef1Test(&bytes, second_pair + 38, 5, 1);
+    writeClassDef1Test(&bytes, second_pair + 46, 7, 1);
+
+    const table = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const accelerator = try buildLookupAccelerator(table, 0, allocator);
+    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
+    try std.testing.expect(accelerator.pair_pos_extension);
+    try std.testing.expectEqual(@as(usize, 2), accelerator.pair_pos_subtables.len);
+    try std.testing.expectEqual(PairPosAcceleratorKind.format_1_x_advance, accelerator.pair_pos_subtables[0].kind);
+    try std.testing.expectEqual(PairPosAcceleratorKind.format_2_x_advance, accelerator.pair_pos_subtables[1].kind);
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    const accelerators = [_]LookupAccelerator{accelerator};
+    try collectLookupWithIndex(
+        table,
+        0,
+        0,
+        &.{ 5, 7 },
+        &adjustments,
+        allocator,
+        .{
+            .lookup_accelerators = &accelerators,
+            .run_has_default_ignorables = false,
+        },
+        null,
+    );
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    // The first wrapper explicitly handled this pair with zero adjustment.
+    // The later class fallback must not override it with -40.
     try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_advance);
     try std.testing.expect(adjustments.items[0].pair_positioned);
 }

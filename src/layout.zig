@@ -3092,6 +3092,10 @@ fn effectiveLanguageTag(text: []const u8, options: ShapeOptions) unicode.OpenTyp
 }
 
 fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
+    // Reserve zero for the overwhelmingly common no-override plan and avoid
+    // constructing/finalizing Wyhash per run. Non-empty plans retain their
+    // established hash representation for cache compatibility.
+    if (features.len == 0) return 0;
     var hasher = std.hash.Wyhash.init(0);
     for (features) |feature| {
         hasher.update(std.mem.asBytes(&feature.tag));
@@ -3102,6 +3106,10 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
 }
 
 fn normalizedVariationCoordsHash(coords: []const f32) u64 {
+    // Match GlyphMetricsCache's established default-instance key. No axis
+    // coordinates means there are no bytes to distinguish, so hashing the
+    // empty length only adds work to every default shaping plan.
+    if (coords.len == 0) return 0;
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(std.mem.asBytes(&coords.len));
     for (coords) |coord| {
@@ -3109,6 +3117,17 @@ fn normalizedVariationCoordsHash(coords: []const f32) u64 {
         hasher.update(std.mem.asBytes(&bits));
     }
     return hasher.final();
+}
+
+test "default shape-plan inputs use zero hashes" {
+    try std.testing.expectEqual(@as(u64, 0), featureOverridesHash(&.{}));
+    try std.testing.expectEqual(@as(u64, 0), normalizedVariationCoordsHash(&.{}));
+
+    // Non-empty values must still take the payload-sensitive hash path.
+    try std.testing.expect(featureOverridesHash(&.{
+        .{ .tag = unicode.tag("liga"), .enabled = false },
+    }) != 0);
+    try std.testing.expect(normalizedVariationCoordsHash(&.{0.25}) != 0);
 }
 
 fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {

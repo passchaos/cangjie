@@ -391,6 +391,10 @@ fn lookupSelectionKeysEqual(a: LookupSelectionKey, b: LookupSelectionKey) bool {
 }
 
 fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
+    // Empty overrides are the normal shaping case. Zero is a stable sentinel
+    // because cache hits still compare the complete override slices after the
+    // hash key matches, so a rare collision cannot alias different plans.
+    if (features.len == 0) return 0;
     var hasher = std.hash.Wyhash.init(0);
     for (features) |feature| {
         hasher.update(std.mem.asBytes(&feature.tag));
@@ -398,6 +402,13 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
         hasher.update(std.mem.asBytes(&enabled));
     }
     return hasher.final();
+}
+
+test "lookup selection reserves zero feature hash for defaults" {
+    try std.testing.expectEqual(@as(u64, 0), featureOverridesHash(&.{}));
+    try std.testing.expect(featureOverridesHash(&.{
+        .{ .tag = unicode.tag("kern"), .enabled = false },
+    }) != 0);
 }
 
 fn featureOverridesEqual(a: []const unicode.FeatureOverride, b: []const unicode.FeatureOverride) bool {

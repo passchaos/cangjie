@@ -542,6 +542,21 @@ Current local snapshot after the Nastaliq parity work:
   eight-median complementary Amiri `fa-words` check improved the mean by
   `1.0%` and median by `1.25%`. Matcher assembly/perf no longer shows the
   repeated 64-slot zero stores, and all parity checksums remain unchanged.
+- Default shape-plan and lookup-selection keys now reserve zero for empty
+  feature-override and variation-coordinate slices instead of constructing and
+  finalizing Wyhash state for values with no payload. Non-empty inputs retain
+  their existing payload-sensitive hashes, and lookup-selection hits still
+  compare the complete feature slices. Serial fixed-CPU-30 A/B/B/A and reverse
+  B/A/A/B comparisons, with four 31-sample medians per binary in each order,
+  reduced the combined Roboto `en-words` median from `323.938` to
+  `321.207 ns/glyph`, about `0.84%`, and Amiri `fa-words` from `1296.696` to
+  `1294.172 ns/glyph`, about `0.19%`. Amiri `fa-thelittleprince` remained
+  within noise: the combined median favored the candidate by `0.39%`, while
+  symmetrically trimming each binary's highest and lowest median yielded a
+  `0.08%` improvement. Post-change Roboto `perf` reduced `Wyhash.final` from
+  about `3.88%` to `2.91%`; the `layout_cache.lookupSelectionKey` child,
+  previously about `0.68%`, disappeared. All corpus and retained USE parity
+  checksums remain unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

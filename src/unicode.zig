@@ -464,6 +464,10 @@ pub const BidiMap = struct {
 };
 
 pub fn isDefaultIgnorableForShaping(codepoint: u21) bool {
+    // SOFT HYPHEN is the lowest default-ignorable scalar Cangjie preserves for
+    // shaping. This authoritative lower bound lets the overwhelmingly common
+    // ASCII path skip the remaining singleton and range comparisons.
+    if (codepoint < 0x00ad) return false;
     return codepoint == 0x00ad or
         codepoint == 0x034f or
         codepoint == 0x061c or
@@ -478,6 +482,16 @@ pub fn isDefaultIgnorableForShaping(codepoint: u21) bool {
         (codepoint >= 0x1bca0 and codepoint <= 0x1bca3) or
         (codepoint >= 0x1d173 and codepoint <= 0x1d17a) or
         (codepoint >= 0xe0000 and codepoint <= 0xe0fff);
+}
+
+test "default-ignorable shaping fast path preserves the lowest boundary" {
+    for (0..0x00ad) |codepoint| {
+        try std.testing.expect(!isDefaultIgnorableForShaping(@intCast(codepoint)));
+    }
+    try std.testing.expect(isDefaultIgnorableForShaping(0x00ad));
+    try std.testing.expect(!isDefaultIgnorableForShaping(0x00ae));
+    try std.testing.expect(isDefaultIgnorableForShaping(0x034f));
+    try std.testing.expect(isDefaultIgnorableForShaping(0xe0100));
 }
 
 pub fn arabicModifiedCombiningClassForShaping(codepoint: u21) u8 {

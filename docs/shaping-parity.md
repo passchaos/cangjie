@@ -557,6 +557,26 @@ Current local snapshot after the Nastaliq parity work:
   about `3.88%` to `2.91%`; the `layout_cache.lookupSelectionKey` child,
   previously about `0.68%`, disappeared. All corpus and retained USE parity
   checksums remain unchanged.
+- Default-ignorable classification now rejects every scalar below U+00AD in
+  one comparison. U+00AD SOFT HYPHEN is the lowest scalar in the shaping set,
+  so this authoritative bound avoids the full singleton/range chain for ASCII
+  while preserving variation selectors and all higher default-ignorables.
+  Serial fixed-CPU-30 A/B/B/A and reverse B/A/A/B comparisons, with four
+  31-sample medians per binary in each order, reduced the combined Roboto
+  `en-words` median by about `0.92%` (a symmetrically trimmed mean improved
+  `321.432` to `319.079 ns/glyph`, about `0.73%`). Amiri
+  `fa-thelittleprince` and `fa-words` also remained slightly faster: trimmed
+  means improved about `0.21%` each. In a same-baseline Roboto `perf` sample,
+  `unicode.isDefaultIgnorableForShaping` fell from about `2.65%` to a residual
+  `0.20%` child and disappeared as a standalone hotspot. All corpus and
+  retained USE parity checksums remain unchanged.
+- A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
+  commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
+  `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at
+  `1293.856` versus `1246.225 ns/glyph`, a Cangjie deficit of about `3.82%`;
+  and Roboto `en-words` at `320.234` versus `229.665 ns/glyph`, a Cangjie
+  deficit of about `39.4%`. These are workload-specific local measurements;
+  the broader cross-font performance objective remains active.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

@@ -627,6 +627,14 @@ Current local snapshot after the Nastaliq parity work:
   `options_ns` fell from about `1.13 ms` before this work to about `0.39 ms`.
   Full HarfBuzz parity for all three corpora and the retained multi-script USE
   fixture remained unchanged.
+- A fixed-CPU-30 Cangjie/HarfBuzz/HarfBuzz/Cangjie absolute matrix at commit
+  `4c3446f`, with 31-sample medians, measured Roboto `en-words` at
+  `291.122` versus `228.537 ns/glyph`, leaving Cangjie about `27.4%` slower;
+  Amiri `fa-thelittleprince` at `745.034` versus `796.559 ns/glyph`, making
+  Cangjie about `6.5%` faster; and Amiri `fa-words` at `1283.056` versus
+  `1248.622 ns/glyph`, leaving Cangjie about `2.8%` slower. These measurements
+  use the in-process system HarfBuzz 8.3 runner and demonstrate that the result
+  remains workload-dependent rather than a broad shaping-performance win.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at
@@ -810,9 +818,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   Odia, Telugu, Kannada, Malayalam, Sinhala, Brahmi, Khudawadi, Tirhuta, Modi,
   and Takri.
 
-Conclusion: some complex Arabic/Nastaliq slices now beat HarfBuzz locally, but
-ordinary Amiri Arabic long text still trails HarfBuzz substantially. The broad
-goal is active, not complete.
+Conclusion: Amiri Arabic long text and some complex Arabic/Nastaliq slices now
+beat HarfBuzz locally, but ordinary Latin word shaping remains substantially
+slower and the Amiri word list still trails slightly. The broad goal is active,
+not complete.
 
 ## Near-Term Gaps
 

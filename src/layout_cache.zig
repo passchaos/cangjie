@@ -492,9 +492,16 @@ const GlyphMetricsKey = struct {
 };
 
 pub const GlyphMetricsCache = struct {
+    const direct_capacity = 512;
+    const HorizontalDirectEntry = struct {
+        key: GlyphMetricsKey = .{ .font_addr = 0, .glyph_id = 0 },
+        metrics: GlyphMetrics = .{ .advance_width = 0, .left_side_bearing = 0 },
+        valid: bool = false,
+    };
     allocator: std.mem.Allocator,
     entries: std.AutoHashMap(GlyphMetricsKey, GlyphMetrics),
     vertical_entries: std.AutoHashMap(GlyphMetricsKey, ?VerticalGlyphMetrics),
+    direct_entries: [direct_capacity]HorizontalDirectEntry = [_]HorizontalDirectEntry{.{}} ** direct_capacity,
     hits: usize = 0,
     misses: usize = 0,
 
@@ -515,6 +522,7 @@ pub const GlyphMetricsCache = struct {
     pub fn clear(self: *GlyphMetricsCache) void {
         self.entries.clearRetainingCapacity();
         self.vertical_entries.clearRetainingCapacity();
+        self.direct_entries = [_]HorizontalDirectEntry{.{}} ** direct_capacity;
         self.hits = 0;
         self.misses = 0;
     }
@@ -525,7 +533,13 @@ pub const GlyphMetricsCache = struct {
 
     pub fn horizontalMetricsAtCoords(self: *GlyphMetricsCache, font: *const Font, glyph_id: GlyphId, normalized_variation_coords: []const f32) !GlyphMetrics {
         const key = glyphMetricsKey(font, glyph_id, normalized_variation_coords);
+        const direct = &self.direct_entries[directMetricsIndex(key)];
+        if (direct.valid and glyphMetricsKeysEqual(direct.key, key)) {
+            self.hits += 1;
+            return direct.metrics;
+        }
         if (self.entries.get(key)) |metrics| {
+            direct.* = .{ .key = key, .metrics = metrics, .valid = true };
             self.hits += 1;
             return metrics;
         }
@@ -539,6 +553,7 @@ pub const GlyphMetricsCache = struct {
             .left_side_bearing = raw.left_side_bearing,
         };
         try self.entries.put(key, metrics);
+        direct.* = .{ .key = key, .metrics = metrics, .valid = true };
         return metrics;
     }
 
@@ -565,6 +580,64 @@ pub const GlyphMetricsCache = struct {
         return metrics;
     }
 };
+
+fn directMetricsIndex(key: GlyphMetricsKey) usize {
+    // Glyph id is the strongest locality signal: shaping repeatedly requests
+    // the same small alphabet from one face and variation instance. Mix the
+    // complete identity so fallback fonts and variable instances can coexist;
+    // exact key comparison still resolves all collisions before returning.
+    var mixed: u64 = @intCast(key.font_addr);
+    mixed = (mixed >> 4) ^ key.variation_hash;
+    mixed ^= @as(u64, key.glyph_id) *% 0x9e37_79b9_7f4a_7c15;
+    mixed ^= mixed >> 32;
+    return @intCast(mixed & (GlyphMetricsCache.direct_capacity - 1));
+}
+
+fn glyphMetricsKeysEqual(a: GlyphMetricsKey, b: GlyphMetricsKey) bool {
+    return a.font_addr == b.font_addr and
+        a.glyph_id == b.glyph_id and
+        a.variation_hash == b.variation_hash;
+}
+
+test "glyph metrics direct cache is exact and cleared with the backing map" {
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var cache = GlyphMetricsCache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const expected = try cache.horizontalMetrics(&font, 1);
+    const key = glyphMetricsKey(&font, 1, &.{});
+    const slot = directMetricsIndex(key);
+    try std.testing.expect(cache.direct_entries[slot].valid);
+    try std.testing.expect(glyphMetricsKeysEqual(key, cache.direct_entries[slot].key));
+
+    // Remove the authoritative map entry so this repeat can succeed only via
+    // the exact direct slot, not by falling through to the old cache path.
+    try std.testing.expect(cache.entries.remove(key));
+    const from_direct = try cache.horizontalMetrics(&font, 1);
+    try std.testing.expectEqual(expected, from_direct);
+    try std.testing.expectEqual(@as(usize, 1), cache.hits);
+    try std.testing.expectEqual(@as(usize, 1), cache.misses);
+
+    // Glyph ids separated by the power-of-two slot count collide. A foreign
+    // complete key must miss the slot and fall back to the authoritative map.
+    try cache.entries.put(key, expected);
+    cache.direct_entries[slot].key.glyph_id +%= GlyphMetricsCache.direct_capacity;
+    const after_collision = try cache.horizontalMetrics(&font, 1);
+    try std.testing.expectEqual(expected, after_collision);
+    try std.testing.expect(glyphMetricsKeysEqual(key, cache.direct_entries[slot].key));
+    try std.testing.expectEqual(@as(usize, 2), cache.hits);
+    try std.testing.expectEqual(@as(usize, 1), cache.misses);
+
+    cache.clear();
+    try std.testing.expect(!cache.direct_entries[slot].valid);
+    try std.testing.expectEqual(@as(usize, 0), cache.hits);
+    try std.testing.expectEqual(@as(usize, 0), cache.misses);
+}
 
 const GlyphIndexKey = struct {
     font_addr: usize,

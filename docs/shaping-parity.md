@@ -659,6 +659,18 @@ Current local snapshot after the Nastaliq parity work:
   Roboto sampling no longer reports `gpos.nextUnignoredGlyph`, previously
   about `1.75%`. Full HarfBuzz parity for all three corpora and Roboto
   HarfRust parity remained unchanged.
+- Horizontal glyph metrics now use a 512-slot exact direct-mapped front cache
+  before the existing hash map. Slots retain the complete font address, glyph
+  id, and variation hash, so collisions and fallback/variation changes safely
+  fall through to the authoritative map and refill the slot. The vertical
+  cache remains unchanged, avoiding per-context storage for an inactive path.
+  Fixed-P-core interleaved `perf stat` comparisons reduced Roboto `en-words`
+  retired instructions by about `3.33%` and cycles by `5.00%`; Amiri
+  `fa-words` improved `0.85%` and `0.39%`, and Amiri
+  `fa-thelittleprince` improved `1.35%` and `1.16%`, respectively. Generic
+  `Wyhash.final`, previously about `3.46%` in Roboto sampling, disappeared
+  from the post-change profile. Full HarfBuzz parity for all three corpora and
+  Roboto HarfRust parity remained unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

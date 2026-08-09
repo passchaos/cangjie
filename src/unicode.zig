@@ -4314,6 +4314,28 @@ test "Grantha marks select the gran OpenType script" {
     );
 }
 
+test "Vedic marks retain their Brahmic grapheme cluster" {
+    const allocator = std.testing.allocator;
+
+    const nonspacing_text = "𑌨᳴";
+    const nonspacing_clusters = try itemizeGraphemeClusters(allocator, nonspacing_text);
+    defer allocator.free(nonspacing_clusters);
+    try std.testing.expectEqualSlices(
+        GraphemeCluster,
+        &.{.{ .byte_start = 0, .byte_len = nonspacing_text.len }},
+        nonspacing_clusters,
+    );
+
+    const spacing_text = "𑌨᳡";
+    const spacing_clusters = try itemizeGraphemeClusters(allocator, spacing_text);
+    defer allocator.free(spacing_clusters);
+    try std.testing.expectEqualSlices(
+        GraphemeCluster,
+        &.{.{ .byte_start = 0, .byte_len = spacing_text.len }},
+        spacing_clusters,
+    );
+}
+
 test "Sharada additions keep the shrd script and mark boundaries" {
     const allocator = std.testing.allocator;
     const text = "𑆠𑭠𑭡";
@@ -5706,6 +5728,14 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0x116ab or
         codepoint == 0x116ad or
         (codepoint >= 0x116b0 and codepoint <= 0x116b7) or
+        // Common Vedic tone/cantillation marks inherit the surrounding
+        // Brahmic script and remain in its grapheme/shaping cluster.
+        (codepoint >= 0x1cd0 and codepoint <= 0x1cd2) or
+        (codepoint >= 0x1cd4 and codepoint <= 0x1ce0) or
+        (codepoint >= 0x1ce2 and codepoint <= 0x1ce8) or
+        codepoint == 0x1ced or
+        codepoint == 0x1cf4 or
+        (codepoint >= 0x1cf8 and codepoint <= 0x1cf9) or
         (codepoint >= 0xa9bc and codepoint <= 0xa9bd) or
         // Kayah Li dependent vowels and tones are nonspacing marks. Keeping
         // them attached preserves one caret/word/shaping unit for syllables
@@ -6172,6 +6202,8 @@ fn isSpacingMark(codepoint: u21) bool {
         codepoint == 0x1163e or
         codepoint == 0x116ac or
         (codepoint >= 0x116ae and codepoint <= 0x116af) or
+        codepoint == 0x1ce1 or
+        codepoint == 0x1cf7 or
         // Rejang final H and virama are visible spacing signs but still belong
         // to the previous base for grapheme, word, and shaping boundaries.
         (codepoint >= 0xa952 and codepoint <= 0xa953) or

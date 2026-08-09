@@ -79,6 +79,35 @@ pub fn swap(
     std.mem.swap(gpos.LigatureComponentInfo, &ligature_components[a], &ligature_components[b]);
 }
 
+/// Merges a glyph range at a monotone cluster level without splitting an
+/// existing cluster at either boundary. GSUB and script reorder both widen
+/// clusters, so centralizing the boundary extension keeps their metadata
+/// semantics identical when one stage merges through a range produced by the
+/// other.
+pub fn mergeMonotoneClusters(clusters: []usize, start_index: usize, end_index: usize) void {
+    if (start_index >= clusters.len) return;
+    var start = start_index;
+    var end = @min(end_index, clusters.len);
+    if (end <= start + 1) return;
+
+    var merged = clusters[start];
+    for (clusters[start..end]) |cluster| {
+        merged = @min(merged, cluster);
+    }
+
+    if (merged != clusters[end - 1]) {
+        while (end < clusters.len and clusters[end - 1] == clusters[end]) {
+            end += 1;
+        }
+    }
+    if (merged != clusters[start]) {
+        while (start > 0 and clusters[start - 1] == clusters[start]) {
+            start -= 1;
+        }
+    }
+    @memset(clusters[start..end], merged);
+}
+
 pub fn insert(
     allocator: std.mem.Allocator,
     glyph_ids: *std.ArrayList(GlyphId),
@@ -138,4 +167,12 @@ fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
     var info = gpos.LigatureComponentInfo{};
     info.component_sources[0] = source;
     return info;
+}
+
+test "monotone cluster merge extends through existing boundary clusters" {
+    var clusters = [_]usize{ 0, 2, 2, 2, 5 };
+
+    mergeMonotoneClusters(&clusters, 0, 3);
+
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 5 }, &clusters);
 }

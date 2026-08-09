@@ -5,6 +5,7 @@ const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
 const class_context = @import("opentype/class_context.zig");
 const ot_layout = @import("opentype/layout.zig");
+const shaping_metadata = @import("shaping_metadata.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
 
@@ -3013,36 +3014,8 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
 fn mergeLigatureClusterMetadata(options: LookupOptions, glyph_index: usize, match: LigatureMatch) void {
     const clusters = options.glyph_cluster_indices orelse return;
     if (glyph_index >= clusters.items.len) return;
-    mergeClusterRange(clusters.items, glyph_index, glyph_index + match.match_end);
+    shaping_metadata.mergeMonotoneClusters(clusters.items, glyph_index, glyph_index + match.match_end);
     mergeFollowingMarksForLigatureCluster(options, glyph_index, match);
-}
-
-fn mergeClusterRange(clusters: []usize, start_index: usize, end_index: usize) void {
-    if (start_index >= clusters.len) return;
-    var start = start_index;
-    var end = @min(end_index, clusters.len);
-    if (end <= start + 1) return;
-
-    var merged = clusters[start];
-    for (clusters[start..end]) |cluster| {
-        merged = @min(merged, cluster);
-    }
-
-    if (merged != clusters[end - 1]) {
-        while (end < clusters.len and clusters[end - 1] == clusters[end]) {
-            end += 1;
-        }
-    }
-
-    if (merged != clusters[start]) {
-        while (start > 0 and clusters[start - 1] == clusters[start]) {
-            start -= 1;
-        }
-    }
-
-    for (clusters[start..end]) |*cluster| {
-        cluster.* = merged;
-    }
 }
 
 fn mergeFollowingMarksForLigatureCluster(options: LookupOptions, glyph_index: usize, match: LigatureMatch) void {
@@ -4840,14 +4813,37 @@ fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId),
                     if (component_offset < relative_index) removed_before += 1;
                 }
                 if (consumed_component) {
-                    // Later records can name a component consumed by this
-                    // ligature. Retarget those records to the replacement
-                    // glyph, but leave LookupFlag-ignored glyphs that survived
-                    // between components addressable at their shifted indices.
                     mapped_index.* = target_index;
                 } else {
                     mapped_index.* -= removed_before;
                 }
+            }
+
+            // HarfBuzz removes the length delta's worth of logical positions
+            // immediately after the lookup's SequenceIndex, even when the
+            // nested ligature used a different LookupFlag and physically
+            // consumed a later component around an ignored glyph. Compact the
+            // mapped sequence the same way after resolving physical indices.
+            // This makes the next SequenceIndex name the old later component,
+            // which may now be the replacement ligature.
+            const remove_count = @min(
+                change.removed_len - change.inserted_len,
+                mapped_len -| (@as(usize, sequence_index) + 1),
+            );
+            if (remove_count != 0) {
+                const remove_start = @as(usize, sequence_index) + 1;
+                const remove_end = remove_start + remove_count;
+                std.mem.copyForwards(
+                    usize,
+                    mapped_buf[remove_start .. mapped_len - remove_count],
+                    mapped_buf[remove_end..mapped_len],
+                );
+                std.mem.copyForwards(
+                    bool,
+                    mapped_live_buf[remove_start .. mapped_len - remove_count],
+                    mapped_live_buf[remove_end..mapped_len],
+                );
+                mapped_len -= remove_count;
             }
             continue;
         }
@@ -9216,6 +9212,74 @@ test "GSUB contextual records extend positions across extension multiple substit
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 20, 31, 3 }, glyphs.items);
 }
 
+test "GSUB contextual ligature compacts positions before a later multiple substitution" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 92;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10); // LookupList.
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6); // Ligature lookup at 16.
+    writeU16Test(&bytes, 14, 40); // Multiple lookup at 50.
+
+    writeU16Test(&bytes, 16, 4);
+    writeU16Test(&bytes, 20, 1);
+    writeU16Test(&bytes, 22, 8);
+    const ligature_subst = 24;
+    writeU16Test(&bytes, ligature_subst + 0, 1);
+    writeU16Test(&bytes, ligature_subst + 2, 18);
+    writeU16Test(&bytes, ligature_subst + 4, 1);
+    writeU16Test(&bytes, ligature_subst + 6, 8);
+    const ligature_set = ligature_subst + 8;
+    writeU16Test(&bytes, ligature_set + 0, 1);
+    writeU16Test(&bytes, ligature_set + 2, 4);
+    const ligature = ligature_set + 4;
+    writeU16Test(&bytes, ligature + 0, 10);
+    writeU16Test(&bytes, ligature + 2, 2);
+    writeU16Test(&bytes, ligature + 4, 2);
+    writeCoverage1(&bytes, ligature_subst + 18, 1);
+
+    writeU16Test(&bytes, 50, 2);
+    writeU16Test(&bytes, 54, 1);
+    writeU16Test(&bytes, 56, 8);
+    const multiple_subst = 58;
+    writeU16Test(&bytes, multiple_subst + 0, 1);
+    writeU16Test(&bytes, multiple_subst + 2, 12);
+    writeU16Test(&bytes, multiple_subst + 4, 1);
+    writeU16Test(&bytes, multiple_subst + 6, 18);
+    writeCoverage1(&bytes, multiple_subst + 12, 3);
+    const sequence = multiple_subst + 18;
+    writeU16Test(&bytes, sequence + 0, 2);
+    writeU16Test(&bytes, sequence + 2, 3);
+    writeU16Test(&bytes, sequence + 4, 4);
+
+    const records = 84;
+    writeU16Test(&bytes, records + 0, 0);
+    writeU16Test(&bytes, records + 2, 0);
+    writeU16Test(&bytes, records + 4, 1);
+    writeU16Test(&bytes, records + 6, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+
+    const input_indices = [_]usize{ 0, 1, 2 };
+    try applySubstitutionRecordsMapped(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len },
+        &glyphs,
+        records,
+        2,
+        &input_indices,
+        allocator,
+        .{},
+    );
+
+    // The first nested lookup consumes input position one into a ligature.
+    // SequenceIndex one in the next record therefore names the former input
+    // position two, whose MultipleSubst expansion must remain in the result.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 3, 4 }, glyphs.items);
+}
+
 test "GSUB contextual ligature remaps records across ignored components" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 112;
@@ -9302,11 +9366,11 @@ test "GSUB contextual ligature remaps records across ignored components" {
         .ligature_components = &ligature_components,
     });
 
-    // The ligature lookup ignores the mark at source 1 while consuming source
-    // 2. The following contextual record still names sequenceIndex 2 in the
-    // pre-substitution match, so it must retarget the replacement ligature, not
-    // the surviving ignored mark that shifted into the old component slot.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 41, 99 }, glyphs.items);
+    // HarfBuzz models a one-glyph contraction by removing the logical
+    // position immediately after SequenceIndex zero. The old position two
+    // shifts to one, so a later SequenceIndex two is now out of range even
+    // though the nested ligature physically skipped the mark between inputs.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 99 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
     try std.testing.expectEqual(@as(u8, 2), ligature_components.items[0].component_count);
     try std.testing.expectEqual(@as(usize, 0), ligature_components.items[0].component_sources[0]);

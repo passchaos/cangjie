@@ -70,6 +70,48 @@ Current USE corpus parity gate:
 zig build shape-bench -Doptimize=ReleaseFast -- --engine compare-harfrust --font ~/Work/harfbuzz/perf/fonts/NotoSansDuployan-Regular.otf --text-file ~/Work/harfrust/harfrust/benches/texts/duployan.txt --direction ltr
 ```
 
+The upstream HarfBuzz `in-house/tests/use.tests` regression set is retained
+verbatim as one UTF-8 text corpus per fixture font under `tests/data/use/`.
+Together the ten files cover all 17 upstream cases (Balinese, Tai Tham,
+Chakma, Newa, Grantha/Vedic, Lepcha, Malayalam, Brahmi, and Kaithi). Run every
+font against both references after USE, contextual GSUB, grapheme-cluster, or
+source-metadata changes:
+
+```sh
+fonts=~/Work/harfbuzz/test/shape/data/in-house/fonts
+for corpus in tests/data/use/*.txt; do
+  hash=${corpus##*/}
+  hash=${hash%.txt}
+  zig build shape-bench -Doptimize=ReleaseFast -- \
+    --engine compare-harfbuzz \
+    --font "$fonts/$hash.ttf" \
+    --text-file "$corpus" \
+    --direction ltr
+  zig build shape-bench -Doptimize=ReleaseFast -- \
+    --engine compare-harfrust \
+    --harfrust-bin ~/Work/harfrust/target/release/hr-shape \
+    --font "$fonts/$hash.ttf" \
+    --text-file "$corpus" \
+    --direction ltr
+done
+```
+
+The current expected aggregate checksums, identical for Cangjie, HarfBuzz, and
+HarfRust, are:
+
+| Font fixture | Cases | Checksum |
+| --- | ---: | ---: |
+| `23406a60ab081c4fb15e1596ea1cd4f27ae8443e` | 1 | `2f98be262c8e7b12` |
+| `2a670df15b73a5dc75a5cc491bde5ac93c5077dc` | 5 | `9dad5d518d7788f1` |
+| `4afb0e8b9a86bb9bd73a1247de4e33fbe3c1fd93` | 4 | `1e72f949bda7bd49` |
+| `4cce528e99f600ed9c25a2b69e32eb94a03b4ae8` | 1 | `60ff4045de0745f` |
+| `573d3a3177c9a8646e94c8a0d7b224334340946a` | 1 | `89190ef2a86420fc` |
+| `6ff0fbead4462d9f229167b4e6839eceb8465058` | 1 | `e00d34dbd7f4bf67` |
+| `7c24183f26d60df414578a0a9f5e79ab9d32a22b` | 1 | `d3bc11481ea14192` |
+| `dcf774ca21062e7439f98658b18974ea8b956d0c` | 1 | `30fa5ca9dce7bacf` |
+| `f518eb6f6b5eec2946c9fbbbde44e45d46f5e2ac` | 1 | `4caf38b3f8bfed32` |
+| `fbb6c84c9e1fe0c39e152fbe845e51fd81f6748e` | 1 | `4e3bc2e9eb662fd1` |
+
 The `harfbuzz` engine links the system HarfBuzz C library in-process and is the
 preferred HarfBuzz timing baseline when the local development environment has
 `pkg-config harfbuzz` available. It supports the shared `--enable-feature` /

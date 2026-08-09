@@ -21,6 +21,7 @@ pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
         .gran,
         .java,
         .lana,
+        .lepc,
         .marc,
         .newa,
         .saur,
@@ -508,7 +509,7 @@ fn reorderRephaGlyphInSyllable(
         // syllable contains no post-base item. This is HarfBuzz's forward
         // reorder and must move all source/cluster/ligature metadata together.
         const destination = if (is_post_base) index - 1 else index;
-        mergeClusterRange(glyph_cluster_indices, start, destination + 1);
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices, start, destination + 1);
         var current = start;
         while (current < destination) : (current += 1) {
             shaping_metadata.swap(
@@ -558,7 +559,7 @@ fn reorderPrebaseGlyphsInSyllable(
         var source_group_end = index + 1;
         while (source_group_end < end and glyph_source_indices[source_group_end] == source) : (source_group_end += 1) {}
         if (insertion < index) {
-            mergeClusterRange(glyph_cluster_indices, insertion, index + 1);
+            shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices, insertion, index + 1);
             var destination = index;
             while (destination > insertion) : (destination -= 1) {
                 shaping_metadata.swap(
@@ -579,15 +580,6 @@ fn reorderPrebaseGlyphsInSyllable(
 fn categoryForReordering(source: usize, source_pref_substituted: []const bool, codepoints: []const u21) Category {
     if (source < source_pref_substituted.len and source_pref_substituted[source]) return .vowel_pre;
     return if (source < codepoints.len) categories.forCodepoint(codepoints[source]) else .other;
-}
-
-fn mergeClusterRange(clusters: []usize, start: usize, end: usize) void {
-    if (start >= end or end > clusters.len) return;
-    var owner = clusters[start];
-    for (clusters[start + 1 .. end]) |candidate| {
-        owner = @min(owner, candidate);
-    }
-    @memset(clusters[start..end], owner);
 }
 
 fn syllableKindIs(syllable_id: u8, kind: SyllableType) bool {
@@ -716,6 +708,10 @@ test "USE category covers Duployan sample codepoints" {
     try @import("std").testing.expectEqual(Category.cg_joiner, categoryForCodepoint(0x034f));
     try @import("std").testing.expectEqual(Category.zwnj, categoryForCodepoint(0x200c));
     try @import("std").testing.expectEqual(Category.other, categoryForCodepoint(0x002e));
+}
+
+test "USE shaping includes Lepcha" {
+    try std.testing.expect(shouldShape(.lepc));
 }
 
 test "USE vowel constraints insert a distinct synthetic source" {
@@ -858,7 +854,9 @@ test "USE reordering moves only the first split prebase component" {
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 20, 10, 21 }, &glyph_ids);
     try std.testing.expectEqualSlices(usize, &.{ 1, 0, 1 }, &sources);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 1 }, &cluster_owners);
+    // Moving the first component merges through its already-shared source
+    // cluster, so the trailing MultipleSubst component inherits the new owner.
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0 }, &cluster_owners);
     try std.testing.expectEqualSlices(bool, &.{ true, false, true }, &substituted);
 }
 
@@ -949,6 +947,44 @@ test "USE rphf substitutions reorder as repha glyphs" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 10, 50, 20 }, &glyph_ids);
     try std.testing.expectEqualSlices(usize, &.{ 2, 0, 3 }, &sources);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 3 }, &cluster_owners);
+}
+
+test "USE repha reorder preserves a GSUB-widened trailing cluster" {
+    var glyph_ids = [_]GlyphId{ 13, 10, 14, 12 };
+    var sources = [_]usize{ 0, 2, 3, 5 };
+    // The below-form ligature at index two consumed source four and widened
+    // the final virama's cluster owner to the same pre-ligature cluster.
+    var cluster_owners = [_]usize{ 0, 2, 2, 2 };
+    var substituted = [_]bool{ true, false, true, false };
+    var components = [_]gpos.LigatureComponentInfo{
+        .{ .component_sources = [_]usize{0} ** gpos.max_ligature_components },
+        .{ .component_sources = [_]usize{2} ** gpos.max_ligature_components },
+        .{
+            .component_count = 2,
+            .component_sources = [_]usize{3} ** gpos.max_ligature_components,
+        },
+        .{ .component_sources = [_]usize{5} ** gpos.max_ligature_components },
+    };
+    components[2].component_sources[1] = 4;
+    const syllable_serials = [_]u8{ 0x12, 0x12, 0x12, 0x12, 0x12, 0x12 };
+    const rphf_substituted = [_]bool{ true, false, false, false, false, false };
+    const pref_substituted = [_]bool{ false, false, false, false, false, false };
+    const codepoints = [_]u21{ 0x1102d, 0x11046, 0x11013, 0x11046, 0x11013, 0x11046 };
+
+    reorderGlyphs(
+        &glyph_ids,
+        &sources,
+        &cluster_owners,
+        &substituted,
+        &components,
+        &syllable_serials,
+        &rphf_substituted,
+        &pref_substituted,
+        &codepoints,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 14, 13, 12 }, &glyph_ids);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, &cluster_owners);
 }
 
 test "USE inserts a dotted circle into each broken syllable" {

@@ -114,7 +114,7 @@ pub const LookupAccelerator = struct {
     mark_filtering_set: ?u16 = null,
     /// Stored on entry zero for an O(1) table-level capability check. Shaping
     /// runs use this to avoid mutation-epoch bookkeeping for fonts whose GSUB
-    /// has no format-3 chaining lookup that consumes a run digest.
+    /// has no lookup accelerator that consumes a shared run digest.
     table_uses_run_digest_cache: bool = false,
     extension_lookup_type: ?u16 = null,
     single_subst: SingleSubstAccelerator = .{},
@@ -170,6 +170,7 @@ const LigatureSubstAccelerator = struct {
     set_slots: []const u16 = &.{},
     definitions: []const LigatureDefinition = &.{},
     components: []const GlyphId = &.{},
+    first_component_digest: GlyphDigest = .{},
     prefilter_second: bool = false,
 };
 
@@ -918,6 +919,7 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
         allocator.free(accelerators);
     }
     var table_uses_run_digest_cache = false;
+    var ligature_digest_lookup_count: usize = 0;
     for (accelerators, 0..) |*accelerator, lookup_i| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + lookup_i * 2));
         // Dispatch fields are trusted by the shaping hot path. Prove the fixed
@@ -928,8 +930,16 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
         accelerator.* = try buildLookupAccelerator(table, lookup_offset, allocator);
         table_uses_run_digest_cache = table_uses_run_digest_cache or
             (accelerator.chaining_coverage_only and !accelerator.chaining_input_digest.isEmpty());
+        if (!accelerator.ligature_subst.first_component_digest.isEmpty()) {
+            ligature_digest_lookup_count += 1;
+        }
         built_count += 1;
     }
+    // A single ligature lookup already scans the run once, so building an
+    // approximate summary first would usually be duplicate work. Two or more
+    // lookups amortize one mutation-aware run digest across their independent
+    // first-component coverages, which is common in Latin `ccmp`/`liga`.
+    table_uses_run_digest_cache = table_uses_run_digest_cache or ligature_digest_lookup_count >= 2;
     if (accelerators.len != 0) accelerators[0].table_uses_run_digest_cache = table_uses_run_digest_cache;
     return accelerators;
 }
@@ -1628,10 +1638,12 @@ fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator
     var components = std.ArrayList(GlyphId).empty;
     errdefer components.deinit(allocator);
     var competing_definition_count: usize = 0;
+    var first_component_digest = GlyphDigest.empty();
 
     var set_i: usize = 0;
     while (set_i < lig_set_count) : (set_i += 1) {
         const glyph = (try coverageGlyphAt(table, coverage_offset, set_i)) orelse return error.BadGsub;
+        first_component_digest.add(glyph);
         const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + set_i * 2));
         const ligature_count = try readU16(table, set_offset);
         const definition_start = definitions.items.len;
@@ -1678,6 +1690,7 @@ fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator
         .set_slots = set_slots,
         .definitions = owned_definitions,
         .components = owned_components,
+        .first_component_digest = first_component_digest,
         .prefilter_second = shouldPrefilterLigatureSecond(competing_definition_count),
     };
 }
@@ -2071,6 +2084,14 @@ fn applyValidatedAcceleratedLookup(
         accelerator.subtable_count == 1 and
         accelerator.ligature_subst.sets.len != 0)
     {
+        if (run_digest_cache) |cache| {
+            const run_digest = cache.get(glyphs.items, accelerator.lookup_flag, lookup_options);
+            if (run_digest.isEmpty() or
+                !accelerator.ligature_subst.first_component_digest.mayIntersect(run_digest))
+            {
+                return true;
+            }
+        }
         if (accelerator.ligature_subst.prefilter_second) {
             try applyLigatureSubstitutionPrefiltered(
                 table,
@@ -2250,6 +2271,14 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
     }
     if (lookup_type == 4 and subtable_count == 1) {
         if (ligatureLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            if (run_digest_cache) |cache| {
+                const run_digest = cache.get(glyphs.items, lookup_flag, lookup_options);
+                if (run_digest.isEmpty() or
+                    !accelerator.first_component_digest.mayIntersect(run_digest))
+                {
+                    return;
+                }
+            }
             if (accelerator.prefilter_second) {
                 try applyLigatureSubstitutionPrefiltered(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
             } else {
@@ -4044,6 +4073,110 @@ test "GSUB run digest cache reuses no-op runs and invalidates on substitution" {
     const after_substitution = cache.get(glyphs.items, 0, options);
     try std.testing.expect(after_substitution.mayHave(2));
     try std.testing.expect(!after_substitution.mayHave(1));
+    try std.testing.expectEqual(generation, cache.generation);
+}
+
+test "GSUB ligature run digest activates only when reusable" {
+    const allocator = std.testing.allocator;
+
+    var single_lookup_bytes = [_]u8{0} ** 46;
+    writeU32Test(&single_lookup_bytes, 0, 0x00010000);
+    writeU16Test(&single_lookup_bytes, 8, 10); // LookupList.
+    writeU16Test(&single_lookup_bytes, 10, 1);
+    writeU16Test(&single_lookup_bytes, 12, 4); // Lookup at 14.
+    writeLigatureLookupTest(&single_lookup_bytes, 14, 1, 2, 5);
+
+    const single_accelerators = try buildLookupAccelerators(
+        &single_lookup_bytes,
+        0,
+        single_lookup_bytes.len,
+        allocator,
+    );
+    defer deinitLookupAccelerators(allocator, single_accelerators);
+    try std.testing.expect(!single_accelerators[0].table_uses_run_digest_cache);
+
+    // A lone ligature lookup would build the same whole-run summary that its
+    // exact scan is about to consume. Keep mutation-epoch bookkeeping disabled
+    // until at least two independent first-component coverages can share it.
+    var generation: usize = 0;
+    const single_options = optionsWithRunDigestGeneration(
+        .{ .lookup_accelerators = single_accelerators },
+        &generation,
+    );
+    try std.testing.expect(single_options.glyph_mutation_generation == null);
+
+    var two_lookup_bytes = [_]u8{0} ** 80;
+    writeU32Test(&two_lookup_bytes, 0, 0x00010000);
+    writeU16Test(&two_lookup_bytes, 8, 10); // LookupList.
+    writeU16Test(&two_lookup_bytes, 10, 2);
+    writeU16Test(&two_lookup_bytes, 12, 6); // Lookup 0 at 16.
+    writeU16Test(&two_lookup_bytes, 14, 38); // Lookup 1 at 48.
+    writeLigatureLookupTest(&two_lookup_bytes, 16, 1, 2, 5);
+    writeLigatureLookupTest(&two_lookup_bytes, 48, 5, 3, 9);
+
+    const two_accelerators = try buildLookupAccelerators(
+        &two_lookup_bytes,
+        0,
+        two_lookup_bytes.len,
+        allocator,
+    );
+    defer deinitLookupAccelerators(allocator, two_accelerators);
+    try std.testing.expect(two_accelerators[0].table_uses_run_digest_cache);
+    try std.testing.expect(two_accelerators[0].ligature_subst.first_component_digest.mayHave(1));
+    try std.testing.expect(two_accelerators[1].ligature_subst.first_component_digest.mayHave(5));
+
+    const two_options = optionsWithRunDigestGeneration(
+        .{ .lookup_accelerators = two_accelerators },
+        &generation,
+    );
+    try std.testing.expect(two_options.glyph_mutation_generation != null);
+}
+
+test "GSUB ligature run digest invalidates after an earlier ligature" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 80;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10); // LookupList.
+    writeU16Test(&bytes, 10, 2);
+    writeU16Test(&bytes, 12, 6); // Lookup 0 at 16.
+    writeU16Test(&bytes, 14, 38); // Lookup 1 at 48.
+    writeLigatureLookupTest(&bytes, 16, 1, 2, 5);
+    writeLigatureLookupTest(&bytes, 48, 5, 3, 9);
+
+    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    defer deinitLookupAccelerators(allocator, accelerators);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+
+    var generation: usize = 0;
+    const options = LookupOptions{
+        .lookup_accelerators = accelerators,
+        .glyph_mutation_generation = &generation,
+        .assume_validated = true,
+    };
+    var cache = RunDigestCache.init();
+    const table = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+
+    // Lookup 0 caches the original {1,2,3} run and produces glyph 5. Lookup 1
+    // starts with 5, which was absent from that summary, so it can only form
+    // the final ligature if the first edit invalidates the shared digest.
+    try applyLookupWithIndex(table, 16, 0, &glyphs, allocator, options, &cache);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 5, 3 }, glyphs.items);
+    try applyLookupWithIndex(table, 48, 1, &glyphs, allocator, options, &cache);
+    try std.testing.expectEqualSlices(GlyphId, &.{9}, glyphs.items);
+
+    // The second ligature advances the epoch after its prefilter read. A later
+    // lookup must likewise observe the final glyph rather than retain {5,3}.
+    const final_digest = cache.get(glyphs.items, 0, options);
+    try std.testing.expect(final_digest.mayHave(9));
+    try std.testing.expect(!final_digest.mayHave(5));
     try std.testing.expectEqual(generation, cache.generation);
 }
 
@@ -10085,6 +10218,8 @@ test "GSUB ligature accelerator preserves preference and ignored component offse
     try std.testing.expectEqual(@as(usize, 1), accelerator.sets.len);
     try std.testing.expectEqual(@as(usize, 2), accelerator.definitions.len);
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 2, 3 }, accelerator.components);
+    try std.testing.expect(accelerator.first_component_digest.mayHave(1));
+    try std.testing.expect(!accelerator.first_component_digest.mayHave(99));
     try std.testing.expect(!accelerator.prefilter_second);
 
     const set = ligatureSetForGlyph(accelerator.sets, accelerator.set_slots, 1).?;
@@ -10746,6 +10881,27 @@ fn writeSingleDeltaLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, del
     writeU16Test(bytes, subtable + 2, 6);
     writeI16Test(bytes, subtable + 4, delta);
     writeCoverage1(bytes, subtable + 6, glyph);
+}
+
+fn writeLigatureLookupTest(bytes: []u8, lookup_offset: usize, first: GlyphId, second: GlyphId, ligature: GlyphId) void {
+    writeU16Test(bytes, lookup_offset + 0, 4); // LigatureSubst.
+    writeU16Test(bytes, lookup_offset + 2, 0); // LookupFlag.
+    writeU16Test(bytes, lookup_offset + 4, 1); // SubTableCount.
+    writeU16Test(bytes, lookup_offset + 6, 8);
+
+    const subtable = lookup_offset + 8;
+    writeU16Test(bytes, subtable + 0, 1); // LigatureSubst format 1.
+    writeU16Test(bytes, subtable + 2, 18); // Coverage.
+    writeU16Test(bytes, subtable + 4, 1); // LigatureSetCount.
+    writeU16Test(bytes, subtable + 6, 8);
+
+    const set = subtable + 8;
+    writeU16Test(bytes, set + 0, 1); // LigatureCount.
+    writeU16Test(bytes, set + 2, 4);
+    writeU16Test(bytes, set + 4, ligature);
+    writeU16Test(bytes, set + 6, 2); // First glyph plus one component.
+    writeU16Test(bytes, set + 8, second);
+    writeCoverage1(bytes, subtable + 18, first);
 }
 
 fn writeSingleLookupGsubTest(bytes: []u8, lookup_type: u16) usize {

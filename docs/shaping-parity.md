@@ -703,6 +703,32 @@ Current local snapshot after the Nastaliq parity work:
   improved `0.73%` and `0.39%`, and Amiri `fa-thelittleprince` improved
   `0.98%` and `0.56%`, respectively. Full HarfBuzz parity for all three
   corpora and Roboto HarfRust parity remained unchanged.
+- LigatureSubst accelerators now also retain an approximate digest of every
+  first-component glyph. Tables with at least two accelerated ligature lookups
+  share one mutation-aware run digest, so lookups whose first-component sets
+  cannot intersect the run return before scanning it; one-ligature-lookup
+  tables keep the exact scan alone because building a summary would duplicate
+  that work. Exact set lookup remains authoritative after digest false
+  positives, and every substitution invalidates the shared digest before a
+  later lookup can reject a newly introduced glyph. On fixed E-core CPU 30,
+  serial 31-sample A/B/B/A medians reduced Roboto `en-words` from `252.770`
+  to `229.138 ns/glyph`, about `9.35%`. Serial 21-sample B/A/A/B medians
+  reduced Amiri `fa-words` from `1278.704` to `1251.860 ns/glyph`, about
+  `2.10%`, and `fa-thelittleprince` from `733.361` to `713.282 ns/glyph`,
+  about `2.74%`. Five-iteration A/B/B/A `perf stat` means corroborated the
+  timing: Roboto instructions/cycles fell `7.94%`/`9.49%`; Amiri words fell
+  `1.52%`/`2.27%`; and Amiri long text fell `2.26%`/`2.66%`. Branches and
+  branch misses also decreased on all three corpora. Full HarfBuzz parity for
+  all three corpora and Roboto HarfRust parity remained unchanged.
+- A post-change fixed-CPU-30 Cangjie/HarfBuzz/HarfBuzz/Cangjie absolute matrix,
+  with 31-sample medians, measured Roboto `en-words` at `229.705` versus
+  `228.308 ns/glyph`, leaving Cangjie about `0.61%` slower; Amiri
+  `fa-words` at `1252.537` versus `1245.834 ns/glyph`, leaving Cangjie about
+  `0.54%` slower; and Amiri `fa-thelittleprince` at `711.887` versus
+  `796.167 ns/glyph`, making Cangjie about `10.59%` faster. Ordinary Latin
+  and the Arabic word list are therefore near parity on these fonts, not yet
+  broad wins; the cross-font and cross-script performance objective remains
+  active.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open
@@ -908,9 +934,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   and Takri.
 
 Conclusion: Amiri Arabic long text and some complex Arabic/Nastaliq slices now
-beat HarfBuzz locally, but ordinary Latin word shaping remains substantially
-slower and the Amiri word list still trails slightly. The broad goal is active,
-not complete.
+beat HarfBuzz locally. Roboto Latin words and the Amiri word list are within
+about one percent on the current fixed-CPU matrix but still trail slightly.
+This is not yet a broad cross-font or cross-script performance win, and the
+overall goal remains active.
 
 ## Near-Term Gaps
 

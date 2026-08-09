@@ -360,6 +360,7 @@ pub const ColorRenderTarget = struct {
         x: f32,
         baseline_y: f32,
         font_size: f32,
+        transform: font_mod.ColorAffine,
     ) void {
         if (stops.len == 0 or units_per_em == 0) return;
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
@@ -416,14 +417,15 @@ pub const ColorRenderTarget = struct {
             .repeat => .repeat,
             .reflect => .reflect,
         };
+        const inverse_transform = transform.inverse() orelse return;
         for (mask.pixels[0..count], 0..) |coverage, index| {
             if (coverage == 0) continue;
             const px = @as(f32, @floatFromInt(index % self.width)) + 0.5;
             const py = @as(f32, @floatFromInt(index / self.width)) + 0.5;
-            const sample = Point{
+            const sample = inverse_transform.apply(.{
                 .x = (px - x) / scale,
                 .y = (baseline_y - py) / scale,
-            };
+            });
             const raw_t = ((sample.x - gradient_start.x) * gradient_vector.x +
                 (sample.y - gradient_start.y) * gradient_vector.y) / denominator;
             const t = applyGradientSpread(raw_t, spread);
@@ -448,6 +450,7 @@ pub const ColorRenderTarget = struct {
         x: f32,
         baseline_y: f32,
         font_size: f32,
+        transform: font_mod.ColorAffine,
     ) void {
         if (stops.len == 0 or units_per_em == 0) return;
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
@@ -484,14 +487,15 @@ pub const ColorRenderTarget = struct {
             .reflect => .reflect,
         };
         const count = @min(self.pixels.len, mask.pixels.len);
+        const inverse_transform = transform.inverse() orelse return;
         for (mask.pixels[0..count], 0..) |coverage, index| {
             if (coverage == 0) continue;
             const px = @as(f32, @floatFromInt(index % self.width)) + 0.5;
             const py = @as(f32, @floatFromInt(index / self.width)) + 0.5;
-            const sample = Point{
+            const sample = inverse_transform.apply(.{
                 .x = (px - x) / scale,
                 .y = (baseline_y - py) / scale,
-            };
+            });
             const p = Point{ .x = sample.x - c0.x, .y = sample.y - c0.y };
             const b = -2.0 * (p.x * cd.x + p.y * cd.y + r0 * dr);
             const c = p.x * p.x + p.y * p.y - r0 * r0;
@@ -511,6 +515,7 @@ pub const ColorRenderTarget = struct {
         x: f32,
         baseline_y: f32,
         font_size: f32,
+        transform: font_mod.ColorAffine,
     ) void {
         if (stops.len == 0 or units_per_em == 0) return;
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
@@ -543,12 +548,17 @@ pub const ColorRenderTarget = struct {
             .reflect => .reflect,
         };
         const count = @min(self.pixels.len, mask.pixels.len);
+        const inverse_transform = transform.inverse() orelse return;
         for (mask.pixels[0..count], 0..) |coverage, index| {
             if (coverage == 0) continue;
             const px = @as(f32, @floatFromInt(index % self.width)) + 0.5;
             const py = @as(f32, @floatFromInt(index / self.width)) + 0.5;
-            const sample_x = (px - x) / scale - gradient.center.x;
-            const sample_y = (baseline_y - py) / scale - gradient.center.y;
+            const sample = inverse_transform.apply(.{
+                .x = (px - x) / scale,
+                .y = (baseline_y - py) / scale,
+            });
+            const sample_x = sample.x - gradient.center.x;
+            const sample_y = sample.y - gradient.center.y;
             var angle = std.math.atan2(-sample_y, sample_x) * 180.0 / std.math.pi;
             if (angle < 0) angle += 360.0;
             const raw_t = if (@abs(span) > 0.000001) (angle - start) / span else 0;
@@ -946,16 +956,60 @@ pub const Rasterizer = struct {
     }
 
     fn renderColorPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, paint: font_mod.ColorPaint, fallback_glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
+        return try self.renderColorPaintTransformed(
+            target,
+            font,
+            paint,
+            fallback_glyph_id,
+            font_size,
+            x,
+            baseline_y,
+            palette_index,
+            normalized_variation_coords,
+            .identity,
+        );
+    }
+
+    fn renderColorPaintTransformed(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        font: *const font_mod.Font,
+        paint: font_mod.ColorPaint,
+        fallback_glyph_id: ?glyph_mod.GlyphId,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+        palette_index: u16,
+        normalized_variation_coords: []const f32,
+        transform: font_mod.ColorAffine,
+    ) !void {
         switch (paint) {
-            .solid => |solid| try self.renderSolidPaint(target, font, fallback_glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
-            .linear_gradient => |gradient| try self.renderLinearGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
-            .radial_gradient => |gradient| try self.renderRadialGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
-            .sweep_gradient => |gradient| try self.renderSweepGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+            .solid => |solid| try self.renderSolidPaint(target, font, fallback_glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
+            .linear_gradient => |gradient| try self.renderLinearGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
+            .radial_gradient => |gradient| try self.renderRadialGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
+            .sweep_gradient => |gradient| try self.renderSweepGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
             .glyph => |glyph_paint| switch (glyph_paint.brush) {
-                .solid => |solid| try self.renderSolidPaint(target, font, glyph_paint.glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
-                .linear_gradient => |gradient| try self.renderLinearGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
-                .radial_gradient => |gradient| try self.renderRadialGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
-                .sweep_gradient => |gradient| try self.renderSweepGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+                .solid => |solid| try self.renderSolidPaint(target, font, glyph_paint.glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
+                .linear_gradient => |gradient| try self.renderLinearGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
+                .radial_gradient => |gradient| try self.renderRadialGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
+                .sweep_gradient => |gradient| try self.renderSweepGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform),
+            },
+            .clip_glyph => |clip_glyph| {
+                const child = try font.colorPaintChildAtCoords(clip_glyph.child, normalized_variation_coords);
+                var clipped = try ColorRenderTarget.init(self.allocator, target.width, target.height);
+                defer clipped.deinit();
+                // PaintGlyph establishes its clip before traversing the child.
+                // A terminal child therefore paints an infinite brush into this
+                // temporary layer; only the clip mask below gives it geometry.
+                try self.renderColorPaintTransformed(&clipped, font, child, null, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform);
+
+                var outline = try self.glyphOutlineForRenderAtCoords(font, clip_glyph.glyph_id, normalized_variation_coords);
+                defer outline.deinit();
+                var mask = try RenderTarget.init(self.allocator, target.width, target.height);
+                defer mask.deinit();
+                try self.renderColorGlyphMask(&mask, &outline, x, baseline_y, font_size, font.units_per_em, transform);
+                applyMaskToColorTarget(&clipped, &mask);
+                blendColorTarget(target, &clipped);
             },
             .layers => |layers| {
                 for (0..layers.layer_count) |offset| {
@@ -963,22 +1017,27 @@ pub const Rasterizer = struct {
                         layers.first_layer_index + @as(u32, @intCast(offset)),
                         normalized_variation_coords,
                     )) orelse continue;
-                    try self.renderColorPaint(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
+                    try self.renderColorPaintTransformed(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform);
                 }
+            },
+            .transform => |transform_paint| {
+                const child = try font.colorPaintChildAtCoords(transform_paint.child, normalized_variation_coords);
+                // A nested transform is applied in the child's local space
+                // before the already-active parent transform.
+                const child_transform = font_mod.ColorAffine.mul(transform, transform_paint.affine);
+                try self.renderColorPaintTransformed(target, font, child, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, child_transform);
             },
         }
     }
 
-    fn renderSolidPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, solid: font_mod.ColorPaint.Solid, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
+    fn renderSolidPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: ?glyph_mod.GlyphId, solid: font_mod.ColorPaint.Solid, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32, transform: font_mod.ColorAffine) !void {
         const base_color = if (solid.palette_index == 0xffff)
             font_mod.PaletteColor{ .red = 255, .green = 255, .blue = 255, .alpha = 255 }
         else
             (try font.paletteColor(palette_index, solid.palette_index)) orelse return;
-        var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
-        defer outline.deinit();
         var mask = try RenderTarget.init(self.allocator, target.width, target.height);
         defer mask.deinit();
-        try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
+        try self.renderColorFillMask(&mask, font, glyph_id, normalized_variation_coords, x, baseline_y, font_size, transform);
         const alpha = std.math.clamp(solid.alpha, 0.0, 1.0);
         target.blendMask(&mask, .{
             .red = base_color.red,
@@ -988,26 +1047,70 @@ pub const Rasterizer = struct {
         });
     }
 
+    fn renderColorFillMask(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        font: *const font_mod.Font,
+        glyph_id: ?glyph_mod.GlyphId,
+        normalized_variation_coords: []const f32,
+        x: f32,
+        baseline_y: f32,
+        font_size: f32,
+        transform: font_mod.ColorAffine,
+    ) !void {
+        const id = glyph_id orelse {
+            @memset(target.pixels, 255);
+            return;
+        };
+        var outline = try self.glyphOutlineForRenderAtCoords(font, id, normalized_variation_coords);
+        defer outline.deinit();
+        return try self.renderColorGlyphMask(target, &outline, x, baseline_y, font_size, font.units_per_em, transform);
+    }
+
+    fn renderColorGlyphMask(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        outline: *const glyph_mod.GlyphOutline,
+        x: f32,
+        baseline_y: f32,
+        font_size: f32,
+        units_per_em: u16,
+        transform: font_mod.ColorAffine,
+    ) !void {
+        if (std.meta.eql(transform, font_mod.ColorAffine.identity)) {
+            return try self.renderGlyph(target, outline, x, baseline_y, font_size, units_per_em);
+        }
+        const flattened_capacity = flattenedLineCapacity(outline.commands.items);
+        var inline_flattened: [128]Line = undefined;
+        var flattened = if (flattened_capacity <= inline_flattened.len)
+            std.ArrayList(Line).initBuffer(inline_flattened[0..])
+        else
+            try std.ArrayList(Line).initCapacity(self.allocator, flattened_capacity);
+        defer if (flattened_capacity > inline_flattened.len) flattened.deinit(self.allocator);
+        const scale = font_size / @as(f32, @floatFromInt(units_per_em));
+        flattenOutlineTransformed(&flattened, outline, transform, scale, x, baseline_y);
+        try self.fillLines(target, flattened.items, .non_zero);
+    }
+
     fn renderLinearGradientPaint(
         self: *Rasterizer,
         target: *ColorRenderTarget,
         font: *const font_mod.Font,
-        glyph_id: glyph_mod.GlyphId,
+        glyph_id: ?glyph_mod.GlyphId,
         gradient: font_mod.ColorPaint.LinearGradient,
         font_size: f32,
         x: f32,
         baseline_y: f32,
         palette_index: u16,
         normalized_variation_coords: []const f32,
+        transform: font_mod.ColorAffine,
     ) !void {
         const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index, normalized_variation_coords);
         defer self.allocator.free(stops);
 
-        var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
-        defer outline.deinit();
         var mask = try RenderTarget.init(self.allocator, target.width, target.height);
         defer mask.deinit();
-        try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
+        try self.renderColorFillMask(&mask, font, glyph_id, normalized_variation_coords, x, baseline_y, font_size, transform);
         target.blendColrLinearGradientMask(
             &mask,
             gradient,
@@ -1016,6 +1119,7 @@ pub const Rasterizer = struct {
             x,
             baseline_y,
             font_size,
+            transform,
         );
     }
 
@@ -1023,44 +1127,42 @@ pub const Rasterizer = struct {
         self: *Rasterizer,
         target: *ColorRenderTarget,
         font: *const font_mod.Font,
-        glyph_id: glyph_mod.GlyphId,
+        glyph_id: ?glyph_mod.GlyphId,
         gradient: font_mod.ColorPaint.RadialGradient,
         font_size: f32,
         x: f32,
         baseline_y: f32,
         palette_index: u16,
         normalized_variation_coords: []const f32,
+        transform: font_mod.ColorAffine,
     ) !void {
         const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index, normalized_variation_coords);
         defer self.allocator.free(stops);
-        var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
-        defer outline.deinit();
         var mask = try RenderTarget.init(self.allocator, target.width, target.height);
         defer mask.deinit();
-        try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
-        target.blendColrRadialGradientMask(&mask, gradient, stops, font.units_per_em, x, baseline_y, font_size);
+        try self.renderColorFillMask(&mask, font, glyph_id, normalized_variation_coords, x, baseline_y, font_size, transform);
+        target.blendColrRadialGradientMask(&mask, gradient, stops, font.units_per_em, x, baseline_y, font_size, transform);
     }
 
     fn renderSweepGradientPaint(
         self: *Rasterizer,
         target: *ColorRenderTarget,
         font: *const font_mod.Font,
-        glyph_id: glyph_mod.GlyphId,
+        glyph_id: ?glyph_mod.GlyphId,
         gradient: font_mod.ColorPaint.SweepGradient,
         font_size: f32,
         x: f32,
         baseline_y: f32,
         palette_index: u16,
         normalized_variation_coords: []const f32,
+        transform: font_mod.ColorAffine,
     ) !void {
         const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index, normalized_variation_coords);
         defer self.allocator.free(stops);
-        var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
-        defer outline.deinit();
         var mask = try RenderTarget.init(self.allocator, target.width, target.height);
         defer mask.deinit();
-        try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
-        target.blendColrSweepGradientMask(&mask, gradient, stops, font.units_per_em, x, baseline_y, font_size);
+        try self.renderColorFillMask(&mask, font, glyph_id, normalized_variation_coords, x, baseline_y, font_size, transform);
+        target.blendColrSweepGradientMask(&mask, gradient, stops, font.units_per_em, x, baseline_y, font_size, transform);
     }
 
     fn resolveColrGradientStops(
@@ -1272,6 +1374,16 @@ fn blendColorTarget(target: *ColorRenderTarget, source: *const ColorRenderTarget
     }
 }
 
+fn applyMaskToColorTarget(target: *ColorRenderTarget, mask: *const RenderTarget) void {
+    for (target.pixels[0..@min(target.pixels.len, mask.pixels.len)], mask.pixels) |*pixel, coverage| {
+        if (coverage == 255) continue;
+        pixel.r = @intCast((@as(u32, pixel.r) * coverage) / 255);
+        pixel.g = @intCast((@as(u32, pixel.g) * coverage) / 255);
+        pixel.b = @intCast((@as(u32, pixel.b) * coverage) / 255);
+        pixel.a = @intCast((@as(u32, pixel.a) * coverage) / 255);
+    }
+}
+
 fn applySvgMaskToMask(mask: *RenderTarget, svg_mask: SvgMaskDef, view_box: ViewBox, x: f32, baseline_y: f32, font_size: f32) void {
     if (view_box.height <= 0) {
         @memset(mask.pixels, 0);
@@ -1429,25 +1541,36 @@ fn outlineContourCount(outline: *const glyph_mod.GlyphOutline) usize {
 }
 
 fn flattenOutline(lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, scale: f32, x: f32, baseline_y: f32) void {
+    return flattenOutlineTransformed(lines, outline, .identity, scale, x, baseline_y);
+}
+
+fn flattenOutlineTransformed(
+    lines: *std.ArrayList(Line),
+    outline: *const glyph_mod.GlyphOutline,
+    transform: font_mod.ColorAffine,
+    scale: f32,
+    x: f32,
+    baseline_y: f32,
+) void {
     var start: ?Point = null;
     var current: ?Point = null;
     for (outline.commands.items) |command| {
         switch (command) {
             .move_to => |p| {
-                const q = fontToPixel(p, scale, x, baseline_y);
+                const q = fontToPixel(transform.apply(p), scale, x, baseline_y);
                 start = q;
                 current = q;
             },
             .line_to => |p| {
                 const a = current orelse continue;
-                const b = fontToPixel(p, scale, x, baseline_y);
+                const b = fontToPixel(transform.apply(p), scale, x, baseline_y);
                 lines.appendAssumeCapacity(.{ .a = a, .b = b });
                 current = b;
             },
             .quad_to => |q| {
                 const a = current orelse continue;
-                const control = fontToPixel(q.control, scale, x, baseline_y);
-                const end = fontToPixel(q.end, scale, x, baseline_y);
+                const control = fontToPixel(transform.apply(q.control), scale, x, baseline_y);
+                const end = fontToPixel(transform.apply(q.end), scale, x, baseline_y);
                 const segments = curves.quadSegmentCount(a, control, end);
                 var prev = a;
                 for (1..segments + 1) |i| {
@@ -1460,9 +1583,9 @@ fn flattenOutline(lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOu
             },
             .cubic_to => |c| {
                 const a = current orelse continue;
-                const c0 = fontToPixel(c.c0, scale, x, baseline_y);
-                const c1 = fontToPixel(c.c1, scale, x, baseline_y);
-                const end = fontToPixel(c.end, scale, x, baseline_y);
+                const c0 = fontToPixel(transform.apply(c.c0), scale, x, baseline_y);
+                const c1 = fontToPixel(transform.apply(c.c1), scale, x, baseline_y);
+                const end = fontToPixel(transform.apply(c.end), scale, x, baseline_y);
                 const segments = curves.cubicSegmentCount(a, c0, c1, end);
                 var prev = a;
                 for (1..segments + 1) |i| {

@@ -201,6 +201,7 @@ pub const BitmapStrikeSource = @import("font.zig").BitmapStrikeSource;
 pub const ColorLayer = @import("font.zig").ColorLayer;
 pub const ColorPaint = @import("font.zig").ColorPaint;
 pub const ColorClipBox = @import("font.zig").ColorClipBox;
+pub const ColorAffine = @import("font.zig").ColorAffine;
 pub const ColorGlyphPaint = @import("render_bridge.zig").ColorGlyphPaint;
 pub const PaletteColor = @import("font.zig").PaletteColor;
 pub const PaletteInfo = @import("font.zig").PaletteInfo;
@@ -4758,6 +4759,69 @@ test "COLR v1 variable gradients resolve geometry and stops" {
     try rasterizer.renderColorGlyph(&default_target, &linear_font, 1, 24, 8, 32, 0);
     try rasterizer.renderColorGlyphAtCoords(&varied_target, &linear_font, 1, 24, 8, 32, 0, &.{0.5});
     try std.testing.expect(colorRenderTargetPixelDifference(&default_target, &varied_target) > 0);
+}
+
+test "COLR v1 variable transforms affect geometry and brush space" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildColorV1VariableTransformTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const default_transform = (try font.colorPaint(1)).?.transform.affine;
+    const varied_transform = (try font.colorPaintAtCoords(1, &.{0.5})).?.transform.affine;
+    try std.testing.expectEqual(ColorAffine.identity, default_transform);
+    try std.testing.expectEqual(@as(f32, 100), varied_transform.dx);
+    try std.testing.expectEqual(@as(f32, 50), varied_transform.dy);
+
+    var default_target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer default_target.deinit();
+    var varied_target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer varied_target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&default_target, &font, 1, 24, 8, 32, 0);
+    try rasterizer.renderColorGlyphAtCoords(&varied_target, &font, 1, 24, 8, 32, 0, &.{0.5});
+    try std.testing.expect(colorRenderTargetPixelDifference(&default_target, &varied_target) > 0);
+}
+
+test "COLR v1 nested PaintGlyph transforms match live Skrifa matrices" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const path = "/home/passchaos/Work/fontations/font-test-data/test_data/ttf/test_glyphs-glyf_colr_1_variable.ttf";
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const first = (try font.colorPaint(207)).?.clip_glyph;
+    try std.testing.expectEqual(@as(GlyphId, 7), first.glyph_id);
+    const outer = (try font.colorPaintChildAtCoords(first.child, &.{})).transform;
+    try std.testing.expectEqual(ColorAffine.identity, outer.affine);
+    const second = (try font.colorPaintChildAtCoords(outer.child, &.{})).clip_glyph;
+    try std.testing.expectEqual(@as(GlyphId, 6), second.glyph_id);
+    const rotation = (try font.colorPaintChildAtCoords(second.child, &.{})).transform.affine;
+
+    // Skrifa's current source resolves the same nested PaintRotate to this
+    // matrix before its fill_glyph optimization.
+    try std.testing.expectApproxEqAbs(@as(f32, 0.9848152), rotation.xx, 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.17360622), rotation.yx, 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.17360622), rotation.xy, 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.9848152), rotation.yy, 0.000001);
+
+    var identity_target = try ColorRenderTarget.init(allocator, 256, 256);
+    defer identity_target.deinit();
+    var rotated_target = try ColorRenderTarget.init(allocator, 256, 256);
+    defer rotated_target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&identity_target, &font, 205, 200, 20, 220, 0);
+    try rasterizer.renderColorGlyph(&rotated_target, &font, 207, 200, 20, 220, 0);
+    try std.testing.expect(colorRenderTargetPixelDifference(&identity_target, &rotated_target) > 0);
 }
 
 test "COLR v1 foreground palette sentinel renders current color" {

@@ -134,6 +134,7 @@ pub const ColorGlyphPaint = union(enum) {
     colr_v1_linear_gradient: font_mod.ColorPaint.LinearGradient,
     colr_v1_radial_gradient: font_mod.ColorPaint.RadialGradient,
     colr_v1_sweep_gradient: font_mod.ColorPaint.SweepGradient,
+    colr_v1_transform: font_mod.ColorPaint.TransformPaint,
     svg_document: []const u8,
 };
 
@@ -439,7 +440,14 @@ fn colorPaintLine(paint: font_mod.ColorPaint) ?font_mod.ColorPaint.ColorLine {
             .sweep_gradient => |gradient| gradient.color_line,
             .solid => null,
         },
-        .solid, .layers => null,
+        .solid, .clip_glyph, .layers, .transform => null,
+    };
+}
+
+fn colorPaintTransform(paint: font_mod.ColorPaint) ?font_mod.ColorAffine {
+    return switch (paint) {
+        .transform => |transform| transform.affine,
+        else => null,
     };
 }
 
@@ -488,10 +496,12 @@ fn colorGlyphPaint(layer_start: usize, layer_len: usize, svg_document: ?[]const 
         return switch (paint) {
             .solid => |solid| .{ .colr_v1_solid = solid },
             .glyph => |glyph| .{ .colr_v1_glyph = glyph },
+            .clip_glyph => .none,
             .layers => |layers| .{ .colr_v1_layers = layers },
             .linear_gradient => |gradient| .{ .colr_v1_linear_gradient = gradient },
             .radial_gradient => |gradient| .{ .colr_v1_radial_gradient = gradient },
             .sweep_gradient => |gradient| .{ .colr_v1_sweep_gradient = gradient },
+            .transform => |transform| .{ .colr_v1_transform = transform },
         };
     }
     if (svg_document) |document| return .{ .svg_document = document };
@@ -804,4 +814,20 @@ test "render bridge rejects invalid variation coordinates" {
     try std.testing.expectError(error.BadSfnt, buildGlyphDrawList(std.testing.allocator, empty, .{
         .normalized_variation_coords = &.{1.01},
     }));
+}
+
+test "render bridge exposes variable COLR transform metadata" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildColorV1VariableTransformTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const paint = (try font.colorPaintAtCoords(1, &.{0.5})).?;
+    const affine = colorPaintTransform(paint).?;
+    try std.testing.expectEqual(@as(f32, 100), affine.dx);
+    try std.testing.expectEqual(@as(f32, 50), affine.dy);
+    const bridge_paint = colorGlyphPaint(0, 0, null, paint);
+    try std.testing.expectEqual(@as(f32, 100), bridge_paint.colr_v1_transform.affine.dx);
 }

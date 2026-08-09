@@ -188,6 +188,10 @@ pub fn buildColorV1VariableSweepGradientTtf(allocator: std.mem.Allocator) ![]u8 
     return buildSfnt(allocator, 0x00010000, try colorV1VariableGradientTtfTables(allocator, .sweep));
 }
 
+pub fn buildColorV1VariableTransformTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1VariableTransformTtfTables(allocator));
+}
+
 pub fn buildColorV1RadialGradientTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1RadialGradientTtfTables(allocator));
 }
@@ -1266,6 +1270,13 @@ fn colorV1VariableGradientTtfTables(allocator: std.mem.Allocator, kind: Variable
     const tables = try colorV1VariableClipTtfTables(allocator);
     allocator.free(tables[0].data);
     tables[0].data = try colrV1VariableGradientTable(allocator, kind);
+    return tables;
+}
+
+fn colorV1VariableTransformTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try colorV1VariableClipTtfTables(allocator);
+    allocator.free(tables[0].data);
+    tables[0].data = try colrV1VariableTransformTable(allocator);
     return tables;
 }
 
@@ -3798,6 +3809,49 @@ fn colrV1VariableGradientTable(allocator: std.mem.Allocator, kind: VariableGradi
     writeI16(bytes, stop_delta_start, 24576); // First stop offset.
     writeI16(bytes, stop_delta_start + 2, -16384); // First stop alpha.
     writeI16(bytes, stop_delta_start + 4, -24576); // Last stop offset.
+    return bytes;
+}
+
+fn colrV1VariableTransformTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 124);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34); // BaseGlyphList.
+    writeU32(bytes, 30, 88); // ItemVariationStore.
+
+    writeU32(bytes, 34, 1);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 10);
+
+    bytes[44] = 15; // PaintVarTranslate.
+    writeU24(bytes, 45, 12); // PaintGlyph child.
+    writeI16(bytes, 48, 0);
+    writeI16(bytes, 50, 0);
+    writeU32(bytes, 52, 0);
+
+    bytes[56] = 10; // PaintGlyph.
+    writeU24(bytes, 57, 6);
+    writeU16(bytes, 60, 1);
+    bytes[62] = 4; // PaintLinearGradient.
+    writeU24(bytes, 63, 16);
+    writeI16(bytes, 66, 0);
+    writeI16(bytes, 68, 0);
+    writeI16(bytes, 70, 700);
+    writeI16(bytes, 72, 0);
+    writeI16(bytes, 74, 0);
+    writeI16(bytes, 76, 100);
+
+    // ColorLine follows the gradient header. Its single stop is a constant red
+    // brush; the regression focuses on affine geometry and brush sampling.
+    bytes[78] = 0;
+    writeU16(bytes, 79, 1);
+    writeF2Dot14(bytes, 81, 0);
+    writeU16(bytes, 83, 0);
+    writeF2Dot14(bytes, 85, 1);
+
+    writeItemVariationStoreWithItems(bytes, 88, 2);
+    writeI16(bytes, 120, 200); // dx delta.
+    writeI16(bytes, 122, 100); // dy delta.
     return bytes;
 }
 

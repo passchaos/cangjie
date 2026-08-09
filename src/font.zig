@@ -521,13 +521,74 @@ pub const ColorClipBox = struct {
     y_max: f32,
 };
 
+pub const ColorAffine = struct {
+    xx: f32 = 1,
+    yx: f32 = 0,
+    xy: f32 = 0,
+    yy: f32 = 1,
+    dx: f32 = 0,
+    dy: f32 = 0,
+
+    pub const identity: ColorAffine = .{};
+
+    pub fn apply(self: ColorAffine, point: glyph_mod.Point) glyph_mod.Point {
+        return .{
+            .x = point.x * self.xx + point.y * self.xy + self.dx,
+            .y = point.x * self.yx + point.y * self.yy + self.dy,
+        };
+    }
+
+    pub fn mul(a: ColorAffine, b: ColorAffine) ColorAffine {
+        return .{
+            .xx = a.xx * b.xx + a.xy * b.yx,
+            .yx = a.yx * b.xx + a.yy * b.yx,
+            .xy = a.xx * b.xy + a.xy * b.yy,
+            .yy = a.yx * b.xy + a.yy * b.yy,
+            .dx = a.xx * b.dx + a.xy * b.dy + a.dx,
+            .dy = a.yx * b.dx + a.yy * b.dy + a.dy,
+        };
+    }
+
+    pub fn inverse(self: ColorAffine) ?ColorAffine {
+        const determinant = self.xx * self.yy - self.xy * self.yx;
+        // F2Dot14 scale paints can encode very small but still invertible
+        // matrices. Treat only an exact zero (or a non-finite result from a
+        // malformed/overflowing composition) as singular; an arbitrary epsilon
+        // would incorrectly discard legal thin transformed gradients.
+        if (determinant == 0 or !std.math.isFinite(determinant)) return null;
+        const inverse_determinant = 1.0 / determinant;
+        const xx = self.yy * inverse_determinant;
+        const yx = -self.yx * inverse_determinant;
+        const xy = -self.xy * inverse_determinant;
+        const yy = self.xx * inverse_determinant;
+        return .{
+            .xx = xx,
+            .yx = yx,
+            .xy = xy,
+            .yy = yy,
+            .dx = -(xx * self.dx + xy * self.dy),
+            .dy = -(yx * self.dx + yy * self.dy),
+        };
+    }
+};
+
+test "COLR affine inversion retains tiny legal scales" {
+    const tiny = ColorAffine{ .xx = 1.0 / 16384.0, .yy = 1.0 / 16384.0 };
+    const inverse = tiny.inverse().?;
+    try std.testing.expectEqual(@as(f32, 16384), inverse.xx);
+    try std.testing.expectEqual(@as(f32, 16384), inverse.yy);
+    try std.testing.expect((ColorAffine{ .xx = 0 }).inverse() == null);
+}
+
 pub const ColorPaint = union(enum) {
     solid: Solid,
     linear_gradient: LinearGradient,
     radial_gradient: RadialGradient,
     sweep_gradient: SweepGradient,
     glyph: Glyph,
+    clip_glyph: ClipGlyph,
     layers: Layers,
+    transform: TransformPaint,
 
     pub const Solid = struct {
         palette_index: u16,
@@ -539,9 +600,24 @@ pub const ColorPaint = union(enum) {
         brush: Brush,
     };
 
+    pub const ClipGlyph = struct {
+        glyph_id: glyph_mod.GlyphId,
+        child: ChildRef,
+    };
+
     pub const Layers = struct {
         first_layer_index: u32,
         layer_count: u8,
+    };
+
+    pub const TransformPaint = struct {
+        affine: ColorAffine,
+        child: ChildRef,
+    };
+
+    /// Opaque reference to a validated child Paint in the same COLR table.
+    pub const ChildRef = struct {
+        offset: usize,
     };
 
     pub const Brush = union(enum) {
@@ -3467,6 +3543,29 @@ pub const Font = struct {
         var graph_guard = ColorPaintGraphGuard{};
         try validateColorPaintLayer(self, layer_list, layer_index, &graph_guard);
         return try readColorPaint(self, paint_start, .{
+            .normalized_coords = normalized_coords,
+            .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
+                null
+            else
+                try readColrVariationContext(self.data, colr),
+        });
+    }
+
+    /// Resolve a child reference from a transform paint.
+    pub fn colorPaintChildAtCoords(self: *const Font, child: ColorPaint.ChildRef, normalized_coords: []const f32) FontError!ColorPaint {
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const colr = self.colr orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.data, colr);
+        if (child.offset < colr.offset or child.offset >= colr.offset + colr.length) return error.BadSfnt;
+        if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
+        }
+        const info = try validateColorPaintRecordBounds(self.data, colr, child.offset);
+        var graph_guard = ColorPaintGraphGuard{};
+        try graph_guard.enter(child.offset);
+        defer graph_guard.leave();
+        try graph_guard.claimPaintRecord(self.data, colr, child.offset, info);
+        return try readColorPaint(self, child.offset, .{
             .normalized_coords = normalized_coords,
             .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
                 null
@@ -12545,7 +12644,7 @@ fn validateColorPaintGraph(font: *const Font, offset: usize, guard: *ColorPaintG
                 try validateColorPaintLayer(font, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)), guard);
             }
         },
-        2 => {
+        2, 3 => {
             if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
             try font.validateColorPaletteIndex(try bin.readU16At(data, offset + 1));
         },
@@ -12556,10 +12655,12 @@ fn validateColorPaintGraph(font: *const Font, offset: usize, guard: *ColorPaintG
             if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
             try validateColorPaintGraph(font, offset + child_offset, guard);
         },
-        // Unsupported paint formats are left for `readColorPaint` to report
-        // when callers ask for that specific paint.  Graph validation only
-        // follows the recursive formats this parser can otherwise traverse
-        // indefinitely.
+        12...31 => try validateColorPaintGraph(
+            font,
+            try colorPaintChildOffset(data, colr, offset, info.min_size, 1),
+            guard,
+        ),
+        // Other unsupported terminal/composite formats remain a lazy error.
         else => return,
     }
 }
@@ -12604,14 +12705,247 @@ fn readColorPaint(font: *const Font, offset: usize, context: ColorPaintReadConte
                 .linear_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .linear_gradient = gradient } } },
                 .radial_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .radial_gradient = gradient } } },
                 .sweep_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .sweep_gradient = gradient } } },
-                else => error.UnsupportedGlyph,
+                else => .{ .clip_glyph = .{
+                    .glyph_id = glyph_id,
+                    .child = .{ .offset = offset + child_offset },
+                } },
             };
         },
         4, 5 => .{ .linear_gradient = try readColorLinearGradient(font, offset, context) },
         6, 7 => .{ .radial_gradient = try readColorRadialGradient(font, offset, context) },
         8, 9 => .{ .sweep_gradient = try readColorSweepGradient(font, offset, context) },
+        12...31 => .{ .transform = try readColorTransform(font, offset, context) },
         else => error.UnsupportedGlyph,
     };
+}
+
+fn readColorTransform(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.TransformPaint {
+    const colr = font.colr orelse return error.BadSfnt;
+    const format = font.data[offset];
+    const info = colorPaintFormatInfo(format) orelse return error.BadSfnt;
+    const child_offset = try colorPaintChildOffset(font.data, colr, offset, info.min_size, 1);
+
+    const affine = switch (format) {
+        12, 13 => try readColorAffineTransform(font, colr, offset, info, context),
+        14, 15 => blk: {
+            const var_index_base = if (format == 15) try bin.readU32At(font.data, offset + 8) else no_colr_variation_index;
+            break :blk ColorAffine{
+                .dx = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 4))) +
+                    @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 0))),
+                .dy = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) +
+                    @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 1))),
+            };
+        },
+        16...23 => try readColorScaleTransform(font, colr, offset, format, context),
+        24...27 => try readColorRotateTransform(font, colr, offset, format, context),
+        28...31 => try readColorSkewTransform(font, colr, offset, format, context),
+        else => return error.BadSfnt,
+    };
+    return .{ .affine = affine, .child = .{ .offset = child_offset } };
+}
+
+fn readColorAffineTransform(font: *const Font, colr: TableRecord, offset: usize, info: ColorPaintFormatInfo, context: ColorPaintReadContext) FontError!ColorAffine {
+    const matrix = try colrTransformMatrixPayloadRange(font.data, colr, offset, info.min_size);
+    const base = matrix.start;
+    const var_index_base = if (font.data[offset] == 13) try bin.readU32At(font.data, base + 24) else no_colr_variation_index;
+    var values: [6]f32 = undefined;
+    for (&values, 0..) |*value, index| {
+        value.* = fixed16_16ToF32(try bin.readI32At(font.data, base + index * 4)) +
+            @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, index)) / 65536.0));
+    }
+    return .{ .xx = values[0], .yx = values[1], .xy = values[2], .yy = values[3], .dx = values[4], .dy = values[5] };
+}
+
+fn readColorScaleTransform(font: *const Font, colr: TableRecord, offset: usize, format: u8, context: ColorPaintReadContext) FontError!ColorAffine {
+    const variable = (format & 1) != 0;
+    const around_center = format == 18 or format == 19 or format == 22 or format == 23;
+    const uniform = format >= 20;
+    const var_index_base = if (variable)
+        try bin.readU32At(font.data, offset + colorPaintFormatInfo(format).?.min_size - 4)
+    else
+        no_colr_variation_index;
+    const scale_x = f2dot14(try bin.readI16At(font.data, offset + 4)) +
+        @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 0)) / 16384.0));
+    const scale_y = if (uniform)
+        scale_x
+    else
+        f2dot14(try bin.readI16At(font.data, offset + 6)) +
+            @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 1)) / 16384.0));
+    const center_delta_base: usize = if (uniform) 1 else 2;
+    const center_offset: usize = if (uniform) 6 else 8;
+    const center_x = if (around_center)
+        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + center_offset))) +
+            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, center_delta_base)))
+    else
+        0;
+    const center_y = if (around_center)
+        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + center_offset + 2))) +
+            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, center_delta_base + 1)))
+    else
+        0;
+    return .{
+        .xx = scale_x,
+        .yy = scale_y,
+        .dx = center_x - scale_x * center_x,
+        .dy = center_y - scale_y * center_y,
+    };
+}
+
+fn readColorRotateTransform(font: *const Font, colr: TableRecord, offset: usize, format: u8, context: ColorPaintReadContext) FontError!ColorAffine {
+    const variable = (format & 1) != 0;
+    const around_center = format >= 26;
+    const var_index_base = if (variable)
+        try bin.readU32At(font.data, offset + colorPaintFormatInfo(format).?.min_size - 4)
+    else
+        no_colr_variation_index;
+    const angle = f2dot14(try bin.readI16At(font.data, offset + 4)) +
+        @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 0)) / 16384.0));
+    const center_x = if (around_center)
+        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) +
+            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 1)))
+    else
+        0;
+    const center_y = if (around_center)
+        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 8))) +
+            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 2)))
+    else
+        0;
+    const radians = angle * std.math.pi;
+    const sine = @sin(radians);
+    const cosine = @cos(radians);
+    return .{
+        .xx = cosine,
+        .yx = sine,
+        .xy = -sine,
+        .yy = cosine,
+        .dx = sine * center_y + (1.0 - cosine) * center_x,
+        .dy = -sine * center_x + (1.0 - cosine) * center_y,
+    };
+}
+
+fn readColorSkewTransform(font: *const Font, colr: TableRecord, offset: usize, format: u8, context: ColorPaintReadContext) FontError!ColorAffine {
+    const variable = (format & 1) != 0;
+    const around_center = format >= 30;
+    const var_index_base = if (variable)
+        try bin.readU32At(font.data, offset + colorPaintFormatInfo(format).?.min_size - 4)
+    else
+        no_colr_variation_index;
+    const x_angle = f2dot14(try bin.readI16At(font.data, offset + 4)) +
+        @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 0)) / 16384.0));
+    const y_angle = f2dot14(try bin.readI16At(font.data, offset + 6)) +
+        @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 1)) / 16384.0));
+    const center_x = if (around_center)
+        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 8))) +
+            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 2)))
+    else
+        0;
+    const center_y = if (around_center)
+        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 10))) +
+            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 3)))
+    else
+        0;
+    const tan_x = @tan(x_angle * std.math.pi);
+    const tan_y = @tan(y_angle * std.math.pi);
+    return .{
+        .xy = -tan_x,
+        .yx = tan_y,
+        .dx = tan_x * center_y,
+        .dy = -tan_y * center_x,
+    };
+}
+
+test "COLR v1 transform formats resolve affine matrices" {
+    var bytes: [320]u8 = .{0} ** 320;
+    const font = colrOnlyFont(&bytes);
+    const context = ColorPaintReadContext{ .normalized_coords = &.{}, .variation = null };
+    const varied_context = ColorPaintReadContext{
+        .normalized_coords = &.{1},
+        .variation = .{ .store_offset = 240, .item_data_count = 1, .map = null },
+    };
+
+    for (12..32) |raw_format| {
+        @memset(&bytes, 0);
+        writeItemVariationStoreWithItems(&bytes, 240, 10);
+        const format: u8 = @intCast(raw_format);
+        const info = colorPaintFormatInfo(format).?;
+        bytes[0] = format;
+        writeU24Test(&bytes, 1, @intCast(info.min_size));
+        bytes[info.min_size] = 2; // PaintSolid child.
+        writeU16Test(&bytes, info.min_size + 1, 0);
+        writeF2Dot14Test(&bytes, info.min_size + 3, 1);
+
+        switch (format) {
+            12, 13 => {
+                writeU24Test(&bytes, 4, @intCast(info.min_size + 5));
+                const matrix = info.min_size + 5;
+                writeF16Dot16Test(&bytes, matrix + 0, 2);
+                writeF16Dot16Test(&bytes, matrix + 4, 0);
+                writeF16Dot16Test(&bytes, matrix + 8, 0);
+                writeF16Dot16Test(&bytes, matrix + 12, 3);
+                writeF16Dot16Test(&bytes, matrix + 16, 40);
+                writeF16Dot16Test(&bytes, matrix + 20, 50);
+                if (format == 13) writeU32Test(&bytes, matrix + 24, 0);
+            },
+            14, 15 => {
+                writeI16Test(&bytes, 4, 40);
+                writeI16Test(&bytes, 6, 50);
+                if (format == 15) writeU32Test(&bytes, 8, 0);
+            },
+            16...23 => {
+                writeF2Dot14Test(&bytes, 4, 0.5);
+                if (format < 20) writeF2Dot14Test(&bytes, 6, 0.75);
+                if (format == 18 or format == 19 or format == 22 or format == 23) {
+                    const center: usize = if (format >= 20) 6 else 8;
+                    writeI16Test(&bytes, center, 100);
+                    writeI16Test(&bytes, center + 2, 200);
+                }
+                if ((format & 1) != 0) writeU32Test(&bytes, info.min_size - 4, 0);
+            },
+            24...27 => {
+                writeF2Dot14Test(&bytes, 4, 0.5);
+                if (format >= 26) {
+                    writeI16Test(&bytes, 6, 100);
+                    writeI16Test(&bytes, 8, 200);
+                }
+                if ((format & 1) != 0) writeU32Test(&bytes, info.min_size - 4, 0);
+            },
+            28...31 => {
+                writeF2Dot14Test(&bytes, 4, 0.25);
+                writeF2Dot14Test(&bytes, 6, 0);
+                if (format >= 30) {
+                    writeI16Test(&bytes, 8, 100);
+                    writeI16Test(&bytes, 10, 200);
+                }
+                if ((format & 1) != 0) writeU32Test(&bytes, info.min_size - 4, 0);
+            },
+            else => unreachable,
+        }
+
+        const result = try readColorTransform(&font, 0, context);
+        try std.testing.expectEqual(@as(usize, info.min_size), result.child.offset);
+        switch (format) {
+            12, 13 => {
+                try std.testing.expectApproxEqAbs(@as(f32, 2), result.affine.xx, 0.0001);
+                try std.testing.expectApproxEqAbs(@as(f32, 3), result.affine.yy, 0.0001);
+                try std.testing.expectApproxEqAbs(@as(f32, 40), result.affine.dx, 0.0001);
+            },
+            14, 15 => {
+                try std.testing.expectApproxEqAbs(@as(f32, 40), result.affine.dx, 0.0001);
+                try std.testing.expectApproxEqAbs(@as(f32, 50), result.affine.dy, 0.0001);
+            },
+            16...23 => try std.testing.expectApproxEqAbs(@as(f32, 0.5), result.affine.xx, 0.0001),
+            24...27 => {
+                try std.testing.expectApproxEqAbs(@as(f32, 0), result.affine.xx, 0.0001);
+                try std.testing.expectApproxEqAbs(@as(f32, 1), result.affine.yx, 0.0001);
+            },
+            28...31 => try std.testing.expectApproxEqAbs(@as(f32, -1), result.affine.xy, 0.0001),
+            else => unreachable,
+        }
+        if ((format & 1) != 0) {
+            const varied = try readColorTransform(&font, 0, varied_context);
+            try std.testing.expect(!std.meta.eql(result.affine, varied.affine));
+        }
+    }
 }
 
 fn readColorSweepGradient(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.SweepGradient {

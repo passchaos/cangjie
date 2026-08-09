@@ -168,6 +168,10 @@ pub fn buildColorV1LinearGradientTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1LinearGradientTtfTables(allocator));
 }
 
+pub fn buildColorV1VariableClipTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1VariableClipTtfTables(allocator));
+}
+
 pub fn buildColorV1RadialGradientTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1RadialGradientTtfTables(allocator));
 }
@@ -1208,6 +1212,24 @@ fn colorV1LinearGradientTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try colorV1GlyphTtfTables(allocator);
     allocator.free(tables[0].data);
     tables[0].data = try colrV1LinearGradientTable(allocator);
+    return tables;
+}
+
+fn colorV1VariableClipTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 12);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "COLR", .data = try colrV1VariableClipTable(allocator) };
+    tables[1] = .{ .tag = "CPAL", .data = try cpalTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[4] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[5] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[6] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[7] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[8] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    tables[11] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -3565,6 +3587,55 @@ fn colrV1LinearGradientTable(allocator: std.mem.Allocator) ![]u8 {
     writeI16(bytes, 96, 0);
     writeI16(bytes, 98, 700);
     writeI16(bytes, 100, 125);
+    return bytes;
+}
+
+fn colrV1VariableClipTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 136);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34); // BaseGlyphList.
+    writeU32(bytes, 22, 55); // ClipList.
+    writeU32(bytes, 26, 80); // VarIndexMap.
+    writeU32(bytes, 30, 100); // ItemVariationStore.
+
+    writeU32(bytes, 34, 1);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 10);
+
+    bytes[44] = 10; // PaintGlyph.
+    writeU24(bytes, 45, 6);
+    writeU16(bytes, 48, 1);
+    bytes[50] = 2; // PaintSolid.
+    writeU16(bytes, 51, 0);
+    writeF2Dot14(bytes, 53, 1);
+
+    bytes[55] = 1; // ClipList format 1.
+    writeU32(bytes, 56, 1);
+    writeU16(bytes, 60, 1);
+    writeU16(bytes, 62, 1);
+    writeU24(bytes, 64, 12);
+    bytes[67] = 2; // ClipBox format 2.
+    writeI16(bytes, 68, 100);
+    writeI16(bytes, 70, 100);
+    writeI16(bytes, 72, 900);
+    writeI16(bytes, 74, 900);
+    writeU32(bytes, 76, 1); // Four logical indexes start at map entry 1.
+
+    // Four-byte map entries preserve the full 0xFFFF_FFFF no-variation
+    // sentinel. Entries beyond mapCount reuse the final entry, so the last
+    // ClipBox coordinate deliberately shares ItemVariationData row 1.
+    bytes[80] = 0;
+    bytes[81] = 0x3f; // four-byte entries, 16 inner-index bits.
+    writeU16(bytes, 82, 4);
+    writeU32(bytes, 84, 0xffff_ffff);
+    writeU32(bytes, 88, 0); // outer 0, inner 0.
+    writeU32(bytes, 92, 0); // outer 0, inner 0.
+    writeU32(bytes, 96, 1); // outer 0, inner 1.
+
+    writeItemVariationStoreWithItems(bytes, 100, 2);
+    writeI16(bytes, 132, 500);
+    writeI16(bytes, 134, -500);
     return bytes;
 }
 

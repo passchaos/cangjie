@@ -204,7 +204,7 @@ fn readIndexMapEntry(data: []const u8, map_data_start: usize, entry_size: u8, in
     };
 }
 
-const DeltaSetIndex = struct {
+pub const DeltaSetIndex = struct {
     outer: usize,
     inner: usize,
 };
@@ -249,7 +249,17 @@ fn deltaSetIndexForMappedItem(data: []const u8, table_offset: usize, table_lengt
 }
 
 fn itemVariationDelta(data: []const u8, table_offset: usize, table_length: usize, store_offset: usize, index: DeltaSetIndex, normalized_coords: []const f32) Error!i32 {
-    if (normalized_coords.len == 0) return 0;
+    return roundF64ToI32(try itemVariationDeltaF64(data, table_offset, table_length, store_offset, index, normalized_coords));
+}
+
+/// Evaluate an ItemVariationStore row without metric rounding.
+///
+/// COLR v1 applies these deltas to several non-integer target types (Fixed and
+/// F2Dot14 as well as FWORD), so its runtime resolver must retain the fractional
+/// result. HVAR/VVAR call the same decoder and round only at their integer API
+/// boundary, keeping the packed-row and region-scalar semantics in one place.
+pub fn itemVariationDeltaF64(data: []const u8, table_offset: usize, table_length: usize, store_offset: usize, index: DeltaSetIndex, normalized_coords: []const f32) Error!f64 {
+    if (normalized_coords.len == 0 or (index.outer == 0xffff and index.inner == 0xffff)) return 0;
     if (store_offset > table_length or table_length - store_offset < 8) return error.BadSfnt;
     const store = table_offset + store_offset;
     const format = try bin.readU16At(data, store);
@@ -272,7 +282,7 @@ fn itemVariationDelta(data: []const u8, table_offset: usize, table_length: usize
         const delta = try itemVariationDeltaValue(data, item_data, index.inner, region_delta_index);
         accum += @as(f64, @floatFromInt(delta)) * scalar;
     }
-    return roundF64ToI32(accum);
+    return accum;
 }
 
 const VariationRegionListRef = struct {
@@ -366,28 +376,39 @@ fn variationRegionScalar(data: []const u8, region_list: VariationRegionListRef, 
     if (region_index >= region_list.region_count) return error.BadSfnt;
     const region_record_size = region_list.axis_count * 6;
     const region_start = region_list.offset + 4 + region_index * region_record_size;
-    var scalar: f64 = 1.0;
+    var scalar: f32 = 1.0;
     for (0..region_list.axis_count) |axis_index| {
         const axis_offset = region_start + axis_index * 6;
-        const start = f2dot14ToF64(try bin.readI16At(data, axis_offset));
-        const peak = f2dot14ToF64(try bin.readI16At(data, axis_offset + 2));
-        const end = f2dot14ToF64(try bin.readI16At(data, axis_offset + 4));
+        const start = try bin.readI16At(data, axis_offset);
+        const peak = try bin.readI16At(data, axis_offset + 2);
+        const end = try bin.readI16At(data, axis_offset + 4);
+        // A zero peak makes this axis inactive for the region. In particular,
+        // do not divide through a [0, 0, end] tent: OpenType defines it as
+        // contributing a scalar of one on this axis.
+        if (peak == 0) continue;
         if (start > peak or peak > end or (start < 0 and end > 0)) continue;
-        const coord = if (axis_index < normalized_coords.len) @as(f64, normalized_coords[axis_index]) else 0;
-        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
+        const coord = try normalizedF2Dot14Bits(if (axis_index < normalized_coords.len) normalized_coords[axis_index] else 0);
         if (coord < start or coord > end) return 0;
         if (coord == peak) continue;
         if (coord < peak) {
-            scalar = (scalar * (coord - start)) / (peak - start);
+            scalar = (scalar * @as(f32, @floatFromInt(@as(i32, coord) - start))) /
+                @as(f32, @floatFromInt(@as(i32, peak) - start));
         } else {
-            scalar = (scalar * (end - coord)) / (end - peak);
+            scalar = (scalar * @as(f32, @floatFromInt(@as(i32, end) - coord))) /
+                @as(f32, @floatFromInt(@as(i32, end) - peak));
         }
     }
     return scalar;
 }
 
-fn f2dot14ToF64(value: i16) f64 {
-    return @as(f64, @floatFromInt(value)) / 16384.0;
+fn normalizedF2Dot14Bits(value: f32) Error!i16 {
+    if (!std.math.isFinite(value) or value < -1 or value > 1) return error.BadSfnt;
+    // Public variation APIs carry f32, while ItemVariationStore regions and
+    // Fontations/Skrifa locations are F2Dot14. Quantize before support tests so
+    // values such as 0.4 resolve to 0.4000244140625 rather than crossing a tent
+    // boundary or losing the small fractional delta observable in COLR.
+    const bias: f32 = if (std.math.signbit(value)) -0.5 else 0.5;
+    return @intFromFloat(value * 16384.0 + bias);
 }
 
 fn roundF64ToI32(value: f64) i32 {

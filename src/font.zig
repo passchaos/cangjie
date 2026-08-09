@@ -3290,7 +3290,18 @@ pub const Font = struct {
     }
 
     pub fn colorClipBox(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorClipBox {
+        return try self.colorClipBoxAtCoords(glyph_id, &.{});
+    }
+
+    /// Resolve the COLR v1 clip box for a glyph at normalized coordinates.
+    ///
+    /// ClipBox format 2 stores four consecutive ItemVariationStore deltas in
+    /// font units. The result intentionally remains floating point: normalized
+    /// F2Dot14 coordinates can produce fractional bounds even though the base
+    /// rectangle and delta rows are integer-valued.
+    pub fn colorClipBoxAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?ColorClipBox {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const colr = self.colr orelse return null;
         try validateSfntTableChecksum(self.data, colr);
         if (colr.length < 34 or try bin.readU16At(self.data, colr.offset) != 1) return null;
@@ -3314,13 +3325,26 @@ pub const Font = struct {
             } else {
                 const relative: usize = @intCast(try readU24At(self.data, record + 4));
                 const box = clip_list_start + relative;
-                if (self.data[box] != 1) return null; // Variable ClipBox format 2 is resolved separately.
-                return .{
+                var result = ColorClipBox{
                     .x_min = @floatFromInt(try bin.readI16At(self.data, box + 1)),
                     .y_min = @floatFromInt(try bin.readI16At(self.data, box + 3)),
                     .x_max = @floatFromInt(try bin.readI16At(self.data, box + 5)),
                     .y_max = @floatFromInt(try bin.readI16At(self.data, box + 7)),
                 };
+                if (self.data[box] == 1) return result;
+
+                const var_index_base = try bin.readU32At(self.data, box + 9);
+                if (normalizedVariationCoordinatesAreDefault(normalized_coords) or var_index_base == no_colr_variation_index) return result;
+                // The Font borrows its backing bytes, so repeat cross-reference
+                // validation immediately before dereferencing a variation row.
+                // Static boxes stay on the cheaper ClipList-only path.
+                try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
+                const context = (try readColrVariationContext(self.data, colr)) orelse return error.BadSfnt;
+                result.x_min += @floatCast(try colrVariationDelta(self.data, colr, context, var_index_base, 0, normalized_coords));
+                result.y_min += @floatCast(try colrVariationDelta(self.data, colr, context, var_index_base, 1, normalized_coords));
+                result.x_max += @floatCast(try colrVariationDelta(self.data, colr, context, var_index_base, 2, normalized_coords));
+                result.y_max += @floatCast(try colrVariationDelta(self.data, colr, context, var_index_base, 3, normalized_coords));
+                return result;
             }
         }
         return null;
@@ -11452,6 +11476,68 @@ const ColrVariationContext = struct {
     map: ?DeltaSetIndexMapInfo,
 };
 
+const no_colr_variation_index = std.math.maxInt(u32);
+
+fn readColrVariationContext(data: []const u8, colr: TableRecord) FontError!?ColrVariationContext {
+    if (colr.length < 34) return error.BadSfnt;
+    const store_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 30));
+    if (store_offset == 0) return null;
+    if (store_offset > colr.length or colr.length - store_offset < 8) return error.BadSfnt;
+    const store = colr.offset + store_offset;
+    if (try bin.readU16At(data, store) != 1) return error.BadSfnt;
+    const item_data_count: usize = @intCast(try bin.readU16At(data, store + 6));
+
+    const map_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 26));
+    return .{
+        .store_offset = store_offset,
+        .item_data_count = item_data_count,
+        .map = if (map_offset == 0)
+            null
+        else
+            try readDeltaSetIndexMapInfo(data, colr, map_offset, 34),
+    };
+}
+
+fn colrVariationDelta(
+    data: []const u8,
+    colr: TableRecord,
+    context: ColrVariationContext,
+    var_index_base: u32,
+    sequence_index: usize,
+    normalized_coords: []const f32,
+) FontError!f64 {
+    if (normalized_coords.len == 0 or var_index_base == no_colr_variation_index) return 0;
+    if (@as(usize, var_index_base) > std.math.maxInt(u32) - sequence_index) return error.BadSfnt;
+    const logical_index: u32 = var_index_base + @as(u32, @intCast(sequence_index));
+
+    const outer_index, const inner_index = if (context.map) |map| blk: {
+        if (map.map_count == 0) {
+            // An explicitly empty DeltaSetIndexMap uses the standard packed
+            // identity mapping, unlike an absent COLR map whose implicit outer
+            // index is always zero.
+            break :blk .{
+                @as(usize, @intCast(logical_index >> 16)),
+                @as(usize, @intCast(logical_index & 0xffff)),
+            };
+        }
+        const mapped_index = @min(@as(usize, logical_index), map.map_count - 1);
+        break :blk try readDeltaSetIndexMapEntry(data, map, mapped_index);
+    } else blk: {
+        if (logical_index > std.math.maxInt(u16)) return error.BadSfnt;
+        break :blk .{ @as(usize, 0), @as(usize, logical_index) };
+    };
+
+    if (outer_index == 0xffff and inner_index == 0xffff) return 0;
+    return try metric_variation_mod.itemVariationDeltaF64(
+        data,
+        colr.offset,
+        colr.length,
+        context.store_offset,
+        .{ .outer = outer_index, .inner = inner_index },
+        normalized_coords,
+    );
+}
+
 const ColrV1BaseGlyphSet = struct {
     list_start: usize,
     record_count: usize,
@@ -11540,6 +11626,19 @@ fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRe
 }
 
 fn validateDeltaSetIndexMap(data: []const u8, table: TableRecord, store_offset: usize, item_data_count: usize, map_offset: usize, minimum_map_offset: usize) FontError!DeltaSetIndexMapInfo {
+    const info = try readDeltaSetIndexMapInfo(data, table, map_offset, minimum_map_offset);
+    for (0..info.map_count) |index| {
+        const outer_index, const inner_index = try readDeltaSetIndexMapEntry(data, info, index);
+        // 0xFFFF_FFFF is the variation-common no-delta sentinel. Production
+        // COLR maps use it for sparse logical indexes, so it is not a dangling
+        // reference to outer item-data index 65535.
+        if (outer_index == 0xffff and inner_index == 0xffff) continue;
+        try validateDeltaSetReference(data, table, store_offset, item_data_count, outer_index, inner_index);
+    }
+    return info;
+}
+
+fn readDeltaSetIndexMapInfo(data: []const u8, table: TableRecord, map_offset: usize, minimum_map_offset: usize) FontError!DeltaSetIndexMapInfo {
     if (map_offset < minimum_map_offset or map_offset > table.length or table.length - map_offset < 4) return error.BadSfnt;
     const map_start = table.offset + map_offset;
     const format = data[map_start];
@@ -11560,7 +11659,7 @@ fn validateDeltaSetIndexMap(data: []const u8, table: TableRecord, store_offset: 
     };
     if (map_count != 0 and map_count > (table.offset + table.length - map_data_start) / entry_size) return error.BadSfnt;
 
-    const info = DeltaSetIndexMapInfo{
+    return .{
         .offset = map_offset,
         .end_offset = map_data_start - table.offset + map_count * entry_size,
         .map_count = map_count,
@@ -11568,11 +11667,6 @@ fn validateDeltaSetIndexMap(data: []const u8, table: TableRecord, store_offset: 
         .entry_size = entry_size,
         .map_data_start = map_data_start,
     };
-    for (0..map_count) |index| {
-        const outer_index, const inner_index = try readDeltaSetIndexMapEntry(data, info, index);
-        try validateDeltaSetReference(data, table, store_offset, item_data_count, outer_index, inner_index);
-    }
-    return info;
 }
 
 fn validateColrVariationTopLevelRanges(store_offset: usize, store_end_offset: usize, map_offset: usize, map_end_offset: usize) FontError!void {
@@ -11716,31 +11810,39 @@ fn validateDeltaSetReference(data: []const u8, table: TableRecord, store_offset:
 }
 
 fn validateColrVariationIndexSequence(data: []const u8, colr: TableRecord, context: ?*const ColrVariationContext, var_index_base: u32, item_count: usize) FontError!void {
-    const ctx = context orelse return error.BadSfnt;
     if (item_count == 0) return;
+    if (var_index_base == no_colr_variation_index) return;
+    const ctx = context orelse return error.BadSfnt;
     if (@as(usize, var_index_base) > std.math.maxInt(u32) - (item_count - 1)) return error.BadSfnt;
 
     if (ctx.map) |map| {
-        if (map.map_count == 0) return error.BadSfnt;
+        if (map.map_count == 0) {
+            for (0..item_count) |sequence_index| {
+                const var_index = var_index_base + @as(u32, @intCast(sequence_index));
+                const outer_index: usize = @intCast(var_index >> 16);
+                const inner_index: usize = @intCast(var_index & 0xffff);
+                if (outer_index == 0xffff and inner_index == 0xffff) continue;
+                try validateDeltaSetReference(data, colr, ctx.store_offset, ctx.item_data_count, outer_index, inner_index);
+            }
+            return;
+        }
         for (0..item_count) |sequence_index| {
             const logical_index = @as(usize, var_index_base) + sequence_index;
             const mapped_index = if (logical_index >= map.map_count) map.map_count - 1 else logical_index;
             const outer_index, const inner_index = try readDeltaSetIndexMapEntry(data, map, mapped_index);
+            if (outer_index == 0xffff and inner_index == 0xffff) continue;
             try validateDeltaSetReference(data, colr, ctx.store_offset, ctx.item_data_count, outer_index, inner_index);
         }
         return;
     }
 
     for (0..item_count) |sequence_index| {
-        const var_index = var_index_base + @as(u32, @intCast(sequence_index));
-        try validateDeltaSetReference(
-            data,
-            colr,
-            ctx.store_offset,
-            ctx.item_data_count,
-            @as(usize, @intCast(var_index >> 16)),
-            @as(usize, @intCast(var_index & 0xffff)),
-        );
+        const inner_index = @as(usize, var_index_base) + sequence_index;
+        if (inner_index > std.math.maxInt(u16)) return error.BadSfnt;
+        // COLR defines varIndexBase as a logical index into its optional map.
+        // Without that map, the implicit mapping selects VarData[0] and uses
+        // the logical index as the inner row (matching Skrifa and FreeType).
+        try validateDeltaSetReference(data, colr, ctx.store_offset, ctx.item_data_count, 0, inner_index);
     }
 }
 
@@ -11816,12 +11918,14 @@ fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: 
 
 fn validateColrVariableTransformVariationRefs(data: []const u8, colr: TableRecord, offset: usize, info: ColorPaintFormatInfo, context: ?*const ColrVariationContext) FontError!void {
     const item_count = colrVariableTransformItemCount(data[offset]) orelse return;
-    // Variable transform paints append varIndexBase after their scalar transform
-    // arguments (or after the transform offset for PaintVarTransform). Check
-    // the whole consecutive delta sequence now so matrix/translate/scale/etc.
-    // paints cannot be parsed successfully with dangling variation rows that
-    // only fail later when variation coordinates are applied.
-    try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, offset + info.min_size - 4), item_count);
+    // PaintVarTransform keeps varIndexBase in the referenced VarAffine2x3
+    // payload, after its six Fixed values. Other variable transforms append it
+    // directly to their paint record.
+    const var_index_offset = if (data[offset] == 13)
+        (try colrTransformMatrixPayloadRange(data, colr, offset, info.min_size)).end - 4
+    else
+        offset + info.min_size - 4;
+    try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, var_index_offset), item_count);
 }
 
 fn colrVariableTransformItemCount(format: u8) ?usize {
@@ -12051,7 +12155,7 @@ fn colorPaintFormatInfo(format: u8) ?ColorPaintFormatInfo {
         10 => .{ .min_size = 6, .kind = .glyph },
         11 => .{ .min_size = 3, .kind = .colr_glyph },
         12 => .{ .min_size = 7, .kind = .single_child },
-        13 => .{ .min_size = 11, .kind = .single_child },
+        13 => .{ .min_size = 7, .kind = .single_child },
         14, 16, 28 => .{ .min_size = 8, .kind = .single_child },
         15, 17, 29 => .{ .min_size = 12, .kind = .single_child },
         18 => .{ .min_size = 12, .kind = .single_child },
@@ -12123,8 +12227,9 @@ fn colrTransformMatrixPayloadRange(data: []const u8, colr: TableRecord, offset: 
     if (transform_offset < min_size) return error.BadSfnt;
     if (transform_offset > colr.offset + colr.length - offset) return error.BadSfnt;
     const matrix_offset = offset + transform_offset;
-    if (24 > colr.offset + colr.length - matrix_offset) return error.BadSfnt;
-    return .{ .start = matrix_offset, .end = matrix_offset + 24 };
+    const matrix_size: usize = if (data[offset] == 13) 28 else 24;
+    if (matrix_size > colr.offset + colr.length - matrix_offset) return error.BadSfnt;
+    return .{ .start = matrix_offset, .end = matrix_offset + matrix_size };
 }
 
 fn validateColrPaintChildPayloadOwnership(data: []const u8, colr: TableRecord, offset: usize, info: ColorPaintFormatInfo) FontError!void {
@@ -17909,14 +18014,14 @@ test "COLR v1 variable transform paints validate variation indexes" {
 
     bytes[colr_offset + 44] = 13; // PaintVarTransform.
     writeU24Test(&bytes, colr_offset + 45, 35); // Child PaintSolid after the matrix.
-    writeU24Test(&bytes, colr_offset + 48, 11); // VarAffine2x3 starts after PaintVarTransform.
-    writeU32Test(&bytes, colr_offset + 51, 0); // varIndexBase covers the six matrix scalars.
-    writeF16Dot16Test(&bytes, colr_offset + 55, 1.0); // xx.
-    writeF16Dot16Test(&bytes, colr_offset + 59, 0.0); // yx.
-    writeF16Dot16Test(&bytes, colr_offset + 63, 0.0); // xy.
-    writeF16Dot16Test(&bytes, colr_offset + 67, 1.0); // yy.
-    writeF16Dot16Test(&bytes, colr_offset + 71, 0.0); // dx.
-    writeF16Dot16Test(&bytes, colr_offset + 75, 0.0); // dy.
+    writeU24Test(&bytes, colr_offset + 48, 7); // VarAffine2x3 follows the seven-byte paint header.
+    writeF16Dot16Test(&bytes, colr_offset + 51, 1.0); // xx.
+    writeF16Dot16Test(&bytes, colr_offset + 55, 0.0); // yx.
+    writeF16Dot16Test(&bytes, colr_offset + 59, 0.0); // xy.
+    writeF16Dot16Test(&bytes, colr_offset + 63, 1.0); // yy.
+    writeF16Dot16Test(&bytes, colr_offset + 67, 0.0); // dx.
+    writeF16Dot16Test(&bytes, colr_offset + 71, 0.0); // dy.
+    writeU32Test(&bytes, colr_offset + 75, 0); // varIndexBase covers the six matrix scalars.
     bytes[colr_offset + 79] = 2; // PaintSolid child.
     writeU16Test(&bytes, colr_offset + 80, 0);
     writeF2Dot14Test(&bytes, colr_offset + 82, 1.0);
@@ -17929,7 +18034,7 @@ test "COLR v1 variable transform paints validate variation indexes" {
     try std.testing.expectError(error.BadSfnt, validateColrVariationData(&missing_store, colr, fvar, 2));
 
     var bad_matrix_index = bytes;
-    writeU32Test(&bad_matrix_index, colr_offset + 51, 1); // Matrix deltas need rows 1 through 6.
+    writeU32Test(&bad_matrix_index, colr_offset + 75, 1); // Matrix deltas need rows 1 through 6.
     try std.testing.expectError(error.BadSfnt, validateColrVariationData(&bad_matrix_index, colr, fvar, 2));
 }
 

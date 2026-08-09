@@ -892,7 +892,7 @@ pub const Rasterizer = struct {
         defer self.allocator.free(layers);
         if (layers.len == 0) {
             if (try font.colorPaint(glyph_id)) |paint| {
-                if (try font.colorClipBox(glyph_id)) |clip| {
+                if (try font.colorClipBoxAtCoords(glyph_id, normalized_variation_coords)) |clip| {
                     var clipped = try ColorRenderTarget.init(self.allocator, target.width, target.height);
                     defer clipped.deinit();
                     try self.renderColorPaint(&clipped, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);

@@ -4621,6 +4621,50 @@ test "reads and renders COLR v1 PaintLinearGradient" {
     try std.testing.expect(target.at(16, 31).a > 0);
 }
 
+test "COLR v1 variable ClipBox resolves and clips at normalized coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildColorV1VariableClipTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const default_clip = (try font.colorClipBox(1)).?;
+    try std.testing.expectEqual(@as(f32, 100), default_clip.x_min);
+    try std.testing.expectEqual(@as(f32, 100), default_clip.y_min);
+    try std.testing.expectEqual(@as(f32, 900), default_clip.x_max);
+    try std.testing.expectEqual(@as(f32, 900), default_clip.y_max);
+
+    // Logical indexes 1/2 map to a +500 row, while indexes 3/4 map
+    // to -500 and exercise DeltaSetIndexMap's required final-entry reuse.
+    const varied_clip = (try font.colorClipBoxAtCoords(1, &.{0.4})).?;
+    // 0.4 is quantized to the F2Dot14 location 0.4000244140625 before
+    // ItemVariationStore evaluation, matching Fontations/Skrifa.
+    try std.testing.expectApproxEqAbs(@as(f32, 300.0122), varied_clip.x_min, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 300.0122), varied_clip.y_min, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 699.9878), varied_clip.x_max, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 699.9878), varied_clip.y_max, 0.0001);
+    try std.testing.expectError(error.BadSfnt, font.colorClipBoxAtCoords(1, &.{1.01}));
+
+    var default_target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer default_target.deinit();
+    var varied_target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer varied_target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&default_target, &font, 1, 24, 8, 32, 0);
+    try rasterizer.renderColorGlyphAtCoords(&varied_target, &font, 1, 24, 8, 32, 0, &.{0.4});
+
+    var default_opaque: usize = 0;
+    var varied_opaque: usize = 0;
+    for (default_target.pixels, varied_target.pixels) |default_pixel, varied_pixel| {
+        if (default_pixel.a != 0) default_opaque += 1;
+        if (varied_pixel.a != 0) varied_opaque += 1;
+    }
+    try std.testing.expect(default_opaque > 0);
+    try std.testing.expect(varied_opaque < default_opaque);
+}
+
 test "COLR v1 foreground palette sentinel renders current color" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

@@ -795,6 +795,19 @@ Current local snapshot after the Nastaliq parity work:
   Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix measured SourceSerifVariable at
   `168.062` versus `161.225 ns/glyph` on CPU 8, leaving about a `4.24%`
   gap, and `178.412` versus `170.635 ns/glyph` on CPU 30, about `4.56%`.
+- Validated GPOS accelerators now retain a homogeneous ExtensionPos lookup's
+  wrapped type. Runtime dispatch reuses it only when lookup offset, outer type,
+  and subtable count all match; unvalidated calls and stale/foreign cache
+  entries still parse the wrappers. This removes five wrapper-header reads per
+  SourceSerifVariable word. Fixed-P-core CPU 8 A/B/B/A comparisons reduced
+  `en-words` retired instructions by `3.16%`, branches by `3.48%`, and cycles
+  by `4.79%`; fixed E-core CPU 30 reproduced `3.15%` fewer instructions and
+  `6.25%` fewer cycles. Roboto and Amiri instructions remained effectively
+  flat. A post-change Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix measured
+  SourceSerifVariable at `158.791` versus `161.268 ns/glyph` on CPU 8, a
+  Cangjie lead of about `1.54%`, and `168.077` versus `171.115 ns/glyph` on
+  CPU 30, about `1.78%`. Full SourceSerifVariable, Roboto, and Amiri HarfBuzz
+  parity plus SourceSerifVariable HarfRust parity remained unchanged.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

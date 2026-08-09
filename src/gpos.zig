@@ -135,6 +135,7 @@ pub const LookupAccelerator = struct {
     lookup_flag: u16 = 0,
     subtable_count: u16 = 0,
     mark_filtering_set: ?u16 = null,
+    extension_lookup_type: ?u16 = null,
     coverage_digest: GlyphDigest = .{},
     coverage_groups: []const ChainingSubtableGroup = &.{},
     coverage_group_slots: []const u16 = &.{},
@@ -508,6 +509,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
             try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2)
         else
             null,
+        .extension_lookup_type = extension_type,
     };
     const single_pos_subtables = if (lookup_type == 1)
         try allocator.alloc(SinglePosSubtable, subtable_count)
@@ -1336,8 +1338,16 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         // collecting any adjustments so a later malformed wrapper cannot leave
         // earlier wrapper results visible to the caller.
         if (!table.assume_validated) try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
-        if (try extensionPositionLookupType(table, lookup_offset, subtable_count)) |wrapped_type| {
-            switch (wrapped_type) {
+        const wrapped_type = try resolvedExtensionPositionLookupType(
+            table,
+            lookup_offset,
+            lookup_type,
+            subtable_count,
+            lookup_index,
+            lookup_options,
+        );
+        if (wrapped_type) |resolved_type| {
+            switch (resolved_type) {
                 1 => {
                     try collectExtensionSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
                     return;
@@ -1505,6 +1515,30 @@ fn extensionPositionLookupType(table: Table, lookup_offset: usize, subtable_coun
         }
     }
     return common_type;
+}
+
+fn resolvedExtensionPositionLookupType(
+    table: Table,
+    lookup_offset: usize,
+    lookup_type: u16,
+    subtable_count: u16,
+    lookup_index: ?u16,
+    options: LookupOptions,
+) GposError!?u16 {
+    if (table.assume_validated) {
+        if (lookupAcceleratorAny(lookup_index, options)) |accelerator| {
+            // A cache entry belongs to one exact Lookup header. Any mismatch
+            // can indicate a foreign/stale accelerator slice and must retain
+            // the authoritative wrapper parser instead of trusting its type.
+            if (accelerator.lookup_offset == lookup_offset and
+                accelerator.lookup_type == lookup_type and
+                accelerator.subtable_count == subtable_count)
+            {
+                return accelerator.extension_lookup_type;
+            }
+        }
+    }
+    return try extensionPositionLookupType(table, lookup_offset, subtable_count);
 }
 
 fn extensionPositionSubtablePayload(table: Table, subtable_offset: usize, expected_lookup_type: u16) GposError!usize {
@@ -5802,6 +5836,57 @@ test "GPOS cached lookup dispatch requires validated matching metadata" {
         .assume_validated = true,
     }, .{ .lookup_accelerators = &stale });
     try std.testing.expectEqual(@as(u16, 1), stale_fallback.lookup_type);
+}
+
+test "GPOS cached ExtensionPos type requires validated matching metadata" {
+    var bytes = [_]u8{0} ** 28;
+    writeU16Test(&bytes, 0, 9);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+    writeU16Test(&bytes, 8, 1); // ExtensionPos format.
+    writeU16Test(&bytes, 10, 2); // PairPos.
+    writeU32Test(&bytes, 12, 8);
+    writeU16Test(&bytes, 16, 1); // Minimal PairPos payload header.
+
+    const accelerators = [_]LookupAccelerator{.{
+        .lookup_offset = 0,
+        .lookup_type = 9,
+        .subtable_count = 1,
+        .extension_lookup_type = 2,
+    }};
+    const validated = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    try std.testing.expectEqual(
+        @as(?u16, 2),
+        try resolvedExtensionPositionLookupType(validated, 0, 9, 1, 0, .{
+            .lookup_accelerators = &accelerators,
+        }),
+    );
+
+    // Mutating the borrowed wrapper proves whether parsing actually occurred.
+    // An unvalidated call and a stale header identity must observe the bytes,
+    // not the cached type from the original lookup.
+    writeU16Test(&bytes, 10, 1);
+    const unvalidated = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectEqual(
+        @as(?u16, 1),
+        try resolvedExtensionPositionLookupType(unvalidated, 0, 9, 1, 0, .{
+            .lookup_accelerators = &accelerators,
+        }),
+    );
+    var stale = accelerators;
+    stale[0].lookup_offset = 2;
+    try std.testing.expectEqual(
+        @as(?u16, 1),
+        try resolvedExtensionPositionLookupType(validated, 0, 9, 1, 0, .{
+            .lookup_accelerators = &stale,
+        }),
+    );
 }
 
 test "GPOS rejects reserved LookupFlag bits" {

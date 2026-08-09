@@ -3799,9 +3799,8 @@ pub const Font = struct {
         const coverage_index = (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id)) orelse
             return try self.appendBaseOutlineTransformed(outline, glyph_id, parent_transform, normalized_coords, read_mode);
         stack[depth] = glyph_id;
-        const components = try varc_mod.glyphComponents(outline.allocator, self.data, varc.offset, varc.length, self.glyph_count, coverage_index);
-        defer outline.allocator.free(components);
-        for (components) |component| {
+        var components = try varc_mod.componentIterator(self.data, varc.offset, varc.length, self.glyph_count, coverage_index);
+        while (try components.next()) |component| {
             if (component.condition_index) |condition_index| {
                 if (!(try varc_mod.conditionMatchesWithAllocator(
                     outline.allocator,

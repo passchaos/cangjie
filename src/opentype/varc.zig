@@ -155,15 +155,45 @@ pub fn glyphCoverageIndex(data: []const u8, offset: usize, length: usize, glyph_
 }
 
 pub fn glyphComponents(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, glyph_count: usize, coverage_index: usize) Error![]Component {
-    const h = try header(data, offset, length);
-    const component_data = try index2Item(data, offset, length, h.var_composite_glyphs_offset, coverage_index);
+    var iterator = try componentIterator(data, offset, length, glyph_count, coverage_index);
     var components = std.ArrayList(Component).empty;
     errdefer components.deinit(allocator);
-    var reader = SliceReader{ .data = component_data };
-    while (reader.remaining() != 0) {
-        try components.append(allocator, try readComponent(data, offset, length, h, &reader, glyph_count));
-    }
+    while (try iterator.next()) |component| try components.append(allocator, component);
     return try components.toOwnedSlice(allocator);
+}
+
+pub const ComponentIterator = struct {
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    glyph_count: usize,
+    h: Header,
+    reader: SliceReader,
+
+    pub fn next(self: *ComponentIterator) Error!?Component {
+        if (self.reader.remaining() == 0) return null;
+        return try readComponent(
+            self.data,
+            self.table_offset,
+            self.table_length,
+            self.h,
+            &self.reader,
+            self.glyph_count,
+        );
+    }
+};
+
+pub fn componentIterator(data: []const u8, offset: usize, length: usize, glyph_count: usize, coverage_index: usize) Error!ComponentIterator {
+    const h = try header(data, offset, length);
+    const component_data = try index2Item(data, offset, length, h.var_composite_glyphs_offset, coverage_index);
+    return .{
+        .data = data,
+        .table_offset = offset,
+        .table_length = length,
+        .glyph_count = glyph_count,
+        .h = h,
+        .reader = .{ .data = component_data },
+    };
 }
 
 pub fn conditionMatches(data: []const u8, offset: usize, length: usize, condition_index: u32, normalized_coords: []const f32) Error!bool {
@@ -1072,6 +1102,34 @@ test "VARC exposes top-level offsets and coverage glyphs" {
     try std.testing.expectEqual(@as(?usize, null), parsed.multi_var_store_offset);
     try std.testing.expectEqual(@as(usize, 32), parsed.var_composite_glyphs_offset);
     try std.testing.expectEqualSlices(u16, &.{ 1, 3 }, parsed.glyphs);
+}
+
+test "VARC component iterator streams the same records as the collecting API" {
+    var bytes: [46]u8 = .{0} ** 46;
+    writeU16(&bytes, 0, 1);
+    writeU32(&bytes, 4, 24);
+    writeU32(&bytes, 20, 32);
+    writeU16(&bytes, 24, 1);
+    writeU16(&bytes, 26, 2);
+    writeU16(&bytes, 28, 1);
+    writeU16(&bytes, 30, 3);
+    writeU32(&bytes, 32, 2);
+    bytes[36] = 1;
+    bytes[37] = 1;
+    bytes[38] = 4;
+    bytes[39] = 7;
+    bytes[40] = 0;
+    writeU16(&bytes, 41, 1);
+    bytes[43] = 0;
+    writeU16(&bytes, 44, 3);
+
+    const collected = try glyphComponents(std.testing.allocator, &bytes, 0, bytes.len, 4, 0);
+    defer std.testing.allocator.free(collected);
+    var iterator = try componentIterator(&bytes, 0, bytes.len, 4, 0);
+    const first = (try iterator.next()).?;
+    try std.testing.expectEqual(@as(u32, 1), first.glyph_id);
+    try std.testing.expectEqual(collected[0].glyph_id, first.glyph_id);
+    try std.testing.expect((try iterator.next()) == null);
 }
 
 test "VARC coverage glyphs must stay sorted and in maxp bounds" {

@@ -823,6 +823,22 @@ Current local snapshot after the Nastaliq parity work:
   USE fixtures continued to pass both references. Devanagari remains roughly
   `2.6x` slower than HarfBuzz after this change, so contextual coverage/class
   acceleration is still a major open performance task.
+- ContextSubst format 3 lookups now predecode coverage offsets and nested
+  record positions, group first-input coverage by exact glyph, and try only
+  candidate subtables in font order. Later input coverages remain exact checks,
+  while the existing nested-record mapper still owns IgnoreMarks/default-
+  ignorable skipping and cardinality-changing substitutions. Generic direct
+  ContextSubst was also made position-major, matching ExtensionSubst/class
+  accelerator ordering instead of independently running each whole-run
+  subtable. A regression fixture covers overlapping subtable priority, an
+  ignored intervening mark, MultipleSubst expansion, and a later match in the
+  mutated run. Fixed-P-core CPU 8 A/B/B/A comparisons reduced
+  NotoSansDevanagari `hi-words` retired instructions by `34.10%`, branches by
+  `33.05%`, and cycles by `34.36%`, improving timing from `2255.574` to
+  `1473.931 ns/glyph`. Roboto and Amiri instructions remained flat. The full
+  Devanagari corpus and all ten retained USE fixtures continued to pass both
+  HarfBuzz and HarfRust; Devanagari still trails HarfBuzz materially, so the
+  complex-script performance objective remains open.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

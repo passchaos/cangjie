@@ -216,7 +216,7 @@ const min_competing_ligature_definitions_for_second_prefilter = 32;
 
 const ContextClassSubtableAccelerator = struct {
     subtable_offset: usize = 0,
-    coverage_offset: usize = 0,
+    first_index_start: usize = 0,
     class_def: usize = 0,
     rules: []const class_context.Rule = &.{},
     classes: []const u16 = &.{},
@@ -1584,6 +1584,14 @@ fn buildContextClassSubtableAccelerator(table: Table, subtable_offset: usize, al
         group_start = group_end;
     }
 
+    const first_index_start = try appendClassFirstIndex(
+        table,
+        coverage_offset,
+        class_def,
+        groups.items,
+        &classes,
+        allocator,
+    );
     const rules_slice = try rules.toOwnedSlice(allocator);
     errdefer allocator.free(rules_slice);
     const classes_slice = try classes.toOwnedSlice(allocator);
@@ -1593,7 +1601,7 @@ fn buildContextClassSubtableAccelerator(table: Table, subtable_offset: usize, al
 
     return .{
         .subtable_offset = subtable_offset,
-        .coverage_offset = coverage_offset,
+        .first_index_start = first_index_start,
         .class_def = class_def,
         .rules = rules_slice,
         .classes = classes_slice,
@@ -1744,7 +1752,7 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
         group_start = group_end;
     }
 
-    const first_index_start = try appendChainingClassFirstIndex(
+    const first_index_start = try appendClassFirstIndex(
         table,
         coverage_offset,
         input_class_def,
@@ -1770,12 +1778,12 @@ fn buildChainingClassSubtableAccelerator(table: Table, subtable_offset: usize, a
     };
 }
 
-const ChainingClassFirstEntry = struct {
+const ClassFirstEntry = struct {
     glyph: GlyphId,
     group_index: u16,
 };
 
-fn appendChainingClassFirstIndex(
+fn appendClassFirstIndex(
     table: Table,
     coverage_offset: usize,
     input_class_def: usize,
@@ -1784,19 +1792,19 @@ fn appendChainingClassFirstIndex(
     allocator: std.mem.Allocator,
 ) (GsubError || std.mem.Allocator.Error)!usize {
     const coverage_count = try coverageGlyphCount(table, coverage_offset);
-    var entries = try std.ArrayList(ChainingClassFirstEntry).initCapacity(allocator, coverage_count);
+    var entries = try std.ArrayList(ClassFirstEntry).initCapacity(allocator, coverage_count);
     defer entries.deinit(allocator);
 
     for (0..coverage_count) |coverage_i| {
         const glyph = (try coverageGlyphAt(table, coverage_offset, coverage_i)) orelse return error.BadGsub;
         const class_set = try classValue(table, input_class_def, glyph);
-        const group_index = chainingClassGroupIndexForClass(groups, class_set) orelse continue;
+        const group_index = classGroupIndexForClass(groups, class_set) orelse continue;
         try entries.append(allocator, .{
             .glyph = glyph,
             .group_index = @intCast(group_index),
         });
     }
-    std.sort.heap(ChainingClassFirstEntry, entries.items, {}, chainingClassFirstEntryLessThan);
+    std.sort.heap(ClassFirstEntry, entries.items, {}, classFirstEntryLessThan);
 
     // Coverage format 2 ranges may overlap legally. `coverageIndex` gives the
     // first matching range precedence, but the input ClassDef and resulting
@@ -1810,24 +1818,24 @@ fn appendChainingClassFirstIndex(
     }
     entries.shrinkRetainingCapacity(write);
     const index_start = classes.items.len;
-    if (write < min_chaining_class_first_entries_for_hash) {
+    if (write < min_class_first_entries_for_hash) {
         try classes.ensureUnusedCapacity(allocator, 1 + write * 2);
-        classes.appendAssumeCapacity(chaining_class_first_index_sorted);
+        classes.appendAssumeCapacity(class_first_index_sorted);
         for (entries.items) |entry| {
             classes.appendAssumeCapacity(entry.glyph);
             classes.appendAssumeCapacity(entry.group_index);
         }
         return index_start;
     }
-    try appendChainingClassFirstHash(entries.items, classes, allocator);
+    try appendClassFirstHash(entries.items, classes, allocator);
     return index_start;
 }
 
-fn chainingClassFirstEntryLessThan(_: void, lhs: ChainingClassFirstEntry, rhs: ChainingClassFirstEntry) bool {
+fn classFirstEntryLessThan(_: void, lhs: ClassFirstEntry, rhs: ClassFirstEntry) bool {
     return lhs.glyph < rhs.glyph;
 }
 
-fn chainingClassGroupIndexForClass(groups: []const class_context.RuleGroup, class_set: u16) ?usize {
+fn classGroupIndexForClass(groups: []const class_context.RuleGroup, class_set: u16) ?usize {
     var lo: usize = 0;
     var hi: usize = groups.len;
     while (lo < hi) {
@@ -1844,21 +1852,21 @@ fn chainingClassGroupIndexForClass(groups: []const class_context.RuleGroup, clas
     return null;
 }
 
-const min_chaining_class_first_entries_for_hash = 8;
-const empty_chaining_class_group_index = std.math.maxInt(u16);
-const chaining_class_first_index_sorted: u16 = 0;
-const chaining_class_first_index_hash: u16 = 1;
+const min_class_first_entries_for_hash = 8;
+const empty_class_group_index = std.math.maxInt(u16);
+const class_first_index_sorted: u16 = 0;
+const class_first_index_hash: u16 = 1;
 
-fn appendChainingClassFirstHash(entries: []const ChainingClassFirstEntry, classes: *std.ArrayList(u16), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+fn appendClassFirstHash(entries: []const ClassFirstEntry, classes: *std.ArrayList(u16), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
     const slot_count = std.math.ceilPowerOfTwo(usize, entries.len * 2) catch return error.OutOfMemory;
     try classes.ensureUnusedCapacity(allocator, 1 + slot_count * 2);
-    classes.appendAssumeCapacity(chaining_class_first_index_hash);
+    classes.appendAssumeCapacity(class_first_index_hash);
     const slots = classes.addManyAsSliceAssumeCapacity(slot_count * 2);
     @memset(slots, 0);
-    for (0..slot_count) |slot| slots[slot * 2 + 1] = empty_chaining_class_group_index;
+    for (0..slot_count) |slot| slots[slot * 2 + 1] = empty_class_group_index;
     for (entries) |entry| {
         var slot = chainingGroupHash(entry.glyph) & (slot_count - 1);
-        while (slots[slot * 2 + 1] != empty_chaining_class_group_index) {
+        while (slots[slot * 2 + 1] != empty_class_group_index) {
             slot = (slot + 1) & (slot_count - 1);
         }
         slots[slot * 2] = entry.glyph;
@@ -1866,21 +1874,21 @@ fn appendChainingClassFirstHash(entries: []const ChainingClassFirstEntry, classe
     }
 }
 
-fn chainingClassGroupForGlyph(subtable: ChainingClassSubtableAccelerator, glyph: GlyphId) ?class_context.RuleGroup {
-    if (subtable.first_index_start >= subtable.classes.len) return null;
-    const index = subtable.classes[subtable.first_index_start..];
+fn classGroupForGlyph(classes: []const u16, first_index_start: usize, groups: []const class_context.RuleGroup, glyph: GlyphId) ?class_context.RuleGroup {
+    if (first_index_start >= classes.len) return null;
+    const index = classes[first_index_start..];
     if (index.len == 0 or (index.len - 1) % 2 != 0) return null;
     const group_index = switch (index[0]) {
-        chaining_class_first_index_hash => group: {
+        class_first_index_hash => group: {
             const slot_count = (index.len - 1) / 2;
             if (slot_count == 0 or !std.math.isPowerOfTwo(slot_count)) return null;
             var slot = chainingGroupHash(glyph) & (slot_count - 1);
-            while (index[2 + slot * 2] != empty_chaining_class_group_index) : (slot = (slot + 1) & (slot_count - 1)) {
+            while (index[2 + slot * 2] != empty_class_group_index) : (slot = (slot + 1) & (slot_count - 1)) {
                 if (index[1 + slot * 2] == glyph) break :group index[2 + slot * 2];
             }
             return null;
         },
-        chaining_class_first_index_sorted => group: {
+        class_first_index_sorted => group: {
             const entry_count = (index.len - 1) / 2;
             var lo: usize = 0;
             var hi: usize = entry_count;
@@ -1899,8 +1907,12 @@ fn chainingClassGroupForGlyph(subtable: ChainingClassSubtableAccelerator, glyph:
         },
         else => return null,
     };
-    if (group_index >= subtable.groups.len) return null;
-    return subtable.groups[group_index];
+    if (group_index >= groups.len) return null;
+    return groups[group_index];
+}
+
+fn chainingClassGroupForGlyph(subtable: ChainingClassSubtableAccelerator, glyph: GlyphId) ?class_context.RuleGroup {
+    return classGroupForGlyph(subtable.classes, subtable.first_index_start, subtable.groups, glyph);
 }
 
 fn buildSingleSubstAccelerator(table: Table, subtable_offset: usize) GsubError!SingleSubstAccelerator {
@@ -4302,9 +4314,7 @@ fn applyContextClassSubstitutionLookupAccelerated(table: Table, lookup_offset: u
 }
 
 fn applyAcceleratedContextClassSubstitutionAt(table: Table, subtable: ContextClassSubtableAccelerator, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
-    if (try coverageIndex(table, subtable.coverage_offset, glyphs.items[pos]) == null) return .{};
-    const input_class = try classValue(table, subtable.class_def, glyphs.items[pos]);
-    const group = class_context.groupForClass(subtable.groups, input_class) orelse return .{};
+    const group = classGroupForGlyph(subtable.classes, subtable.first_index_start, subtable.groups, glyphs.items[pos]) orelse return .{};
     if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
 
     var input_indices_buf: [max_chaining_class_region_glyphs]usize = undefined;
@@ -8181,7 +8191,8 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
 
     const classes = [_]u16{
         1, 5, // Three-glyph rule after the first input.
-        2, 1, 5, // Four-glyph rule after the first input.
+        2,                        1, 5, // Four-glyph rule after the first input.
+        class_first_index_sorted, 1, 0,
     };
     const rules = [_]class_context.Rule{
         .{
@@ -8215,7 +8226,7 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
         .max_lookahead_count = 0,
     }};
     const subtable = ContextClassSubtableAccelerator{
-        .coverage_offset = coverage,
+        .first_index_start = 5,
         .class_def = class_def,
         .rules = &rules,
         .classes = &classes,
@@ -8247,6 +8258,55 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
     try std.testing.expect(result.matched);
     try std.testing.expectEqual(@as(usize, 3), result.next_pos);
     try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3, 9 }, glyphs.items);
+}
+
+test "GSUB direct and extension context class builders share first-group sidecars" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 112;
+
+    // Direct ContextSubst lookup 0 and ExtensionSubst lookup 1 both point at
+    // the same format-2 payload.
+    writeU16Test(&bytes, 0, 5);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 32);
+    writeU16Test(&bytes, 8, 7);
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 8);
+    writeU16Test(&bytes, 16, 1);
+    writeU16Test(&bytes, 18, 5);
+    writeU32Test(&bytes, 20, 16);
+
+    const context = 32;
+    writeU16Test(&bytes, context + 0, 2);
+    writeU16Test(&bytes, context + 2, 30);
+    writeU16Test(&bytes, context + 4, 36);
+    writeU16Test(&bytes, context + 6, 2);
+    writeU16Test(&bytes, context + 8, 0);
+    writeU16Test(&bytes, context + 10, 12);
+    const set = context + 12;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 0);
+    writeCoverage1(&bytes, context + 30, 5);
+    writeClassDef1(&bytes, context + 36, 5, 1);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
+    const direct = try buildContextClassSubtableAccelerators(table, 0, 1, allocator);
+    defer deinitContextClassSubtableAccelerators(allocator, direct);
+    const extension = try buildExtensionContextClassSubtableAccelerators(table, 8, 1, allocator);
+    defer deinitContextClassSubtableAccelerators(allocator, extension);
+
+    try std.testing.expectEqual(@as(usize, 1), direct.len);
+    try std.testing.expectEqual(@as(usize, 1), extension.len);
+    try std.testing.expectEqualSlices(class_context.Rule, direct[0].rules, extension[0].rules);
+    try std.testing.expectEqualSlices(u16, direct[0].classes, extension[0].classes);
+    try std.testing.expectEqualSlices(class_context.RuleGroup, direct[0].groups, extension[0].groups);
+    try std.testing.expectEqual(direct[0].first_index_start, extension[0].first_index_start);
+    try std.testing.expectEqualSlices(u16, &.{ class_first_index_sorted, 5, 0 }, direct[0].classes[direct[0].first_index_start..]);
+    try std.testing.expectEqual(@as(u16, 1), (classGroupForGlyph(direct[0].classes, direct[0].first_index_start, direct[0].groups, 5) orelse return error.TestUnexpectedResult).class_set);
+    try std.testing.expect(classGroupForGlyph(direct[0].classes, direct[0].first_index_start, direct[0].groups, 4) == null);
 }
 
 test "GSUB accelerated chaining class matching keeps shorter rules at run end" {
@@ -8282,8 +8342,8 @@ test "GSUB accelerated chaining class matching keeps shorter rules at run end" {
 
     const classes = [_]u16{
         5, 7, // Short rule: one extra input and one lookahead.
-        5,                                 5, 5, // Long rule: three extra inputs.
-        chaining_class_first_index_sorted, 1, 0,
+        5,                        5, 5, // Long rule: three extra inputs.
+        class_first_index_sorted, 1, 0,
     };
     const rules = [_]class_context.Rule{
         .{
@@ -8368,7 +8428,7 @@ test "GSUB accelerated chaining class matching preserves backtrack order and bou
     // OpenType stores backtrack classes nearest to the input first. Keeping
     // that order in the sidecar avoids reversing either the font data or the
     // lazily collected backtrack window.
-    const classes = [_]u16{ 2, 6, 7, chaining_class_first_index_sorted, 1, 0 };
+    const classes = [_]u16{ 2, 6, 7, class_first_index_sorted, 1, 0 };
     const rules = [_]class_context.Rule{.{
         .class_set = 3,
         .input_count = 1,
@@ -8503,7 +8563,7 @@ test "GSUB direct and extension chaining class builders preserve backtrack rules
     try std.testing.expectEqual(@as(usize, chain + 66), direct[0].backtrack_class_def);
     try std.testing.expectEqual(@as(u16, 1), chainingClassRuleBacktrackCount(direct[0].rules[0]));
     try std.testing.expectEqualSlices(u16, &.{ 2, 3 }, direct[0].classes[0..2]);
-    try std.testing.expectEqualSlices(u16, &.{ chaining_class_first_index_sorted, 5, 0 }, direct[0].classes[direct[0].first_index_start..]);
+    try std.testing.expectEqualSlices(u16, &.{ class_first_index_sorted, 5, 0 }, direct[0].classes[direct[0].first_index_start..]);
     try std.testing.expectEqual(@as(u16, 1), (chainingClassGroupForGlyph(direct[0], 5) orelse return error.TestUnexpectedResult).class_set);
     try std.testing.expect(chainingClassGroupForGlyph(direct[0], 4) == null);
 
@@ -8548,7 +8608,7 @@ test "GSUB chaining class first index deduplicates overlapping coverage and skip
     }};
     var classes = std.ArrayList(u16).empty;
     defer classes.deinit(allocator);
-    const first_index_start = try appendChainingClassFirstIndex(
+    const first_index_start = try appendClassFirstIndex(
         .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
         0,
         20,
@@ -8557,7 +8617,7 @@ test "GSUB chaining class first index deduplicates overlapping coverage and skip
         allocator,
     );
     try std.testing.expectEqualSlices(u16, &.{
-        chaining_class_first_index_sorted,
+        class_first_index_sorted,
         10,
         0,
         11,
@@ -8576,8 +8636,8 @@ test "GSUB chaining class first index deduplicates overlapping coverage and skip
 
 test "GSUB chaining class first slots preserve exact hits and misses" {
     const allocator = std.testing.allocator;
-    var entries: [min_chaining_class_first_entries_for_hash]ChainingClassFirstEntry = undefined;
-    var groups: [min_chaining_class_first_entries_for_hash]class_context.RuleGroup = undefined;
+    var entries: [min_class_first_entries_for_hash]ClassFirstEntry = undefined;
+    var groups: [min_class_first_entries_for_hash]class_context.RuleGroup = undefined;
     for (&entries, &groups, 0..) |*entry, *group, i| {
         entry.* = .{ .glyph = @intCast(10 + i * 17), .group_index = @intCast(i) };
         group.* = .{
@@ -8590,7 +8650,7 @@ test "GSUB chaining class first slots preserve exact hits and misses" {
     }
     var classes = std.ArrayList(u16).empty;
     defer classes.deinit(allocator);
-    try appendChainingClassFirstHash(&entries, &classes, allocator);
+    try appendClassFirstHash(&entries, &classes, allocator);
     try std.testing.expect(classes.items.len >= 1 + entries.len * 4);
 
     const subtable = ChainingClassSubtableAccelerator{

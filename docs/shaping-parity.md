@@ -876,6 +876,17 @@ Current local snapshot after the Nastaliq parity work:
   The complete Devanagari corpus, all ten retained USE fixtures, Roboto,
   SourceSerifVariable, and both Amiri corpora retained HarfBuzz/HarfRust
   parity.
+- ContextSubst format-2 accelerators now reuse the same exact first-glyph
+  sidecar and lookup helper as chaining class subtables. Their former Coverage
+  offset is likewise replaced in place, so the optimization adds neither an
+  accelerator field nor an allocation. A direct/ExtensionSubst builder fixture
+  proves identical rules, class sidecars, groups, and first-glyph indexes.
+  Against `651173b`, fixed CPU-8 P-core A/B/B/A means reduced
+  NotoSansDevanagari `hi-words` instructions by `1.18%`, branches by `1.06%`,
+  and cycles by `1.39%`; fixed CPU-30 E-core reproduced `1.17%`, `1.06%`,
+  and `1.26%` reductions. Roboto and Amiri retired work remained flat, and the
+  full Devanagari/USE/Latin/variable/Arabic dual-reference parity matrix was
+  unchanged.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

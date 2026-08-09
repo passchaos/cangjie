@@ -3826,11 +3826,20 @@ pub const Font = struct {
             // Missing trailing normalized coordinates are semantically zero, so
             // a component that neither overrides axes nor resets unspecified
             // axes can borrow its parent's slice directly. Only coordinate
-            // remapping needs an owned buffer that survives the recursive call.
-            const owned_child_coords = if (coordinates_unchanged)
+            // remapping needs writable storage that survives the recursive call.
+            const child_coord_count = varc_mod.componentCoordinateCount(normalized_coords, font_coords, font_axis_count);
+            var inline_child_coords: [32]f32 = undefined;
+            const child_coord_storage = if (coordinates_unchanged)
                 null
+            else if (child_coord_count <= inline_child_coords.len)
+                inline_child_coords[0..child_coord_count]
             else
-                try varc_mod.componentCoordinates(
+                try outline.allocator.alloc(f32, child_coord_count);
+            defer if (child_coord_storage) |coords| {
+                if (child_coord_count > inline_child_coords.len) outline.allocator.free(coords);
+            };
+            if (child_coord_storage) |coords| {
+                try varc_mod.componentCoordinatesInto(
                     outline.allocator,
                     self.data,
                     varc.offset,
@@ -3839,9 +3848,10 @@ pub const Font = struct {
                     normalized_coords,
                     font_coords,
                     font_axis_count,
+                    coords,
                 );
-            defer if (owned_child_coords) |coords| outline.allocator.free(coords);
-            const child_coords = owned_child_coords orelse normalized_coords;
+            }
+            const child_coords = child_coord_storage orelse normalized_coords;
             if (child_glyph == glyph_id) {
                 try self.appendBaseOutlineTransformed(outline, child_glyph, child_transform, child_coords, read_mode);
             } else {

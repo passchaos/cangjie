@@ -220,9 +220,40 @@ pub fn componentCoordinates(
     font_coords: []const f32,
     font_axis_count: usize,
 ) Error![]f32 {
-    const coord_count = @max(font_axis_count, @max(current_coords.len, font_coords.len));
+    const coord_count = componentCoordinateCount(current_coords, font_coords, font_axis_count);
     const coords = try allocator.alloc(f32, coord_count);
     errdefer allocator.free(coords);
+    try componentCoordinatesInto(
+        allocator,
+        data,
+        offset,
+        length,
+        component,
+        current_coords,
+        font_coords,
+        font_axis_count,
+        coords,
+    );
+    return coords;
+}
+
+pub fn componentCoordinateCount(current_coords: []const f32, font_coords: []const f32, font_axis_count: usize) usize {
+    return @max(font_axis_count, @max(current_coords.len, font_coords.len));
+}
+
+pub fn componentCoordinatesInto(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    component: Component,
+    current_coords: []const f32,
+    font_coords: []const f32,
+    font_axis_count: usize,
+    coords: []f32,
+) Error!void {
+    const required = componentCoordinateCount(current_coords, font_coords, font_axis_count);
+    if (coords.len < required) return error.BadSfnt;
     @memset(coords, 0);
     const source = if ((component.flags & ComponentFlags.reset_unspecified_axes) != 0)
         font_coords
@@ -230,8 +261,8 @@ pub fn componentCoordinates(
         current_coords;
     @memcpy(coords[0..@min(coords.len, source.len)], source[0..@min(coords.len, source.len)]);
 
-    if ((component.flags & ComponentFlags.have_axes) == 0) return coords;
-    if (component.axis_count == 0) return coords;
+    if ((component.flags & ComponentFlags.have_axes) == 0) return;
+    if (component.axis_count == 0) return;
     var inline_indices: [32]i32 = undefined;
     const indices = if (component.axis_count <= inline_indices.len)
         inline_indices[0..component.axis_count]
@@ -275,7 +306,6 @@ pub fn componentCoordinates(
         const clamped = std.math.clamp(raw_value, @as(i32, std.math.minInt(i16)), @as(i32, std.math.maxInt(i16)));
         coords[@intCast(axis_index)] = @as(f32, @floatFromInt(clamped)) / 16384.0;
     }
-    return coords;
 }
 
 pub fn componentTransform(
@@ -1300,6 +1330,36 @@ test "VARC axis variation rounds after adding the static axis value" {
     // 10 + (-1 * 0.5) = 9.5, which rounds to 10. Rounding the variation
     // delta separately would incorrectly produce 9.
     try std.testing.expectEqual(@as(f32, 10.0 / 16384.0), coords[0]);
+
+    var inline_coords: [1]f32 = undefined;
+    try componentCoordinatesInto(
+        std.testing.allocator,
+        &bytes,
+        0,
+        bytes.len,
+        component,
+        &.{0.5},
+        &.{0.5},
+        1,
+        &inline_coords,
+    );
+    try std.testing.expectEqualSlices(f32, coords, &inline_coords);
+
+    var too_short: [0]f32 = .{};
+    try std.testing.expectError(
+        error.BadSfnt,
+        componentCoordinatesInto(
+            std.testing.allocator,
+            &bytes,
+            0,
+            bytes.len,
+            component,
+            &.{0.5},
+            &.{0.5},
+            1,
+            &too_short,
+        ),
+    );
 }
 
 test "VARC component validation rejects truncation and coverage count mismatch" {

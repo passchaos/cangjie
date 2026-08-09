@@ -694,6 +694,15 @@ Current local snapshot after the Nastaliq parity work:
   remained flat to slightly faster, while Amiri `fa-thelittleprince` improved
   about `0.06%` in instructions and `0.71%` in cycles. Full HarfBuzz parity
   for all three corpora and Roboto HarfRust parity remained unchanged.
+- LigatureSubst accelerators with at least eight first-glyph sets now retain a
+  read-only open-addressed set index at no more than 50% load. Exact glyph
+  verification resolves probes, small lookups keep binary search, and the
+  immutable index remains safe to share across shaping threads. Fixed-P-core
+  interleaved `perf stat` comparisons reduced Roboto `en-words` retired
+  instructions by about `2.02%` and cycles by `1.54%`; Amiri `fa-words`
+  improved `0.73%` and `0.39%`, and Amiri `fa-thelittleprince` improved
+  `0.98%` and `0.56%`, respectively. Full HarfBuzz parity for all three
+  corpora and Roboto HarfRust parity remained unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

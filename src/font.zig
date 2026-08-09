@@ -3504,6 +3504,15 @@ pub const Font = struct {
 
     pub fn glyphBounds(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        if (self.varc) |varc| {
+            try validateSfntTableChecksum(self.data, varc);
+            try validateVarcTable(self.data, varc, self.glyph_count);
+            if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id) != null) {
+                var outline = try self.glyphOutline(std.heap.page_allocator, glyph_id);
+                defer outline.deinit();
+                return outline.bounds;
+            }
+        }
         if (self.format == .truetype) {
             const loca = self.loca orelse return error.MissingTable;
             const glyf = self.glyf orelse return error.MissingTable;
@@ -3524,6 +3533,15 @@ pub const Font = struct {
 
     pub fn glyphBoundsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.Bounds {
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        if (self.varc) |varc| {
+            try validateSfntTableChecksum(self.data, varc);
+            try validateVarcTable(self.data, varc, self.glyph_count);
+            if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id) != null) {
+                var outline = try self.glyphOutlineAtCoords(std.heap.page_allocator, glyph_id, normalized_coords);
+                defer outline.deinit();
+                return outline.bounds;
+            }
+        }
         if (self.cff2 != null) {
             return (try self.cff2GlyphBoundsAtCoords(glyph_id, normalized_coords)) orelse error.UnsupportedGlyph;
         }
@@ -3567,6 +3585,13 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         if (normalizedVariationCoordinatesAreDefault(normalized_coords)) return try self.glyphOutline(allocator, glyph_id);
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        if (self.varc) |varc| {
+            try validateSfntTableChecksum(self.data, varc);
+            try validateVarcTable(self.data, varc, self.glyph_count);
+            if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id) != null) {
+                return try self.varcGlyphOutlineAtCoords(allocator, glyph_id, normalized_coords, .revalidate);
+            }
+        }
         if (self.cff2 != null) {
             return (try self.cff2GlyphOutlineAtCoordsPrepared(allocator, glyph_id, normalized_coords, .revalidate)) orelse error.UnsupportedGlyph;
         }
@@ -3585,6 +3610,11 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         if (normalizedVariationCoordinatesAreDefault(normalized_coords)) return try self.glyphOutlineForRaster(allocator, glyph_id);
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        if (self.varc) |varc| {
+            if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id) != null) {
+                return try self.varcGlyphOutlineAtCoords(allocator, glyph_id, normalized_coords, .parsed);
+            }
+        }
         if (self.cff2 != null) {
             return (try self.cff2GlyphOutlineAtCoordsPrepared(allocator, glyph_id, normalized_coords, .parsed)) orelse error.UnsupportedGlyph;
         }
@@ -3659,6 +3689,19 @@ pub const Font = struct {
             glyph_mod.Bounds{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
+        if (self.varc) |varc| {
+            if (read_mode.shouldRevalidate()) {
+                try validateSfntTableChecksum(self.data, varc);
+                try validateVarcTable(self.data, varc, self.glyph_count);
+            }
+            if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id)) |_| {
+                var stack: [64]glyph_mod.GlyphId = undefined;
+                const axis_count = if (self.fvar != null) try self.fvarAxisCountForReadMode(read_mode) else 0;
+                try self.appendVarcGlyphOutline(&outline, glyph_id, Transform.identity(), &.{}, &.{}, axis_count, read_mode, &stack, 0);
+                outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
+                return outline;
+            }
+        }
         if (self.format == .truetype) {
             try self.appendGlyphOutline(&outline, null, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
         } else if (self.cff2) |cff2| {
@@ -3684,6 +3727,173 @@ pub const Font = struct {
             }
         }
         return outline;
+    }
+
+    fn varcGlyphOutlineAtCoords(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+        read_mode: OutlineReadMode,
+    ) FontError!glyph_mod.GlyphOutline {
+        const varc = self.varc orelse return error.UnsupportedGlyph;
+        if (read_mode.shouldRevalidate()) {
+            try validateSfntTableChecksum(self.data, varc);
+            try validateVarcTable(self.data, varc, self.glyph_count);
+        }
+        const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
+        const default_bounds = if (self.format == .truetype)
+            try self.glyphBoundsFromParsedTables(glyph_id)
+        else
+            glyph_mod.Bounds{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
+        var outline = glyph_mod.GlyphOutline.init(
+            allocator,
+            glyph_id,
+            default_bounds,
+            metrics.advance_width,
+            metrics.left_side_bearing,
+        );
+        errdefer outline.deinit();
+
+        // VARC evaluates component conditions, transforms, and axis overrides
+        // in the current component's coordinate space. RESET_UNSPECIFIED_AXES,
+        // however, restores values from the immutable top-level font location,
+        // so both slices must remain available throughout recursive expansion.
+        const axis_count = if (self.fvar != null)
+            try self.fvarAxisCountForReadMode(read_mode)
+        else
+            normalized_coords.len;
+        var stack: [64]glyph_mod.GlyphId = undefined;
+        try self.appendVarcGlyphOutline(
+            &outline,
+            glyph_id,
+            Transform.identity(),
+            normalized_coords,
+            normalized_coords,
+            axis_count,
+            read_mode,
+            &stack,
+            0,
+        );
+        outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
+        return outline;
+    }
+
+    fn appendVarcGlyphOutline(
+        self: *const Font,
+        outline: *glyph_mod.GlyphOutline,
+        glyph_id: glyph_mod.GlyphId,
+        parent_transform: Transform,
+        normalized_coords: []const f32,
+        font_coords: []const f32,
+        font_axis_count: usize,
+        read_mode: OutlineReadMode,
+        stack: *[64]glyph_mod.GlyphId,
+        depth: usize,
+    ) FontError!void {
+        if (depth >= stack.len) return error.CompoundDepthExceeded;
+        for (stack[0..depth]) |ancestor| {
+            if (ancestor == glyph_id) return try self.appendBaseOutlineTransformed(outline, glyph_id, parent_transform, normalized_coords, read_mode);
+        }
+        const varc = self.varc orelse return try self.appendBaseOutlineTransformed(outline, glyph_id, parent_transform, normalized_coords, read_mode);
+        const coverage_index = (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id)) orelse
+            return try self.appendBaseOutlineTransformed(outline, glyph_id, parent_transform, normalized_coords, read_mode);
+        stack[depth] = glyph_id;
+        const components = try varc_mod.glyphComponents(outline.allocator, self.data, varc.offset, varc.length, self.glyph_count, coverage_index);
+        defer outline.allocator.free(components);
+        for (components) |component| {
+            if (component.condition_index) |condition_index| {
+                if (!(try varc_mod.conditionMatchesWithAllocator(
+                    outline.allocator,
+                    self.data,
+                    varc.offset,
+                    varc.length,
+                    condition_index,
+                    normalized_coords,
+                ))) continue;
+            }
+            if (component.glyph_id > std.math.maxInt(glyph_mod.GlyphId)) return error.InvalidGlyph;
+            const child_glyph: glyph_mod.GlyphId = @intCast(component.glyph_id);
+            const component_transform = try varc_mod.componentTransform(
+                outline.allocator,
+                self.data,
+                varc.offset,
+                varc.length,
+                component,
+                normalized_coords,
+            );
+            const child_transform = parent_transform.mul(transformFromVarc(component_transform));
+            const child_coords = try varc_mod.componentCoordinates(
+                outline.allocator,
+                self.data,
+                varc.offset,
+                varc.length,
+                component,
+                normalized_coords,
+                font_coords,
+                font_axis_count,
+            );
+            defer outline.allocator.free(child_coords);
+            if (child_glyph == glyph_id) {
+                try self.appendBaseOutlineTransformed(outline, child_glyph, child_transform, child_coords, read_mode);
+            } else {
+                try self.appendVarcGlyphOutline(
+                    outline,
+                    child_glyph,
+                    child_transform,
+                    child_coords,
+                    font_coords,
+                    font_axis_count,
+                    read_mode,
+                    stack,
+                    depth + 1,
+                );
+            }
+        }
+    }
+
+    fn appendBaseOutlineTransformed(
+        self: *const Font,
+        outline: *glyph_mod.GlyphOutline,
+        glyph_id: glyph_mod.GlyphId,
+        transform: Transform,
+        normalized_coords: []const f32,
+        read_mode: OutlineReadMode,
+    ) FontError!void {
+        if (self.format == .truetype) {
+            if (normalizedVariationCoordinatesAreDefault(normalized_coords) or self.gvar == null) {
+                try self.appendGlyphOutline(outline, null, glyph_id, transform, 0);
+            } else {
+                var points = std.ArrayList(glyph_mod.Point).empty;
+                defer points.deinit(outline.allocator);
+                try self.appendGlyphOutlineAtCoords(outline, &points, glyph_id, transform, 0, normalized_coords, read_mode);
+            }
+            return;
+        }
+
+        const command_start = outline.commands.items.len;
+        if (self.cff2) |cff2| {
+            if (read_mode.shouldRevalidate()) {
+                try validateSfntTableChecksum(self.data, cff2);
+                try validateCff2Table(self.data, cff2);
+            }
+            if (normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+                _ = try cff2_mod.appendGlyphOutline(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, outline);
+            } else {
+                _ = try cff2_mod.appendGlyphOutlineAtCoords(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords, outline);
+            }
+        } else {
+            const cff = self.cff orelse return error.MissingTable;
+            const cff_data = self.data[cff.offset .. cff.offset + cff.length];
+            if (read_mode.shouldRevalidate()) {
+                try validateSfntTableChecksum(self.data, cff);
+                try validateCffGlyphCount(self.data, cff, self.glyph_count);
+                try cff_mod.appendGlyphOutline(outline.allocator, cff_data, try cff_mod.parseInfo(cff_data), outline, glyph_id);
+            } else {
+                try cff_mod.appendGlyphOutlinePrepared(outline.allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(cff_data), outline, glyph_id);
+            }
+        }
+        transformPathCommands(outline.commands.items[command_start..], transform);
     }
 
     fn gvarTargetCount(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!usize {
@@ -3929,6 +4139,36 @@ const Transform = struct {
         };
     }
 };
+
+fn transformFromVarc(value: varc_mod.StaticTransform) Transform {
+    return .{
+        .xx = value.xx,
+        .yx = value.yx,
+        .xy = value.xy,
+        .yy = value.yy,
+        .dx = value.dx,
+        .dy = value.dy,
+    };
+}
+
+fn transformPathCommands(commands: []glyph_mod.PathCommand, transform: Transform) void {
+    for (commands) |*command| {
+        switch (command.*) {
+            .move_to => |*point| point.* = transform.apply(point.*),
+            .line_to => |*point| point.* = transform.apply(point.*),
+            .quad_to => |*curve| {
+                curve.control = transform.apply(curve.control);
+                curve.end = transform.apply(curve.end);
+            },
+            .cubic_to => |*curve| {
+                curve.c0 = transform.apply(curve.c0);
+                curve.c1 = transform.apply(curve.c1);
+                curve.end = transform.apply(curve.end);
+            },
+            .close => {},
+        }
+    }
+}
 
 const CompoundGlyphPlacement = union(enum) {
     offset: struct { x: i16, y: i16 },

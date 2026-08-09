@@ -63,6 +63,11 @@ pub const TuplePayloadInfo = struct {
     y_deltas: PackedDeltasInfo,
 };
 
+const SharedPointNumbers = struct {
+    offset: usize,
+    info: PointNumbersInfo,
+};
+
 pub const PointDelta = struct {
     point: u16,
     x: i32,
@@ -496,13 +501,18 @@ pub fn tupleInfo(data: []const u8, offset: usize, length: usize, expected_glyph_
     if (tuple_index_in_glyph >= glyph.tuple_count) return error.BadSfnt;
     const table = data[offset .. offset + length];
     const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    const shared_points = try sharedPointNumbers(table, glyph);
     var header_offset = glyph.data_offset + 4;
-    var tuple_data_bytes: usize = 0;
+    // Shared point numbers live once at the front of serializedData, outside
+    // every tuple's variationDataSize. Include their encoded byte length when
+    // checking each tuple's payload budget, but never charge them to an
+    // individual tuple.
+    var serialized_data_bytes: usize = if (shared_points) |shared| shared.info.bytes_consumed else 0;
     for (0..glyph.tuple_count) |index| {
-        const tuple = try readTupleInfo(table, parsed, glyph, header_offset, index, tuple_data_bytes);
+        const tuple = try readTupleInfo(table, parsed, glyph, header_offset, index, serialized_data_bytes);
         if (index == tuple_index_in_glyph) return tuple;
         header_offset += tuple.header_size;
-        tuple_data_bytes += tuple.variation_data_size;
+        serialized_data_bytes += tuple.variation_data_size;
     }
     return error.BadSfnt;
 }
@@ -511,26 +521,37 @@ pub fn tuplePayloadInfo(data: []const u8, offset: usize, length: usize, expected
     const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return null;
     const tuple = (try tupleInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, tuple_index_in_glyph)) orelse return null;
     const table = data[offset .. offset + length];
+    const shared_points = try sharedPointNumbers(table, glyph);
     var tuple_data_offset = glyph.data_offset + glyph.tuple_data_offset;
+    if (shared_points) |shared| tuple_data_offset += shared.info.bytes_consumed;
     // Walk earlier tuples to find this tuple's serialized payload.
     for (0..tuple_index_in_glyph) |index| {
         const previous = (try tupleInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, index)) orelse return error.BadSfnt;
         tuple_data_offset += previous.variation_data_size;
     }
-    return try tuplePayloadInfoFromTuple(table, tuple, tuple_data_offset, all_points_delta_count);
+    return try tuplePayloadInfoFromTuple(table, tuple, tuple_data_offset, all_points_delta_count, shared_points);
 }
 
-fn tuplePayloadInfoFromTuple(table: []const u8, tuple: TupleInfo, tuple_data_offset: usize, all_points_delta_count: ?usize) Error!TuplePayloadInfo {
+fn tuplePayloadInfoFromTuple(
+    table: []const u8,
+    tuple: TupleInfo,
+    tuple_data_offset: usize,
+    all_points_delta_count: ?usize,
+    shared_points: ?SharedPointNumbers,
+) Error!TuplePayloadInfo {
     if (tuple_data_offset > table.len or tuple.variation_data_size > table.len - tuple_data_offset) return error.BadSfnt;
     const tuple_data_end = tuple_data_offset + tuple.variation_data_size;
 
     var cursor = tuple_data_offset;
-    const point_numbers_offset: ?usize = if (tuple.private_point_numbers) cursor else null;
-    const points = if (tuple.private_point_numbers) blk: {
+    const point_numbers_offset: ?usize, const points = if (tuple.private_point_numbers) blk: {
+        const point_numbers_offset = cursor;
         const parsed_points = try packedPointNumbersInfo(table, cursor, tuple_data_end);
         cursor += parsed_points.bytes_consumed;
-        break :blk parsed_points;
-    } else PointNumbersInfo{ .all_points = true, .count = 0, .max_point = 0, .bytes_consumed = 0 };
+        break :blk .{ point_numbers_offset, parsed_points };
+    } else if (shared_points) |shared|
+        .{ shared.offset, shared.info }
+    else
+        .{ null, PointNumbersInfo{ .all_points = true, .count = 0, .max_point = 0, .bytes_consumed = 0 } };
 
     const delta_count = if (points.all_points) (all_points_delta_count orelse return error.BadSfnt) else points.count;
     const x_offset = cursor;
@@ -577,8 +598,15 @@ pub fn decodeTuplePointDeltasForPointCount(data: []const u8, offset: usize, leng
     return try decodeTuplePointDeltasForPointCountFromPayload(table, payload, point_count, out);
 }
 
-fn decodeTuplePointDeltasForPointCountFromTuple(table: []const u8, tuple: TupleInfo, tuple_data_offset: usize, point_count: usize, out: []PointDelta) Error!usize {
-    const payload = try tuplePayloadInfoFromTuple(table, tuple, tuple_data_offset, point_count);
+fn decodeTuplePointDeltasForPointCountFromTuple(
+    table: []const u8,
+    tuple: TupleInfo,
+    tuple_data_offset: usize,
+    point_count: usize,
+    shared_points: ?SharedPointNumbers,
+    out: []PointDelta,
+) Error!usize {
+    const payload = try tuplePayloadInfoFromTuple(table, tuple, tuple_data_offset, point_count, shared_points);
     return try decodeTuplePointDeltasForPointCountFromPayload(table, payload, point_count, out);
 }
 
@@ -711,6 +739,7 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
     const table = data[offset .. offset + length];
     const glyph = (try glyphInfoFromParsed(table, parsed, glyph_id)) orelse return 0;
     if (out.len < point_count) return error.BadSfnt;
+    const shared_points = try sharedPointNumbers(table, glyph);
 
     var initialized_out = false;
     if (mode == .decode_all) {
@@ -719,15 +748,15 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
     }
 
     var header_offset = glyph.data_offset + 4;
-    const tuple_data_base = glyph.data_offset + glyph.tuple_data_offset;
-    var tuple_data_bytes: usize = 0;
+    const serialized_data_base = glyph.data_offset + glyph.tuple_data_offset;
+    var serialized_data_bytes: usize = if (shared_points) |shared| shared.info.bytes_consumed else 0;
     for (0..glyph.tuple_count) |tuple_index| {
-        const tuple = try readTupleInfo(table, parsed, glyph, header_offset, tuple_index, tuple_data_bytes);
-        if (tuple_data_bytes > std.math.maxInt(usize) - tuple_data_base) return error.BadSfnt;
-        const tuple_data_offset = tuple_data_base + tuple_data_bytes;
+        const tuple = try readTupleInfo(table, parsed, glyph, header_offset, tuple_index, serialized_data_bytes);
+        if (serialized_data_bytes > std.math.maxInt(usize) - serialized_data_base) return error.BadSfnt;
+        const tuple_data_offset = serialized_data_base + serialized_data_bytes;
         const delta_count = switch (mode) {
             .decode_all => blk: {
-                const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(table, tuple, tuple_data_offset, point_count, raw_scratch);
+                const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(table, tuple, tuple_data_offset, point_count, shared_points, raw_scratch);
                 const scalar = try tupleScalarFromTuple(table, parsed, tuple, normalized_coords);
                 break :blk RawDeltaRun{ .raw_count = raw_count, .scalar = scalar };
             },
@@ -738,15 +767,28 @@ fn accumulateGlyphPointDeltasForPointCountWithFlagsMode(data: []const u8, offset
                     initializeDensePointDeltas(out, point_count);
                     initialized_out = true;
                 }
-                const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(table, tuple, tuple_data_offset, point_count, raw_scratch);
+                const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(table, tuple, tuple_data_offset, point_count, shared_points, raw_scratch);
                 break :blk RawDeltaRun{ .raw_count = raw_count, .scalar = scalar };
             },
         };
         try accumulateRawPointDeltas(out, point_count, raw_scratch[0..delta_count.raw_count], delta_count.scalar, has_delta);
         header_offset += tuple.header_size;
-        tuple_data_bytes += tuple.variation_data_size;
+        serialized_data_bytes += tuple.variation_data_size;
     }
     return if (initialized_out) point_count else 0;
+}
+
+fn sharedPointNumbers(table: []const u8, glyph: GlyphInfo) Error!?SharedPointNumbers {
+    if (!glyph.uses_shared_point_numbers) return null;
+    const offset = glyph.data_offset + glyph.tuple_data_offset;
+    const glyph_end = glyph.data_offset + glyph.data_length;
+    // A zero count means "all points" and still consumes its one-byte marker.
+    // Keeping the offset alongside the parsed metadata lets every tuple reuse
+    // the same point selection without copying or reparsing its delta payload.
+    return .{
+        .offset = offset,
+        .info = try packedPointNumbersInfo(table, offset, glyph_end),
+    };
 }
 
 fn accumulateRawPointDeltas(out: []ScaledPointDelta, point_count: usize, deltas: []const PointDelta, scalar: f32, has_delta: ?[]bool) Error!void {
@@ -1147,6 +1189,51 @@ test "gvar point-count accumulation keeps dense outputs and flags" {
     try std.testing.expectEqual(@as(u16, 2), out[2].point);
     try std.testing.expectEqual(@as(f32, 1.5), out[2].x);
     try std.testing.expectEqualSlices(bool, &.{ true, true, true }, &has_delta);
+}
+
+test "gvar point-count accumulation reuses shared point numbers" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 9, // offsets: 0, 18 bytes.
+        0x80, 1, 0, 10, // One tuple and shared point numbers; dataOffset=10.
+        0, 4, 0x80, 0x00, // Four-byte tuple payload, embedded peak.
+        0x40, 0x00, // peak = 1.
+        1, 0, 1, // Shared point selection: one point, point id 1.
+        0, 8, // x delta: +8.
+        0, 248, // y delta: -8.
+        0, // short-offset alignment padding, outside the tuple payload.
+    };
+    var raw: [3]PointDelta = undefined;
+    var scaled: [3]ScaledPointDelta = undefined;
+    var out: [3]ScaledPointDelta = undefined;
+    var has_delta = [_]bool{ false, false, false };
+
+    const count = try accumulateGlyphPointDeltasForPointCountWithFlags(
+        &bytes,
+        0,
+        bytes.len,
+        1,
+        1,
+        0,
+        &.{0.5},
+        3,
+        &raw,
+        &scaled,
+        &out,
+        &has_delta,
+    );
+    try std.testing.expectEqual(@as(usize, 3), count);
+    try std.testing.expectEqual(@as(f32, 0), out[0].x);
+    try std.testing.expectEqual(@as(f32, 4), out[1].x);
+    try std.testing.expectEqual(@as(f32, -4), out[1].y);
+    try std.testing.expectEqual(@as(f32, 0), out[2].x);
+    try std.testing.expectEqualSlices(bool, &.{ false, true, false }, &has_delta);
 }
 
 test "gvar point-count accumulation clears flags for absent glyph data" {

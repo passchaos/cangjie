@@ -188,6 +188,14 @@ pub fn buildVarcTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try varcTtfTables(allocator));
 }
 
+pub fn buildVarcTransformTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try varcTransformTtfTables(allocator));
+}
+
+pub fn buildVarcStaticTransformTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try varcStaticTransformTtfTables(allocator));
+}
+
 pub fn buildIftTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try iftTtfTables(allocator));
 }
@@ -1268,6 +1276,20 @@ fn varcTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "VARC", .data = try varcTable(allocator) };
+    return tables;
+}
+
+fn varcTransformTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try varcTtfTables(allocator);
+    allocator.free(tables[8].data);
+    tables[8].data = try varcTransformTable(allocator);
+    return tables;
+}
+
+fn varcStaticTransformTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try varcTtfTables(allocator);
+    allocator.free(tables[8].data);
+    tables[8].data = try varcStaticTransformTable(allocator);
     return tables;
 }
 
@@ -3612,7 +3634,7 @@ fn iftPatchMapTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn varcTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 42);
+    const bytes = try allocator.alloc(u8, 46);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
@@ -3622,14 +3644,113 @@ fn varcTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 26, 2);
     writeU16(bytes, 28, 0);
     writeU16(bytes, 30, 1);
-    writeU16(bytes, 32, 1); // Index2 count.
-    bytes[34] = 1; // offSize.
+    writeU32(bytes, 32, 2); // INDEX2 count matches the two coverage glyphs.
+    bytes[36] = 1; // offSize.
+    bytes[37] = 1;
+    bytes[38] = 4;
+    bytes[39] = 7;
+    bytes[40] = 0; // Component flags.
+    writeU16(bytes, 41, 0); // Glyph 0 self-component resolves to base glyf.
+    bytes[43] = 0;
+    writeU16(bytes, 44, 1); // Glyph 1 self-component resolves to base glyf.
+    return bytes;
+}
+
+fn varcTransformTable(allocator: std.mem.Allocator) ![]u8 {
+    // Header, coverage, condition list with true/false format-1 conditions,
+    // then a two-item INDEX2.
+    const bytes = try allocator.alloc(u8, 89);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 24);
+    writeU32(bytes, 12, 32);
+    writeU32(bytes, 20, 60);
+
+    writeU16(bytes, 24, 1);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 0);
+    writeU16(bytes, 30, 1);
+
+    writeU32(bytes, 32, 2);
+    writeU32(bytes, 36, 12);
+    writeU32(bytes, 40, 20);
+    // Condition 0: -1 <= axis 0 <= 1 (true at default).
+    writeU16(bytes, 44, 1);
+    writeU16(bytes, 46, 0);
+    writeF2Dot14(bytes, 48, -1);
+    writeF2Dot14(bytes, 50, 1);
+    // Condition 1: 0.5 <= axis 0 <= 1 (false at default).
+    writeU16(bytes, 52, 1);
+    writeU16(bytes, 54, 0);
+    writeF2Dot14(bytes, 56, 0.5);
+    writeF2Dot14(bytes, 58, 1);
+
+    // Glyph 0: two components. First recursively resolves VARC glyph 1 with
+    // scale(2, 0.5)+translate(10, 20); second is filtered out by condition 1.
+    // Glyph 1: self-component falls back to its base glyf outline.
+    writeU32(bytes, 60, 2);
+    bytes[64] = 1;
+    bytes[65] = 1;
+    bytes[66] = 19;
+    bytes[67] = 22;
+    var cursor: usize = 68;
+    // flags 0x3b0: condition + translate X/Y + scale X/Y.
+    bytes[cursor] = 0x83;
+    bytes[cursor + 1] = 0xb0;
+    cursor += 2;
+    writeU16(bytes, cursor, 1);
+    cursor += 2;
+    bytes[cursor] = 0; // condition index 0.
+    cursor += 1;
+    writeI16(bytes, cursor, 10);
+    writeI16(bytes, cursor + 2, 20);
+    writeI16(bytes, cursor + 4, 2048);
+    writeI16(bytes, cursor + 6, 512);
+    cursor += 8;
+    bytes[cursor] = 0x80; // HAVE_CONDITION UInt32Var.
+    bytes[cursor + 1] = 0x80;
+    cursor += 2;
+    writeU16(bytes, cursor, 1);
+    cursor += 2;
+    bytes[cursor] = 1; // condition index 1.
+    cursor += 1;
+    bytes[cursor] = 0;
+    writeU16(bytes, cursor + 1, 1);
+    return bytes;
+}
+
+fn varcStaticTransformTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 83);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 24);
+    writeU32(bytes, 20, 32);
+    writeU16(bytes, 24, 1);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 0);
+    writeU16(bytes, 30, 1);
+
+    writeU32(bytes, 32, 2);
     bytes[36] = 1;
-    bytes[37] = 5;
-    bytes[38] = 0xaa;
-    bytes[39] = 0xbb;
-    bytes[40] = 0xcc;
-    bytes[41] = 0xdd;
+    bytes[37] = 1;
+    bytes[38] = 13;
+    bytes[39] = 16;
+    var cursor: usize = 40;
+    // flags 0x330: translate X/Y + scale X/Y.
+    bytes[cursor] = 0x83;
+    bytes[cursor + 1] = 0x30;
+    cursor += 2;
+    writeU16(bytes, cursor, 1);
+    cursor += 2;
+    writeI16(bytes, cursor, 10);
+    writeI16(bytes, cursor + 2, 20);
+    writeI16(bytes, cursor + 4, 2048);
+    writeI16(bytes, cursor + 6, 512);
+    cursor += 8;
+    bytes[cursor] = 0;
+    writeU16(bytes, cursor + 1, 1);
     return bytes;
 }
 

@@ -2735,6 +2735,41 @@ test "lazy VARC metadata revalidates borrowed table bytes" {
     try std.testing.expectError(error.BadSfnt, font.varcInfo(allocator));
 }
 
+test "VARC outlines recurse, filter conditions, and apply static transforms" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVarcTransformTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var base = try font.glyphOutline(allocator, 1);
+    defer base.deinit();
+    var composite = try font.glyphOutline(allocator, 0);
+    defer composite.deinit();
+
+    try std.testing.expectEqual(base.commands.items.len, composite.commands.items.len);
+    try std.testing.expectEqual(@as(f32, base.commands.items[0].move_to.x * 2 + 10), composite.commands.items[0].move_to.x);
+    try std.testing.expectEqual(@as(f32, base.commands.items[0].move_to.y * 0.5 + 20), composite.commands.items[0].move_to.y);
+    try std.testing.expectEqual(@as(f32, base.commands.items[1].line_to.x * 2 + 10), composite.commands.items[1].line_to.x);
+    try std.testing.expectEqual(@as(f32, base.commands.items[1].line_to.y * 0.5 + 20), composite.commands.items[1].line_to.y);
+    try std.testing.expectEqual(@as(i16, 10), composite.bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 20), composite.bounds.y_min);
+    try std.testing.expectEqual(@as(i16, 1410), composite.bounds.x_max);
+    try std.testing.expectEqual(@as(i16, 145), composite.bounds.y_max);
+
+    // At a non-default location condition 1 also matches, so the second
+    // self-component contributes another untransformed copy of glyph 1.
+    var varied = try font.glyphOutlineAtCoords(allocator, 0, &.{0.75});
+    defer varied.deinit();
+    try std.testing.expectEqual(base.commands.items.len * 2, varied.commands.items.len);
+    try std.testing.expectEqual(@as(f32, base.commands.items[0].move_to.x * 2 + 10), varied.commands.items[0].move_to.x);
+    try std.testing.expectEqual(base.commands.items[0].move_to.x, varied.commands.items[base.commands.items.len].move_to.x);
+    try std.testing.expectEqual(@as(i16, 0), (try font.glyphBoundsAtCoords(0, &.{0.75})).x_min);
+    try std.testing.expectEqual(composite.bounds, try font.glyphBounds(0));
+}
+
 test "parses EBDT EBLC bitmap glyph metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

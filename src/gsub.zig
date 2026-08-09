@@ -1533,7 +1533,91 @@ fn buildContextClassSubtableAcceleratorsImpl(table: Table, lookup_offset: usize,
 }
 
 fn buildContextClassSubtableAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!?ContextClassSubtableAccelerator {
-    if (try readU16(table, subtable_offset) != 2) return null;
+    return switch (try readU16(table, subtable_offset)) {
+        1 => try buildContextGlyphSubtableAccelerator(table, subtable_offset, allocator),
+        2 => try buildContextClassFormat2SubtableAccelerator(table, subtable_offset, allocator),
+        else => null,
+    };
+}
+
+fn buildContextGlyphSubtableAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!?ContextClassSubtableAccelerator {
+    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
+    // Coverage format 2 may legally overlap, in which case the first matching
+    // range selects the RuleSet. Keep that uncommon topology on the generic
+    // parser rather than collapsing two authored coverage indexes by glyph.
+    if (try readU16(table, coverage_offset) != 1) return null;
+    const set_count = try readU16(table, subtable_offset + 4);
+
+    var rules = std.ArrayList(class_context.Rule).empty;
+    var classes = std.ArrayList(u16).empty;
+    var groups = std.ArrayList(class_context.RuleGroup).empty;
+    var success = false;
+    defer if (!success) {
+        rules.deinit(allocator);
+        classes.deinit(allocator);
+        groups.deinit(allocator);
+    };
+
+    var order: u32 = 0;
+    for (0..set_count) |set_i| {
+        const set_relative = try readU16(table, subtable_offset + 6 + set_i * 2);
+        if (set_relative == 0) continue;
+        const set_offset = subtable_offset + set_relative;
+        const rule_count = try readU16(table, set_offset);
+        for (0..rule_count) |rule_i| {
+            const rule_offset = set_offset + try readU16(table, set_offset + 2 + rule_i * 2);
+            const input_count = try readU16(table, rule_offset);
+            if (input_count == 0 or input_count > max_chaining_class_region_glyphs) return null;
+            const subst_count = try readU16(table, rule_offset + 2);
+            const classes_start = classes.items.len;
+            var hash = class_context.sequenceHashEmpty();
+            for (1..input_count) |input_i| {
+                const glyph = try readU16(table, rule_offset + 4 + (input_i - 1) * 2);
+                try classes.append(allocator, glyph);
+                hash = class_context.sequenceHashAppend(hash, glyph);
+            }
+            try rules.append(allocator, .{
+                .class_set = @intCast(set_i),
+                .input_count = input_count,
+                .lookahead_count = 0,
+                .hash = hash,
+                .order = order,
+                .lookup_index = 0,
+                .classes_start = @intCast(classes_start),
+                .subst_count = subst_count,
+                .records_offset = @intCast(rule_offset + 4 + (@as(usize, input_count) - 1) * 2),
+            });
+            order += 1;
+        }
+    }
+    if (rules.items.len == 0) return null;
+
+    try finishContextRuleGroups(&rules, &groups, allocator);
+    const first_index_start = try appendGlyphFirstIndex(
+        table,
+        coverage_offset,
+        groups.items,
+        &classes,
+        allocator,
+    );
+    const rules_slice = try rules.toOwnedSlice(allocator);
+    errdefer allocator.free(rules_slice);
+    const classes_slice = try classes.toOwnedSlice(allocator);
+    errdefer allocator.free(classes_slice);
+    const groups_slice = try groups.toOwnedSlice(allocator);
+    success = true;
+
+    return .{
+        .subtable_offset = subtable_offset,
+        .first_index_start = first_index_start,
+        .class_def = empty_class_def_offset,
+        .rules = rules_slice,
+        .classes = classes_slice,
+        .groups = groups_slice,
+    };
+}
+
+fn buildContextClassFormat2SubtableAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!?ContextClassSubtableAccelerator {
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
     const set_count = try readU16(table, subtable_offset + 6);
@@ -1582,25 +1666,7 @@ fn buildContextClassSubtableAccelerator(table: Table, subtable_offset: usize, al
     }
     if (rules.items.len == 0) return null;
 
-    std.sort.heap(class_context.Rule, rules.items, {}, class_context.ruleLessThan);
-    var group_start: usize = 0;
-    while (group_start < rules.items.len) {
-        const class_set = rules.items[group_start].class_set;
-        var group_end = group_start;
-        var max_input_count: u16 = 0;
-        while (group_end < rules.items.len and rules.items[group_end].class_set == class_set) : (group_end += 1) {
-            max_input_count = @max(max_input_count, rules.items[group_end].input_count);
-        }
-        try groups.append(allocator, .{
-            .class_set = class_set,
-            .start = group_start,
-            .len = group_end - group_start,
-            .max_input_count = max_input_count,
-            .max_lookahead_count = 0,
-        });
-        group_start = group_end;
-    }
-
+    try finishContextRuleGroups(&rules, &groups, allocator);
     const first_index_start = try appendClassFirstIndex(
         table,
         coverage_offset,
@@ -1624,6 +1690,27 @@ fn buildContextClassSubtableAccelerator(table: Table, subtable_offset: usize, al
         .classes = classes_slice,
         .groups = groups_slice,
     };
+}
+
+fn finishContextRuleGroups(rules: *std.ArrayList(class_context.Rule), groups: *std.ArrayList(class_context.RuleGroup), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+    std.sort.heap(class_context.Rule, rules.items, {}, class_context.ruleLessThan);
+    var group_start: usize = 0;
+    while (group_start < rules.items.len) {
+        const class_set = rules.items[group_start].class_set;
+        var group_end = group_start;
+        var max_input_count: u16 = 0;
+        while (group_end < rules.items.len and rules.items[group_end].class_set == class_set) : (group_end += 1) {
+            max_input_count = @max(max_input_count, rules.items[group_end].input_count);
+        }
+        try groups.append(allocator, .{
+            .class_set = class_set,
+            .start = group_start,
+            .len = group_end - group_start,
+            .max_input_count = max_input_count,
+            .max_lookahead_count = 0,
+        });
+        group_start = group_end;
+    }
 }
 
 fn buildExtensionChainingClassSubtableAccelerators(table: Table, lookup_offset: usize, subtable_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]ChainingClassSubtableAccelerator {
@@ -1834,17 +1921,41 @@ fn appendClassFirstIndex(
         write += 1;
     }
     entries.shrinkRetainingCapacity(write);
+    return try appendPreparedClassFirstIndex(entries.items, classes, allocator);
+}
+
+fn appendGlyphFirstIndex(
+    table: Table,
+    coverage_offset: usize,
+    groups: []const class_context.RuleGroup,
+    classes: *std.ArrayList(u16),
+    allocator: std.mem.Allocator,
+) (GsubError || std.mem.Allocator.Error)!usize {
+    const coverage_count = try coverageGlyphCount(table, coverage_offset);
+    var entries = try std.ArrayList(ClassFirstEntry).initCapacity(allocator, coverage_count);
+    defer entries.deinit(allocator);
+    for (0..coverage_count) |coverage_i| {
+        const group_index = classGroupIndexForClass(groups, @intCast(coverage_i)) orelse continue;
+        try entries.append(allocator, .{
+            .glyph = (try coverageGlyphAt(table, coverage_offset, coverage_i)) orelse return error.BadGsub,
+            .group_index = @intCast(group_index),
+        });
+    }
+    return try appendPreparedClassFirstIndex(entries.items, classes, allocator);
+}
+
+fn appendPreparedClassFirstIndex(entries: []const ClassFirstEntry, classes: *std.ArrayList(u16), allocator: std.mem.Allocator) std.mem.Allocator.Error!usize {
     const index_start = classes.items.len;
-    if (write < min_class_first_entries_for_hash) {
-        try classes.ensureUnusedCapacity(allocator, 1 + write * 2);
+    if (entries.len < min_class_first_entries_for_hash) {
+        try classes.ensureUnusedCapacity(allocator, 1 + entries.len * 2);
         classes.appendAssumeCapacity(class_first_index_sorted);
-        for (entries.items) |entry| {
+        for (entries) |entry| {
             classes.appendAssumeCapacity(entry.glyph);
             classes.appendAssumeCapacity(entry.group_index);
         }
-        return index_start;
+    } else {
+        try appendClassFirstHash(entries, classes, allocator);
     }
-    try appendClassFirstHash(entries.items, classes, allocator);
     return index_start;
 }
 
@@ -4392,7 +4503,10 @@ fn applyAcceleratedContextClassSubstitutionAt(table: Table, subtable: ContextCla
     const input_indices = input_indices_buf[0..input_len];
     var input_classes: [max_chaining_class_region_glyphs]u16 = undefined;
     for (1..input_len) |input_i| {
-        input_classes[input_i - 1] = try classValue(table, subtable.class_def, glyphs.items[input_indices[input_i]]);
+        input_classes[input_i - 1] = if (subtable.class_def == empty_class_def_offset)
+            glyphs.items[input_indices[input_i]]
+        else
+            try classValue(table, subtable.class_def, glyphs.items[input_indices[input_i]]);
     }
 
     const rules = subtable.rules[group.start .. group.start + group.len];
@@ -8368,6 +8482,65 @@ test "GSUB direct and extension context class builders share first-group sidecar
     try std.testing.expectEqualSlices(u16, &.{ class_first_index_sorted, 5, 0 }, direct[0].classes[direct[0].first_index_start..]);
     try std.testing.expectEqual(@as(u16, 1), (classGroupForGlyph(direct[0].classes, direct[0].first_index_start, direct[0].groups, 5) orelse return error.TestUnexpectedResult).class_set);
     try std.testing.expect(classGroupForGlyph(direct[0].classes, direct[0].first_index_start, direct[0].groups, 4) == null);
+}
+
+test "GSUB direct and extension context glyph builders preserve arbitrary records" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 144;
+
+    // Direct ContextSubst lookup 0 and ExtensionSubst lookup 1 share a
+    // format-1 payload with two records targeting different input positions.
+    writeU16Test(&bytes, 0, 5);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 32);
+    writeU16Test(&bytes, 8, 7);
+    writeU16Test(&bytes, 12, 1);
+    writeU16Test(&bytes, 14, 8);
+    writeU16Test(&bytes, 16, 1);
+    writeU16Test(&bytes, 18, 5);
+    writeU32Test(&bytes, 20, 16);
+
+    const context = 32;
+    writeU16Test(&bytes, context + 0, 1);
+    writeU16Test(&bytes, context + 2, 32);
+    writeU16Test(&bytes, context + 4, 1);
+    writeU16Test(&bytes, context + 6, 8);
+    const set = context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 2);
+    writeU16Test(&bytes, rule + 2, 2);
+    writeU16Test(&bytes, rule + 4, 7);
+    writeU16Test(&bytes, rule + 6, 0);
+    writeU16Test(&bytes, rule + 8, 3);
+    writeU16Test(&bytes, rule + 10, 1);
+    writeU16Test(&bytes, rule + 12, 4);
+    writeCoverage1(&bytes, context + 32, 5);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
+    const direct = try buildContextClassSubtableAccelerators(table, 0, 1, allocator);
+    defer deinitContextClassSubtableAccelerators(allocator, direct);
+    const extension = try buildExtensionContextClassSubtableAccelerators(table, 8, 1, allocator);
+    defer deinitContextClassSubtableAccelerators(allocator, extension);
+
+    try std.testing.expectEqual(@as(usize, 1), direct.len);
+    try std.testing.expectEqual(@as(usize, 1), extension.len);
+    try std.testing.expectEqual(empty_class_def_offset, direct[0].class_def);
+    try std.testing.expectEqualSlices(class_context.Rule, direct[0].rules, extension[0].rules);
+    try std.testing.expectEqualSlices(u16, direct[0].classes, extension[0].classes);
+    try std.testing.expectEqualSlices(class_context.RuleGroup, direct[0].groups, extension[0].groups);
+    try std.testing.expectEqual(@as(u16, 2), direct[0].rules[0].subst_count);
+    try std.testing.expectEqual(@as(u32, @intCast(rule + 6)), direct[0].rules[0].records_offset);
+    try std.testing.expectEqualSlices(u16, &.{7}, direct[0].classes[0..1]);
+    try std.testing.expectEqual(@as(u16, 0), (classGroupForGlyph(direct[0].classes, direct[0].first_index_start, direct[0].groups, 5) orelse return error.TestUnexpectedResult).class_set);
+
+    // A legal overlapping format-2 Coverage retains the generic path because
+    // the first matching range, not merely the glyph id, selects its RuleSet.
+    writeU16Test(&bytes, context + 32, 2);
+    const unsupported = try buildContextClassSubtableAccelerators(table, 0, 1, allocator);
+    defer deinitContextClassSubtableAccelerators(allocator, unsupported);
+    try std.testing.expectEqual(@as(usize, 0), unsupported.len);
 }
 
 test "GSUB accelerated chaining class matching keeps shorter rules at run end" {

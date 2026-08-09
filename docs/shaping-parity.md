@@ -899,6 +899,18 @@ Current local snapshot after the Nastaliq parity work:
   `6.50%`, `5.14%`, and `3.6%` reductions. Roboto and Amiri retired work
   remained flat, and the retained Devanagari/USE/Latin/variable/Arabic
   HarfBuzz/HarfRust parity matrix was unchanged.
+- ContextSubst format-1 now reuses the format-2 contextual rule accelerator.
+  Coverage format-1 glyphs map directly to RuleGroups, while extra inputs are
+  compared as exact glyph ids through the existing sidecar matcher. Arbitrary
+  SubstLookupRecord counts and sequence indexes still use the original mapped
+  record applier, preserving IgnoreMarks, source-syllable boundaries, cardinality
+  changes, and font-authored rule order. Coverage format-2 remains on the generic
+  path because legal overlapping ranges select RuleSets by first matching range,
+  not merely by glyph id. Against `729ee20`, fixed CPU-8 P-core A/B/B/A means
+  reduced NotoSansDevanagari `hi-words` instructions by `4.26%`, branches by
+  `4.08%`, and cycles by about `5.8%`; fixed CPU-30 E-core reproduced `4.27%`,
+  `4.11%`, and about `6.1%` reductions. Roboto and Amiri retired work remained
+  flat, and all retained dual-reference parity gates were unchanged.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

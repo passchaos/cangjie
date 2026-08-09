@@ -3558,6 +3558,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             glyph_class,
             has_gdef_glyph_classes,
             source_codepoint,
+            index < ligature_components.items.len and ligature_components.items[index].synthetic_base,
             mark_attachment,
             has_gpos_positioning,
             lookup_options,
@@ -3896,11 +3897,12 @@ fn markAdvanceZeroingPolicy(
     glyph_class: GlyphClass,
     has_gdef_glyph_classes: bool,
     source_codepoint: u21,
+    synthetic_base: bool,
     mark_attachment: bool,
     has_gpos_positioning: bool,
     options: LookupOptions,
 ) MarkAdvanceZeroing {
-    if (mark_attachment) return .{};
+    if (mark_attachment or synthetic_base) return .{};
 
     const gdef_mark = glyph_class == .mark and !unicode.isSpacingMarkCodepoint(source_codepoint);
     // HarfBuzz only synthesizes classes when the face has no GlyphClassDef at
@@ -3927,15 +3929,18 @@ fn markAdvanceZeroingPolicy(
 test "USE mark zeroing synthesizes only nonspacing marks without GDEF classes" {
     const options = LookupOptions{ .script_tag = .brah };
 
-    const nonspacing = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11038, false, false, options);
+    const nonspacing = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11038, false, false, false, options);
     try std.testing.expect(nonspacing.zero_advance);
     try std.testing.expect(nonspacing.adjust_offsets);
 
-    const spacing = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11000, false, false, options);
+    const spacing = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11000, false, false, false, options);
     try std.testing.expectEqual(MarkAdvanceZeroing{}, spacing);
 
-    const explicit_unclassified = markAdvanceZeroingPolicy(true, .unclassified, true, 0x11038, false, false, options);
+    const explicit_unclassified = markAdvanceZeroingPolicy(true, .unclassified, true, 0x11038, false, false, false, options);
     try std.testing.expectEqual(MarkAdvanceZeroing{}, explicit_unclassified);
+
+    const dotted_circle = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11038, true, false, false, options);
+    try std.testing.expectEqual(MarkAdvanceZeroing{}, dotted_circle);
 }
 
 test "USE mark zeroing leaves offset adjustment to GPOS and honors native direction" {
@@ -3944,6 +3949,7 @@ test "USE mark zeroing leaves offset adjustment to GPOS and honors native direct
         .unclassified,
         false,
         0x11038,
+        false,
         false,
         true,
         .{ .script_tag = .brah },
@@ -3958,6 +3964,7 @@ test "USE mark zeroing leaves offset adjustment to GPOS and honors native direct
         .unclassified,
         false,
         0x11038,
+        false,
         false,
         false,
         .{

@@ -3042,8 +3042,19 @@ fn ligatureComponentInfoForMatch(options: LookupOptions, glyph_index: usize, mat
     const component_count = @min(match.component_count, gpos.max_ligature_components);
     info.component_count = @intCast(component_count);
     info.component_sources[0] = sourceForGlyph(options, glyph_index);
+    if (options.ligature_components) |components| {
+        if (glyph_index < components.items.len) {
+            info.synthetic_base = components.items[glyph_index].synthetic_base;
+        }
+    }
     for (1..component_count) |component_index| {
-        insertLigatureComponentSource(&info, component_index, sourceForGlyph(options, glyph_index + match.component_offsets[component_index]));
+        const matched_index = glyph_index + match.component_offsets[component_index];
+        insertLigatureComponentSource(&info, component_index, sourceForGlyph(options, matched_index));
+        if (options.ligature_components) |components| {
+            if (matched_index < components.items.len) {
+                info.synthetic_base = info.synthetic_base or components.items[matched_index].synthetic_base;
+            }
+        }
     }
     return info;
 }
@@ -9736,6 +9747,45 @@ test "GSUB ligature substitution honors LigatureSet order" {
     try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{});
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
+}
+
+test "GSUB ligature preserves synthetic base provenance" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 32;
+
+    writeU16Test(&bytes, 0, 4);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+    const ligature_subst = 8;
+    writeU16Test(&bytes, ligature_subst + 0, 1);
+    writeU16Test(&bytes, ligature_subst + 2, 18);
+    writeU16Test(&bytes, ligature_subst + 4, 1);
+    writeU16Test(&bytes, ligature_subst + 6, 8);
+    const ligature_set = ligature_subst + 8;
+    writeU16Test(&bytes, ligature_set + 0, 1);
+    writeU16Test(&bytes, ligature_set + 2, 4);
+    const ligature = ligature_set + 4;
+    writeU16Test(&bytes, ligature + 0, 40);
+    writeU16Test(&bytes, ligature + 2, 2);
+    writeU16Test(&bytes, ligature + 4, 2);
+    writeCoverage1(&bytes, ligature_subst + 18, 1);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2 });
+    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    defer components.deinit(allocator);
+    try components.appendSlice(allocator, &.{
+        .{ .synthetic_base = true },
+        .{},
+    });
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .ligature_components = &components,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{40}, glyphs.items);
+    try std.testing.expect(components.items[0].synthetic_base);
 }
 
 test "GSUB ligature accelerator preserves preference and ignored component offsets" {

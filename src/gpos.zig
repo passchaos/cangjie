@@ -19,6 +19,11 @@ pub const LigatureComponentInfo = struct {
     /// the result as ligated, but Indic reph detection must not mistake an
     /// individual multiplied component for an intact ligature.
     multiplied: bool = false,
+    /// Script shapers may insert a base glyph without adding a source scalar
+    /// (notably U+25CC for a broken syllable). Such a glyph borrows cluster and
+    /// source ownership from the broken mark but must not inherit that source's
+    /// fallback Unicode mark class.
+    synthetic_base: bool = false,
 };
 
 /// GPOS produces additive adjustments instead of mutating glyph ids. The caller

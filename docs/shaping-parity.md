@@ -112,6 +112,31 @@ HarfRust, are:
 | `f518eb6f6b5eec2946c9fbbbde44e45d46f5e2ac` | 1 | `4caf38b3f8bfed32` |
 | `fbb6c84c9e1fe0c39e152fbe845e51fd81f6748e` | 1 | `4e3bc2e9eb662fd1` |
 
+Two additional upstream gates close the remaining compact USE test sets:
+
+- `tests/data/use-indic3-tests.txt` retains the one
+  `in-house/tests/use-indic3.tests` Kannada fixture. It verifies that a `knd3`
+  ScriptList entry selects USE rather than the legacy Indic shaper
+  (`3c96e7a303c58475a8c750bf4289bbe73784f37d.ttf`, checksum
+  `32fc3493752ad1e9`).
+- `tests/data/tai-tham-use-syllable-tests.txt` retains the four Tai Tham cases
+  that were the only missing inputs from the 27-case
+  `in-house/tests/use-syllable.tests` set
+  (`3cc01fede4debd4b7794ccb1b16cdb9987ea7571.ttf`, checksum
+  `4f94b265e784b828`). Together with the previously retained per-script files,
+  all 27 inputs from that upstream test now have a local corpus gate.
+
+Run each gate with both `compare-harfbuzz` and `compare-harfrust`, following the
+same command pattern above. The Tai Tham slice specifically covers independent
+SAKOT grapheme boundaries, three adjacent USE syllables, broken-syllable dotted
+circle insertion without GDEF classes, and a synthetic base retaining its
+advance instead of inheriting the broken mark's fallback class.
+
+The complete 27-case set passes HarfRust 0.12 and matches the expected output
+from the local HarfBuzz 14.3 checkout. System HarfBuzz 8.3 differs on the
+already-retained Batak `U+1BC7,U+1BF3,U+1BF3` case by omitting the second
+dotted circle; that older behavior is not used as the parity target.
+
 The `harfbuzz` engine links the system HarfBuzz C library in-process and is the
 preferred HarfBuzz timing baseline when the local development environment has
 `pkg-config harfbuzz` available. It supports the shared `--enable-feature` /

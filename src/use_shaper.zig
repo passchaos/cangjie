@@ -112,6 +112,7 @@ pub fn assignGraphemeClusterOwners(
         // original UAX grapheme owner here would incorrectly jump back across
         // the ZWNJ to the earlier base.
         if (codepoints[source_index - 1] == 0x1a60 and
+            categories.forCodepoint(codepoints[owner_by_source[source_index - 1]]) == .zwnj and
             codepoint >= 0x1a20 and codepoint <= 0x1a54)
         {
             owner_by_source[source_index] = owner_by_source[source_index - 1];
@@ -419,6 +420,7 @@ pub fn insertDottedCirclesForBrokenSyllables(
             source,
             glyph_cluster_indices.items[glyph_index],
         );
+        ligature_components.items[insert_index].synthetic_base = true;
         if (insert_index <= glyph_index) glyph_index += 1;
     }
 }
@@ -810,7 +812,19 @@ test "USE cluster owners propagate ZWNJ through a Tai Tham stack" {
 
     try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
 
-    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 3, 3, 3, 3 }, &cluster_owners);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 3, 3, 3, 3 }, &cluster_owners);
+}
+
+test "USE cluster owners keep ordinary Tai Tham SAKOT stacks separate" {
+    const allocator = std.testing.allocator;
+    const text = "ᨽ᩠ᨽᩣ᩠ᨽᩙ";
+    const byte_starts = [_]usize{ 0, 3, 6, 9, 12, 15, 18 };
+    const codepoints = [_]u21{ 0x1a3d, 0x1a60, 0x1a3d, 0x1a63, 0x1a60, 0x1a3d, 0x1a59 };
+    var cluster_owners = [_]usize{ 0, 1, 2, 3, 4, 5, 6 };
+
+    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2, 2, 5, 5 }, &cluster_owners);
 }
 
 test "USE cluster owners attach marks after WORD JOINER" {
@@ -1030,6 +1044,7 @@ test "USE inserts a dotted circle into each broken syllable" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 23, 58, 66, 128 }, glyph_ids.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 2 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, cluster_owners.items);
+    try std.testing.expect(components.items[3].synthetic_base);
 }
 
 test "USE dotted circle follows a pref-substituted broken-cluster glyph" {

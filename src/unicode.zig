@@ -4200,7 +4200,14 @@ test "Tai Tham stacks select the lana OpenType script" {
 
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
-    try std.testing.expectEqual(@as(usize, 1), clusters.len);
+    try std.testing.expectEqualSlices(
+        GraphemeCluster,
+        &.{
+            .{ .byte_start = 0, .byte_len = "ᨲ᩠".len },
+            .{ .byte_start = "ᨲ᩠".len, .byte_len = "ᩅᩫᩡ".len },
+        },
+        clusters,
+    );
 
     const runs = try itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
@@ -5446,7 +5453,6 @@ fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize,
     if (isRegionalIndicator(previous) and isRegionalIndicator(current) and regional_indicator_count % 2 == 1) return true;
     if (isGraphemeExtendCodepoint(current)) return true;
     if (previous == 0x17d2 and isKhmerConsonant(current)) return true;
-    if (previous == 0x1a60 and isTaiThamConsonant(current)) return true;
     if (previous == 0x11442 and isNewaConsonant(current)) return true;
     if (previous == 0xa8c4 and isSaurashtraConsonant(current)) return true;
     if (previous == 0x1134d and isGranthaConsonant(current)) return true;
@@ -5922,12 +5928,6 @@ fn isKhmerConsonant(codepoint: u21) bool {
     // orthographic syllable atomic for caret movement and for any future Khmer
     // shaping pass that consumes one cluster at a time.
     return codepoint >= 0x1780 and codepoint <= 0x17a2;
-}
-
-fn isTaiThamConsonant(codepoint: u21) bool {
-    // U+1A60 SAKOT turns the following Tai Tham consonant into a subjoined
-    // component. This is the script's InCB linker behavior for UAX #29.
-    return codepoint >= 0x1a20 and codepoint <= 0x1a54;
 }
 
 fn isNewaConsonant(codepoint: u21) bool {

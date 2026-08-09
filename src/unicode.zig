@@ -520,6 +520,10 @@ pub fn canonicalDecomposition(codepoint: u21) ?[]const u21 {
 }
 
 pub fn modifiedCombiningClassForShaping(codepoint: u21) u8 {
+    // U+0300 is the first scalar with a non-zero canonical combining class,
+    // and every shaping-specific override below is higher. Avoid searching the
+    // generated CCC ranges for ASCII and Latin-1 text.
+    if (codepoint < 0x0300) return 0;
     // These script-specific overrides are part of HarfBuzz's normalization
     // contract. SAKOT and PADMA intentionally sort after ordinary tone/vowel
     // marks even though their canonical class is lower.
@@ -528,6 +532,13 @@ pub fn modifiedCombiningClassForShaping(codepoint: u21) u8 {
         0x0f39 => 127,
         else => modifiedCombiningClass(canonicalCombiningClass(codepoint)),
     };
+}
+
+test "modified combining class fast path preserves its lower boundary and overrides" {
+    try std.testing.expectEqual(@as(u8, 0), modifiedCombiningClassForShaping(0x02ff));
+    try std.testing.expectEqual(@as(u8, 230), modifiedCombiningClassForShaping(0x0300));
+    try std.testing.expectEqual(@as(u8, 254), modifiedCombiningClassForShaping(0x1a60));
+    try std.testing.expectEqual(@as(u8, 127), modifiedCombiningClassForShaping(0x0f39));
 }
 
 fn modifiedCombiningClass(class: u8) u8 {

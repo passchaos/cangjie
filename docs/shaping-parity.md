@@ -587,6 +587,20 @@ Current local snapshot after the Nastaliq parity work:
   Five-sample Amiri long-text probes reported the same 6,912 KiB maximum RSS
   for baseline and candidate. All corpus and retained USE parity checksums
   remain unchanged.
+- Modified combining-class lookup now returns zero before consulting the
+  generated CCC table for scalars below U+0300, the first Unicode scalar with a
+  non-zero canonical combining class. All shaping-specific overrides are also
+  above this boundary, so ASCII and Latin-1 mark-order scans avoid a binary
+  search without weakening SAKOT/PADMA/Tibetan ordering. Serial fixed-CPU-30
+  A/B/B/A and reverse B/A/A/B comparisons, with four 31-sample medians per
+  binary in each order, reduced the symmetrically trimmed Roboto `en-words`
+  mean from `310.333` to `300.964 ns/glyph`, about `3.02%`; Amiri
+  `fa-thelittleprince` improved from `753.668` to `748.335 ns/glyph`, about
+  `0.71%`; and Amiri `fa-words` remained effectively flat but slightly faster
+  (`1288.538` to `1287.916 ns/glyph`, about `0.05%`). Post-change Roboto
+  `perf` no longer reports `layout.markSortClass` above the `0.1%` threshold;
+  it was about `2.33%` in the same-baseline profile. All corpus and retained
+  USE parity checksums remain unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

@@ -635,6 +635,18 @@ Current local snapshot after the Nastaliq parity work:
   `1248.622 ns/glyph`, leaving Cangjie about `2.8%` slower. These measurements
   use the in-process system HarfBuzz 8.3 runner and demonstrate that the result
   remains workload-dependent rather than a broad shaping-performance win.
+- GSUB and GPOS table-proof caches now remember the most recently used font
+  address before consulting their hash sets. Consecutive runs from one face
+  therefore prove cache membership with one pointer comparison, while
+  alternating fallback faces retain the original hash-set semantics. Combined
+  fixed-CPU-30 forward/reverse comparisons improved four Roboto `en-words`
+  medians from `289.942` to `289.132 ns/glyph`, about `0.28%`, and Amiri
+  `fa-words` from `1288.756` to `1272.163 ns/glyph`, about `1.29%`. An
+  additional reverse 101-sample Amiri `fa-thelittleprince` check improved
+  `743.212` to `741.412 ns/glyph`, about `0.24%`. On a five-iteration Roboto
+  `perf stat` run, retired instructions fell about `0.38%` and branches about
+  `0.37%`; all three HarfBuzz corpus checksums and Roboto HarfRust parity
+  remained unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

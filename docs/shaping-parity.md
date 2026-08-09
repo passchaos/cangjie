@@ -492,6 +492,22 @@ Current local snapshot after the Nastaliq parity work:
   Amiri long-text medians were `793.535` versus `796.110 ns/glyph`, a narrow
   Cangjie lead of about `0.3%`. This is one workload, not evidence that the
   broader cross-font performance goal is complete.
+- Coarse bidi classification now handles ASCII, European/Arabic-Indic digits,
+  and the authoritative Arabic/Hebrew script ranges before entering the full
+  all-script classifier. The LTR paragraph preflight also skips ASCII outright
+  because no ASCII scalar has a strong RTL class. A full Unicode scalar-space
+  differential test proves every fast-path result matches the original
+  number-or-script classification. Fixed-CPU-30 A/B/B/A and reverse B/A/A/B
+  comparisons with 31-sample medians reduced Amiri `fa-thelittleprince` by
+  `3.1–3.2%` and `fa-words` by `1.6–2.2%`. An additional eight-median
+  complementary Roboto check was effectively flat but slightly faster
+  (`360.293` versus `360.072 ns/glyph`, about `0.06%`). Post-change `perf`
+  reduced the bidi-map `scriptForCodepoint` path from about `3.1%` to about
+  `0.4%`. All corpus and retained USE checksums remained unchanged. A final
+  Cangjie/HarfBuzz/HarfBuzz/Cangjie sequence measured Amiri long text at
+  `766.959` versus `795.355 ns/glyph`, a Cangjie lead of about `3.6%`.
+  Amiri and Roboto word lists still trail HarfBuzz, so this does not complete
+  the broader objective.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

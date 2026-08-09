@@ -2116,13 +2116,57 @@ fn isMeroiticCursiveWordCodepoint(codepoint: u21) bool {
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
 /// higher-level bidi functions use this coarse class to build visual runs.
 pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
-    if (isBidiNumberCodepoint(codepoint)) return .number;
-    const script = scriptForCodepoint(codepoint);
+    if (bidiClassFast(codepoint)) |class| return class;
+    return bidiClassForScript(scriptForCodepoint(codepoint));
+}
+
+fn bidiClassFast(codepoint: u21) ?BidiClass {
+    // ASCII dominates Latin word-list and UI shaping. Its coarse bidi class is
+    // fully determined without consulting the much broader script classifier.
+    if (codepoint <= 0x7f) {
+        if (codepoint >= '0' and codepoint <= '9') return .number;
+        if ((codepoint >= 'A' and codepoint <= 'Z') or
+            (codepoint >= 'a' and codepoint <= 'z'))
+        {
+            return .ltr;
+        }
+        return .neutral;
+    }
+    if ((codepoint >= 0x0660 and codepoint <= 0x0669) or
+        (codepoint >= 0x06f0 and codepoint <= 0x06f9))
+    {
+        return .number;
+    }
+    // The Arabic and Hebrew predicates are the authoritative Script ranges
+    // used below by scriptForCodepoint. Checking them directly avoids walking
+    // every unrelated historic and LTR script for the common RTL path.
+    if (isArabicScriptCodepoint(codepoint) or
+        isHebrewScriptCodepoint(codepoint))
+    {
+        return .rtl;
+    }
+    return null;
+}
+
+fn bidiClassForScript(script: Script) BidiClass {
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
         .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
+}
+
+test "coarse bidi fast path matches script classification over Unicode" {
+    var value: u32 = 0;
+    while (value <= 0x10ffff) : (value += 1) {
+        const codepoint: u21 = @intCast(value);
+        const fast = bidiClassFast(codepoint) orelse continue;
+        const reference = if (isBidiNumberCodepoint(codepoint))
+            BidiClass.number
+        else
+            bidiClassForScript(scriptForCodepoint(codepoint));
+        try std.testing.expectEqual(reference, fast);
+    }
 }
 
 /// Resolve a paragraph base direction from the first strong character.

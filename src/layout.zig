@@ -1946,9 +1946,19 @@ fn shouldApplyBidiVisualOrder(text: []const u8, options: ShapeOptions) bool {
 fn textHasRtlBidiClass(text: []const u8) bool {
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (it.nextCodepoint()) |codepoint| {
+        // No ASCII scalar has a strong RTL class. Latin word lists and common
+        // UI strings can therefore reject paragraph-level bidi reordering
+        // without entering the all-script classifier for every byte.
+        if (codepoint <= 0x7f) continue;
         if (unicode.bidiClassForCodepoint(codepoint) == .rtl) return true;
     }
     return false;
+}
+
+test "RTL presence scan ignores ASCII without hiding RTL scripts" {
+    try std.testing.expect(!textHasRtlBidiClass("ASCII 123 ()"));
+    try std.testing.expect(textHasRtlBidiClass("ASCII \u{05d0}"));
+    try std.testing.expect(textHasRtlBidiClass("فارسی"));
 }
 
 fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: LookupOptions) !PenPosition {

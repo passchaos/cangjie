@@ -2186,9 +2186,19 @@ const BidiGlyphClusterEntry = struct {
 
 fn buildBidiGlyphClusterIndex(allocator: std.mem.Allocator, glyphs: []const GlyphPosition) ![]BidiGlyphClusterEntry {
     const entries = try allocator.alloc(BidiGlyphClusterEntry, glyphs.len);
+    var monotone = true;
     for (glyphs, entries, 0..) |glyph, *entry, glyph_index| {
         entry.* = .{ .cluster = glyph.cluster, .glyph_index = glyph_index };
+        if (glyph_index != 0 and glyph.cluster < glyphs[glyph_index - 1].cluster) {
+            monotone = false;
+        }
     }
+    // Cmap, GSUB cluster merging, and ordinary GPOS preserve monotone public
+    // clusters, so the entries above are already in the exact order required
+    // by binary search (equal-cluster glyph indexes were emitted ascending).
+    // Script reordering and mixed native-direction runs can break that
+    // invariant; retain the full stable tie-break sort only for those cases.
+    if (monotone) return entries;
     std.sort.heap(BidiGlyphClusterEntry, entries, {}, bidiGlyphClusterEntryLessThan);
     return entries;
 }
@@ -2215,6 +2225,34 @@ fn bidiGlyphClusterRange(entries: []const BidiGlyphClusterEntry, cluster: usize)
     }
     if (start == low) return null;
     return .{ .start = start, .end = low };
+}
+
+test "bidi glyph cluster index skips or repairs ordering as needed" {
+    const monotone = [_]GlyphPosition{
+        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+        .{ .glyph_id = 2, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+        .{ .glyph_id = 3, .codepoint = 'B', .cluster = 2, .x_advance = 1 },
+    };
+    const monotone_index = try buildBidiGlyphClusterIndex(std.testing.allocator, &monotone);
+    defer std.testing.allocator.free(monotone_index);
+    try std.testing.expectEqualSlices(BidiGlyphClusterEntry, &.{
+        .{ .cluster = 0, .glyph_index = 0 },
+        .{ .cluster = 0, .glyph_index = 1 },
+        .{ .cluster = 2, .glyph_index = 2 },
+    }, monotone_index);
+
+    const reordered = [_]GlyphPosition{
+        .{ .glyph_id = 3, .codepoint = 'B', .cluster = 2, .x_advance = 1 },
+        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+        .{ .glyph_id = 2, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+    };
+    const reordered_index = try buildBidiGlyphClusterIndex(std.testing.allocator, &reordered);
+    defer std.testing.allocator.free(reordered_index);
+    try std.testing.expectEqualSlices(BidiGlyphClusterEntry, &.{
+        .{ .cluster = 0, .glyph_index = 1 },
+        .{ .cluster = 0, .glyph_index = 2 },
+        .{ .cluster = 2, .glyph_index = 0 },
+    }, reordered_index);
 }
 
 fn appendVisualGlyph(

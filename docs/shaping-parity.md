@@ -478,6 +478,20 @@ Current local snapshot after the Nastaliq parity work:
   unchanged. The same-session Amiri HarfBuzz median was `796.567 ns/glyph`
   versus Cangjie's `815.637 ns/glyph`, narrowing the remaining long-text gap to
   about `2.4%`.
+- Bidi visual-order indexing now detects the normal monotone-cluster glyph
+  stream in one pass and uses its existing `(cluster, glyph_index)` order
+  directly. Script-reordered or mixed native-direction streams still use the
+  previous heap sort, so the general ordering contract is unchanged. A serial
+  fixed-CPU-30 A/B/B/A run with 31-sample medians reduced Amiri
+  `fa-thelittleprince` from `816.200` to `792.650 ns/glyph`, about `2.9%`;
+  a reverse B/A/A/B run improved `816.383` to `797.972 ns/glyph`, about
+  `2.3%`. Amiri `fa-words` improved `0.2–0.5%`, while Roboto `en-words`
+  improved `0.9–1.2%`; all checksums remained unchanged. The post-change
+  `perf` sample no longer reports the bidi heap-sort symbol, previously about
+  `2.7%`. In the same final Cangjie/HarfBuzz/HarfBuzz/Cangjie sequence, the
+  Amiri long-text medians were `793.535` versus `796.110 ns/glyph`, a narrow
+  Cangjie lead of about `0.3%`. This is one workload, not evidence that the
+  broader cross-font performance goal is complete.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

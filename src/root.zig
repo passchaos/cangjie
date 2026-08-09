@@ -2770,6 +2770,31 @@ test "VARC outlines recurse, filter conditions, and apply static transforms" {
     try std.testing.expectEqual(composite.bounds, try font.glyphBounds(0));
 }
 
+test "VARC non-default outlines apply HVAR metrics" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildVarcHvarTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var default_outline = try font.glyphOutline(allocator, 1);
+    defer default_outline.deinit();
+    try std.testing.expectEqual(@as(u16, 800), default_outline.advance_width);
+    try std.testing.expectEqual(@as(i16, 0), default_outline.left_side_bearing);
+
+    var varied = try font.glyphOutlineAtCoords(allocator, 1, &.{0.5});
+    defer varied.deinit();
+    try std.testing.expectEqual(@as(u16, 804), varied.advance_width);
+    try std.testing.expectEqual(@as(i16, 4), varied.left_side_bearing);
+
+    var raster = try font.glyphOutlineForRasterAtCoords(allocator, 1, &.{0.5});
+    defer raster.deinit();
+    try std.testing.expectEqual(varied.advance_width, raster.advance_width);
+    try std.testing.expectEqual(varied.left_side_bearing, raster.left_side_bearing);
+}
+
 test "parses EBDT EBLC bitmap glyph metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

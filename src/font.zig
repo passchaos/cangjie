@@ -1489,10 +1489,25 @@ pub const Font = struct {
 
     /// Return horizontal metrics with HVAR advance/LSB deltas applied when present.
     pub fn horizontalMetricsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!HorizontalMetricInfo {
+        return try self.horizontalMetricsAtCoordsForReadMode(glyph_id, normalized_coords, .revalidate);
+    }
+
+    fn horizontalMetricsAtCoordsForReadMode(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+        read_mode: OutlineReadMode,
+    ) FontError!HorizontalMetricInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
-        var metrics = try self.horizontalMetrics(glyph_id);
-        const hvar = (try self.metricVariationTableForRead(.hvar)) orelse return metrics;
+        var metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
+        const hvar = switch (read_mode) {
+            .revalidate => (try self.metricVariationTableForRead(.hvar)) orelse return metrics,
+            // Font.parse already validated HVAR against fvar and the glyph
+            // count. Raster loops may therefore avoid document-level checksum
+            // and structural validation on every outline request.
+            .parsed => self.hvar orelse return metrics,
+        };
 
         const advance_delta = try metric_variation_mod.hvarAdvanceWidthDelta(self.data, hvar.offset, hvar.length, glyph_id, normalized_coords);
         metrics.advance_width = clampI32ToU16(@as(i32, metrics.advance_width) + advance_delta);
@@ -3742,7 +3757,7 @@ pub const Font = struct {
             try validateSfntTableChecksum(self.data, varc);
             try validateVarcTable(self.data, varc, self.glyph_count);
         }
-        const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
+        const metrics = try self.horizontalMetricsAtCoordsForReadMode(glyph_id, normalized_coords, read_mode);
         const default_bounds = if (self.format == .truetype)
             try self.glyphBoundsFromParsedTables(glyph_id)
         else

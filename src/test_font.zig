@@ -196,6 +196,10 @@ pub fn buildVarcStaticTransformTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try varcStaticTransformTtfTables(allocator));
 }
 
+pub fn buildVarcHvarTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try varcHvarTtfTables(allocator));
+}
+
 pub fn buildIftTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try iftTtfTables(allocator));
 }
@@ -1290,6 +1294,18 @@ fn varcStaticTransformTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try varcTtfTables(allocator);
     allocator.free(tables[8].data);
     tables[8].data = try varcStaticTransformTable(allocator);
+    return tables;
+}
+
+fn varcHvarTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const base = try varcTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 3);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    tables[base.len + 1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[base.len + 2] = .{ .tag = "HVAR", .data = try hvarTable(allocator) };
     return tables;
 }
 

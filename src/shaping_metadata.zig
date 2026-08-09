@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const GlyphId = @import("glyph.zig").GlyphId;
-const gpos = @import("gpos.zig");
+const ligature_provenance = @import("ligature_provenance.zig");
 
 /// Moves one glyph while preserving every array that carries post-cmap shaping
 /// metadata. Keeping this operation centralized prevents script shapers from
@@ -11,7 +11,7 @@ pub fn move(
     glyph_source_indices: *std.ArrayList(usize),
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *ligature_provenance.Store,
     from: usize,
     to: usize,
 ) void {
@@ -34,7 +34,7 @@ pub fn move(
                 glyph_source_indices.items,
                 glyph_cluster_indices.items,
                 glyph_substituted.items,
-                ligature_components.items,
+                ligature_components.infos.items,
                 index,
                 index + 1,
             );
@@ -47,7 +47,7 @@ pub fn move(
                 glyph_source_indices.items,
                 glyph_cluster_indices.items,
                 glyph_substituted.items,
-                ligature_components.items,
+                ligature_components.infos.items,
                 index,
                 index - 1,
             );
@@ -61,7 +61,7 @@ pub fn swap(
     glyph_source_indices: []usize,
     glyph_cluster_indices: []usize,
     glyph_substituted: []bool,
-    ligature_components: []gpos.LigatureComponentInfo,
+    ligature_components: []ligature_provenance.Info,
     a: usize,
     b: usize,
 ) void {
@@ -76,7 +76,7 @@ pub fn swap(
     std.mem.swap(usize, &glyph_source_indices[a], &glyph_source_indices[b]);
     std.mem.swap(usize, &glyph_cluster_indices[a], &glyph_cluster_indices[b]);
     std.mem.swap(bool, &glyph_substituted[a], &glyph_substituted[b]);
-    std.mem.swap(gpos.LigatureComponentInfo, &ligature_components[a], &ligature_components[b]);
+    std.mem.swap(ligature_provenance.Info, &ligature_components[a], &ligature_components[b]);
 }
 
 /// Merges a glyph range at a monotone cluster level without splitting an
@@ -114,7 +114,7 @@ pub fn insert(
     glyph_source_indices: *std.ArrayList(usize),
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *ligature_provenance.Store,
     index: usize,
     glyph_id: GlyphId,
     source_index: usize,
@@ -141,11 +141,11 @@ pub fn insert(
     try glyph_substituted.replaceRange(allocator, index, 0, &.{false});
     errdefer _ = glyph_substituted.orderedRemove(index);
 
-    try ligature_components.replaceRange(
+    try ligature_components.infos.replaceRange(
         allocator,
         index,
         0,
-        &.{defaultLigatureComponentInfo(source_index)},
+        &.{.{}},
     );
 }
 
@@ -154,19 +154,13 @@ fn assertParallelLengths(
     glyph_source_indices: *const std.ArrayList(usize),
     glyph_cluster_indices: *const std.ArrayList(usize),
     glyph_substituted: *const std.ArrayList(bool),
-    ligature_components: *const std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *const ligature_provenance.Store,
 ) void {
     const len = glyph_ids.items.len;
     std.debug.assert(glyph_source_indices.items.len == len);
     std.debug.assert(glyph_cluster_indices.items.len == len);
     std.debug.assert(glyph_substituted.items.len == len);
-    std.debug.assert(ligature_components.items.len == len);
-}
-
-fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
-    var info = gpos.LigatureComponentInfo{};
-    info.component_sources[0] = source;
-    return info;
+    std.debug.assert(ligature_components.infos.items.len == len);
 }
 
 test "monotone cluster merge extends through existing boundary clusters" {

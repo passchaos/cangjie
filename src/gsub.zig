@@ -2,7 +2,7 @@ const std = @import("std");
 const bin = @import("binary.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
-const gpos = @import("gpos.zig");
+const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
 const ot_layout = @import("opentype/layout.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
@@ -65,7 +65,7 @@ pub const LookupOptions = struct {
     /// specific feature without clearing the cumulative substitution state
     /// needed by default-ignorable handling.
     glyph_stage_substituted: ?*std.ArrayList(bool) = null,
-    ligature_components: ?*std.ArrayList(gpos.LigatureComponentInfo) = null,
+    ligature_components: ?*ligature_provenance.Store = null,
     /// Optional source-level feature assignment. `active_source_feature` gates
     /// a lookup to glyphs whose original source index carries that tag. Context
     /// and chaining lookups still see the complete surrounding glyph stream;
@@ -2761,11 +2761,8 @@ fn validateShapingMetadataRequirements(options: LookupOptions, glyph_count: usiz
     if (options.glyph_stage_substituted) |substituted| {
         if (substituted.items.len != glyph_count) return error.InvalidShapingInput;
     }
-    if (options.ligature_components) |components| {
-        if (components.items.len != glyph_count) return error.InvalidShapingInput;
-        for (components.items) |component_info| {
-            try validateLigatureComponentInfo(component_info);
-        }
+    if (options.ligature_components) |store| {
+        if (store.infos.items.len != glyph_count or !store.isValid()) return error.InvalidShapingInput;
     }
     if (!require_source_features and !require_source_syllables and options.source_codepoints == null) return;
 
@@ -2837,20 +2834,6 @@ test "GSUB feature plans validate derived source metadata requirements once" {
         error.InvalidShapingInput,
         validateShapingMetadataForMergedPlan(.{ .glyph_source_indices = &sources }, glyphs.items.len, merged_plan),
     );
-}
-
-fn validateLigatureComponentInfo(info: gpos.LigatureComponentInfo) GsubError!void {
-    // Source metadata is optional, but when a caller supplies it the arrays
-    // must already be parallel to the glyph run. GSUB mutates those arrays in
-    // lockstep after this point; accepting a non-parallel input would silently
-    // desynchronize later GPOS MarkLigPos component selection.
-    if (info.component_count > gpos.max_ligature_components) return error.InvalidShapingInput;
-    if (info.component_count <= 1) return;
-    var previous = info.component_sources[0];
-    for (info.component_sources[1..info.component_count]) |source| {
-        if (source < previous) return error.InvalidShapingInput;
-        previous = source;
-    }
 }
 
 fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {
@@ -2942,21 +2925,15 @@ fn ligatureMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []cons
     return sourceCodepointForGlyph(options, glyph_base + relative_index) == 0x034f;
 }
 
-fn defaultLigatureComponentInfo(source: usize) gpos.LigatureComponentInfo {
-    var info = gpos.LigatureComponentInfo{};
-    info.component_sources[0] = source;
-    return info;
-}
-
 fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, glyph_index: usize, removed_len: usize, inserted_len: usize, source: usize) std.mem.Allocator.Error!void {
     const cluster = clusterForGlyph(options, glyph_index);
-    var component_info = if (options.ligature_components) |components|
-        if (glyph_index < components.items.len)
-            components.items[glyph_index]
+    var component_info: ligature_provenance.Info = if (options.ligature_components) |store|
+        if (glyph_index < store.infos.items.len)
+            store.infos.items[glyph_index]
         else
-            defaultLigatureComponentInfo(source)
+            .{}
     else
-        defaultLigatureComponentInfo(source);
+        .{};
     if (inserted_len > 1) component_info.multiplied = true;
     if (options.glyph_source_indices) |sources| {
         if (glyph_index <= sources.items.len) {
@@ -2994,10 +2971,10 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
             try substituted.replaceRange(allocator, glyph_index, remove_count, replacements);
         }
     }
-    if (options.ligature_components) |components| {
-        if (glyph_index <= components.items.len) {
-            const remove_count = @min(removed_len, components.items.len - glyph_index);
-            const replacements = try allocator.alloc(gpos.LigatureComponentInfo, inserted_len);
+    if (options.ligature_components) |store| {
+        if (glyph_index <= store.infos.items.len) {
+            const remove_count = @min(removed_len, store.infos.items.len - glyph_index);
+            const replacements = try allocator.alloc(ligature_provenance.Info, inserted_len);
             defer allocator.free(replacements);
             // MultipleSubst can decompose a glyph produced by a ligature. Each
             // output remains ligated in HarfBuzz, which matters to script
@@ -3006,7 +2983,7 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
             // across every replacement component instead of resetting it to a
             // one-source glyph.
             @memset(replacements, component_info);
-            try components.replaceRange(allocator, glyph_index, remove_count, replacements);
+            try store.infos.replaceRange(allocator, glyph_index, remove_count, replacements);
         }
     }
 }
@@ -3037,39 +3014,45 @@ fn mergeFollowingMarksForLigatureCluster(options: LookupOptions, glyph_index: us
     }
 }
 
-fn ligatureComponentInfoForMatch(options: LookupOptions, glyph_index: usize, match: LigatureMatch) gpos.LigatureComponentInfo {
-    var info = gpos.LigatureComponentInfo{};
-    const component_count = @min(match.component_count, gpos.max_ligature_components);
-    info.component_count = @intCast(component_count);
-    info.component_sources[0] = sourceForGlyph(options, glyph_index);
-    if (options.ligature_components) |components| {
-        if (glyph_index < components.items.len) {
-            info.synthetic_base = components.items[glyph_index].synthetic_base;
-        }
+fn ligatureComponentInfoForMatch(
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+    glyph_index: usize,
+    match: LigatureMatch,
+) std.mem.Allocator.Error!ligature_provenance.Info {
+    const store = options.ligature_components orelse return .{};
+    const component_count = @min(match.component_count, ligature_provenance.max_components);
+    if (component_count <= 1) return .{};
+
+    var component_sources: [ligature_provenance.max_components]usize = undefined;
+    component_sources[0] = sourceForGlyph(options, glyph_index);
+    var synthetic_base = false;
+    if (glyph_index < store.infos.items.len) {
+        synthetic_base = store.infos.items[glyph_index].synthetic_base;
     }
     for (1..component_count) |component_index| {
         const matched_index = glyph_index + match.component_offsets[component_index];
-        insertLigatureComponentSource(&info, component_index, sourceForGlyph(options, matched_index));
-        if (options.ligature_components) |components| {
-            if (matched_index < components.items.len) {
-                info.synthetic_base = info.synthetic_base or components.items[matched_index].synthetic_base;
-            }
+        insertLigatureComponentSource(component_sources[0..], component_index, sourceForGlyph(options, matched_index));
+        if (matched_index < store.infos.items.len) {
+            synthetic_base = synthetic_base or store.infos.items[matched_index].synthetic_base;
         }
     }
+    var info = try store.addLigature(allocator, component_sources[0..component_count]);
+    info.synthetic_base = synthetic_base;
     return info;
 }
 
-fn insertLigatureComponentSource(info: *gpos.LigatureComponentInfo, end: usize, source: usize) void {
+fn insertLigatureComponentSource(sources: []usize, end: usize, source: usize) void {
     var index = end;
-    while (index > 0 and source < info.component_sources[index - 1]) : (index -= 1) {
-        info.component_sources[index] = info.component_sources[index - 1];
+    while (index > 0 and source < sources[index - 1]) : (index -= 1) {
+        sources[index] = sources[index - 1];
     }
-    info.component_sources[index] = source;
+    sources[index] = source;
 }
 
-fn setLigatureMetadata(options: LookupOptions, glyph_index: usize, info: gpos.LigatureComponentInfo) void {
-    if (options.ligature_components) |components| {
-        if (glyph_index < components.items.len) components.items[glyph_index] = info;
+fn setLigatureMetadata(options: LookupOptions, glyph_index: usize, info: ligature_provenance.Info) void {
+    if (options.ligature_components) |store| {
+        if (glyph_index < store.infos.items.len) store.infos.items[glyph_index] = info;
     }
 }
 
@@ -3225,7 +3208,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         if (covered >= lig_set_count) continue;
         const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2));
         if (try ligatureAt(table, set_offset, glyphs.items[i..], i, lookup_flag, options)) |match| {
-            const component_info = ligatureComponentInfoForMatch(options, i, match);
+            const component_info = try ligatureComponentInfoForMatch(allocator, options, i, match);
             mergeLigatureClusterMetadata(options, i, match);
             glyphs.items[i] = match.ligature;
             markGlyphSubstituted(options, i);
@@ -3263,7 +3246,7 @@ fn applyLigatureSubstitutionAcceleratedImpl(comptime prefilter_second: bool, tab
         else
             ligatureAtAccelerated(accelerator, set, glyphs.items[i..], i, lookup_flag, options);
         if (match) |matched| {
-            const component_info = ligatureComponentInfoForMatch(options, i, matched);
+            const component_info = try ligatureComponentInfoForMatch(allocator, options, i, matched);
             mergeLigatureClusterMetadata(options, i, matched);
             glyphs.items[i] = matched.ligature;
             markGlyphSubstituted(options, i);
@@ -3423,7 +3406,7 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     if (covered >= lig_set_count) return null;
     const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2));
     const match = try ligatureAt(table, set_offset, glyphs.items[glyph_index..], glyph_index, lookup_flag, options) orelse return null;
-    const component_info = ligatureComponentInfoForMatch(options, glyph_index, match);
+    const component_info = try ligatureComponentInfoForMatch(allocator, options, glyph_index, match);
     mergeLigatureClusterMetadata(options, glyph_index, match);
     glyphs.items[glyph_index] = match.ligature;
     markGlyphSubstituted(options, glyph_index);
@@ -7823,12 +7806,10 @@ test "GSUB multiple substitution preserves ligature provenance" {
     defer stage_substituted.deinit(allocator);
     try stage_substituted.append(allocator, false);
 
-    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    var components = ligature_provenance.Store{};
     defer components.deinit(allocator);
-    var ligature_info = gpos.LigatureComponentInfo{ .component_count = 2 };
-    ligature_info.component_sources[0] = 3;
-    ligature_info.component_sources[1] = 4;
-    try components.append(allocator, ligature_info);
+    const ligature_info = try components.addLigature(allocator, &.{ 3, 4 });
+    try components.infos.append(allocator, ligature_info);
 
     try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
         .glyph_source_indices = &sources,
@@ -7839,14 +7820,18 @@ test "GSUB multiple substitution preserves ligature provenance" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 20, 21 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 3, 3 }, sources.items);
     try std.testing.expectEqualSlices(bool, &.{ true, true }, stage_substituted.items);
-    try std.testing.expectEqual(@as(u8, 2), components.items[0].component_count);
-    try std.testing.expectEqual(@as(u8, 2), components.items[1].component_count);
-    try std.testing.expect(components.items[0].multiplied);
-    try std.testing.expect(components.items[1].multiplied);
+    try std.testing.expectEqual(@as(u8, 2), components.infos.items[0].component_count);
+    try std.testing.expectEqual(@as(u8, 2), components.infos.items[1].component_count);
+    try std.testing.expect(components.infos.items[0].multiplied);
+    try std.testing.expect(components.infos.items[1].multiplied);
+    try std.testing.expectEqual(
+        components.infos.items[0].source_start,
+        components.infos.items[1].source_start,
+    );
     try std.testing.expectEqualSlices(
         usize,
-        components.items[0].component_sources[0..2],
-        components.items[1].component_sources[0..2],
+        &.{ 3, 4 },
+        components.componentSources(components.infos.items[0]).?,
     );
 }
 
@@ -9361,13 +9346,10 @@ test "GSUB contextual ligature remaps records across ignored components" {
     defer sources.deinit(allocator);
     try sources.appendSlice(allocator, &.{ 0, 1, 2 });
 
-    var ligature_components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    var ligature_components = ligature_provenance.Store{};
     defer ligature_components.deinit(allocator);
-    try ligature_components.appendSlice(allocator, &.{
-        defaultLigatureComponentInfo(0),
-        defaultLigatureComponentInfo(1),
-        defaultLigatureComponentInfo(2),
-    });
+    try ligature_components.infos.resize(allocator, 3);
+    @memset(ligature_components.infos.items, .{});
 
     var glyph_classes = [_]u16{0} ** 100;
     glyph_classes[99] = 3;
@@ -9383,10 +9365,13 @@ test "GSUB contextual ligature remaps records across ignored components" {
     // though the nested ligature physically skipped the mark between inputs.
     try std.testing.expectEqualSlices(GlyphId, &.{ 40, 99 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
-    try std.testing.expectEqual(@as(u8, 2), ligature_components.items[0].component_count);
-    try std.testing.expectEqual(@as(usize, 0), ligature_components.items[0].component_sources[0]);
-    try std.testing.expectEqual(@as(usize, 2), ligature_components.items[0].component_sources[1]);
-    try std.testing.expectEqual(@as(usize, 1), ligature_components.items[1].component_sources[0]);
+    try std.testing.expectEqual(@as(u8, 2), ligature_components.infos.items[0].component_count);
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 0, 2 },
+        ligature_components.componentSources(ligature_components.infos.items[0]).?,
+    );
+    try std.testing.expectEqual(@as(u8, 1), ligature_components.infos.items[1].component_count);
 }
 
 test "GSUB single substitution subtables do not cascade within lookup" {
@@ -9773,9 +9758,9 @@ test "GSUB ligature preserves synthetic base provenance" {
     var glyphs = std.ArrayList(GlyphId).empty;
     defer glyphs.deinit(allocator);
     try glyphs.appendSlice(allocator, &.{ 1, 2 });
-    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    var components = ligature_provenance.Store{};
     defer components.deinit(allocator);
-    try components.appendSlice(allocator, &.{
+    try components.infos.appendSlice(allocator, &.{
         .{ .synthetic_base = true },
         .{},
     });
@@ -9785,7 +9770,7 @@ test "GSUB ligature preserves synthetic base provenance" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{40}, glyphs.items);
-    try std.testing.expect(components.items[0].synthetic_base);
+    try std.testing.expect(components.infos.items[0].synthetic_base);
 }
 
 test "GSUB ligature accelerator preserves preference and ignored component offsets" {
@@ -10648,13 +10633,10 @@ test "GSUB public apply validates ligature component source order" {
     defer glyphs.deinit(allocator);
     try glyphs.append(allocator, 10);
 
-    var bad_info = gpos.LigatureComponentInfo{ .component_count = 2 };
-    bad_info.component_sources[0] = 3;
-    bad_info.component_sources[1] = 2;
-
-    var ligature_components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    var ligature_components = ligature_provenance.Store{};
     defer ligature_components.deinit(allocator);
-    try ligature_components.append(allocator, bad_info);
+    try ligature_components.sources.appendSlice(allocator, &.{ 3, 2 });
+    try ligature_components.infos.append(allocator, .{ .component_count = 2 });
 
     try std.testing.expectError(error.InvalidShapingInput, applyWithOptions(&bytes, 0, bytes.len, &glyphs, allocator, .{
         .ligature_components = &ligature_components,

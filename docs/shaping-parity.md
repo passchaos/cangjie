@@ -443,6 +443,22 @@ Current local snapshot after the Nastaliq parity work:
   amortizes little duplicate classification. Profiled bidi time fell from
   about `9.24 ms` to `8.72 ms`, about `5.6%`, while output checksums remained
   unchanged.
+- Ligature component provenance now keeps an 8-byte handle beside each glyph
+  and stores source positions only for actual ligatures in an append-only
+  pool. Ordinary glyphs previously carried a 528-byte inline 64-entry array;
+  MultipleSubst outputs now copy and share one compact handle rather than
+  copying that array. Source-index renumbering scans each pooled source once,
+  so shared handles cannot apply an insertion shift repeatedly. A serial
+  fixed-CPU-30 A/B/B/A run with 31-sample medians reduced Amiri
+  `fa-thelittleprince` from `878.335` to `837.997 ns/glyph`, about `4.6%`,
+  and Roboto `en-words` from `432.246` to `404.230 ns/glyph`, about `6.5%`.
+  An eight-median complementary A/B/B/A plus B/A/A/B word-list check improved
+  Amiri `fa-words` from `1860.685` to `1824.369 ns/glyph`, about `2.0%`.
+  On a five-sample Amiri run, maximum RSS fell from 7,680 to 6,912 KiB. A
+  post-change `perf` sample reported generic `memcpy` at about `0.12%`, down
+  from about `3.30%` in the independent baseline; compact provenance-array
+  growth was about `0.25%`. Full Amiri long-text/word-list, Roboto, HarfRust
+  Indic, and retained USE parity checksums remained unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

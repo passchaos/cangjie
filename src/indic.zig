@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const GlyphId = @import("glyph.zig").GlyphId;
-const gpos = @import("gpos.zig");
+const ligature_provenance = @import("ligature_provenance.zig");
 const gsub = @import("gsub.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const unicode = @import("unicode.zig");
@@ -23,7 +23,7 @@ pub fn reorderPreBaseMatras(
     glyph_source_indices: *std.ArrayList(usize),
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *ligature_provenance.Store,
     codepoints: []const u21,
 ) void {
     var index: usize = 0;
@@ -52,7 +52,7 @@ pub fn insertDottedCirclesForBrokenClusters(
     glyph_source_indices: *std.ArrayList(usize),
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *ligature_provenance.Store,
     codepoints: []const u21,
     dotted_circle_glyph: GlyphId,
 ) !void {
@@ -112,13 +112,13 @@ pub fn reorderRephs(
     glyph_source_indices: *std.ArrayList(usize),
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *ligature_provenance.Store,
     codepoints: []const u21,
 ) void {
     var index: usize = 0;
     while (index < glyph_source_indices.items.len) {
         const source_index = glyph_source_indices.items[index];
-        if (!isFormedReph(ligature_components.items[index], source_index, codepoints)) {
+        if (!isFormedReph(ligature_components, ligature_components.infos.items[index], source_index, codepoints)) {
             index += 1;
             continue;
         }
@@ -309,11 +309,12 @@ fn devanagariSyllableStart(codepoints: []const u21, source_index: usize) usize {
     return source_index;
 }
 
-fn isFormedReph(info: gpos.LigatureComponentInfo, source_index: usize, codepoints: []const u21) bool {
+fn isFormedReph(store: *const ligature_provenance.Store, info: ligature_provenance.Info, source_index: usize, codepoints: []const u21) bool {
     if (source_index + 1 >= codepoints.len) return false;
     if (codepoints[source_index] != 0x0930 or codepoints[source_index + 1] != 0x094d) return false;
     if (info.component_count < 2 or info.multiplied) return false;
-    return info.component_sources[0] == source_index and info.component_sources[1] == source_index + 1;
+    const sources = store.componentSources(info) orelse return false;
+    return sources[0] == source_index and sources[1] == source_index + 1;
 }
 
 fn preBaseMatraTargetGlyphIndex(sources: []const usize, codepoints: []const u21, syllable_start: usize, matra_source: usize, fallback_index: usize) usize {

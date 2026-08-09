@@ -2,6 +2,7 @@ const std = @import("std");
 
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
+const ligature_provenance = @import("ligature_provenance.zig");
 const unicode = @import("unicode.zig");
 
 pub const ShapeScratch = struct {
@@ -13,7 +14,7 @@ pub const ShapeScratch = struct {
     glyph_cluster_indices: std.ArrayList(usize) = .empty,
     glyph_substituted: std.ArrayList(bool) = .empty,
     glyph_stage_substituted: std.ArrayList(bool) = .empty,
-    ligature_components: std.ArrayList(gpos.LigatureComponentInfo) = .empty,
+    ligature_components: ligature_provenance.Store = .{},
     joining_forms: std.ArrayList(unicode.JoiningForm) = .empty,
     source_features: std.ArrayList(u32) = .empty,
     source_syllables: std.ArrayList(u8) = .empty,
@@ -53,7 +54,7 @@ pub const ShapeScratch = struct {
         self.glyph_cluster_indices.clearRetainingCapacity();
         self.glyph_substituted.clearRetainingCapacity();
         self.glyph_stage_substituted.clearRetainingCapacity();
-        self.ligature_components.clearRetainingCapacity();
+        self.ligature_components.clear();
         self.joining_forms.clearRetainingCapacity();
         self.source_features.clearRetainingCapacity();
         self.source_syllables.clearRetainingCapacity();

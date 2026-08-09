@@ -4,27 +4,9 @@ const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ot_layout = @import("opentype/layout.zig");
 const class_context = @import("opentype/class_context.zig");
+const ligature_provenance = @import("ligature_provenance.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
-
-pub const max_ligature_components = 64;
-
-pub const LigatureComponentInfo = struct {
-    /// Source-order positions for the logical components that produced this
-    /// ligature glyph. Non-ligature glyphs may leave component_count at 1.
-    component_count: u8 = 1,
-    component_sources: [max_ligature_components]usize = [_]usize{0} ** max_ligature_components,
-    /// True when MultipleSubst decomposed this glyph after ligation. The
-    /// component sources still matter to attachment and USE must still treat
-    /// the result as ligated, but Indic reph detection must not mistake an
-    /// individual multiplied component for an intact ligature.
-    multiplied: bool = false,
-    /// Script shapers may insert a base glyph without adding a source scalar
-    /// (notably U+25CC for a broken syllable). Such a glyph borrows cluster and
-    /// source ownership from the broken mark but must not inherit that source's
-    /// fallback Unicode mark class.
-    synthetic_base: bool = false,
-};
 
 /// GPOS produces additive adjustments instead of mutating glyph ids. The caller
 /// applies these deltas while constructing final glyph positions.
@@ -120,9 +102,10 @@ pub const LookupOptions = struct {
     /// treats untouched default-ignorables as transparent, but substituted
     /// glyphs must remain visible to matching just like HarfBuzz.
     glyph_substituted: ?[]const bool = null,
-    /// Optional ligature component metadata parallel to the post-GSUB glyph
-    /// stream. Entries are only meaningful for ligature glyph positions.
-    ligature_components: ?[]const LigatureComponentInfo = null,
+    /// Optional compact ligature provenance. Its `infos` array is parallel to
+    /// the post-GSUB glyph stream; component source slices live in the store's
+    /// append-only pool.
+    ligature_components: ?*const ligature_provenance.Store = null,
     /// Preselected lookup indices for the active script/language/features.
     /// This is a shaping fast path; callers that supply it must keep it in
     /// sync with the other selection options.
@@ -1878,25 +1861,8 @@ fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GposError
         if (substituted.len != glyph_count) return error.InvalidShapingInput;
     }
     if (options.source_codepoints != null and options.glyph_source_indices == null) return error.InvalidShapingInput;
-    if (options.ligature_components) |components| {
-        if (components.len != glyph_count) return error.InvalidShapingInput;
-        for (components) |component_info| {
-            try validateLigatureComponentInfo(component_info);
-        }
-    }
-}
-
-fn validateLigatureComponentInfo(info: LigatureComponentInfo) GposError!void {
-    // GPOS MarkLigPos treats component_sources as ordered original-text
-    // positions. Reject non-parallel or non-monotonic metadata at the public
-    // API boundary instead of silently attaching marks to the wrong ligature
-    // component.
-    if (info.component_count > max_ligature_components) return error.InvalidShapingInput;
-    if (info.component_count <= 1) return;
-    var previous = info.component_sources[0];
-    for (info.component_sources[1..info.component_count]) |source| {
-        if (source < previous) return error.InvalidShapingInput;
-        previous = source;
+    if (options.ligature_components) |store| {
+        if (store.infos.items.len != glyph_count or !store.isValid()) return error.InvalidShapingInput;
     }
 }
 
@@ -4853,10 +4819,11 @@ fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyp
 
     if (options.glyph_source_indices) |sources| {
         if (mark_position < sources.len) {
-            if (options.ligature_components) |components| {
-                if (ligature_position < components.len) {
-                    const info = components[ligature_position];
-                    const available_count = @min(@as(usize, info.component_count), component_count);
+            if (options.ligature_components) |store| {
+                if (ligature_position < store.infos.items.len) {
+                    const info = store.infos.items[ligature_position];
+                    const component_sources = store.componentSources(info) orelse return error.InvalidShapingInput;
+                    const available_count = @min(component_sources.len, component_count);
                     if (available_count > 0) {
                         const mark_source = sources[mark_position];
                         var chosen: usize = 0;
@@ -4866,7 +4833,7 @@ fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyp
                         // that mark, which handles marks originally typed
                         // between ligature components as well as marks after
                         // the full ligature sequence.
-                        for (info.component_sources[0..available_count], 0..) |component_source, component_i| {
+                        for (component_sources[0..available_count], 0..) |component_source, component_i| {
                             if (component_source > mark_source) break;
                             chosen = component_i;
                         }
@@ -4999,16 +4966,17 @@ const MarkLigatureComponentHint = struct {
 
 fn markLigatureComponentHint(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, mark_position: usize, lookup_flag: u16, options: LookupOptions) GposError!?MarkLigatureComponentHint {
     const ligature_position = try previousCoveredLigatureGlyph(table, mark_coverage_offset, glyphs, mark_position, lookup_flag, options) orelse return null;
-    const components = options.ligature_components orelse return null;
-    if (ligature_position >= components.len) return null;
-    const info = components[ligature_position];
+    const store = options.ligature_components orelse return null;
+    if (ligature_position >= store.infos.items.len) return null;
+    const info = store.infos.items[ligature_position];
     if (info.component_count <= 1) return null;
+    const component_sources = store.componentSources(info) orelse return error.InvalidShapingInput;
     const sources = options.glyph_source_indices orelse return null;
     if (mark_position >= sources.len) return null;
 
     const mark_source = sources[mark_position];
     var component_index: usize = 0;
-    for (info.component_sources[0..info.component_count], 0..) |component_source, index| {
+    for (component_sources, 0..) |component_source, index| {
         if (component_source > mark_source) break;
         component_index = index;
     }
@@ -8802,18 +8770,10 @@ test "GPOS mark-to-ligature uses source metadata for component choice" {
 
     const glyphs = [_]GlyphId{ 20, 22 };
     const sources = [_]usize{ 0, 2 };
-    const ligature_components = [_]LigatureComponentInfo{
-        .{
-            .component_count = 2,
-            .component_sources = blk: {
-                var component_sources = [_]usize{0} ** max_ligature_components;
-                component_sources[0] = 0;
-                component_sources[1] = 1;
-                break :blk component_sources;
-            },
-        },
-        .{},
-    };
+    var ligature_components = ligature_provenance.Store{};
+    defer ligature_components.deinit(allocator);
+    const ligature_info = try ligature_components.addLigature(allocator, &.{ 0, 1 });
+    try ligature_components.infos.appendSlice(allocator, &.{ ligature_info, .{} });
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
 
@@ -9238,10 +9198,10 @@ test "GPOS public adjustment collection validates ligature component source orde
     writeU16Test(&bytes, 0, 1);
 
     const glyphs = [_]GlyphId{10};
-    var bad_info = LigatureComponentInfo{ .component_count = 2 };
-    bad_info.component_sources[0] = 3;
-    bad_info.component_sources[1] = 2;
-    const ligature_components = [_]LigatureComponentInfo{bad_info};
+    var ligature_components = ligature_provenance.Store{};
+    defer ligature_components.deinit(allocator);
+    try ligature_components.sources.appendSlice(allocator, &.{ 3, 2 });
+    try ligature_components.infos.append(allocator, .{ .component_count = 2 });
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
 

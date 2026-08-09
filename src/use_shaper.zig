@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const gsub = @import("gsub.zig");
-const gpos = @import("gpos.zig");
+const ligature_provenance = @import("ligature_provenance.zig");
 const Font = @import("font.zig").Font;
 const GlyphId = @import("glyph.zig").GlyphId;
 const shaping_metadata = @import("shaping_metadata.zig");
@@ -144,7 +144,7 @@ pub fn insertVowelConstraintDottedCircles(
     glyph_source_indices: *std.ArrayList(usize),
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *ligature_provenance.Store,
     dotted_circle_glyph: GlyphId,
 ) std.mem.Allocator.Error!void {
     if (dotted_circle_glyph == 0) return;
@@ -170,7 +170,7 @@ pub fn insertVowelConstraintDottedCircles(
         try glyph_source_indices.ensureUnusedCapacity(allocator, 1);
         try glyph_cluster_indices.ensureUnusedCapacity(allocator, 1);
         try glyph_substituted.ensureUnusedCapacity(allocator, 1);
-        try ligature_components.ensureUnusedCapacity(allocator, 1);
+        try ligature_components.infos.ensureUnusedCapacity(allocator, 1);
 
         for (glyph_source_indices.items) |*source| {
             if (source.* >= constrained_source) source.* += 1;
@@ -178,12 +178,7 @@ pub fn insertVowelConstraintDottedCircles(
         for (glyph_cluster_indices.items) |*owner| {
             if (owner.* >= constrained_source) owner.* += 1;
         }
-        for (ligature_components.items) |*info| {
-            const component_count = @min(info.component_count, gpos.max_ligature_components);
-            for (info.component_sources[0..component_count]) |*source| {
-                if (source.* >= constrained_source) source.* += 1;
-            }
-        }
+        ligature_components.shiftSourceIndices(constrained_source, 1);
 
         try codepoints.replaceRange(allocator, constrained_source, 0, &.{0x25cc});
         try clusters.replaceRange(allocator, constrained_source, 0, &.{source_start});
@@ -228,7 +223,7 @@ pub fn decomposeCanonicalSources(
     glyph_source_indices: *std.ArrayList(usize),
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *ligature_provenance.Store,
 ) !void {
     var source_index: usize = 0;
     while (source_index < codepoints.items.len) {
@@ -269,7 +264,7 @@ pub fn decomposeCanonicalSources(
         try glyph_source_indices.ensureUnusedCapacity(allocator, extra);
         try glyph_cluster_indices.ensureUnusedCapacity(allocator, extra);
         try glyph_substituted.ensureUnusedCapacity(allocator, extra);
-        try ligature_components.ensureUnusedCapacity(allocator, extra);
+        try ligature_components.infos.ensureUnusedCapacity(allocator, extra);
 
         const source_start = clusters.items[source_index];
         const source_end = source_ends.items[source_index];
@@ -279,12 +274,7 @@ pub fn decomposeCanonicalSources(
         for (glyph_cluster_indices.items) |*owner| {
             if (owner.* > source_index) owner.* += extra;
         }
-        for (ligature_components.items) |*info| {
-            const component_count = @min(info.component_count, gpos.max_ligature_components);
-            for (info.component_sources[0..component_count]) |*source| {
-                if (source.* > source_index) source.* += extra;
-            }
-        }
+        ligature_components.shiftSourceIndices(source_index + 1, extra);
 
         try codepoints.replaceRange(allocator, source_index, 1, components);
         var source_starts: [4]usize = undefined;
@@ -304,17 +294,16 @@ pub fn decomposeCanonicalSources(
         var sources: [4]usize = undefined;
         var owners: [4]usize = undefined;
         var substituted: [4]bool = .{ false, false, false, false };
-        var infos: [4]gpos.LigatureComponentInfo = undefined;
+        var infos: [4]ligature_provenance.Info = undefined;
         for (0..components.len) |component_index| {
             sources[component_index] = source_index + component_index;
             owners[component_index] = source_index + component_index;
             infos[component_index] = .{};
-            infos[component_index].component_sources[0] = source_index + component_index;
         }
         try glyph_source_indices.replaceRange(allocator, glyph_index, 1, sources[0..components.len]);
         try glyph_cluster_indices.replaceRange(allocator, glyph_index, 1, owners[0..components.len]);
         try glyph_substituted.replaceRange(allocator, glyph_index, 1, substituted[0..components.len]);
-        try ligature_components.replaceRange(allocator, glyph_index, 1, infos[0..components.len]);
+        try ligature_components.infos.replaceRange(allocator, glyph_index, 1, infos[0..components.len]);
         source_index += components.len;
     }
 }
@@ -365,7 +354,7 @@ pub fn insertDottedCirclesForBrokenSyllables(
     glyph_source_indices: *std.ArrayList(usize),
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *std.ArrayList(gpos.LigatureComponentInfo),
+    ligature_components: *ligature_provenance.Store,
     source_syllables: []const u8,
     source_rphf_substituted: []const bool,
     source_pref_substituted: []const bool,
@@ -420,7 +409,7 @@ pub fn insertDottedCirclesForBrokenSyllables(
             source,
             glyph_cluster_indices.items[glyph_index],
         );
-        ligature_components.items[insert_index].synthetic_base = true;
+        ligature_components.infos.items[insert_index].synthetic_base = true;
         if (insert_index <= glyph_index) glyph_index += 1;
     }
 }
@@ -430,7 +419,7 @@ pub fn reorderGlyphs(
     glyph_source_indices: []usize,
     glyph_cluster_indices: []usize,
     glyph_substituted: []bool,
-    ligature_components: []gpos.LigatureComponentInfo,
+    ligature_components: []ligature_provenance.Info,
     source_syllables: []const u8,
     source_rphf_substituted: []const bool,
     source_pref_substituted: []const bool,
@@ -487,7 +476,7 @@ fn reorderRephaGlyphInSyllable(
     glyph_source_indices: []usize,
     glyph_cluster_indices: []usize,
     glyph_substituted: []bool,
-    ligature_components: []gpos.LigatureComponentInfo,
+    ligature_components: []ligature_provenance.Info,
     source_rphf_substituted: []const bool,
     source_pref_substituted: []const bool,
     codepoints: []const u21,
@@ -533,7 +522,7 @@ fn reorderPrebaseGlyphsInSyllable(
     glyph_source_indices: []usize,
     glyph_cluster_indices: []usize,
     glyph_substituted: []bool,
-    ligature_components: []gpos.LigatureComponentInfo,
+    ligature_components: []ligature_provenance.Info,
     source_pref_substituted: []const bool,
     codepoints: []const u21,
     start: usize,
@@ -739,9 +728,9 @@ test "USE vowel constraints insert a distinct synthetic source" {
     var substituted = std.ArrayList(bool).empty;
     defer substituted.deinit(allocator);
     try substituted.appendSlice(allocator, &.{ false, false });
-    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    var components = ligature_provenance.Store{};
     defer components.deinit(allocator);
-    try components.appendSlice(allocator, &.{ .{}, .{} });
+    try components.infos.appendSlice(allocator, &.{ .{}, .{} });
 
     try insertVowelConstraintDottedCircles(
         allocator,
@@ -844,11 +833,7 @@ test "USE reordering moves only the first split prebase component" {
     var sources = [_]usize{ 0, 1, 1 };
     var cluster_owners = [_]usize{ 0, 1, 1 };
     var substituted = [_]bool{ false, true, true };
-    var components = [_]gpos.LigatureComponentInfo{
-        .{ .component_sources = [_]usize{0} ** gpos.max_ligature_components },
-        .{ .component_sources = [_]usize{1} ** gpos.max_ligature_components },
-        .{ .component_sources = [_]usize{1} ** gpos.max_ligature_components },
-    };
+    var components = [_]ligature_provenance.Info{ .{}, .{}, .{} };
     const syllable_serials = [_]u8{ 0x12, 0x12 };
     const rphf_substituted = [_]bool{ false, false };
     const pref_substituted = [_]bool{ false, false };
@@ -879,10 +864,7 @@ test "USE pref substitutions reorder as prebase glyphs" {
     var sources = [_]usize{ 0, 1 };
     var cluster_owners = [_]usize{ 0, 0 };
     var substituted = [_]bool{ false, true };
-    var components = [_]gpos.LigatureComponentInfo{
-        .{ .component_sources = [_]usize{0} ** gpos.max_ligature_components },
-        .{ .component_sources = [_]usize{1} ** gpos.max_ligature_components },
-    };
+    var components = [_]ligature_provenance.Info{ .{}, .{} };
     const syllable_serials = [_]u8{ 0x12, 0x12 };
     const rphf_substituted = [_]bool{ false, false };
     const pref_substituted = [_]bool{ false, true };
@@ -936,11 +918,7 @@ test "USE rphf substitutions reorder as repha glyphs" {
     var sources = [_]usize{ 0, 2, 3 };
     var cluster_owners = [_]usize{ 0, 2, 3 };
     var substituted = [_]bool{ true, false, false };
-    var components = [_]gpos.LigatureComponentInfo{
-        .{ .component_sources = [_]usize{0} ** gpos.max_ligature_components },
-        .{ .component_sources = [_]usize{2} ** gpos.max_ligature_components },
-        .{ .component_sources = [_]usize{3} ** gpos.max_ligature_components },
-    };
+    var components = [_]ligature_provenance.Info{ .{}, .{}, .{} };
     const syllable_serials = [_]u8{ 0x12, 0x12, 0x12, 0x12 };
     const rphf_substituted = [_]bool{ true, false, false, false };
     const pref_substituted = [_]bool{ false, false, false, false };
@@ -970,16 +948,12 @@ test "USE repha reorder preserves a GSUB-widened trailing cluster" {
     // the final virama's cluster owner to the same pre-ligature cluster.
     var cluster_owners = [_]usize{ 0, 2, 2, 2 };
     var substituted = [_]bool{ true, false, true, false };
-    var components = [_]gpos.LigatureComponentInfo{
-        .{ .component_sources = [_]usize{0} ** gpos.max_ligature_components },
-        .{ .component_sources = [_]usize{2} ** gpos.max_ligature_components },
-        .{
-            .component_count = 2,
-            .component_sources = [_]usize{3} ** gpos.max_ligature_components,
-        },
-        .{ .component_sources = [_]usize{5} ** gpos.max_ligature_components },
+    var components = [_]ligature_provenance.Info{
+        .{},
+        .{},
+        .{ .component_count = 2 },
+        .{},
     };
-    components[2].component_sources[1] = 4;
     const syllable_serials = [_]u8{ 0x12, 0x12, 0x12, 0x12, 0x12, 0x12 };
     const rphf_substituted = [_]bool{ true, false, false, false, false, false };
     const pref_substituted = [_]bool{ false, false, false, false, false, false };
@@ -1015,13 +989,10 @@ test "USE inserts a dotted circle into each broken syllable" {
     var substituted = std.ArrayList(bool).empty;
     defer substituted.deinit(allocator);
     try substituted.appendSlice(allocator, &.{ false, false, false });
-    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    var components = ligature_provenance.Store{};
     defer components.deinit(allocator);
-    for (sources.items) |source| {
-        var info = gpos.LigatureComponentInfo{};
-        info.component_sources[0] = source;
-        try components.append(allocator, info);
-    }
+    try components.infos.resize(allocator, sources.items.len);
+    @memset(components.infos.items, .{});
     const syllable_serials = [_]u8{ 0x12, 0x12, 0x27 };
     const rphf_substituted = [_]bool{ false, false, false };
     const pref_substituted = [_]bool{ false, false, false };
@@ -1044,7 +1015,7 @@ test "USE inserts a dotted circle into each broken syllable" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 23, 58, 66, 128 }, glyph_ids.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 2 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, cluster_owners.items);
-    try std.testing.expect(components.items[3].synthetic_base);
+    try std.testing.expect(components.infos.items[3].synthetic_base);
 }
 
 test "USE dotted circle follows a pref-substituted broken-cluster glyph" {
@@ -1061,13 +1032,10 @@ test "USE dotted circle follows a pref-substituted broken-cluster glyph" {
     var substituted = std.ArrayList(bool).empty;
     defer substituted.deinit(allocator);
     try substituted.appendSlice(allocator, &.{ false, true, false });
-    var components = std.ArrayList(gpos.LigatureComponentInfo).empty;
+    var components = ligature_provenance.Store{};
     defer components.deinit(allocator);
-    for (sources.items) |source| {
-        var info = gpos.LigatureComponentInfo{};
-        info.component_sources[0] = source;
-        try components.append(allocator, info);
-    }
+    try components.infos.resize(allocator, sources.items.len);
+    @memset(components.infos.items, .{});
     const syllable_serials = [_]u8{ 0x12, 0x27, 0x27 };
     const rphf_substituted = [_]bool{ false, false, false };
     const pref_substituted = [_]bool{ false, true, false };

@@ -9,6 +9,17 @@ pub const GlyphRenderMode = enum {
     slug_analytic,
 };
 
+/// Pixel contract for a glyph atlas entry.
+///
+/// Outline and COLR layer requests produce one-channel coverage. Embedded PNG
+/// glyphs already contain color and alpha, so consumers must allocate and cache
+/// them separately as premultiplied RGBA instead of interpreting their bytes as
+/// an alpha mask.
+pub const GlyphAtlasContent = enum {
+    alpha_mask,
+    premultiplied_rgba,
+};
+
 pub const BridgeOptions = struct {
     origin_x: f32 = 0,
     origin_y: f32 = 0,
@@ -30,6 +41,7 @@ pub const GlyphAtlasCacheKey = struct {
     variation_hash: u64 = 0,
     variation_coord_count: usize = 0,
     render_mode: GlyphRenderMode,
+    content: GlyphAtlasContent = .alpha_mask,
 };
 
 pub const GlyphAtlasRequest = struct {
@@ -40,6 +52,7 @@ pub const GlyphAtlasRequest = struct {
     normalized_variation_coords: []const f32 = &.{},
     variation_hash: u64 = 0,
     render_mode: GlyphRenderMode = .atlas_mask,
+    content: GlyphAtlasContent = .alpha_mask,
 
     pub fn cacheKey(self: GlyphAtlasRequest) GlyphAtlasCacheKey {
         return .{
@@ -50,6 +63,7 @@ pub const GlyphAtlasRequest = struct {
             .variation_hash = self.variation_hash,
             .variation_coord_count = self.normalized_variation_coords.len,
             .render_mode = self.render_mode,
+            .content = self.content,
         };
     }
 };
@@ -138,6 +152,7 @@ pub const ColorGlyphPaint = union(enum) {
     colr_v1_transform: font_mod.ColorPaint.TransformPaint,
     colr_v1_composite: font_mod.ColorPaint.Composite,
     svg_document: []const u8,
+    embedded_png: font_mod.BitmapGlyphPng,
 };
 
 pub const ColorGlyphDrawCommand = struct {
@@ -147,6 +162,7 @@ pub const ColorGlyphDrawCommand = struct {
     color_stop_start: usize = 0,
     color_stop_len: usize = 0,
     svg_document: ?[]const u8 = null,
+    embedded_png: ?font_mod.BitmapGlyphPng = null,
     has_colr_v1_paint: bool = false,
     paint: ColorGlyphPaint = .none,
 };
@@ -285,16 +301,30 @@ const BridgeBuilder = struct {
         var pen_x = self.options.origin_x + line.x + advanceBefore(self.paragraph.glyphs[line.glyph_start..line_glyph_end], start - line.glyph_start);
         for (self.paragraph.glyphs[start..end]) |glyph| {
             const output_index = self.glyphs.items.len;
-            const atlas_index = try self.atlasRequestIndex(.{
-                .font = run.font,
-                .glyph_id = glyph.glyph_id,
-                .font_size = run.font_size,
-                .normalized_variation_coords = self.options.normalized_variation_coords,
-                .variation_hash = self.variation_hash,
-                .render_mode = self.options.render_mode,
-            });
+            const color_index: ?usize = if (self.options.include_color_glyphs)
+                try self.appendColorGlyph(run.font, run.font_size, glyph.glyph_id, output_index)
+            else
+                null;
+            const embedded_png = if (color_index) |index| self.color_glyphs.items[index].embedded_png else null;
+            const atlas_content: GlyphAtlasContent = if (embedded_png != null) .premultiplied_rgba else .alpha_mask;
+            const atlas_index: ?usize = if (run.font.hasOutlineData() or embedded_png != null)
+                try self.atlasRequestIndex(.{
+                    .font = run.font,
+                    .glyph_id = glyph.glyph_id,
+                    .font_size = run.font_size,
+                    .normalized_variation_coords = self.options.normalized_variation_coords,
+                    .variation_hash = self.variation_hash,
+                    .render_mode = self.options.render_mode,
+                    .content = atlas_content,
+                })
+            else
+                null;
             var path_index: ?usize = null;
-            if (self.options.include_path_requests) {
+            // A bitmap-only face has no path source. Suppress path requests for
+            // both its color images and intentionally empty spacing glyphs so a
+            // backend cannot accidentally turn a valid draw list into a
+            // MissingTable error while preparing optional vector fallbacks.
+            if (self.options.include_path_requests and run.font.hasOutlineData()) {
                 path_index = try self.pathRequestIndex(.{
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,
@@ -323,12 +353,8 @@ const BridgeBuilder = struct {
                 .render_mode = self.options.render_mode,
                 .atlas_request_index = atlas_index,
                 .path_request_index = path_index,
+                .color_glyph_index = color_index,
             });
-            if (self.options.include_color_glyphs) {
-                if (try self.appendColorGlyph(run.font, run.font_size, glyph.glyph_id, output_index)) |color_index| {
-                    self.glyphs.items[output_index].color_glyph_index = color_index;
-                }
-            }
             pen_x += glyph.x_advance;
         }
     }
@@ -366,7 +392,16 @@ const BridgeBuilder = struct {
             }
         }
         const layer_len = self.color_layers.items.len - layer_start;
-        if (layer_len == 0 and svg_document == null and color_paint == null) return null;
+        // Match Rasterizer precedence. A font may carry several color
+        // representations, but the command identifies exactly the source a
+        // renderer should consume rather than exposing a lower-priority PNG as
+        // if it were additional paint.
+        const selected_svg = if (layer_len == 0 and color_paint == null) svg_document else null;
+        const selected_png = if (layer_len == 0 and color_paint == null and selected_svg == null)
+            try font.bitmapGlyphPng(glyph_id, font_size)
+        else
+            null;
+        if (layer_len == 0 and selected_svg == null and color_paint == null and selected_png == null) return null;
 
         const color_index = self.color_glyphs.items.len;
         try self.color_glyphs.append(self.allocator, .{
@@ -375,9 +410,10 @@ const BridgeBuilder = struct {
             .layer_len = layer_len,
             .color_stop_start = color_stop_start,
             .color_stop_len = self.color_stops.items.len - color_stop_start,
-            .svg_document = svg_document,
+            .svg_document = selected_svg,
+            .embedded_png = selected_png,
             .has_colr_v1_paint = color_paint != null,
-            .paint = colorGlyphPaint(layer_start, layer_len, svg_document, color_paint),
+            .paint = colorGlyphPaint(layer_start, layer_len, selected_svg, color_paint, selected_png),
         });
         return color_index;
     }
@@ -460,7 +496,8 @@ fn sameAtlasRequest(a: GlyphAtlasRequest, b: GlyphAtlasRequest) bool {
         a.palette_index == b.palette_index and
         a.variation_hash == b.variation_hash and
         variationCoordinatesEqual(a.normalized_variation_coords, b.normalized_variation_coords) and
-        a.render_mode == b.render_mode;
+        a.render_mode == b.render_mode and
+        a.content == b.content;
 }
 
 fn variationCoordinatesEqual(a: []const f32, b: []const f32) bool {
@@ -493,7 +530,13 @@ fn pathRequestMode(render_mode: GlyphRenderMode) GlyphRenderMode {
     };
 }
 
-fn colorGlyphPaint(layer_start: usize, layer_len: usize, svg_document: ?[]const u8, color_paint: ?font_mod.ColorPaint) ColorGlyphPaint {
+fn colorGlyphPaint(
+    layer_start: usize,
+    layer_len: usize,
+    svg_document: ?[]const u8,
+    color_paint: ?font_mod.ColorPaint,
+    embedded_png: ?font_mod.BitmapGlyphPng,
+) ColorGlyphPaint {
     if (color_paint) |paint| {
         return switch (paint) {
             .solid => |solid| .{ .colr_v1_solid = solid },
@@ -508,8 +551,9 @@ fn colorGlyphPaint(layer_start: usize, layer_len: usize, svg_document: ?[]const 
             .composite => |composite| .{ .colr_v1_composite = composite },
         };
     }
-    if (svg_document) |document| return .{ .svg_document = document };
     if (layer_len > 0) return .{ .colr_v0_layers = .{ .layer_start = layer_start, .layer_len = layer_len } };
+    if (svg_document) |document| return .{ .svg_document = document };
+    if (embedded_png) |png| return .{ .embedded_png = png };
     return .none;
 }
 
@@ -561,6 +605,7 @@ test "render bridge builds glyph draw commands and deduplicated requests" {
     try std.testing.expectEqual(@as(u32, @bitCast(@as(f32, 20))), atlas_key.font_size_bits);
     try std.testing.expect(atlas_key.palette_index == null);
     try std.testing.expectEqual(GlyphRenderMode.atlas_mask, atlas_key.render_mode);
+    try std.testing.expectEqual(GlyphAtlasContent.alpha_mask, atlas_key.content);
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), draw_list.glyphs[0].x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 25.0), draw_list.glyphs[0].baseline_y, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 19.0), draw_list.glyphs[1].x, 0.001);
@@ -642,6 +687,109 @@ test "render bridge emits color glyph layer metadata" {
     try std.testing.expectEqual(@as(u16, 0), draw_list.color_layers[0].palette_index);
     try std.testing.expectEqual(@as(u8, 255), draw_list.color_layers[0].color.?.red);
     try std.testing.expectEqual(@as(u8, 255), draw_list.color_layers[1].color.?.blue);
+}
+
+test "render bridge emits embedded PNG color atlas metadata" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildBitmapOnlyCbdtPngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expect(!font.hasOutlineData());
+
+    const fonts = [_]*const font_mod.Font{&font};
+    const cascade = layout.FontCascade.init(&fonts);
+    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
+        .max_width = 100,
+        .line_height = 20,
+    });
+
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{});
+    defer draw_list.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), draw_list.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 1), draw_list.atlas_requests.len);
+    try std.testing.expectEqual(@as(usize, 0), draw_list.path_requests.len);
+    try std.testing.expectEqual(@as(usize, 1), draw_list.color_glyphs.len);
+    try std.testing.expectEqual(@as(?usize, 0), draw_list.glyphs[0].atlas_request_index);
+    try std.testing.expectEqual(@as(?usize, null), draw_list.glyphs[0].path_request_index);
+    try std.testing.expectEqual(@as(?usize, 0), draw_list.glyphs[0].color_glyph_index);
+
+    const atlas_request = draw_list.atlas_requests[0];
+    try std.testing.expectEqual(GlyphAtlasContent.premultiplied_rgba, atlas_request.content);
+    try std.testing.expectEqual(GlyphAtlasContent.premultiplied_rgba, atlas_request.cacheKey().content);
+    const command = draw_list.color_glyphs[0];
+    const bitmap = command.embedded_png orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(font_mod.BitmapStrikeSource.cblc_cbdt, bitmap.source);
+    try std.testing.expectEqual(@as(u16, 16), bitmap.ppem);
+    try std.testing.expectEqual(@as(u32, 1), bitmap.width);
+    try std.testing.expectEqual(@as(u32, 1), bitmap.height);
+    try std.testing.expect(command.svg_document == null);
+    try std.testing.expect(!command.has_colr_v1_paint);
+    try std.testing.expectEqual(bitmap, command.paint.embedded_png);
+}
+
+test "render bridge skips atlas and path work for empty bitmap-only glyphs" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildBitmapOnlyCbdtPngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const glyphs = [_]layout.GlyphPosition{.{
+        .glyph_id = 0,
+        .codepoint = ' ',
+        .cluster = 0,
+        .x_advance = 8,
+    }};
+    const runs = [_]layout.CascadeRun{.{
+        .font = &font,
+        .font_index = 0,
+        .font_size = 16,
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .x_offset = 0,
+    }};
+    const lines = [_]layout.ParagraphLine{.{
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .run_start = 0,
+        .run_len = 1,
+        .byte_start = 0,
+        .byte_len = 1,
+        .x = 0,
+        .y = 0,
+        .width = 8,
+        .height = 20,
+        .baseline = 16,
+        .ascent = 16,
+        .descent = 4,
+        .leading = 0,
+    }};
+    const paragraph = layout.ParagraphLayout{
+        .glyphs = &glyphs,
+        .runs = &runs,
+        .lines = &lines,
+        .width = 8,
+        .height = 20,
+    };
+
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{});
+    defer draw_list.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), draw_list.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 0), draw_list.atlas_requests.len);
+    try std.testing.expectEqual(@as(usize, 0), draw_list.path_requests.len);
+    try std.testing.expectEqual(@as(usize, 0), draw_list.color_glyphs.len);
+    try std.testing.expect(draw_list.glyphs[0].atlas_request_index == null);
+    try std.testing.expect(draw_list.glyphs[0].path_request_index == null);
+    try std.testing.expect(draw_list.glyphs[0].color_glyph_index == null);
 }
 
 test "render bridge emits COLR v1 paint metadata" {
@@ -805,6 +953,12 @@ test "render bridge variation cache identity preserves coordinates" {
     b.variation_hash = normalizedVariationHash(&.{0.25});
     try std.testing.expect(!sameAtlasRequest(a, b));
     try std.testing.expect(a.cacheKey().variation_hash != b.cacheKey().variation_hash);
+
+    var rgba = a;
+    rgba.content = .premultiplied_rgba;
+    try std.testing.expect(!sameAtlasRequest(a, rgba));
+    try std.testing.expectEqual(GlyphAtlasContent.alpha_mask, a.cacheKey().content);
+    try std.testing.expectEqual(GlyphAtlasContent.premultiplied_rgba, rgba.cacheKey().content);
 }
 
 test "render bridge rejects invalid variation coordinates" {
@@ -832,6 +986,6 @@ test "render bridge exposes variable COLR transform metadata" {
     const affine = colorPaintTransform(paint).?;
     try std.testing.expectEqual(@as(f32, 100), affine.dx);
     try std.testing.expectEqual(@as(f32, 50), affine.dy);
-    const bridge_paint = colorGlyphPaint(0, 0, null, paint);
+    const bridge_paint = colorGlyphPaint(0, 0, null, paint, null);
     try std.testing.expectEqual(@as(f32, 100), bridge_paint.colr_v1_transform.affine.dx);
 }

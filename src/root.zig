@@ -233,6 +233,7 @@ pub const ClipboardPayload = @import("editor.zig").ClipboardPayload;
 pub const CascadeRun = @import("layout.zig").CascadeRun;
 pub const FontCascade = @import("layout.zig").FontCascade;
 pub const GlyphAtlasCacheKey = @import("render_bridge.zig").GlyphAtlasCacheKey;
+pub const GlyphAtlasContent = @import("render_bridge.zig").GlyphAtlasContent;
 pub const GlyphAtlasRequest = @import("render_bridge.zig").GlyphAtlasRequest;
 pub const GlyphDrawList = @import("render_bridge.zig").GlyphDrawList;
 pub const GlyphPathCacheKey = @import("render_bridge.zig").GlyphPathCacheKey;

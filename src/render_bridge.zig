@@ -118,6 +118,7 @@ pub const ColorGlyphPaint = union(enum) {
     colr_v1_solid: font_mod.ColorPaint.Solid,
     colr_v1_glyph: font_mod.ColorPaint.Glyph,
     colr_v1_layers: font_mod.ColorPaint.Layers,
+    colr_v1_linear_gradient: font_mod.ColorPaint.LinearGradient,
     svg_document: []const u8,
 };
 
@@ -387,6 +388,7 @@ fn colorGlyphPaint(layer_start: usize, layer_len: usize, svg_document: ?[]const 
             .solid => |solid| .{ .colr_v1_solid = solid },
             .glyph => |glyph| .{ .colr_v1_glyph = glyph },
             .layers => |layers| .{ .colr_v1_layers = layers },
+            .linear_gradient => |gradient| .{ .colr_v1_linear_gradient = gradient },
         };
     }
     if (svg_document) |document| return .{ .svg_document = document };
@@ -580,8 +582,14 @@ test "render bridge emits COLR v1 PaintGlyph metadata" {
     try std.testing.expectEqual(@as(usize, 1), draw_list.color_glyphs.len);
     try std.testing.expect(draw_list.color_glyphs[0].has_colr_v1_paint);
     try std.testing.expectEqual(@as(glyph_mod.GlyphId, 1), draw_list.color_glyphs[0].paint.colr_v1_glyph.glyph_id);
-    try std.testing.expectEqual(@as(u16, 0), draw_list.color_glyphs[0].paint.colr_v1_glyph.solid.palette_index);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), draw_list.color_glyphs[0].paint.colr_v1_glyph.solid.alpha, 0.001);
+    const glyph_paint = draw_list.color_glyphs[0].paint.colr_v1_glyph;
+    switch (glyph_paint.brush) {
+        .solid => |solid| {
+            try std.testing.expectEqual(@as(u16, 0), solid.palette_index);
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0), solid.alpha, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "render bridge emits COLR v1 PaintColrLayers metadata" {

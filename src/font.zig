@@ -516,6 +516,7 @@ pub const PaletteInfo = struct {
 
 pub const ColorPaint = union(enum) {
     solid: Solid,
+    linear_gradient: LinearGradient,
     glyph: Glyph,
     layers: Layers,
 
@@ -526,12 +527,53 @@ pub const ColorPaint = union(enum) {
 
     pub const Glyph = struct {
         glyph_id: glyph_mod.GlyphId,
-        solid: Solid,
+        brush: Brush,
     };
 
     pub const Layers = struct {
         first_layer_index: u32,
         layer_count: u8,
+    };
+
+    pub const Brush = union(enum) {
+        solid: Solid,
+        linear_gradient: LinearGradient,
+    };
+
+    pub const Extend = enum(u8) {
+        pad = 0,
+        repeat = 1,
+        reflect = 2,
+    };
+
+    pub const LinearGradient = struct {
+        p0: glyph_mod.Point,
+        p1: glyph_mod.Point,
+        p2: glyph_mod.Point,
+        color_line: ColorLine,
+    };
+
+    pub const ColorLine = struct {
+        extend: Extend,
+        stop_count: u16,
+        stops_data: []const u8,
+
+        pub fn stop(self: ColorLine, index: usize) ?ColorStop {
+            if (index >= self.stop_count) return null;
+            const start = index * 6;
+            if (start + 6 > self.stops_data.len) return null;
+            return .{
+                .offset = f2dot14(std.mem.readInt(i16, self.stops_data[start..][0..2], .big)),
+                .palette_index = std.mem.readInt(u16, self.stops_data[start + 2 ..][0..2], .big),
+                .alpha = f2dot14(std.mem.readInt(i16, self.stops_data[start + 4 ..][0..2], .big)),
+            };
+        }
+    };
+
+    pub const ColorStop = struct {
+        offset: f32,
+        palette_index: u16,
+        alpha: f32,
     };
 };
 
@@ -3226,6 +3268,9 @@ pub const Font = struct {
         // color slot for them.  Validate at parse/read boundaries so rendering
         // code does not silently drop malformed color layers or paints as if
         // they merely selected an absent runtime palette.
+        // 0xFFFF is the spec-defined foreground/currentColor sentinel and does
+        // not name a CPAL entry.
+        if (color_index == 0xffff) return;
         if (self.cpal == null) return error.BadSfnt;
         _ = (try self.paletteColor(0, color_index)) orelse return error.BadSfnt;
     }
@@ -10959,6 +11004,7 @@ fn validateColrPaletteBounds(data: []const u8, colr: TableRecord, cpal: ?TableRe
 }
 
 fn validateColrPaletteIndexBounds(palette_index: u16, cpal_palette_entries: ?u16) FontError!void {
+    if (palette_index == 0xffff) return;
     const palette_entries = cpal_palette_entries orelse return error.BadSfnt;
     if (palette_index >= palette_entries) return error.BadSfnt;
 }
@@ -11185,6 +11231,7 @@ const ColrClipBoxOwnership = struct {
     fn claim(self: *ColrClipBoxOwnership, range: ColrV1StructuralRange) FontError!void {
         if (range.start >= range.end) return error.BadSfnt;
         for (self.ranges[0..self.count]) |owned| {
+            if (range.start == owned.start and range.end == owned.end) return;
             if (colrRangesOverlap(range, owned)) return error.BadSfnt;
         }
         if (self.count == self.ranges.len) return error.BadSfnt;
@@ -11321,9 +11368,9 @@ fn validateColrV1ClipBox(data: []const u8, colr: TableRecord, offset: usize) Fon
     const y_max = try bin.readI16At(data, offset + 7);
     if (x_min > x_max or y_min > y_max) return error.BadSfnt;
 
-    // ClipRecords are an index over independently-owned ClipBox payloads.
-    // Reject duplicate or partially-overlapping ClipBoxes so one glyph range
-    // cannot reinterpret another range's bounds or varIndexBase bytes.
+    // ClipRecords may share an identical ClipBox. Partially-overlapping boxes
+    // remain ambiguous because the same bytes would then be decoded at
+    // different typed boundaries.
     return .{ .start = offset - colr.offset, .end = offset - colr.offset + min_size };
 }
 
@@ -11803,13 +11850,11 @@ fn validateColorPaintGlyphBounds(
             const referenced_glyph = try bin.readU16At(data, offset + 1);
             try validateGlyphIdInMaxp(referenced_glyph, glyph_count);
             const set = base_glyph_set orelse return error.BadSfnt;
-            const referenced_paint = (try set.paintOffsetForGlyph(data, colr, referenced_glyph)) orelse return error.BadSfnt;
-            // PaintColrGlyph is a graph edge to another BaseGlyphPaintRecord,
-            // not just an arbitrary maxp glyph id. Validate the referenced
-            // base paint while preserving the active base-glyph stack so
-            // indirect cycles such as A -> B -> A cannot hide behind otherwise
-            // well-formed per-record Paint offsets.
-            try validateColrBaseGlyphPaintGraph(data, colr, glyph_count, set, referenced_glyph, referenced_paint, base_graph_guard);
+            _ = (try set.paintOffsetForGlyph(data, colr, referenced_glyph)) orelse return error.BadSfnt;
+            // Cross-glyph recursion is a traversal concern: one cyclic color
+            // glyph must not make all unrelated COLR glyphs unusable. Lazy paint
+            // traversal carries its own glyph stack. Parse-time validation still
+            // proves that the target BaseGlyphPaintRecord exists and is in maxp.
         },
         .single_child => try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, try colorPaintChildOffset(data, colr, offset, info.min_size, 1), guard, base_graph_guard),
         .composite => {
@@ -11903,6 +11948,11 @@ const ColorPaintGraphGuard = struct {
             if (colrPaintRangesOverlap(range, forbidden)) return error.BadSfnt;
         }
         for (self.owned_ranges[0..self.owned_range_count]) |owned| {
+            // COLR v1 is an offset DAG: multiple paints may deliberately share
+            // the exact same child paint or typed payload. The active-offset
+            // stack rejects recursion; here only partially overlapping ranges
+            // are ambiguous and therefore malformed.
+            if (range.start == owned.start and range.end == owned.end) return;
             if (colrPaintRangesOverlap(range, owned)) return error.BadSfnt;
         }
         if (self.owned_range_count == self.owned_ranges.len) return error.BadSfnt;
@@ -12050,10 +12100,10 @@ fn validateColrColorLine(data: []const u8, colr: TableRecord, offset: usize, pai
     if (extend > max_colr_extend_mode) return error.BadSfnt;
 
     const stop_count: usize = @intCast(try bin.readU16At(data, color_line_offset + 1));
-    // Gradients need at least two ordered stops to define a non-degenerate
-    // interpolation interval.  Enforcing this at parse time keeps renderers
-    // from inventing fallback colors for malformed ColorLine payloads.
-    if (stop_count < 2) return error.BadSfnt;
+    // A ColorLine must contain at least one stop. A single stop is a valid
+    // constant-color brush; the COLR spec explicitly requires consumers to
+    // treat it like a solid fill rather than rejecting the font.
+    if (stop_count == 0) return error.BadSfnt;
 
     const stops_start = color_line_offset + 3;
     const stop_size = colrColorStopSize(variable);
@@ -12141,31 +12191,37 @@ fn colrLayerList(data: []const u8, colr: TableRecord) FontError!?ColrLayerList {
         .offsets_start = offsets_start,
         .paint_data_start = 4 + layer_count * 4,
     };
-    try validateColrLayerListPaintHeaderOwnership(data, colr, layer_list);
+    try validateColrLayerListPaintHeaders(data, colr, layer_list);
     return layer_list;
 }
 
-fn validateColrLayerListPaintHeaderOwnership(data: []const u8, colr: TableRecord, layer_list: ColrLayerList) FontError!void {
-    // LayerList offsets are the canonical paint order for PaintColrLayers.
-    // Require each layer to own at least its fixed Paint header and keep those
-    // headers in the same byte order as the offset array. This rejects duplicate
-    // or partially-overlapping layer entries without trying to infer ownership
-    // of every recursively referenced child payload.
-    var previous_header_end: ?usize = null;
+fn validateColrLayerListPaintHeaders(data: []const u8, colr: TableRecord, layer_list: ColrLayerList) FontError!void {
+    const colr_end = colr.offset + colr.length;
+    const layer_list_offset = layer_list.start - colr.offset;
     for (0..layer_list.layer_count) |index| {
         const paint_offset: usize = @intCast(try bin.readU32At(data, layer_list.offsets_start + index * 4));
-        if (paint_offset < layer_list.paint_data_start) return error.BadSfnt;
-        const layer_list_offset = layer_list.start - colr.offset;
-        if (paint_offset > colr.length - layer_list_offset) return error.BadSfnt;
-        if (previous_header_end) |previous_end| {
-            if (paint_offset < previous_end) return error.BadSfnt;
-        }
-
+        if (paint_offset < layer_list.paint_data_start or paint_offset > colr.length - layer_list_offset) return error.BadSfnt;
         const paint_start = layer_list.start + paint_offset;
-        if (paint_start >= colr.offset + colr.length) return error.BadSfnt;
+        if (paint_start >= colr_end) return error.BadSfnt;
         const info = colorPaintFormatInfo(data[paint_start]) orelse return error.BadSfnt;
-        if (info.min_size > colr.offset + colr.length - paint_start) return error.BadSfnt;
-        previous_header_end = paint_offset + info.min_size;
+        if (info.min_size > colr_end - paint_start) return error.BadSfnt;
+
+        // Layer order is independent of physical table order, and exact Paint
+        // sharing is a normal COLR v1 DAG optimization. Only two distinct
+        // headers that partially overlap are ambiguous typed data.
+        for (0..index) |previous_index| {
+            const previous_offset: usize = @intCast(try bin.readU32At(data, layer_list.offsets_start + previous_index * 4));
+            if (previous_offset == paint_offset) continue;
+            const previous_start = layer_list.start + previous_offset;
+            if (previous_start >= colr_end) return error.BadSfnt;
+            const previous_info = colorPaintFormatInfo(data[previous_start]) orelse return error.BadSfnt;
+            if (previous_info.min_size > colr_end - previous_start) return error.BadSfnt;
+            if (paint_offset < previous_offset + previous_info.min_size and
+                previous_offset < paint_offset + info.min_size)
+            {
+                return error.BadSfnt;
+            }
+        }
     }
 }
 
@@ -12262,11 +12318,44 @@ fn readColorPaint(font: *const Font, offset: usize) FontError!ColorPaint {
             if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
             const child = try readColorPaint(font, offset + child_offset);
             break :blk switch (child) {
-                .solid => |solid| .{ .glyph = .{ .glyph_id = glyph_id, .solid = solid } },
+                .solid => |solid| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .solid = solid } } },
+                .linear_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .linear_gradient = gradient } } },
                 else => error.UnsupportedGlyph,
             };
         },
+        4 => .{ .linear_gradient = try readColorLinearGradient(font, offset) },
         else => error.UnsupportedGlyph,
+    };
+}
+
+fn readColorLinearGradient(font: *const Font, offset: usize) FontError!ColorPaint.LinearGradient {
+    const colr = font.colr orelse return error.BadSfnt;
+    const info = colorPaintFormatInfo(4).?;
+    const color_line_offset = try colorPaintChildOffset(font.data, colr, offset, info.min_size, 1);
+    const extend = std.enums.fromInt(ColorPaint.Extend, font.data[color_line_offset]) orelse return error.BadSfnt;
+    const stop_count = try bin.readU16At(font.data, color_line_offset + 1);
+    if (stop_count == 0) return error.BadSfnt;
+    const stops_start = color_line_offset + 3;
+    const stops_len = @as(usize, stop_count) * 6;
+    if (stops_len > colr.offset + colr.length - stops_start) return error.BadSfnt;
+    return .{
+        .p0 = .{
+            .x = @floatFromInt(try bin.readI16At(font.data, offset + 4)),
+            .y = @floatFromInt(try bin.readI16At(font.data, offset + 6)),
+        },
+        .p1 = .{
+            .x = @floatFromInt(try bin.readI16At(font.data, offset + 8)),
+            .y = @floatFromInt(try bin.readI16At(font.data, offset + 10)),
+        },
+        .p2 = .{
+            .x = @floatFromInt(try bin.readI16At(font.data, offset + 12)),
+            .y = @floatFromInt(try bin.readI16At(font.data, offset + 14)),
+        },
+        .color_line = .{
+            .extend = extend,
+            .stop_count = stop_count,
+            .stops_data = font.data[stops_start .. stops_start + stops_len],
+        },
     };
 }
 
@@ -17336,12 +17425,14 @@ test "COLR v1 PaintColrGlyph references declared base glyphs" {
 
     var direct_self_edge = bytes;
     writeU16Test(&direct_self_edge, 51, 1); // Re-enters the currently validated base glyph.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&direct_self_edge, colr, 4));
+    // Cycles are rejected by lazy traversal so one cyclic glyph cannot make
+    // unrelated valid color glyphs unusable at font-parse time.
+    try validateColrGlyphBounds(&direct_self_edge, colr, 4);
 
     var indirect_cycle = bytes;
     indirect_cycle[53] = 11; // Glyph 2 now references another BaseGlyphPaintRecord.
     writeU16Test(&indirect_cycle, 54, 1); // Completing glyph 1 -> glyph 2 -> glyph 1.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&indirect_cycle, colr, 4));
+    try validateColrGlyphBounds(&indirect_cycle, colr, 4);
 }
 
 test "COLR base glyph records are strictly ordered" {
@@ -17480,7 +17571,7 @@ test "COLR v1 optional top-level tables cannot alias one another" {
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
-test "COLR v1 ClipList ClipBoxes own disjoint payloads" {
+test "COLR v1 ClipList allows shared but not partially overlapping ClipBoxes" {
     var bytes: [92]u8 = .{0} ** 92;
     writeU16Test(&bytes, 0, 1); // COLR version 1.
     writeU32Test(&bytes, 22, 34); // ClipListOffset.
@@ -17514,7 +17605,7 @@ test "COLR v1 ClipList ClipBoxes own disjoint payloads" {
 
     var duplicate_box = bytes;
     writeU24Test(&duplicate_box, clip_list + 16, 19); // Two ClipRecords reuse the same ClipBox payload.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&duplicate_box, colr, 2));
+    try validateColrGlyphBounds(&duplicate_box, colr, 2);
 
     var partial_overlap = bytes;
     writeU24Test(&partial_overlap, clip_list + 16, 23); // Starts inside the first ClipBox payload.
@@ -18205,9 +18296,13 @@ test "COLR v1 gradient ColorLine stops are validated" {
     bad_extend[color_line] = 3; // ExtendMode only defines pad, repeat, and reflect.
     try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bad_extend, colr, 2));
 
-    var too_few_stops = bytes;
-    writeU16Test(&too_few_stops, color_line + 1, 1);
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&too_few_stops, colr, 2));
+    var one_stop = bytes;
+    writeU16Test(&one_stop, color_line + 1, 1);
+    try validateColrGlyphBounds(&one_stop, colr, 2);
+
+    var no_stops = bytes;
+    writeU16Test(&no_stops, color_line + 1, 0);
+    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&no_stops, colr, 2));
 
     var descending_stops = bytes;
     writeF2Dot14Test(&descending_stops, color_line + 9, -0.25);
@@ -18220,6 +18315,31 @@ test "COLR v1 gradient ColorLine stops are validated" {
     var bad_stop_palette = bytes;
     writeU16Test(&bad_stop_palette, color_line + 11, 2); // CPAL below declares palette entries 0 and 1 only.
     try std.testing.expectError(error.BadSfnt, validateColrPaletteBounds(&bad_stop_palette, colr, cpal));
+}
+
+test "COLR foreground palette sentinel is valid in v0 and v1" {
+    var v0: [18]u8 = .{0} ** 18;
+    writeU16Test(&v0, 0, 0);
+    writeU16Test(&v0, 2, 0);
+    writeU32Test(&v0, 4, 14);
+    writeU32Test(&v0, 8, 14);
+    writeU16Test(&v0, 12, 1);
+    writeU16Test(&v0, 14, 1);
+    writeU16Test(&v0, 16, 0xffff);
+    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = v0.len };
+    try validateColrPaletteBounds(&v0, colr, null);
+
+    var v1: [49]u8 = .{0} ** 49;
+    writeU16Test(&v1, 0, 1);
+    writeU32Test(&v1, 14, 34);
+    writeU32Test(&v1, 34, 1);
+    writeU16Test(&v1, 38, 1);
+    writeU32Test(&v1, 40, 10);
+    v1[44] = 2;
+    writeU16Test(&v1, 45, 0xffff);
+    writeF2Dot14Test(&v1, 47, 1);
+    const colr_v1 = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = v1.len };
+    try validateColrPaletteBounds(&v1, colr_v1, null);
 }
 
 test "COLR v1 PaintComposite rejects reserved composite modes" {
@@ -18376,7 +18496,7 @@ test "COLR v1 paint offsets cannot overlap parent metadata" {
     try std.testing.expectError(error.BadSfnt, paint_glyph_font.colorPaint(1));
 }
 
-test "COLR v1 LayerList paint headers are ordered and non-overlapping" {
+test "COLR v1 LayerList allows shared and reordered paint offsets" {
     var bytes: [56]u8 = .{0} ** 56;
     writeU16Test(&bytes, 0, 1); // COLR version 1.
     writeU32Test(&bytes, 18, 34); // LayerListOffset.
@@ -18396,7 +18516,7 @@ test "COLR v1 LayerList paint headers are ordered and non-overlapping" {
 
     var duplicate_header = bytes;
     writeU32Test(&duplicate_header, 42, 12); // Reuses the first layer's PaintSolid header.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&duplicate_header, colr, 2));
+    try validateColrGlyphBounds(&duplicate_header, colr, 2);
 
     var partial_overlap = bytes;
     writeU32Test(&partial_overlap, 42, 14); // Starts inside the first PaintSolid header.
@@ -18406,7 +18526,7 @@ test "COLR v1 LayerList paint headers are ordered and non-overlapping" {
     var decreasing_order = bytes;
     writeU32Test(&decreasing_order, 38, 17);
     writeU32Test(&decreasing_order, 42, 12); // Disjoint headers, but not in LayerList order.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&decreasing_order, colr, 2));
+    try validateColrGlyphBounds(&decreasing_order, colr, 2);
 }
 
 test "COLR v1 paint graph rejects cyclic layer references" {

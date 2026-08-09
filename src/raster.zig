@@ -351,6 +351,94 @@ pub const ColorRenderTarget = struct {
         }
     }
 
+    fn blendColrLinearGradientMask(
+        self: *ColorRenderTarget,
+        mask: *const RenderTarget,
+        gradient: font_mod.ColorPaint.LinearGradient,
+        stops: []const SvgGradientStop,
+        units_per_em: u16,
+        x: f32,
+        baseline_y: f32,
+        font_size: f32,
+    ) void {
+        if (stops.len == 0 or units_per_em == 0) return;
+        const scale = font_size / @as(f32, @floatFromInt(units_per_em));
+        if (scale == 0) return;
+
+        const p0 = gradient.p0;
+        const p1 = gradient.p1;
+        const p2 = gradient.p2;
+        const p0p1 = Point{ .x = p1.x - p0.x, .y = p1.y - p0.y };
+        const p0p2 = Point{ .x = p2.x - p0.x, .y = p2.y - p0.y };
+        const cross = p0p1.x * p0p2.y - p0p1.y * p0p2.x;
+        if ((p0p1.x == 0 and p0p1.y == 0) or
+            (p0p2.x == 0 and p0p2.y == 0) or
+            @abs(cross) <= 0.000001)
+        {
+            self.blendMask(mask, stops[0].color);
+            return;
+        }
+
+        // Reduce COLR's P0/P1/P2 representation to the actual gradient vector:
+        // project P0→P1 onto the line through P0 perpendicular to P0→P2.
+        const perpendicular = Point{ .x = p0p2.y, .y = -p0p2.x };
+        const perpendicular_len_sq = perpendicular.x * perpendicular.x + perpendicular.y * perpendicular.y;
+        const projection_scale = (p0p1.x * perpendicular.x + p0p1.y * perpendicular.y) / perpendicular_len_sq;
+        const vector = Point{
+            .x = perpendicular.x * projection_scale,
+            .y = perpendicular.y * projection_scale,
+        };
+
+        const first_offset = stops[0].offset;
+        const last_offset = stops[stops.len - 1].offset;
+        const stop_range = last_offset - first_offset;
+        if (stop_range == 0) {
+            if (gradient.color_line.extend == .pad) self.blendMask(mask, stops[0].color);
+            return;
+        }
+        const gradient_start = Point{
+            .x = p0.x + vector.x * first_offset,
+            .y = p0.y + vector.y * first_offset,
+        };
+        const gradient_vector = Point{
+            .x = vector.x * stop_range,
+            .y = vector.y * stop_range,
+        };
+        const denominator = gradient_vector.x * gradient_vector.x + gradient_vector.y * gradient_vector.y;
+        if (denominator <= 0.000001) {
+            self.blendMask(mask, stops[0].color);
+            return;
+        }
+
+        const count = @min(self.pixels.len, mask.pixels.len);
+        const spread: SvgGradientSpread = switch (gradient.color_line.extend) {
+            .pad => .pad,
+            .repeat => .repeat,
+            .reflect => .reflect,
+        };
+        for (mask.pixels[0..count], 0..) |coverage, index| {
+            if (coverage == 0) continue;
+            const px = @as(f32, @floatFromInt(index % self.width)) + 0.5;
+            const py = @as(f32, @floatFromInt(index / self.width)) + 0.5;
+            const sample = Point{
+                .x = (px - x) / scale,
+                .y = (baseline_y - py) / scale,
+            };
+            const raw_t = ((sample.x - gradient_start.x) * gradient_vector.x +
+                (sample.y - gradient_start.y) * gradient_vector.y) / denominator;
+            const t = applyGradientSpread(raw_t, spread);
+            const color = colrGradientColorAt(stops, first_offset + t * stop_range);
+            const src_a = (@as(u32, coverage) * color.alpha) / 255;
+            if (src_a == 0) continue;
+            const dst = &self.pixels[index];
+            const inv_a = 255 - src_a;
+            dst.r = @intCast((@as(u32, color.red) * src_a + @as(u32, dst.r) * inv_a) / 255);
+            dst.g = @intCast((@as(u32, color.green) * src_a + @as(u32, dst.g) * inv_a) / 255);
+            dst.b = @intCast((@as(u32, color.blue) * src_a + @as(u32, dst.b) * inv_a) / 255);
+            dst.a = @intCast(@min(@as(u32, 255), src_a + (@as(u32, dst.a) * inv_a) / 255));
+        }
+    }
+
     fn blendRadialGradientMask(self: *ColorRenderTarget, mask: *const RenderTarget, gradient: SvgRadialGradient, view_box: ViewBox, x: f32, baseline_y: f32, font_size: f32) void {
         const count = @min(self.pixels.len, mask.pixels.len);
         if (view_box.height <= 0 or gradient.r <= 0) return;
@@ -395,20 +483,88 @@ fn interpolatePaletteColor(a: font_mod.PaletteColor, b: font_mod.PaletteColor, t
 }
 
 fn gradientColorAt(stops: SvgGradientStops, t: f32) font_mod.PaletteColor {
+    return gradientColorAtSlice(stops.items[0..stops.len], t);
+}
+
+fn gradientColorAtSlice(stops: []const SvgGradientStop, t: f32) font_mod.PaletteColor {
     if (stops.len == 0) return .{ .red = 0, .green = 0, .blue = 0, .alpha = 0 };
-    const clamped = @max(0.0, @min(1.0, t));
-    const first = stops.items[0];
-    if (clamped <= first.offset or stops.len == 1) return first.color;
+    const first = stops[0];
+    if (t <= first.offset or stops.len == 1) return first.color;
     var previous = first;
-    for (stops.items[1..stops.len]) |stop| {
-        if (clamped <= stop.offset) {
+    for (stops[1..]) |stop| {
+        if (t <= stop.offset) {
             const span = stop.offset - previous.offset;
-            const local_t = if (span > 0) (clamped - previous.offset) / span else 0.0;
+            const local_t = if (span > 0) (t - previous.offset) / span else 0.0;
             return interpolatePaletteColor(previous.color, stop.color, local_t);
         }
         previous = stop;
     }
     return previous.color;
+}
+
+fn colrGradientColorAt(stops: []const SvgGradientStop, t: f32) font_mod.PaletteColor {
+    if (stops.len == 0) return .{ .red = 0, .green = 0, .blue = 0, .alpha = 0 };
+    const first = stops[0];
+    if (t <= first.offset or stops.len == 1) return first.color;
+    var previous = first;
+    for (stops[1..]) |stop| {
+        if (t <= stop.offset) {
+            const span = stop.offset - previous.offset;
+            const local_t = if (span > 0) (t - previous.offset) / span else 0.0;
+            return interpolateColrColor(previous.color, stop.color, local_t);
+        }
+        previous = stop;
+    }
+    return previous.color;
+}
+
+fn interpolateColrColor(a: font_mod.PaletteColor, b: font_mod.PaletteColor, t: f32) font_mod.PaletteColor {
+    const alpha_a = @as(f32, @floatFromInt(a.alpha)) / 255.0;
+    const alpha_b = @as(f32, @floatFromInt(b.alpha)) / 255.0;
+    const alpha = alpha_a + (alpha_b - alpha_a) * t;
+    const channels_a = [_]f32{
+        srgbByteToLinear(a.red) * alpha_a,
+        srgbByteToLinear(a.green) * alpha_a,
+        srgbByteToLinear(a.blue) * alpha_a,
+    };
+    const channels_b = [_]f32{
+        srgbByteToLinear(b.red) * alpha_b,
+        srgbByteToLinear(b.green) * alpha_b,
+        srgbByteToLinear(b.blue) * alpha_b,
+    };
+    var channels: [3]u8 = undefined;
+    for (&channels, channels_a, channels_b) |*out, channel_a, channel_b| {
+        const premultiplied = channel_a + (channel_b - channel_a) * t;
+        const linear = if (alpha > 0) premultiplied / alpha else 0;
+        out.* = linearToSrgbByte(linear);
+    }
+    return .{
+        .red = channels[0],
+        .green = channels[1],
+        .blue = channels[2],
+        .alpha = floatUnitToByte(alpha),
+    };
+}
+
+fn srgbByteToLinear(value: u8) f32 {
+    const srgb = @as(f32, @floatFromInt(value)) / 255.0;
+    return if (srgb <= 0.04045)
+        srgb / 12.92
+    else
+        std.math.pow(f32, (srgb + 0.055) / 1.055, 2.4);
+}
+
+fn linearToSrgbByte(value: f32) u8 {
+    const clamped = std.math.clamp(value, 0, 1);
+    const srgb = if (clamped <= 0.0031308)
+        clamped * 12.92
+    else
+        1.055 * std.math.pow(f32, clamped, 1.0 / 2.4) - 0.055;
+    return floatUnitToByte(srgb);
+}
+
+fn floatUnitToByte(value: f32) u8 {
+    return @intFromFloat(@round(std.math.clamp(value, 0, 1) * 255.0));
 }
 
 fn applyGradientSpread(t: f32, spread: SvgGradientSpread) f32 {
@@ -425,6 +581,22 @@ fn applyGradientSpread(t: f32, spread: SvgGradientSpread) f32 {
 fn lerpByte(a: u8, b: u8, t: f32) u8 {
     const value = @as(f32, @floatFromInt(a)) + (@as(f32, @floatFromInt(b)) - @as(f32, @floatFromInt(a))) * t;
     return @intFromFloat(@round(@max(0.0, @min(255.0, value))));
+}
+
+test "COLR gradients interpolate linear-light premultiplied colors" {
+    const red = font_mod.PaletteColor{ .red = 255, .green = 0, .blue = 0, .alpha = 255 };
+    const blue = font_mod.PaletteColor{ .red = 0, .green = 0, .blue = 255, .alpha = 255 };
+    const middle = interpolateColrColor(red, blue, 0.5);
+    try std.testing.expect(@abs(@as(i16, middle.red) - 188) <= 1);
+    try std.testing.expectEqual(@as(u8, 0), middle.green);
+    try std.testing.expect(@abs(@as(i16, middle.blue) - 188) <= 1);
+    try std.testing.expectEqual(@as(u8, 255), middle.alpha);
+
+    const transparent_blue = font_mod.PaletteColor{ .red = 0, .green = 0, .blue = 255, .alpha = 0 };
+    const premultiplied = interpolateColrColor(red, transparent_blue, 0.5);
+    try std.testing.expect(premultiplied.red > 250);
+    try std.testing.expect(premultiplied.blue < 5);
+    try std.testing.expect(@abs(@as(i16, premultiplied.alpha) - 128) <= 1);
 }
 
 pub const Rasterizer = struct {
@@ -583,7 +755,10 @@ pub const Rasterizer = struct {
         }
 
         for (layers) |layer| {
-            const color = (try font.paletteColor(palette_index, layer.palette_index)) orelse continue;
+            const color = if (layer.palette_index == 0xffff)
+                font_mod.PaletteColor{ .red = 255, .green = 255, .blue = 255, .alpha = 255 }
+            else
+                (try font.paletteColor(palette_index, layer.palette_index)) orelse continue;
             var outline = try self.glyphOutlineForRenderAtCoords(font, layer.glyph_id, normalized_variation_coords);
             defer outline.deinit();
             var mask = try RenderTarget.init(self.allocator, target.width, target.height);
@@ -596,7 +771,11 @@ pub const Rasterizer = struct {
     fn renderColorPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, paint: font_mod.ColorPaint, fallback_glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         switch (paint) {
             .solid => |solid| try self.renderSolidPaint(target, font, fallback_glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
-            .glyph => |glyph_paint| try self.renderSolidPaint(target, font, glyph_paint.glyph_id, glyph_paint.solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+            .linear_gradient => |gradient| try self.renderLinearGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+            .glyph => |glyph_paint| switch (glyph_paint.brush) {
+                .solid => |solid| try self.renderSolidPaint(target, font, glyph_paint.glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+                .linear_gradient => |gradient| try self.renderLinearGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+            },
             .layers => |layers| {
                 for (0..layers.layer_count) |offset| {
                     const child = (try font.colorPaintLayer(layers.first_layer_index + @as(u32, @intCast(offset)))) orelse continue;
@@ -607,7 +786,10 @@ pub const Rasterizer = struct {
     }
 
     fn renderSolidPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, solid: font_mod.ColorPaint.Solid, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
-        const base_color = (try font.paletteColor(palette_index, solid.palette_index)) orelse return;
+        const base_color = if (solid.palette_index == 0xffff)
+            font_mod.PaletteColor{ .red = 255, .green = 255, .blue = 255, .alpha = 255 }
+        else
+            (try font.paletteColor(palette_index, solid.palette_index)) orelse return;
         var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
         defer outline.deinit();
         var mask = try RenderTarget.init(self.allocator, target.width, target.height);
@@ -619,6 +801,54 @@ pub const Rasterizer = struct {
             .blue = base_color.blue,
             .alpha = @intCast((@as(u32, base_color.alpha) * @as(u32, @intFromFloat(@round(solid.alpha * 255.0)))) / 255),
         });
+    }
+
+    fn renderLinearGradientPaint(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        font: *const font_mod.Font,
+        glyph_id: glyph_mod.GlyphId,
+        gradient: font_mod.ColorPaint.LinearGradient,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+        palette_index: u16,
+        normalized_variation_coords: []const f32,
+    ) !void {
+        const stops = try self.allocator.alloc(SvgGradientStop, gradient.color_line.stop_count);
+        defer self.allocator.free(stops);
+        for (stops, 0..) |*resolved, index| {
+            const stop = gradient.color_line.stop(index) orelse return error.BadSfnt;
+            const base_color = if (stop.palette_index == 0xffff)
+                font_mod.PaletteColor{ .red = 255, .green = 255, .blue = 255, .alpha = 255 }
+            else
+                (try font.paletteColor(palette_index, stop.palette_index)) orelse return error.BadSfnt;
+            resolved.* = .{
+                .offset = stop.offset,
+                .color = .{
+                    .red = base_color.red,
+                    .green = base_color.green,
+                    .blue = base_color.blue,
+                    .alpha = @intCast((@as(u32, base_color.alpha) *
+                        @as(u32, @intFromFloat(@round(stop.alpha * 255.0)))) / 255),
+                },
+            };
+        }
+
+        var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
+        defer outline.deinit();
+        var mask = try RenderTarget.init(self.allocator, target.width, target.height);
+        defer mask.deinit();
+        try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
+        target.blendColrLinearGradientMask(
+            &mask,
+            gradient,
+            stops,
+            font.units_per_em,
+            x,
+            baseline_y,
+            font_size,
+        );
     }
 
     fn glyphOutlineForRenderAtCoords(self: *Rasterizer, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, normalized_variation_coords: []const f32) !glyph_mod.GlyphOutline {

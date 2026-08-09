@@ -4496,8 +4496,13 @@ test "reads and renders COLR v1 PaintGlyph with nested PaintSolid" {
     switch (paint) {
         .glyph => |glyph_paint| {
             try std.testing.expectEqual(@as(GlyphId, 1), glyph_paint.glyph_id);
-            try std.testing.expectEqual(@as(u16, 0), glyph_paint.solid.palette_index);
-            try std.testing.expectApproxEqAbs(@as(f32, 1.0), glyph_paint.solid.alpha, 0.001);
+            switch (glyph_paint.brush) {
+                .solid => |solid| {
+                    try std.testing.expectEqual(@as(u16, 0), solid.palette_index);
+                    try std.testing.expectApproxEqAbs(@as(f32, 1.0), solid.alpha, 0.001);
+                },
+                else => return error.TestUnexpectedResult,
+            }
         },
         else => return error.TestUnexpectedResult,
     }
@@ -4537,7 +4542,10 @@ test "reads and renders COLR v1 PaintColrLayers" {
     switch (first_layer) {
         .glyph => |glyph_paint| {
             try std.testing.expectEqual(@as(GlyphId, 1), glyph_paint.glyph_id);
-            try std.testing.expectEqual(@as(u16, 0), glyph_paint.solid.palette_index);
+            switch (glyph_paint.brush) {
+                .solid => |solid| try std.testing.expectEqual(@as(u16, 0), solid.palette_index),
+                else => return error.TestUnexpectedResult,
+            }
         },
         else => return error.TestUnexpectedResult,
     }
@@ -4558,6 +4566,72 @@ test "reads and renders COLR v1 PaintColrLayers" {
     try std.testing.expect(blue_channel_pixels > 0);
 }
 
+test "reads and renders COLR v1 PaintLinearGradient" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildColorV1LinearGradientTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const paint = (try font.colorPaint(1)).?;
+    switch (paint) {
+        .glyph => |glyph_paint| switch (glyph_paint.brush) {
+            .linear_gradient => |gradient| {
+                try std.testing.expectEqual(@as(f32, 0), gradient.p0.x);
+                try std.testing.expectEqual(@as(f32, 700), gradient.p1.x);
+                try std.testing.expectEqual(ColorPaint.Extend.pad, gradient.color_line.extend);
+                try std.testing.expectEqual(@as(u16, 2), gradient.color_line.stop_count);
+                const first = gradient.color_line.stop(0).?;
+                const last = gradient.color_line.stop(1).?;
+                try std.testing.expectEqual(@as(u16, 0), first.palette_index);
+                try std.testing.expectEqual(@as(f32, 0), first.offset);
+                try std.testing.expectEqual(@as(u16, 1), last.palette_index);
+                try std.testing.expectEqual(@as(f32, 1), last.offset);
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, 1, 24, 8, 32, 0);
+
+    var red_dominant: usize = 0;
+    var blue_dominant: usize = 0;
+    for (target.pixels) |pixel| {
+        if (pixel.a == 0) continue;
+        if (pixel.r > pixel.b) red_dominant += 1;
+        if (pixel.b > pixel.r) blue_dominant += 1;
+    }
+    try std.testing.expect(red_dominant > 0);
+    try std.testing.expect(blue_dominant > 0);
+}
+
+test "COLR v1 foreground palette sentinel renders current color" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildColorV1ForegroundTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, 1, 24, 8, 32, 0);
+
+    var white_pixels: usize = 0;
+    for (target.pixels) |pixel| {
+        if (pixel.a != 0 and pixel.r == pixel.g and pixel.g == pixel.b and pixel.r > 0) white_pixels += 1;
+    }
+    try std.testing.expect(white_pixels > 10);
+}
+
 test "rejects COLR v1 ClipList offsets that alias records" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -4568,24 +4642,26 @@ test "rejects COLR v1 ClipList offsets that alias records" {
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
-test "rejects COLR v1 recursive paint payload aliasing" {
+test "accepts COLR v1 exact shared paint payloads" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
     const bytes = try test_font.buildColorV1RecursivePaintAliasTtf(allocator);
     defer allocator.free(bytes);
 
-    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
 }
 
-test "rejects COLR v1 indirect PaintColrGlyph cycles" {
+test "accepts fonts containing isolated COLR v1 PaintColrGlyph cycles" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
     const bytes = try test_font.buildColorV1IndirectPaintColrGlyphCycleTtf(allocator);
     defer allocator.free(bytes);
 
-    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
 }
 
 test "reads OpenType SVG glyph document metadata" {

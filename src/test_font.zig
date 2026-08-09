@@ -164,6 +164,14 @@ pub fn buildColorV1LayersTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1LayersTtfTables(allocator));
 }
 
+pub fn buildColorV1LinearGradientTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1LinearGradientTtfTables(allocator));
+}
+
+pub fn buildColorV1ForegroundTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1ForegroundTtfTables(allocator));
+}
+
 pub fn buildColorV1InvalidClipListTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1InvalidClipListTtfTables(allocator));
 }
@@ -1185,6 +1193,20 @@ fn colorV1LayersTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn colorV1LinearGradientTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try colorV1GlyphTtfTables(allocator);
+    allocator.free(tables[0].data);
+    tables[0].data = try colrV1LinearGradientTable(allocator);
+    return tables;
+}
+
+fn colorV1ForegroundTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try colorV1GlyphTtfTables(allocator);
+    // The nested PaintSolid starts at byte 50 in colrV1GlyphTable.
+    writeU16(tables[0].data, 51, 0xffff);
     return tables;
 }
 
@@ -3475,6 +3497,40 @@ fn colrV1LayersTable(allocator: std.mem.Allocator) ![]u8 {
     bytes[79] = 2;
     writeU16(bytes, 80, 1);
     writeF2Dot14(bytes, 82, 1.0);
+    return bytes;
+}
+
+fn colrV1LinearGradientTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 81);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34);
+
+    writeU32(bytes, 34, 1);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 10);
+
+    bytes[44] = 10; // PaintGlyph.
+    writeU24(bytes, 45, 6);
+    writeU16(bytes, 48, 1);
+
+    bytes[50] = 4; // PaintLinearGradient.
+    writeU24(bytes, 51, 16);
+    writeI16(bytes, 54, 0); // p0.
+    writeI16(bytes, 56, 0);
+    writeI16(bytes, 58, 700); // p1.
+    writeI16(bytes, 60, 0);
+    writeI16(bytes, 62, 0); // p2 rotates the gradient axis to horizontal.
+    writeI16(bytes, 64, 100);
+
+    bytes[66] = 0; // ExtendMode.pad.
+    writeU16(bytes, 67, 2);
+    writeF2Dot14(bytes, 69, 0);
+    writeU16(bytes, 71, 0);
+    writeF2Dot14(bytes, 73, 1);
+    writeF2Dot14(bytes, 75, 1);
+    writeU16(bytes, 77, 1);
+    writeF2Dot14(bytes, 79, 1);
     return bytes;
 }
 

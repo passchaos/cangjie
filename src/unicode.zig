@@ -306,6 +306,7 @@ const joining_type_ranges = [_]JoiningTypeRange{
     .{ .first = 0x08CA, .last = 0x08E1, .kind = .transparent },
     .{ .first = 0x08E3, .last = 0x0902, .kind = .transparent },
     .{ .first = 0x200D, .last = 0x200D, .kind = .join_causing },
+    .{ .first = 0x10EFD, .last = 0x10EFF, .kind = .transparent },
 };
 
 pub fn joiningTypeForCodepoint(codepoint: u21) JoiningType {
@@ -331,13 +332,65 @@ pub fn joiningTypeForCodepoint(codepoint: u21) JoiningType {
 /// neighbors and receive no positional feature themselves. Non-Arabic text is
 /// left as `.none`, so callers can pass mixed-script runs without accidentally
 /// enabling Arabic features for punctuation or digits.
-pub fn resolveJoiningForms(codepoints: []const u21, forms: []JoiningForm) error{InvalidJoiningInput}!void {
+pub noinline fn resolveJoiningForms(codepoints: []const u21, forms: []JoiningForm) error{InvalidJoiningInput}!void {
     if (forms.len != codepoints.len) return error.InvalidJoiningInput;
     @memset(forms, .none);
 
+    var previous: ?JoiningType = null;
+    var pending_index: ?usize = null;
+    var pending_kind: JoiningType = .non_joining;
+    var pending_joins_previous = false;
+
     for (codepoints, 0..) |codepoint, index| {
         const current = joiningTypeForCodepoint(codepoint);
-        if (current == .transparent or current == .non_joining or scriptForCodepoint(codepoint) != .arabic) continue;
+        if (current == .transparent) continue;
+
+        // The next non-transparent character resolves the pending Arabic
+        // character's right connection. This replaces two repeated
+        // forward/backward searches per character with one streaming pass and
+        // one Joining_Type lookup per scalar.
+        if (pending_index) |pending| {
+            const joins_next = joinsLeft(pending_kind) and joinsRight(current);
+            forms[pending] = joiningFormForConnections(pending_joins_previous, joins_next);
+        }
+        pending_index = null;
+
+        if (current != .non_joining and isArabicScriptCodepoint(codepoint)) {
+            pending_index = index;
+            pending_kind = current;
+            pending_joins_previous = if (previous) |kind|
+                joinsLeft(kind) and joinsRight(current)
+            else
+                false;
+        }
+        previous = current;
+    }
+
+    if (pending_index) |pending| {
+        forms[pending] = joiningFormForConnections(pending_joins_previous, false);
+    }
+}
+
+fn joiningFormForConnections(joins_previous: bool, joins_next: bool) JoiningForm {
+    return if (joins_previous and joins_next)
+        .medial
+    else if (joins_previous)
+        .final
+    else if (joins_next)
+        .initial
+    else
+        .isolated;
+}
+
+fn resolveJoiningFormsReference(codepoints: []const u21, forms: []JoiningForm) error{InvalidJoiningInput}!void {
+    if (forms.len != codepoints.len) return error.InvalidJoiningInput;
+    @memset(forms, .none);
+
+    // Retain the former bidirectional implementation as a test oracle for the
+    // streaming state machine. This is intentionally not used by shaping.
+    for (codepoints, 0..) |codepoint, index| {
+        const current = joiningTypeForCodepoint(codepoint);
+        if (current == .transparent or current == .non_joining or !isArabicScriptCodepoint(codepoint)) continue;
 
         var previous: ?JoiningType = null;
         var previous_index = index;
@@ -360,14 +413,7 @@ pub fn resolveJoiningForms(codepoints: []const u21, forms: []JoiningForm) error{
 
         const joins_previous = if (previous) |kind| joinsLeft(kind) and joinsRight(current) else false;
         const joins_next = if (next) |kind| joinsLeft(current) and joinsRight(kind) else false;
-        forms[index] = if (joins_previous and joins_next)
-            .medial
-        else if (joins_previous)
-            .final
-        else if (joins_next)
-            .initial
-        else
-            .isolated;
+        forms[index] = joiningFormForConnections(joins_previous, joins_next);
     }
 }
 
@@ -1816,8 +1862,7 @@ fn isArabicScriptCodepoint(codepoint: u21) bool {
     // instead of falling back to DFLT/neutral handling.
     return (codepoint >= 0x0600 and codepoint <= 0x06ff) or
         (codepoint >= 0x0750 and codepoint <= 0x077f) or
-        (codepoint >= 0x0870 and codepoint <= 0x089f) or
-        (codepoint >= 0x08a0 and codepoint <= 0x08ff) or
+        (codepoint >= 0x0870 and codepoint <= 0x08ff) or
         (codepoint >= 0x10efd and codepoint <= 0x10eff) or
         (codepoint >= 0xfb50 and codepoint <= 0xfdff) or
         (codepoint >= 0xfe70 and codepoint <= 0xfeff);
@@ -3203,6 +3248,42 @@ test "Arabic joining forms skip transparent marks and honor join controls" {
     var persian_forms: [persian_kaf_lam.len]JoiningForm = undefined;
     try resolveJoiningForms(&persian_kaf_lam, &persian_forms);
     try std.testing.expectEqualSlices(JoiningForm, &.{ .isolated, .initial, .medial, .final }, &persian_forms);
+
+    const supplementary_mark = [_]u21{ 0x0628, 0x10efd, 0x0628 };
+    var supplementary_forms: [supplementary_mark.len]JoiningForm = undefined;
+    try resolveJoiningForms(&supplementary_mark, &supplementary_forms);
+    try std.testing.expectEqualSlices(JoiningForm, &.{ .initial, .none, .final }, &supplementary_forms);
+}
+
+test "streaming Arabic joining forms match bidirectional reference" {
+    const alphabet = [_]u21{
+        0x0628, // Arabic dual joining.
+        0x0627, // Arabic right joining.
+        0x0621, // Arabic non-joining.
+        0x064e, // Arabic transparent.
+        0x200d, // Join-causing ZWJ.
+        0x200c, // Non-joining ZWNJ.
+        0x0712, // Non-Arabic dual-joining Syriac.
+        ' ', // Neutral non-joining separator.
+    };
+    var codepoints: [4]u21 = undefined;
+    var expected: [4]JoiningForm = undefined;
+    var actual: [4]JoiningForm = undefined;
+
+    for (1..codepoints.len + 1) |len| {
+        var combination_count: usize = 1;
+        for (0..len) |_| combination_count *= alphabet.len;
+        for (0..combination_count) |encoded| {
+            var remaining = encoded;
+            for (codepoints[0..len]) |*codepoint| {
+                codepoint.* = alphabet[remaining % alphabet.len];
+                remaining /= alphabet.len;
+            }
+            try resolveJoiningFormsReference(codepoints[0..len], expected[0..len]);
+            try resolveJoiningForms(codepoints[0..len], actual[0..len]);
+            try std.testing.expectEqualSlices(JoiningForm, expected[0..len], actual[0..len]);
+        }
+    }
 }
 
 test "paragraph direction follows the first strong character" {

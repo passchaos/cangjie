@@ -412,6 +412,24 @@ Current local snapshot after the Nastaliq parity work:
   but `perf stat` showed slightly fewer instructions (`-0.022%`) and branches
   (`-0.027%`), confirming no added LTR work. Full Amiri, Amiri word-list, and
   Roboto checksums remain unchanged.
+- Arabic joining-form resolution now streams once through the source run,
+  retaining only the previous non-transparent Joining_Type and one pending
+  Arabic character. The former implementation searched both backward and
+  forward for every Arabic scalar and repeatedly binary-searched the joining
+  table. A 4,680-sequence exhaustive test (lengths one through four over
+  Arabic dual/right/non-joining/transparent characters, ZWJ/ZWNJ, Syriac, and
+  separators) proves the new state machine matches the former semantics.
+  Unicode 17 U+10EFD–U+10EFF are now also Arabic-script Transparent joining
+  marks; the focused `BEH + U+10EFD + BEH` HarfBuzz/HarfRust checksum is
+  `fee2f1ada1c3d897`. A fixed-CPU-30 A/B/B/A comparison with 31-sample medians
+  reduced Amiri `fa-thelittleprince` from `920.404` to
+  `887.327 ns/glyph`, about `3.6%`, and `fa-words` from `1883.453` to
+  `1859.196 ns/glyph`, about `1.3%`. Roboto improved slightly from `435.915`
+  to `434.621 ns/glyph`. `resolveJoiningForms` and
+  `joiningTypeForCodepoint` disappeared as standalone perf hotspots. The
+  same-session HarfBuzz median was `796.355 ns/glyph`, leaving Cangjie about
+  `11.4%` behind on this Amiri workload; the broad performance goal is still
+  open.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

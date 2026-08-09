@@ -508,6 +508,16 @@ Current local snapshot after the Nastaliq parity work:
   `766.959` versus `795.355 ns/glyph`, a Cangjie lead of about `3.6%`.
   Amiri and Roboto word lists still trail HarfBuzz, so this does not complete
   the broader objective.
+- GSUB and GPOS run-digest caches now initialize only their readable headers
+  (`len` and GSUB's mutation generation). Inactive digest entries are written
+  before `len` exposes them, but aggregate `{}` construction previously cleared
+  all 16 entries—784 bytes for GSUB and 520 bytes for GPOS—on every shaped
+  word. Fixed-CPU-30 A/B/B/A and reverse B/A/A/B comparisons with 31-sample
+  medians reduced Roboto `en-words` by about `7–9%`, Amiri `fa-words` by about
+  `2–6%`, and Amiri `fa-thelittleprince` by about `0.3–0.4%`, with unchanged
+  checksums. Post-change Roboto `perf` reduced generic `memset` from about
+  `7.0%` to `0.8%`; the two Font-wrapper cache clears disappeared from the
+  sampled stacks.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

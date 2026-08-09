@@ -242,6 +242,15 @@ const RunDigestCache = struct {
     entries: [max_run_digest_cache_entries]Entry = undefined,
     len: usize = 0,
 
+    fn init() RunDigestCache {
+        // Entries become readable only after `get` fully assigns them and
+        // increments `len`. Leave inactive storage undefined instead of
+        // clearing the complete 16-entry cache for every short shaping run.
+        var cache: RunDigestCache = undefined;
+        cache.len = 0;
+        return cache;
+    }
+
     fn get(self: *RunDigestCache, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
         const active_mark_filtering_set = options.active_mark_filtering_set;
         for (self.entries[0..self.len]) |entry| {
@@ -388,7 +397,7 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     }
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = RunDigestCache{};
+    var run_digest_cache = RunDigestCache.init();
     if (selected_lookups.len != 0) {
         for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;

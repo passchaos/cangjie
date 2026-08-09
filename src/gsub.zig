@@ -287,6 +287,17 @@ const RunDigestCache = struct {
     len: usize = 0,
     generation: usize = 0,
 
+    fn init() RunDigestCache {
+        // `get` only reads entries below `len`, and every such entry is
+        // assigned immediately before `len` advances. Initializing only this
+        // small header avoids clearing 16 large digest entries for every
+        // shaped run while preserving the same mutation-generation semantics.
+        var cache: RunDigestCache = undefined;
+        cache.len = 0;
+        cache.generation = 0;
+        return cache;
+    }
+
     fn get(self: *RunDigestCache, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
         const generation = if (options.glyph_mutation_generation) |value| value.* else 0;
         if (generation != self.generation) {
@@ -483,7 +494,7 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     }
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = RunDigestCache{};
+    var run_digest_cache = RunDigestCache.init();
     if (selected_lookups.len != 0) {
         for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
@@ -560,7 +571,7 @@ pub fn applyFeatureSequenceWithOptions(
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
-    var run_digest_cache = RunDigestCache{};
+    var run_digest_cache = RunDigestCache.init();
 
     // Preserve arbitrary LangSys-required features even when a higher-level
     // script plan names only the well-known stages it needs to interleave.
@@ -732,7 +743,7 @@ pub fn applyFeatureLookupPlanWithOptions(
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = RunDigestCache{};
+    var run_digest_cache = RunDigestCache.init();
     for (plan.entries) |entry| {
         var selected_options = shaping_options;
         selected_options.active_source_feature = if (entry.application.source_scoped) entry.application.tag else null;
@@ -763,7 +774,7 @@ pub fn applyMergedFeatureLookupPlanWithOptions(
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (plan.lookups.len != plan.lookup_offsets.len) return error.BadGsub;
-    var run_digest_cache = RunDigestCache{};
+    var run_digest_cache = RunDigestCache.init();
     for (plan.lookups, plan.lookup_offsets) |lookup, lookup_offset| {
         if (lookup.lookup >= lookup_count) return error.BadGsub;
         var selected_options = shaping_options;

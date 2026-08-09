@@ -783,6 +783,18 @@ Current local snapshot after the Nastaliq parity work:
   against both references also remained unchanged. The optimized
   SourceSerifVariable word list is now within roughly `8%` of HarfBuzz on the
   less noisy fixed-CPU comparisons, down from about `2.8x` slower.
+- Accelerated PairPos now dispatches each first glyph through the existing
+  exact coverage-group index and probes only the authored subtables whose
+  coverage can contain it. The grouped indexes preserve original subtable
+  order, so explicit-zero PairPos matches still stop later fallbacks; generic
+  subtables retain their parser fallback. Fixed-P-core CPU 8 A/B/B/A
+  comparisons reduced SourceSerifVariable `en-words` retired instructions by
+  `5.93%` and branches by `7.02%`; fixed E-core CPU 30 reproduced `5.92%`
+  fewer instructions and `7.01%` fewer branches. Roboto instructions also
+  improved `2.64%`, while Amiri remained flat. A post-change
+  Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix measured SourceSerifVariable at
+  `168.062` versus `161.225 ns/glyph` on CPU 8, leaving about a `4.24%`
+  gap, and `178.412` versus `170.635 ns/glyph` on CPU 30, about `4.56%`.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

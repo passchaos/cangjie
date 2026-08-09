@@ -1702,8 +1702,18 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
             first_index + 1
         else
             nextUnignoredGlyph(glyphs, first_index + 1, lookup_flag, options) orelse continue;
-        var subtable_i: usize = 0;
-        while (subtable_i < subtable_count) : (subtable_i += 1) {
+        // PairPos coverage is a necessary and exact first-glyph condition.
+        // Accelerator construction already groups those coverages in authored
+        // subtable order, so probe only possible alternatives rather than all
+        // subtables for every adjacent pair.
+        const candidate_subtables = chainingSubtableGroupForGlyph(
+            accelerator.coverage_groups,
+            accelerator.coverage_group_slots,
+            glyphs[first_index],
+        ) orelse continue;
+        for (candidate_subtables) |subtable_index| {
+            const subtable_i: usize = subtable_index;
+            if (subtable_i >= subtable_count or subtable_i >= accelerator.pair_pos_subtables.len) return error.BadGpos;
             const pair_accelerator = accelerator.pair_pos_subtables[subtable_i];
             switch (pair_accelerator.kind) {
                 .format_1_x_advance => {
@@ -6495,6 +6505,17 @@ test "GPOS ExtensionPos PairPos accelerator preserves device stride and preceden
     try std.testing.expectEqual(@as(usize, 2), accelerator.pair_pos_subtables.len);
     try std.testing.expectEqual(PairPosAcceleratorKind.format_1_x_advance, accelerator.pair_pos_subtables[0].kind);
     try std.testing.expectEqual(PairPosAcceleratorKind.format_2_x_advance, accelerator.pair_pos_subtables[1].kind);
+    const candidates = chainingSubtableGroupForGlyph(
+        accelerator.coverage_groups,
+        accelerator.coverage_group_slots,
+        5,
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u16, &.{ 0, 1 }, candidates);
+    try std.testing.expect(chainingSubtableGroupForGlyph(
+        accelerator.coverage_groups,
+        accelerator.coverage_group_slots,
+        6,
+    ) == null);
 
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);

@@ -219,7 +219,14 @@ pub fn componentCoordinates(
             component.axis_count,
         );
         defer allocator.free(deltas);
-        for (values, deltas) |*value, delta| value.* += @intFromFloat(@round(delta));
+        // Tuple deltas are floating-point because multiple active regions can
+        // contribute fractional values. Round only after adding a delta to its
+        // static TupleValues base; rounding the delta first changes negative
+        // half-way cases by one F2Dot14 bit and compounds through nested VARC
+        // components.
+        for (values, deltas) |*value, delta| {
+            value.* = @intFromFloat(@round(@as(f32, @floatFromInt(value.*)) + delta));
+        }
     }
     for (indices, values) |axis_index, raw_value| {
         if (axis_index < 0 or axis_index >= coords.len) return error.BadSfnt;
@@ -922,6 +929,42 @@ fn writeU32(bytes: []u8, offset: usize, value: u32) void {
     std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
 }
 
+fn writeSingleRegionVarcFixture(bytes: []u8, packed_deltas: []const u8) void {
+    std.debug.assert(bytes.len == 76 and packed_deltas.len <= 4);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 4, 68); // Empty coverage required by the VARC header.
+    writeU32(bytes, 8, 24); // MultiItemVariationStore.
+    writeU32(bytes, 20, 72); // Empty VarCompositeGlyphs INDEX2.
+
+    // One variation-data subtable referencing one sparse region whose support
+    // ramps from zero to one over normalized axis 0.
+    writeU16(bytes, 24, 1);
+    writeU32(bytes, 26, 12);
+    writeU16(bytes, 30, 1);
+    writeU32(bytes, 32, 28);
+    writeU16(bytes, 36, 1);
+    writeU32(bytes, 38, 6);
+    writeU16(bytes, 42, 1);
+    writeU16(bytes, 44, 0);
+    writeU16(bytes, 46, 0);
+    writeU16(bytes, 48, 0x4000);
+    writeU16(bytes, 50, 0x4000);
+
+    bytes[52] = 1;
+    writeU16(bytes, 53, 1);
+    writeU16(bytes, 55, 0);
+    writeU32(bytes, 57, 1);
+    bytes[61] = 1;
+    bytes[62] = 1;
+    bytes[63] = @intCast(packed_deltas.len + 1);
+    @memcpy(bytes[64..][0..packed_deltas.len], packed_deltas);
+
+    writeU16(bytes, 68, 1);
+    writeU16(bytes, 70, 0);
+    writeU32(bytes, 72, 0);
+}
+
 test "VARC exposes top-level offsets and coverage glyphs" {
     var bytes: [46]u8 = .{0} ** 46;
     writeU16(&bytes, 0, 1);
@@ -1038,45 +1081,43 @@ test "VARC INDEX2 uses 32-bit count and one-based offsets" {
 
 test "VARC multi-item variation store evaluates region-major tuples" {
     var bytes: [76]u8 = .{0} ** 76;
-    writeU16(&bytes, 0, 1);
-    writeU32(&bytes, 4, 68); // Unused empty coverage required by the header.
-    writeU32(&bytes, 8, 24); // MultiItemVariationStore.
-    writeU32(&bytes, 20, 72); // Unused empty VarCompositeGlyphs INDEX2.
-
-    // MultiItemVariationStore with one sparse region and one variation-data
-    // subtable. Offsets are relative to the store, not the enclosing VARC.
-    writeU16(&bytes, 24, 1);
-    writeU32(&bytes, 26, 12); // SparseVariationRegionList at byte 36.
-    writeU16(&bytes, 30, 1);
-    writeU32(&bytes, 32, 28); // MultiItemVariationData at byte 52.
-
-    writeU16(&bytes, 36, 1); // One sparse region.
-    writeU32(&bytes, 38, 6);
-    writeU16(&bytes, 42, 1); // One active axis in the region.
-    writeU16(&bytes, 44, 0);
-    writeU16(&bytes, 46, 0);
-    writeU16(&bytes, 48, 0x4000);
-    writeU16(&bytes, 50, 0x4000);
-
-    bytes[52] = 1; // MultiItemVariationData format.
-    writeU16(&bytes, 53, 1);
-    writeU16(&bytes, 55, 0); // Region index 0.
-    writeU32(&bytes, 57, 1); // DeltaSets INDEX2 count.
-    bytes[61] = 1; // offSize.
-    bytes[62] = 1;
-    bytes[63] = 4;
-    bytes[64] = 1; // Two i8 deltas.
-    bytes[65] = 10;
-    bytes[66] = @bitCast(@as(i8, -20));
-
-    writeU16(&bytes, 68, 1); // Empty coverage format 1.
-    writeU16(&bytes, 70, 0);
-    writeU32(&bytes, 72, 0); // Empty INDEX2.
+    writeSingleRegionVarcFixture(&bytes, &.{ 1, 10, @bitCast(@as(i8, -20)) });
 
     const deltas = try variationDeltas(std.testing.allocator, &bytes, 0, bytes.len, 0, &.{0.5}, 2);
     defer std.testing.allocator.free(deltas);
     try std.testing.expectApproxEqAbs(@as(f32, 5), deltas[0], 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, -10), deltas[1], 0.0001);
+}
+
+test "VARC axis variation rounds after adding the static axis value" {
+    var bytes: [76]u8 = .{0} ** 76;
+    writeSingleRegionVarcFixture(&bytes, &.{ 0, @bitCast(@as(i8, -1)) });
+
+    const component = Component{
+        .flags = ComponentFlags.have_axes | ComponentFlags.axis_values_have_variation,
+        .glyph_id = 0,
+        .condition_index = null,
+        .axis_indices = &.{ 0, 0 },
+        .axis_values = &.{ 0, 10 },
+        .axis_count = 1,
+        .axis_values_var_index = 0,
+        .decomposed_transform = .{},
+    };
+    const coords = try componentCoordinates(
+        std.testing.allocator,
+        &bytes,
+        0,
+        bytes.len,
+        component,
+        &.{0.5},
+        &.{0.5},
+        1,
+    );
+    defer std.testing.allocator.free(coords);
+
+    // 10 + (-1 * 0.5) = 9.5, which rounds to 10. Rounding the variation
+    // delta separately would incorrectly produce 9.
+    try std.testing.expectEqual(@as(f32, 10.0 / 16384.0), coords[0]);
 }
 
 test "VARC component validation rejects truncation and coverage count mismatch" {

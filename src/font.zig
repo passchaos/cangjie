@@ -3821,17 +3821,27 @@ pub const Font = struct {
                 normalized_coords,
             );
             const child_transform = parent_transform.mul(transformFromVarc(component_transform));
-            const child_coords = try varc_mod.componentCoordinates(
-                outline.allocator,
-                self.data,
-                varc.offset,
-                varc.length,
-                component,
-                normalized_coords,
-                font_coords,
-                font_axis_count,
-            );
-            defer outline.allocator.free(child_coords);
+            const coordinates_unchanged = (component.flags &
+                (varc_mod.ComponentFlags.have_axes | varc_mod.ComponentFlags.reset_unspecified_axes)) == 0;
+            // Missing trailing normalized coordinates are semantically zero, so
+            // a component that neither overrides axes nor resets unspecified
+            // axes can borrow its parent's slice directly. Only coordinate
+            // remapping needs an owned buffer that survives the recursive call.
+            const owned_child_coords = if (coordinates_unchanged)
+                null
+            else
+                try varc_mod.componentCoordinates(
+                    outline.allocator,
+                    self.data,
+                    varc.offset,
+                    varc.length,
+                    component,
+                    normalized_coords,
+                    font_coords,
+                    font_axis_count,
+                );
+            defer if (owned_child_coords) |coords| outline.allocator.free(coords);
+            const child_coords = owned_child_coords orelse normalized_coords;
             if (child_glyph == glyph_id) {
                 try self.appendBaseOutlineTransformed(outline, child_glyph, child_transform, child_coords, read_mode);
             } else {

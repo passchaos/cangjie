@@ -570,6 +570,23 @@ Current local snapshot after the Nastaliq parity work:
   `unicode.isDefaultIgnorableForShaping` fell from about `2.65%` to a residual
   `0.20%` child and disappeared as a standalone hotspot. All corpus and
   retained USE parity checksums remain unchanged.
+- The cmap pass now reserves all eight parallel glyph/source metadata arrays
+  once from the validated UTF-8 byte length, a safe upper bound because each
+  retained scalar consumes at least one byte and variation selectors consume
+  no glyph/source slot. The scalar loop can consequently use assume-capacity
+  appends instead of repeating eight capacity checks per glyph; later USE and
+  GSUB cardinality changes retain their existing checked growth paths. Serial
+  fixed-CPU-30 A/B/B/A and reverse B/A/A/B comparisons, with four 31-sample
+  medians per binary in each order, reduced symmetrically trimmed means for
+  Amiri `fa-thelittleprince` from `763.914` to `748.469 ns/glyph`, about
+  `2.02%`; Amiri `fa-words` from `1293.898` to `1288.255 ns/glyph`, about
+  `0.44%`; and Roboto `en-words` from `319.236` to `309.804 ns/glyph`, about
+  `2.96%`. Post-change Roboto `perf` no longer reports the cmap-loop
+  `usize`, `u16`, provenance-info, and `u21` capacity checks, which previously
+  accounted for about `1.74%`, `0.89%`, `0.30%`, and `0.24%`, respectively.
+  Five-sample Amiri long-text probes reported the same 6,912 KiB maximum RSS
+  for baseline and candidate. All corpus and retained USE parity checksums
+  remain unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

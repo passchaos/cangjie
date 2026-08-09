@@ -3212,6 +3212,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // Keep three parallel arrays through GSUB: glyph ids are mutable, while
     // codepoints and clusters retain source-text identity for rendering,
     // hit-testing, and debug output after substitutions.
+    // Valid UTF-8 has at most one retained source per input byte; variation
+    // selectors only lower that count. Reserve every parallel cmap array once
+    // so the scalar loop does not repeat eight capacity checks per glyph.
+    try glyph_ids.ensureUnusedCapacity(buffer.allocator, text.len);
+    try codepoints.ensureUnusedCapacity(buffer.allocator, text.len);
+    try clusters.ensureUnusedCapacity(buffer.allocator, text.len);
+    try source_ends.ensureUnusedCapacity(buffer.allocator, text.len);
+    try glyph_source_indices.ensureUnusedCapacity(buffer.allocator, text.len);
+    try glyph_cluster_indices.ensureUnusedCapacity(buffer.allocator, text.len);
+    try glyph_substituted.ensureUnusedCapacity(buffer.allocator, text.len);
+    try ligature_components.infos.ensureUnusedCapacity(buffer.allocator, text.len);
+
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     var has_default_ignorable = false;
     while (it.i < text.len) {
@@ -3238,18 +3250,19 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             clusters.items[clusters.items.len - 1] - cluster_base
         else
             cluster;
-        try glyph_ids.append(buffer.allocator, try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint));
-        try codepoints.append(buffer.allocator, codepoint);
-        try clusters.append(buffer.allocator, cluster_base + source_cluster);
-        try source_ends.append(buffer.allocator, cluster_base + it.i);
-        try glyph_source_indices.append(buffer.allocator, glyph_source_indices.items.len);
+        const glyph_id = try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
+        glyph_ids.appendAssumeCapacity(glyph_id);
+        codepoints.appendAssumeCapacity(codepoint);
+        clusters.appendAssumeCapacity(cluster_base + source_cluster);
+        source_ends.appendAssumeCapacity(cluster_base + it.i);
+        glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
         const cluster_owner_index = if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
             glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
         else
             glyph_cluster_indices.items.len;
-        try glyph_cluster_indices.append(buffer.allocator, cluster_owner_index);
-        try glyph_substituted.append(buffer.allocator, false);
-        try ligature_components.infos.append(buffer.allocator, .{});
+        glyph_cluster_indices.appendAssumeCapacity(cluster_owner_index);
+        glyph_substituted.appendAssumeCapacity(false);
+        ligature_components.infos.appendAssumeCapacity(.{});
     }
     if (shape_profile) |p| {
         p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);

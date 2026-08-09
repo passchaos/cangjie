@@ -517,6 +517,7 @@ pub const PaletteInfo = struct {
 pub const ColorPaint = union(enum) {
     solid: Solid,
     linear_gradient: LinearGradient,
+    radial_gradient: RadialGradient,
     glyph: Glyph,
     layers: Layers,
 
@@ -538,6 +539,7 @@ pub const ColorPaint = union(enum) {
     pub const Brush = union(enum) {
         solid: Solid,
         linear_gradient: LinearGradient,
+        radial_gradient: RadialGradient,
     };
 
     pub const Extend = enum(u8) {
@@ -550,6 +552,14 @@ pub const ColorPaint = union(enum) {
         p0: glyph_mod.Point,
         p1: glyph_mod.Point,
         p2: glyph_mod.Point,
+        color_line: ColorLine,
+    };
+
+    pub const RadialGradient = struct {
+        c0: glyph_mod.Point,
+        r0: f32,
+        c1: glyph_mod.Point,
+        r1: f32,
         color_line: ColorLine,
     };
 
@@ -12320,11 +12330,47 @@ fn readColorPaint(font: *const Font, offset: usize) FontError!ColorPaint {
             break :blk switch (child) {
                 .solid => |solid| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .solid = solid } } },
                 .linear_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .linear_gradient = gradient } } },
+                .radial_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .radial_gradient = gradient } } },
                 else => error.UnsupportedGlyph,
             };
         },
         4 => .{ .linear_gradient = try readColorLinearGradient(font, offset) },
+        6 => .{ .radial_gradient = try readColorRadialGradient(font, offset) },
         else => error.UnsupportedGlyph,
+    };
+}
+
+fn readColorRadialGradient(font: *const Font, offset: usize) FontError!ColorPaint.RadialGradient {
+    const colr = font.colr orelse return error.BadSfnt;
+    const info = colorPaintFormatInfo(6).?;
+    const color_line_offset = try colorPaintChildOffset(font.data, colr, offset, info.min_size, 1);
+    const color_line = try readColorLine(font, colr, color_line_offset);
+    return .{
+        .c0 = .{
+            .x = @floatFromInt(try bin.readI16At(font.data, offset + 4)),
+            .y = @floatFromInt(try bin.readI16At(font.data, offset + 6)),
+        },
+        .r0 = @floatFromInt(try bin.readU16At(font.data, offset + 8)),
+        .c1 = .{
+            .x = @floatFromInt(try bin.readI16At(font.data, offset + 10)),
+            .y = @floatFromInt(try bin.readI16At(font.data, offset + 12)),
+        },
+        .r1 = @floatFromInt(try bin.readU16At(font.data, offset + 14)),
+        .color_line = color_line,
+    };
+}
+
+fn readColorLine(font: *const Font, colr: TableRecord, color_line_offset: usize) FontError!ColorPaint.ColorLine {
+    const extend = std.enums.fromInt(ColorPaint.Extend, font.data[color_line_offset]) orelse return error.BadSfnt;
+    const stop_count = try bin.readU16At(font.data, color_line_offset + 1);
+    if (stop_count == 0) return error.BadSfnt;
+    const stops_start = color_line_offset + 3;
+    const stops_len = @as(usize, stop_count) * 6;
+    if (stops_len > colr.offset + colr.length - stops_start) return error.BadSfnt;
+    return .{
+        .extend = extend,
+        .stop_count = stop_count,
+        .stops_data = font.data[stops_start .. stops_start + stops_len],
     };
 }
 
@@ -12332,12 +12378,7 @@ fn readColorLinearGradient(font: *const Font, offset: usize) FontError!ColorPain
     const colr = font.colr orelse return error.BadSfnt;
     const info = colorPaintFormatInfo(4).?;
     const color_line_offset = try colorPaintChildOffset(font.data, colr, offset, info.min_size, 1);
-    const extend = std.enums.fromInt(ColorPaint.Extend, font.data[color_line_offset]) orelse return error.BadSfnt;
-    const stop_count = try bin.readU16At(font.data, color_line_offset + 1);
-    if (stop_count == 0) return error.BadSfnt;
-    const stops_start = color_line_offset + 3;
-    const stops_len = @as(usize, stop_count) * 6;
-    if (stops_len > colr.offset + colr.length - stops_start) return error.BadSfnt;
+    const color_line = try readColorLine(font, colr, color_line_offset);
     return .{
         .p0 = .{
             .x = @floatFromInt(try bin.readI16At(font.data, offset + 4)),
@@ -12351,11 +12392,7 @@ fn readColorLinearGradient(font: *const Font, offset: usize) FontError!ColorPain
             .x = @floatFromInt(try bin.readI16At(font.data, offset + 12)),
             .y = @floatFromInt(try bin.readI16At(font.data, offset + 14)),
         },
-        .color_line = .{
-            .extend = extend,
-            .stop_count = stop_count,
-            .stops_data = font.data[stops_start .. stops_start + stops_len],
-        },
+        .color_line = color_line,
     };
 }
 

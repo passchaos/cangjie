@@ -136,6 +136,7 @@ pub const ColorGlyphPaint = union(enum) {
     colr_v1_radial_gradient: font_mod.ColorPaint.RadialGradient,
     colr_v1_sweep_gradient: font_mod.ColorPaint.SweepGradient,
     colr_v1_transform: font_mod.ColorPaint.TransformPaint,
+    colr_v1_composite: font_mod.ColorPaint.Composite,
     svg_document: []const u8,
 };
 
@@ -441,7 +442,7 @@ fn colorPaintLine(paint: font_mod.ColorPaint) ?font_mod.ColorPaint.ColorLine {
             .sweep_gradient => |gradient| gradient.color_line,
             .solid => null,
         },
-        .solid, .clip_glyph, .colr_glyph, .layers, .transform => null,
+        .solid, .clip_glyph, .colr_glyph, .layers, .transform, .composite => null,
     };
 }
 
@@ -504,6 +505,7 @@ fn colorGlyphPaint(layer_start: usize, layer_len: usize, svg_document: ?[]const 
             .radial_gradient => |gradient| .{ .colr_v1_radial_gradient = gradient },
             .sweep_gradient => |gradient| .{ .colr_v1_sweep_gradient = gradient },
             .transform => |transform| .{ .colr_v1_transform = transform },
+            .composite => |composite| .{ .colr_v1_composite = composite },
         };
     }
     if (svg_document) |document| return .{ .svg_document = document };

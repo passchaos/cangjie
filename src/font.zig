@@ -590,6 +590,7 @@ pub const ColorPaint = union(enum) {
     colr_glyph: ColrGlyph,
     layers: Layers,
     transform: TransformPaint,
+    composite: Composite,
 
     pub const Solid = struct {
         palette_index: u16,
@@ -618,6 +619,43 @@ pub const ColorPaint = union(enum) {
     pub const TransformPaint = struct {
         affine: ColorAffine,
         child: ChildRef,
+    };
+
+    pub const Composite = struct {
+        source: ChildRef,
+        backdrop: ChildRef,
+        mode: CompositeMode,
+    };
+
+    pub const CompositeMode = enum(u8) {
+        clear = 0,
+        src = 1,
+        dest = 2,
+        src_over = 3,
+        dest_over = 4,
+        src_in = 5,
+        dest_in = 6,
+        src_out = 7,
+        dest_out = 8,
+        src_atop = 9,
+        dest_atop = 10,
+        xor = 11,
+        plus = 12,
+        screen = 13,
+        overlay = 14,
+        darken = 15,
+        lighten = 16,
+        color_dodge = 17,
+        color_burn = 18,
+        hard_light = 19,
+        soft_light = 20,
+        difference = 21,
+        exclusion = 22,
+        multiply = 23,
+        hsl_hue = 24,
+        hsl_saturation = 25,
+        hsl_color = 26,
+        hsl_luminosity = 27,
     };
 
     /// Opaque reference to a validated child Paint in the same COLR table.
@@ -12494,9 +12532,10 @@ fn validateColrPaintChildPayloadOwnership(data: []const u8, colr: TableRecord, o
             const backdrop = try colorPaintChildOffset(data, colr, offset, info.min_size, 5);
             const source_header = try colrPaintHeaderRange(data, colr, source);
             const backdrop_header = try colrPaintHeaderRange(data, colr, backdrop);
-            // PaintComposite owns two independent child Paint headers.  Sharing
-            // or partially overlapping those headers would make source/backdrop
-            // interpretation depend on which traversal reaches the bytes first.
+            // COLR paint graphs are DAGs, so source and backdrop may share the
+            // exact same Paint header. Only distinct partially-overlapping
+            // headers are ambiguous typed data.
+            if (source_header.start == backdrop_header.start and source_header.end == backdrop_header.end) return;
             if (colrPaintRangesOverlap(source_header, backdrop_header)) return error.BadSfnt;
         },
         else => return,
@@ -12752,6 +12791,11 @@ fn readColorPaint(font: *const Font, offset: usize, context: ColorPaintReadConte
         6, 7 => .{ .radial_gradient = try readColorRadialGradient(font, offset, context) },
         8, 9 => .{ .sweep_gradient = try readColorSweepGradient(font, offset, context) },
         12...31 => .{ .transform = try readColorTransform(font, offset, context) },
+        32 => .{ .composite = .{
+            .source = .{ .offset = try colorPaintChildOffset(data, colr, offset, 8, 1) },
+            .mode = std.enums.fromInt(ColorPaint.CompositeMode, data[offset + 4]) orelse return error.BadSfnt,
+            .backdrop = .{ .offset = try colorPaintChildOffset(data, colr, offset, 8, 5) },
+        } },
         else => error.UnsupportedGlyph,
     };
 }
@@ -19076,7 +19120,7 @@ test "COLR v1 PaintComposite rejects reserved composite modes" {
     try validateColrGlyphBounds(&bytes, colr, 2);
 }
 
-test "COLR v1 PaintComposite child headers cannot overlap" {
+test "COLR v1 PaintComposite allows shared but not partially overlapping child headers" {
     var bytes: [62]u8 = .{0} ** 62;
     writeU16Test(&bytes, 0, 1); // COLR version 1.
     writeU32Test(&bytes, 14, 34); // BaseGlyphListOffset.
@@ -19095,6 +19139,10 @@ test "COLR v1 PaintComposite child headers cannot overlap" {
 
     const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
     try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bytes, colr, 2));
+
+    var shared = bytes;
+    writeU24Test(&shared, 49, 8); // Source and backdrop share one exact PaintSolid.
+    try validateColrGlyphBounds(&shared, colr, 2);
 }
 
 test "COLR v1 PaintTransform requires a complete Affine2x3 matrix" {

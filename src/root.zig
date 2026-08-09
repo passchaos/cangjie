@@ -5010,6 +5010,58 @@ test "COLR v1 PaintColrGlyph matches live Skrifa referenced clip traversal" {
     try std.testing.expect(colorRenderTargetPixelDifference(&referenced, &caller) > 0);
 }
 
+test "COLR v1 PaintComposite renders all current modes" {
+    const allocator = std.testing.allocator;
+    const path = "/home/passchaos/Work/fontations/font-test-data/test_data/ttf/test_glyphs-glyf_colr_1_variable.ttf";
+    const bytes = std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(4 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const expected_overlap = [_]Rgba{
+        .{ .r = 0, .g = 0, .b = 0, .a = 255 },
+        .{ .r = 104, .g = 199, .b = 232, .a = 255 },
+        .{ .r = 255, .g = 220, .b = 1, .a = 255 },
+        .{ .r = 104, .g = 199, .b = 232, .a = 255 },
+        .{ .r = 255, .g = 220, .b = 1, .a = 255 },
+        .{ .r = 104, .g = 199, .b = 232, .a = 255 },
+        .{ .r = 255, .g = 220, .b = 1, .a = 255 },
+        .{ .r = 0, .g = 0, .b = 0, .a = 255 },
+        .{ .r = 0, .g = 0, .b = 0, .a = 255 },
+        .{ .r = 104, .g = 199, .b = 232, .a = 255 },
+        .{ .r = 255, .g = 220, .b = 1, .a = 255 },
+        .{ .r = 0, .g = 0, .b = 0, .a = 255 },
+        .{ .r = 255, .g = 255, .b = 233, .a = 255 },
+        .{ .r = 255, .g = 247, .b = 232, .a = 255 },
+        .{ .r = 255, .g = 240, .b = 2, .a = 255 },
+        .{ .r = 104, .g = 199, .b = 1, .a = 255 },
+        .{ .r = 255, .g = 220, .b = 232, .a = 255 },
+        .{ .r = 255, .g = 255, .b = 11, .a = 255 },
+        .{ .r = 255, .g = 210, .b = 0, .a = 255 },
+        .{ .r = 208, .g = 240, .b = 209, .a = 255 },
+        .{ .r = 255, .g = 229, .b = 3, .a = 255 },
+        .{ .r = 151, .g = 21, .b = 231, .a = 255 },
+        .{ .r = 151, .g = 76, .b = 231, .a = 255 },
+        .{ .r = 104, .g = 172, .b = 1, .a = 255 },
+        .{ .r = 145, .g = 227, .b = 255, .a = 255 },
+        .{ .r = 230, .g = 213, .b = 102, .a = 255 },
+        .{ .r = 145, .g = 227, .b = 255, .a = 255 },
+        .{ .r = 217, .g = 187, .b = 0, .a = 255 },
+    };
+
+    for (expected_overlap, 0..) |expected, raw_mode| {
+        const glyph_id: GlyphId = @intCast(120 + raw_mode);
+        var target = try ColorRenderTarget.init(allocator, 256, 256);
+        defer target.deinit();
+        var rasterizer = Rasterizer.init(allocator);
+        try rasterizer.renderColorGlyph(&target, &font, glyph_id, 200, 20, 220, 0);
+        try std.testing.expectEqual(expected, target.at(120, 120));
+    }
+}
+
 test "reads OpenType SVG glyph document metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

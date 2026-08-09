@@ -224,6 +224,10 @@ pub fn buildCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cbdtPngTtfTables(allocator));
 }
 
+pub fn buildCbdtFormat19PngTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try cbdtFormat19PngTtfTables(allocator));
+}
+
 pub fn buildBitmapOnlyCbdtPngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try bitmapOnlyCbdtPngTtfTables(allocator));
 }
@@ -1373,6 +1377,22 @@ fn cbdtPngTtfTables(allocator: std.mem.Allocator) ![]Table {
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "CBDT", .data = try cbdtPngTable(allocator) };
     tables[1] = .{ .tag = "CBLC", .data = try cblcPngTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn cbdtFormat19PngTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "CBDT", .data = try cbdtFormat19PngTable(allocator) };
+    tables[1] = .{ .tag = "CBLC", .data = try cblcFormat19PngTable(allocator) };
     tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
@@ -4362,6 +4382,64 @@ fn cbdtPngTable(allocator: std.mem.Allocator) ![]u8 {
     bytes[off + 4] = 12;
     writeU32(bytes, off + 5, @intCast(png.len));
     @memcpy(bytes[off + 9 .. off + 9 + png.len], png);
+    return bytes;
+}
+
+fn cbdtFormat19PngTable(allocator: std.mem.Allocator) ![]u8 {
+    const png = cbdtFixturePng();
+    const bytes = try allocator.alloc(u8, 4 + 4 + png.len);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 3);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, @intCast(png.len));
+    @memcpy(bytes[8..], png);
+    return bytes;
+}
+
+fn cblcFormat19PngTable(allocator: std.mem.Allocator) ![]u8 {
+    const png = cbdtFixturePng();
+    const image_size: usize = 4 + png.len;
+    const bytes = try allocator.alloc(u8, 8 + 48 + 8 + 20);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 3);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, 28);
+    writeU32(bytes, size + 8, 1);
+    bytes[size + 16] = 11;
+    bytes[size + 17] = @bitCast(@as(i8, -3));
+    bytes[size + 18] = 12;
+    bytes[size + 28] = 11;
+    bytes[size + 29] = @bitCast(@as(i8, -3));
+    bytes[size + 30] = 12;
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 1);
+    bytes[size + 44] = 16;
+    bytes[size + 45] = 16;
+    bytes[size + 46] = 32;
+
+    const record = 56;
+    writeU16(bytes, record + 0, 1);
+    writeU16(bytes, record + 2, 1);
+    writeU32(bytes, record + 4, 8);
+
+    const subtable = 64;
+    writeU16(bytes, subtable + 0, 2);
+    writeU16(bytes, subtable + 2, 19);
+    writeU32(bytes, subtable + 4, 4);
+    writeU32(bytes, subtable + 8, @intCast(image_size));
+    // Shared BigGlyphMetrics: horizontal bearing (4, 11) and advance 12.
+    bytes[subtable + 12] = 1;
+    bytes[subtable + 13] = 1;
+    bytes[subtable + 14] = 4;
+    bytes[subtable + 15] = 11;
+    bytes[subtable + 16] = 12;
+    bytes[subtable + 17] = 0;
+    bytes[subtable + 18] = 1;
+    bytes[subtable + 19] = 12;
     return bytes;
 }
 

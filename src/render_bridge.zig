@@ -761,6 +761,33 @@ test "render bridge resolves sbix dupe records before atlas emission" {
     try std.testing.expectEqual(GlyphAtlasContent.premultiplied_rgba, draw_list.atlas_requests[0].content);
 }
 
+test "render bridge preserves CBDT format 19 shared metrics" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildCbdtFormat19PngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const font_mod.Font{&font};
+    const cascade = layout.FontCascade.init(&fonts);
+    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
+        .max_width = 100,
+        .line_height = 20,
+    });
+
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{});
+    defer draw_list.deinit();
+
+    const bitmap = draw_list.color_glyphs[0].paint.embedded_png;
+    try std.testing.expectEqual(font_mod.BitmapStrikeSource.cblc_cbdt, bitmap.source);
+    try std.testing.expectEqual(@as(i16, 4), bitmap.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 11), bitmap.origin_offset_y);
+    try std.testing.expectEqual(GlyphAtlasContent.premultiplied_rgba, draw_list.atlas_requests[0].content);
+}
+
 test "render bridge skips atlas and path work for empty bitmap-only glyphs" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

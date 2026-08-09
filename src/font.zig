@@ -4775,9 +4775,19 @@ const CblcGlyphLocation = struct {
     image_format: u16,
     offset: usize,
     length: usize,
+    /// Index subtable formats 2 and 5 store one BigGlyphMetrics record shared
+    /// by their images. CBDT image format 19 has no inline metrics and must
+    /// consume this value for placement and dimensions.
+    shared_metrics: ?BitmapMetrics = null,
 };
 
-fn cblcImageLocation(image_format: u16, image_base: usize, start: usize, end: usize) FontError!?CblcGlyphLocation {
+fn cblcImageLocation(
+    image_format: u16,
+    image_base: usize,
+    start: usize,
+    end: usize,
+    shared_metrics: ?BitmapMetrics,
+) FontError!?CblcGlyphLocation {
     if (end < start) return error.BadSfnt;
     if (end == start) return null;
     if (start > std.math.maxInt(usize) - image_base) return error.BadSfnt;
@@ -4788,7 +4798,12 @@ fn cblcImageLocation(image_format: u16, image_base: usize, start: usize, end: us
     // cannot describe an in-memory CBDT range if adding the glyph payload span
     // wraps usize.
     if (length > std.math.maxInt(usize) - offset) return error.BadSfnt;
-    return .{ .image_format = image_format, .offset = offset, .length = length };
+    return .{
+        .image_format = image_format,
+        .offset = offset,
+        .length = length,
+        .shared_metrics = shared_metrics,
+    };
 }
 
 const BitmapMetrics = struct {
@@ -5129,6 +5144,7 @@ fn validateCblcCbdtTables(data: []const u8, cblc: TableRecord, cbdt: TableRecord
 
 fn validateCbdtGlyphData(data: []const u8, cbdt: TableRecord, location: CblcGlyphLocation, glyph_count: u16) FontError!void {
     if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
+    if (location.image_format == 19 and location.shared_metrics == null) return error.BadSfnt;
 
     // CBLC is an index over CBDT payloads, so all non-empty locations must be
     // structurally safe even when this library does not render that bitmap
@@ -5253,14 +5269,14 @@ fn cblcGlyphLocationFormat1Or3(data: []const u8, strike: CblcStrike, offsets_off
     // Equal adjacent offsets are the CBLC encoding for "no bitmap for this
     // glyph". A decreasing range is different: it means the index subtable is
     // corrupt and must not be silently treated as a missing glyph.
-    return try cblcImageLocation(image_format, image_base, start, end);
+    return try cblcImageLocation(image_format, image_base, start, end, null);
 }
 
 fn cblcGlyphLocationFormat2(data: []const u8, strike: CblcStrike, body_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, local_index: usize, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
     if (body_offset + 12 > data.len or body_offset + 12 > strike.offset + strike.index_tables_size) return error.BadSfnt;
     const image_size = try bin.readU32At(data, body_offset);
     if (image_size == 0) return error.BadSfnt;
-    _ = try readBigBitmapMetrics(data, body_offset + 4);
+    const shared_metrics = try readBigBitmapMetrics(data, body_offset + 4);
 
     // Index format 2 is a fixed-size dense range: every glyph covered by the
     // IndexSubTableArray entry consumes exactly imageSize bytes in CBDT.  Check
@@ -5272,7 +5288,7 @@ fn cblcGlyphLocationFormat2(data: []const u8, strike: CblcStrike, body_offset: u
 
     const start = try checkedCblcImageStart(local_index, image_size);
     const end = try checkedCblcImageEnd(start, image_size);
-    return try cblcImageLocation(image_format, image_base, start, end);
+    return try cblcImageLocation(image_format, image_base, start, end, shared_metrics);
 }
 
 fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: usize, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
@@ -5300,7 +5316,7 @@ fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: u
             if (current_glyph <= previous) return error.BadSfnt;
         }
         previous_glyph = current_glyph;
-        const location = try cblcImageLocation(image_format, image_base, start, end);
+        const location = try cblcImageLocation(image_format, image_base, start, end, null);
         if (current_glyph == glyph_id) match = location;
     }
     return match;
@@ -5309,7 +5325,7 @@ fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: u
 fn cblcGlyphLocationFormat5(data: []const u8, strike: CblcStrike, body_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
     if (body_offset + 16 > data.len or body_offset + 16 > strike.offset + strike.index_tables_size) return error.BadSfnt;
     const image_size = try bin.readU32At(data, body_offset);
-    _ = try readBigBitmapMetrics(data, body_offset + 4);
+    const shared_metrics = try readBigBitmapMetrics(data, body_offset + 4);
     const glyph_count = try bin.readU32At(data, body_offset + 12);
     if (glyph_count == 0) return error.BadSfnt;
     if (image_size == 0) return error.BadSfnt;
@@ -5338,7 +5354,7 @@ fn cblcGlyphLocationFormat5(data: []const u8, strike: CblcStrike, body_offset: u
     const index = match_index orelse return null;
     const start = try checkedCblcImageStart(index, image_size);
     const end = try checkedCblcImageEnd(start, image_size);
-    return try cblcImageLocation(image_format, image_base, start, end);
+    return try cblcImageLocation(image_format, image_base, start, end, shared_metrics);
 }
 
 fn checkedCblcImageStart(index: usize, image_size: u32) FontError!usize {
@@ -5388,7 +5404,7 @@ fn cbdtGlyphInfo(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locati
     const metrics = switch (location.image_format) {
         1, 2, 17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
         6, 7, 18 => readBigBitmapMetrics(slice, 0) catch unreachable,
-        19 => BitmapMetrics{ .height = 0, .width = 0, .bearing_x = 0, .bearing_y = 0, .advance = 0 },
+        19 => location.shared_metrics orelse return error.BadSfnt,
         else => unreachable,
     };
     const payload = switch (location.image_format) {
@@ -5443,7 +5459,7 @@ fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locatio
     const metrics = switch (location.image_format) {
         1, 2, 17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
         6, 7, 18 => readBigBitmapMetrics(slice, 0) catch unreachable,
-        19 => BitmapMetrics{ .height = 0, .width = 0, .bearing_x = 0, .bearing_y = 0, .advance = 0 },
+        19 => location.shared_metrics orelse return error.BadSfnt,
         else => unreachable,
     };
     const data_len = try bin.readU32At(slice, metrics_len);
@@ -14281,9 +14297,16 @@ test "CBLC fixed-size index formats validate dense and sparse invariants" {
 
     var format2: [12]u8 = .{0} ** 12;
     writeU32Test(&format2, 0, 9); // One fixed-size image-format-17 CBDT payload.
+    format2[4] = 7;
+    format2[5] = 9;
+    format2[6] = @bitCast(@as(i8, -2));
+    format2[7] = 6;
+    format2[8] = 10;
     const dense_location = (try cblcGlyphLocationFormat2(&format2, strike, 0, 1, 3, 2, 17, 0)).?;
     try std.testing.expectEqual(@as(usize, 18), dense_location.offset);
     try std.testing.expectEqual(@as(usize, 9), dense_location.length);
+    try std.testing.expectEqual(@as(i8, -2), dense_location.shared_metrics.?.bearing_x);
+    try std.testing.expectEqual(@as(i8, 6), dense_location.shared_metrics.?.bearing_y);
 
     writeU32Test(&format2, 0, 0);
     try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat2(&format2, strike, 0, 1, 3, 0, 17, 0));
@@ -14306,6 +14329,11 @@ test "CBLC fixed-size index formats validate dense and sparse invariants" {
     writeU16Test(&data, 66, 1); // imageFormat 1: byte-aligned bitmap payloads.
     writeU32Test(&data, 68, 0); // imageDataOffset.
     writeU32Test(&data, 72, 9); // imageSize.
+    data[76] = 7;
+    data[77] = 9;
+    data[78] = @bitCast(@as(i8, -2));
+    data[79] = 6;
+    data[80] = 10;
     writeU32Test(&data, 84, 3); // Three glyph codes follow.
     writeU16Test(&data, 88, 1);
     writeU16Test(&data, 90, 3);
@@ -14318,9 +14346,36 @@ test "CBLC fixed-size index formats validate dense and sparse invariants" {
     writeU16Test(&data, 90, 2);
     writeU16Test(&data, 92, 3);
     try validateCblcCbdtTables(&data, cblc, cbdt, 4);
+    const sparse_location = (try cblcGlyphLocation(&data, try cblcStrike(&data, cblc, 4, 0), 2)).?;
+    try std.testing.expectEqual(@as(i8, -2), sparse_location.shared_metrics.?.bearing_x);
+    try std.testing.expectEqual(@as(i8, 6), sparse_location.shared_metrics.?.bearing_y);
 
     writeU16Test(&data, 92, 4); // Outside the subtable's declared 1...3 range.
     try std.testing.expectError(error.BadSfnt, validateCblcCbdtTables(&data, cblc, cbdt, 4));
+}
+
+test "CBDT format 19 requires shared index-subtable metrics" {
+    const metrics = BitmapMetrics{
+        .height = 7,
+        .width = 9,
+        .bearing_x = -2,
+        .bearing_y = 6,
+        .advance = 10,
+    };
+    const valid = CblcGlyphLocation{
+        .image_format = 19,
+        .offset = 0,
+        .length = 4,
+        .shared_metrics = metrics,
+    };
+    var data: [4]u8 = .{0} ** 4;
+    const cbdt = TableRecord{ .tag = .{ 'C', 'B', 'D', 'T' }, .checksum = 0, .offset = 0, .length = data.len };
+
+    // The empty PNG length is structurally readable; this focused test is for
+    // the location-level metrics contract, before full PNG validation.
+    var missing = valid;
+    missing.shared_metrics = null;
+    try std.testing.expectError(error.BadSfnt, validateCbdtGlyphData(&data, cbdt, missing, 1));
 }
 
 test "CBLC strike glyph ranges stay within maxp glyph count" {
@@ -14416,15 +14471,15 @@ test "CBLC format 4 sparse pairs validate every glyph record" {
 test "CBLC image locations reject arithmetic overflow before CBDT slicing" {
     const max = std.math.maxInt(usize);
 
-    try std.testing.expectError(error.BadSfnt, cblcImageLocation(17, max - 4, 8, 12));
-    try std.testing.expectError(error.BadSfnt, cblcImageLocation(17, max - 4, 2, 8));
+    try std.testing.expectError(error.BadSfnt, cblcImageLocation(17, max - 4, 8, 12, null));
+    try std.testing.expectError(error.BadSfnt, cblcImageLocation(17, max - 4, 2, 8, null));
     try std.testing.expectError(error.BadSfnt, checkedCblcImageStart(max / 2 + 1, 2));
     try std.testing.expectError(error.BadSfnt, checkedCblcImageEnd(max - 1, 2));
 
-    const missing = try cblcImageLocation(17, 10, 4, 4);
+    const missing = try cblcImageLocation(17, 10, 4, 4, null);
     try std.testing.expectEqual(@as(?CblcGlyphLocation, null), missing);
 
-    const location = (try cblcImageLocation(17, 10, 4, 8)).?;
+    const location = (try cblcImageLocation(17, 10, 4, 8, null)).?;
     try std.testing.expectEqual(@as(usize, 14), location.offset);
     try std.testing.expectEqual(@as(usize, 4), location.length);
 }

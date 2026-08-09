@@ -2903,6 +2903,37 @@ test "renders CBDT RGBA PNG at bitmap bearings with premultiplied source-over" {
     try std.testing.expectEqual(Rgba{ .r = 0, .g = 128, .b = 0, .a = 128 }, target.at(7, 6));
 }
 
+test "renders CBDT format 19 with shared CBLC metrics" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildCbdtFormat19PngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex('A');
+
+    const info = (try font.bitmapGlyphInfo(glyph_id, 16)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(?u16, 19), info.image_format);
+    try std.testing.expectEqual(@as(i16, 4), info.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 11), info.origin_offset_y);
+    try std.testing.expectEqual(@as(u32, 1), info.width);
+    try std.testing.expectEqual(@as(u32, 1), info.height);
+
+    const bitmap = (try font.bitmapGlyphPng(glyph_id, 16)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(i16, 4), bitmap.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 11), bitmap.origin_offset_y);
+
+    var target = try ColorRenderTarget.init(allocator, 32, 32);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, glyph_id, 16, 5, 20, 0);
+    // Format 19 has no inline metrics: CBLC index format 2 supplies the shared
+    // bearing, placing this pixel at (5 + 4, 20 - 11) = (9, 9).
+    try std.testing.expectEqual(Rgba{ .r = 128, .g = 0, .b = 0, .a = 128 }, target.at(9, 9));
+    try std.testing.expectEqual(@as(u8, 0), target.at(5, 20).a);
+}
+
 test "bitmap-only fonts leave missing strike glyphs transparent" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

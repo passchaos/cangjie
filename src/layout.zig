@@ -188,14 +188,19 @@ pub const ShapePlanKey = struct {
     variation_hash: u64 = 0,
 
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
+        const infer_both = options.script_tag == null and options.language_tag == null;
+        const inferred = if (infer_both)
+            unicode.inferOpenTypeProperties(text)
+        else
+            undefined;
         return .{
             .direction = options.direction,
             .reorder_bidi = options.reorder_bidi,
             .native_direction_shaping = options.native_direction_shaping,
             .writing_mode = options.writing_mode,
             .text_orientation = options.text_orientation,
-            .script_tag = effectiveScriptTag(text, options),
-            .language_tag = effectiveLanguageTag(text, options),
+            .script_tag = options.script_tag orelse unicode.openTypeScriptTag(if (infer_both) inferred.script else unicode.inferOpenTypeScript(text)),
+            .language_tag = options.language_tag orelse if (infer_both) inferred.language else unicode.inferOpenTypeLanguageTag(text),
             .script_position = options.script_position,
             .feature_hash = featureOverridesHash(options.features),
             .variation_hash = normalizedVariationCoordsHash(options.normalized_variation_coords),
@@ -3066,12 +3071,17 @@ const LookupOptions = struct {
 };
 
 fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
-    const script = scriptForText(text);
+    const infer_language = options.language_tag == null;
+    const inferred = if (infer_language)
+        unicode.inferOpenTypeProperties(text)
+    else
+        undefined;
+    const script = if (infer_language) inferred.script else unicode.inferOpenTypeScript(text);
     return .{
         .script = script,
         .script_tag = options.script_tag orelse unicode.openTypeScriptTag(script),
         .script_tag_explicit = options.script_tag != null,
-        .language_tag = effectiveLanguageTag(text, options),
+        .language_tag = options.language_tag orelse inferred.language,
         .direction = options.direction,
         .reorder_bidi = options.reorder_bidi,
         .native_direction_shaping = options.native_direction_shaping,
@@ -3081,10 +3091,6 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) LookupOptions {
         .text_orientation = options.text_orientation,
         .normalized_variation_coords = options.normalized_variation_coords,
     };
-}
-
-fn effectiveScriptTag(text: []const u8, options: ShapeOptions) unicode.OpenTypeScriptTag {
-    return options.script_tag orelse unicode.openTypeScriptTag(scriptForText(text));
 }
 
 fn effectiveLanguageTag(text: []const u8, options: ShapeOptions) unicode.OpenTypeLanguageTag {
@@ -3158,15 +3164,6 @@ fn cascadeHash(cascade: FontCascade) u64 {
         hasher.update(std.mem.asBytes(&addr));
     }
     return hasher.final();
-}
-
-fn scriptForText(text: []const u8) unicode.Script {
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.nextCodepoint()) |codepoint| {
-        const script = unicode.scriptForCodepoint(codepoint);
-        if (script != .common and script != .inherited and script != .unknown) return script;
-    }
-    return .common;
 }
 
 fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, base_lookup_options: LookupOptions) !void {

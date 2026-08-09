@@ -3338,7 +3338,14 @@ test "detects scripts and itemizes script runs" {
     try std.testing.expectEqual(OpenTypeLanguageTag.zhs, inferOpenTypeLanguageTag("一丁"));
     try std.testing.expectEqual(OpenTypeLanguageTag.kor, inferOpenTypeLanguageTag("한글"));
     try std.testing.expectEqual(OpenTypeLanguageTag.ara, inferOpenTypeLanguageTag("ب"));
+    try std.testing.expectEqual(OpenTypeLanguageTag.dflt, inferOpenTypeLanguageTag("ASCII 123"));
     try std.testing.expectEqual(OpenTypeLanguageTag.dflt, inferOpenTypeLanguageTag("A\xff一"));
+    const han_japanese = @import("unicode.zig").inferOpenTypeProperties("一あ");
+    try std.testing.expectEqual(Script.han, han_japanese.script);
+    try std.testing.expectEqual(OpenTypeLanguageTag.jan, han_japanese.language);
+    const ascii = @import("unicode.zig").inferOpenTypeProperties("ASCII 123");
+    try std.testing.expectEqual(Script.latin, ascii.script);
+    try std.testing.expectEqual(OpenTypeLanguageTag.dflt, ascii.language);
     try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .jan), openTypeLanguageTagForLocale("ja-JP"));
     try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .zhs), openTypeLanguageTagForLocale("zh-Hans-CN"));
     try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .zht), openTypeLanguageTagForLocale("zh-Hant-TW"));

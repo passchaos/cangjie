@@ -613,6 +613,20 @@ Current local snapshot after the Nastaliq parity work:
   Amiri `fa-words` A/B/B/A check improved `1290.691` to
   `1285.697 ns/glyph`, about `0.39%`. Full HarfBuzz parity for all three
   corpora and HarfRust parity for Roboto remained unchanged.
+- Default OpenType script and language inference now shares one UTF-8/Script
+  scan instead of classifying the leading strong scalar once for each
+  property. The combined state still follows later CJK language hints, so Han
+  followed by Hiragana selects the Han script and Japanese LangSys; explicit
+  language callers retain the early-exit script-only path. ASCII bytes bypass
+  UTF-8 decoding, and after the first strong ASCII script they also bypass
+  Unicode Script lookup. A fixed-CPU-30 41-sample A/B/B/A comparison reduced
+  Roboto `en-words` from `299.186` to `287.023 ns/glyph`, about `4.07%`;
+  Amiri `fa-words` improved from `1286.669` to `1278.313 ns/glyph`, about
+  `0.65%`; and Amiri `fa-thelittleprince` remained effectively flat but
+  slightly faster (`743.725` to `743.144 ns/glyph`). Roboto profile
+  `options_ns` fell from about `1.13 ms` before this work to about `0.39 ms`.
+  Full HarfBuzz parity for all three corpora and the retained multi-script USE
+  fixture remained unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

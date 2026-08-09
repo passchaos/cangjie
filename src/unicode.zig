@@ -887,29 +887,80 @@ pub fn openTypeScriptHorizontalDirection(script_tag: OpenTypeScriptTag) ?BidiCla
     };
 }
 
-/// Infer a coarse OpenType language tag from script content when the caller did
-/// not specify one. This gives CJK, Arabic, and Indic fonts a better default
-/// LangSys than always using `dflt`.
-pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
+/// Script and language properties inferred together for OpenType selection.
+pub const InferredOpenTypeProperties = struct {
+    script: Script,
+    language: OpenTypeLanguageTag,
+};
+
+/// Infer only the first strong script, for callers that already have an
+/// explicit language and therefore should not scan the remainder of the text.
+pub fn inferOpenTypeScript(text: []const u8) Script {
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const decoded = decodeCodepointAt(text, cursor) orelse return .common;
+        cursor = decoded.next;
+        const script = scriptForCodepoint(decoded.codepoint);
+        if (isStrongInferredScript(script)) return script;
+    }
+    return .common;
+}
+
+/// Infer the first strong script and the coarse default language in one scan.
+///
+/// Script selection needs the first non-Common/Inherited/Unknown script, while
+/// language selection may inspect later content (for example Han followed by
+/// Hiragana is Japanese). Keeping both decisions in one state machine avoids
+/// decoding and classifying the same leading scalar twice during shaping.
+pub fn inferOpenTypeProperties(text: []const u8) InferredOpenTypeProperties {
+    var text_script: Script = .common;
     var saw_han = false;
     var cursor: usize = 0;
     while (cursor < text.len) {
-        const decoded = decodeCodepointAt(text, cursor) orelse return .dflt;
+        if (text[cursor] < 0x80) {
+            // No inferred non-default language uses an ASCII script. Once a
+            // strong script is known, the remaining ASCII bytes therefore
+            // require neither UTF-8 decoding nor Unicode Script lookup.
+            if (text_script == .common) {
+                const script = scriptForCodepoint(@intCast(text[cursor]));
+                if (isStrongInferredScript(script)) text_script = script;
+            }
+            cursor += 1;
+            continue;
+        }
+
+        const decoded = decodeCodepointAt(text, cursor) orelse return .{
+            .script = text_script,
+            .language = .dflt,
+        };
         const codepoint = decoded.codepoint;
         cursor = decoded.next;
         const script = scriptForCodepoint(codepoint);
+        if (text_script == .common and isStrongInferredScript(script)) {
+            text_script = script;
+        }
         switch (script) {
-            .hiragana, .katakana => return .jan,
-            .hangul => return .kor,
-            .arabic => return .ara,
-            .devanagari => return .hin,
-            .bengali, .odia, .gurmukhi, .telugu, .kannada, .tamil, .thai, .lao => return .dflt,
+            .hiragana, .katakana => return .{ .script = text_script, .language = .jan },
+            .hangul => return .{ .script = text_script, .language = .kor },
+            .arabic => return .{ .script = text_script, .language = .ara },
+            .devanagari => return .{ .script = text_script, .language = .hin },
+            .bengali, .odia, .gurmukhi, .telugu, .kannada, .tamil, .thai, .lao => return .{ .script = text_script, .language = .dflt },
             .han => saw_han = true,
             else => {},
         }
     }
-    if (saw_han) return .zhs;
-    return .dflt;
+    return .{
+        .script = text_script,
+        .language = if (saw_han) .zhs else .dflt,
+    };
+}
+
+fn isStrongInferredScript(script: Script) bool {
+    return script != .common and script != .inherited and script != .unknown;
+}
+
+pub fn inferOpenTypeLanguageTag(text: []const u8) OpenTypeLanguageTag {
+    return inferOpenTypeProperties(text).language;
 }
 
 /// Map a BCP47-ish locale tag to the OpenType language-system tags currently

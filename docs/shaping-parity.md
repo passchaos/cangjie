@@ -601,6 +601,18 @@ Current local snapshot after the Nastaliq parity work:
   `perf` no longer reports `layout.markSortClass` above the `0.1%` threshold;
   it was about `2.33%` in the same-baseline profile. All corpus and retained
   USE parity checksums remain unchanged.
+- Final glyph positioning now reserves the post-GSUB glyph count once and uses
+  assume-capacity appends in the output loop. Positioning can remove untouched
+  default-ignorables when no invisible glyph exists, but it cannot increase
+  cardinality, so the post-GSUB stream is a guaranteed capacity upper bound
+  while keeping the suppression path unchanged. Fixed-CPU-30 A/B/B/A plus reverse
+  B/A/A/B comparisons, with four 31/41-sample medians per binary, improved
+  Roboto `en-words` from a combined mean of `302.094` to
+  `301.152 ns/glyph`, about `0.31%`, and Amiri `fa-thelittleprince` from
+  `746.936` to `744.978 ns/glyph`, about `0.26%`. A separate 31-sample
+  Amiri `fa-words` A/B/B/A check improved `1290.691` to
+  `1285.697 ns/glyph`, about `0.39%`. Full HarfBuzz parity for all three
+  corpora and HarfRust parity for Roboto remained unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

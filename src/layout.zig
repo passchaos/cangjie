@@ -3583,6 +3583,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     else
         0;
     const segment_glyph_start = buffer.glyphs.items.len;
+    // Positioning can suppress untouched default-ignorables but never emits
+    // more final glyphs than the post-GSUB stream. Reserve the segment once so
+    // the output loop does not repeat a large GlyphPosition capacity check.
+    try buffer.glyphs.ensureUnusedCapacity(buffer.allocator, glyph_ids.items.len);
     const attachment_links = &scratch.attachment_links;
     try attachment_links.resize(buffer.allocator, glyph_ids.items.len);
     @memset(attachment_links.items, .{});
@@ -3692,7 +3696,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         else
             0.0;
         glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
-        try buffer.glyphs.append(buffer.allocator, .{
+        buffer.glyphs.appendAssumeCapacity(.{
             .glyph_id = output_glyph_id,
             .codepoint = source_codepoint,
             .cluster = source_span.start,

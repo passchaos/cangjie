@@ -3794,7 +3794,6 @@ pub const Font = struct {
         data_table: TableRecord,
         size_px: f32,
         best_ppem: *?u16,
-        best_distance: *f32,
     ) FontError!void {
         try validateSfntTableChecksum(self.data, location_table);
         try validateSfntTableChecksum(self.data, data_table);
@@ -3802,7 +3801,7 @@ pub const Font = struct {
         const strike_count = try cblcStrikeCount(self.data, location_table);
         for (0..strike_count) |strike_index| {
             const strike = try cblcStrike(self.data, location_table, self.glyph_count, strike_index);
-            recordBestBitmapPpem(strike.ppem, size_px, best_ppem, best_distance);
+            recordBestBitmapPpem(strike.ppem, size_px, best_ppem);
         }
     }
 
@@ -3840,7 +3839,6 @@ pub const Font = struct {
     pub fn bestBitmapStrikePpem(self: *const Font, size_px: f32) FontError!?u16 {
         try validateBitmapRequestSize(size_px);
         var best_ppem: ?u16 = null;
-        var best_distance: f32 = std.math.inf(f32);
 
         if (self.sbix) |sbix| {
             try validateSfntTableChecksum(self.data, sbix);
@@ -3852,7 +3850,7 @@ pub const Font = struct {
             const strike_count = try sbixStrikeCount(self.data, sbix);
             for (0..strike_count) |strike_index| {
                 const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-                recordBestBitmapPpem(strike.ppem, size_px, &best_ppem, &best_distance);
+                recordBestBitmapPpem(strike.ppem, size_px, &best_ppem);
             }
         }
 
@@ -3861,22 +3859,22 @@ pub const Font = struct {
             // indexes. Revalidating both tables here keeps this metadata-only
             // query from returning a ppem for a borrowed bitmap table whose
             // referenced image bytes no longer satisfy the parser invariants.
-            try self.recordBestBitmapPpemFromLocationTables(self.cblc.?, self.cbdt.?, size_px, &best_ppem, &best_distance);
+            try self.recordBestBitmapPpemFromLocationTables(self.cblc.?, self.cbdt.?, size_px, &best_ppem);
         }
         if (self.eblc != null and self.ebdt != null) {
-            try self.recordBestBitmapPpemFromLocationTables(self.eblc.?, self.ebdt.?, size_px, &best_ppem, &best_distance);
+            try self.recordBestBitmapPpemFromLocationTables(self.eblc.?, self.ebdt.?, size_px, &best_ppem);
         }
 
         return best_ppem;
     }
 
-    /// Return embedded bitmap metadata for the best strike near `size_px`.
+    /// Return bitmap metadata from the exact, nearest larger, or largest
+    /// smaller strike, in that order.
     pub fn bitmapGlyphInfo(self: *const Font, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateBitmapRequestSize(size_px);
 
         var best: ?BitmapGlyphInfo = null;
-        var best_distance: f32 = std.math.inf(f32);
 
         if (self.sbix) |sbix| {
             try validateSfntTableChecksum(self.data, sbix);
@@ -3884,7 +3882,7 @@ pub const Font = struct {
             const strike_count = try sbixStrikeCount(self.data, sbix);
             for (0..strike_count) |strike_index| {
                 const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-                if (try sbixGlyphInfo(self.data, strike, glyph_id, self.glyph_count)) |info| recordBestBitmapInfo(info, size_px, &best, &best_distance);
+                if (try sbixGlyphInfo(self.data, strike, glyph_id, self.glyph_count)) |info| recordBestBitmapInfo(info, size_px, &best);
             }
             if (best) |info| return info;
         }
@@ -3917,16 +3915,11 @@ pub const Font = struct {
             try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             var best: ?BitmapGlyphPng = null;
-            var best_distance: f32 = std.math.inf(f32);
             for (0..strike_count) |strike_index| {
                 const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
                 const maybe_glyph = try sbixGlyphPng(self.data, strike, glyph_id, self.glyph_count);
                 if (maybe_glyph) |glyph| {
-                    const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
-                    if (best == null or distance < best_distance) {
-                        best = glyph;
-                        best_distance = distance;
-                    }
+                    if (best == null or bitmapPpemIsPreferred(glyph.ppem, best.?.ppem, size_px)) best = glyph;
                 }
             }
             if (best) |glyph| return glyph;
@@ -4814,27 +4807,58 @@ const BitmapMetrics = struct {
     advance: u8,
 };
 
-fn recordBestBitmapPpem(ppem: u16, size_px: f32, best_ppem: *?u16, best_distance: *f32) void {
-    const distance = @abs(@as(f32, @floatFromInt(ppem)) - size_px);
-    if (best_ppem.* == null or distance < best_distance.*) {
-        best_ppem.* = ppem;
-        best_distance.* = distance;
-    }
+fn bitmapPpemIsPreferred(candidate: u16, current: u16, size_px: f32) bool {
+    const candidate_size: f32 = @floatFromInt(candidate);
+    const current_size: f32 = @floatFromInt(current);
+    const candidate_is_large_enough = candidate_size >= size_px;
+    const current_is_large_enough = current_size >= size_px;
+
+    // Prefer the smallest strike that does not require upscaling. If every
+    // available strike is smaller than the request, use the largest one. This
+    // exact -> nearest larger -> nearest smaller policy matches modern Skrifa
+    // and HarfBuzz and avoids magnifying low-resolution emoji merely because
+    // that strike is numerically closer to the requested size.
+    if (candidate_is_large_enough != current_is_large_enough) return candidate_is_large_enough;
+    return if (candidate_is_large_enough) candidate < current else candidate > current;
 }
 
-fn recordBestBitmapInfo(candidate: BitmapGlyphInfo, size_px: f32, best: *?BitmapGlyphInfo, best_distance: *f32) void {
-    const distance = @abs(@as(f32, @floatFromInt(candidate.ppem)) - size_px);
-    if (best.* == null or distance < best_distance.*) {
-        best.* = candidate;
-        best_distance.* = distance;
-    }
+fn recordBestBitmapPpem(ppem: u16, size_px: f32, best_ppem: *?u16) void {
+    if (best_ppem.* == null or bitmapPpemIsPreferred(ppem, best_ppem.*.?, size_px)) best_ppem.* = ppem;
+}
+
+fn recordBestBitmapInfo(candidate: BitmapGlyphInfo, size_px: f32, best: *?BitmapGlyphInfo) void {
+    if (best.* == null or bitmapPpemIsPreferred(candidate.ppem, best.*.?.ppem, size_px)) best.* = candidate;
+}
+
+test "bitmap strike preference avoids upscaling when a larger strike exists" {
+    try std.testing.expect(bitmapPpemIsPreferred(64, 16, 17));
+    try std.testing.expect(!bitmapPpemIsPreferred(16, 64, 17));
+    try std.testing.expect(bitmapPpemIsPreferred(64, 128, 17));
+    try std.testing.expect(bitmapPpemIsPreferred(128, 64, 200));
+    try std.testing.expect(!bitmapPpemIsPreferred(16, 64, 200));
+    try std.testing.expect(!bitmapPpemIsPreferred(64, 64, 64));
+
+    var best: ?u16 = null;
+    for ([_]u16{ 128, 16, 64 }) |ppem| recordBestBitmapPpem(ppem, 17, &best);
+    try std.testing.expectEqual(@as(?u16, 64), best);
+
+    best = null;
+    for ([_]u16{ 16, 128, 64 }) |ppem| recordBestBitmapPpem(ppem, 200, &best);
+    try std.testing.expectEqual(@as(?u16, 128), best);
+
+    // Candidate enumeration is glyph-specific. If the nearest nominal strike
+    // has no image for this glyph, the next larger available image still wins
+    // over a smaller image that would require upscaling.
+    best = null;
+    for ([_]u16{ 16, 128 }) |ppem| recordBestBitmapPpem(ppem, 17, &best);
+    try std.testing.expectEqual(@as(?u16, 128), best);
 }
 
 fn validateBitmapRequestSize(size_px: f32) FontError!void {
     // Public bitmap selection compares the requested CSS/device pixel size
     // against strike ppem values. NaN/Inf and non-positive sizes do not name a
-    // meaningful target strike and can otherwise poison the "best distance"
-    // comparison, causing APIs to return arbitrary metadata or null.
+    // meaningful target strike and can otherwise poison ordered size
+    // comparisons, causing APIs to return arbitrary metadata or null.
     if (!std.math.isFinite(size_px) or size_px <= 0) return error.InvalidBitmapSize;
 }
 
@@ -5095,12 +5119,11 @@ fn cblcStrike(data: []const u8, cblc: TableRecord, glyph_count: u16, strike_inde
 
 fn cblcGlyphInfo(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16, glyph_id: glyph_mod.GlyphId, size_px: f32, source: BitmapStrikeSource) FontError!?BitmapGlyphInfo {
     var best: ?BitmapGlyphInfo = null;
-    var best_distance: f32 = std.math.inf(f32);
     const strike_count = try cblcStrikeCount(data, cblc);
     for (0..strike_count) |strike_index| {
         const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
         const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
-        if (try cbdtGlyphInfo(data, cbdt, strike, location, glyph_id, source)) |info| recordBestBitmapInfo(info, size_px, &best, &best_distance);
+        if (try cbdtGlyphInfo(data, cbdt, strike, location, glyph_id, source)) |info| recordBestBitmapInfo(info, size_px, &best);
     }
     return best;
 }
@@ -5116,17 +5139,12 @@ fn cblcGlyphPng(
 ) FontError!?BitmapGlyphPng {
     const strike_count = try cblcStrikeCount(data, cblc);
     var best: ?BitmapGlyphPng = null;
-    var best_distance: f32 = std.math.inf(f32);
     for (0..strike_count) |strike_index| {
         const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
         if (glyph_id < strike.start_glyph or glyph_id > strike.end_glyph) continue;
         const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
         const glyph = (try cbdtGlyphPng(data, cbdt, strike, location, source)) orelse continue;
-        const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
-        if (best == null or distance < best_distance) {
-            best = glyph;
-            best_distance = distance;
-        }
+        if (best == null or bitmapPpemIsPreferred(glyph.ppem, best.?.ppem, size_px)) best = glyph;
     }
     return best;
 }

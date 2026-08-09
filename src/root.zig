@@ -2934,6 +2934,37 @@ test "renders CBDT format 19 with shared CBLC metrics" {
     try std.testing.expectEqual(@as(u8, 0), target.at(5, 20).a);
 }
 
+test "selects a larger CBDT strike before upscaling a smaller image when available" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = "/home/passchaos/Work/fontations/font-test-data/test_data/ttf/cbdt.ttf";
+    const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return,
+        else => return err,
+    };
+    defer allocator.free(data);
+
+    var font = try Font.parse(allocator, data);
+    defer font.deinit();
+    const glyph_id: GlyphId = 2;
+
+    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(12));
+    try std.testing.expectEqual(@as(?u16, 64), try font.bestBitmapStrikePpem(17));
+    try std.testing.expectEqual(@as(?u16, 64), try font.bestBitmapStrikePpem(60));
+    try std.testing.expectEqual(@as(?u16, 128), try font.bestBitmapStrikePpem(65));
+    try std.testing.expectEqual(@as(?u16, 128), try font.bestBitmapStrikePpem(200));
+
+    const at_17 = (try font.bitmapGlyphPng(glyph_id, 17)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(u16, 64), at_17.ppem);
+    try std.testing.expectEqual(@as(u32, 39), at_17.width);
+    try std.testing.expectEqual(@as(u32, 52), at_17.height);
+
+    const info = (try font.bitmapGlyphInfo(glyph_id, 17)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(u16, 64), info.ppem);
+    try std.testing.expectEqual(at_17.width, info.width);
+    try std.testing.expectEqual(at_17.height, info.height);
+}
+
 test "bitmap-only fonts leave missing strike glyphs transparent" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

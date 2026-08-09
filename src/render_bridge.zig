@@ -162,6 +162,7 @@ pub const ColorGlyphDrawCommand = struct {
     color_stop_start: usize = 0,
     color_stop_len: usize = 0,
     svg_document: ?[]const u8 = null,
+    owns_svg_document: bool = false,
     embedded_png: ?font_mod.BitmapGlyphPng = null,
     has_colr_v1_paint: bool = false,
     paint: ColorGlyphPaint = .none,
@@ -194,6 +195,9 @@ pub const GlyphDrawList = struct {
         self.allocator.free(self.normalized_variation_coords);
         self.allocator.free(self.color_stops);
         self.allocator.free(self.color_layers);
+        for (self.color_glyphs) |command| {
+            if (command.owns_svg_document) self.allocator.free(command.svg_document.?);
+        }
         self.allocator.free(self.color_glyphs);
         self.allocator.free(self.path_requests);
         self.allocator.free(self.atlas_requests);
@@ -241,6 +245,9 @@ const BridgeBuilder = struct {
         self.selection.deinit(self.allocator);
         self.color_stops.deinit(self.allocator);
         self.color_layers.deinit(self.allocator);
+        for (self.color_glyphs.items) |command| {
+            if (command.owns_svg_document) self.allocator.free(command.svg_document.?);
+        }
         self.color_glyphs.deinit(self.allocator);
         self.path_requests.deinit(self.allocator);
         self.atlas_requests.deinit(self.allocator);
@@ -381,8 +388,15 @@ const BridgeBuilder = struct {
             });
         }
 
-        const svg_document = try font.svgDocument(glyph_id);
         const color_paint = try font.colorPaintAtCoords(glyph_id, self.options.normalized_variation_coords);
+        // COLR has priority over SVG. Avoid decoding a lower-priority gzip SVG
+        // document when the same glyph already selected a COLR source.
+        var resolved_svg = if (layer_start == self.color_layers.items.len and color_paint == null)
+            try font.resolvedSvgGlyphDocumentForRaster(self.allocator, glyph_id)
+        else
+            null;
+        defer if (resolved_svg) |*document| document.deinit();
+        const svg_document = if (resolved_svg) |document| document.data else null;
         const color_stop_start = self.color_stops.items.len;
         if (color_paint) |paint| {
             if (colorPaintLine(paint)) |color_line| {
@@ -415,6 +429,17 @@ const BridgeBuilder = struct {
             .has_colr_v1_paint = color_paint != null,
             .paint = colorGlyphPaint(layer_start, layer_len, selected_svg, color_paint, selected_png),
         });
+        // Appending the command is the only fallible operation after selecting
+        // the document. Transfer gzip ownership only after that succeeds so an
+        // allocation failure still leaves the resolved handle responsible for
+        // freeing its decoded buffer.
+        if (selected_svg != null) {
+            if (resolved_svg) |*document| {
+                if (document.takeOwnedData() != null) {
+                    self.color_glyphs.items[color_index].owns_svg_document = true;
+                }
+            }
+        }
         return color_index;
     }
 
@@ -445,18 +470,39 @@ const BridgeBuilder = struct {
     fn toOwnedList(self: *BridgeBuilder) !GlyphDrawList {
         const normalized_variation_coords = try self.allocator.dupe(f32, self.options.normalized_variation_coords);
         errdefer self.allocator.free(normalized_variation_coords);
+        const glyphs = try self.glyphs.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(glyphs);
+        const runs = try self.runs.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(runs);
+        const atlas_requests = try self.atlas_requests.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(atlas_requests);
+        const path_requests = try self.path_requests.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(path_requests);
+        const color_glyphs = try self.color_glyphs.toOwnedSlice(self.allocator);
+        errdefer {
+            for (color_glyphs) |command| {
+                if (command.owns_svg_document) self.allocator.free(command.svg_document.?);
+            }
+            self.allocator.free(color_glyphs);
+        }
+        const color_layers = try self.color_layers.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(color_layers);
+        const color_stops = try self.color_stops.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(color_stops);
+        const selection = try self.selection.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(selection);
         const result = GlyphDrawList{
             .allocator = self.allocator,
-            .glyphs = try self.glyphs.toOwnedSlice(self.allocator),
-            .runs = try self.runs.toOwnedSlice(self.allocator),
-            .atlas_requests = try self.atlas_requests.toOwnedSlice(self.allocator),
-            .path_requests = try self.path_requests.toOwnedSlice(self.allocator),
-            .color_glyphs = try self.color_glyphs.toOwnedSlice(self.allocator),
-            .color_layers = try self.color_layers.toOwnedSlice(self.allocator),
-            .color_stops = try self.color_stops.toOwnedSlice(self.allocator),
+            .glyphs = glyphs,
+            .runs = runs,
+            .atlas_requests = atlas_requests,
+            .path_requests = path_requests,
+            .color_glyphs = color_glyphs,
+            .color_layers = color_layers,
+            .color_stops = color_stops,
             .normalized_variation_coords = normalized_variation_coords,
             .cursor = self.cursor,
-            .selection = try self.selection.toOwnedSlice(self.allocator),
+            .selection = selection,
         };
         // Requests live as long as the draw list, not as long as the caller's
         // BridgeOptions. Rebind every borrowed location to the single owned
@@ -687,6 +733,34 @@ test "render bridge emits color glyph layer metadata" {
     try std.testing.expectEqual(@as(u16, 0), draw_list.color_layers[0].palette_index);
     try std.testing.expectEqual(@as(u8, 255), draw_list.color_layers[0].color.?.red);
     try std.testing.expectEqual(@as(u8, 255), draw_list.color_layers[1].color.?.blue);
+}
+
+test "render bridge owns decoded gzip SVG documents" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildGzipSvgTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const font_mod.Font{&font};
+    const cascade = layout.FontCascade.init(&fonts);
+    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+        .max_width = 100,
+        .line_height = 24,
+    });
+
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{});
+    defer draw_list.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), draw_list.color_glyphs.len);
+    const command = draw_list.color_glyphs[0];
+    try std.testing.expect(command.owns_svg_document);
+    try std.testing.expect(std.mem.startsWith(u8, command.svg_document.?, "<svg"));
+    try std.testing.expect(std.mem.indexOf(u8, command.svg_document.?, "<rect") != null);
+    try std.testing.expectEqualSlices(u8, command.svg_document.?, command.paint.svg_document);
 }
 
 test "render bridge emits embedded PNG color atlas metadata" {

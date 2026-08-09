@@ -7,6 +7,9 @@
         .imx = .{
             .path = "../imx",
         },
+        .vort = .{
+            .path = "../vort",
+        },
     },
     .paths = .{
         "build.zig",

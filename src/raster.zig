@@ -937,8 +937,10 @@ pub const Rasterizer = struct {
                 }
                 return;
             }
-            if (try font.svgDocument(glyph_id)) |document| {
-                var maybe_svg_paint = try parseSvgPaint(self.allocator, glyph_id, document);
+            if (try font.resolvedSvgGlyphDocumentForRaster(self.allocator, glyph_id)) |resolved_value| {
+                var resolved = resolved_value;
+                defer resolved.deinit();
+                var maybe_svg_paint = try parseSvgPaint(self.allocator, glyph_id, resolved.data);
                 if (maybe_svg_paint) |*svg_paint| {
                     defer svg_paint.deinit();
                     for (svg_paint.paths) |*path| {

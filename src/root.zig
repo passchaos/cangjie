@@ -209,6 +209,7 @@ pub const PaletteInfo = @import("font.zig").PaletteInfo;
 pub const PcltInfo = @import("font.zig").PcltInfo;
 pub const PostInfo = @import("font.zig").PostInfo;
 pub const SvgGlyphDocument = @import("font.zig").SvgGlyphDocument;
+pub const ResolvedSvgGlyphDocument = @import("font.zig").ResolvedSvgGlyphDocument;
 pub const StatAxisValue = @import("font.zig").StatAxisValue;
 pub const StatAxisValueCoordinate = @import("font.zig").StatAxisValueCoordinate;
 pub const StatDesignAxis = @import("font.zig").StatDesignAxis;
@@ -5328,6 +5329,72 @@ test "renders OpenType SVG glyph document into an RGBA target" {
     }
     try std.testing.expect(red_pixels > 20);
     try std.testing.expectEqual(@as(usize, 0), non_red_pixels);
+}
+
+test "resolves and renders gzip OpenType SVG documents" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildGzipSvgTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const raw = (try font.svgGlyphDocument(1)) orelse return error.MissingSvgGlyph;
+    try std.testing.expectEqualSlices(u8, &.{ 0x1f, 0x8b, 0x08 }, raw.data[0..3]);
+
+    var resolved = (try font.resolvedSvgGlyphDocument(allocator, 1)) orelse return error.MissingSvgGlyph;
+    defer resolved.deinit();
+    try std.testing.expect(resolved.allocator != null);
+    try std.testing.expect(std.mem.startsWith(u8, resolved.data, "<svg"));
+    try std.testing.expect(std.mem.indexOf(u8, resolved.data, "<rect") != null);
+
+    var target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, 1, 24, 8, 32, 0);
+
+    var red_pixels: usize = 0;
+    for (target.pixels) |pixel| {
+        if (pixel.r > 0 and pixel.g == 0 and pixel.b == 0 and pixel.a > 0) red_pixels += 1;
+    }
+    try std.testing.expect(red_pixels > 50);
+}
+
+test "resolves real HarfBuzz gzip SVG fixture" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = "/home/passchaos/Work/harfbuzz/test/shape/data/text-rendering-tests/fonts/TestSVGgzip.otf";
+    const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return,
+        else => return err,
+    };
+    defer allocator.free(data);
+
+    var font = try Font.parse(allocator, data);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex(0x1f600);
+    try std.testing.expectEqual(@as(GlyphId, 3), glyph_id);
+
+    var resolved = (try font.resolvedSvgGlyphDocument(allocator, glyph_id)) orelse return error.MissingSvgGlyph;
+    defer resolved.deinit();
+    try std.testing.expectEqual(@as(usize, 3166), resolved.data.len);
+    try std.testing.expect(std.mem.startsWith(u8, resolved.data, "<svg"));
+    try std.testing.expect(std.mem.indexOf(u8, resolved.data, "<linearGradient") != null);
+
+    var target = try ColorRenderTarget.init(allocator, 160, 160);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, glyph_id, 128, 16, 144, 0);
+    var painted_pixels: usize = 0;
+    var colored_pixels: usize = 0;
+    for (target.pixels) |pixel| {
+        if (pixel.a == 0) continue;
+        painted_pixels += 1;
+        if (pixel.r != pixel.g or pixel.g != pixel.b) colored_pixels += 1;
+    }
+    try std.testing.expect(painted_pixels > 400);
+    try std.testing.expect(colored_pixels > 400);
 }
 
 test "renders OpenType SVG glyph with multiple curved paths" {

@@ -7,6 +7,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const vort_dep = b.dependency("vort", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const mod = b.addModule("cangjie", .{
         .root_source_file = b.path("src/root.zig"),
@@ -14,6 +18,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "imx", .module = imx_dep.module("imx") },
+            .{ .name = "vort", .module = vort_dep.module("vort") },
         },
     });
 

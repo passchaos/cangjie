@@ -1,4 +1,5 @@
 const std = @import("std");
+const vort = @import("vort");
 const ankr_mod = @import("opentype/ankr.zig");
 const base_mod = @import("opentype/base.zig");
 const bin = @import("binary.zig");
@@ -728,6 +729,35 @@ pub const SvgGlyphDocument = struct {
     start_glyph_id: glyph_mod.GlyphId,
     end_glyph_id: glyph_mod.GlyphId,
     data: []const u8,
+};
+
+/// Validated SVG XML ready for a renderer.
+///
+/// Plain documents borrow the Font's backing SFNT bytes. Gzip documents own a
+/// bounded decoded allocation. Keeping ownership in the handle prevents callers
+/// from accidentally retaining a temporary decompression buffer through the
+/// existing borrowed-slice API.
+pub const ResolvedSvgGlyphDocument = struct {
+    start_glyph_id: glyph_mod.GlyphId,
+    end_glyph_id: glyph_mod.GlyphId,
+    data: []const u8,
+    allocator: ?std.mem.Allocator = null,
+
+    pub fn deinit(self: *ResolvedSvgGlyphDocument) void {
+        if (self.allocator) |allocator| allocator.free(self.data);
+        self.* = undefined;
+    }
+
+    /// Transfer a decoded gzip buffer to a longer-lived owner.
+    ///
+    /// Returns null for a document that already borrows the Font's SFNT bytes.
+    pub fn takeOwnedData(self: *ResolvedSvgGlyphDocument) ?[]u8 {
+        if (self.allocator == null) return null;
+        const data: []u8 = @constCast(self.data);
+        self.allocator = null;
+        self.data = &.{};
+        return data;
+    }
 };
 
 pub const BitmapGlyphPng = struct {
@@ -3728,7 +3758,7 @@ pub const Font = struct {
         return stops;
     }
 
-    pub fn svgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
+    fn rawSvgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const svg = self.svg orelse return null;
         try validateSfntTableChecksum(self.data, svg);
@@ -3756,6 +3786,69 @@ pub const Font = struct {
             }
         }
         return match;
+    }
+
+    /// Resolve an SVG document to validated cleartext XML.
+    ///
+    /// The returned handle must be deinitialized even though plain documents
+    /// are borrowed; gzip documents own their bounded decoded bytes.
+    pub fn resolvedSvgGlyphDocument(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!?ResolvedSvgGlyphDocument {
+        return try self.resolvedSvgGlyphDocumentForReadMode(allocator, glyph_id, .revalidate);
+    }
+
+    /// Renderer fast path for immutable fonts already validated by `Font.parse`.
+    ///
+    /// Only the matching document is decompressed; unrelated SVG records in the
+    /// same font are not repeatedly inflated for every glyph draw.
+    pub fn resolvedSvgGlyphDocumentForRaster(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!?ResolvedSvgGlyphDocument {
+        return try self.resolvedSvgGlyphDocumentForReadMode(allocator, glyph_id, .parsed);
+    }
+
+    fn resolvedSvgGlyphDocumentForReadMode(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        read_mode: OutlineReadMode,
+    ) FontError!?ResolvedSvgGlyphDocument {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const svg = self.svg orelse return null;
+        if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, svg);
+        const document_list = try svgDocumentList(self.data, svg);
+
+        var previous_end_glyph_id: ?glyph_mod.GlyphId = null;
+        var match: ?ResolvedSvgGlyphDocument = null;
+        errdefer if (match) |*document| document.deinit();
+        for (0..document_list.entry_count) |index| {
+            const record = try readSvgDocumentRecord(self.data, document_list.records_start + index * 12);
+            try validateSvgDocumentRecord(record, document_list, self.glyph_count, &previous_end_glyph_id);
+            if (read_mode.shouldRevalidate()) {
+                try validateSvgDocumentByteRangeAgainstPreviousRecords(self.data, document_list, record, index);
+            }
+            if (glyph_id < record.start_glyph_id or glyph_id > record.end_glyph_id) continue;
+            const document_start = document_list.start + record.document_offset;
+            var resolved = try resolveSvgDocumentPayload(
+                allocator,
+                self.data[document_start .. document_start + record.document_length],
+            );
+            match = .{
+                .start_glyph_id = record.start_glyph_id,
+                .end_glyph_id = record.end_glyph_id,
+                .data = resolved.data,
+                .allocator = resolved.allocator,
+            };
+            resolved.allocator = null;
+            resolved.deinit();
+            if (!read_mode.shouldRevalidate()) break;
+        }
+        return match;
+    }
+
+    /// Return the validated raw SVG table payload.
+    ///
+    /// This preserves the historical borrowed-slice API; gzip data remains
+    /// compressed. Renderers should use `resolvedSvgGlyphDocument()`.
+    pub fn svgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
+        return try self.rawSvgGlyphDocument(glyph_id);
     }
 
     pub fn svgDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
@@ -10949,6 +11042,7 @@ const SvgDocumentByteRange = struct {
 
 const gzip_magic = [_]u8{ 0x1f, 0x8b };
 const gzip_deflate_method = 8;
+const max_svg_document_size = 16 * 1024 * 1024;
 
 fn svgDocumentList(data: []const u8, svg: TableRecord) FontError!SvgDocumentList {
     if (svg.length < 10) return error.BadSfnt;
@@ -11058,10 +11152,40 @@ fn validateSvgDocumentByteRangeAgainstPreviousRecords(data: []const u8, document
 }
 
 fn validateSvgDocumentPayload(allocator: std.mem.Allocator, document: []const u8) FontError!void {
+    var resolved = try resolveSvgDocumentPayload(allocator, document);
+    defer resolved.deinit();
+}
+
+const ResolvedSvgPayload = struct {
+    data: []const u8,
+    allocator: ?std.mem.Allocator = null,
+
+    fn deinit(self: *ResolvedSvgPayload) void {
+        if (self.allocator) |allocator| allocator.free(self.data);
+        self.* = undefined;
+    }
+};
+
+fn resolveSvgDocumentPayload(allocator: std.mem.Allocator, document: []const u8) FontError!ResolvedSvgPayload {
     const payload = stripUtf8Bom(document);
     if (payload.len == 0) return error.BadSfnt;
-    if (isGzipSvgDocument(payload)) return;
+    if (payload.len > max_svg_document_size and !isGzipSvgDocument(payload)) return error.BadSfnt;
+    if (std.mem.startsWith(u8, payload, &gzip_magic)) {
+        if (!isGzipSvgDocument(payload)) return error.BadSfnt;
+        const decoded = vort.decodeGzipAllocLimited(allocator, payload, max_svg_document_size) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.BadSfnt,
+        };
+        errdefer allocator.free(decoded);
+        try validateCleartextSvgDocumentPayload(allocator, decoded);
+        return .{ .data = decoded, .allocator = allocator };
+    }
+    try validateCleartextSvgDocumentPayload(allocator, payload);
+    return .{ .data = payload };
+}
 
+fn validateCleartextSvgDocumentPayload(allocator: std.mem.Allocator, payload: []const u8) FontError!void {
+    if (payload.len == 0 or payload.len > max_svg_document_size) return error.BadSfnt;
     var stack = std.ArrayList([]const u8).empty;
     defer stack.deinit(allocator);
 
@@ -11142,12 +11266,12 @@ fn stripUtf8Bom(document: []const u8) []const u8 {
 }
 
 fn isGzipSvgDocument(document: []const u8) bool {
-    if (!std.mem.startsWith(u8, document, &gzip_magic)) return false;
-    // OpenType SVG documents may be gzip-compressed. The renderer currently
-    // only consumes cleartext XML, so parse-time validation merely recognizes a
-    // well-formed gzip header prefix and leaves decompression support to a
-    // future renderer path instead of rejecting otherwise valid SFNT metadata.
-    return document.len >= 10 and document[2] == gzip_deflate_method;
+    // The gzip trailer is eight bytes (CRC32 + ISIZE); Vort validates both
+    // fields and rejects concatenated/trailing members for this single-document
+    // OpenType payload.
+    return document.len >= 18 and
+        std.mem.startsWith(u8, document, &gzip_magic) and
+        document[2] == gzip_deflate_method;
 }
 
 fn skipXmlBeforeRootTrivia(document: []const u8, start: usize) FontError!usize {
@@ -17827,6 +17951,35 @@ test "SVG document payload root is validated at parse time" {
     bytes[document_start + 1] = 'g'; // Changes the root element from <svg ...> to a non-SVG root.
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
+test "gzip SVG payload validation checks stream integrity and decoded XML" {
+    const valid = try vort.encodeGzipFixedAlloc(std.testing.allocator, "<svg><g/></svg>");
+    defer std.testing.allocator.free(valid);
+    try validateSvgDocumentPayload(std.testing.allocator, valid);
+
+    const wrong_root = try vort.encodeGzipFixedAlloc(std.testing.allocator, "<g/>");
+    defer std.testing.allocator.free(wrong_root);
+    try std.testing.expectError(error.BadSfnt, validateSvgDocumentPayload(std.testing.allocator, wrong_root));
+
+    const bad_crc = try std.testing.allocator.dupe(u8, valid);
+    defer std.testing.allocator.free(bad_crc);
+    bad_crc[bad_crc.len - 8] ^= 1;
+    try std.testing.expectError(error.BadSfnt, validateSvgDocumentPayload(std.testing.allocator, bad_crc));
+
+    const bad_isize = try std.testing.allocator.dupe(u8, valid);
+    defer std.testing.allocator.free(bad_isize);
+    bad_isize[bad_isize.len - 4] +%= 1;
+    try std.testing.expectError(error.BadSfnt, validateSvgDocumentPayload(std.testing.allocator, bad_isize));
+
+    try std.testing.expectError(error.BadSfnt, validateSvgDocumentPayload(std.testing.allocator, &.{ 0x1f, 0x8b, 0x08 }));
+
+    // Vort consults ISIZE before allocation, so an advertised gzip bomb is
+    // rejected by the 16 MiB SVG limit without attempting that allocation.
+    const oversized = try std.testing.allocator.dupe(u8, valid);
+    defer std.testing.allocator.free(oversized);
+    std.mem.writeInt(u32, oversized[oversized.len - 4 ..][0..4], @intCast(max_svg_document_size + 1), .little);
+    try std.testing.expectError(error.BadSfnt, validateSvgDocumentPayload(std.testing.allocator, oversized));
 }
 
 test "SVG document glyph range ordering is enforced at parse time" {

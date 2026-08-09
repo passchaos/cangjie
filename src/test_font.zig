@@ -1,4 +1,5 @@
 const std = @import("std");
+const vort = @import("vort");
 
 pub fn buildMinimalTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalTtfTables(allocator));
@@ -266,6 +267,15 @@ pub fn buildMathTtf(allocator: std.mem.Allocator) ![]u8 {
 
 pub fn buildSvgTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try svgTtfTables(allocator));
+}
+
+pub fn buildGzipSvgTtf(allocator: std.mem.Allocator) ![]u8 {
+    const document =
+        \\<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="12" y="18" width="72" height="54" fill="red"/></svg>
+    ;
+    const compressed = try vort.encodeGzipFixedAlloc(allocator, document);
+    defer allocator.free(compressed);
+    return buildSfnt(allocator, 0x00010000, try svgTtfTablesForDocument(allocator, compressed));
 }
 
 pub fn buildSvgCurveTtf(allocator: std.mem.Allocator) ![]u8 {
@@ -1519,9 +1529,16 @@ fn mathTtfTables(allocator: std.mem.Allocator) ![]Table {
 }
 
 fn svgTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const document =
+        \\<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M10 90 L50 10 L90 90 Z" fill="red"/></svg>
+    ;
+    return try svgTtfTablesForDocument(allocator, document);
+}
+
+fn svgTtfTablesForDocument(allocator: std.mem.Allocator, document: []const u8) ![]Table {
     const tables = try allocator.alloc(Table, 9);
     errdefer allocator.free(tables);
-    tables[0] = .{ .tag = "SVG ", .data = try svgTable(allocator) };
+    tables[0] = .{ .tag = "SVG ", .data = try svgTableForDocument(allocator, document) };
     tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
     tables[3] = .{ .tag = "head", .data = try headTable(allocator) };

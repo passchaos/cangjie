@@ -778,6 +778,10 @@ test "gvar point deltas are exposed for non-empty glyph data" {
     try std.testing.expectEqual(@as(f32, -2), phantom.bottom.y);
     try std.testing.expectEqual(@as(f32, 6), phantom.verticalAdvanceDelta());
 
+    const varied_metrics = try font.horizontalMetricsAtCoords(1, &.{0.5});
+    try std.testing.expectEqual(@as(u16, 809), varied_metrics.advance_width);
+    try std.testing.expectEqual(@as(i16, 1), varied_metrics.left_side_bearing);
+
     const varied_bounds = (try font.gvarGlyphBoundsAtCoords(allocator, 1, &.{0.5})).?;
     const default_bounds = try font.glyphBounds(1);
     try std.testing.expectEqual(default_bounds.x_min + 5, varied_bounds.x_min);
@@ -811,6 +815,9 @@ test "gvar compound glyph deltas adjust component offsets" {
 
     const phantom = (try font.gvarPhantomPointDeltasAtCoords(allocator, 2, &.{0.5})).?;
     try std.testing.expectEqual(@as(f32, 9), phantom.horizontalAdvanceDelta());
+    const varied_metrics = try font.horizontalMetricsAtCoords(2, &.{0.5});
+    try std.testing.expectEqual(@as(u16, 1009), varied_metrics.advance_width);
+    try std.testing.expectEqual(@as(i16, 0), varied_metrics.left_side_bearing);
 
     var default_outline = try font.glyphOutline(allocator, 2);
     defer default_outline.deinit();

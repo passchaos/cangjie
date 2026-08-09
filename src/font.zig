@@ -1489,7 +1489,23 @@ pub const Font = struct {
 
     /// Return horizontal metrics with HVAR advance/LSB deltas applied when present.
     pub fn horizontalMetricsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!HorizontalMetricInfo {
-        return try self.horizontalMetricsAtCoordsForReadMode(glyph_id, normalized_coords, .revalidate);
+        var metrics = try self.horizontalMetricsAtCoordsForReadMode(glyph_id, normalized_coords, .revalidate);
+        if (self.hvar == null and self.gvar != null) {
+            if (try self.gvarPhantomPointDeltasAtCoordsPrepared(std.heap.page_allocator, glyph_id, normalized_coords, .revalidate)) |phantom| {
+                // With no HVAR, OpenType derives horizontal metric deltas from
+                // gvar phantom points: pp1 is the LSB delta and pp2-pp1 is the
+                // advance delta. This is the high-level metrics contract used
+                // by Fontations and FreeType; VARC's internal GlyphHMetrics
+                // deliberately remains hmtx+HVAR only.
+                metrics.left_side_bearing = clampF32ToI16(
+                    @round(@as(f32, @floatFromInt(metrics.left_side_bearing)) + phantom.left.x),
+                );
+                metrics.advance_width = clampF32ToU16(
+                    @round(@as(f32, @floatFromInt(metrics.advance_width)) + phantom.horizontalAdvanceDelta()),
+                );
+            }
+        }
+        return metrics;
     }
 
     fn horizontalMetricsAtCoordsForReadMode(

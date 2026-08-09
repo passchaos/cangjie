@@ -132,6 +132,14 @@ pub fn buildGvarCompoundTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try gvarCompoundTtfTables(allocator));
 }
 
+pub fn buildCompoundPointMatchTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try compoundPointMatchTtfTables(allocator));
+}
+
+pub fn buildGvarPointMatchTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try gvarPointMatchTtfTables(allocator));
+}
+
 pub fn buildVariableStatTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try variableStatTtfTables(allocator));
 }
@@ -705,6 +713,37 @@ fn gvarCompoundTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
     tables[8] = .{ .tag = "loca", .data = try gvarCompoundLocaTable(allocator) };
     tables[9] = .{ .tag = "maxp", .data = try gvarCompoundMaxpTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    return tables;
+}
+
+fn compoundPointMatchTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try compoundPointMatchGlyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 5) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, 5) };
+    tables[5] = .{ .tag = "loca", .data = try compoundPointMatchLocaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try compoundPointMatchMaxpTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn gvarPointMatchTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 11);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTableWithCanonicalInstanceSize(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try compoundPointMatchGlyfTable(allocator) };
+    tables[3] = .{ .tag = "gvar", .data = try gvarPointMatchTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 5) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, 5) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[8] = .{ .tag = "loca", .data = try compoundPointMatchLocaTable(allocator) };
+    tables[9] = .{ .tag = "maxp", .data = try compoundPointMatchMaxpTable(allocator) };
     tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
     return tables;
 }
@@ -2810,6 +2849,16 @@ fn singleAxisFvarTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn singleAxisFvarTableWithCanonicalInstanceSize(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try singleAxisFvarTable(allocator);
+    // The OpenType minimum instanceSize is 4 + axisCount * 4 even when there
+    // are no named instances. Our parser deliberately accepts the zero used by
+    // older fixtures, but external engines such as FreeType require the
+    // canonical value before exposing the face as variable.
+    writeU16(bytes, 14, 8);
+    return bytes;
+}
+
 fn gvarTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 26);
     @memset(bytes, 0);
@@ -2900,6 +2949,42 @@ fn gvarCompoundTable(allocator: std.mem.Allocator) ![]u8 {
     bytes[53] = 0; // left phantom x delta.
     bytes[54] = 18; // right phantom x delta.
     bytes[55] = 0x82; // three y deltas are zero.
+    return bytes;
+}
+
+fn gvarPointMatchTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 64);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 4, 1); // axisCount.
+    writeU16(bytes, 6, 0); // sharedTupleCount.
+    // Offset32 treats zero as a null offset even when sharedTupleCount is zero.
+    // Keep a non-null, in-bounds value for compatibility with strict readers.
+    writeU32(bytes, 8, 44); // sharedTupleOffset (empty array).
+    writeU16(bytes, 12, 5); // glyphCount.
+    writeU16(bytes, 14, 1); // long offsets.
+    writeU32(bytes, 16, 46); // glyphVariationDataArrayOffset after six offsets plus padding.
+    writeU32(bytes, 20, 0); // glyph 0.
+    writeU32(bytes, 24, 0); // glyph 1.
+    writeU32(bytes, 28, 0); // glyph 2.
+    writeU32(bytes, 32, 0); // glyph 3.
+    writeU32(bytes, 36, 0); // glyph 4 begins at the start of the data array.
+    writeU32(bytes, 40, 18); // glyph 4 has one 18-byte tuple.
+
+    writeU16(bytes, 46, 1); // one tuple.
+    writeU16(bytes, 48, 10); // tuple data starts after one 6-byte header.
+    writeU16(bytes, 50, 8); // tuple payload size.
+    writeU16(bytes, 52, 0xa000); // embedded peak + private point numbers.
+    writeF2Dot14(bytes, 54, 1.0);
+    bytes[56] = 2; // Select the two component translation targets.
+    bytes[57] = 1; // One-byte point-number run with two entries.
+    bytes[58] = 0; // Component 0.
+    bytes[59] = 1; // Component 1.
+    bytes[60] = 1; // One-byte X-delta run with two entries.
+    bytes[61] = 20; // Component 0 moves +20 at the peak.
+    bytes[62] = 50; // Point-anchored component delta must be ignored.
+    bytes[63] = 0x81; // Two zero Y deltas.
     return bytes;
 }
 
@@ -3996,6 +4081,91 @@ fn gvarCompoundGlyfTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn compoundPointMatchGlyfTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 110);
+    @memset(bytes, 0);
+
+    // Glyph 1 has an off-curve point at (100, 100). Matching that raw point
+    // verifies that the loader does not try to reconstruct anchor indexes from
+    // emitted path commands, where implied endpoints change the indexing.
+    writeSimpleOffCurveTriangleGlyph(bytes, 12);
+
+    // Glyph 2: first place glyph 1 at (10, 0), then place a half-scale copy by
+    // matching its raw point 1 to raw point 1 of the first component. The
+    // second component's transformed point is (50, 50), so it must translate
+    // by (60, 50) to meet the parent's (110, 100).
+    const matched = 40;
+    writeI16(bytes, matched + 0, -1);
+    writeI16(bytes, matched + 2, 0);
+    writeI16(bytes, matched + 4, 0);
+    writeI16(bytes, matched + 6, 160);
+    writeI16(bytes, matched + 8, 100);
+    writeU16(bytes, matched + 10, 0x0020 | 0x0002); // MORE_COMPONENTS + XY byte args.
+    writeU16(bytes, matched + 12, 1);
+    bytes[matched + 14] = 10;
+    bytes[matched + 15] = 0;
+    writeU16(bytes, matched + 16, 0x0008); // Point args plus a uniform scale.
+    writeU16(bytes, matched + 18, 1);
+    bytes[matched + 20] = 1; // Parent point 1.
+    bytes[matched + 21] = 1; // Child point 1.
+    writeF2Dot14(bytes, matched + 22, 0.5);
+
+    // Glyph 3 nests glyph 2 and then point-matches another glyph 1. This proves
+    // point indexes are based at the current compound rather than the global
+    // top-level scratch array: parent point 4 is the nested second component's
+    // off-curve point at (110, 100).
+    const nested = 64;
+    writeI16(bytes, nested + 0, -1);
+    writeI16(bytes, nested + 2, 0);
+    writeI16(bytes, nested + 4, 0);
+    writeI16(bytes, nested + 6, 210);
+    writeI16(bytes, nested + 8, 100);
+    writeU16(bytes, nested + 10, 0x0020 | 0x0002);
+    writeU16(bytes, nested + 12, 2);
+    bytes[nested + 14] = 0;
+    bytes[nested + 15] = 0;
+    writeU16(bytes, nested + 16, 0x0000); // Point args, byte point numbers.
+    writeU16(bytes, nested + 18, 1);
+    bytes[nested + 20] = 4; // Parent point 4 in nested glyph 2.
+    bytes[nested + 21] = 0; // Child point 0 at (0, 0).
+
+    // Glyph 4 gives gvar a direct, non-nested point-matching target. Its first
+    // component has an XY placement delta; the second component is anchored by
+    // points and deliberately has a non-zero gvar component delta that engines
+    // must ignore.
+    const varied = 86;
+    writeI16(bytes, varied + 0, -1);
+    writeI16(bytes, varied + 2, 0);
+    writeI16(bytes, varied + 4, 0);
+    writeI16(bytes, varied + 6, 210);
+    writeI16(bytes, varied + 8, 100);
+    writeU16(bytes, varied + 10, 0x0020 | 0x0002);
+    writeU16(bytes, varied + 12, 1);
+    bytes[varied + 14] = 10;
+    bytes[varied + 15] = 0;
+    writeU16(bytes, varied + 16, 0x0001); // Point args encoded as 16-bit words.
+    writeU16(bytes, varied + 18, 1);
+    writeU16(bytes, varied + 20, 1); // Parent off-curve point.
+    writeU16(bytes, varied + 22, 0); // Child point at the origin.
+    return bytes;
+}
+
+fn writeSimpleOffCurveTriangleGlyph(bytes: []u8, off: usize) void {
+    writeI16(bytes, off + 0, 1);
+    writeI16(bytes, off + 2, 0);
+    writeI16(bytes, off + 4, 0);
+    writeI16(bytes, off + 6, 100);
+    writeI16(bytes, off + 8, 100);
+    writeU16(bytes, off + 10, 2);
+    writeU16(bytes, off + 12, 0); // No instructions.
+    bytes[off + 14] = 0x31; // On-curve (0, 0), same X/Y.
+    bytes[off + 15] = 0x36; // Off-curve (100, 100), positive short X/Y.
+    bytes[off + 16] = 0x23; // On-curve (100, 0), same X, negative short Y.
+    bytes[off + 17] = 100;
+    bytes[off + 18] = 100;
+    bytes[off + 19] = 100;
+}
+
 fn glyfTableWithThreeOutlinedGlyphs(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 96);
     @memset(bytes, 0);
@@ -4279,6 +4449,15 @@ fn hmtxTableWithLigature(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn hmtxTableWithGlyphCount(allocator: std.mem.Allocator, glyph_count: usize) ![]u8 {
+    const bytes = try allocator.alloc(u8, glyph_count * 4);
+    for (0..glyph_count) |glyph_index| {
+        writeU16(bytes, glyph_index * 4, if (glyph_index == 0) 500 else 800);
+        writeI16(bytes, glyph_index * 4 + 2, 0);
+    }
+    return bytes;
+}
+
 fn hmtxTableWithTwoExtraGlyphs(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 16);
     writeU16(bytes, 0, 500);
@@ -4349,6 +4528,17 @@ fn gvarCompoundLocaTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 2, 6);
     writeU16(bytes, 4, 20);
     writeU16(bytes, 6, 28);
+    return bytes;
+}
+
+fn compoundPointMatchLocaTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 12);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 6);
+    writeU16(bytes, 4, 20);
+    writeU16(bytes, 6, 32);
+    writeU16(bytes, 8, 43);
+    writeU16(bytes, 10, 55);
     return bytes;
 }
 
@@ -5855,6 +6045,15 @@ fn gvarCompoundMaxpTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 12, 1); // maxCompositeContours.
     writeU16(bytes, 28, 1); // maxComponentElements.
     writeU16(bytes, 30, 1); // maxComponentDepth.
+    return bytes;
+}
+
+fn compoundPointMatchMaxpTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try maxpTableWithGlyphs(allocator, 5);
+    writeU16(bytes, 10, 9); // maxCompositePoints (nested glyph 3).
+    writeU16(bytes, 12, 3); // maxCompositeContours.
+    writeU16(bytes, 28, 2); // maxComponentElements.
+    writeU16(bytes, 30, 2); // maxComponentDepth (glyph 3 -> glyph 2 -> glyph 1).
     return bytes;
 }
 

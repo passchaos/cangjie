@@ -3612,7 +3612,7 @@ pub const Font = struct {
         defer if (target_count > inline_has_delta.len) allocator.free(has_delta);
         const deltas = (try self.gvarPointDeltasAtCoordsPreparedNoShrink(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
         defer allocator.free(deltas);
-        try appendSimpleGlyph(&outline, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
+        try appendSimpleGlyph(&outline, null, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
         try applyGvarSimpleGlyphMetricDeltas(&outline, default_bounds, metrics, deltas, target_count - 4);
         return outline;
     }
@@ -3622,7 +3622,9 @@ pub const Font = struct {
         const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
-        try self.appendCompoundGlyphAtCoords(&outline, data, Transform.identity(), 1, glyph_id, normalized_coords, read_mode);
+        var points = std.ArrayList(glyph_mod.Point).empty;
+        defer points.deinit(allocator);
+        try self.appendCompoundGlyphAtCoords(&outline, &points, data, Transform.identity(), 1, glyph_id, normalized_coords, read_mode);
         outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
         if (try self.gvarPhantomPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, read_mode)) |phantom| {
             applyGvarGlyphMetricDeltas(&outline, default_bounds, metrics, phantom);
@@ -3658,7 +3660,7 @@ pub const Font = struct {
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
         if (self.format == .truetype) {
-            try self.appendGlyphOutline(&outline, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
+            try self.appendGlyphOutline(&outline, null, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
         } else if (self.cff2) |cff2| {
             if (read_mode.shouldRevalidate()) {
                 try validateSfntTableChecksum(self.data, cff2);
@@ -3760,7 +3762,7 @@ pub const Font = struct {
         };
     }
 
-    fn appendGlyphOutline(self: *const Font, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId, transform: Transform, depth: u8) FontError!void {
+    fn appendGlyphOutline(self: *const Font, outline: *glyph_mod.GlyphOutline, points: ?*std.ArrayList(glyph_mod.Point), glyph_id: glyph_mod.GlyphId, transform: Transform, depth: u8) FontError!void {
         if (depth > 8) return error.CompoundDepthExceeded;
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return;
@@ -3768,13 +3770,21 @@ pub const Font = struct {
         if (contour_count >= 0) {
             // Simple glyf outlines store contour end points plus compressed
             // point deltas. Compound outlines recurse into component glyphs.
-            try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null, null);
+            try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, null, null);
+        } else if (points) |compound_points| {
+            try self.appendCompoundGlyph(outline, compound_points, data, transform, depth + 1);
         } else {
-            try self.appendCompoundGlyph(outline, data, transform, depth + 1);
+            // Raw TrueType point indices are observable only while expanding a
+            // compound glyph. Keep the overwhelmingly common simple-glyph path
+            // allocation-free, and create one shared point array only after the
+            // top-level glyph has proved to be compound.
+            var compound_points = std.ArrayList(glyph_mod.Point).empty;
+            defer compound_points.deinit(outline.allocator);
+            try self.appendCompoundGlyph(outline, &compound_points, data, transform, depth + 1);
         }
     }
 
-    fn appendGlyphOutlineAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId, transform: Transform, depth: u8, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
+    fn appendGlyphOutlineAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, points: *std.ArrayList(glyph_mod.Point), glyph_id: glyph_mod.GlyphId, transform: Transform, depth: u8, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
         if (depth > 8) return error.CompoundDepthExceeded;
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return;
@@ -3788,59 +3798,63 @@ pub const Font = struct {
                 try outline.allocator.alloc(bool, target_count);
             defer if (target_count > inline_has_delta.len) outline.allocator.free(has_delta);
             const deltas = (try self.gvarPointDeltasAtCoordsPreparedNoShrink(outline.allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse {
-                try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, null, null);
+                try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, null, null);
                 return;
             };
             defer outline.allocator.free(deltas);
-            try appendSimpleGlyph(outline, data, @intCast(contour_count), transform, deltas, has_delta);
+            try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, deltas, has_delta);
         } else {
-            try self.appendCompoundGlyphAtCoords(outline, data, transform, depth + 1, glyph_id, normalized_coords, read_mode);
+            try self.appendCompoundGlyphAtCoords(outline, points, data, transform, depth + 1, glyph_id, normalized_coords, read_mode);
         }
     }
 
-    fn appendCompoundGlyph(self: *const Font, outline: *glyph_mod.GlyphOutline, data: []const u8, parent_transform: Transform, depth: u8) FontError!void {
+    fn appendCompoundGlyph(self: *const Font, outline: *glyph_mod.GlyphOutline, points: *std.ArrayList(glyph_mod.Point), data: []const u8, parent_transform: Transform, depth: u8) FontError!void {
         var r = bin.Reader.init(data);
         _ = try r.readI16();
         try r.skip(8);
+        const parent_point_start = points.items.len;
         while (true) {
-            const flags = try r.readU16();
-            const component_glyph = try r.readU16();
-            var arg1: i16 = 0;
-            var arg2: i16 = 0;
-            if ((flags & 0x0001) != 0) {
-                arg1 = try r.readI16();
-                arg2 = try r.readI16();
-            } else {
-                arg1 = try r.readI8();
-                arg2 = try r.readI8();
+            const component = try readCompoundGlyphComponent(&r);
+            switch (component.placement) {
+                .offset => |offset| {
+                    var child = component.linear_transform;
+                    child.dx = @floatFromInt(offset.x);
+                    child.dy = @floatFromInt(offset.y);
+                    try self.appendGlyphOutline(outline, points, component.glyph_id, parent_transform.mul(child), depth);
+                },
+                .points => |point_match| {
+                    try self.appendPointMatchedComponent(
+                        outline,
+                        points,
+                        component.glyph_id,
+                        parent_transform.mul(component.linear_transform),
+                        depth,
+                        parent_point_start,
+                        point_match,
+                    );
+                },
             }
-            // This parser supports component placement expressed as direct XY
-            // offsets. Point-to-point component matching requires hinting-time
-            // semantics and is rejected until that behavior is implemented.
-            if ((flags & 0x0002) == 0) return error.UnsupportedGlyph;
-
-            var child = Transform.identity();
-            child.dx = @floatFromInt(arg1);
-            child.dy = @floatFromInt(arg2);
-            if ((flags & 0x0008) != 0) {
-                const scale = f2dot14(try r.readI16());
-                child.xx = scale;
-                child.yy = scale;
-            } else if ((flags & 0x0040) != 0) {
-                child.xx = f2dot14(try r.readI16());
-                child.yy = f2dot14(try r.readI16());
-            } else if ((flags & 0x0080) != 0) {
-                child.xx = f2dot14(try r.readI16());
-                child.yx = f2dot14(try r.readI16());
-                child.xy = f2dot14(try r.readI16());
-                child.yy = f2dot14(try r.readI16());
-            }
-            try self.appendGlyphOutline(outline, component_glyph, parent_transform.mul(child), depth);
-            if ((flags & 0x0020) == 0) break;
+            if ((component.flags & 0x0020) == 0) break;
         }
     }
 
-    fn appendCompoundGlyphAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, data: []const u8, parent_transform: Transform, depth: u8, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
+    fn appendPointMatchedComponent(
+        self: *const Font,
+        outline: *glyph_mod.GlyphOutline,
+        points: *std.ArrayList(glyph_mod.Point),
+        component_glyph: glyph_mod.GlyphId,
+        transform: Transform,
+        depth: u8,
+        parent_point_start: usize,
+        point_match: CompoundGlyphPointMatch,
+    ) FontError!void {
+        const child_point_start = points.items.len;
+        const child_command_start = outline.commands.items.len;
+        try self.appendGlyphOutline(outline, points, component_glyph, transform, depth);
+        try placePointMatchedComponent(outline, points, parent_point_start, child_point_start, child_command_start, point_match);
+    }
+
+    fn appendCompoundGlyphAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, points: *std.ArrayList(glyph_mod.Point), data: []const u8, parent_transform: Transform, depth: u8, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
         const target_count = try gvarTargetCountForGlyphData(data);
         const maybe_deltas = try self.gvarPointDeltasAtCoordsPreparedNoShrink(outline.allocator, glyph_id, normalized_coords, target_count, null, read_mode);
         defer if (maybe_deltas) |deltas| outline.allocator.free(deltas);
@@ -3848,44 +3862,39 @@ pub const Font = struct {
         var r = bin.Reader.init(data);
         _ = try r.readI16();
         try r.skip(8);
+        const parent_point_start = points.items.len;
         var component_index: usize = 0;
         while (true) : (component_index += 1) {
-            const flags = try r.readU16();
-            const component_glyph = try r.readU16();
-            var arg1: i16 = 0;
-            var arg2: i16 = 0;
-            if ((flags & 0x0001) != 0) {
-                arg1 = try r.readI16();
-                arg2 = try r.readI16();
-            } else {
-                arg1 = try r.readI8();
-                arg2 = try r.readI8();
+            const component = try readCompoundGlyphComponent(&r);
+            switch (component.placement) {
+                .offset => |offset| {
+                    const component_delta = if (maybe_deltas) |deltas| gvarDeltaForPoint(deltas, component_index) else gvar_mod.Point{ .x = 0, .y = 0 };
+                    var child = component.linear_transform;
+                    child.dx = @as(f32, @floatFromInt(offset.x)) + @round(component_delta.x);
+                    child.dy = @as(f32, @floatFromInt(offset.y)) + @round(component_delta.y);
+                    try self.appendGlyphOutlineAtCoords(outline, points, component.glyph_id, parent_transform.mul(child), depth, normalized_coords, read_mode);
+                },
+                .points => |point_match| {
+                    const child_point_start = points.items.len;
+                    const child_command_start = outline.commands.items.len;
+                    try self.appendGlyphOutlineAtCoords(
+                        outline,
+                        points,
+                        component.glyph_id,
+                        parent_transform.mul(component.linear_transform),
+                        depth,
+                        normalized_coords,
+                        read_mode,
+                    );
+                    // A compound gvar tuple describes component translation
+                    // deltas. Point-anchored components have no translation
+                    // argument to vary, so FreeType and fontations deliberately
+                    // ignore that component delta and derive placement solely
+                    // from the two varied, linearly transformed anchor points.
+                    try placePointMatchedComponent(outline, points, parent_point_start, child_point_start, child_command_start, point_match);
+                },
             }
-            // Keep point-matching components on the same unsupported path as
-            // the default compound loader. Component gvar deltas are offsets,
-            // and applying them to anchor-point placement requires the hinting
-            // and point-match semantics this renderer still does not expose.
-            if ((flags & 0x0002) == 0) return error.UnsupportedGlyph;
-
-            const component_delta = if (maybe_deltas) |deltas| gvarDeltaForPoint(deltas, component_index) else gvar_mod.Point{ .x = 0, .y = 0 };
-            var child = Transform.identity();
-            child.dx = @as(f32, @floatFromInt(arg1)) + @round(component_delta.x);
-            child.dy = @as(f32, @floatFromInt(arg2)) + @round(component_delta.y);
-            if ((flags & 0x0008) != 0) {
-                const scale = f2dot14(try r.readI16());
-                child.xx = scale;
-                child.yy = scale;
-            } else if ((flags & 0x0040) != 0) {
-                child.xx = f2dot14(try r.readI16());
-                child.yy = f2dot14(try r.readI16());
-            } else if ((flags & 0x0080) != 0) {
-                child.xx = f2dot14(try r.readI16());
-                child.yx = f2dot14(try r.readI16());
-                child.xy = f2dot14(try r.readI16());
-                child.yy = f2dot14(try r.readI16());
-            }
-            try self.appendGlyphOutlineAtCoords(outline, component_glyph, parent_transform.mul(child), depth, normalized_coords, read_mode);
-            if ((flags & 0x0020) == 0) break;
+            if ((component.flags & 0x0020) == 0) break;
         }
     }
 };
@@ -3920,6 +3929,104 @@ const Transform = struct {
         };
     }
 };
+
+const CompoundGlyphPlacement = union(enum) {
+    offset: struct { x: i16, y: i16 },
+    points: CompoundGlyphPointMatch,
+};
+
+const CompoundGlyphRuntimeComponent = struct {
+    flags: u16,
+    glyph_id: glyph_mod.GlyphId,
+    placement: CompoundGlyphPlacement,
+    linear_transform: Transform,
+};
+
+fn readCompoundGlyphComponent(r: *bin.Reader) FontError!CompoundGlyphRuntimeComponent {
+    const flags = try r.readU16();
+    const glyph_id = try r.readU16();
+    const placement: CompoundGlyphPlacement = if ((flags & 0x0002) != 0)
+        .{ .offset = if ((flags & 0x0001) != 0)
+            .{ .x = try r.readI16(), .y = try r.readI16() }
+        else
+            .{ .x = try r.readI8(), .y = try r.readI8() } }
+    else
+        .{ .points = if ((flags & 0x0001) != 0)
+            .{ .parent_point = try r.readU16(), .child_point = try r.readU16() }
+        else
+            .{ .parent_point = try r.readU8(), .child_point = try r.readU8() } };
+
+    var transform = Transform.identity();
+    if ((flags & 0x0008) != 0) {
+        const scale = f2dot14(try r.readI16());
+        transform.xx = scale;
+        transform.yy = scale;
+    } else if ((flags & 0x0040) != 0) {
+        transform.xx = f2dot14(try r.readI16());
+        transform.yy = f2dot14(try r.readI16());
+    } else if ((flags & 0x0080) != 0) {
+        transform.xx = f2dot14(try r.readI16());
+        transform.yx = f2dot14(try r.readI16());
+        transform.xy = f2dot14(try r.readI16());
+        transform.yy = f2dot14(try r.readI16());
+    }
+    return .{
+        .flags = flags,
+        .glyph_id = glyph_id,
+        .placement = placement,
+        .linear_transform = transform,
+    };
+}
+
+fn placePointMatchedComponent(
+    outline: *glyph_mod.GlyphOutline,
+    points: *std.ArrayList(glyph_mod.Point),
+    parent_point_start: usize,
+    child_point_start: usize,
+    child_command_start: usize,
+    point_match: CompoundGlyphPointMatch,
+) FontError!void {
+    const parent_index = parent_point_start + @as(usize, point_match.parent_point);
+    const child_index = child_point_start + @as(usize, point_match.child_point);
+    // Parse-time graph validation normally proves both accesses. Keep the
+    // materializer defensive as well: glyphOutlineForRaster() intentionally
+    // trusts parsed bytes, and no malformed or post-parse-mutated point number
+    // should turn that trust boundary into an out-of-bounds access.
+    if (parent_index >= child_point_start or child_index >= points.items.len) return error.InvalidGlyph;
+
+    const parent_point = points.items[parent_index];
+    const child_point = points.items[child_index];
+    const offset = glyph_mod.Point{
+        .x = parent_point.x - child_point.x,
+        .y = parent_point.y - child_point.y,
+    };
+    if (offset.x == 0 and offset.y == 0) return;
+
+    for (points.items[child_point_start..]) |*point| translateGlyphPoint(point, offset);
+    for (outline.commands.items[child_command_start..]) |*command| translatePathCommand(command, offset);
+}
+
+fn translateGlyphPoint(point: *glyph_mod.Point, offset: glyph_mod.Point) void {
+    point.x += offset.x;
+    point.y += offset.y;
+}
+
+fn translatePathCommand(command: *glyph_mod.PathCommand, offset: glyph_mod.Point) void {
+    switch (command.*) {
+        .move_to => |*point| translateGlyphPoint(point, offset),
+        .line_to => |*point| translateGlyphPoint(point, offset),
+        .quad_to => |*curve| {
+            translateGlyphPoint(&curve.control, offset);
+            translateGlyphPoint(&curve.end, offset);
+        },
+        .cubic_to => |*curve| {
+            translateGlyphPoint(&curve.c0, offset);
+            translateGlyphPoint(&curve.c1, offset);
+            translateGlyphPoint(&curve.end, offset);
+        },
+        .close => {},
+    }
+}
 
 const SbixStrike = struct {
     ppem: u16,
@@ -6438,8 +6545,7 @@ fn readCompoundGlyphPointMatch(argument_data: []const u8, flags: u16) FontError!
     // numbers: arg1 names a point already contributed to the parent compound
     // glyph, and arg2 names a point in the referenced child glyph. Preserve
     // those unsigned values so a later graph walk can check them against the
-    // actual simple/compound point counts instead of treating this placement
-    // mode as opaque bytes until outline expansion rejects it as unsupported.
+    // actual simple/compound point counts before outline expansion uses them.
     if ((flags & 0x0002) != 0) return null;
 
     return if ((flags & 0x0001) != 0)
@@ -8450,7 +8556,15 @@ fn kernFormat0Body(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.G
     return null;
 }
 
-fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour_count: u16, transform: Transform, gvar_deltas: ?[]GvarScaledPointDelta, gvar_has_delta: ?[]const bool) FontError!void {
+fn appendSimpleGlyph(
+    outline: *glyph_mod.GlyphOutline,
+    transformed_points: ?*std.ArrayList(glyph_mod.Point),
+    data: []const u8,
+    contour_count: u16,
+    transform: Transform,
+    gvar_deltas: ?[]GvarScaledPointDelta,
+    gvar_has_delta: ?[]const bool,
+) FontError!void {
     if (contour_count == 0) return;
     var r = bin.Reader.init(data);
     _ = try r.readI16();
@@ -8563,6 +8677,15 @@ fn appendSimpleGlyph(outline: *glyph_mod.GlyphOutline, data: []const u8, contour
             }
         }
         outline.bounds = boundsForFlaggedPoints(points);
+    }
+
+    if (transformed_points) |raw_points| {
+        // Compound point anchors address the original glyf points, including
+        // off-curve controls that may disappear into implied path endpoints.
+        // Preserve those points only for the lifetime of this recursive load;
+        // GlyphOutline remains a compact command stream after expansion.
+        try raw_points.ensureUnusedCapacity(outline.allocator, points.len);
+        for (points) |point| raw_points.appendAssumeCapacity(transform.apply(point.point()));
     }
 
     var start: usize = 0;
@@ -14442,7 +14565,7 @@ test "simple glyf contours reject non-increasing end points" {
     );
     defer outline.deinit();
 
-    try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, &glyph_data, 2, Transform.identity(), null, null));
+    try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, null, &glyph_data, 2, Transform.identity(), null, null));
 }
 
 test "glyph outline API revalidates borrowed loca and glyf bytes" {

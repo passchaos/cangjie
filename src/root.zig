@@ -826,6 +826,68 @@ test "gvar compound glyph deltas adjust component offsets" {
     try std.testing.expectEqual(varied_outline.bounds, varied_bounds);
 }
 
+test "compound glyph point matching preserves raw off-curve indexes and nesting" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildCompoundPointMatchTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var matched = try font.glyphOutline(allocator, 2);
+    defer matched.deinit();
+    try std.testing.expectEqual(@as(usize, 6), matched.commands.items.len);
+    try std.testing.expectEqual(@as(f32, 10), matched.commands.items[0].move_to.x);
+    try std.testing.expectEqual(@as(f32, 110), matched.commands.items[1].quad_to.control.x);
+    try std.testing.expectEqual(@as(f32, 100), matched.commands.items[1].quad_to.control.y);
+    try std.testing.expectEqual(@as(f32, 60), matched.commands.items[3].move_to.x);
+    try std.testing.expectEqual(@as(f32, 50), matched.commands.items[3].move_to.y);
+    // The two off-curve raw point 1 anchors coincide after the second
+    // component's 0.5 linear transform and point-derived translation.
+    try std.testing.expectEqual(matched.commands.items[1].quad_to.control, matched.commands.items[4].quad_to.control);
+
+    var nested = try font.glyphOutline(allocator, 3);
+    defer nested.deinit();
+    try std.testing.expectEqual(@as(usize, 9), nested.commands.items.len);
+    // Parent point 4 is relative to nested glyph 2, not to the top-level
+    // scratch buffer. It anchors the third contour's raw origin at (110, 100).
+    try std.testing.expectEqual(@as(f32, 110), nested.commands.items[6].move_to.x);
+    try std.testing.expectEqual(@as(f32, 100), nested.commands.items[6].move_to.y);
+    try std.testing.expectEqual(@as(f32, 210), nested.commands.items[7].quad_to.control.x);
+    try std.testing.expectEqual(@as(f32, 200), nested.commands.items[7].quad_to.control.y);
+}
+
+test "gvar ignores component deltas for point-matched placement" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarPointMatchTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var default_outline = try font.glyphOutline(allocator, 4);
+    defer default_outline.deinit();
+    var varied_outline = try font.glyphOutlineAtCoords(allocator, 4, &.{0.5});
+    defer varied_outline.deinit();
+
+    // At coord 0.5 component 0's +20 peak delta becomes +10. The anchor point
+    // therefore moves +10 and carries component 1 with it. Component 1 also has
+    // a deliberately non-zero +50 peak delta; applying it would add another
+    // +25 and break the point match, so all corresponding commands must differ
+    // by exactly the first component's +10.
+    try std.testing.expectEqual(default_outline.commands.items.len, varied_outline.commands.items.len);
+    try std.testing.expectEqual(@as(f32, default_outline.commands.items[0].move_to.x + 10), varied_outline.commands.items[0].move_to.x);
+    try std.testing.expectEqual(@as(f32, default_outline.commands.items[3].move_to.x + 10), varied_outline.commands.items[3].move_to.x);
+    try std.testing.expectEqual(@as(f32, default_outline.commands.items[4].quad_to.control.x + 10), varied_outline.commands.items[4].quad_to.control.x);
+    try std.testing.expectEqual(varied_outline.commands.items[1].quad_to.control, varied_outline.commands.items[3].move_to);
+    try std.testing.expectEqual(@as(i16, 20), varied_outline.bounds.x_min);
+    try std.testing.expectEqual(@as(i16, 220), varied_outline.bounds.x_max);
+}
+
 test "rasterizer renders variable outlines at normalized coordinates" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

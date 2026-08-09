@@ -513,7 +513,11 @@ fn modifiedCombiningClass(class: u8) u8 {
 
 pub fn inheritsPreviousClusterInRtlShaping(codepoint: u21) bool {
     if (codepoint == 0x200d) return true;
-    return scriptForCodepoint(codepoint) == .arabic and isCombiningMark(codepoint) and !isVariationSelector(codepoint);
+    // This path runs once per scalar while mapping RTL shaping input. Keep its
+    // Unicode 17 Arabic Mn coverage explicit: the generic script classifier
+    // and the all-script combining-mark predicate both do substantially more
+    // work, while the latter historically missed the newest Arabic marks.
+    return isArabicNonspacingMark(codepoint);
 }
 
 pub const GraphemeCluster = struct {
@@ -1814,8 +1818,27 @@ fn isArabicScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x0750 and codepoint <= 0x077f) or
         (codepoint >= 0x0870 and codepoint <= 0x089f) or
         (codepoint >= 0x08a0 and codepoint <= 0x08ff) or
+        (codepoint >= 0x10efd and codepoint <= 0x10eff) or
         (codepoint >= 0xfb50 and codepoint <= 0xfdff) or
         (codepoint >= 0xfe70 and codepoint <= 0xfeff);
+}
+
+// Keep this compact range chain out of the mixed-direction scalar loop that
+// calls inheritsPreviousClusterInRtlShaping(). LTR shaping never needs it, and
+// one out-of-line call per RTL scalar is cheaper than inlining the former
+// all-script classification path into that shared loop.
+noinline fn isArabicNonspacingMark(codepoint: u21) bool {
+    return (codepoint >= 0x0610 and codepoint <= 0x061a) or
+        (codepoint >= 0x064b and codepoint <= 0x065f) or
+        codepoint == 0x0670 or
+        (codepoint >= 0x06d6 and codepoint <= 0x06dc) or
+        (codepoint >= 0x06df and codepoint <= 0x06e4) or
+        (codepoint >= 0x06e7 and codepoint <= 0x06e8) or
+        (codepoint >= 0x06ea and codepoint <= 0x06ed) or
+        (codepoint >= 0x0897 and codepoint <= 0x089f) or
+        (codepoint >= 0x08ca and codepoint <= 0x08e1) or
+        (codepoint >= 0x08e3 and codepoint <= 0x08ff) or
+        (codepoint >= 0x10efd and codepoint <= 0x10eff);
 }
 
 fn isLatinScriptCodepoint(codepoint: u21) bool {
@@ -3187,6 +3210,16 @@ test "paragraph direction follows the first strong character" {
     try std.testing.expectEqual(BidiClass.ltr, try paragraphDirection("123 hello مرحبا"));
     try std.testing.expectEqual(BidiClass.ltr, try paragraphDirection("123 !"));
     try std.testing.expectError(error.InvalidUtf8, paragraphDirection("\xff"));
+}
+
+test "RTL shaping cluster inheritance stays Arabic-mark scoped" {
+    try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x064e));
+    try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x0898));
+    try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x10efd));
+    try std.testing.expect(!inheritsPreviousClusterInRtlShaping(0x0628));
+    try std.testing.expect(!inheritsPreviousClusterInRtlShaping(0x05b0));
+    try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x200d));
+    try std.testing.expectEqual(Script.arabic, scriptForCodepoint(0x10efd));
 }
 
 test "Hebrew presentation forms keep Hebrew script and RTL direction" {

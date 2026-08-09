@@ -397,6 +397,21 @@ Current local snapshot after the Nastaliq parity work:
   HarfBuzz median (`795.825 ns/glyph`) by about `18.5%`, down from roughly
   `39.5%`, so the overall performance goal remains open. HarfBuzz and HarfRust
   parity both retain checksum `f2da7bb39eb7323a`.
+- RTL shaping input now classifies cluster-inheriting Arabic marks through an
+  out-of-line, Unicode 17-specific 11-range predicate instead of invoking the
+  full ordered script classifier followed by the all-script combining-mark
+  table for every scalar. This also closes missing modern Arabic Mn coverage
+  for U+0898–U+089F, U+08CA–U+08FF, and supplementary
+  U+10EFD–U+10EFF; focused HarfBuzz/HarfRust output matches at checksum
+  `7cb1b7bd03a57f5d`. A fixed-CPU-30 A/B/B/A comparison with 31-sample medians
+  reduced Amiri `fa-thelittleprince` from `944.499` to
+  `909.871 ns/glyph`, about `3.7%`. Profiled cmap/input-map time fell from
+  about `7.13 ms` to `4.57 ms`, about `35.9%`, and the old
+  `inheritsPreviousClusterInRtlShaping -> scriptForCodepoint/isCombiningMark`
+  stack disappeared from sampled hotspots. Roboto timing was frequency-noisy,
+  but `perf stat` showed slightly fewer instructions (`-0.022%`) and branches
+  (`-0.027%`), confirming no added LTR work. Full Amiri, Amiri word-list, and
+  Roboto checksums remain unchanged.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

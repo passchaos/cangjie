@@ -3523,10 +3523,11 @@ fn colrV1LayersTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn colrV1LinearGradientTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 81);
+    const bytes = try allocator.alloc(u8, 102);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU32(bytes, 14, 34);
+    writeU32(bytes, 22, 81); // ClipList.
 
     writeU32(bytes, 34, 1);
     writeU16(bytes, 38, 1);
@@ -3553,6 +3554,17 @@ fn colrV1LinearGradientTable(allocator: std.mem.Allocator) ![]u8 {
     writeF2Dot14(bytes, 75, 1);
     writeU16(bytes, 77, 1);
     writeF2Dot14(bytes, 79, 1);
+
+    bytes[81] = 1; // ClipList format 1.
+    writeU32(bytes, 82, 1);
+    writeU16(bytes, 86, 1);
+    writeU16(bytes, 88, 1);
+    writeU24(bytes, 90, 12);
+    bytes[93] = 1; // ClipBox format 1: retain the bottom half of glyph 1.
+    writeI16(bytes, 94, 0);
+    writeI16(bytes, 96, 0);
+    writeI16(bytes, 98, 700);
+    writeI16(bytes, 100, 125);
     return bytes;
 }
 

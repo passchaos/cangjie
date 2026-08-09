@@ -200,6 +200,7 @@ pub const BitmapStrikeInfo = @import("font.zig").BitmapStrikeInfo;
 pub const BitmapStrikeSource = @import("font.zig").BitmapStrikeSource;
 pub const ColorLayer = @import("font.zig").ColorLayer;
 pub const ColorPaint = @import("font.zig").ColorPaint;
+pub const ColorClipBox = @import("font.zig").ColorClipBox;
 pub const ColorGlyphPaint = @import("render_bridge.zig").ColorGlyphPaint;
 pub const PaletteColor = @import("font.zig").PaletteColor;
 pub const PaletteInfo = @import("font.zig").PaletteInfo;
@@ -4576,6 +4577,11 @@ test "reads and renders COLR v1 PaintLinearGradient" {
     defer font.deinit();
 
     const paint = (try font.colorPaint(1)).?;
+    const clip = (try font.colorClipBox(1)).?;
+    try std.testing.expectEqual(@as(f32, 0), clip.x_min);
+    try std.testing.expectEqual(@as(f32, 0), clip.y_min);
+    try std.testing.expectEqual(@as(f32, 700), clip.x_max);
+    try std.testing.expectEqual(@as(f32, 125), clip.y_max);
     switch (paint) {
         .glyph => |glyph_paint| switch (glyph_paint.brush) {
             .linear_gradient => |gradient| {
@@ -4609,6 +4615,10 @@ test "reads and renders COLR v1 PaintLinearGradient" {
     }
     try std.testing.expect(red_dominant > 0);
     try std.testing.expect(blue_dominant > 0);
+    // Font-space y=125 maps to pixel y=29 at this size/baseline. The upper
+    // half of the triangle would be covered without the COLR ClipBox.
+    try std.testing.expectEqual(@as(u8, 0), target.at(20, 27).a);
+    try std.testing.expect(target.at(16, 31).a > 0);
 }
 
 test "COLR v1 foreground palette sentinel renders current color" {

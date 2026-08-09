@@ -514,6 +514,13 @@ pub const PaletteInfo = struct {
     label_name_id: ?u16 = null,
 };
 
+pub const ColorClipBox = struct {
+    x_min: f32,
+    y_min: f32,
+    x_max: f32,
+    y_max: f32,
+};
+
 pub const ColorPaint = union(enum) {
     solid: Solid,
     linear_gradient: LinearGradient,
@@ -3278,6 +3285,43 @@ pub const Font = struct {
             var graph_guard = ColorPaintGraphGuard{};
             try validateColorPaintGraph(self, paint_start, &graph_guard);
             return try readColorPaint(self, paint_start);
+        }
+        return null;
+    }
+
+    pub fn colorClipBox(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorClipBox {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const colr = self.colr orelse return null;
+        try validateSfntTableChecksum(self.data, colr);
+        if (colr.length < 34 or try bin.readU16At(self.data, colr.offset) != 1) return null;
+        try validateColrV1ClipList(self.data, colr, self.glyph_count);
+        const clip_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 22));
+        if (clip_list_offset == 0) return null;
+        const clip_list_start = colr.offset + clip_list_offset;
+        const clip_count: usize = @intCast(try bin.readU32At(self.data, clip_list_start + 1));
+        const records_start = clip_list_start + 5;
+        var low: usize = 0;
+        var high: usize = clip_count;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const record = records_start + mid * 7;
+            const start_glyph = try bin.readU16At(self.data, record);
+            const end_glyph = try bin.readU16At(self.data, record + 2);
+            if (glyph_id < start_glyph) {
+                high = mid;
+            } else if (glyph_id > end_glyph) {
+                low = mid + 1;
+            } else {
+                const relative: usize = @intCast(try readU24At(self.data, record + 4));
+                const box = clip_list_start + relative;
+                if (self.data[box] != 1) return null; // Variable ClipBox format 2 is resolved separately.
+                return .{
+                    .x_min = @floatFromInt(try bin.readI16At(self.data, box + 1)),
+                    .y_min = @floatFromInt(try bin.readI16At(self.data, box + 3)),
+                    .x_max = @floatFromInt(try bin.readI16At(self.data, box + 5)),
+                    .y_max = @floatFromInt(try bin.readI16At(self.data, box + 7)),
+                };
+            }
         }
         return null;
     }

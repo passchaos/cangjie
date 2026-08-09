@@ -892,7 +892,15 @@ pub const Rasterizer = struct {
         defer self.allocator.free(layers);
         if (layers.len == 0) {
             if (try font.colorPaint(glyph_id)) |paint| {
-                try self.renderColorPaint(target, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
+                if (try font.colorClipBox(glyph_id)) |clip| {
+                    var clipped = try ColorRenderTarget.init(self.allocator, target.width, target.height);
+                    defer clipped.deinit();
+                    try self.renderColorPaint(&clipped, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
+                    applyColrClipBox(&clipped, clip, font.units_per_em, x, baseline_y, font_size);
+                    blendColorTarget(target, &clipped);
+                } else {
+                    try self.renderColorPaint(target, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
+                }
                 return;
             }
             if (try font.svgDocument(glyph_id)) |document| {
@@ -1216,6 +1224,45 @@ fn applySvgClipToMask(mask: *RenderTarget, clip: SvgClipShape, view_box: ViewBox
             },
         };
         if (!inside) coverage.* = 0;
+    }
+}
+
+fn applyColrClipBox(
+    target: *ColorRenderTarget,
+    clip: font_mod.ColorClipBox,
+    units_per_em: u16,
+    x: f32,
+    baseline_y: f32,
+    font_size: f32,
+) void {
+    if (units_per_em == 0) {
+        @memset(target.pixels, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+        return;
+    }
+    const scale = font_size / @as(f32, @floatFromInt(units_per_em));
+    const min_x = x + clip.x_min * scale;
+    const max_x = x + clip.x_max * scale;
+    const min_y = baseline_y - clip.y_max * scale;
+    const max_y = baseline_y - clip.y_min * scale;
+    for (target.pixels, 0..) |*pixel, index| {
+        const px = @as(f32, @floatFromInt(index % target.width)) + 0.5;
+        const py = @as(f32, @floatFromInt(index / target.width)) + 0.5;
+        if (px < min_x or px >= max_x or py < min_y or py >= max_y) {
+            pixel.* = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        }
+    }
+}
+
+fn blendColorTarget(target: *ColorRenderTarget, source: *const ColorRenderTarget) void {
+    for (target.pixels[0..@min(target.pixels.len, source.pixels.len)], source.pixels) |*dst, src| {
+        if (src.a == 0) continue;
+        const inv_a = 255 - @as(u32, src.a);
+        // ColorRenderTarget stores premultiplied channels, so the temporary
+        // source must be added directly rather than multiplied by alpha again.
+        dst.r = @intCast(@min(@as(u32, 255), @as(u32, src.r) + (@as(u32, dst.r) * inv_a) / 255));
+        dst.g = @intCast(@min(@as(u32, 255), @as(u32, src.g) + (@as(u32, dst.g) * inv_a) / 255));
+        dst.b = @intCast(@min(@as(u32, 255), @as(u32, src.b) + (@as(u32, dst.b) * inv_a) / 255));
+        dst.a = @intCast(@min(@as(u32, 255), @as(u32, src.a) + (@as(u32, dst.a) * inv_a) / 255));
     }
 }
 

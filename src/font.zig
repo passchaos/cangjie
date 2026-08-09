@@ -3815,7 +3815,6 @@ pub const Font = struct {
             if (component.glyph_id > std.math.maxInt(glyph_mod.GlyphId)) return error.InvalidGlyph;
             const child_glyph: glyph_mod.GlyphId = @intCast(component.glyph_id);
             const component_transform = try varc_mod.componentTransform(
-                outline.allocator,
                 self.data,
                 varc.offset,
                 varc.length,

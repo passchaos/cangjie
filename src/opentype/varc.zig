@@ -202,23 +202,35 @@ pub fn componentCoordinates(
 
     if ((component.flags & ComponentFlags.have_axes) == 0) return coords;
     if (component.axis_count == 0) return coords;
-    const indices = try allocator.alloc(i32, component.axis_count);
-    defer allocator.free(indices);
-    const values = try allocator.alloc(i32, component.axis_count);
-    defer allocator.free(values);
+    var inline_indices: [32]i32 = undefined;
+    const indices = if (component.axis_count <= inline_indices.len)
+        inline_indices[0..component.axis_count]
+    else
+        try allocator.alloc(i32, component.axis_count);
+    defer if (component.axis_count > inline_indices.len) allocator.free(indices);
+    var inline_values: [32]i32 = undefined;
+    const values = if (component.axis_count <= inline_values.len)
+        inline_values[0..component.axis_count]
+    else
+        try allocator.alloc(i32, component.axis_count);
+    defer if (component.axis_count > inline_values.len) allocator.free(values);
     try decodePackedDeltas(component.axis_indices, indices);
     try decodePackedDeltas(component.axis_values, values);
     if (component.axis_values_var_index) |var_index| {
-        const deltas = try variationDeltas(
-            allocator,
+        var inline_deltas: [32]f32 = undefined;
+        const deltas = if (component.axis_count <= inline_deltas.len)
+            inline_deltas[0..component.axis_count]
+        else
+            try allocator.alloc(f32, component.axis_count);
+        defer if (component.axis_count > inline_deltas.len) allocator.free(deltas);
+        try variationDeltasInto(
             data,
             offset,
             length,
             var_index,
             current_coords,
-            component.axis_count,
+            deltas,
         );
-        defer allocator.free(deltas);
         // Tuple deltas are floating-point because multiple active regions can
         // contribute fractional values. Round only after adding a delta to its
         // static TupleValues base; rounding the delta first changes negative
@@ -237,7 +249,6 @@ pub fn componentCoordinates(
 }
 
 pub fn componentTransform(
-    allocator: std.mem.Allocator,
     data: []const u8,
     offset: usize,
     length: usize,
@@ -256,8 +267,9 @@ pub fn componentTransform(
             ComponentFlags.have_center_x |
             ComponentFlags.have_center_y;
         const field_count: usize = @popCount(component.flags & transform_mask);
-        const deltas = try variationDeltas(allocator, data, offset, length, var_index, normalized_coords, field_count);
-        defer allocator.free(deltas);
+        var delta_storage: [9]f32 = undefined;
+        const deltas = delta_storage[0..field_count];
+        try variationDeltasInto(data, offset, length, var_index, normalized_coords, deltas);
         var delta_index: usize = 0;
         if ((component.flags & ComponentFlags.have_translate_x) != 0) {
             transform.translate_x += deltas[delta_index];
@@ -765,8 +777,8 @@ fn conditionAtMatches(allocator: std.mem.Allocator, data: []const u8, table_offs
             if (table_length - condition_offset < 8) return error.BadSfnt;
             const default_value: f32 = @floatFromInt(try bin.readI16At(data, absolute + 2));
             const var_index = try bin.readU32At(data, absolute + 4);
-            const deltas = try variationDeltas(allocator, data, table_offset, table_length, var_index, normalized_coords, 1);
-            defer allocator.free(deltas);
+            var deltas: [1]f32 = undefined;
+            try variationDeltasInto(data, table_offset, table_length, var_index, normalized_coords, &deltas);
             break :result default_value + deltas[0] > 0;
         },
         3 => result: {
@@ -799,19 +811,16 @@ fn readU24At(data: []const u8, offset: usize) Error!usize {
     return (@as(usize, data[offset]) << 16) | (@as(usize, data[offset + 1]) << 8) | data[offset + 2];
 }
 
-fn variationDeltas(
-    allocator: std.mem.Allocator,
+fn variationDeltasInto(
     data: []const u8,
     table_offset: usize,
     table_length: usize,
     var_index: u32,
     normalized_coords: []const f32,
-    tuple_len: usize,
-) Error![]f32 {
-    const output = try allocator.alloc(f32, tuple_len);
+    output: []f32,
+) Error!void {
     @memset(output, 0);
-    errdefer allocator.free(output);
-    if (tuple_len == 0 or var_index == 0xffff_ffff) return output;
+    if (output.len == 0 or var_index == 0xffff_ffff) return;
 
     const h = try header(data, table_offset, table_length);
     const store_offset = h.multi_var_store_offset orelse return error.BadSfnt;
@@ -835,11 +844,9 @@ fn variationDeltas(
     const delta_sets_index = try index2Info(data, table_offset, table_length, delta_sets_offset);
     if (inner >= delta_sets_index.count) return error.BadSfnt;
     const packed_deltas = try index2Item(data, table_offset, table_length, delta_sets_offset, inner);
-    if (region_index_count != 0 and tuple_len > std.math.maxInt(usize) / region_index_count) return error.BadSfnt;
-    const expected_values = region_index_count * tuple_len;
-    const raw_deltas = try allocator.alloc(i32, expected_values);
-    defer allocator.free(raw_deltas);
-    try decodePackedDeltas(packed_deltas, raw_deltas);
+    if (region_index_count != 0 and output.len > std.math.maxInt(usize) / region_index_count) return error.BadSfnt;
+    const expected_values = region_index_count * output.len;
+    var delta_fetcher = PackedDeltaFetcher{ .reader = .{ .data = packed_deltas }, .remaining = expected_values };
 
     const region_list_offset = store_offset + region_list_relative;
     if (region_list_relative < offsets_end or region_list_offset > table_length or table_length - region_list_offset < 2) return error.BadSfnt;
@@ -851,14 +858,86 @@ fn variationDeltas(
         const region_relative: usize = @intCast(try bin.readU32At(data, table_offset + region_list_offset + 2 + @as(usize, region_index) * 4));
         if (region_relative == 0 or region_relative > table_length - region_list_offset) return error.BadSfnt;
         const scalar = try sparseRegionScalar(data, table_offset, table_length, region_list_offset + region_relative, normalized_coords);
-        if (scalar == 0) continue;
-        const delta_start = region_delta_index * tuple_len;
-        for (output, raw_deltas[delta_start .. delta_start + tuple_len]) |*value, delta| {
-            value.* += @as(f32, @floatFromInt(delta)) * scalar;
+        if (scalar == 0)
+            try delta_fetcher.skip(output.len)
+        else
+            try delta_fetcher.addScaled(output, scalar);
+    }
+    try delta_fetcher.finish();
+}
+
+const PackedDeltaFetcher = struct {
+    reader: SliceReader,
+    remaining: usize,
+    run_remaining: usize = 0,
+    bytes_per_value: usize = 1,
+
+    fn ensureRun(self: *PackedDeltaFetcher) Error!void {
+        if (self.run_remaining != 0) return;
+        if (self.remaining == 0) return error.BadSfnt;
+        const control = try self.reader.readU8();
+        self.run_remaining = @as(usize, control & 0x3f) + 1;
+        const zero = (control & 0x80) != 0;
+        const words = (control & 0x40) != 0;
+        self.bytes_per_value = if (zero and !words) 0 else if (zero and words) 4 else if (words) 2 else 1;
+        if (self.run_remaining > self.remaining) return error.BadSfnt;
+        if (self.bytes_per_value != 0 and self.run_remaining > self.reader.remaining() / self.bytes_per_value) return error.BadSfnt;
+    }
+
+    fn skip(self: *PackedDeltaFetcher, requested: usize) Error!void {
+        if (requested > self.remaining) return error.BadSfnt;
+        var count = requested;
+        while (count != 0) {
+            try self.ensureRun();
+            const take = @min(count, self.run_remaining);
+            self.reader.offset += take * self.bytes_per_value;
+            self.run_remaining -= take;
+            self.remaining -= take;
+            count -= take;
         }
     }
-    return output;
-}
+
+    fn addScaled(self: *PackedDeltaFetcher, output: []f32, scalar: f32) Error!void {
+        if (output.len > self.remaining) return error.BadSfnt;
+        var output_index: usize = 0;
+        while (output_index < output.len) {
+            try self.ensureRun();
+            const take = @min(output.len - output_index, self.run_remaining);
+            switch (self.bytes_per_value) {
+                0 => {},
+                1 => {
+                    const bytes = self.reader.data[self.reader.offset..][0..take];
+                    for (bytes, output[output_index..][0..take]) |byte, *value| {
+                        value.* += @as(f32, @floatFromInt(@as(i8, @bitCast(byte)))) * scalar;
+                    }
+                },
+                2 => {
+                    for (output[output_index..][0..take], 0..) |*value, index| {
+                        const start = self.reader.offset + index * 2;
+                        const delta = std.mem.readInt(i16, self.reader.data[start..][0..2], .big);
+                        value.* += @as(f32, @floatFromInt(delta)) * scalar;
+                    }
+                },
+                4 => {
+                    for (output[output_index..][0..take], 0..) |*value, index| {
+                        const start = self.reader.offset + index * 4;
+                        const delta = std.mem.readInt(i32, self.reader.data[start..][0..4], .big);
+                        value.* += @as(f32, @floatFromInt(delta)) * scalar;
+                    }
+                },
+                else => unreachable,
+            }
+            self.reader.offset += take * self.bytes_per_value;
+            self.run_remaining -= take;
+            self.remaining -= take;
+            output_index += take;
+        }
+    }
+
+    fn finish(self: PackedDeltaFetcher) Error!void {
+        if (self.remaining != 0 or self.run_remaining != 0 or self.reader.remaining() != 0) return error.BadSfnt;
+    }
+};
 
 fn sparseRegionScalar(data: []const u8, table_offset: usize, table_length: usize, region_offset: usize, normalized_coords: []const f32) Error!f32 {
     if (region_offset > table_length or table_length - region_offset < 2) return error.BadSfnt;
@@ -1083,10 +1162,55 @@ test "VARC multi-item variation store evaluates region-major tuples" {
     var bytes: [76]u8 = .{0} ** 76;
     writeSingleRegionVarcFixture(&bytes, &.{ 1, 10, @bitCast(@as(i8, -20)) });
 
-    const deltas = try variationDeltas(std.testing.allocator, &bytes, 0, bytes.len, 0, &.{0.5}, 2);
-    defer std.testing.allocator.free(deltas);
+    var deltas: [2]f32 = undefined;
+    try variationDeltasInto(&bytes, 0, bytes.len, 0, &.{0.5}, &deltas);
     try std.testing.expectApproxEqAbs(@as(f32, 5), deltas[0], 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, -10), deltas[1], 0.0001);
+}
+
+test "VARC packed delta fetcher streams mixed runs" {
+    const packed_bytes = [_]u8{
+        0x80, // One zero.
+        0x40, 0x01, 0x00, // One i16: 256.
+        0xc0, 0xff, 0xff, 0xff, 0xfe, // One i32: -2.
+    };
+    var fetcher = PackedDeltaFetcher{
+        .reader = .{ .data = &packed_bytes },
+        .remaining = 3,
+    };
+    var output = [_]f32{ 0, 0, 0 };
+    try fetcher.addScaled(&output, 0.5);
+    try fetcher.finish();
+    try std.testing.expectEqualSlices(f32, &.{ 0, 128, -1 }, &output);
+
+    const bytes = [_]u8{ 0x02, 1, 2, 3 };
+    var split = PackedDeltaFetcher{
+        .reader = .{ .data = &bytes },
+        .remaining = 3,
+    };
+    try split.skip(2);
+    var tail = [_]f32{0};
+    try split.addScaled(&tail, 1);
+    try split.finish();
+    try std.testing.expectEqual(@as(f32, 3), tail[0]);
+}
+
+test "VARC packed delta fetcher rejects count and byte mismatches" {
+    const extra = [_]u8{ 0, 1, 0, 2 };
+    var extra_fetcher = PackedDeltaFetcher{
+        .reader = .{ .data = &extra },
+        .remaining = 1,
+    };
+    var output = [_]f32{0};
+    try extra_fetcher.addScaled(&output, 1);
+    try std.testing.expectError(error.BadSfnt, extra_fetcher.finish());
+
+    const truncated = [_]u8{ 0x40, 0 };
+    var truncated_fetcher = PackedDeltaFetcher{
+        .reader = .{ .data = &truncated },
+        .remaining = 1,
+    };
+    try std.testing.expectError(error.BadSfnt, truncated_fetcher.addScaled(&output, 1));
 }
 
 test "VARC axis variation rounds after adding the static axis value" {

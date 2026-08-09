@@ -3,11 +3,18 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const imx_dep = b.dependency("imx", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const mod = b.addModule("cangjie", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "imx", .module = imx_dep.module("imx") },
+        },
     });
 
     const tests = b.addTest(.{

@@ -195,6 +195,7 @@ pub const VisibleByteRange = @import("buffer.zig").VisibleByteRange;
 pub const VisibleLineRange = @import("buffer.zig").VisibleLineRange;
 pub const TextBuffer = @import("buffer.zig").TextBuffer;
 pub const TextEditor = @import("editor.zig").TextEditor;
+pub const BitmapGlyphPng = @import("font.zig").BitmapGlyphPng;
 pub const BitmapGlyphInfo = @import("font.zig").BitmapGlyphInfo;
 pub const BitmapStrikeInfo = @import("font.zig").BitmapStrikeInfo;
 pub const BitmapStrikeSource = @import("font.zig").BitmapStrikeSource;
@@ -2866,6 +2867,7 @@ test "parses CBDT CBLC PNG bitmap glyphs" {
     try std.testing.expect(bitmap_info.data_length > 0);
 
     const bitmap = (try font.bitmapGlyphPng(glyph_id, 16)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.cblc_cbdt, bitmap.source);
     try std.testing.expectEqual(@as(u16, 16), bitmap.ppem);
     try std.testing.expectEqual(@as(i16, 2), bitmap.origin_offset_x);
     try std.testing.expectEqual(@as(i16, 13), bitmap.origin_offset_y);
@@ -2873,6 +2875,126 @@ test "parses CBDT CBLC PNG bitmap glyphs" {
     try std.testing.expectEqual(@as(u32, 1), bitmap.height);
     try std.testing.expect(std.mem.eql(u8, bitmap.data[1..4], "PNG"));
     try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(18));
+}
+
+test "renders CBDT RGBA PNG at bitmap bearings with premultiplied source-over" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildBitmapOnlyCbdtPngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex('A');
+
+    var target = try ColorRenderTarget.init(allocator, 32, 32);
+    defer target.deinit();
+    // ColorRenderTarget uses premultiplied storage. A half-alpha green
+    // backdrop makes this exercise both image alpha and source-over.
+    target.clear(.{ .r = 0, .g = 128, .b = 0, .a = 128 });
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, glyph_id, 16, 5, 20, 0);
+
+    // The fixture is a 1x1 half-alpha red PNG. CBDT bearing (2, 13) places its
+    // top-left at (5 + 2, 20 - 13) = (7, 7).
+    try std.testing.expectEqual(Rgba{ .r = 128, .g = 63, .b = 0, .a = 191 }, target.at(7, 7));
+    try std.testing.expectEqual(Rgba{ .r = 0, .g = 128, .b = 0, .a = 128 }, target.at(6, 7));
+    try std.testing.expectEqual(Rgba{ .r = 0, .g = 128, .b = 0, .a = 128 }, target.at(7, 6));
+}
+
+test "bitmap-only fonts leave missing strike glyphs transparent" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildBitmapOnlyCbdtPngTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expect(!font.hasOutlineData());
+
+    var target = try ColorRenderTarget.init(allocator, 32, 32);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    // Glyph 0 has neither a CBDT image nor an outline. Rendering it is a valid
+    // no-op rather than a MissingTable failure.
+    try rasterizer.renderColorGlyph(&target, &font, 0, 16, 5, 20, 0);
+    for (target.pixels) |pixel| try std.testing.expectEqual(@as(u8, 0), pixel.a);
+}
+
+test "renders indexed CBDT PNG from Noto Color Emoji when available" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf";
+    const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return,
+        else => return err,
+    };
+    defer allocator.free(data);
+
+    var font = try Font.parse(allocator, data);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex(0x1f600);
+    const bitmap = (try font.bitmapGlyphPng(glyph_id, 109)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.cblc_cbdt, bitmap.source);
+
+    var target = try ColorRenderTarget.init(allocator, 180, 200);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, glyph_id, 109, 16, 160, 0);
+
+    var colored_pixels: usize = 0;
+    var nontransparent_pixels: usize = 0;
+    for (target.pixels) |pixel| {
+        if (pixel.a == 0) continue;
+        nontransparent_pixels += 1;
+        // Decoded PNG samples are converted to the target's premultiplied
+        // representation before filtering and blending.
+        try std.testing.expect(pixel.r <= pixel.a);
+        try std.testing.expect(pixel.g <= pixel.a);
+        try std.testing.expect(pixel.b <= pixel.a);
+        if (pixel.r != pixel.g or pixel.g != pixel.b) colored_pixels += 1;
+    }
+    try std.testing.expect(nontransparent_pixels > 1_000);
+    try std.testing.expect(colored_pixels > 1_000);
+}
+
+test "renders indexed sbix PNG with bottom-left origin when available" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = "/home/passchaos/Work/fontations/font-test-data/test_data/ttf/noto_handwriting-sbix.ttf";
+    const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return,
+        else => return err,
+    };
+    defer allocator.free(data);
+
+    var font = try Font.parse(allocator, data);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex(0x270d);
+    const bitmap = (try font.bitmapGlyphPng(glyph_id, 109)) orelse return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.sbix, bitmap.source);
+    try std.testing.expectEqual(@as(i16, 4), bitmap.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, -27), bitmap.origin_offset_y);
+
+    var target = try ColorRenderTarget.init(allocator, 180, 220);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, glyph_id, 109, 20, 160, 0);
+
+    // sbix is bottom-left based: x = 20 + 4 and
+    // top = 160 - (128 - 27) = 59 for this known fixture.
+    var nontransparent_pixels: usize = 0;
+    for (target.pixels, 0..) |pixel, index| {
+        if (pixel.a == 0) continue;
+        nontransparent_pixels += 1;
+        const px = index % target.width;
+        const py = index / target.width;
+        try std.testing.expect(px >= 24 and px < 152);
+        try std.testing.expect(py >= 59 and py < 187);
+    }
+    try std.testing.expect(nontransparent_pixels > 1_000);
+    try std.testing.expectEqual(@as(u8, 0), target.at(24, 58).a);
+    try std.testing.expectEqual(@as(u8, 0), target.at(23, 59).a);
 }
 
 test "maps many-to-one cmap format 13 last-resort ranges" {

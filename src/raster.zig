@@ -1,4 +1,5 @@
 const std = @import("std");
+const imx = @import("imx");
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
 const layout = @import("layout.zig");
@@ -49,6 +50,8 @@ pub const Rgba = struct {
 };
 
 const max_color_glyph_traversal_depth = 64;
+const max_embedded_bitmap_dimension = 16 * 1024;
+const max_embedded_bitmap_decode_bytes = 256 * 1024 * 1024;
 
 const ColorGlyphTraversalGuard = struct {
     stack: [max_color_glyph_traversal_depth]glyph_mod.GlyphId = undefined,
@@ -953,6 +956,14 @@ pub const Rasterizer = struct {
                     return;
                 }
             }
+            if (try font.bitmapGlyphPng(glyph_id, font_size)) |bitmap| {
+                try self.renderEmbeddedPng(target, bitmap, font_size, x, baseline_y);
+                return;
+            }
+            // Bitmap-only emoji fonts often leave spacing/control glyphs out of
+            // their strikes. Such a glyph is intentionally empty; there is no
+            // vector table to use as a monochrome fallback.
+            if (!font.hasOutlineData()) return;
             var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
             defer outline.deinit();
             var mask = try RenderTarget.init(self.allocator, target.width, target.height);
@@ -974,6 +985,75 @@ pub const Rasterizer = struct {
             try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
             target.blendMask(&mask, color);
         }
+    }
+
+    fn renderEmbeddedPng(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        bitmap: font_mod.BitmapGlyphPng,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        if (bitmap.ppem == 0) return error.BadSfnt;
+
+        var decoder = imx.PngDecoder.init(bitmap.data) catch return error.BadSfnt;
+        var decoded = decoder.decodeNormalizedToColor8WithAlpha(
+            self.allocator,
+            .{
+                // Embedded glyph images are expected to be small. Bounding both
+                // dimensions and decoded storage keeps a malicious font from
+                // turning one draw call into an unbounded image allocation.
+                .max_width = max_embedded_bitmap_dimension,
+                .max_height = max_embedded_bitmap_dimension,
+                .max_bytes = max_embedded_bitmap_decode_bytes,
+            },
+        ) catch |err| return switch (err) {
+            error.AllocationFailed => error.OutOfMemory,
+            error.ImageTooLarge => error.BitmapGlyphTooLarge,
+            else => error.BadSfnt,
+        };
+        defer decoded.deinit();
+
+        if (decoded.width() != bitmap.width or decoded.height() != bitmap.height) return error.BadSfnt;
+
+        // Indexed and truecolor embedded PNGs decode directly to RGBA8. The
+        // conversion fallback also handles otherwise-valid grayscale PNGs
+        // without complicating the hot path used by current emoji fonts.
+        var converted: ?imx.buffer.RgbaImage = null;
+        defer if (converted) |*image| image.deinit();
+        const rgba = if (decoded.colorType() == .rgba8)
+            decoded.bytes()
+        else converted_bytes: {
+            converted = decoded.toRgba8(self.allocator) catch |err| return switch (err) {
+                error.AllocationFailed => error.OutOfMemory,
+                else => error.BadSfnt,
+            };
+            break :converted_bytes converted.?.bytes();
+        };
+
+        const strike_scale = font_size / @as(f32, @floatFromInt(bitmap.ppem));
+        if (!std.math.isFinite(strike_scale) or strike_scale <= 0) return error.InvalidBitmapSize;
+
+        const left = x + @as(f32, @floatFromInt(bitmap.origin_offset_x)) * strike_scale;
+        const top = switch (bitmap.source) {
+            // CBDT bearings are measured from the baseline to the top edge.
+            .cblc_cbdt, .eblc_ebdt => baseline_y - @as(f32, @floatFromInt(bitmap.origin_offset_y)) * strike_scale,
+            // sbix yOffset moves the image's bottom edge relative to the
+            // baseline, so the PNG height participates in top-edge placement.
+            .sbix => baseline_y -
+                (@as(f32, @floatFromInt(bitmap.height)) +
+                    @as(f32, @floatFromInt(bitmap.origin_offset_y))) * strike_scale,
+        };
+        blendScaledRgba8(
+            target,
+            rgba,
+            @intCast(bitmap.width),
+            @intCast(bitmap.height),
+            left,
+            top,
+            strike_scale,
+        );
     }
 
     fn renderColorPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, paint: font_mod.ColorPaint, fallback_glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
@@ -1450,15 +1530,115 @@ fn applyColrClipBoxTransformed(
 
 fn blendColorTarget(target: *ColorRenderTarget, source: *const ColorRenderTarget) void {
     for (target.pixels[0..@min(target.pixels.len, source.pixels.len)], source.pixels) |*dst, src| {
-        if (src.a == 0) continue;
-        const inv_a = 255 - @as(u32, src.a);
-        // ColorRenderTarget stores premultiplied channels, so the temporary
-        // source must be added directly rather than multiplied by alpha again.
-        dst.r = @intCast(@min(@as(u32, 255), @as(u32, src.r) + (@as(u32, dst.r) * inv_a) / 255));
-        dst.g = @intCast(@min(@as(u32, 255), @as(u32, src.g) + (@as(u32, dst.g) * inv_a) / 255));
-        dst.b = @intCast(@min(@as(u32, 255), @as(u32, src.b) + (@as(u32, dst.b) * inv_a) / 255));
-        dst.a = @intCast(@min(@as(u32, 255), @as(u32, src.a) + (@as(u32, dst.a) * inv_a) / 255));
+        blendPremultipliedPixel(dst, src);
     }
+}
+
+fn blendPremultipliedPixel(dst: *Rgba, src: Rgba) void {
+    if (src.a == 0) return;
+    const inv_a = 255 - @as(u32, src.a);
+    // ColorRenderTarget stores premultiplied channels, so the source is added
+    // directly rather than multiplied by alpha a second time.
+    dst.r = @intCast(@min(@as(u32, 255), @as(u32, src.r) + (@as(u32, dst.r) * inv_a) / 255));
+    dst.g = @intCast(@min(@as(u32, 255), @as(u32, src.g) + (@as(u32, dst.g) * inv_a) / 255));
+    dst.b = @intCast(@min(@as(u32, 255), @as(u32, src.b) + (@as(u32, dst.b) * inv_a) / 255));
+    dst.a = @intCast(@min(@as(u32, 255), @as(u32, src.a) + (@as(u32, dst.a) * inv_a) / 255));
+}
+
+fn blendScaledRgba8(
+    target: *ColorRenderTarget,
+    source: []const u8,
+    source_width: usize,
+    source_height: usize,
+    left: f32,
+    top: f32,
+    scale: f32,
+) void {
+    std.debug.assert(source.len == source_width * source_height * 4);
+    if (source_width == 0 or source_height == 0 or scale <= 0) return;
+
+    const right = left + @as(f32, @floatFromInt(source_width)) * scale;
+    const bottom = top + @as(f32, @floatFromInt(source_height)) * scale;
+    if (!std.math.isFinite(left) or !std.math.isFinite(top) or
+        !std.math.isFinite(right) or !std.math.isFinite(bottom))
+    {
+        return;
+    }
+
+    // Clip in floating point before converting to integers. Besides avoiding
+    // work outside the target, this keeps absurd but finite placement values
+    // from overflowing an integer conversion.
+    const start_x_f = @max(@floor(left), 0.0);
+    const start_y_f = @max(@floor(top), 0.0);
+    const end_x_f = @min(@ceil(right), @as(f32, @floatFromInt(target.width)));
+    const end_y_f = @min(@ceil(bottom), @as(f32, @floatFromInt(target.height)));
+    if (end_x_f <= start_x_f or end_y_f <= start_y_f) return;
+
+    const start_x: usize = @intFromFloat(start_x_f);
+    const start_y: usize = @intFromFloat(start_y_f);
+    const end_x: usize = @intFromFloat(end_x_f);
+    const end_y: usize = @intFromFloat(end_y_f);
+    const inverse_scale = 1.0 / scale;
+
+    for (start_y..end_y) |dest_y| {
+        const source_y = ((@as(f32, @floatFromInt(dest_y)) + 0.5 - top) * inverse_scale) - 0.5;
+        const y0_float = @floor(source_y);
+        const y_fraction = source_y - y0_float;
+        const y0: i32 = @intFromFloat(y0_float);
+
+        for (start_x..end_x) |dest_x| {
+            const source_x = ((@as(f32, @floatFromInt(dest_x)) + 0.5 - left) * inverse_scale) - 0.5;
+            const x0_float = @floor(source_x);
+            const x_fraction = source_x - x0_float;
+            const x0: i32 = @intFromFloat(x0_float);
+
+            // Interpolate premultiplied samples. Interpolating straight RGB
+            // would pull arbitrary palette colors through transparent texels
+            // and produce dark/colored fringes around emoji silhouettes. An
+            // implicit transparent border also gives fractional placement the
+            // correct edge coverage instead of clamping a whole edge texel.
+            const top_sample = lerpPremultipliedColor(
+                premultipliedRgba8At(source, source_width, source_height, x0, y0),
+                premultipliedRgba8At(source, source_width, source_height, x0 + 1, y0),
+                x_fraction,
+            );
+            const bottom_sample = lerpPremultipliedColor(
+                premultipliedRgba8At(source, source_width, source_height, x0, y0 + 1),
+                premultipliedRgba8At(source, source_width, source_height, x0 + 1, y0 + 1),
+                x_fraction,
+            );
+            const sample = lerpPremultipliedColor(top_sample, bottom_sample, y_fraction);
+            blendPremultipliedPixel(&target.pixels[dest_y * @as(usize, target.width) + dest_x], sample);
+        }
+    }
+}
+
+fn premultipliedRgba8At(source: []const u8, width: usize, height: usize, x: i32, y: i32) Rgba {
+    if (x < 0 or y < 0) return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const ux: usize = @intCast(x);
+    const uy: usize = @intCast(y);
+    if (ux >= width or uy >= height) return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const rgba = source[(uy * width + ux) * 4 ..][0..4];
+    const alpha = @as(f32, @floatFromInt(rgba[3])) / 255.0;
+    return .{
+        .r = lerpPremultipliedByte(0, @floatFromInt(rgba[0]), alpha),
+        .g = lerpPremultipliedByte(0, @floatFromInt(rgba[1]), alpha),
+        .b = lerpPremultipliedByte(0, @floatFromInt(rgba[2]), alpha),
+        .a = rgba[3],
+    };
+}
+
+fn lerpPremultipliedColor(a: Rgba, b: Rgba, t: f32) Rgba {
+    return .{
+        .r = lerpPremultipliedByte(@floatFromInt(a.r), @floatFromInt(b.r), t),
+        .g = lerpPremultipliedByte(@floatFromInt(a.g), @floatFromInt(b.g), t),
+        .b = lerpPremultipliedByte(@floatFromInt(a.b), @floatFromInt(b.b), t),
+        .a = lerpPremultipliedByte(@floatFromInt(a.a), @floatFromInt(b.a), t),
+    };
+}
+
+fn lerpPremultipliedByte(a: f32, b: f32, t: f32) u8 {
+    return @intFromFloat(@round(std.math.clamp(a + (b - a) * t, 0, 255)));
 }
 
 fn compositeColorTargets(source: *const ColorRenderTarget, backdrop: *ColorRenderTarget, mode: font_mod.ColorPaint.CompositeMode) void {

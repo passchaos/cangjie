@@ -731,6 +731,9 @@ pub const SvgGlyphDocument = struct {
 };
 
 pub const BitmapGlyphPng = struct {
+    /// Table family determines whether the vertical offset is a top bearing
+    /// (CBDT/EBDT) or a bottom-edge offset (sbix).
+    source: BitmapStrikeSource,
     ppem: u16,
     ppi: u16,
     origin_offset_x: i16,
@@ -1068,7 +1071,17 @@ pub const Font = struct {
         const ift = findTable(records, "IFT ");
         const iftx = findTable(records, "IFTX");
 
-        if (format == .truetype and (glyf == null or loca == null)) return error.MissingTable;
+        const has_glyf_outlines = glyf != null and loca != null;
+        if (format == .truetype) {
+            // TrueType outlines are a glyf/loca pair; accepting only one table
+            // leaves every glyph boundary ambiguous. Modern bitmap-only emoji
+            // fonts, however, legitimately omit both and draw exclusively from
+            // sbix or CBDT/CBLC, so do not impose an outline requirement on
+            // those fonts.
+            if ((glyf == null) != (loca == null)) return error.MissingTable;
+            const has_embedded_bitmaps = sbix != null or (cblc != null and cbdt != null);
+            if (!has_glyf_outlines and !has_embedded_bitmaps) return error.MissingTable;
+        }
         if (format == .opentype_cff and cff == null and cff2 == null) return error.MissingTable;
 
         // The offsets in the directory have already been checked against the
@@ -1133,7 +1146,7 @@ pub const Font = struct {
             break :blk parsed;
         } else null;
         if (format == .opentype_cff and cff2 != null) try validateCff2Table(data, cff2.?);
-        if (format == .truetype) {
+        if (format == .truetype and has_glyf_outlines) {
             const max_points = try bin.readU16At(data, maxp.offset + 6);
             const max_contours = try bin.readU16At(data, maxp.offset + 8);
             const max_component_elements = try bin.readU16At(data, maxp.offset + 28);
@@ -1152,7 +1165,7 @@ pub const Font = struct {
                 max_component_depth,
             );
         }
-        const gvar_target_context: ?GvarGlyphTargetContext = if (format == .truetype)
+        const gvar_target_context: ?GvarGlyphTargetContext = if (format == .truetype and has_glyf_outlines)
             .{ .loca = loca.?, .glyf = glyf.?, .index_to_loc_format = index_to_loc_format }
         else
             null;
@@ -3925,7 +3938,7 @@ pub const Font = struct {
             try validateSfntTableChecksum(self.data, cblc);
             try validateSfntTableChecksum(self.data, cbdt);
             try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
-            if (try cblcGlyphPng(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px)) |png| return png;
+            if (try cblcGlyphPng(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |png| return png;
         }
         if (self.eblc != null and self.ebdt != null) {
             const eblc = self.eblc.?;
@@ -3933,9 +3946,18 @@ pub const Font = struct {
             try validateSfntTableChecksum(self.data, eblc);
             try validateSfntTableChecksum(self.data, ebdt);
             try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
-            if (try cblcGlyphPng(self.data, eblc, ebdt, self.glyph_count, glyph_id, size_px)) |png| return png;
+            if (try cblcGlyphPng(self.data, eblc, ebdt, self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |png| return png;
         }
         return null;
+    }
+
+    /// Whether this face has a vector outline source for monochrome fallback.
+    ///
+    /// Bitmap-only TrueType fonts are valid and common for emoji. Renderers use
+    /// this distinction to treat an absent bitmap (for example the space glyph)
+    /// as an empty glyph instead of attempting a missing glyf/loca fallback.
+    pub fn hasOutlineData(self: *const Font) bool {
+        return self.glyf != null or self.cff != null or self.cff2 != null;
     }
 
     pub fn glyphBounds(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
@@ -4890,6 +4912,7 @@ fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphI
     if (!bin.tagEq(graphic_type, "png ")) return null;
     return try bitmapGlyphPngFromData(
         data[glyph_start + 8 .. glyph_end],
+        .sbix,
         strike.ppem,
         strike.ppi,
         try bin.readI16At(data, glyph_start),
@@ -4993,7 +5016,15 @@ fn cblcGlyphInfo(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_c
     return best;
 }
 
-fn cblcGlyphPng(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphPng {
+fn cblcGlyphPng(
+    data: []const u8,
+    cblc: TableRecord,
+    cbdt: TableRecord,
+    glyph_count: u16,
+    glyph_id: glyph_mod.GlyphId,
+    size_px: f32,
+    source: BitmapStrikeSource,
+) FontError!?BitmapGlyphPng {
     const strike_count = try cblcStrikeCount(data, cblc);
     var best: ?BitmapGlyphPng = null;
     var best_distance: f32 = std.math.inf(f32);
@@ -5001,7 +5032,7 @@ fn cblcGlyphPng(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_co
         const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
         if (glyph_id < strike.start_glyph or glyph_id > strike.end_glyph) continue;
         const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
-        const glyph = (try cbdtGlyphPng(data, cbdt, strike, location)) orelse continue;
+        const glyph = (try cbdtGlyphPng(data, cbdt, strike, location, source)) orelse continue;
         const distance = @abs(@as(f32, @floatFromInt(glyph.ppem)) - size_px);
         if (best == null or distance < best_distance) {
             best = glyph;
@@ -5316,7 +5347,7 @@ fn cbdtGlyphInfo(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locati
     };
 }
 
-fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation) FontError!?BitmapGlyphPng {
+fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation, source: BitmapStrikeSource) FontError!?BitmapGlyphPng {
     if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
     switch (location.image_format) {
         17, 18, 19 => {},
@@ -5344,12 +5375,20 @@ fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, locatio
     const data_len = try bin.readU32At(slice, metrics_len);
     if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
     const png = slice[metrics_len + 4 .. metrics_len + 4 + data_len];
-    return try bitmapGlyphPngFromData(png, strike.ppem, strike.ppi, metrics.bearing_x, metrics.bearing_y);
+    return try bitmapGlyphPngFromData(png, source, strike.ppem, strike.ppi, metrics.bearing_x, metrics.bearing_y);
 }
 
-fn bitmapGlyphPngFromData(png: []const u8, ppem: u16, ppi: u16, origin_offset_x: i16, origin_offset_y: i16) FontError!BitmapGlyphPng {
+fn bitmapGlyphPngFromData(
+    png: []const u8,
+    source: BitmapStrikeSource,
+    ppem: u16,
+    ppi: u16,
+    origin_offset_x: i16,
+    origin_offset_y: i16,
+) FontError!BitmapGlyphPng {
     const dimensions = try validatePngBitmapPayload(png);
     return .{
+        .source = source,
         .ppem = ppem,
         .ppi = ppi,
         .origin_offset_x = origin_offset_x,
@@ -14409,7 +14448,7 @@ test "CBDT non-PNG image formats are skipped by PNG lookup" {
 
     const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = 76 };
     const cbdt = TableRecord{ .tag = .{ 'C', 'B', 'D', 'T' }, .checksum = 0, .offset = 76, .length = 4 };
-    try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try cblcGlyphPng(&bytes, cblc, cbdt, 2, 1, 16));
+    try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try cblcGlyphPng(&bytes, cblc, cbdt, 2, 1, 16, .cblc_cbdt));
 }
 
 test "cmap format 4 idRangeOffset stays inside declared subtable length" {

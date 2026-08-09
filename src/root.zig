@@ -4666,6 +4666,40 @@ test "reads and renders COLR v1 PaintRadialGradient" {
     try std.testing.expect(edge.b > edge.r);
 }
 
+test "reads and renders COLR v1 PaintSweepGradient" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildColorV1SweepGradientTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const paint = (try font.colorPaint(1)).?;
+    switch (paint) {
+        .glyph => |glyph_paint| switch (glyph_paint.brush) {
+            .sweep_gradient => |gradient| {
+                try std.testing.expectEqual(@as(f32, 350), gradient.center.x);
+                try std.testing.expectEqual(@as(f32, 0), gradient.start_angle);
+                try std.testing.expectEqual(@as(f32, 360), gradient.end_angle);
+                try std.testing.expectEqual(@as(u16, 2), gradient.color_line.stop_count);
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var target = try ColorRenderTarget.init(allocator, 48, 48);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, 1, 24, 8, 32, 0);
+
+    const upper = target.at(17, 29);
+    const lower = target.at(17, 30);
+    try std.testing.expect(upper.r > upper.b);
+    try std.testing.expect(lower.b > lower.r);
+}
+
 test "rejects COLR v1 ClipList offsets that alias records" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

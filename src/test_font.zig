@@ -172,6 +172,10 @@ pub fn buildColorV1RadialGradientTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1RadialGradientTtfTables(allocator));
 }
 
+pub fn buildColorV1SweepGradientTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try colorV1SweepGradientTtfTables(allocator));
+}
+
 pub fn buildColorV1ForegroundTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try colorV1ForegroundTtfTables(allocator));
 }
@@ -1211,6 +1215,13 @@ fn colorV1RadialGradientTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try colorV1GlyphTtfTables(allocator);
     allocator.free(tables[0].data);
     tables[0].data = try colrV1RadialGradientTable(allocator);
+    return tables;
+}
+
+fn colorV1SweepGradientTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try colorV1GlyphTtfTables(allocator);
+    allocator.free(tables[0].data);
+    tables[0].data = try colrV1SweepGradientTable(allocator);
     return tables;
 }
 
@@ -3575,6 +3586,37 @@ fn colrV1RadialGradientTable(allocator: std.mem.Allocator) ![]u8 {
     writeF2Dot14(bytes, 75, 1);
     writeU16(bytes, 77, 1);
     writeF2Dot14(bytes, 79, 1);
+    return bytes;
+}
+
+fn colrV1SweepGradientTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 77);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU32(bytes, 14, 34);
+    writeU32(bytes, 34, 1);
+    writeU16(bytes, 38, 1);
+    writeU32(bytes, 40, 10);
+
+    bytes[44] = 10;
+    writeU24(bytes, 45, 6);
+    writeU16(bytes, 48, 1);
+
+    bytes[50] = 8; // PaintSweepGradient.
+    writeU24(bytes, 51, 12);
+    writeI16(bytes, 54, 350);
+    writeI16(bytes, 56, 100);
+    writeF2Dot14(bytes, 58, -1); // 0 degrees after the OpenType shift.
+    writeF2Dot14(bytes, 60, 1); // 360 degrees after the OpenType shift.
+
+    bytes[62] = 0;
+    writeU16(bytes, 63, 2);
+    writeF2Dot14(bytes, 65, 0);
+    writeU16(bytes, 67, 0);
+    writeF2Dot14(bytes, 69, 1);
+    writeF2Dot14(bytes, 71, 1);
+    writeU16(bytes, 73, 1);
+    writeF2Dot14(bytes, 75, 1);
     return bytes;
 }
 

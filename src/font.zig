@@ -518,6 +518,7 @@ pub const ColorPaint = union(enum) {
     solid: Solid,
     linear_gradient: LinearGradient,
     radial_gradient: RadialGradient,
+    sweep_gradient: SweepGradient,
     glyph: Glyph,
     layers: Layers,
 
@@ -540,6 +541,7 @@ pub const ColorPaint = union(enum) {
         solid: Solid,
         linear_gradient: LinearGradient,
         radial_gradient: RadialGradient,
+        sweep_gradient: SweepGradient,
     };
 
     pub const Extend = enum(u8) {
@@ -560,6 +562,13 @@ pub const ColorPaint = union(enum) {
         r0: f32,
         c1: glyph_mod.Point,
         r1: f32,
+        color_line: ColorLine,
+    };
+
+    pub const SweepGradient = struct {
+        center: glyph_mod.Point,
+        start_angle: f32,
+        end_angle: f32,
         color_line: ColorLine,
     };
 
@@ -12331,12 +12340,31 @@ fn readColorPaint(font: *const Font, offset: usize) FontError!ColorPaint {
                 .solid => |solid| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .solid = solid } } },
                 .linear_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .linear_gradient = gradient } } },
                 .radial_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .radial_gradient = gradient } } },
+                .sweep_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .sweep_gradient = gradient } } },
                 else => error.UnsupportedGlyph,
             };
         },
         4 => .{ .linear_gradient = try readColorLinearGradient(font, offset) },
         6 => .{ .radial_gradient = try readColorRadialGradient(font, offset) },
+        8 => .{ .sweep_gradient = try readColorSweepGradient(font, offset) },
         else => error.UnsupportedGlyph,
+    };
+}
+
+fn readColorSweepGradient(font: *const Font, offset: usize) FontError!ColorPaint.SweepGradient {
+    const colr = font.colr orelse return error.BadSfnt;
+    const info = colorPaintFormatInfo(8).?;
+    const color_line_offset = try colorPaintChildOffset(font.data, colr, offset, info.min_size, 1);
+    return .{
+        .center = .{
+            .x = @floatFromInt(try bin.readI16At(font.data, offset + 4)),
+            .y = @floatFromInt(try bin.readI16At(font.data, offset + 6)),
+        },
+        // OpenType 1.9.1 shifts the F2Dot14 angle domain so -1 and +1
+        // conveniently encode 0° and 360° respectively.
+        .start_angle = f2dot14(try bin.readI16At(font.data, offset + 8)) * 180.0 + 180.0,
+        .end_angle = f2dot14(try bin.readI16At(font.data, offset + 10)) * 180.0 + 180.0,
+        .color_line = try readColorLine(font, colr, color_line_offset),
     };
 }
 

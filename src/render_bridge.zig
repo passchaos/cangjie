@@ -120,6 +120,7 @@ pub const ColorGlyphPaint = union(enum) {
     colr_v1_layers: font_mod.ColorPaint.Layers,
     colr_v1_linear_gradient: font_mod.ColorPaint.LinearGradient,
     colr_v1_radial_gradient: font_mod.ColorPaint.RadialGradient,
+    colr_v1_sweep_gradient: font_mod.ColorPaint.SweepGradient,
     svg_document: []const u8,
 };
 
@@ -391,6 +392,7 @@ fn colorGlyphPaint(layer_start: usize, layer_len: usize, svg_document: ?[]const 
             .layers => |layers| .{ .colr_v1_layers = layers },
             .linear_gradient => |gradient| .{ .colr_v1_linear_gradient = gradient },
             .radial_gradient => |gradient| .{ .colr_v1_radial_gradient = gradient },
+            .sweep_gradient => |gradient| .{ .colr_v1_sweep_gradient = gradient },
         };
     }
     if (svg_document) |document| return .{ .svg_document = document };

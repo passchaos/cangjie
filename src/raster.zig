@@ -502,6 +502,63 @@ pub const ColorRenderTarget = struct {
         }
     }
 
+    fn blendColrSweepGradientMask(
+        self: *ColorRenderTarget,
+        mask: *const RenderTarget,
+        gradient: font_mod.ColorPaint.SweepGradient,
+        stops: []const SvgGradientStop,
+        units_per_em: u16,
+        x: f32,
+        baseline_y: f32,
+        font_size: f32,
+    ) void {
+        if (stops.len == 0 or units_per_em == 0) return;
+        const scale = font_size / @as(f32, @floatFromInt(units_per_em));
+        if (scale == 0) return;
+
+        const sector = gradient.end_angle - gradient.start_angle;
+        const first_offset = stops[0].offset;
+        const last_offset = stops[stops.len - 1].offset;
+        const stop_range = last_offset - first_offset;
+        if (stop_range == 0) {
+            if (gradient.color_line.extend == .pad) self.blendMask(mask, stops[0].color);
+            return;
+        }
+
+        var start = gradient.start_angle + sector * first_offset;
+        var end = gradient.start_angle + sector * last_offset;
+        // Convert design-space counter-clockwise angles to screen-space
+        // clockwise angles. Keep start < end and reverse stop sampling when the
+        // conversion flips the sector direction, matching Skrifa traversal.
+        start = 360.0 - start;
+        end = 360.0 - end;
+        const reverse_stops = start >= end;
+        if (reverse_stops) std.mem.swap(f32, &start, &end);
+        const span = end - start;
+        if (@abs(span) <= 0.000001 and gradient.color_line.extend != .pad) return;
+
+        const spread: SvgGradientSpread = switch (gradient.color_line.extend) {
+            .pad => .pad,
+            .repeat => .repeat,
+            .reflect => .reflect,
+        };
+        const count = @min(self.pixels.len, mask.pixels.len);
+        for (mask.pixels[0..count], 0..) |coverage, index| {
+            if (coverage == 0) continue;
+            const px = @as(f32, @floatFromInt(index % self.width)) + 0.5;
+            const py = @as(f32, @floatFromInt(index / self.width)) + 0.5;
+            const sample_x = (px - x) / scale - gradient.center.x;
+            const sample_y = (baseline_y - py) / scale - gradient.center.y;
+            var angle = std.math.atan2(-sample_y, sample_x) * 180.0 / std.math.pi;
+            if (angle < 0) angle += 360.0;
+            const raw_t = if (@abs(span) > 0.000001) (angle - start) / span else 0;
+            var t = applyGradientSpread(raw_t, spread);
+            if (reverse_stops) t = 1.0 - t;
+            const color = colrGradientColorAt(stops, first_offset + t * stop_range);
+            blendColorPixel(&self.pixels[index], coverage, color);
+        }
+    }
+
     fn blendRadialGradientMask(self: *ColorRenderTarget, mask: *const RenderTarget, gradient: SvgRadialGradient, view_box: ViewBox, x: f32, baseline_y: f32, font_size: f32) void {
         const count = @min(self.pixels.len, mask.pixels.len);
         if (view_box.height <= 0 or gradient.r <= 0) return;
@@ -557,6 +614,18 @@ fn radialGradientParameter(a: f32, b: f32, c: f32, r0: f32, radius_delta: f32) ?
     if (@abs(b) <= 0.000001) return null;
     const value = -c / b;
     return if (r0 + value * radius_delta >= 0) value else null;
+}
+
+test "COLR sweep spread maps normal and reversed sectors" {
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), applyGradientSpread(0.25, .pad), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), applyGradientSpread(1.25, .repeat), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), applyGradientSpread(1.25, .reflect), 0.0001);
+
+    // Reversing a sweep sector reverses normalized stop traversal.
+    const forward = applyGradientSpread(0.25, .pad);
+    const reversed = 1.0 - applyGradientSpread(0.25, .pad);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), reversed, 0.0001);
+    try std.testing.expect(forward != reversed);
 }
 
 test "COLR radial gradient chooses a non-negative-radius root" {
@@ -873,10 +942,12 @@ pub const Rasterizer = struct {
             .solid => |solid| try self.renderSolidPaint(target, font, fallback_glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
             .linear_gradient => |gradient| try self.renderLinearGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
             .radial_gradient => |gradient| try self.renderRadialGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+            .sweep_gradient => |gradient| try self.renderSweepGradientPaint(target, font, fallback_glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
             .glyph => |glyph_paint| switch (glyph_paint.brush) {
                 .solid => |solid| try self.renderSolidPaint(target, font, glyph_paint.glyph_id, solid, font_size, x, baseline_y, palette_index, normalized_variation_coords),
                 .linear_gradient => |gradient| try self.renderLinearGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
                 .radial_gradient => |gradient| try self.renderRadialGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
+                .sweep_gradient => |gradient| try self.renderSweepGradientPaint(target, font, glyph_paint.glyph_id, gradient, font_size, x, baseline_y, palette_index, normalized_variation_coords),
             },
             .layers => |layers| {
                 for (0..layers.layer_count) |offset| {
@@ -956,6 +1027,28 @@ pub const Rasterizer = struct {
         defer mask.deinit();
         try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
         target.blendColrRadialGradientMask(&mask, gradient, stops, font.units_per_em, x, baseline_y, font_size);
+    }
+
+    fn renderSweepGradientPaint(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        font: *const font_mod.Font,
+        glyph_id: glyph_mod.GlyphId,
+        gradient: font_mod.ColorPaint.SweepGradient,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+        palette_index: u16,
+        normalized_variation_coords: []const f32,
+    ) !void {
+        const stops = try self.resolveColrGradientStops(font, gradient.color_line, palette_index);
+        defer self.allocator.free(stops);
+        var outline = try self.glyphOutlineForRenderAtCoords(font, glyph_id, normalized_variation_coords);
+        defer outline.deinit();
+        var mask = try RenderTarget.init(self.allocator, target.width, target.height);
+        defer mask.deinit();
+        try self.renderGlyph(&mask, &outline, x, baseline_y, font_size, font.units_per_em);
+        target.blendColrSweepGradientMask(&mask, gradient, stops, font.units_per_em, x, baseline_y, font_size);
     }
 
     fn resolveColrGradientStops(

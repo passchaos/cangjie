@@ -2002,7 +2002,7 @@ fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, gl
 
     try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, 0, lookup_options);
     const bidi_start = shapeProfileNow(shape_profile, profile_io);
-    if (shouldApplyBidiVisualOrder(text, options)) {
+    if (shouldApplyBidiVisualOrderWithAsciiProof(text, options, lookup_options.all_ascii)) {
         try applyBidiVisualOrder(buffer, text, options.direction, font);
     }
     if (shape_profile) |p| p.bidi_ns += shapeProfileElapsed(bidi_start, profile_io);
@@ -2010,8 +2010,16 @@ fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, gl
 }
 
 fn shouldApplyBidiVisualOrder(text: []const u8, options: ShapeOptions) bool {
+    return shouldApplyBidiVisualOrderWithAsciiProof(text, options, false);
+}
+
+fn shouldApplyBidiVisualOrderWithAsciiProof(text: []const u8, options: ShapeOptions, all_ascii: bool) bool {
     if (!options.reorder_bidi) return false;
     if (options.direction == .rtl) return true;
+    // Default property inference already scans the complete run before cmap
+    // construction. Reuse its all-ASCII result instead of decoding every byte
+    // again after shaping merely to prove that no strong RTL scalar exists.
+    if (all_ascii) return false;
     return textHasRtlBidiClass(text);
 }
 
@@ -2031,6 +2039,9 @@ test "RTL presence scan ignores ASCII without hiding RTL scripts" {
     try std.testing.expect(!textHasRtlBidiClass("ASCII 123 ()"));
     try std.testing.expect(textHasRtlBidiClass("ASCII \u{05d0}"));
     try std.testing.expect(textHasRtlBidiClass("فارسی"));
+    try std.testing.expect(!shouldApplyBidiVisualOrderWithAsciiProof("ASCII 123 ()", .{}, true));
+    // Explicit RTL remains authoritative even when the source is all ASCII.
+    try std.testing.expect(shouldApplyBidiVisualOrderWithAsciiProof("ASCII", .{ .direction = .rtl }, true));
 }
 
 fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {

@@ -729,6 +729,24 @@ Current local snapshot after the Nastaliq parity work:
   and the Arabic word list are therefore near parity on these fonts, not yet
   broad wins; the cross-font and cross-script performance objective remains
   active.
+- Single-font shaping now reuses default property inference's complete
+  all-ASCII proof when deciding whether an LTR run needs post-shape bidi
+  reordering. Previously the same word was decoded a second time after
+  shaping solely to prove that no ASCII scalar has a strong RTL bidi class;
+  explicit RTL and every non-ASCII or explicitly languaged run retain the
+  original scan. On fixed P-core CPU 8, a five-iteration A/B/B/A `perf stat`
+  comparison reduced Roboto `en-words` retired instructions by `1.49%`,
+  branches by `1.82%`, and cycles by `2.05%`; 31-sample timing medians
+  improved about `2.37%`. The same E-core CPU 30 check reduced instructions
+  by about `1.50%`, while Amiri word-list and long-text instructions remained
+  effectively flat because their forced RTL path returns before the new ASCII
+  test. A longer fixed-P-core Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix measured
+  Cangjie at `201.445 ns/glyph` versus HarfBuzz at `215.896 ns/glyph`, a
+  Cangjie lead of about `6.69%`; the noisier E-core matrix also favored Cangjie
+  (`223.548` versus `228.445 ns/glyph`, about `2.14%`). Full HarfBuzz parity
+  for Roboto and both Amiri corpora, Roboto HarfRust parity, and all ten
+  retained USE fixtures against both references remained unchanged. These are
+  still one font/corpus and one host, not a broad Latin-performance claim.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open
@@ -934,10 +952,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   and Takri.
 
 Conclusion: Amiri Arabic long text and some complex Arabic/Nastaliq slices now
-beat HarfBuzz locally. Roboto Latin words and the Amiri word list are within
-about one percent on the current fixed-CPU matrix but still trail slightly.
-This is not yet a broad cross-font or cross-script performance win, and the
-overall goal remains active.
+beat HarfBuzz locally. Roboto Latin words now also beat HarfBuzz on the current
+fixed-P-core matrix, while the Amiri word list was within about one percent but
+still trailed slightly in the preceding absolute matrix. This is not yet a
+broad cross-font or cross-script performance win, and the overall goal remains
+active.
 
 ## Near-Term Gaps
 

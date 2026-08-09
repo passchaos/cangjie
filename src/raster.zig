@@ -4,6 +4,7 @@ const glyph_mod = @import("glyph.zig");
 const layout = @import("layout.zig");
 const curves = @import("raster/curves.zig");
 const scanline = @import("raster/scanline.zig");
+const prepared_scanline = @import("raster/prepared_scanline.zig");
 
 pub const RenderTarget = struct {
     allocator: std.mem.Allocator,
@@ -436,6 +437,37 @@ pub const Rasterizer = struct {
         return .{ .allocator = allocator };
     }
 
+    /// Flatten and prepare an outline for repeated rendering at one geometry.
+    ///
+    /// `x`, `baseline_y`, size, units-per-em, and the rasterizer's current hint
+    /// size are baked into the returned geometry. Sampling density is not, so
+    /// callers may render the same prepared outline with a different
+    /// `samples_per_axis`. This is intended for glyph atlases and repeated UI
+    /// drawing where the same glyph geometry is scanned many times.
+    pub fn prepareGlyph(self: *Rasterizer, outline: *const glyph_mod.GlyphOutline, x: f32, baseline_y: f32, font_size: f32, units_per_em: u16) !PreparedGlyph {
+        var flattened = try std.ArrayList(Line).initCapacity(self.allocator, flattenedLineCapacity(outline.commands.items));
+        defer flattened.deinit(self.allocator);
+        const scale = font_size / @as(f32, @floatFromInt(units_per_em));
+        flattenOutline(&flattened, outline, scale, x, baseline_y);
+        const hint_size = self.hint_size_px orelse font_size;
+        alignSmallGlyphToPixelGrid(flattened.items, outline, scale, font_size, hint_size);
+        return .{
+            .prepared_fill = try prepared_scanline.prepare(self.allocator, flattened.items),
+            .hint_size = hint_size,
+        };
+    }
+
+    /// Scan immutable prepared geometry into `target`.
+    ///
+    /// The target and scan scratch are per call; a single prepared glyph may be
+    /// shared by concurrent renderers as long as it is not deinitialized.
+    pub inline fn renderPreparedGlyph(self: *Rasterizer, target: *RenderTarget, prepared: *const PreparedGlyph) !void {
+        try prepared_scanline.fill(self.allocator, scanlineTarget(target), &prepared.prepared_fill, .non_zero, self.samples_per_axis);
+        if (self.embolden_small_glyphs and prepared.hint_size <= 20.0) {
+            try self.emboldenPreparedGlyph(target, prepared);
+        }
+    }
+
     pub fn renderGlyph(self: *Rasterizer, target: *RenderTarget, outline: *const glyph_mod.GlyphOutline, x: f32, baseline_y: f32, font_size: f32, units_per_em: u16) !void {
         const flattened_capacity = flattenedLineCapacity(outline.commands.items);
         var inline_flattened: [128]Line = undefined;
@@ -452,6 +484,12 @@ pub const Rasterizer = struct {
         if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);
         }
+    }
+
+    fn emboldenPreparedGlyph(self: *Rasterizer, target: *RenderTarget, prepared: *const PreparedGlyph) !void {
+        if (prepared.hint_size > 16.0) return;
+        const bounds = prepared.prepared_fill.boundsForTarget(scanlineTarget(target)) orelse return;
+        try self.emboldenBounds(target, bounds);
     }
 
     pub fn renderRun(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32) !void {
@@ -608,6 +646,10 @@ pub const Rasterizer = struct {
     fn emboldenSmallGlyph(self: *Rasterizer, target: *RenderTarget, lines: []const Line, font_size: f32) !void {
         if (lines.len == 0 or font_size > 16.0) return;
         const bounds = scanline.boundsForTarget(scanlineTarget(target), lines) orelse return;
+        try self.emboldenBounds(target, bounds);
+    }
+
+    fn emboldenBounds(self: *Rasterizer, target: *RenderTarget, bounds: scanline.Bounds) !void {
         const min_x = bounds.min_x;
         const min_y = bounds.min_y;
         const max_x = bounds.max_x;
@@ -645,6 +687,27 @@ pub const Rasterizer = struct {
                 if (y + 1 <= max_y) target.blend(x, y + 1, vertical);
             }
         }
+    }
+};
+
+pub const PreparedGlyph = struct {
+    prepared_fill: prepared_scanline.PreparedFill,
+    hint_size: f32,
+
+    /// Whether retained real-font measurements predict a win over direct
+    /// `renderGlyph` in a repeated-render loop.
+    ///
+    /// Callers should branch once before entering the loop, not once per glyph
+    /// render. Tiny straight-sided glyphs are already optimized by the direct
+    /// stack-local path; prepared geometry pays off for curve-heavy or
+    /// multi-contour outlines.
+    pub fn recommendedForRepeatedRendering(self: *const PreparedGlyph) bool {
+        return self.prepared_fill.lines.len >= 16;
+    }
+
+    pub fn deinit(self: *PreparedGlyph) void {
+        self.prepared_fill.deinit();
+        self.* = undefined;
     }
 };
 
@@ -3012,6 +3075,76 @@ test "small glyph embolden can be disabled for native-weight UI text" {
 
     try std.testing.expect(alphaSum(&normal) > 0);
     try std.testing.expect(alphaSum(&bold) > alphaSum(&normal));
+}
+
+test "prepared glyph rendering matches direct rendering and is reusable" {
+    const allocator = std.testing.allocator;
+    var outline = glyph_mod.GlyphOutline.init(allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 700, .y_max = 700 }, 800, 0);
+    defer outline.deinit();
+    var builder = glyph_mod.OutlineBuilder{ .outline = &outline };
+    try builder.moveTo(.{ .x = 0, .y = 0 });
+    try builder.quadTo(.{ .x = 350, .y = 700 }, .{ .x = 700, .y = 0 });
+    try builder.close();
+
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.embolden_small_glyphs = false;
+    var prepared = try rasterizer.prepareGlyph(&outline, 3, 54, 48, 1000);
+    defer prepared.deinit();
+
+    for (1..5) |samples| {
+        rasterizer.samples_per_axis = @intCast(samples);
+        var direct = try RenderTarget.init(allocator, 64, 64);
+        defer direct.deinit();
+        var prepared_once = try RenderTarget.init(allocator, 64, 64);
+        defer prepared_once.deinit();
+        var prepared_twice = try RenderTarget.init(allocator, 64, 64);
+        defer prepared_twice.deinit();
+
+        try rasterizer.renderGlyph(&direct, &outline, 3, 54, 48, 1000);
+        try rasterizer.renderPreparedGlyph(&prepared_once, &prepared);
+        try rasterizer.renderPreparedGlyph(&prepared_twice, &prepared);
+        try std.testing.expectEqualSlices(u8, direct.pixels, prepared_once.pixels);
+        try std.testing.expectEqualSlices(u8, prepared_once.pixels, prepared_twice.pixels);
+    }
+}
+
+test "prepared glyph preserves small-size embolden policy" {
+    const allocator = std.testing.allocator;
+    var outline = glyph_mod.GlyphOutline.init(allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 700, .y_max = 700 }, 800, 0);
+    defer outline.deinit();
+    var builder = glyph_mod.OutlineBuilder{ .outline = &outline };
+    try builder.moveTo(.{ .x = 100, .y = 100 });
+    try builder.lineTo(.{ .x = 600, .y = 100 });
+    try builder.lineTo(.{ .x = 600, .y = 600 });
+    try builder.lineTo(.{ .x = 100, .y = 600 });
+    try builder.close();
+
+    var direct = try RenderTarget.init(allocator, 20, 20);
+    defer direct.deinit();
+    var cached = try RenderTarget.init(allocator, 20, 20);
+    defer cached.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.hint_size_px = 12;
+    rasterizer.embolden_small_glyphs = true;
+    var prepared = try rasterizer.prepareGlyph(&outline, 2, 14, 12, 1000);
+    defer prepared.deinit();
+
+    try rasterizer.renderGlyph(&direct, &outline, 2, 14, 12, 1000);
+    try rasterizer.renderPreparedGlyph(&cached, &prepared);
+    try std.testing.expectEqualSlices(u8, direct.pixels, cached.pixels);
+}
+
+test "prepared empty glyph is a reusable no-op" {
+    const allocator = std.testing.allocator;
+    var outline = glyph_mod.GlyphOutline.init(allocator, 0, .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 }, 500, 0);
+    defer outline.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    var prepared = try rasterizer.prepareGlyph(&outline, 0, 20, 20, 1000);
+    defer prepared.deinit();
+    var target = try RenderTarget.init(allocator, 24, 24);
+    defer target.deinit();
+    try rasterizer.renderPreparedGlyph(&target, &prepared);
+    try std.testing.expectEqual(@as(u32, 0), alphaSum(&target));
 }
 
 test "glyph fill uses non-zero winding for overlapping same-direction strokes" {

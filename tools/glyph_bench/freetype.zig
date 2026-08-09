@@ -41,7 +41,7 @@ const FreeTypeFace = struct {
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !report.Result {
-    if (options.mode == .raster_reuse) return error.InvalidArguments;
+    if (options.mode == .raster_reuse or options.mode == .raster_prepared) return error.InvalidArguments;
     const ft_face = try FreeTypeFace.init(font_bytes, options);
     defer ft_face.deinit();
 
@@ -95,7 +95,7 @@ fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Op
     const load_flags: ft.FT_Int32 = switch (options.mode) {
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .raster => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
-        .raster_reuse => unreachable,
+        .raster_reuse, .raster_prepared => unreachable,
     };
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -103,7 +103,7 @@ fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Op
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
             .outline => outlineChecksum(face.*.glyph),
             .raster => rasterTargetChecksum(face.*.glyph, options, target_pixels),
-            .raster_reuse => unreachable,
+            .raster_reuse, .raster_prepared => unreachable,
         });
     }
 }

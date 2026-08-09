@@ -950,3 +950,15 @@ not complete.
   from roughly 90.5M to 70.8M median, rather than regressing the common path.
   Full Roboto `en-words` (`checksum=fd03166ae7017b20`) and Amiri `fa-words`
   (`checksum=246e98435cc9c642`) still pass in-process HarfBuzz parity.
+- Repeated glyph rendering now has an explicit `PreparedGlyph` API and a
+  `raster-prepared` benchmark mode. Preparation flattens curves once, removes
+  horizontal/non-finite edges, computes slopes, sorts by activation y, and
+  caches raw bounds; subsequent renders retain independent scratch and are safe
+  to run concurrently. The existing direct `renderGlyph` scanner remains in its
+  original module/code shape: an isolated fixed-P-core HEAD/current harness
+  differed by less than 0.01% retired instructions. Prepared/direct fixed-P-core
+  comparisons at 64 px reduced retired instructions by about 0.6% for Roboto
+  `A`, 19.2% for `g`, 19.5% for `é`, 22.6% for Amiri `س`, and 14.0% for `م`;
+  the four complex glyphs reduced cycles by roughly 16.7–22.0%. Direct and
+  prepared target checksums are byte-identical, with differential tests for
+  1/2/3/4 samples, repeated calls, empty outlines, and small-size emboldening.

@@ -323,6 +323,7 @@ pub const visualOrderBidiRuns = @import("unicode.zig").visualOrderBidiRuns;
 pub const visualOrderCodepoints = @import("unicode.zig").visualOrderCodepoints;
 pub const visualOrderUtf8 = @import("unicode.zig").visualOrderUtf8;
 pub const ColorRenderTarget = @import("raster.zig").ColorRenderTarget;
+pub const PreparedGlyph = @import("raster.zig").PreparedGlyph;
 pub const RenderTarget = @import("raster.zig").RenderTarget;
 pub const Rgba = @import("raster.zig").Rgba;
 pub const Rasterizer = @import("raster.zig").Rasterizer;

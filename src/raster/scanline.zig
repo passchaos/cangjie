@@ -26,12 +26,12 @@ pub const FillRule = enum {
     even_odd,
 };
 
-const WindingIntersection = struct {
+pub const WindingIntersection = struct {
     x: f32,
     delta: i8,
 };
 
-const PreparedFillLine = struct {
+pub const PreparedFillLine = struct {
     ax: f32,
     ay: f32,
     y_min: f32,
@@ -240,7 +240,7 @@ pub fn boundsForTarget(target: Target, lines: []const Line) ?Bounds {
     return .{ .min_x = min_x, .min_y = min_y, .max_x = max_x, .max_y = max_y };
 }
 
-fn blendUnchecked(target: Target, x: i32, y: i32, coverage: u8) void {
+pub inline fn blendUnchecked(target: Target, x: i32, y: i32, coverage: u8) void {
     const idx = @as(usize, @intCast(y)) * target.width + @as(usize, @intCast(x));
     if (coverage == 255) {
         target.pixels[idx] = 255;
@@ -249,7 +249,7 @@ fn blendUnchecked(target: Target, x: i32, y: i32, coverage: u8) void {
     target.pixels[idx] = @max(target.pixels[idx], coverage);
 }
 
-fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFillLine {
+pub fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFillLine {
     std.debug.assert(out.len >= lines.len);
     var count: usize = 0;
     for (lines) |line| {
@@ -276,7 +276,7 @@ fn lessThanPreparedFillLineYMin(_: void, lhs: PreparedFillLine, rhs: PreparedFil
     return lhs.y_min < rhs.y_min;
 }
 
-fn sortPreparedFillLinesByYMin(lines: []PreparedFillLine) void {
+pub fn sortPreparedFillLinesByYMin(lines: []PreparedFillLine) void {
     if (lines.len <= 128) {
         var index: usize = 1;
         while (index < lines.len) : (index += 1) {
@@ -292,7 +292,7 @@ fn sortPreparedFillLinesByYMin(lines: []PreparedFillLine) void {
     std.sort.heap(PreparedFillLine, lines, {}, lessThanPreparedFillLineYMin);
 }
 
-fn updateActiveFillLines(active_storage: []PreparedFillLine, active_count: *usize, sorted_lines: []const PreparedFillLine, next_line: *usize, y: i32) []PreparedFillLine {
+pub fn updateActiveFillLines(active_storage: []PreparedFillLine, active_count: *usize, sorted_lines: []const PreparedFillLine, next_line: *usize, y: i32) []PreparedFillLine {
     std.debug.assert(active_storage.len >= sorted_lines.len);
     const row_min_y: f32 = @floatFromInt(y);
     const row_max_y = row_min_y + 1.0;
@@ -326,7 +326,7 @@ const coverage_lut_1 = makeCoverageLut(1);
 const coverage_lut_4 = makeCoverageLut(4);
 const coverage_lut_16 = makeCoverageLut(16);
 
-fn sampleOffsetsForAxis(sample_axis: i32) ?[]const f32 {
+pub fn sampleOffsetsForAxis(sample_axis: i32) ?[]const f32 {
     return switch (sample_axis) {
         1 => &sample_offsets_1,
         2 => &sample_offsets_2,
@@ -335,7 +335,7 @@ fn sampleOffsetsForAxis(sample_axis: i32) ?[]const f32 {
     };
 }
 
-fn coverageLutForSampleCount(sample_count: i32) ?[]const u8 {
+pub fn coverageLutForSampleCount(sample_count: i32) ?[]const u8 {
     return switch (sample_count) {
         1 => &coverage_lut_1,
         4 => &coverage_lut_4,
@@ -350,7 +350,7 @@ fn makeCoverageLut(comptime sample_count: i32) [256]u8 {
     return lut;
 }
 
-fn fillCoverageLut(lut: *[256]u8, sample_count: i32) void {
+pub fn fillCoverageLut(lut: *[256]u8, sample_count: i32) void {
     for (lut, 0..) |*coverage, count| {
         const clamped_count = @min(@as(i32, @intCast(count)), sample_count);
         coverage.* = @intCast(@divTrunc(clamped_count * @as(i32, 255), sample_count));
@@ -361,7 +361,7 @@ fn lessThanWindingIntersection(_: void, lhs: WindingIntersection, rhs: WindingIn
     return lhs.x < rhs.x;
 }
 
-fn sortWindingIntersections(intersections: []WindingIntersection) void {
+pub fn sortWindingIntersections(intersections: []WindingIntersection) void {
     if (intersections.len <= 16) {
         var index: usize = 1;
         while (index < intersections.len) : (index += 1) {
@@ -377,7 +377,7 @@ fn sortWindingIntersections(intersections: []WindingIntersection) void {
     std.sort.heap(WindingIntersection, intersections, {}, lessThanWindingIntersection);
 }
 
-const CoveredSpan = struct {
+pub const CoveredSpan = struct {
     min_x: i32,
     max_x: i32,
 };
@@ -387,7 +387,7 @@ fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []co
     return coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f);
 }
 
-fn coverSpanFinite(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) ?CoveredSpan {
+pub fn coverSpanFinite(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) ?CoveredSpan {
     std.debug.assert(std.math.isFinite(start_f) and std.math.isFinite(end_f));
     const start64: f64 = start_f;
     const end64: f64 = end_f;

@@ -27,11 +27,13 @@ pub const Mode = enum {
     outline,
     raster,
     raster_reuse,
+    raster_prepared,
 
     pub fn fromName(name: []const u8) ?Mode {
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "raster")) return .raster;
         if (std.mem.eql(u8, name, "raster-reuse")) return .raster_reuse;
+        if (std.mem.eql(u8, name, "raster-prepared")) return .raster_prepared;
         return null;
     }
 
@@ -40,6 +42,7 @@ pub const Mode = enum {
             .outline => "outline",
             .raster => "raster",
             .raster_reuse => "raster-reuse",
+            .raster_prepared => "raster-prepared",
         };
     }
 };
@@ -173,7 +176,8 @@ pub fn parse(args: []const []const u8) !Options {
     }
     if (!std.math.isFinite(options.font_size) or options.font_size <= 0) return error.InvalidArguments;
     if (options.target_size == 0 or options.samples_per_axis == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
-    if ((options.engine == .freetype or options.engine == .compare_freetype) and options.mode == .raster_reuse) return error.InvalidArguments;
+    if ((options.engine == .freetype or options.engine == .compare_freetype) and
+        (options.mode == .raster_reuse or options.mode == .raster_prepared)) return error.InvalidArguments;
     return options;
 }
 
@@ -212,11 +216,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode outline|raster|raster-reuse] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode outline|raster|raster-reuse|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          outline, raster, or raster-reuse; default outline
+        \\  --mode NAME          outline, raster, raster-reuse, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound

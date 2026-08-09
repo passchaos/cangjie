@@ -254,4 +254,16 @@ pub fn build(b: *std.Build) void {
         "--variation",  "0.5",
     });
     bench_smoke_step.dependOn(&glyph_raster_reuse_smoke_cmd.step);
+
+    const glyph_raster_prepared_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_raster_prepared_smoke_cmd.addArgs(&.{
+        "--mode",       "raster-prepared",
+        "--format",     "tsv",
+        "--builtin",    "gvar-compound",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+        "--variation",  "0.5",
+    });
+    bench_smoke_step.dependOn(&glyph_raster_prepared_smoke_cmd.step);
 }

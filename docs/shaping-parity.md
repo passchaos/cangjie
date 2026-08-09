@@ -384,6 +384,19 @@ Current local snapshot after the Nastaliq parity work:
   `1855.722 ns/glyph`, a `0.045%` difference). The digest adds no storage,
   exact group lookup still resolves false positives, and full parity for all
   three corpora was unchanged.
+- RTL bidi-map construction now walks grapheme clusters and logical items with
+  one shared backward cursor. The previous implementation searched the full
+  logical item array once per grapheme, making long RTL runs effectively
+  quadratic. A fixed-CPU-30 ABBA comparison with four 15/21-sample medians per
+  binary reduced Amiri `fa-thelittleprince` from an average
+  `1110.128 ns/glyph` to `943.117 ns/glyph`, about `15.0%`. Profiled bidi time
+  fell from about `21.4 ms` to `9.1 ms`, and `logicalRangeForBytes` disappeared
+  from sampled hotspots; GSUB/GPOS stage times were unchanged. A neighboring
+  31-sample Roboto-only A/B/B/A check was flat (`435.000` versus
+  `435.047 ns/glyph`). Amiri still trails the same-session in-process
+  HarfBuzz median (`795.825 ns/glyph`) by about `18.5%`, down from roughly
+  `39.5%`, so the overall performance goal remains open. HarfBuzz and HarfRust
+  parity both retain checksum `f2da7bb39eb7323a`.
 - The retained Gulzar 1,000-line `fa-words` probe remains a Cangjie win:
   current medians are about `9733 ns/glyph` for Cangjie versus
   `12230 ns/glyph` for in-process HarfBuzz, with the same

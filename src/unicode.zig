@@ -2587,28 +2587,35 @@ fn appendRtlCodepointsByGrapheme(allocator: std.mem.Allocator, output: *std.Arra
 fn appendRtlVisualBidiItemsByGrapheme(allocator: std.mem.Allocator, items: *std.ArrayList(BidiMapItem), logical_to_visual: []usize, logical: []const BidiMapItem, text: []const u8, run: BidiRun, range: LogicalRange) !void {
     const clusters = try itemizeGraphemeClusters(allocator, text[run.byte_start .. run.byte_start + run.byte_len]);
     defer allocator.free(clusters);
+    var logical_end = range.end;
     var cluster_index = clusters.len;
     while (cluster_index > 0) {
         cluster_index -= 1;
         const cluster = clusters[cluster_index];
         const cluster_start = run.byte_start + cluster.byte_start;
-        const cluster_end = cluster_start + cluster.byte_len;
-        const cluster_range = logicalRangeForBytes(logical, cluster_start, cluster_end);
-        const start = @max(cluster_range.start, range.start);
-        const end = @min(cluster_range.end, range.end);
-        if (rtlClusterNeedsCodepointOrder(logical[start..end])) {
-            var index = end;
-            while (index > start) {
+        var logical_start = logical_end;
+        // Clusters partition this run in logical byte order. Walking both
+        // sequences backward avoids rescanning the complete logical item array
+        // for every cluster, which made long RTL runs quadratic in their
+        // codepoint count.
+        while (logical_start > range.start and logical[logical_start - 1].byte_start >= cluster_start) {
+            logical_start -= 1;
+        }
+        if (rtlClusterNeedsCodepointOrder(logical[logical_start..logical_end])) {
+            var index = logical_end;
+            while (index > logical_start) {
                 index -= 1;
                 try appendVisualBidiItem(allocator, items, logical_to_visual, logical[index], run.direction);
             }
         } else {
-            var index = start;
-            while (index < end) : (index += 1) {
+            var index = logical_start;
+            while (index < logical_end) : (index += 1) {
                 try appendVisualBidiItem(allocator, items, logical_to_visual, logical[index], run.direction);
             }
         }
+        logical_end = logical_start;
     }
+    std.debug.assert(logical_end == range.start);
 }
 
 fn rtlClusterNeedsCodepointOrder(items: []const BidiMapItem) bool {
@@ -2648,6 +2655,31 @@ fn appendVisualBidiItem(allocator: std.mem.Allocator, items: *std.ArrayList(Bidi
         .visual_codepoint = if (direction == .rtl) mirroredCodepoint(logical.codepoint) else logical.codepoint,
         .direction = direction,
     });
+}
+
+test "RTL bidi map walks long grapheme runs without losing item boundaries" {
+    const allocator = std.testing.allocator;
+    const grapheme = "א\u{05b0}";
+    const grapheme_count = 64;
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(allocator);
+    for (0..grapheme_count) |_| try text.appendSlice(allocator, grapheme);
+
+    var map = try buildBidiMap(allocator, text.items, .rtl);
+    defer map.deinit();
+    try std.testing.expectEqual(@as(usize, grapheme_count * 2), map.items.len);
+
+    for (0..grapheme_count) |visual_cluster| {
+        const logical_cluster = grapheme_count - 1 - visual_cluster;
+        const logical_base = logical_cluster * 2;
+        const visual_base = visual_cluster * 2;
+        // Hebrew points retain the existing RTL intra-grapheme order while
+        // grapheme groups themselves are emitted from the end of the run.
+        try std.testing.expectEqual(logical_base + 1, map.visualToLogical(visual_base).?);
+        try std.testing.expectEqual(logical_base, map.visualToLogical(visual_base + 1).?);
+        try std.testing.expectEqual(visual_base + 1, map.logicalToVisual(logical_base).?);
+        try std.testing.expectEqual(visual_base, map.logicalToVisual(logical_base + 1).?);
+    }
 }
 
 fn appendCodepoints(allocator: std.mem.Allocator, output: *std.ArrayList(u21), text: []const u8) !void {

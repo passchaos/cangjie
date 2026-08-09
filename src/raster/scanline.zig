@@ -396,16 +396,34 @@ fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []co
     var x = x_start;
     if (full_start <= full_end) {
         while (x < full_start) : (x += 1) {
-            coverPartialPixel(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
+            coverPartialPixelDispatch(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
         }
         while (x <= full_end) : (x += 1) {
             coverage_counts[@intCast(x - min_x)] += full_coverage;
         }
     }
     while (x <= x_end) : (x += 1) {
-        coverPartialPixel(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
+        coverPartialPixelDispatch(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
     }
     return .{ .min_x = x_start, .max_x = x_end };
+}
+
+inline fn coverPartialPixelDispatch(coverage_counts: []u8, min_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32, x: i32) void {
+    if (sample_offsets.len == 4) {
+        coverPartialPixel4(coverage_counts, min_x, start_f, end_f, x);
+        return;
+    }
+    coverPartialPixel(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
+}
+
+inline fn coverPartialPixel4(coverage_counts: []u8, min_x: i32, start_f: f32, end_f: f32, x: i32) void {
+    const base: f32 = @floatFromInt(x);
+    var count: u8 = 0;
+    count += @intFromBool(base + 0.125 >= start_f and base + 0.125 < end_f);
+    count += @intFromBool(base + 0.375 >= start_f and base + 0.375 < end_f);
+    count += @intFromBool(base + 0.625 >= start_f and base + 0.625 < end_f);
+    count += @intFromBool(base + 0.875 >= start_f and base + 0.875 < end_f);
+    coverage_counts[@intCast(x - min_x)] += count;
 }
 
 fn coverPartialPixel(coverage_counts: []u8, min_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32, x: i32) void {
@@ -413,6 +431,28 @@ fn coverPartialPixel(coverage_counts: []u8, min_x: i32, sample_offsets: []const 
         const px = @as(f32, @floatFromInt(x)) + sample_offset;
         if (px >= start_f and px < end_f) {
             coverage_counts[@intCast(x - min_x)] += 1;
+        }
+    }
+}
+
+test "four-sample partial coverage matches the generic loop at boundaries" {
+    const boundaries = [_]f32{
+        -1.0, -0.875, -0.625, -0.375, -0.125,
+        0.0,  0.125,  0.375,  0.625,  0.875,
+        1.0,  1.125,  1.375,  1.625,  1.875,
+        2.0,
+    };
+    for (boundaries) |start| {
+        for (boundaries) |end| {
+            if (end < start) continue;
+            var generic = [_]u8{0} ** 3;
+            var specialized = [_]u8{0} ** 3;
+            for (0..generic.len) |index| {
+                const x: i32 = @intCast(index);
+                coverPartialPixel(&generic, 0, &sample_offsets_4, start, end, x);
+                coverPartialPixel4(&specialized, 0, start, end, x);
+            }
+            try std.testing.expectEqual(generic, specialized);
         }
     }
 }

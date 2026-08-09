@@ -703,6 +703,18 @@ Current local snapshot after the Nastaliq parity work:
   improved `0.73%` and `0.39%`, and Amiri `fa-thelittleprince` improved
   `0.98%` and `0.56%`, respectively. Full HarfBuzz parity for all three
   corpora and Roboto HarfRust parity remained unchanged.
+- The default 4x4 grayscale raster path now expands its four horizontal
+  boundary-sample comparisons instead of iterating a runtime slice for every
+  partial pixel. The comparisons retain the original order and half-open
+  boundary rules; 1x1, 2x2, and arbitrary sample counts keep the generic
+  fallback. Fixed-P-core `raster-reuse` measurements across Roboto `A`, `g`,
+  `é` and Amiri `س`, `م` reduced cycles by roughly `6.3–20.8%` and
+  instructions by `4.5–9.0%`, with byte-identical target checksums for every
+  glyph and for 1/2/3/4 samples per axis. A serial 64 px Roboto
+  Cangjie/FreeType matrix after the change still leaves FreeType ahead:
+  Cangjie/FreeType median ratios were about `1.82x` for `A`, `2.09x` for
+  `g`, and `1.65x` for `é` (geometric mean `1.84x`), so the broader raster
+  objective remains open.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

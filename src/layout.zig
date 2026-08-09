@@ -3319,7 +3319,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .glyph_cluster_indices = glyph_cluster_indices,
         .glyph_substituted = glyph_substituted,
         .ligature_components = ligature_components,
-        .source_codepoints = codepoints.items,
+        // The LTR ASCII cmap fast path proves there is no CGJ, joiner, or
+        // default-ignorable scalar for contextual/ligature skipping. Omit the
+        // source slice so generic Latin GSUB avoids scanning the identity
+        // source map merely to re-prove those codepoint bounds.
+        .source_codepoints = if (resolved_lookup_options.all_ascii and lookup_options.direction == .ltr)
+            null
+        else
+            codepoints.items,
         .shape_profile = shape_profile,
         .profile_io = profile_io,
     };

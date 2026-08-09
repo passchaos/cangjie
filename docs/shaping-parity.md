@@ -684,6 +684,16 @@ Current local snapshot after the Nastaliq parity work:
   sampling no longer attributes any `utf8Decode` cycles to the cmap pass.
   Full HarfBuzz parity for all three corpora and Roboto HarfRust parity
   remained unchanged.
+- LTR all-ASCII runs now omit GSUB's optional source-codepoint slice. Such a
+  run cannot contain CGJ, joiners, or other default-ignorables, so ligature and
+  contextual matching need no Unicode source lookup; the existing metadata
+  validator consequently returns after its required parallel-array cardinality
+  checks instead of rescanning the identity source map. Fixed-P-core
+  interleaved `perf stat` comparisons reduced Roboto `en-words` retired
+  instructions by about `1.71%` and cycles by `1.33%`. Amiri `fa-words`
+  remained flat to slightly faster, while Amiri `fa-thelittleprince` improved
+  about `0.06%` in instructions and `0.71%` in cycles. Full HarfBuzz parity
+  for all three corpora and Roboto HarfRust parity remained unchanged.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

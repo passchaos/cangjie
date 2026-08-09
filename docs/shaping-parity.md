@@ -747,6 +747,23 @@ Current local snapshot after the Nastaliq parity work:
   for Roboto and both Amiri corpora, Roboto HarfRust parity, and all ten
   retained USE fixtures against both references remained unchanged. These are
   still one font/corpus and one host, not a broad Latin-performance claim.
+- Final positioning now allocates, clears, remaps, and propagates attachment
+  scratch only when the collected GPOS adjustments actually contain a mark or
+  cursive attachment. PairPos/SinglePos-only runs previously paid two
+  glyph-count-sized clears and a full remapping/propagation pass even though
+  every link was empty; fonts and Arabic lines that emit real attachments keep
+  the original path. Fixed-P-core CPU 8 A/B/B/A `perf stat` comparisons reduced
+  Roboto `en-words` retired instructions by `4.21%`, branches by `3.21%`, and
+  cycles by `4.53%`; Amiri `fa-words` instructions/cycles improved
+  `1.05%`/`1.51%`, and `fa-thelittleprince` improved `0.62%`/`0.56%`.
+  Fixed-E-core CPU 30 reproduced the Roboto reduction at `4.20%`
+  instructions and `4.79%` cycles. A post-change 31-sample, three-iteration
+  Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix measured Roboto at `193.855`
+  versus `215.091 ns/glyph` on CPU 8, a Cangjie lead of about `9.87%`, and
+  `210.454` versus `229.616 ns/glyph` on CPU 30, about `8.35%`. Full
+  HarfBuzz parity for Roboto and both Amiri corpora, Roboto HarfRust parity,
+  and all ten retained USE fixtures against both references remained
+  unchanged.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

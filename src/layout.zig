@@ -3773,6 +3773,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 
     const position_start = shapeProfileNow(shape_profile, profile_io);
     std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, adjustmentIndexLessThan);
+    const has_gpos_attachments = adjustmentsHaveAttachments(gpos_adjustments.items);
     // GPOS adjustments and legacy kern are accumulated in font units, then
     // scaled into user-space coordinates for the final GlyphPosition stream.
     const has_gdef_glyph_classes = gdef_metadata.glyph_classes != null;
@@ -3793,10 +3794,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // the output loop does not repeat a large GlyphPosition capacity check.
     try buffer.glyphs.ensureUnusedCapacity(buffer.allocator, glyph_ids.items.len);
     const attachment_links = &scratch.attachment_links;
-    try attachment_links.resize(buffer.allocator, glyph_ids.items.len);
-    @memset(attachment_links.items, .{});
-    try glyph_output_indices.resize(buffer.allocator, glyph_ids.items.len);
-    @memset(glyph_output_indices.items, std.math.maxInt(usize));
+    if (has_gpos_attachments) {
+        // Parent indexes refer to the post-GSUB input stream. Allocate the
+        // remapping arrays only when GPOS actually emitted a mark/cursive
+        // attachment; ordinary PairPos-only Latin runs need neither array.
+        try attachment_links.resize(buffer.allocator, glyph_ids.items.len);
+        @memset(attachment_links.items, .{});
+        try glyph_output_indices.resize(buffer.allocator, glyph_ids.items.len);
+        @memset(glyph_output_indices.items, std.math.maxInt(usize));
+    }
     for (glyph_ids.items, 0..) |glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
@@ -3900,7 +3906,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             -unzeroed_vertical_advance
         else
             0.0;
-        glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
+        if (has_gpos_attachments) {
+            glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
+        }
         buffer.glyphs.appendAssumeCapacity(.{
             .glyph_id = output_glyph_id,
             .codepoint = source_codepoint,
@@ -3912,21 +3920,23 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .y_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset else @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
-        if (!hide_default_ignorable) {
+        if (has_gpos_attachments and !hide_default_ignorable) {
             attachment_links.items[index] = attachmentLinkForAdjustment(adjustment);
         }
         previous_glyph = glyph_id;
     }
-    compactAttachmentLinks(
-        attachment_links.items,
-        glyph_output_indices.items,
-        buffer.glyphs.items.len - segment_glyph_start,
-    );
-    propagateGlyphAttachmentOffsets(
-        buffer.glyphs.items[segment_glyph_start..],
-        attachment_links.items[0 .. buffer.glyphs.items.len - segment_glyph_start],
-        lookup_options,
-    );
+    if (has_gpos_attachments) {
+        compactAttachmentLinks(
+            attachment_links.items,
+            glyph_output_indices.items,
+            buffer.glyphs.items.len - segment_glyph_start,
+        );
+        propagateGlyphAttachmentOffsets(
+            buffer.glyphs.items[segment_glyph_start..],
+            attachment_links.items[0 .. buffer.glyphs.items.len - segment_glyph_start],
+            lookup_options,
+        );
+    }
     if (shape_profile) |p| p.position_ns += shapeProfileElapsed(position_start, profile_io);
 }
 
@@ -4123,6 +4133,51 @@ fn attachmentLinkForAdjustment(adjustment: gpos.Adjustment) attachment.Link {
         .mark => .{ .kind = .mark, .parent_index = adjustment.attachment_parent_index },
         .cursive => .{ .kind = .cursive, .parent_index = adjustment.attachment_parent_index },
     };
+}
+
+fn adjustmentsHaveAttachments(adjustments: []const gpos.Adjustment) bool {
+    for (adjustments) |adjustment| {
+        if (adjustment.attachment_type != .none) return true;
+    }
+    return false;
+}
+
+test "attachment scratch is needed only for emitted attachment adjustments" {
+    try std.testing.expect(!adjustmentsHaveAttachments(&.{
+        .{ .index = 0, .x_advance = -20, .pair_positioned = true },
+    }));
+    try std.testing.expect(adjustmentsHaveAttachments(&.{
+        .{ .index = 0, .attachment_type = .mark, .attachment_parent_index = 1 },
+    }));
+    try std.testing.expect(adjustmentsHaveAttachments(&.{
+        .{ .index = 0, .attachment_type = .cursive, .attachment_parent_index = 1 },
+    }));
+}
+
+test "attachment remapping scratch follows emitted adjustment type across runs" {
+    const test_font = @import("test_font.zig");
+    const mark_bytes = try test_font.buildMinimalGposMarkTtf(std.testing.allocator);
+    defer std.testing.allocator.free(mark_bytes);
+    var mark_font = try Font.parse(std.testing.allocator, mark_bytes);
+    defer mark_font.deinit();
+    const pair_bytes = try test_font.buildMinimalGposTtf(std.testing.allocator);
+    defer std.testing.allocator.free(pair_bytes);
+    var pair_font = try Font.parse(std.testing.allocator, pair_bytes);
+    defer pair_font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const mark_run = try TextShaper.shapeUtf8(&mark_font, &buffer, "AA", 20);
+    try std.testing.expectEqual(@as(usize, 2), mark_run.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 2), buffer.shape_scratch.attachment_links.items.len);
+    try std.testing.expectEqual(@as(usize, 2), buffer.shape_scratch.glyph_output_indices.items.len);
+
+    // Shape into the same reusable buffer. Its clear step drops the old lengths,
+    // and PairPos does not regrow arrays that it cannot consume.
+    const pair_run = try TextShaper.shapeUtf8(&pair_font, &buffer, "AA", 20);
+    try std.testing.expectEqual(@as(usize, 2), pair_run.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 0), buffer.shape_scratch.attachment_links.items.len);
+    try std.testing.expectEqual(@as(usize, 0), buffer.shape_scratch.glyph_output_indices.items.len);
 }
 
 fn remapAttachmentLinkForOutput(link: attachment.Link, output_indices: []const usize) attachment.Link {

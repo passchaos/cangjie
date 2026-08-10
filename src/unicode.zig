@@ -198,6 +198,7 @@ const JoiningTypeRange = struct {
 };
 
 const joining_type_ranges = [_]JoiningTypeRange{
+    .{ .first = 0x034F, .last = 0x034F, .kind = .transparent },
     .{ .first = 0x0610, .last = 0x061A, .kind = .transparent },
     .{ .first = 0x061C, .last = 0x061C, .kind = .transparent },
     .{ .first = 0x0620, .last = 0x0620, .kind = .dual },
@@ -3503,6 +3504,11 @@ test "Arabic joining forms skip transparent marks and honor join controls" {
     var supplementary_forms: [supplementary_mark.len]JoiningForm = undefined;
     try resolveJoiningForms(&supplementary_mark, &supplementary_forms);
     try std.testing.expectEqualSlices(JoiningForm, &.{ .initial, .none, .final }, &supplementary_forms);
+
+    const cgj = [_]u21{ 0x0635, 0x0650, 0x034f, 0x0651, 0x0627 };
+    var cgj_forms: [cgj.len]JoiningForm = undefined;
+    try resolveJoiningForms(&cgj, &cgj_forms);
+    try std.testing.expectEqualSlices(JoiningForm, &.{ .initial, .none, .none, .none, .final }, &cgj_forms);
 }
 
 test "streaming Arabic joining forms match bidirectional reference" {

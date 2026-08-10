@@ -1142,6 +1142,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   ordering and CursivePos placement/advance chaining. The remaining USE work is
   to validate other USE scripts and fonts before making a broader USE parity
   claim.
+- HarfBuzz in-house `default-ignorables.tests` rows that `shape-bench` can
+  express now pass focused `compare-harfbuzz`. This includes CGJ cases where
+  CGJ stays transparent for ordinary contextual matching, but must not be skipped
+  by a ligature lookup when it actually blocked canonical mark reordering; it
+  also includes Arabic joining across CGJ so `صِ͏ّا` shapes to initial/final
+  forms while preserving separate mark glyphs.
 - Myanmar now has a dedicated modern `mym2` shaping slice instead of falling
   through generic GSUB. Focused HarfBuzz in-house rows pass for
   `mark-attachment.tests` (`98b7887cff91f722b92a8ff800120954606354f9.ttf`,
@@ -1332,6 +1338,10 @@ shaping-performance superiority.
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are
   covered, but broader font/script matrices still need expansion.
+- Retain broader default-ignorable coverage. The currently passing focused
+  `default-ignorables.tests` rows cover CGJ/Arabic and ZWJ/mark interactions, but
+  shape-bench still cannot express every upstream option such as synthetic
+  not-found variation-selector glyphs.
 - Arabic-like joining now includes Adlam in the Arabic-style positional shaper:
   the HarfBuzz in-house `arabic-like-joining.tests` Adlam long joining row for
   `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` passes. The same in-house

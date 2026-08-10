@@ -3867,6 +3867,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
             }
         }
+        if (hasRunnableFraction(codepoints.items)) {
+            try source_features.resize(buffer.allocator, codepoints.items.len);
+            var fraction_options = gsub_options;
+            fraction_options.source_features = source_features.items;
+            if (markFractionSourceFeatures(source_features.items, codepoints.items, .numerator)) {
+                try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("numr"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
+            }
+            if (markFractionSourceFeatures(source_features.items, codepoints.items, .fraction)) {
+                try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("frac"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
+            }
+            if (markFractionSourceFeatures(source_features.items, codepoints.items, .denominator)) {
+                try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("dnom"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
+            }
+        }
         if (indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0) {
             const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
             try indic.insertDottedCirclesForBrokenClusters(
@@ -4335,6 +4349,63 @@ fn scriptPositionFeatureApplication(position: ScriptPosition) ?gsub.FeatureAppli
         .superscript => .{ .tag = unicode.tag("sups") },
         .subscript => .{ .tag = unicode.tag("subs") },
     };
+}
+
+const FractionStage = enum {
+    numerator,
+    fraction,
+    denominator,
+};
+
+const FractionRun = struct {
+    start: usize,
+    slash: usize,
+    end: usize,
+};
+
+fn hasRunnableFraction(codepoints: []const u21) bool {
+    return firstFractionRunFrom(codepoints, 0) != null;
+}
+
+fn markFractionSourceFeatures(source_features: []u32, codepoints: []const u21, stage: FractionStage) bool {
+    @memset(source_features, 0);
+    var any = false;
+    var search_start: usize = 0;
+    const Range = struct {
+        start: usize,
+        end: usize,
+        tag: u32,
+    };
+    while (firstFractionRunFrom(codepoints, search_start)) |run| {
+        const range: Range = switch (stage) {
+            .numerator => .{ .start = run.start, .end = run.slash, .tag = unicode.tag("numr") },
+            .fraction => .{ .start = run.start, .end = run.end, .tag = unicode.tag("frac") },
+            .denominator => .{ .start = run.slash + 1, .end = run.end, .tag = unicode.tag("dnom") },
+        };
+        for (range.start..range.end) |index| source_features[index] = range.tag;
+        any = true;
+        search_start = run.end;
+    }
+    return any;
+}
+
+fn firstFractionRunFrom(codepoints: []const u21, start_index: usize) ?FractionRun {
+    var index = start_index;
+    while (index < codepoints.len) : (index += 1) {
+        if (codepoints[index] != 0x2044) continue;
+        var start = index;
+        while (start > 0 and isFractionDecimalNumber(codepoints[start - 1])) start -= 1;
+        var end = index + 1;
+        while (end < codepoints.len and isFractionDecimalNumber(codepoints[end])) end += 1;
+        if (start == index or end == index + 1) continue;
+        return .{ .start = start, .slash = index, .end = end };
+    }
+    return null;
+}
+
+fn isFractionDecimalNumber(codepoint: u21) bool {
+    return (codepoint >= '0' and codepoint <= '9') or
+        (codepoint >= 0x0660 and codepoint <= 0x0669);
 }
 
 fn shouldShapeInNativeDirection(options: LookupOptions) bool {

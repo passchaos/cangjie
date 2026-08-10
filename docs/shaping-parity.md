@@ -1179,6 +1179,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   space separators such as U+2000..U+200A, U+202F, U+205F, and U+3000 through
   the ASCII space glyph when the font lacks nominal coverage, then applies
   HarfBuzz-compatible horizontal and top-to-bottom fallback advances/origins.
+- The ASCII digit row from HarfBuzz in-house `automatic-fractions.tests`
+  passes for `15dfc433a135a658b9f4b1a861b5cdd9658ccbb9.ttf`
+  (`U+0031,U+0032,U+0033,U+2044,U+0034,U+0035,U+0036`). Cangjie now assigns
+  fraction-scoped `numr/frac/dnom` features when digits appear on both sides of
+  U+2044; Arabic-Indic fraction rows still need a separate retained fix.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

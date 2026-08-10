@@ -17,11 +17,9 @@ pub const Info = struct {
 
 pub fn validate(data: []const u8, offset: usize, length: usize) Error!void {
     const header = try headerInfo(data, offset, length);
-    const known_mask: u16 = if (header.version == 0) 0x0003 else 0x000f;
     var previous_max: ?u16 = null;
     for (0..header.count) |index| {
         const range = try rangeAt(data, offset, length, index);
-        if ((range.behavior & ~known_mask) != 0) return error.BadSfnt;
         if (previous_max) |previous| {
             if (range.max_ppem <= previous) return error.BadSfnt;
         }
@@ -45,9 +43,16 @@ pub fn behavior(data: []const u8, offset: usize, length: usize, ppem: u16) Error
     try validate(data, offset, length);
     for (0..header.count) |index| {
         const range = try rangeAt(data, offset, length, index);
-        if (ppem <= range.max_ppem) return range.behavior;
+        if (ppem <= range.max_ppem) return behaviorForVersion(header.version, range.behavior);
     }
     return 0;
+}
+
+fn behaviorForVersion(version: u16, raw: u16) u16 {
+    // FreeType accepts version-0 tables that carry version-1 bits, but masks
+    // them for behavior queries. Keep raw bits visible through info() while
+    // matching that query behavior for compatibility with in-the-wild fonts.
+    return if (version == 0) raw & 0x0003 else raw;
 }
 
 const Header = struct {
@@ -73,4 +78,26 @@ fn rangeAt(data: []const u8, offset: usize, length: usize, index: usize) Error!R
         .max_ppem = try bin.readU16At(data, range_offset),
         .behavior = try bin.readU16At(data, range_offset + 2),
     };
+}
+
+test "gasp version 0 accepts and masks version 1 behavior bits" {
+    const bytes = [_]u8{
+        0, 0, // version 0.
+        0,    2, // numRanges.
+        0,    5,
+        0,    14,
+        0xff, 0xff,
+        0,    15,
+    };
+
+    try validate(&bytes, 0, bytes.len);
+    try std.testing.expectEqual(@as(u16, 0x0002), try behavior(&bytes, 0, bytes.len, 5));
+    try std.testing.expectEqual(@as(u16, 0x0003), try behavior(&bytes, 0, bytes.len, 6));
+
+    const allocator = std.testing.allocator;
+    const parsed = try info(allocator, &bytes, 0, bytes.len);
+    defer allocator.free(parsed.ranges);
+    try std.testing.expectEqual(@as(u16, 0), parsed.version);
+    try std.testing.expectEqual(@as(u16, 0x000e), parsed.ranges[0].behavior);
+    try std.testing.expectEqual(@as(u16, 0x000f), parsed.ranges[1].behavior);
 }

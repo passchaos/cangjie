@@ -1306,10 +1306,15 @@ shaping-performance superiority.
   `mongolian-variation-selector.tests` rows for
   `ef86fe710cfea877bbe0dbb6946a1f88d0661031.ttf` plus
   `37033cc5cf37bb223d7355153016b6ccece93b28.ttf` pass. Broader Mongolian
-  fixture coverage is still blocked by a separate font-parser compatibility
-  issue: `4d4206e30b2dbf1c1ef492a8eae1c9e7829ebad8.ttf` currently fails during
-  `gasp` validation because it uses behavior bits outside Cangjie's accepted
-  mask.
+  fixture coverage now reaches
+  `4d4206e30b2dbf1c1ef492a8eae1c9e7829ebad8.ttf` after `gasp` parsing was
+  relaxed to match FreeType/HarfBuzz-style structural validation: version-0
+  tables that carry version-1 behavior bits are accepted, while behavior
+  queries mask those bits to the version-0 low-bit contract. A retained
+  follow-up remains for the MVS word case `U+182A,U+1820,U+1822,U+182D,U+180E,
+  U+1820,U+202F,U+1836,U+1822,U+1828`, where HarfBuzz selects the FVS-style
+  final forms around U+180E and Cangjie still selects the default final/isolated
+  forms.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

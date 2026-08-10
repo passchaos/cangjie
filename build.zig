@@ -69,6 +69,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     text: []const u8,
     direction: []const u8,
     script: ?[]const u8 = null,
+    language: ?[]const u8 = null,
     enable_feature: ?[]const u8 = null,
     not_found_variation_selector_glyph: ?[]const u8 = null,
 }{
@@ -150,6 +151,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .text = "۝١٢٣",
         .direction = "ltr",
         .script = "arab",
+    },
+    .{
+        .font_hash = "d3129450fafe5e5c98cfc25a4e71809b1b4d2855",
+        .text = "|",
+        .direction = "ltr",
+        .language = "dv",
     },
 };
 
@@ -415,6 +422,9 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.script) |script| {
                 inline_parity_cmd.addArgs(&.{ "--script", script });
+            }
+            if (gate.language) |language| {
+                inline_parity_cmd.addArgs(&.{ "--language", language });
             }
             if (gate.enable_feature) |feature| {
                 inline_parity_cmd.addArgs(&.{ "--enable-feature", feature });

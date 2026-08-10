@@ -907,6 +907,7 @@ pub const OpenTypeLanguageTag = enum(u32) {
     zhs = tag("ZHS "),
     zht = tag("ZHT "),
     hin = tag("HIN "),
+    dhv = tag("DHV "),
 };
 
 pub const FeatureOverride = struct {
@@ -1131,6 +1132,7 @@ pub fn openTypeLanguageTagForLocale(locale_tag: []const u8) ?OpenTypeLanguageTag
     if (asciiEqlIgnoreCase(language, "ko")) return .kor;
     if (asciiEqlIgnoreCase(language, "ar")) return .ara;
     if (asciiEqlIgnoreCase(language, "hi")) return .hin;
+    if (asciiEqlIgnoreCase(language, "dv")) return .dhv;
     if (asciiEqlIgnoreCase(language, "zh")) {
         if (script) |script_value| {
             if (asciiEqlIgnoreCase(script_value, "Hant")) return .zht;

@@ -347,6 +347,7 @@ fn parseLanguageTag(text: []const u8) ?cangjie.OpenTypeLanguageTag {
     if (std.ascii.eqlIgnoreCase(text, "zhs")) return .zhs;
     if (std.ascii.eqlIgnoreCase(text, "zht")) return .zht;
     if (std.ascii.eqlIgnoreCase(text, "hin")) return .hin;
+    if (std.ascii.eqlIgnoreCase(text, "dhv") or std.ascii.eqlIgnoreCase(text, "dv")) return .dhv;
     return null;
 }
 
@@ -359,6 +360,7 @@ pub fn harfrustLanguageArgument(tag_value: cangjie.OpenTypeLanguageTag) ?[]const
         .zhs => "zh-Hans",
         .zht => "zh-Hant",
         .hin => "hi",
+        .dhv => "dv",
     };
 }
 
@@ -394,7 +396,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --warmup N                   unmeasured warmup iterations, default 1000
         \\  --samples N                  independent measured samples, default 1
         \\  --direction ltr|rtl|ttb|btt  shaping direction, default ltr
-        \\  --language dflt|ara|jan|kor|zhs|zht|hin
+        \\  --language dflt|ara|jan|kor|zhs|zht|hin|dhv|dv
         \\                               force an OpenType language system
         \\  --no-bidi-reorder            keep logical glyph order after shaping
         \\  --script-position normal|superscript|subscript

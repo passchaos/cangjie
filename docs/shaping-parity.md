@@ -1218,6 +1218,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   GPOS class subtables whose covered class has no ClassSet slot, matching
   HarfBuzz's no-match behavior, and the parity tool keeps Arabic Prepend
   clusters in HarfBuzz buffer-cluster order for this row.
+- The Dhivehi row from HarfBuzz in-house `language-tags.tests` passes for
+  `d3129450fafe5e5c98cfc25a4e71809b1b4d2855.ttf` (`U+007C`) with language
+  `dv`. Cangjie now maps BCP-47 `dv` to OpenType `DHV ` so language-system
+  selection can reach Dhivehi-localized substitutions.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

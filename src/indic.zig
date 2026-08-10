@@ -180,6 +180,20 @@ pub fn mergePlaceholderDependentMarks(glyph_cluster_indices: *std.ArrayList(usiz
     }
 }
 
+pub fn mergeTrailingDependentMarks(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
+    if (script_tag != .gur2 and script_tag != .guru) return;
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source == 0 or source >= codepoints.len) continue;
+        if (!isIndicDependentMark(codepoints[source], script_tag)) continue;
+        const syllable_start = indicSyllableStart(codepoints, source, script_tag);
+        if (syllable_start >= source) continue;
+        const first_glyph = firstGlyphInSourceRange(glyph_source_indices.items, syllable_start, source) orelse continue;
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, first_glyph, glyph_index + 1);
+    }
+}
+
 pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) bool {
     @memset(source_features, 0);
     var marked = false;
@@ -444,6 +458,12 @@ fn hasInitialReph(codepoints: []const u21, syllable_start: usize, syllable_end: 
 fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
     var marked = false;
     if (script_tag == .tel2 or script_tag == .telu) {
+        if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag, blwf_source_mask)) {
+            marked = true;
+        }
+        return marked;
+    }
+    if (script_tag == .gur2 or script_tag == .guru) {
         if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag, blwf_source_mask)) {
             marked = true;
         }
@@ -1045,6 +1065,25 @@ test "Gurmukhi udaat after explicit dotted circle stays attached" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Gurmukhi virama ra marks blwf and trailing vowel cluster" {
+    var features = [_]u32{0} ** 4;
+    const codepoints = [_]u21{ 0x0a2d, 0x0a4d, 0x0a30, 0x0a42 };
+
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .gur2));
+    try std.testing.expectEqual(blwf_source_mask, features[1]);
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 9 });
+
+    mergeTrailingDependentMarks(&clusters, &sources, &codepoints, .gur2);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0 }, clusters.items);
 }
 
 test "Kannada initial ra virama ZWJ normalizes for legacy half form" {

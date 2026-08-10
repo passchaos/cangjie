@@ -1552,7 +1552,11 @@ shaping-performance superiority.
   `54674a3111d209fb6be0ed31745314b7a8d2c244.ttf` is retained for
   `U+0BA4,U+0BCD,U+00B3`; Cangjie now routes `tml2`/`taml` through the Indic
   shaper and marks Tamil `consonant+virama` sources for `half`, covering the
-  `ta + pulli` pre-half form before a non-Tamil following glyph.
+  `ta + pulli` pre-half form before a non-Tamil following glyph. The Gurmukhi
+  `indic-misc.tests` row for `755160ddba002332349fda3eb999e629d63dccf6.ttf`
+  is retained for `U+0A2D,U+0A4D,U+0A30,U+0A42`; Cangjie now marks
+  Gurmukhi `virama+ra` sources for `blwf` and keeps the following dependent
+  vowel in the syllable cluster.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

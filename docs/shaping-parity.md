@@ -1580,7 +1580,12 @@ shaping-performance superiority.
   `ZWJ/ZWNJ/ZWJ` row `U+091F,U+094D,U+200D,U+091F,U+094D,U+200C,U+091F,U+094D,U+200D,U+092F,U+093F`;
   Cangjie now treats `virama+ZWNJ` as a syllable terminator, so the following
   pre-base matra targets the following `ya` syllable instead of jumping before
-  the previous `tta`. The legacy
+  the previous `tta`. The first, second, fourth, and fifth Devanagari rows of
+  `indic-vowel-letter-spoofing.tests` are retained for
+  `1a5face3fcbd929d228235c2f72bbd6f8eb37424.ttf`; Cangjie now runs the
+  HarfBuzz vowel-constraint dotted-circle insertion table in the traditional
+  Indic path before GSUB. The third row's `ra,virama,i` reph-like case still
+  needs follow-up work and is not retained yet. The legacy
   Kannada `indic-old-spec.tests` row for
   `57a9d9f83020155cbb1d2be1f43d82388cbecc88.ttf` is retained for
   `U+0C9A,U+0CCD,U+0C9A,U+0CCD`; Cangjie now marks the trailing old-spec

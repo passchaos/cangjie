@@ -3952,6 +3952,19 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     } else {
         const indic_shape = indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
         if (indic_shape) {
+            const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+            try use_shaper.insertVowelConstraintDottedCircles(
+                buffer.allocator,
+                glyph_ids,
+                codepoints,
+                clusters,
+                source_ends,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                dotted_circle_glyph,
+            );
             try use_shaper.decomposeCanonicalSources(
                 buffer.allocator,
                 font,

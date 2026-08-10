@@ -349,7 +349,7 @@ fn parseLanguageTag(text: []const u8) ?cangjie.OpenTypeLanguageTag {
     if (std.ascii.eqlIgnoreCase(text, "zht")) return .zht;
     if (std.ascii.eqlIgnoreCase(text, "hin")) return .hin;
     if (std.ascii.eqlIgnoreCase(text, "dhv") or std.ascii.eqlIgnoreCase(text, "dv")) return .dhv;
-    return null;
+    return cangjie.openTypeLanguageTagForLocale(text);
 }
 
 pub fn harfrustLanguageArgument(tag_value: cangjie.OpenTypeLanguageTag) ?[]const u8 {

@@ -1226,7 +1226,8 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `language-tags.tests` pass for
   `6991b13ce889466be6de3f66e891de2bc0f117ee.ttf` (`U+004A`) through OpenType
   language tag `ZHH `. Locale mapping now distinguishes `zh-HK`, `zh-MO`, and
-  Hant+HK/MO from generic Traditional Chinese `ZHT `.
+  Hant+HK/MO from generic Traditional Chinese `ZHT `, and `shape-bench`
+  accepts those BCP-47 language strings directly in retained gates.
 - Representative Thai and Lao rows from HarfBuzz in-house `sara-am.tests` pass
   for `63a539a90a371ccf028dc2dcced9b63b07163be7.ttf`
   (`U+0E01,U+0E31,U+0E33` and `U+0E81,U+0EB1,U+0EB3`). Cangjie now performs

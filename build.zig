@@ -165,6 +165,18 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .language = "zhh",
     },
     .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-HK",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-Hant-mo",
+    },
+    .{
         .font_hash = "63a539a90a371ccf028dc2dcced9b63b07163be7",
         .text = "กัำ",
         .direction = "ltr",

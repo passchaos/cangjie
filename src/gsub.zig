@@ -2767,7 +2767,33 @@ fn applyValidatedAcceleratedLookup(
             }
             return true;
         },
-        5 => return false,
+        5 => {
+            if (accelerator.context_class_subtables.len != 0) {
+                try applyContextClassSubstitutionLookupAccelerated(
+                    table,
+                    lookup_offset,
+                    accelerator.subtable_count,
+                    glyphs,
+                    allocator,
+                    accelerator.lookup_flag,
+                    lookup_options,
+                    accelerator,
+                );
+                return true;
+            }
+            if (accelerator.context_coverage_subtables.len != 0) {
+                try applyContextCoverageLookupAccelerated(
+                    table,
+                    glyphs,
+                    allocator,
+                    accelerator.lookup_flag,
+                    lookup_options,
+                    accelerator,
+                );
+                return true;
+            }
+            return false;
+        },
         6 => {
             if (!accelerator.chaining_coverage_only) return false;
             const run_digest = if (run_digest_cache) |cache|

@@ -1004,6 +1004,16 @@ Current local snapshot after the Nastaliq parity work:
   Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix measured `957.022` versus
   `784.909 ns/glyph`, leaving Cangjie about `21.93%` slower—still the largest
   active shaping-performance gap, but down from the prior `28.74%`.
+- Validated, non-profiled GSUB now also dispatches accelerated direct
+  ContextSubst lookups through the small fast wrapper instead of entering the
+  generic profiling-capable dispatcher before reaching the same predecoded
+  context accelerators. This extends the existing ligature and chaining fast
+  wrapper to lookup type 5 without changing unsupported, profiled,
+  unvalidated, or stale-cache behavior. A serial B/A/A/B timing check against
+  `8b0038c` on NotoSansDevanagari `hi-words` measured baseline medians of
+  `825.716` and `789.428 ns/glyph`, versus candidate medians of `734.119`
+  and `737.643 ns/glyph`. Roboto `en-words` and Devanagari `hi-words`
+  retained in-process HarfBuzz parity.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

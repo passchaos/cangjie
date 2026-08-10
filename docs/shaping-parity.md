@@ -1014,6 +1014,14 @@ Current local snapshot after the Nastaliq parity work:
   `825.716` and `789.428 ns/glyph`, versus candidate medians of `734.119`
   and `737.643 ns/glyph`. Roboto `en-words` and Devanagari `hi-words`
   retained in-process HarfBuzz parity.
+- The lookup-selection cache now retains merged GSUB feature plans as well as
+  one-stage feature plans. USE final and typographic stages merge several
+  features for every shaped word; caching their resolved lookup slices avoids
+  rebuilding the same merged plan for NotoSansDevanagari `hi-words` thousands
+  of times. A serial B/A/A/B timing check against `5042673` measured baseline
+  medians of `825.660` and `764.896 ns/glyph`, versus candidate medians of
+  `757.872` and `735.510 ns/glyph`. Devanagari `hi-words` retained
+  in-process HarfBuzz parity.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

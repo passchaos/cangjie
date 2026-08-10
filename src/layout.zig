@@ -4059,16 +4059,19 @@ fn applyMergedGsubFeatureApplicationsAfterRunProof(
         );
     }
     if (applications.len == 0) return;
-    const plan = try font.gsubMergedFeatureLookupPlanForShaping(
-        buffer.allocator,
-        applications,
-        options,
-        gdef_metadata,
-    );
-    defer {
+    const plan = if (buffer.lookup_selection_cache) |selection_cache|
+        try selection_cache.gsubMergedFeatureLookupPlan(font, applications, options, gdef_metadata)
+    else
+        try font.gsubMergedFeatureLookupPlanForShaping(
+            buffer.allocator,
+            applications,
+            options,
+            gdef_metadata,
+        );
+    defer if (buffer.lookup_selection_cache == null) {
         var mutable_plan = plan;
         mutable_plan.deinit(buffer.allocator);
-    }
+    };
     try font.applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof(
         plan,
         glyph_ids,

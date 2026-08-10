@@ -87,6 +87,12 @@ pub const serializeManifest = @import("database.zig").serializeManifest;
 pub const userFontSourcesForOs = @import("database.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("database.zig").writeManifestFile;
 pub const Font = @import("font.zig").Font;
+pub const FontContainerError = @import("font_container.zig").Error;
+pub const FontContainerFormat = @import("font_container.zig").Format;
+pub const default_max_decoded_font_size = @import("font_container.zig").default_max_decoded_size;
+pub const LoadedFont = @import("font_container.zig").LoadedFont;
+pub const decodeFontContainerAlloc = @import("font_container.zig").decodeFontContainerAlloc;
+pub const detectFontContainerFormat = @import("font_container.zig").detectFormat;
 pub const AnkrAnchorInfo = @import("font.zig").AnkrAnchorInfo;
 pub const AnkrGlyphAnchorsInfo = @import("font.zig").AnkrGlyphAnchorsInfo;
 pub const AnkrInfo = @import("font.zig").AnkrInfo;
@@ -335,6 +341,7 @@ pub const Rasterizer = @import("raster.zig").Rasterizer;
 pub const bidiClassForCodepoint = @import("unicode.zig").bidiClassForCodepoint;
 pub const testing = struct {
     pub const test_font = @import("test_font.zig");
+    pub const font_container = @import("font_container.zig").testing;
 };
 
 test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes" {
@@ -7877,6 +7884,115 @@ test "loads a minimal OTF CFF font and rasterizes its charstring outline" {
         if (pixel > 0) covered += 1;
     }
     try std.testing.expect(covered > 10);
+}
+
+test "FontDatabase loads and scans WOFF1 font sources" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const sfnt = try test_font.buildNamedTtfWithNames(
+        allocator,
+        "Database WOFF",
+        "Regular",
+        "Database WOFF Regular",
+    );
+    defer allocator.free(sfnt);
+    const woff = try testing.font_container.buildWoff1(allocator, sfnt, true);
+    defer allocator.free(woff);
+
+    var database = FontDatabase.init(allocator);
+    defer database.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try database.addFontBytes(woff));
+    const face = database.match(.{ .family = "Database WOFF" }) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(GlyphId, 1), try face.font.glyphIndex('A'));
+    const manifest = try database.manifest(allocator);
+    defer FontDatabase.freeManifest(allocator, manifest);
+    try std.testing.expectEqual(@as(usize, 1), manifest.len);
+    try std.testing.expect(manifestEntryMatchesBytes(manifest[0], woff));
+    try std.testing.expect(!manifestEntryMatchesBytes(manifest[0], sfnt));
+
+    var tmp_dir = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "scan.woff",
+        .data = woff,
+    });
+    var scanned = FontDatabase.init(allocator);
+    defer scanned.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        try scanned.scanFontDir(
+            std.testing.io,
+            tmp_dir.dir,
+            .limited(sfnt.len),
+        ),
+    );
+    try std.testing.expect(scanned.match(.{ .family = "Database WOFF" }) != null);
+    var limited = FontDatabase.init(allocator);
+    defer limited.deinit();
+    try std.testing.expectError(
+        error.OutputTooLarge,
+        limited.addFontFile(
+            std.testing.io,
+            tmp_dir.dir,
+            "scan.woff",
+            .limited(sfnt.len - 1),
+        ),
+    );
+}
+
+test "loads real WOFF1 and WOFF2 fonts when fixtures are installed" {
+    const Case = struct {
+        path: []const u8,
+        codepoint: u21,
+        expect_variations: bool = false,
+    };
+    const cases = [_]Case{
+        .{
+            .path = "/usr/share/yelp/mathjax/fonts/HTML-CSS/TeX/woff/MathJax_Main-Regular.woff",
+            .codepoint = 'A',
+        },
+        .{
+            .path = "/usr/share/fonts-sil-annapurna/woff/AnnapurnaSIL-Regular.woff",
+            .codepoint = 0x0915,
+        },
+        .{
+            .path = "/home/passchaos/Work/rustls/website/static/GeneralSans-Variable.woff2",
+            .codepoint = 'A',
+            .expect_variations = true,
+        },
+        .{
+            .path = "/usr/share/fonts-sil-annapurna/woff2/AnnapurnaSIL-Regular.woff2",
+            .codepoint = 0x0915,
+        },
+    };
+    for (cases) |case| {
+        const input = std.Io.Dir.cwd().readFileAlloc(
+            std.testing.io,
+            case.path,
+            std.testing.allocator,
+            .limited(16 * 1024 * 1024),
+        ) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer std.testing.allocator.free(input);
+        var loaded = try LoadedFont.load(
+            std.testing.allocator,
+            input,
+            64 * 1024 * 1024,
+        );
+        defer loaded.deinit();
+        try std.testing.expect((try loaded.font.glyphIndex(case.codepoint)) != 0);
+        const axes = try loaded.font.variationAxes(std.testing.allocator);
+        defer std.testing.allocator.free(axes);
+        if (case.expect_variations) try std.testing.expect(axes.len != 0);
+
+        var database = FontDatabase.init(std.testing.allocator);
+        defer database.deinit();
+        _ = try database.addFontBytesWithLimit(input, 64 * 1024 * 1024);
+        try std.testing.expectEqual(@as(usize, 1), database.familyCount());
+    }
 }
 
 test "shapes text across a fallback font cascade" {

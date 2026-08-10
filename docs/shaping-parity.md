@@ -1141,6 +1141,23 @@ still trailed slightly in the preceding absolute matrix. This is not yet a
 broad cross-font or cross-script performance win, and the overall goal remains
 active.
 
+The latest post-`077a833` fixed-P/E-core absolute matrix sharpens that
+workload-dependent conclusion:
+
+- Roboto `en-words` was about `17.30%` faster than HarfBuzz on CPU 8 and
+  `13.93%` faster on CPU 30.
+- SourceSerifVariable `en-words` was about `18.43%` faster on CPU 8 and
+  `17.52%` faster on CPU 30.
+- Amiri `fa-thelittleprince` was about `14.86%` faster on CPU 8 but about
+  `0.51%` slower on CPU 30, which is effectively the boundary of run noise.
+- NotoSansDevanagari `hi-words` remained about `42.89%` slower on CPU 8 and
+  `52.23%` slower on CPU 30.
+
+These are serial same-host Cangjie/HarfBuzz/HarfBuzz/Cangjie measurements, not
+cross-machine headlines. Latin and selected Arabic/variable-font paths now have
+real local wins, but the Devanagari result alone rules out claiming broad
+shaping-performance superiority.
+
 ## Near-Term Gaps
 
 - Add a library-level HarfRust comparison runner. The `harfbuzz` `shape-bench`

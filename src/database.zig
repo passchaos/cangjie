@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Font = @import("font.zig").Font;
+const font_container = @import("font_container.zig");
 const layout = @import("layout.zig");
 
 pub const FontStyle = enum {
@@ -265,11 +266,50 @@ pub const FontDatabase = struct {
     }
 
     pub fn addFontBytes(self: *FontDatabase, bytes: []const u8) !usize {
-        return try self.addFontFaceBytes(bytes, 0);
+        return try self.addFontBytesWithLimit(
+            bytes,
+            font_container.default_max_decoded_size,
+        );
+    }
+
+    pub fn addFontBytesWithLimit(
+        self: *FontDatabase,
+        bytes: []const u8,
+        max_decoded_size: usize,
+    ) !usize {
+        const owned_bytes = try font_container.decodeFontContainerAlloc(
+            self.allocator,
+            bytes,
+            max_decoded_size,
+        );
+        return try self.addOwnedFontFaceBytes(
+            owned_bytes,
+            fontBytesHash(bytes),
+            bytes.len,
+            0,
+        );
     }
 
     pub fn addFontCollectionBytes(self: *FontDatabase, bytes: []const u8) !usize {
-        const count = try Font.faceCount(bytes);
+        return try self.addFontCollectionBytesWithLimit(
+            bytes,
+            font_container.default_max_decoded_size,
+        );
+    }
+
+    pub fn addFontCollectionBytesWithLimit(
+        self: *FontDatabase,
+        bytes: []const u8,
+        max_decoded_size: usize,
+    ) !usize {
+        const decoded = try font_container.decodeFontContainerAlloc(
+            self.allocator,
+            bytes,
+            max_decoded_size,
+        );
+        defer self.allocator.free(decoded);
+        const count = try Font.faceCount(decoded);
+        const source_hash = fontBytesHash(bytes);
         var added: usize = 0;
         errdefer {
             while (added > 0) : (added -= 1) {
@@ -278,7 +318,12 @@ pub const FontDatabase = struct {
         }
         for (0..count) |face_index| {
             const before = self.faces.items.len;
-            _ = try self.addFontFaceBytes(bytes, face_index);
+            _ = try self.addFontFaceBytes(
+                decoded,
+                source_hash,
+                bytes.len,
+                face_index,
+            );
             if (self.faces.items.len > before) added += 1;
         }
         return added;
@@ -287,13 +332,13 @@ pub const FontDatabase = struct {
     pub fn addFontFile(self: *FontDatabase, io: std.Io, dir: std.Io.Dir, path: []const u8, limit: std.Io.Limit) !usize {
         const bytes = try dir.readFileAlloc(io, path, self.allocator, limit);
         defer self.allocator.free(bytes);
-        return try self.addFontBytes(bytes);
+        return try self.addFontBytesWithLimit(bytes, @intFromEnum(limit));
     }
 
     pub fn addFontCollectionFile(self: *FontDatabase, io: std.Io, dir: std.Io.Dir, path: []const u8, limit: std.Io.Limit) !usize {
         const bytes = try dir.readFileAlloc(io, path, self.allocator, limit);
         defer self.allocator.free(bytes);
-        return try self.addFontCollectionBytes(bytes);
+        return try self.addFontCollectionBytesWithLimit(bytes, @intFromEnum(limit));
     }
 
     pub fn scanFontDir(self: *FontDatabase, io: std.Io, dir: std.Io.Dir, limit: std.Io.Limit) !usize {
@@ -379,24 +424,64 @@ pub const FontDatabase = struct {
         return added;
     }
 
-    fn addFontFaceBytes(self: *FontDatabase, bytes: []const u8, face_index: usize) !usize {
-        const content_hash = fontBytesHash(bytes);
-        if (self.findOwnedFaceByHash(content_hash, face_index)) |index| return index;
+    fn addFontFaceBytes(
+        self: *FontDatabase,
+        bytes: []const u8,
+        source_hash: u64,
+        source_size: usize,
+        face_index: usize,
+    ) !usize {
         const owned_bytes = try self.allocator.dupe(u8, bytes);
-        errdefer self.allocator.free(owned_bytes);
-        const owned = try self.allocator.create(OwnedFont);
-        errdefer self.allocator.destroy(owned);
-        owned.* = .{ .bytes = owned_bytes, .font = try Font.parseFace(self.allocator, owned_bytes, face_index), .content_hash = content_hash, .face_index = face_index };
-        errdefer owned.font.deinit();
+        return try self.addOwnedFontFaceBytes(
+            owned_bytes,
+            source_hash,
+            source_size,
+            face_index,
+        );
+    }
 
-        try self.owned_fonts.append(self.allocator, owned);
-        errdefer {
+    fn addOwnedFontFaceBytes(
+        self: *FontDatabase,
+        owned_bytes: []u8,
+        source_hash: u64,
+        source_size: usize,
+        face_index: usize,
+    ) !usize {
+        const content_hash = fontBytesHash(owned_bytes);
+        if (self.findOwnedFaceByBytes(owned_bytes, content_hash, face_index)) |index| {
+            self.allocator.free(owned_bytes);
+            return index;
+        }
+        const owned = self.allocator.create(OwnedFont) catch |err| {
+            self.allocator.free(owned_bytes);
+            return err;
+        };
+        const font = Font.parseFace(self.allocator, owned_bytes, face_index) catch |err| {
+            self.allocator.destroy(owned);
+            self.allocator.free(owned_bytes);
+            return err;
+        };
+        owned.* = .{
+            .bytes = owned_bytes,
+            .source_hash = source_hash,
+            .source_size = source_size,
+            .font = font,
+            .content_hash = content_hash,
+            .face_index = face_index,
+        };
+        self.owned_fonts.append(self.allocator, owned) catch |err| {
+            owned.font.deinit();
+            self.allocator.free(owned.bytes);
+            self.allocator.destroy(owned);
+            return err;
+        };
+        const index = self.addFont(&owned.font) catch |err| {
             _ = self.owned_fonts.pop();
             owned.font.deinit();
             self.allocator.free(owned.bytes);
             self.allocator.destroy(owned);
-        }
-        const index = try self.addFont(&owned.font);
+            return err;
+        };
         if (self.faces.items[index].font != &owned.font) {
             _ = self.owned_fonts.pop();
             owned.font.deinit();
@@ -584,9 +669,19 @@ pub const FontDatabase = struct {
         return null;
     }
 
-    fn findOwnedFaceByHash(self: *const FontDatabase, content_hash: u64, face_index: usize) ?usize {
+    fn findOwnedFaceByBytes(
+        self: *const FontDatabase,
+        bytes: []const u8,
+        content_hash: u64,
+        face_index: usize,
+    ) ?usize {
         for (self.owned_fonts.items) |owned| {
             if (owned.content_hash != content_hash or owned.face_index != face_index) continue;
+            // Wyhash is only a fast rejection key. An allocator-backed font
+            // database must not silently alias attacker-controlled inputs on a
+            // 64-bit collision, because the retained Font would then expose
+            // tables from different bytes than the caller supplied.
+            if (!std.mem.eql(u8, owned.bytes, bytes)) continue;
             for (self.faces.items, 0..) |face, index| {
                 if (face.font == &owned.font) return index;
             }
@@ -596,14 +691,14 @@ pub const FontDatabase = struct {
 
     fn contentHashForFont(self: *const FontDatabase, font: *const Font) u64 {
         for (self.owned_fonts.items) |owned| {
-            if (&owned.font == font) return owned.content_hash;
+            if (&owned.font == font) return owned.source_hash;
         }
         return 0;
     }
 
     fn contentSizeForFont(self: *const FontDatabase, font: *const Font) u64 {
         for (self.owned_fonts.items) |owned| {
-            if (&owned.font == font) return owned.bytes.len;
+            if (&owned.font == font) return owned.source_size;
         }
         return 0;
     }
@@ -611,6 +706,8 @@ pub const FontDatabase = struct {
 
 const OwnedFont = struct {
     bytes: []u8,
+    source_hash: u64,
+    source_size: u64,
     font: Font,
     content_hash: u64,
     face_index: usize,
@@ -650,12 +747,18 @@ fn isSupportedFontPath(path: []const u8) bool {
     return std.ascii.endsWithIgnoreCase(path, ".ttf") or
         std.ascii.endsWithIgnoreCase(path, ".otf") or
         std.ascii.endsWithIgnoreCase(path, ".ttc") or
-        std.ascii.endsWithIgnoreCase(path, ".otc");
+        std.ascii.endsWithIgnoreCase(path, ".otc") or
+        std.ascii.endsWithIgnoreCase(path, ".woff") or
+        std.ascii.endsWithIgnoreCase(path, ".woff2");
 }
 
 fn isCollectionPath(path: []const u8) bool {
     return std.ascii.endsWithIgnoreCase(path, ".ttc") or
-        std.ascii.endsWithIgnoreCase(path, ".otc");
+        std.ascii.endsWithIgnoreCase(path, ".otc") or
+        // WOFF2 may wrap a font collection. The collection API also accepts a
+        // one-face WOFF2, so scanners can discover every face without parsing
+        // the compressed header twice or special-casing its flavor here.
+        std.ascii.endsWithIgnoreCase(path, ".woff2");
 }
 
 fn appendUserFontSource(buffer: []FontSource, count: *usize, path_buffer: []u8, path_offset: *usize, home_path: []const u8, relative_path: []const u8) !void {

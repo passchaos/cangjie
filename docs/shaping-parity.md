@@ -55,9 +55,11 @@ HarfBuzz reference runs require `-Denable-harfbuzz=true`. If the local
 `-Dharfbuzz-prefix=/path/to/prefix`; otherwise the build uses
 `pkg-config harfbuzz`.
 
-Use `--profile` for targeting only. Profile mode applies Arabic GSUB feature
-stages separately, so it is not the final performance number for the cached
-feature-plan hot path.
+Use `--profile` for defensive-path targeting only. It records glyph windows
+around every GSUB lookup and therefore intentionally uses the generic lookup
+dispatcher. Use `--profile-fast-path` when investigating optimized production
+paths; it keeps validated lookup accelerators active and records lightweight
+per-lookup timings without glyph-window snapshots.
 
 For output parity against HarfRust, build the local CLI once:
 

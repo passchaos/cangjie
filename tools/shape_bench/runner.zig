@@ -108,10 +108,12 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     var profile = cangjie.ShapeStageProfile{};
     if (options.profile) {
         layout_buffer.shape_profile = &profile;
+        layout_buffer.profile_fast_path = options.profile_fast_path;
         layout_buffer.profile_io = io;
     }
     defer if (options.profile) {
         layout_buffer.shape_profile = null;
+        layout_buffer.profile_fast_path = false;
         layout_buffer.profile_io = null;
     };
 

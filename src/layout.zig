@@ -1494,6 +1494,7 @@ pub const LayoutBuffer = struct {
     script_runs: std.ArrayList(ScriptedRun) = .empty,
     shape_profile: ?*ShapeStageProfile = null,
     profile_io: ?std.Io = null,
+    profile_fast_path: bool = false,
     gdef_metadata_cache: ?*GdefMetadataCache = null,
     gsub_table_proof_cache: ?*GsubTableProofCache = null,
     gpos_table_proof_cache: ?*GposTableProofCache = null,
@@ -3499,6 +3500,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         else
             codepoints.items,
         .shape_profile = shape_profile,
+        .profile_fast_path = buffer.profile_fast_path,
         .profile_io = profile_io,
     };
     const gsub_start = shapeProfileNow(shape_profile, profile_io);

@@ -90,6 +90,7 @@ pub const Options = struct {
     use_caches: bool = true,
     use_shaped_cache: bool = false,
     profile: bool = false,
+    profile_fast_path: bool = false,
     line_summary: bool = false,
     glyph_summary: bool = false,
     feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
@@ -201,6 +202,9 @@ pub fn parse(args: []const []const u8) !Options {
             options.use_shaped_cache = true;
         } else if (std.mem.eql(u8, arg, "--profile")) {
             options.profile = true;
+        } else if (std.mem.eql(u8, arg, "--profile-fast-path")) {
+            options.profile = true;
+            options.profile_fast_path = true;
         } else if (std.mem.eql(u8, arg, "--line-summary")) {
             options.line_summary = true;
         } else if (std.mem.eql(u8, arg, "--glyph-summary")) {
@@ -335,6 +339,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --no-caches                  bypass glyph metric and cmap caches
         \\  --shaped-cache               cache complete shaped runs
         \\  --profile                    collect Cangjie stage timings
+        \\  --profile-fast-path          collect timings while keeping validated lookup accelerators active
         \\  --line-summary               print per-line glyph counts and checksums for the first measured iteration
         \\  --glyph-summary              include per-line glyph id lists with --line-summary
         \\  --enable-feature TAG         enable one OpenType feature tag for Cangjie

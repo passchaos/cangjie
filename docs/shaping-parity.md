@@ -1477,7 +1477,11 @@ shaping-performance superiority.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari
-  word corpus, not full HarfBuzz Indic script parity.
+  word corpus, not full HarfBuzz Indic script parity. The focused
+  `indic-init.tests` Bengali row for
+  `1a3d8f381387dd29be1e897e4b5100ac8b4829e1.ttf` now passes after the Indic
+  slice learned `bng2`/`beng` pre-base matra reordering, source-scoped `init`
+  on word-start left matras, and cluster merging for the moved matra.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

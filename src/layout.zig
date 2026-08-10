@@ -3973,18 +3973,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 ligature_components,
                 codepoints.items,
                 dotted_circle_glyph,
+                lookup_options.script_tag,
             );
 
             try source_features.resize(buffer.allocator, codepoints.items.len);
-            const has_basic_source_features = indic.markBasicSourceFeatures(source_features.items, codepoints.items);
+            const has_basic_source_features = indic.markBasicSourceFeatures(source_features.items, codepoints.items, lookup_options.script_tag);
             gsub_options.source_features = source_features.items;
 
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             try gsub.validateScriptShaperRunMetadata(gsub_options, glyph_ids.items.len);
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
-            indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
+            indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
+            _ = indic.markInitialMatraGlyphSources(source_features.items, glyph_source_indices.items, codepoints.items, lookup_options.script_tag);
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
-            indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
+            indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
         }
     }

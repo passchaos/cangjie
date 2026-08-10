@@ -4502,7 +4502,7 @@ fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
 fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {
     if (indic.shouldShape(script_tag) or use_shaper.shouldShape(script_tag) or myanmar.shouldShape(script_tag)) return false;
     return switch (script_tag) {
-        .hang, .khmr => false,
+        .deva, .dev2, .dev3, .hang, .khmr => false,
         else => true,
     };
 }

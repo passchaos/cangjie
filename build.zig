@@ -289,6 +289,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     },
     .{
         .font_hash = "1a5face3fcbd929d228235c2f72bbd6f8eb37424",
+        .text = "\u{0908} \u{0930}\u{094d}\u{0907}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "1a5face3fcbd929d228235c2f72bbd6f8eb37424",
         .text = "\u{090a} \u{0909}\u{0941}",
         .direction = "ltr",
     },

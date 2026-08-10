@@ -146,6 +146,7 @@ pub fn insertVowelConstraintDottedCircles(
     glyph_substituted: *std.ArrayList(bool),
     ligature_components: *ligature_provenance.Store,
     dotted_circle_glyph: GlyphId,
+    final_owns_dotted_circle_cluster: bool,
 ) std.mem.Allocator.Error!void {
     if (dotted_circle_glyph == 0) return;
 
@@ -196,7 +197,10 @@ pub fn insertVowelConstraintDottedCircles(
         // clear its grapheme continuation bit. Model that by giving the circle
         // a distinct synthetic source and making both glyphs own their source
         // starts rather than the preceding independent vowel's grapheme.
-        glyph_cluster_indices.items[glyph_index] = shifted_source;
+        glyph_cluster_indices.items[glyph_index] = if (final_owns_dotted_circle_cluster)
+            constrained_source
+        else
+            shifted_source;
         try shaping_metadata.insert(
             allocator,
             glyph_ids,
@@ -743,12 +747,60 @@ test "USE vowel constraints insert a distinct synthetic source" {
         &substituted,
         &components,
         87,
+        false,
     );
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 87, 7 }, glyph_ids.items);
     try std.testing.expectEqualSlices(u21, &.{ 0x0905, 0x25cc, 0x093a }, codepoints.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, owners.items);
+}
+
+test "Indic vowel constraints can merge the final scalar with dotted-circle owner" {
+    const allocator = std.testing.allocator;
+    var glyph_ids = std.ArrayList(GlyphId).empty;
+    defer glyph_ids.deinit(allocator);
+    try glyph_ids.appendSlice(allocator, &.{ 17, 30, 5 });
+    var codepoints = std.ArrayList(u21).empty;
+    defer codepoints.deinit(allocator);
+    try codepoints.appendSlice(allocator, &.{ 0x0930, 0x094d, 0x0907 });
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(allocator);
+    try clusters.appendSlice(allocator, &.{ 4, 4, 10 });
+    var source_ends = std.ArrayList(usize).empty;
+    defer source_ends.deinit(allocator);
+    try source_ends.appendSlice(allocator, &.{ 7, 10, 13 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+    var owners = std.ArrayList(usize).empty;
+    defer owners.deinit(allocator);
+    try owners.appendSlice(allocator, &.{ 0, 0, 2 });
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(allocator);
+    try substituted.appendSlice(allocator, &.{ false, false, false });
+    var components = ligature_provenance.Store{};
+    defer components.deinit(allocator);
+    try components.infos.appendSlice(allocator, &.{ .{}, .{}, .{} });
+
+    try insertVowelConstraintDottedCircles(
+        allocator,
+        &glyph_ids,
+        &codepoints,
+        &clusters,
+        &source_ends,
+        &sources,
+        &owners,
+        &substituted,
+        &components,
+        87,
+        true,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 17, 30, 87, 5 }, glyph_ids.items);
+    try std.testing.expectEqualSlices(u21, &.{ 0x0930, 0x094d, 0x25cc, 0x0907 }, codepoints.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, owners.items);
 }
 
 test "USE shaping includes Balinese" {

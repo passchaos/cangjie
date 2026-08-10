@@ -510,7 +510,7 @@ fn glyphIndexForSource(sources: []const usize, target_source: usize) ?usize {
 fn startsBrokenCluster(codepoints: []const u21, source_index: usize, script_tag: unicode.OpenTypeScriptTag) bool {
     if (source_index != 0 and isIndicSyllableCodepoint(codepoints[source_index - 1], script_tag)) return false;
     if (source_index != 0 and codepoints[source_index - 1] == 0x25cc) return false;
-    if (isIndicConsonant(codepoints[source_index], script_tag) or isIndicIndependentVowel(codepoints[source_index], script_tag)) return false;
+    if (isIndicBase(codepoints[source_index], script_tag)) return false;
     const syllable_end = indicSyllableEnd(codepoints, source_index, script_tag);
     if (syllable_end <= source_index) return false;
     if (codepoints[source_index] == viramaCodepoint(script_tag)) return true;
@@ -521,7 +521,7 @@ fn hasInitialReph(codepoints: []const u21, syllable_start: usize, syllable_end: 
     if (syllable_start + 2 >= syllable_end) return false;
     if (codepoints[syllable_start] != rephRaCodepoint(script_tag) or codepoints[syllable_start + 1] != viramaCodepoint(script_tag)) return false;
     if (isJoiner(codepoints[syllable_start + 2])) return false;
-    return hasConsonant(codepoints[syllable_start + 2 .. syllable_end], script_tag);
+    return hasConsonantLikeBase(codepoints[syllable_start + 2 .. syllable_end], script_tag);
 }
 
 fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
@@ -908,6 +908,13 @@ fn hasConsonant(codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) 
     return false;
 }
 
+fn hasConsonantLikeBase(codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    for (codepoints) |codepoint| {
+        if (isIndicBase(codepoint, script_tag)) return true;
+    }
+    return false;
+}
+
 fn isIndicSyllableCodepoint(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return isIndicBase(codepoint, script_tag) or
         isIndicDependentMark(codepoint, script_tag) or
@@ -916,10 +923,13 @@ fn isIndicSyllableCodepoint(codepoint: u21, script_tag: unicode.OpenTypeScriptTa
 }
 
 fn isIndicBase(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
-    return isIndicConsonant(codepoint, script_tag) or isIndicIndependentVowel(codepoint, script_tag);
+    return isIndicConsonant(codepoint, script_tag) or
+        isIndicIndependentVowel(codepoint, script_tag) or
+        isIndicPlaceholderBase(codepoint, script_tag);
 }
 
 fn isIndicPlaceholderBase(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (codepoint == 0x25cc) return true;
     return switch (script_tag) {
         .knd2, .knda => codepoint == 0x0c80,
         else => false,

@@ -3702,6 +3702,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 glyph_substituted,
                 ligature_components,
                 dotted_circle_glyph,
+                false,
             );
             try use_shaper.decomposeCanonicalSources(
                 buffer.allocator,
@@ -3964,6 +3965,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 glyph_substituted,
                 ligature_components,
                 dotted_circle_glyph,
+                true,
             );
             try use_shaper.decomposeCanonicalSources(
                 buffer.allocator,

@@ -3918,7 +3918,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .direction = if (shapingDirectionForGpos(lookup_options) == .rtl) .rtl else .ltr,
         .features = lookup_options.features,
         .apply_all_if_unselected = false,
-        .run_has_gdef_marks = runHasGdefMarks(glyph_ids.items, gdef_metadata.*),
+        .run_may_have_mark_attachments = runMayHaveMarkAttachments(glyph_ids.items, codepoints.items, glyph_source_indices.items, gdef_metadata.*),
         .run_has_default_ignorables = has_default_ignorable,
         .glyph_source_indices = glyph_source_indices.items,
         .source_codepoints = codepoints.items,
@@ -3998,17 +3998,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             }
         }
         const adjustment = findAdjustmentSorted(gpos_adjustments.items, index, &adjustment_cursor);
-        var adjustment_x_advance = if (adjustment.x_advance_absolute)
+        const adjustment_x_advance = if (adjustment.x_advance_absolute)
             @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
         else
             @as(f32, @floatFromInt(adjustment.x_advance));
-        const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
-        const mark_attachment = adjustment.attachment_type == .mark;
-        if (mark_attachment) {
-            adjustment_x_advance = -@as(f32, @floatFromInt(metrics.advance_width));
-        }
         const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
         const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
+        const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
+        const mark_attachment = adjustment.attachment_type == .mark;
         const visible_not_found_variation_selector = lookup_options.not_found_variation_selector_glyph != null and
             isVariationSelector(source_codepoint) and
             !was_substituted;
@@ -4641,7 +4638,7 @@ fn markAdvanceZeroingPolicy(
     has_gpos_positioning: bool,
     options: LookupOptions,
 ) MarkAdvanceZeroing {
-    if (mark_attachment or synthetic_base) return .{};
+    if (synthetic_base) return .{};
 
     const gdef_mark = glyph_class == .mark and !unicode.isSpacingMarkCodepoint(source_codepoint);
     // HarfBuzz only synthesizes classes when the face has no GlyphClassDef at
@@ -4651,7 +4648,8 @@ fn markAdvanceZeroingPolicy(
         !has_gdef_glyph_classes and
         unicode.isNonspacingMarkCodepoint(source_codepoint) and
         !unicode.isDefaultIgnorableForShaping(source_codepoint);
-    const zero_advance = gdef_mark or synthesized_use_mark;
+    const attachment_mark_without_gdef = mark_attachment and !has_gdef_glyph_classes;
+    const zero_advance = gdef_mark or synthesized_use_mark or attachment_mark_without_gdef;
     if (!zero_advance) return .{};
 
     const forward_direction = options.writing_mode.isVertical() or
@@ -4867,10 +4865,15 @@ fn fallbackGlyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCac
     return (try unicode_glyph_fallback.glyphForMissingCodepoint(font, codepoint)) orelse glyph;
 }
 
-fn runHasGdefMarks(glyphs: []const GlyphId, metadata: GdefLookupMetadata) bool {
+fn runMayHaveMarkAttachments(glyphs: []const GlyphId, codepoints: []const u21, glyph_source_indices: []const usize, metadata: GdefLookupMetadata) bool {
     const classes = metadata.glyph_classes orelse return true;
-    for (glyphs) |glyph| {
+    for (glyphs, 0..) |glyph, index| {
         if (glyph < classes.len and classes[glyph] == @intFromEnum(GlyphClass.mark)) return true;
+        const source_index = if (index < glyph_source_indices.len)
+            @min(glyph_source_indices[index], codepoints.len -| 1)
+        else
+            @min(index, codepoints.len -| 1);
+        if (source_index < codepoints.len and unicode.isUnicodeMarkCodepoint(codepoints[source_index])) return true;
     }
     return false;
 }

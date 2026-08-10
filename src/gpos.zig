@@ -86,9 +86,10 @@ pub const LookupOptions = struct {
     mark_attach_classes: ?[]const u16 = null,
     mark_filtering_sets: ?[]const []const GlyphId = null,
     active_mark_filtering_set: ?u16 = null,
-    /// Cached run-level GDEF mark presence after GSUB. When supplied, direct
-    /// mark attachment lookups can skip without rescanning every glyph.
-    run_has_gdef_marks: ?bool = null,
+    /// Cached run-level mark attachment possibility after GSUB. This includes
+    /// GDEF mark glyph classes and Unicode marks; some fonts cover a mark glyph
+    /// in MarkBasePos while misclassifying it in GDEF.
+    run_may_have_mark_attachments: ?bool = null,
     /// Cached source-level default-ignorable presence. A known-false value
     /// proves that LookupFlag=0 matching can advance to the adjacent glyph
     /// without consulting source metadata or Unicode properties.
@@ -1211,7 +1212,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
 }
 
 fn selectedLookupMayApply(table: Table, lookup_index: u16, options: LookupOptions) GposError!bool {
-    if (options.run_has_gdef_marks orelse true) return true;
+    if (options.run_may_have_mark_attachments orelse true) return true;
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (lookup_index >= lookup_count) return true;
@@ -1501,7 +1502,7 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
             1 => {}, // SinglePos needs whole-lookup subtable ordering; handled above.
             2 => {}, // PairPos needs whole-lookup subtable ordering; handled above.
             3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            4 => if (runMayHaveGdefMarks(glyphs, lookup_options)) {
+            4 => if (runMayHaveMarkAttachments(glyphs, lookup_options)) {
                 if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
                     if (i < accelerator.mark_to_base_subtables.len) {
                         try collectMarkToBaseAdjustmentParsed(table, accelerator.mark_to_base_subtables[i], glyphs, adjustments, allocator, lookup_flag, lookup_options);
@@ -1510,8 +1511,8 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
                 }
                 try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options);
             },
-            5 => if (runMayHaveGdefMarks(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            6 => if (runMayHaveGdefMarks(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            5 => if (runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            6 => if (runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
@@ -2163,8 +2164,8 @@ fn validateMarkFilteringSetIndex(options: LookupOptions) GposError!void {
     if (mark_filtering_set_index >= mark_sets.len) return error.BadGpos;
 }
 
-fn runMayHaveGdefMarks(glyphs: []const GlyphId, options: LookupOptions) bool {
-    if (options.run_has_gdef_marks) |has_marks| return has_marks;
+fn runMayHaveMarkAttachments(glyphs: []const GlyphId, options: LookupOptions) bool {
+    if (options.run_may_have_mark_attachments) |has_marks| return has_marks;
     const classes = options.glyph_classes orelse return true;
     for (glyphs) |glyph| {
         if (glyph < classes.len and classes[glyph] == 3) return true;
@@ -7508,7 +7509,7 @@ test "GPOS default feature selection matches shaping defaults" {
     try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, enabled_lookups.items);
 }
 
-test "GPOS lookup selection skips mark positioning for unmarked runs" {
+test "GPOS lookup selection skips mark positioning for runs without attachment targets" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 104;
     writeMarkLookupSelectionTable(&bytes);
@@ -7516,14 +7517,14 @@ test "GPOS lookup selection skips mark positioning for unmarked runs" {
 
     var unmarked = try selectedLookupIndices(table, allocator, .{
         .script_tag = .dflt,
-        .run_has_gdef_marks = false,
+        .run_may_have_mark_attachments = false,
     });
     defer unmarked.deinit(allocator);
     try std.testing.expectEqualSlices(u16, &.{0}, unmarked.items);
 
     var marked = try selectedLookupIndices(table, allocator, .{
         .script_tag = .dflt,
-        .run_has_gdef_marks = true,
+        .run_may_have_mark_attachments = true,
     });
     defer marked.deinit(allocator);
     try std.testing.expectEqualSlices(u16, &.{ 0, 1, 2 }, marked.items);

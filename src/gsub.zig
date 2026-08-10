@@ -7182,6 +7182,20 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
             }
         }
     }
+    if (lookup_type == 5) {
+        for (0..subtable_count) |subtable_i| {
+            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
+            if ((try applyContextSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)).matched) return .{};
+        }
+        return .{};
+    }
+    if (lookup_type == 6) {
+        for (0..subtable_count) |subtable_i| {
+            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
+            if ((try applyChainingContextSubstitutionAt(table, subtable_offset, null, glyphs, glyph_index, allocator, lookup_flag, lookup_options)).matched) return .{};
+        }
+        return .{};
+    }
 
     // Contextual records target one glyph in the matched input sequence. Run
     // the nested lookup on a one-glyph scratch buffer so it cannot accidentally
@@ -11063,6 +11077,71 @@ test "GSUB context nested extension ligature uses real glyph run" {
     // run when the wrapped subtable is LigatureSubst: the ligature needs to see
     // and consume the following component in the original glyph buffer.
     try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
+}
+
+test "GSUB context nested chaining lookup sees real lookahead" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 140;
+
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 8, 10); // LookupList.
+    writeU16Test(&bytes, 10, 3);
+    writeU16Test(&bytes, 12, 8); // Lookup 0: parent ContextSubst at 18.
+    writeU16Test(&bytes, 14, 48); // Lookup 1: nested ChainingContextSubst at 58.
+    writeU16Test(&bytes, 16, 98); // Lookup 2: nested SingleSubst at 108.
+
+    const parent_lookup = 18;
+    writeU16Test(&bytes, parent_lookup + 0, 5);
+    writeU16Test(&bytes, parent_lookup + 2, 0);
+    writeU16Test(&bytes, parent_lookup + 4, 1);
+    writeU16Test(&bytes, parent_lookup + 6, 8);
+
+    const parent_context = 26;
+    writeU16Test(&bytes, parent_context + 0, 1);
+    writeU16Test(&bytes, parent_context + 2, 22);
+    writeU16Test(&bytes, parent_context + 4, 1);
+    writeU16Test(&bytes, parent_context + 6, 8);
+    const set = parent_context + 8;
+    writeU16Test(&bytes, set + 0, 1);
+    writeU16Test(&bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16Test(&bytes, rule + 0, 1);
+    writeU16Test(&bytes, rule + 2, 1);
+    writeU16Test(&bytes, rule + 4, 0);
+    writeU16Test(&bytes, rule + 6, 1);
+    writeCoverage1(&bytes, parent_context + 22, 1);
+
+    const nested_lookup = 58;
+    writeU16Test(&bytes, nested_lookup + 0, 6);
+    writeU16Test(&bytes, nested_lookup + 2, 0);
+    writeU16Test(&bytes, nested_lookup + 4, 1);
+    writeU16Test(&bytes, nested_lookup + 6, 8);
+
+    const chain = nested_lookup + 8;
+    writeU16Test(&bytes, chain + 0, 3);
+    writeU16Test(&bytes, chain + 2, 0); // BacktrackGlyphCount.
+    writeU16Test(&bytes, chain + 4, 1); // InputGlyphCount.
+    writeU16Test(&bytes, chain + 6, 22);
+    writeU16Test(&bytes, chain + 8, 1); // LookAheadGlyphCount.
+    writeU16Test(&bytes, chain + 10, 28);
+    writeU16Test(&bytes, chain + 12, 1); // SubstCount.
+    writeU16Test(&bytes, chain + 14, 0);
+    writeU16Test(&bytes, chain + 16, 2);
+    writeCoverage1(&bytes, chain + 22, 1);
+    writeCoverage1(&bytes, chain + 28, 2);
+
+    writeSingleDeltaLookup(&bytes, 108, 1, 10);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, parent_lookup, &glyphs, allocator, .{});
+
+    // A direct nested ChainingContextSubst must run at the real glyph-buffer
+    // position. A one-glyph scratch buffer cannot see lookahead glyph 2 and
+    // leaves glyph 1 unchanged.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3 }, glyphs.items);
 }
 
 test "GSUB contextual records extend positions across extension multiple substitution" {

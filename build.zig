@@ -365,6 +365,16 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "5028afb650b1bb718ed2131e872fbcce57828fff",
+        .text = "\u{0b13}\u{200d}\u{0b01}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "5028afb650b1bb718ed2131e872fbcce57828fff",
+        .text = "\u{0b13}\u{200c}\u{0b01}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "2681c1c72d6484ed3410417f521b1b819b4e2392",
         .text = "\u{3008}",
         .direction = "ttb",

@@ -19,7 +19,7 @@ const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng, .gur2, .guru, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
+        .dev2, .bng2, .beng, .ory2, .orya, .gur2, .guru, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -181,7 +181,7 @@ pub fn mergePlaceholderDependentMarks(glyph_cluster_indices: *std.ArrayList(usiz
 }
 
 pub fn mergeTrailingDependentMarks(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
-    if (script_tag != .gur2 and script_tag != .guru) return;
+    if (script_tag != .ory2 and script_tag != .orya and script_tag != .gur2 and script_tag != .guru) return;
     var glyph_index: usize = 0;
     while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
         const source = glyph_source_indices.items[glyph_index];
@@ -189,7 +189,11 @@ pub fn mergeTrailingDependentMarks(glyph_cluster_indices: *std.ArrayList(usize),
         if (!isIndicDependentMark(codepoints[source], script_tag)) continue;
         const syllable_start = indicSyllableStart(codepoints, source, script_tag);
         if (syllable_start >= source) continue;
-        const first_glyph = firstGlyphInSourceRange(glyph_source_indices.items, syllable_start, source) orelse continue;
+        const first_source = if ((script_tag == .ory2 or script_tag == .orya) and codepoints[source - 1] == 0x200c)
+            source - 1
+        else
+            syllable_start;
+        const first_glyph = firstGlyphInSourceRange(glyph_source_indices.items, first_source, source) orelse continue;
         shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, first_glyph, glyph_index + 1);
     }
 }
@@ -389,6 +393,7 @@ pub fn finalFeatureApplications() []const gsub.FeatureApplication {
 fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .bng2, .beng => codepoint == 0x09c7 or codepoint == 0x09c8,
+        .ory2, .orya => codepoint == 0x0b47 or codepoint == 0x0b48,
         .gur2, .guru => codepoint == 0x0a3f,
         .tel2, .telu => codepoint == 0x0c46 or codepoint == 0x0c47 or codepoint == 0x0c48,
         .knd2, .knda => codepoint == 0x0cbf,
@@ -819,6 +824,7 @@ fn isPostHalantConsonant(codepoints: []const u21, source: usize, syllable_start:
 fn isIndicSyllableModifier(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .bng2, .beng => codepoint >= 0x0981 and codepoint <= 0x0983,
+        .ory2, .orya => codepoint >= 0x0b01 and codepoint <= 0x0b03,
         .gur2, .guru => codepoint >= 0x0a01 and codepoint <= 0x0a03,
         .tel2, .telu => codepoint >= 0x0c00 and codepoint <= 0x0c03,
         .knd2, .knda => codepoint >= 0x0c82 and codepoint <= 0x0c83,
@@ -856,6 +862,10 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
     return switch (script_tag) {
         .bng2, .beng => (codepoint >= 0x0995 and codepoint <= 0x09b9) or
             (codepoint >= 0x09dc and codepoint <= 0x09df),
+        .ory2, .orya => (codepoint >= 0x0b15 and codepoint <= 0x0b39) or
+            codepoint == 0x0b5c or
+            codepoint == 0x0b5d or
+            codepoint == 0x0b5f,
         .gur2, .guru => (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
             (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
             (codepoint >= 0x0a72 and codepoint <= 0x0a74),
@@ -881,6 +891,9 @@ fn isIndicIndependentVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
         .bng2, .beng => (codepoint >= 0x0985 and codepoint <= 0x0994) or
             codepoint == 0x09e0 or
             codepoint == 0x09e1,
+        .ory2, .orya => (codepoint >= 0x0b05 and codepoint <= 0x0b14) or
+            codepoint == 0x0b60 or
+            codepoint == 0x0b61,
         .gur2, .guru => (codepoint >= 0x0a05 and codepoint <= 0x0a0a) or
             (codepoint >= 0x0a0f and codepoint <= 0x0a10) or
             (codepoint >= 0x0a13 and codepoint <= 0x0a14),
@@ -910,6 +923,15 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
         .bng2, .beng => (codepoint >= 0x0981 and codepoint <= 0x0983) or
             (codepoint >= 0x09be and codepoint <= 0x09cc) or
             codepoint == 0x09d7,
+        .ory2, .orya => (codepoint >= 0x0b01 and codepoint <= 0x0b03) or
+            codepoint == 0x0b3c or
+            (codepoint >= 0x0b3e and codepoint <= 0x0b44) or
+            (codepoint >= 0x0b47 and codepoint <= 0x0b48) or
+            (codepoint >= 0x0b4b and codepoint <= 0x0b4d) or
+            codepoint == 0x0b55 or
+            codepoint == 0x0b56 or
+            codepoint == 0x0b57 or
+            (codepoint >= 0x0b62 and codepoint <= 0x0b63),
         .gur2, .guru => (codepoint >= 0x0a01 and codepoint <= 0x0a03) or
             codepoint == 0x0a3c or
             (codepoint >= 0x0a3e and codepoint <= 0x0a42) or
@@ -960,6 +982,7 @@ fn isBeforeSubscriptVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag)
 fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09cd,
+        .ory2, .orya => 0x0b4d,
         .gur2, .guru => 0x0a4d,
         .tel2, .telu => 0x0c4d,
         .knd2, .knda => 0x0ccd,
@@ -972,6 +995,7 @@ fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
 fn rephRaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09b0,
+        .ory2, .orya => 0x0b30,
         .gur2, .guru => 0x0a30,
         .tel2, .telu => 0x0c30,
         .knd2, .knda => 0x0cb0,
@@ -1205,6 +1229,23 @@ test "Kannada placeholder merges dependent mark cluster" {
     mergePlaceholderDependentMarks(&clusters, &sources, &codepoints, .knd2);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Odia joiner candrabindu uses Indic shaping cluster" {
+    const codepoints = [_]u21{ 0x0b13, 0x200c, 0x0b01 };
+    var features = [_]u32{0} ** 3;
+    try std.testing.expect(!markBasicSourceFeatures(&features, &codepoints, .ory2));
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3, 6 });
+
+    mergeTrailingDependentMarks(&clusters, &sources, &codepoints, .ory2);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 3, 3 }, clusters.items);
 }
 
 test "Telugu post-base virama consonant marks blwf source" {

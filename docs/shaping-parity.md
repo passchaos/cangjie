@@ -1556,7 +1556,12 @@ shaping-performance superiority.
   `indic-misc.tests` row for `755160ddba002332349fda3eb999e629d63dccf6.ttf`
   is retained for `U+0A2D,U+0A4D,U+0A30,U+0A42`; Cangjie now marks
   Gurmukhi `virama+ra` sources for `blwf` and keeps the following dependent
-  vowel in the syllable cluster.
+  vowel in the syllable cluster. The Odia `indic-joiner-candrabindu.tests`
+  rows for `5028afb650b1bb718ed2131e872fbcce57828fff.ttf` are retained for
+  `U+0B13,U+200D,U+0B01` and `U+0B13,U+200C,U+0B01`; Cangjie now routes
+  `ory2`/`orya` through the Indic shaper so ZWJ can trigger the `abvs`
+  candrabindu ligature, while the ZWNJ row keeps the dependent mark in the
+  joiner's shaping cluster.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

@@ -3644,6 +3644,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .language_tag = lookup_options.language_tag,
         .text_direction = if (lookup_options.direction == .rtl) .rtl else .ltr,
         .features = lookup_options.features,
+        .normalized_variation_coords = lookup_options.normalized_variation_coords,
         .vertical = lookup_options.writing_mode.isVertical(),
         .apply_all_if_unselected = false,
         .glyph_source_indices = glyph_source_indices,
@@ -3947,9 +3948,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
     } else {
-        if (buffer.lookup_selection_cache) |selection_cache| {
+        if (lookup_options.normalized_variation_coords.len == 0) if (buffer.lookup_selection_cache) |selection_cache| {
             gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
-        }
+        };
         if (gsub_after_proof) {
             try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
         } else {

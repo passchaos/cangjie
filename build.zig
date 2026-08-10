@@ -71,6 +71,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     script: ?[]const u8 = null,
     language: ?[]const u8 = null,
     enable_feature: ?[]const u8 = null,
+    variation: ?[]const u8 = null,
     not_found_variation_selector_glyph: ?[]const u8 = null,
 }{
     .{
@@ -155,6 +156,18 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "e207635780b42f898d58654b65098763e340f5c7",
         .text = "യ്രെ",
         .direction = "ltr",
+    },
+    .{
+        .font_hash = "d23d76ea0909c14972796937ba072b5a40c1e257",
+        .text = "r",
+        .direction = "ltr",
+        .variation = "0,0.65,0",
+    },
+    .{
+        .font_hash = "d23d76ea0909c14972796937ba072b5a40c1e257",
+        .text = "r",
+        .direction = "ltr",
+        .variation = "0,0.7,0",
     },
     .{
         .font_hash = "b895f8ff06493cc893ec44de380690ca0074edfa",
@@ -561,6 +574,9 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.enable_feature) |feature| {
                 inline_parity_cmd.addArgs(&.{ "--enable-feature", feature });
+            }
+            if (gate.variation) |variation| {
+                inline_parity_cmd.addArgs(&.{ "--variation", variation });
             }
             shaping_corpus_parity_smoke_step.dependOn(&inline_parity_cmd.step);
         }

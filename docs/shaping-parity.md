@@ -1490,6 +1490,11 @@ shaping-performance superiority.
   shaping explicitly with `--native-direction-shaping`; with
   `--no-bidi-reorder`, this exposes HarfBuzz buffer-order semantics and keeps
   the `rtlm` substitutions in final RTL order.
+- The HarfBuzz in-house `variations-rvrn.tests` boundary for
+  `d23d76ea0909c14972796937ba072b5a40c1e257.ttf` is retained with normalized
+  coordinates `0,0.65,0` and `0,0.7,0`. Cangjie now enables `rvrn` by default
+  and applies GSUB FeatureVariations condition sets so the low coordinate keeps
+  `rvrn_base` while the high coordinate selects `rvrn_subst`.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

@@ -6661,7 +6661,6 @@ fn ensureContextSubstitutionSubtableWithin(table: Table, subtable_offset: usize)
             try ensureCoverageTableWithin(table, coverage_offset);
             try ensureClassDefTableWithin(table, class_def_offset);
             const class_set_count = try readU16BadGsub(table, subtable_offset + 6);
-            try ensureCoveredClassSetIndexesWithin(table, coverage_offset, class_def_offset, class_set_count);
             const class_set_offsets_pos = subtable_offset + 8;
             try ensureBytesWithin(table, class_set_offsets_pos, @as(usize, class_set_count) * 2);
             for (0..class_set_count) |set_i| {
@@ -6741,7 +6740,6 @@ fn ensureChainingContextSubstitutionSubtableWithin(table: Table, subtable_offset
             try ensureClassDefTableWithin(table, input_class_def);
             try ensureOptionalClassDefTableWithin(table, lookahead_class_def);
             const set_count = try readU16BadGsub(table, subtable_offset + 10);
-            try ensureCoveredClassSetIndexesWithin(table, coverage_offset, input_class_def, set_count);
             const set_offsets_pos = subtable_offset + 12;
             try ensureBytesWithin(table, set_offsets_pos, @as(usize, set_count) * 2);
             for (0..set_count) |set_i| {
@@ -6880,76 +6878,6 @@ fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_coun
         },
         else => return error.UnsupportedGsub,
     }
-}
-
-fn ensureCoveredClassSetIndexesWithin(table: Table, coverage_offset: usize, class_def_offset: usize, set_count: u16) GsubError!void {
-    // Contextual class format 2 subtables use the class of the first covered
-    // input glyph as an array index into SubClassSet/ChainSubClassSet. Class
-    // values used by later input/backtrack/lookahead positions are matched by
-    // rules and do not have this array bound, so validate only the covered
-    // first-glyph domain instead of globally constraining the ClassDef.
-    const format = try readU16BadGsub(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
-            for (0..glyph_count) |glyph_i| {
-                try ensureGlyphClassSetIndexWithin(table, class_def_offset, try readU16BadGsub(table, coverage_offset + 4 + glyph_i * 2), set_count);
-            }
-        },
-        2 => {
-            const range_count = try readU16BadGsub(table, coverage_offset + 2);
-            const class_format = try readU16BadGsub(table, class_def_offset);
-            if (class_format == 2) {
-                try ensureCoverageClassRangeSetIndexesWithin(table, coverage_offset + 4, range_count, class_def_offset + 4, try readU16BadGsub(table, class_def_offset + 2), set_count);
-            } else {
-                for (0..range_count) |range_i| {
-                    const range_offset = coverage_offset + 4 + range_i * 6;
-                    const start = try readU16BadGsub(table, range_offset);
-                    const end = try readU16BadGsub(table, range_offset + 2);
-                    for (@as(usize, start)..@as(usize, end) + 1) |glyph| {
-                        try ensureGlyphClassSetIndexWithin(table, class_def_offset, @intCast(glyph), set_count);
-                    }
-                }
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
-}
-
-fn ensureCoverageClassRangeSetIndexesWithin(table: Table, coverage_ranges_offset: usize, coverage_range_count: u16, class_ranges_offset: usize, class_range_count: u16, set_count: u16) GsubError!void {
-    // Coverage format 2 and ClassDef format 2 are both sorted range-record
-    // arrays. Walk them together instead of expanding every covered glyph and
-    // binary-searching the same ClassDef; this preserves the same bounds proof
-    // while avoiding O(covered_glyphs * log(class_ranges)) validation costs.
-    var coverage_i: usize = 0;
-    var class_i: usize = 0;
-    while (coverage_i < coverage_range_count) {
-        const coverage_range = coverage_ranges_offset + coverage_i * 6;
-        const coverage_start = try readU16BadGsub(table, coverage_range);
-        const coverage_end = try readU16BadGsub(table, coverage_range + 2);
-
-        while (class_i < class_range_count) {
-            const class_range = class_ranges_offset + class_i * 6;
-            const class_end = try readU16BadGsub(table, class_range + 2);
-            if (class_end >= coverage_start) break;
-            class_i += 1;
-        }
-
-        var scan_class_i = class_i;
-        while (scan_class_i < class_range_count) : (scan_class_i += 1) {
-            const class_range = class_ranges_offset + scan_class_i * 6;
-            const class_start = try readU16BadGsub(table, class_range);
-            if (class_start > coverage_end) break;
-            const class_value = try readU16BadGsub(table, class_range + 4);
-            if (class_value >= set_count) return error.BadGsub;
-        }
-        coverage_i += 1;
-    }
-}
-
-fn ensureGlyphClassSetIndexWithin(table: Table, class_def_offset: usize, glyph: GlyphId, set_count: u16) GsubError!void {
-    const class = try classValueForValidation(table, class_def_offset, glyph);
-    if (class >= set_count) return error.BadGsub;
 }
 
 fn classValueForValidation(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u16 {
@@ -8380,7 +8308,9 @@ test "GSUB rejects malformed ClassDef format 2 ranges" {
     try std.testing.expectError(error.BadGsub, classValue(table, 0, 18));
 }
 
-test "GSUB contextual class subtables reject covered class indexes outside set arrays" {
+test "GSUB contextual class subtables allow covered class indexes outside set arrays" {
+    const allocator = std.testing.allocator;
+
     var context_bytes = [_]u8{0} ** 32;
     writeU16Test(&context_bytes, 0, 2); // ContextSubst format 2.
     writeU16Test(&context_bytes, 2, 12); // Coverage.
@@ -8391,7 +8321,13 @@ test "GSUB contextual class subtables reject covered class indexes outside set a
     writeClassDef1(&context_bytes, 18, 5, 1); // Covered glyph indexes past SubClassSetCount.
 
     var table = Table{ .data = &context_bytes, .offset = 0, .length = context_bytes.len };
-    try std.testing.expectError(error.BadGsub, ensureContextSubstitutionSubtableWithin(table, 0));
+    try ensureContextSubstitutionSubtableWithin(table, 0);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 5);
+    try applyContextClassSubstitution(table, 0, &glyphs, allocator, 0, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 
     writeClassDef1(&context_bytes, 18, 5, 0);
     try ensureContextSubstitutionSubtableWithin(table, 0);
@@ -8410,7 +8346,9 @@ test "GSUB contextual class subtables reject covered class indexes outside set a
     writeClassDef1(&chaining_bytes, 38, 0, 0);
 
     table = .{ .data = &chaining_bytes, .offset = 0, .length = chaining_bytes.len };
-    try std.testing.expectError(error.BadGsub, ensureChainingContextSubstitutionSubtableWithin(table, 0));
+    try ensureChainingContextSubstitutionSubtableWithin(table, 0);
+    try applyChainingClassSubstitution(table, 0, &glyphs, allocator, 0, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 
     writeClassDef1(&chaining_bytes, 30, 5, 0);
     try ensureChainingContextSubstitutionSubtableWithin(table, 0);

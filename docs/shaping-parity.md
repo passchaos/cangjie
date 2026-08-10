@@ -1293,10 +1293,11 @@ shaping-performance superiority.
   HarfBuzz in-house `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`
   `arabic-normalization.tests` slice passes for all 32 lines covered by that
   font, including contextual forms after `beh` and repeated `yeh+hamza`
-  sequences. The same in-house file still exposes a separate `BadGsub` parser
-  gap on `3e46c3b84c1370a06594736c7f8acebf810bbb3b.ttf`, so broader Arabic
-  normalization parity should continue from that GSUB compatibility issue
-  before claiming the full fixture.
+  sequences. The same in-house file's
+  `3e46c3b84c1370a06594736c7f8acebf810bbb3b.ttf` slice now also passes all
+  32 normalization lines after GSUB class-format validation learned to treat
+  covered classes with no ClassSet slot as legal no-op matches, matching the
+  runtime behavior already used by Cangjie and HarfBuzz.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

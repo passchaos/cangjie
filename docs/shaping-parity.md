@@ -1228,7 +1228,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   (`U+002E,U+002E`). Cangjie now mirrors HarfBuzz's fallback kern machine by
   splitting a legacy kern value across the first glyph's advance and the second
   glyph's advance/offset, while still letting GPOS pair positioning suppress
-  duplicate legacy kern application.
+  duplicate legacy kern application. Apple/AAT `kern` format-2 class subtables
+  are now applied for horizontal fallback kerning as well; all three
+  `kern-format2.tests` rows for
+  `e39391c77a6321c2ac7a2d644de0396470cd4bfe.ttf` are retained.
 - The explicit `pnum` row from HarfBuzz in-house `digits.tests` passes for
   `e5ff44940364c2247abed50bdda30d2ef5aedfe4.ttf`
   (`U+0661,U+0662,U+0668,U+0663,U+0667`, script `arab`). Cangjie now applies

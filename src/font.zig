@@ -2511,12 +2511,19 @@ pub const Font = struct {
             const vertical = (coverage & 0x8000) != 0;
             const cross_stream = (coverage & 0x4000) != 0;
             const variation = (coverage & 0x2000) != 0;
-            if (format == 0 and !vertical and !cross_stream and !variation) {
-                // AAT subtables have an eight-byte common header (including
-                // tupleIndex) before the same format-0 pair-search payload.
-                if (try kernFormat0Body(data[subtable_offset + 8 .. subtable_offset + length], left, right)) |value| {
+            if (!vertical and !cross_stream and !variation) {
+                const body = data[subtable_offset + 8 .. subtable_offset + length];
+                const value = if (format == 0)
+                    // AAT subtables have an eight-byte common header (including
+                    // tupleIndex) before the same format-0 pair-search payload.
+                    try kernFormat0Body(body, left, right)
+                else if (format == 2)
+                    try kernFormat2Body(body, left, right)
+                else
+                    null;
+                if (value) |kern_value| {
                     saw_matching_pair = true;
-                    total += value;
+                    total += kern_value;
                 }
             }
             subtable_offset += length;
@@ -7190,8 +7197,13 @@ fn validateAppleKernTable(data: []const u8, kern: TableRecord, glyph_count: u16)
         const vertical = (coverage & 0x8000) != 0;
         const cross_stream = (coverage & 0x4000) != 0;
         const variation = (coverage & 0x2000) != 0;
-        if (format == 0 and !vertical and !cross_stream and !variation) {
-            try validateKernFormat0Body(data[subtable_offset + 8 .. subtable_offset + length], glyph_count);
+        if (!vertical and !cross_stream and !variation) {
+            const body = data[subtable_offset + 8 .. subtable_offset + length];
+            if (format == 0) {
+                try validateKernFormat0Body(body, glyph_count);
+            } else if (format == 2) {
+                try validateKernFormat2Body(body, glyph_count);
+            }
         }
         subtable_offset += length;
     }
@@ -9542,6 +9554,61 @@ fn kernFormat0Body(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.G
         }
     }
     return null;
+}
+
+fn kernFormat2Body(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!?i16 {
+    try validateKernFormat2Body(data, std.math.maxInt(u16));
+    const left_class_offset = try bin.readU16At(data, 2);
+    const right_class_offset = try bin.readU16At(data, 4);
+    const left_offset = try kernFormat2ClassValue(data, left_class_offset, left);
+    const right_offset = try kernFormat2ClassValue(data, right_class_offset, right);
+    if (left_offset == 0 or right_offset == 0) return null;
+    const combined_offset = @as(usize, left_offset) + @as(usize, right_offset);
+    if (combined_offset < 8) return null;
+    const value_offset = combined_offset - 8;
+    if (value_offset > data.len - 2) return error.BadSfnt;
+    const value = try bin.readI16At(data, value_offset);
+    return if (value == 0) null else value;
+}
+
+fn validateKernFormat2Body(data: []const u8, glyph_count: u16) FontError!void {
+    if (data.len < 8) return error.BadSfnt;
+    const row_width = try bin.readU16At(data, 0);
+    const left_class_offset = try bin.readU16At(data, 2);
+    const right_class_offset = try bin.readU16At(data, 4);
+    const array_offset = try bin.readU16At(data, 6);
+    if (row_width == 0) return error.BadSfnt;
+    if (array_offset < 8 or array_offset - 8 > data.len - 2) return error.BadSfnt;
+    try validateKernFormat2ClassTable(data, left_class_offset, glyph_count);
+    try validateKernFormat2ClassTable(data, right_class_offset, glyph_count);
+}
+
+fn validateKernFormat2ClassTable(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
+    if (offset < 8) return error.BadSfnt;
+    const body_offset = offset - 8;
+    if (body_offset > data.len - 4) return error.BadSfnt;
+    const first_glyph = try bin.readU16At(data, body_offset);
+    const glyph_len = try bin.readU16At(data, body_offset + 2);
+    if (glyph_len == 0) return;
+    if (@as(usize, first_glyph) + @as(usize, glyph_len) > @as(usize, glyph_count)) return error.BadSfnt;
+    const values_offset = body_offset + 4;
+    if (@as(usize, glyph_len) * 2 > data.len - values_offset) return error.BadSfnt;
+    for (0..glyph_len) |index| {
+        const value = try bin.readU16At(data, values_offset + index * 2);
+        if (@as(usize, value) > data.len + 8 - 2) return error.BadSfnt;
+    }
+}
+
+fn kernFormat2ClassValue(data: []const u8, class_table_offset: usize, glyph: glyph_mod.GlyphId) FontError!u16 {
+    if (class_table_offset < 8) return error.BadSfnt;
+    const body_offset = class_table_offset - 8;
+    if (body_offset > data.len - 4) return error.BadSfnt;
+    const first_glyph = try bin.readU16At(data, body_offset);
+    const glyph_len = try bin.readU16At(data, body_offset + 2);
+    if (glyph < first_glyph or glyph >= first_glyph + glyph_len) return 0;
+    const value_offset = body_offset + 4 + (@as(usize, glyph - first_glyph) * 2);
+    if (value_offset > data.len - 2) return error.BadSfnt;
+    return try bin.readU16At(data, value_offset);
 }
 
 fn appendSimpleGlyph(
@@ -14125,6 +14192,33 @@ test "Apple kern v1 format 0 applies horizontal pair subtables" {
     const font = kernOnlyFont(&data);
     try std.testing.expectEqual(@as(i16, -80), try font.kerning(1, 1));
     try std.testing.expectEqual(@as(i16, 0), try font.kerning(0, 1));
+}
+
+test "Apple kern v1 format 2 applies class kerning" {
+    var data: [58]u8 = .{0} ** 58;
+    writeU32Test(&data, 0, 0x00010000);
+    writeU32Test(&data, 4, 1);
+
+    writeU32Test(&data, 8, 50); // Subtable length.
+    writeU16Test(&data, 12, 0x0002); // Horizontal format 2.
+    writeU16Test(&data, 14, 0); // tupleIndex.
+    writeU16Test(&data, 16, 4); // rowWidth.
+    writeU16Test(&data, 18, 24); // left class table offset.
+    writeU16Test(&data, 20, 34); // right class table offset.
+    writeU16Test(&data, 22, 16); // kerning array offset.
+    writeI16Test(&data, 26, -40); // array[16 + 2].
+
+    writeU16Test(&data, 32, 0); // left first glyph.
+    writeU16Test(&data, 34, 1); // left glyph count.
+    writeU16Test(&data, 36, 16); // left class row offset.
+
+    writeU16Test(&data, 42, 1); // right first glyph.
+    writeU16Test(&data, 44, 1); // right glyph count.
+    writeU16Test(&data, 46, 2); // right class column offset.
+
+    const font = kernOnlyFont(&data);
+    try std.testing.expectEqual(@as(i16, -40), try font.kerning(0, 1));
+    try std.testing.expectEqual(@as(i16, 0), try font.kerning(1, 1));
 }
 
 test "Apple kern v1 validates declared subtable lengths" {

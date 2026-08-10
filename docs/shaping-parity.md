@@ -967,6 +967,21 @@ Current local snapshot after the Nastaliq parity work:
   Duployan gate kept retired instructions and branches flat, and Devanagari,
   all ten USE corpora, Indic3, Tai Tham, vowel-letter spoofing, Roboto,
   SourceSerifVariable, and Amiri retained dual-reference parity.
+- `GlyphIndexCache` now puts a 512-slot exact direct-mapped front cache ahead
+  of its authoritative hash map for all codepoints, while retaining the
+  existing dedicated ASCII array. Each compact 16-byte slot stores the full
+  font address and Unicode scalar, so collisions and fallback-font changes
+  fall through safely; the additional footprint is 8 KiB per cache. This
+  removes repeated Wyhash from non-ASCII cmap lookup, which accounted for
+  about `1.29%` of the post-`0780173` Devanagari profile. Fixed CPU-8
+  A/B/B/A timing reduced NotoSansDevanagari `hi-words` from `998.090` to
+  `983.263 ns/glyph`, about `1.49%`; fixed CPU-30 B/A/A/B reduced
+  `1194.126` to `1165.804 ns/glyph`, about `2.37%`. Interleaved hardware
+  counters reduced retired instructions by `1.15%`/`1.19%` and cycles by
+  `1.10%`/`1.74%` on CPU 8/30. Roboto's ASCII retired instructions stayed
+  within `0.07%`, while Amiri `fa-words` instructions and cycles improved by
+  about `0.85%` and `1%`. Devanagari, Roboto, SourceSerifVariable, Amiri, and
+  all ten retained USE corpora kept dual-reference parity.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

@@ -605,7 +605,7 @@ pub fn inheritsPreviousClusterInRtlShaping(codepoint: u21) bool {
     // Unicode 17 Arabic Mn coverage explicit: the generic script classifier
     // and the all-script combining-mark predicate both do substantially more
     // work, while the latter historically missed the newest Arabic marks.
-    return isArabicNonspacingMark(codepoint);
+    return isArabicNonspacingMark(codepoint) or isHebrewNonspacingMark(codepoint);
 }
 
 pub const GraphemeCluster = struct {
@@ -2115,6 +2115,14 @@ noinline fn isArabicNonspacingMark(codepoint: u21) bool {
         (codepoint >= 0x10efd and codepoint <= 0x10eff);
 }
 
+fn isHebrewNonspacingMark(codepoint: u21) bool {
+    return (codepoint >= 0x0591 and codepoint <= 0x05bd) or
+        codepoint == 0x05bf or
+        (codepoint >= 0x05c1 and codepoint <= 0x05c2) or
+        (codepoint >= 0x05c4 and codepoint <= 0x05c5) or
+        codepoint == 0x05c7;
+}
+
 fn isLatinScriptCodepoint(codepoint: u21) bool {
     // Keep all encoded Latin extension blocks in the Latin shaping script.
     // Precomposed Vietnamese, phonetic, and medievalist letters are alphabetic
@@ -3554,12 +3562,12 @@ test "paragraph direction follows the first strong character" {
     try std.testing.expectError(error.InvalidUtf8, paragraphDirection("\xff"));
 }
 
-test "RTL shaping cluster inheritance stays Arabic-mark scoped" {
+test "RTL shaping cluster inheritance covers RTL nonspacing marks" {
     try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x064e));
     try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x0898));
     try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x10efd));
     try std.testing.expect(!inheritsPreviousClusterInRtlShaping(0x0628));
-    try std.testing.expect(!inheritsPreviousClusterInRtlShaping(0x05b0));
+    try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x05b0));
     try std.testing.expect(inheritsPreviousClusterInRtlShaping(0x200d));
     try std.testing.expectEqual(Script.arabic, scriptForCodepoint(0x10efd));
 }

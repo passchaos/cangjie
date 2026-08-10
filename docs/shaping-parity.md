@@ -423,8 +423,12 @@ Current local snapshot after the Nastaliq parity work:
   full ordered script classifier followed by the all-script combining-mark
   table for every scalar. This also closes missing modern Arabic Mn coverage
   for U+0898–U+089F, U+08CA–U+08FF, and supplementary
-  U+10EFD–U+10EFF; focused HarfBuzz/HarfRust output matches at checksum
-  `7cb1b7bd03a57f5d`. A fixed-CPU-30 A/B/B/A comparison with 31-sample medians
+  U+10EFD–U+10EFF. Hebrew nonspacing marks now share the same RTL cluster
+  inheritance path; the focused HarfBuzz `hebrew-diacritics.tests` row
+  `U+05D4,U+05B2,U+05D1,U+05B5,U+05DC` for
+  `b895f8ff06493cc893ec44de380690ca0074edfa.ttf` is retained. Focused
+  HarfBuzz/HarfRust Arabic output matches at checksum `7cb1b7bd03a57f5d`. A
+  fixed-CPU-30 A/B/B/A comparison with 31-sample medians
   reduced Amiri `fa-thelittleprince` from `944.499` to
   `909.871 ns/glyph`, about `3.7%`. Profiled cmap/input-map time fell from
   about `7.13 ms` to `4.57 ms`, about `35.9%`, and the old

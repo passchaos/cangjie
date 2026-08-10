@@ -123,6 +123,7 @@ pub const Options = struct {
     reorder_bidi: bool = true,
     native_direction_shaping: bool = false,
     normalize_clusters_to_graphemes: bool = false,
+    script_tag: ?cangjie.OpenTypeScriptTag = null,
     language_tag: ?cangjie.OpenTypeLanguageTag = null,
     script_position: cangjie.ScriptPosition = .normal,
     use_caches: bool = true,
@@ -234,6 +235,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.script_position = parseScriptPosition(args[i]) orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--script")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.script_tag = parseScriptTag(args[i]) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--no-caches")) {
             options.use_caches = false;
             options.use_shaped_cache = false;
@@ -364,6 +369,12 @@ fn parseScriptPosition(text: []const u8) ?cangjie.ScriptPosition {
     return null;
 }
 
+fn parseScriptTag(text: []const u8) ?cangjie.OpenTypeScriptTag {
+    if (text.len != 4) return null;
+    const tag_value = runtimeOpenTypeTag(text[0..4]);
+    return std.enums.fromInt(cangjie.OpenTypeScriptTag, tag_value);
+}
+
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "shape-bench";
     std.debug.print(
@@ -387,6 +398,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\                               force an OpenType language system
         \\  --no-bidi-reorder            keep logical glyph order after shaping
         \\  --script-position normal|superscript|subscript
+        \\  --script TAG                 force a 4-byte OpenType script tag, e.g. arab
         \\  --no-caches                  bypass glyph metric and cmap caches
         \\  --shaped-cache               cache complete shaped runs
         \\  --profile                    collect Cangjie stage timings

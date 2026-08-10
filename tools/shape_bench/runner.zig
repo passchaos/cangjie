@@ -90,6 +90,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .native_direction_shaping = options.native_direction_shaping,
         .writing_mode = options.direction.writingMode(),
         .text_orientation = options.direction.textOrientation(),
+        .script_tag = options.script_tag,
         .language_tag = options.language_tag,
         .script_position = options.script_position,
         .features = options.featureOverrides(),

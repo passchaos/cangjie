@@ -1206,6 +1206,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   splitting a legacy kern value across the first glyph's advance and the second
   glyph's advance/offset, while still letting GPOS pair positioning suppress
   duplicate legacy kern application.
+- The explicit `pnum` row from HarfBuzz in-house `digits.tests` passes for
+  `e5ff44940364c2247abed50bdda30d2ef5aedfe4.ttf`
+  (`U+0661,U+0662,U+0668,U+0663,U+0667`, script `arab`). Cangjie now applies
+  caller-enabled optional GSUB features after the core Arabic shaping stages,
+  and `shape-bench` can force an OpenType script tag for retained upstream rows
+  that specify `--script`.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

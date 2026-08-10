@@ -3749,6 +3749,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             }
             try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, merged_features_buf[0..merged_feature_count], glyph_ids, joining_options, gdef_metadata.*);
         }
+        var optional_features_buf: [16]gsub.FeatureApplication = undefined;
+        const optional_feature_count = explicitOptionalFeatureApplications(
+            optional_features_buf[0..],
+            lookup_options.features,
+        );
+        try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, optional_features_buf[0..optional_feature_count], glyph_ids, gsub_options, gdef_metadata.*);
     } else if (myanmar_shape) {
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
         myanmar.markSourceSyllables(source_syllables.items, codepoints.items);
@@ -4361,6 +4367,33 @@ fn shapingFeatureEnabled(feature: u32, overrides: []const unicode.FeatureOverrid
         if (override.tag == feature) return override.enabled;
     }
     return default_enabled;
+}
+
+fn explicitOptionalFeatureApplications(out: []gsub.FeatureApplication, overrides: []const unicode.FeatureOverride) usize {
+    var count: usize = 0;
+    for (overrides) |override| {
+        if (!override.enabled or !explicitOptionalFeatureShouldRun(override.tag)) continue;
+        if (count >= out.len) break;
+        out[count] = .{ .tag = override.tag, .auto_zwj = false };
+        count += 1;
+    }
+    return count;
+}
+
+fn explicitOptionalFeatureShouldRun(feature: u32) bool {
+    return feature != unicode.tag("ccmp") and
+        feature != unicode.tag("locl") and
+        feature != unicode.tag("isol") and
+        feature != unicode.tag("fina") and
+        feature != unicode.tag("medi") and
+        feature != unicode.tag("init") and
+        feature != unicode.tag("rlig") and
+        feature != unicode.tag("calt") and
+        feature != unicode.tag("rclt") and
+        feature != unicode.tag("liga") and
+        feature != unicode.tag("clig") and
+        feature != unicode.tag("sups") and
+        feature != unicode.tag("subs");
 }
 
 fn scriptPositionFeatureApplication(position: ScriptPosition) ?gsub.FeatureApplication {

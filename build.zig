@@ -13,6 +13,20 @@ const retained_use_fixture_hashes = [_][]const u8{
     "fbb6c84c9e1fe0c39e152fbe845e51fd81f6748e",
 };
 
+const retained_compact_use_gates = [_]struct {
+    font_hash: []const u8,
+    text_file: []const u8,
+}{
+    .{
+        .font_hash = "3c96e7a303c58475a8c750bf4289bbe73784f37d",
+        .text_file = "tests/data/use-indic3-tests.txt",
+    },
+    .{
+        .font_hash = "3cc01fede4debd4b7794ccb1b16cdb9987ea7571",
+        .text_file = "tests/data/tai-tham-use-syllable-tests.txt",
+    },
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -232,6 +246,16 @@ pub fn build(b: *std.Build) void {
                 "--direction", "ltr",
             });
             shaping_use_parity_smoke_step.dependOn(&use_parity_cmd.step);
+        }
+        for (retained_compact_use_gates) |gate| {
+            const compact_use_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            compact_use_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}.ttf", .{ harfbuzz_in_house_fonts, gate.font_hash }),
+                "--text-file", gate.text_file,
+                "--direction", "ltr",
+            });
+            shaping_use_parity_smoke_step.dependOn(&compact_use_parity_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_use_parity_smoke_step);
     }

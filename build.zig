@@ -113,6 +113,11 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
         .text_file = "tests/data/spaces-horizontal.txt",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "1c2c3fc37b2d4c3cb2ef726c6cdaaabd4b7f3eb9",
+        .text_file = "tests/data/spaces-horizontal.txt",
+        .direction = "ttb",
+    },
 };
 
 pub fn build(b: *std.Build) void {

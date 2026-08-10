@@ -155,6 +155,8 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
     hb.hb_buffer_set_direction(buffer, switch (options.direction) {
         .ltr => hb.HB_DIRECTION_LTR,
         .rtl => hb.HB_DIRECTION_RTL,
+        .ttb => hb.HB_DIRECTION_TTB,
+        .btt => hb.HB_DIRECTION_BTT,
     });
     if (scriptTagForText(line)) |script_tag| {
         hb.hb_buffer_set_script(buffer, hb.hb_ot_tag_to_script(script_tag));

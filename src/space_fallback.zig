@@ -46,6 +46,30 @@ pub fn advanceWidth(font: *const Font, codepoint: u21, glyph_id: GlyphId, curren
     };
 }
 
+pub fn advanceHeight(font: *const Font, codepoint: u21, glyph_id: GlyphId, default_advance: i32) !?i32 {
+    const kind = kindForCodepoint(codepoint) orelse return null;
+    const space_glyph = try font.glyphIndex(' ');
+    if (space_glyph == 0 or glyph_id != space_glyph) return null;
+    if (kind != .space and try font.glyphIndex(codepoint) != 0) return null;
+
+    const upem: i32 = @intCast(font.units_per_em);
+    const length = switch (kind) {
+        .space => default_advance,
+        .em => upem,
+        .em_2 => divRounded(upem, 2),
+        .em_3 => divRounded(upem, 3),
+        .em_4 => divRounded(upem, 4),
+        .em_5 => divRounded(upem, 5),
+        .em_6 => divRounded(upem, 6),
+        .em_16 => divRounded(upem, 16),
+        .four_em_18 => @as(i32, @intCast(@divTrunc(@as(i64, upem) * 4, 18))),
+        .figure => default_advance,
+        .punctuation => default_advance,
+        .narrow => @divTrunc(default_advance, 2),
+    };
+    return -length;
+}
+
 fn kindForCodepoint(codepoint: u21) ?Kind {
     return switch (codepoint) {
         0x0020, 0x00a0 => .space,

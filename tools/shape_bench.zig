@@ -272,8 +272,9 @@ const CompareOrder = enum {
     reverse_source,
 };
 
-fn compareOrder(text: []const u8, direction: cangjie.TextDirection) CompareOrder {
-    if (direction == .ltr) return .source;
+fn compareOrder(text: []const u8, direction: options_mod.Direction) CompareOrder {
+    if (direction == .ltr or direction == .ttb) return .source;
+    if (direction == .btt) return .reverse_source;
     const native_direction = cangjie.openTypeScriptHorizontalDirection(scriptTagForText(text)) orelse .rtl;
     return if (native_direction == .ltr) .source else .reverse_source;
 }
@@ -289,7 +290,7 @@ fn scriptTagForText(text: []const u8) cangjie.OpenTypeScriptTag {
     return .dflt;
 }
 
-fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u8, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: cangjie.TextDirection) !?LineMismatch {
+fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u8, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: options_mod.Direction) !?LineMismatch {
     const count = @min(cangjie_lines.len, harfrust_lines.len);
     for (0..count) |line_index| {
         const order = compareOrder(if (line_index < text_lines.len) text_lines[line_index] else "", direction);

@@ -67,6 +67,44 @@ pub const OutputFormat = enum {
     }
 };
 
+pub const Direction = enum {
+    ltr,
+    rtl,
+    ttb,
+    btt,
+
+    pub fn textDirection(self: Direction) cangjie.TextDirection {
+        return switch (self) {
+            .ltr, .ttb => .ltr,
+            .rtl, .btt => .rtl,
+        };
+    }
+
+    pub fn writingMode(self: Direction) cangjie.WritingMode {
+        return switch (self) {
+            .ltr, .rtl => .horizontal_tb,
+            .ttb => .vertical_rl,
+            .btt => .vertical_lr,
+        };
+    }
+
+    pub fn textOrientation(self: Direction) cangjie.TextOrientation {
+        return switch (self) {
+            .ltr, .rtl => .mixed,
+            .ttb, .btt => .upright,
+        };
+    }
+
+    pub fn label(self: Direction) []const u8 {
+        return switch (self) {
+            .ltr => "ltr",
+            .rtl => "rtl",
+            .ttb => "ttb",
+            .btt => "btt",
+        };
+    }
+};
+
 pub const Options = struct {
     engine: Engine = .cangjie,
     output_format: OutputFormat = .text,
@@ -81,7 +119,7 @@ pub const Options = struct {
     iterations: usize = 10_000,
     warmup: usize = 1_000,
     samples: usize = 1,
-    direction: cangjie.TextDirection = .ltr,
+    direction: Direction = .ltr,
     reorder_bidi: bool = true,
     native_direction_shaping: bool = false,
     normalize_clusters_to_graphemes: bool = false,
@@ -288,9 +326,11 @@ fn runtimeOpenTypeTag(bytes: []const u8) u32 {
         @as(u32, bytes[3]);
 }
 
-fn parseDirection(text: []const u8) ?cangjie.TextDirection {
+fn parseDirection(text: []const u8) ?Direction {
     if (std.mem.eql(u8, text, "ltr")) return .ltr;
     if (std.mem.eql(u8, text, "rtl")) return .rtl;
+    if (std.mem.eql(u8, text, "ttb")) return .ttb;
+    if (std.mem.eql(u8, text, "btt")) return .btt;
     return null;
 }
 
@@ -342,7 +382,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --iterations N               measured iterations, default 10000
         \\  --warmup N                   unmeasured warmup iterations, default 1000
         \\  --samples N                  independent measured samples, default 1
-        \\  --direction ltr|rtl          shaping direction, default ltr
+        \\  --direction ltr|rtl|ttb|btt  shaping direction, default ltr
         \\  --language dflt|ara|jan|kor|zhs|zht|hin
         \\                               force an OpenType language system
         \\  --no-bidi-reorder            keep logical glyph order after shaping

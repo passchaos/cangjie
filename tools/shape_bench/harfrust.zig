@@ -95,10 +95,7 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
     const size_text = try std.fmt.bufPrint(&size_buf, "{d}", .{options.size});
     var iterations_buf: [32]u8 = undefined;
     const iterations_text = try std.fmt.bufPrint(&iterations_buf, "{d}", .{iterations});
-    const direction_text = switch (options.direction) {
-        .ltr => "ltr",
-        .rtl => "rtl",
-    };
+    const direction_text = options.direction.label();
     var args = std.ArrayList([]const u8).empty;
     defer args.deinit(allocator);
     try args.appendSlice(allocator, &.{

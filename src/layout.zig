@@ -4032,6 +4032,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             try space_fallback.advanceWidth(font, source_codepoint, glyph_id, metrics.advance_width)
         else
             null;
+        const default_vertical_advance_units: i32 = @as(i32, font.ascender) - @as(i32, font.descender);
+        const fallback_space_vertical_advance = if (lookup_options.writing_mode.isVertical())
+            try space_fallback.advanceHeight(font, source_codepoint, glyph_id, default_vertical_advance_units)
+        else
+            null;
         const base_advance = if (hide_default_ignorable or mark_zeroing.zero_advance)
             0
         else if (fallback_space_advance) |value|
@@ -4056,6 +4061,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             font_size;
         const vertical_advance = if (mark_zeroing.zero_advance)
             0
+        else if (fallback_space_vertical_advance) |value|
+            @as(f32, @floatFromInt(value)) * scale
         else if (use_sideways_vertical_advance)
             horizontal_advance
         else if (vertical_metrics) |value|

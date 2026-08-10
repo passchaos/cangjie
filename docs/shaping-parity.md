@@ -1173,13 +1173,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   (`U+0061,U+035C,U+0062`). Cangjie synthesizes HarfBuzz-compatible fallback
   mark offsets from glyph extents when GPOS is absent, while leaving real
   GPOS mark/cursive attachment paths in control when present.
-- HarfBuzz in-house `spaces.tests` horizontal rows are retained in
+- HarfBuzz in-house `spaces.tests` horizontal and `ttb` rows are retained in
   `tests/data/spaces-horizontal.txt` for
   `1c2c3fc37b2d4c3cb2ef726c6cdaaabd4b7f3eb9.ttf`. Cangjie now maps Unicode
   space separators such as U+2000..U+200A, U+202F, U+205F, and U+3000 through
   the ASCII space glyph when the font lacks nominal coverage, then applies
-  HarfBuzz-compatible horizontal fallback advances. The vertical `ttb` rows are
-  still outside `shape-bench`'s current direction surface.
+  HarfBuzz-compatible horizontal and top-to-bottom fallback advances/origins.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

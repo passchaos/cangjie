@@ -85,9 +85,11 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     const cascade_fonts = [_]*const cangjie.Font{font};
     const cascade = cangjie.FontCascade.init(&cascade_fonts);
     const shape_options = cangjie.ShapeOptions{
-        .direction = options.direction,
+        .direction = options.direction.textDirection(),
         .reorder_bidi = options.reorder_bidi,
         .native_direction_shaping = options.native_direction_shaping,
+        .writing_mode = options.direction.writingMode(),
+        .text_orientation = options.direction.textOrientation(),
         .language_tag = options.language_tag,
         .script_position = options.script_position,
         .features = options.featureOverrides(),
@@ -142,10 +144,10 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                         .checksum = line_checksum,
                         .glyph_ids = if (options.glyph_summary) try glyphIds(allocator, glyphs) else &.{},
                         .clusters = if (options.glyph_summary) try glyphClusters(allocator, line, glyphs, options.normalize_clusters_to_graphemes) else &.{},
-                        .x_advances = if (options.glyph_summary) try glyphXAdvances(allocator, font, options.size, glyphs) else &.{},
-                        .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, font, options.size, glyphs) else &.{},
-                        .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, glyphs) else &.{},
-                        .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, font, options.size, glyphs) else &.{},
+                        .x_advances = if (options.glyph_summary) try glyphXAdvances(allocator, font, options.size, options, glyphs) else &.{},
+                        .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, font, options.size, options, glyphs) else &.{},
+                        .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, options, glyphs) else &.{},
+                        .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, font, options.size, options, glyphs) else &.{},
                     });
                 }
             }
@@ -511,28 +513,54 @@ fn hasPreBaseMatra(text: []const u8) bool {
     return false;
 }
 
-fn glyphXAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphXAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+    _ = options;
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.x_advance);
     return values;
 }
 
-fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
-    for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.y_advance);
+    for (glyphs, values) |glyph, *value| {
+        const runtime_value = fontUnitPosition(font, font_size, glyph.y_advance);
+        value.* = if (options.direction == .ttb and glyph.vertical and runtime_value > 0)
+            try harfBuzzVerticalAdvance(font, glyph)
+        else
+            runtime_value;
+    }
     return values;
 }
 
-fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
-    for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.x_offset);
+    for (glyphs, values) |glyph, *value| {
+        value.* = if (options.direction == .ttb and glyph.vertical)
+            -@divTrunc(@as(i32, (try font.horizontalMetrics(glyph.glyph_id)).advance_width), 2)
+        else
+            fontUnitPosition(font, font_size, glyph.x_offset);
+    }
     return values;
 }
 
-fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
-    for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.y_offset);
+    for (glyphs, values) |glyph, *value| {
+        value.* = if (options.direction == .ttb and glyph.vertical)
+            -@divTrunc(defaultVerticalAdvance(font), 2)
+        else
+            fontUnitPosition(font, font_size, glyph.y_offset);
+    }
     return values;
+}
+
+fn harfBuzzVerticalAdvance(font: *const cangjie.Font, glyph: cangjie.GlyphPosition) !i32 {
+    if (try font.verticalMetrics(glyph.glyph_id)) |metrics| return -@as(i32, @intCast(metrics.advance_height));
+    return -defaultVerticalAdvance(font);
+}
+
+fn defaultVerticalAdvance(font: *const cangjie.Font) i32 {
+    return @as(i32, font.ascender) - @as(i32, font.descender);
 }
 
 fn fontUnitPosition(font: *const cangjie.Font, font_size: f32, value: f32) i32 {

@@ -17,6 +17,7 @@ const shaping_metadata = @import("shaping_metadata.zig");
 const bidi = @import("text/bidi.zig");
 const space_fallback = @import("space_fallback.zig");
 const unicode = @import("unicode.zig");
+const unicode_glyph_fallback = @import("unicode_glyph_fallback.zig");
 const use_shaper = @import("use_shaper.zig");
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
 pub const GdefMetadataCache = layout_cache.GdefMetadataCache;
@@ -3528,8 +3529,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 break :glyph value.glyph_id;
             } else glyph: {
                 const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
-                break :glyph (try space_fallback.glyphForCodepoint(font, shaped_codepoint)) orelse
-                    try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
+                break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
             const source_cluster = if (lookup_options.direction == .rtl and
                 unicode.inheritsPreviousClusterInRtlShaping(codepoint) and
@@ -4858,6 +4858,13 @@ fn isDefaultIgnorableForShaping(codepoint: u21) bool {
 fn glyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {
     if (cache) |glyph_cache| return try glyph_cache.glyphIndex(font, codepoint);
     return try font.glyphIndex(codepoint);
+}
+
+fn fallbackGlyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {
+    if (try space_fallback.glyphForCodepoint(font, codepoint)) |glyph| return glyph;
+    const glyph = try glyphIndexWithOptionalCache(font, cache, codepoint);
+    if (glyph != 0) return glyph;
+    return (try unicode_glyph_fallback.glyphForMissingCodepoint(font, codepoint)) orelse glyph;
 }
 
 fn runHasGdefMarks(glyphs: []const GlyphId, metadata: GdefLookupMetadata) bool {

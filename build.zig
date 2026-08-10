@@ -111,6 +111,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .text = "١٢٣⁄٤٥٦",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "1c04a16f32a39c26c851b7fc014d2e8d298ba2b8",
+        .text = "‑",
+        .direction = "ltr",
+    },
 };
 
 const retained_harfbuzz_text_parity_gates = [_]struct {

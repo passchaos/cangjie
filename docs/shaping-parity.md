@@ -1185,6 +1185,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `15dfc433a135a658b9f4b1a861b5cdd9658ccbb9.ttf`. Cangjie now assigns
   fraction-scoped `numr/frac/dnom` features when digits appear on both sides of
   U+2044 while leaving one-sided fraction-slash inputs unmodified.
+- The U+2011 row from HarfBuzz in-house `hyphens.tests` passes for
+  `1c04a16f32a39c26c851b7fc014d2e8d298ba2b8.ttf`. When a font lacks a nominal
+  non-breaking hyphen glyph but has U+2010, Cangjie mirrors HarfBuzz's normalize
+  fallback and uses the U+2010 glyph while preserving the original source
+  cluster.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

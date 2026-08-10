@@ -3867,20 +3867,6 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
             }
         }
-        if (hasRunnableFraction(codepoints.items)) {
-            try source_features.resize(buffer.allocator, codepoints.items.len);
-            var fraction_options = gsub_options;
-            fraction_options.source_features = source_features.items;
-            if (markFractionSourceFeatures(source_features.items, codepoints.items, .numerator)) {
-                try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("numr"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
-            }
-            if (markFractionSourceFeatures(source_features.items, codepoints.items, .fraction)) {
-                try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("frac"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
-            }
-            if (markFractionSourceFeatures(source_features.items, codepoints.items, .denominator)) {
-                try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("dnom"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
-            }
-        }
         if (indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0) {
             const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
             try indic.insertDottedCirclesForBrokenClusters(
@@ -3905,6 +3891,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+        }
+    }
+    if (hasRunnableFraction(codepoints.items)) {
+        try source_features.resize(buffer.allocator, codepoints.items.len);
+        var fraction_options = gsub_options;
+        fraction_options.source_features = source_features.items;
+        if (markFractionSourceFeatures(source_features.items, codepoints.items, .numerator)) {
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("numr"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
+        }
+        if (markFractionSourceFeatures(source_features.items, codepoints.items, .fraction)) {
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("frac"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
+        }
+        if (markFractionSourceFeatures(source_features.items, codepoints.items, .denominator)) {
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("dnom"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
         }
     }
 

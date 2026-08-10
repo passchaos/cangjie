@@ -124,7 +124,7 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
     options.line_summary = true;
     options.glyph_summary = true;
     options.reorder_bidi = false;
-    options.native_direction_shaping = true;
+    options.native_direction_shaping = base_options.direction.textDirection() == .rtl;
     options.normalize_clusters_to_graphemes = true;
     options.language_tag = base_options.language_tag orelse .dflt;
 

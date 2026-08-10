@@ -904,6 +904,7 @@ pub const OpenTypeLanguageTag = enum(u32) {
     ara = tag("ARA "),
     jan = tag("JAN "),
     kor = tag("KOR "),
+    zhh = tag("ZHH "),
     zhs = tag("ZHS "),
     zht = tag("ZHT "),
     hin = tag("HIN "),
@@ -1135,16 +1136,17 @@ pub fn openTypeLanguageTagForLocale(locale_tag: []const u8) ?OpenTypeLanguageTag
     if (asciiEqlIgnoreCase(language, "dv")) return .dhv;
     if (asciiEqlIgnoreCase(language, "zh")) {
         if (script) |script_value| {
-            if (asciiEqlIgnoreCase(script_value, "Hant")) return .zht;
+            if (asciiEqlIgnoreCase(script_value, "Hant")) {
+                if (region) |region_value| {
+                    if (asciiEqlIgnoreCase(region_value, "HK") or asciiEqlIgnoreCase(region_value, "MO")) return .zhh;
+                }
+                return .zht;
+            }
             if (asciiEqlIgnoreCase(script_value, "Hans")) return .zhs;
         }
         if (region) |region_value| {
-            if (asciiEqlIgnoreCase(region_value, "TW") or
-                asciiEqlIgnoreCase(region_value, "HK") or
-                asciiEqlIgnoreCase(region_value, "MO"))
-            {
-                return .zht;
-            }
+            if (asciiEqlIgnoreCase(region_value, "HK") or asciiEqlIgnoreCase(region_value, "MO")) return .zhh;
+            if (asciiEqlIgnoreCase(region_value, "TW")) return .zht;
         }
         return .zhs;
     }

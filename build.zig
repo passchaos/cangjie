@@ -158,6 +158,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
         .language = "dv",
     },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zhh",
+    },
 };
 
 const retained_harfbuzz_text_parity_gates = [_]struct {

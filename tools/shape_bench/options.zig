@@ -344,6 +344,7 @@ fn parseLanguageTag(text: []const u8) ?cangjie.OpenTypeLanguageTag {
     if (std.ascii.eqlIgnoreCase(text, "ara")) return .ara;
     if (std.ascii.eqlIgnoreCase(text, "jan")) return .jan;
     if (std.ascii.eqlIgnoreCase(text, "kor")) return .kor;
+    if (std.ascii.eqlIgnoreCase(text, "zhh")) return .zhh;
     if (std.ascii.eqlIgnoreCase(text, "zhs")) return .zhs;
     if (std.ascii.eqlIgnoreCase(text, "zht")) return .zht;
     if (std.ascii.eqlIgnoreCase(text, "hin")) return .hin;
@@ -357,6 +358,7 @@ pub fn harfrustLanguageArgument(tag_value: cangjie.OpenTypeLanguageTag) ?[]const
         .ara => "ar",
         .jan => "ja",
         .kor => "ko",
+        .zhh => "zh-Hant-HK",
         .zhs => "zh-Hans",
         .zht => "zh-Hant",
         .hin => "hi",
@@ -396,7 +398,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --warmup N                   unmeasured warmup iterations, default 1000
         \\  --samples N                  independent measured samples, default 1
         \\  --direction ltr|rtl|ttb|btt  shaping direction, default ltr
-        \\  --language dflt|ara|jan|kor|zhs|zht|hin|dhv|dv
+        \\  --language dflt|ara|jan|kor|zhh|zhs|zht|hin|dhv|dv
         \\                               force an OpenType language system
         \\  --no-bidi-reorder            keep logical glyph order after shaping
         \\  --script-position normal|superscript|subscript

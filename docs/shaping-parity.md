@@ -1222,6 +1222,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `d3129450fafe5e5c98cfc25a4e71809b1b4d2855.ttf` (`U+007C`) with language
   `dv`. Cangjie now maps BCP-47 `dv` to OpenType `DHV ` so language-system
   selection can reach Dhivehi-localized substitutions.
+- The Hong Kong/Macau Traditional Chinese rows from HarfBuzz in-house
+  `language-tags.tests` pass for
+  `6991b13ce889466be6de3f66e891de2bc0f117ee.ttf` (`U+004A`) through OpenType
+  language tag `ZHH `. Locale mapping now distinguishes `zh-HK`, `zh-MO`, and
+  Hant+HK/MO from generic Traditional Chinese `ZHT `.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

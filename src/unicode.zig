@@ -111,7 +111,8 @@ pub const BidiClass = enum {
 ///
 /// The compact range table below is generated from Unicode 15.1
 /// DerivedJoiningType.txt for Arabic/Syriac/N'Ko/Mandaic codepoint blocks plus
-/// ZWJ. Unlisted codepoints have the normative Non_Joining default.
+/// the Mongolian values currently needed by the Arabic-style shaper and ZWJ.
+/// Unlisted codepoints have the normative Non_Joining default.
 pub const JoiningType = enum {
     non_joining,
     right,
@@ -305,6 +306,12 @@ const joining_type_ranges = [_]JoiningTypeRange{
     .{ .first = 0x08BA, .last = 0x08C8, .kind = .dual },
     .{ .first = 0x08CA, .last = 0x08E1, .kind = .transparent },
     .{ .first = 0x08E3, .last = 0x0902, .kind = .transparent },
+    .{ .first = 0x180B, .last = 0x180D, .kind = .transparent },
+    .{ .first = 0x180F, .last = 0x180F, .kind = .transparent },
+    .{ .first = 0x1820, .last = 0x1842, .kind = .dual },
+    .{ .first = 0x1843, .last = 0x1843, .kind = .right },
+    .{ .first = 0x1844, .last = 0x1878, .kind = .dual },
+    .{ .first = 0x1887, .last = 0x18A8, .kind = .dual },
     .{ .first = 0x200D, .last = 0x200D, .kind = .join_causing },
     .{ .first = 0x10EFD, .last = 0x10EFF, .kind = .transparent },
 };
@@ -329,9 +336,10 @@ pub fn joiningTypeForCodepoint(codepoint: u21) JoiningType {
 /// Resolve positional forms in logical text order.
 ///
 /// Transparent joining characters do not break the connection between their
-/// neighbors and receive no positional feature themselves. Non-Arabic text is
-/// left as `.none`, so callers can pass mixed-script runs without accidentally
-/// enabling Arabic features for punctuation or digits.
+/// neighbors and receive no positional feature themselves. Text outside scripts
+/// that use the Arabic-style joining shaper is left as `.none`, so callers can
+/// pass mixed-script runs without accidentally enabling positional features for
+/// punctuation or digits.
 pub noinline fn resolveJoiningForms(codepoints: []const u21, forms: []JoiningForm) error{InvalidJoiningInput}!void {
     if (forms.len != codepoints.len) return error.InvalidJoiningInput;
     @memset(forms, .none);
@@ -355,7 +363,7 @@ pub noinline fn resolveJoiningForms(codepoints: []const u21, forms: []JoiningFor
         }
         pending_index = null;
 
-        if (current != .non_joining and isArabicScriptCodepoint(codepoint)) {
+        if (current != .non_joining and hasArabicJoiningForms(codepoint)) {
             pending_index = index;
             pending_kind = current;
             pending_joins_previous = if (previous) |kind|
@@ -390,7 +398,7 @@ fn resolveJoiningFormsReference(codepoints: []const u21, forms: []JoiningForm) e
     // streaming state machine. This is intentionally not used by shaping.
     for (codepoints, 0..) |codepoint, index| {
         const current = joiningTypeForCodepoint(codepoint);
-        if (current == .transparent or current == .non_joining or !isArabicScriptCodepoint(codepoint)) continue;
+        if (current == .transparent or current == .non_joining or !hasArabicJoiningForms(codepoint)) continue;
 
         var previous: ?JoiningType = null;
         var previous_index = index;
@@ -423,6 +431,10 @@ fn joinsRight(kind: JoiningType) bool {
 
 fn joinsLeft(kind: JoiningType) bool {
     return kind == .left or kind == .dual or kind == .join_causing;
+}
+
+fn hasArabicJoiningForms(codepoint: u21) bool {
+    return isArabicScriptCodepoint(codepoint) or isMongolianScriptCodepoint(codepoint);
 }
 
 pub const BidiRun = struct {

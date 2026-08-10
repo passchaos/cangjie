@@ -1298,6 +1298,18 @@ shaping-performance superiority.
   32 normalization lines after GSUB class-format validation learned to treat
   covered classes with no ClassSet slot as legal no-op matches, matching the
   runtime behavior already used by Cangjie and HarfBuzz.
+- Mongolian Free Variation Selectors now participate in the Arabic-style
+  joining shaper under the `mong` ScriptList. The focused
+  `arabic-feature-order.tests` FVS rows for
+  `813c2f8e5512187fd982417a7fb4286728e6f4a8.ttf` and
+  `8a9fea2a7384f2116e5b84a9b31f83be7850ce21.ttf` pass, and the simple
+  `mongolian-variation-selector.tests` rows for
+  `ef86fe710cfea877bbe0dbb6946a1f88d0661031.ttf` plus
+  `37033cc5cf37bb223d7355153016b6ccece93b28.ttf` pass. Broader Mongolian
+  fixture coverage is still blocked by a separate font-parser compatibility
+  issue: `4d4206e30b2dbf1c1ef492a8eae1c9e7829ebad8.ttf` currently fails during
+  `gasp` validation because it uses behavior bits outside Cangjie's accepted
+  mask.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

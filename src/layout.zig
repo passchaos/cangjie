@@ -3618,15 +3618,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             codepoints.items,
         );
     }
-    if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
+    if (usesArabicJoiningShaper(lookup_options.script_tag) and codepoints.items.len != 0) {
         try joining_forms.resize(buffer.allocator, codepoints.items.len);
         try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
         try source_features.resize(buffer.allocator, joining_forms.items.len);
         for (joining_forms.items, source_features.items) |form, *feature| {
             feature.* = joiningFormFeatureTag(form);
         }
-        var arabic_options = gsub_options;
-        arabic_options.source_features = source_features.items;
+        if (lookup_options.script_tag == .mong) {
+            inheritMongolianVariationSelectorFeatures(source_features.items, codepoints.items);
+        }
+        var joining_options = gsub_options;
+        joining_options.source_features = source_features.items;
 
         // Unicode Arabic joining forms are position-scoped and must run after
         // canonical/localized substitutions but before required ligatures.
@@ -3648,6 +3651,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .{ .tag = unicode.tag("clig"), .auto_zwj = false },
         };
         for (planned_features) |application| {
+            if (lookup_options.script_tag == .mong and (application.tag == unicode.tag("rlig") or application.tag == unicode.tag("calt"))) continue;
             if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
             applications_buf[application_count] = application;
             application_count += 1;
@@ -3661,9 +3665,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 const stage_start = shapeProfileNow(shape_profile, profile_io);
                 const lookup_count_before = profile.gsub_lookup_count;
                 if (gsub_after_proof) {
-                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
                 } else {
-                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
                 }
                 if (stage_index < profile.arabic_stage_ns.len) {
                     profile.arabic_stage_ns[stage_index] += shapeProfileElapsed(stage_start, profile_io);
@@ -3673,13 +3677,27 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             }
         } else {
             if (gsub_after_proof and buffer.lookup_selection_cache != null) {
-                const plan = try buffer.lookup_selection_cache.?.gsubFeatureLookupPlan(font, applications_buf[0..application_count], arabic_options, gdef_metadata.*);
-                try font.applyGsubFeatureLookupPlanUsingGdefAfterProof(plan, glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                const plan = try buffer.lookup_selection_cache.?.gsubFeatureLookupPlan(font, applications_buf[0..application_count], joining_options, gdef_metadata.*);
+                try font.applyGsubFeatureLookupPlanUsingGdefAfterProof(plan, glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
             } else if (gsub_after_proof) {
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications_buf[0..application_count], glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
             } else {
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, arabic_options, gdef_metadata.*);
+                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
             }
+        }
+        if (lookup_options.script_tag == .mong) {
+            var merged_features_buf: [2]gsub.FeatureApplication = undefined;
+            var merged_feature_count: usize = 0;
+            const mongolian_merged_features = [_]gsub.FeatureApplication{
+                .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
+                .{ .tag = unicode.tag("calt"), .auto_zwj = false },
+            };
+            for (mongolian_merged_features) |application| {
+                if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
+                merged_features_buf[merged_feature_count] = application;
+                merged_feature_count += 1;
+            }
+            try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, merged_features_buf[0..merged_feature_count], glyph_ids, joining_options, gdef_metadata.*);
         }
     } else if (use_shape) {
         try source_features.resize(buffer.allocator, codepoints.items.len);
@@ -4154,6 +4172,21 @@ fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
         .final => unicode.tag("fina"),
         .none => 0,
     };
+}
+
+fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
+    return script_tag == .arab or script_tag == .mong;
+}
+
+fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {
+    for (codepoints, 0..) |codepoint, index| {
+        if (!isMongolianFreeVariationSelector(codepoint) or index == 0) continue;
+        source_features[index] = source_features[index - 1];
+    }
+}
+
+fn isMongolianFreeVariationSelector(codepoint: u21) bool {
+    return (codepoint >= 0x180b and codepoint <= 0x180d) or codepoint == 0x180f;
 }
 
 fn shapingFeatureEnabled(feature: u32, overrides: []const unicode.FeatureOverride, default_enabled: bool) bool {

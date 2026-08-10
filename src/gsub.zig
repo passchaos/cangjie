@@ -39,6 +39,7 @@ const FeatureSelection = struct {
 pub const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
+    text_direction: enum { ltr, rtl } = .ltr,
     features: []const unicode.FeatureOverride = &.{},
     vertical: bool = false,
     apply_all_if_unselected: bool = true,
@@ -2470,7 +2471,7 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
         // LangSys.ReqFeatureIndex is an OpenType contract: the feature is
         // necessary for that script/language system and must be applied even
         // when its tag is normally optional or an override disables that tag.
-        if (!selection.required and !featureEnabled(feature_tag, options.features, options.vertical)) continue;
+        if (!selection.required and !featureEnabled(feature_tag, options)) continue;
         const feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
         const lookup_index_count = try readU16(table, feature_offset + 2);
         for (0..lookup_index_count) |i| {
@@ -2483,12 +2484,14 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     return lookups;
 }
 
-fn featureEnabled(feature_tag: u32, overrides: []const unicode.FeatureOverride, vertical: bool) bool {
-    for (overrides) |override| {
+fn featureEnabled(feature_tag: u32, options: LookupOptions) bool {
+    for (options.features) |override| {
         if (override.tag == feature_tag) return override.enabled;
     }
     return defaultFeatureEnabled(feature_tag) or
-        (vertical and (feature_tag == unicode.tag("vert") or feature_tag == unicode.tag("vrt2")));
+        (options.vertical and (feature_tag == unicode.tag("vert") or feature_tag == unicode.tag("vrt2"))) or
+        (options.text_direction == .ltr and (feature_tag == unicode.tag("ltra") or feature_tag == unicode.tag("ltrm"))) or
+        (options.text_direction == .rtl and (feature_tag == unicode.tag("rtla") or feature_tag == unicode.tag("rtlm")));
 }
 
 fn defaultFeatureEnabled(feature_tag: u32) bool {

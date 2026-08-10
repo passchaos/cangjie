@@ -3467,8 +3467,31 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 if (glyph_ids.items.len != 0) {
                     if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
                         glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
+                        source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
+                        continue;
                     }
-                    source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
+                    const selector_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint);
+                    if (selector_glyph == 0) {
+                        source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
+                        continue;
+                    }
+                    glyph_ids.appendAssumeCapacity(selector_glyph);
+                    codepoints.appendAssumeCapacity(codepoint);
+                    const source_cluster = if (lookup_options.direction == .rtl and clusters.items.len != 0)
+                        clusters.items[clusters.items.len - 1] - cluster_base
+                    else
+                        cluster;
+                    clusters.appendAssumeCapacity(cluster_base + source_cluster);
+                    source_ends.appendAssumeCapacity(cluster_base + it.i);
+                    glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
+                    const cluster_owner_index = if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
+                        glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
+                    else
+                        glyph_cluster_indices.items.len;
+                    glyph_cluster_indices.appendAssumeCapacity(cluster_owner_index);
+                    glyph_substituted.appendAssumeCapacity(false);
+                    ligature_components.infos.appendAssumeCapacity(.{});
+                    continue;
                 }
                 // Variation selectors refine the preceding scalar and do not
                 // advance text themselves. Keeping them out of the glyph stream
@@ -3529,6 +3552,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     var gsub_options = gsub.LookupOptions{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
+        .text_direction = if (lookup_options.direction == .rtl) .rtl else .ltr,
         .features = lookup_options.features,
         .vertical = lookup_options.writing_mode.isVertical(),
         .apply_all_if_unselected = false,

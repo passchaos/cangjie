@@ -1321,10 +1321,10 @@ shaping-performance superiority.
 - Arabic-like joining now includes Adlam in the Arabic-style positional shaper:
   the HarfBuzz in-house `arabic-like-joining.tests` Adlam long joining row for
   `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` passes. The same in-house
-  file still has a separate Phags-Pa variation-selector gap on
-  `ec404b8524cd56efa5d25524cc8541a0b6604b4f.ttf` for sequences such as
-  `U+A849,U+A85E,U+FE00`, where HarfBuzz selects `uniA85E.mir` and Cangjie
-  still returns the default `uniA85E`.
+  file's `ec404b8524cd56efa5d25524cc8541a0b6604b4f.ttf` Phags-Pa rows now pass
+  after Cangjie enabled HarfBuzz-style direction features (`ltrm`/`rtlm`) and
+  kept variation selectors with ordinary cmap glyphs visible for GSUB fallback
+  matching when no cmap-14 variation record exists.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

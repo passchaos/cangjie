@@ -1534,7 +1534,12 @@ shaping-performance superiority.
   `U+0CB0,U+0CCD,U+200D,U+0C95`; Cangjie now routes `knd2`/`knda` through the
   Indic shaper, uses Kannada's virama and consonant/mark classes, preserves
   HarfBuzz's Kannada `Ra+Halant+ZWJ` compatibility ordering, and merges the
-  formed reph cluster across the syllable.
+  formed reph cluster across the syllable. The Telugu `indic-special-cases.tests`
+  word `U+0C1A,U+0C3F,U+0C32,U+0C4D,U+0C15,U+0C42,U+0C30,U+0C4D` now has a
+  retained gate for `e716f6bd00a108d186b7e9f47b4515565f784f36.ttf`; Cangjie
+  routes `tel2`/`telu` through the Indic shaper, applies Telugu `blwf`/`abvs`
+  and final `haln`, and reorders before-subscript vowels ahead of formed
+  subscript consonants.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

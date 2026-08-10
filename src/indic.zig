@@ -17,7 +17,7 @@ const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng, .gur2, .guru, .knd2, .knda, .mlm2, .mlym => true,
+        .dev2, .bng2, .beng, .gur2, .guru, .tel2, .telu, .knd2, .knda, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -242,6 +242,60 @@ pub fn reorderRephs(
     }
 }
 
+pub fn reorderBeforeSubscriptVowels(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (script_tag != .tel2 and script_tag != .telu) return;
+
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source >= codepoints.len or !isBeforeSubscriptVowel(codepoints[source], script_tag)) continue;
+
+        const syllable_start = indicSyllableStart(codepoints, source, script_tag);
+        const target = beforeSubscriptVowelTargetGlyph(glyph_source_indices.items, codepoints, syllable_start, source, glyph_index, script_tag) orelse continue;
+        if (target >= glyph_index) continue;
+        const merge_start = firstGlyphInSourceRange(glyph_source_indices.items, syllable_start, source) orelse target;
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, merge_start, glyph_index + 1);
+        shaping_metadata.move(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            glyph_index,
+            target,
+        );
+        glyph_index = target + 1;
+    }
+}
+
+fn beforeSubscriptVowelTargetGlyph(sources: []const usize, codepoints: []const u21, syllable_start: usize, vowel_source: usize, fallback_index: usize, script_tag: unicode.OpenTypeScriptTag) ?usize {
+    var target: ?usize = null;
+    for (sources, 0..) |source, glyph_index| {
+        if (glyph_index >= fallback_index) break;
+        if (source < syllable_start or source >= vowel_source) continue;
+        if (source + 1 >= codepoints.len) continue;
+        if (codepoints[source] != viramaCodepoint(script_tag)) continue;
+        if (!isIndicConsonant(codepoints[source + 1], script_tag)) continue;
+        target = glyph_index;
+    }
+    return target;
+}
+
+fn firstGlyphInSourceRange(sources: []const usize, start_source: usize, end_source: usize) ?usize {
+    for (sources, 0..) |source, glyph_index| {
+        if (source >= start_source and source <= end_source) return glyph_index;
+    }
+    return null;
+}
+
 const pre_reorder_feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("nukt") },
     .{ .tag = unicode.tag("akhn") },
@@ -275,6 +329,7 @@ const final_feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("abvs") },
     .{ .tag = unicode.tag("blws") },
     .{ .tag = unicode.tag("psts") },
+    .{ .tag = unicode.tag("haln") },
 };
 
 pub fn preReorderFeatureApplications() []const gsub.FeatureApplication {
@@ -304,6 +359,7 @@ fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .bng2, .beng => codepoint == 0x09c7 or codepoint == 0x09c8,
         .gur2, .guru => codepoint == 0x0a3f,
+        .tel2, .telu => codepoint == 0x0c46 or codepoint == 0x0c47 or codepoint == 0x0c48,
         .knd2, .knda => codepoint == 0x0cbf,
         .mlm2, .mlym => codepoint == 0x0d46 or codepoint == 0x0d47 or codepoint == 0x0d48,
         else => codepoint == 0x093f,
@@ -369,6 +425,12 @@ fn hasInitialReph(codepoints: []const u21, syllable_start: usize, syllable_end: 
 
 fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
     var marked = false;
+    if (script_tag == .tel2 or script_tag == .telu) {
+        if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
+            marked = true;
+        }
+        return marked;
+    }
     if (script_tag == .knd2 or script_tag == .knda) {
         if (markKannadaRaHalfSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
             marked = true;
@@ -385,6 +447,18 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         if (!hasConsonant(codepoints[virama_index + 1 .. syllable_end], script_tag)) continue;
 
         source_features[index] |= half_source_mask;
+        marked = true;
+    }
+    return marked;
+}
+
+fn markPostBaseViramaConsonantSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
+    var marked = false;
+    var index = syllable_start;
+    while (index + 1 < syllable_end) : (index += 1) {
+        if (codepoints[index] != viramaCodepoint(script_tag)) continue;
+        if (!isIndicConsonant(codepoints[index + 1], script_tag)) continue;
+        source_features[index] |= blwf_source_mask;
         marked = true;
     }
     return marked;
@@ -684,6 +758,7 @@ fn isIndicSyllableModifier(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
     return switch (script_tag) {
         .bng2, .beng => codepoint >= 0x0981 and codepoint <= 0x0983,
         .gur2, .guru => codepoint >= 0x0a01 and codepoint <= 0x0a03,
+        .tel2, .telu => codepoint >= 0x0c00 and codepoint <= 0x0c03,
         .knd2, .knda => codepoint >= 0x0c82 and codepoint <= 0x0c83,
         else => codepoint >= 0x0900 and codepoint <= 0x0903,
     };
@@ -714,6 +789,9 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
         .gur2, .guru => (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
             (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
             (codepoint >= 0x0a72 and codepoint <= 0x0a74),
+        .tel2, .telu => (codepoint >= 0x0c15 and codepoint <= 0x0c39) or
+            codepoint == 0x0c58 or
+            codepoint == 0x0c59,
         .knd2, .knda => (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
             codepoint == 0x0cde,
         .mlm2, .mlym => (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
@@ -732,6 +810,11 @@ fn isIndicIndependentVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
         .gur2, .guru => (codepoint >= 0x0a05 and codepoint <= 0x0a0a) or
             (codepoint >= 0x0a0f and codepoint <= 0x0a10) or
             (codepoint >= 0x0a13 and codepoint <= 0x0a14),
+        .tel2, .telu => (codepoint >= 0x0c05 and codepoint <= 0x0c0c) or
+            (codepoint >= 0x0c0e and codepoint <= 0x0c10) or
+            (codepoint >= 0x0c12 and codepoint <= 0x0c14) or
+            codepoint == 0x0c60 or
+            codepoint == 0x0c61,
         .knd2, .knda => (codepoint >= 0x0c85 and codepoint <= 0x0c8c) or
             (codepoint >= 0x0c8e and codepoint <= 0x0c90) or
             (codepoint >= 0x0c92 and codepoint <= 0x0c94) or
@@ -759,6 +842,14 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
             codepoint == 0x0a51 or
             (codepoint >= 0x0a70 and codepoint <= 0x0a71) or
             codepoint == 0x0a75,
+        .tel2, .telu => (codepoint >= 0x0c00 and codepoint <= 0x0c04) or
+            codepoint == 0x0c3c or
+            (codepoint >= 0x0c3e and codepoint <= 0x0c44) or
+            (codepoint >= 0x0c46 and codepoint <= 0x0c48) or
+            (codepoint >= 0x0c4a and codepoint <= 0x0c4d) or
+            codepoint == 0x0c55 or
+            codepoint == 0x0c56 or
+            (codepoint >= 0x0c62 and codepoint <= 0x0c63),
         .knd2, .knda => codepoint == 0x0c81 or
             (codepoint >= 0x0c82 and codepoint <= 0x0c83) or
             codepoint == 0x0cbc or
@@ -777,10 +868,18 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
     };
 }
 
+fn isBeforeSubscriptVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    return switch (script_tag) {
+        .tel2, .telu => codepoint >= 0x0c3e and codepoint <= 0x0c42,
+        else => false,
+    };
+}
+
 fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09cd,
         .gur2, .guru => 0x0a4d,
+        .tel2, .telu => 0x0c4d,
         .knd2, .knda => 0x0ccd,
         .mlm2, .mlym => 0x0d4d,
         else => 0x094d,
@@ -791,6 +890,7 @@ fn rephRaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09b0,
         .gur2, .guru => 0x0a30,
+        .tel2, .telu => 0x0c30,
         .knd2, .knda => 0x0cb0,
         .mlm2, .mlym => 0x0d30,
         else => 0x0930,
@@ -948,6 +1048,44 @@ test "Indic reph reorder merges Kannada syllable clusters" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 5 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 2, 0 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Telugu post-base virama consonant marks blwf source" {
+    var features = [_]u32{0} ** 8;
+    const codepoints = [_]u21{ 0x0c1a, 0x0c3f, 0x0c32, 0x0c4d, 0x0c15, 0x0c42, 0x0c30, 0x0c4d };
+
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .tel2));
+    try std.testing.expectEqual(blwf_source_mask, features[3]);
+    try std.testing.expectEqual(@as(u32, 0), features[4]);
+}
+
+test "Telugu before-subscript vowel reorders before subscript glyph" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 13, 4, 16, 6 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 2, 3, 5 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 6, 9, 15 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ true, false, true, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0c1a, 0x0c3f, 0x0c32, 0x0c4d, 0x0c15, 0x0c42 };
+    reorderBeforeSubscriptVowels(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .tel2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 13, 4, 6, 16 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 5, 3 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 6, 6, 6 }, clusters.items);
 }
 
 test "Bengali pre-base matras move before bases and mark init only at word start" {

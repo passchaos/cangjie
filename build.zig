@@ -68,6 +68,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     font_hash: []const u8,
     text: []const u8,
     direction: []const u8,
+    not_found_variation_selector_glyph: ?[]const u8 = null,
 }{
     .{
         .font_hash = "932ad5132c2761297c74e9976fe25b08e5ffa10b",
@@ -83,6 +84,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "21b7fb9c1eeae260473809fbc1fe330f66a507cd",
         .text = "ىٕ͏ِ",
         .direction = "rtl",
+    },
+    .{
+        .font_hash = "bbc24004e776f348a0f72287d24b0124867ee750",
+        .text = "f︀i",
+        .direction = "ltr",
+        .not_found_variation_selector_glyph = "1000000",
     },
 };
 
@@ -326,6 +333,9 @@ pub fn build(b: *std.Build) void {
                 "--text",      gate.text,
                 "--direction", gate.direction,
             });
+            if (gate.not_found_variation_selector_glyph) |glyph_id| {
+                inline_parity_cmd.addArgs(&.{ "--not-found-variation-selector-glyph", glyph_id });
+            }
             shaping_corpus_parity_smoke_step.dependOn(&inline_parity_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_corpus_parity_smoke_step);

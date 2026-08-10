@@ -262,7 +262,7 @@ const LineMismatch = struct {
     line_index: usize,
     cangjie: runner.BenchResult.LineSummary,
     harfrust: runner.BenchResult.LineSummary,
-    cangjie_glyph_ids: []const u16,
+    cangjie_glyph_ids: []const u32,
     cangjie_clusters: []const u32,
     cangjie_position_values: []const i32,
 };
@@ -293,9 +293,9 @@ fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u
     const count = @min(cangjie_lines.len, harfrust_lines.len);
     for (0..count) |line_index| {
         const order = compareOrder(if (line_index < text_lines.len) text_lines[line_index] else "", direction);
-        const cangjie_ids = try comparableSlice(u16, allocator, cangjie_lines[line_index].glyph_ids, order);
+        const cangjie_ids = try comparableSlice(u32, allocator, cangjie_lines[line_index].glyph_ids, order);
         errdefer allocator.free(cangjie_ids);
-        if (!std.mem.eql(u16, cangjie_ids, harfrust_lines[line_index].glyph_ids)) {
+        if (!std.mem.eql(u32, cangjie_ids, harfrust_lines[line_index].glyph_ids)) {
             return .{
                 .kind = .glyph_id,
                 .line_index = line_index,
@@ -342,9 +342,9 @@ fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u
         const line_index = count;
         const order = compareOrder(if (line_index < text_lines.len) text_lines[line_index] else "", direction);
         const cangjie_ids = if (line_index < cangjie_lines.len)
-            try comparableSlice(u16, allocator, cangjie_lines[line_index].glyph_ids, order)
+            try comparableSlice(u32, allocator, cangjie_lines[line_index].glyph_ids, order)
         else
-            try allocator.alloc(u16, 0);
+            try allocator.alloc(u32, 0);
         errdefer allocator.free(cangjie_ids);
         const cangjie_clusters = if (line_index < cangjie_lines.len)
             try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, order)
@@ -390,14 +390,14 @@ fn comparableSlice(comptime T: type, allocator: std.mem.Allocator, items: []cons
     return comparable;
 }
 
-fn printGlyphIds(glyph_ids: []const u16) void {
+fn printGlyphIds(glyph_ids: []const u32) void {
     for (glyph_ids, 0..) |glyph_id, index| {
         if (index != 0) std.debug.print(",", .{});
         std.debug.print("{d}", .{glyph_id});
     }
 }
 
-fn firstDifferentGlyphIndex(lhs: []const u16, rhs: []const u16) usize {
+fn firstDifferentGlyphIndex(lhs: []const u32, rhs: []const u32) usize {
     const shared_len = @min(lhs.len, rhs.len);
     for (0..shared_len) |index| {
         if (lhs[index] != rhs[index]) return index;
@@ -405,14 +405,18 @@ fn firstDifferentGlyphIndex(lhs: []const u16, rhs: []const u16) usize {
     return shared_len;
 }
 
-fn printGlyphWindow(font: *const cangjie.Font, glyph_ids: []const u16, clusters: []const u32, center: usize) !void {
+fn printGlyphWindow(font: *const cangjie.Font, glyph_ids: []const u32, clusters: []const u32, center: usize) !void {
     const start = center -| 8;
     const end = @min(glyph_ids.len, center + 9);
     for (glyph_ids[start..end], start..) |glyph_id, index| {
         if (index != start) std.debug.print(",", .{});
         const cluster = if (index < clusters.len) clusters[index] else 0;
-        if (try font.glyphName(glyph_id)) |name| {
-            std.debug.print("{d}@{d}:{s}", .{ glyph_id, cluster, name });
+        const name = if (glyph_id <= std.math.maxInt(cangjie.GlyphId))
+            try font.glyphName(@intCast(glyph_id))
+        else
+            null;
+        if (name) |value| {
+            std.debug.print("{d}@{d}:{s}", .{ glyph_id, cluster, value });
         } else {
             std.debug.print("{d}@{d}", .{ glyph_id, cluster });
         }

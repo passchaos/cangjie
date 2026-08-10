@@ -85,6 +85,10 @@ pub const LookupOptions = struct {
     /// GSUB uses this to mirror HarfBuzz's joiner/default-ignorable skipping
     /// semantics without guessing from substituted glyph ids.
     source_codepoints: ?[]const u21 = null,
+    /// HarfBuzz-compatible parity switch: an unsupported variation selector
+    /// mapped to a synthetic not-found glyph is no longer skipped as a
+    /// default-ignorable during contextual matching.
+    visible_variation_selectors: bool = false,
     active_auto_zwnj: bool = true,
     active_auto_zwj: bool = true,
     /// Preselected lookup indices for the active script/language/features.
@@ -3916,6 +3920,7 @@ fn noteGlyphMutation(options: LookupOptions) void {
 fn contextualMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []const GlyphId, glyph_index: usize, context_match: bool) bool {
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_index])) return true;
     const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
+    if (options.visible_variation_selectors and isVariationSelector(codepoint)) return false;
     // CGJ is always transparent to OpenType matching: unlike ZWNJ/ZWJ, it has
     // no feature-specific auto-joiner mode and must never become an input or
     // ligature component merely because the lookup is matching its input run.
@@ -3937,7 +3942,7 @@ fn ligatureMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []cons
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[relative_index])) return true;
     const codepoint = sourceCodepointForGlyph(options, glyph_base + relative_index) orelse return false;
     if (codepoint == 0x034f) return !cgjPreventedMarkReorder(options, glyph_base + relative_index);
-    return isVariationSelector(codepoint);
+    return !options.visible_variation_selectors and isVariationSelector(codepoint);
 }
 
 fn cgjPreventedMarkReorder(options: LookupOptions, glyph_index: usize) bool {

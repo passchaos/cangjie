@@ -102,6 +102,10 @@ pub const LookupOptions = struct {
     /// attachment searches use this to keep hidden default-ignorables
     /// transparent after they have been mapped to visible fallback glyph ids.
     source_codepoints: ?[]const u21 = null,
+    /// HarfBuzz-compatible parity switch: an unsupported variation selector
+    /// mapped to a synthetic not-found glyph remains visible to positioning
+    /// lookups instead of being skipped as a hidden default-ignorable.
+    visible_variation_selectors: bool = false,
     /// GSUB substitution state parallel to the post-GSUB glyph stream. GPOS
     /// treats untouched default-ignorables as transparent, but substituted
     /// glyphs must remain visible to matching just like HarfBuzz.
@@ -2210,7 +2214,13 @@ fn glyphWasSubstituted(options: LookupOptions, glyph_index: usize) bool {
 fn markAttachmentSearchSkipsGlyph(options: LookupOptions, glyph_index: usize) bool {
     if (options.run_has_default_ignorables == false) return false;
     const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
+    if (options.visible_variation_selectors and isVariationSelector(codepoint)) return false;
     return unicode.isDefaultIgnorableForShaping(codepoint) and !glyphWasSubstituted(options, glyph_index);
+}
+
+fn isVariationSelector(codepoint: u21) bool {
+    return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
+        (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
 }
 
 fn matchSkipsGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []const GlyphId, glyph_index: usize) bool {

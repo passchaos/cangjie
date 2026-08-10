@@ -1150,11 +1150,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   forms while preserving separate mark glyphs.
 - The focused HarfBuzz in-house `variation-selectors.tests` row for
   `bbc24004e776f348a0f72287d24b0124867ee750.ttf`
-  (`U+0066,U+FE00,U+0069`) also passes: unsupported variation selectors remain in
-  the GSUB stream as fallback default-ignorables, block and/or participate in
-  ligature matching like HarfBuzz, then render as zero-advance fallback space.
-  The upstream synthetic `--not-found-variation-selector-glyph` option is not yet
-  exposed through `shape-bench`.
+  (`U+0066,U+FE00,U+0069`) passes in both upstream modes: by default unsupported
+  variation selectors remain in the GSUB stream as fallback default-ignorables,
+  block and/or participate in ligature matching like HarfBuzz, then render as
+  zero-advance fallback space; with
+  `--not-found-variation-selector-glyph=1000000`, the selector remains visible
+  to matching and is reported as that zero-advance synthetic glyph. The latter
+  row is retained in `shaping-corpus-parity-smoke`.
 - HarfBuzz in-house `positioning-features.tests` rows that `shape-bench` can
   express now pass focused `compare-harfbuzz`. This includes a real GPOS table
   whose FeatureList records are not sorted by tag (`kern` before `abvm`);
@@ -1362,12 +1364,8 @@ shaping-performance superiority.
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are
   covered, but broader font/script matrices still need expansion.
 - Retain broader default-ignorable coverage. The currently passing focused
-  `default-ignorables.tests` rows cover CGJ/Arabic and ZWJ/mark interactions, but
-  shape-bench still cannot express every upstream option such as synthetic
-  not-found variation-selector glyphs.
-- Add shape-bench support for HarfBuzz's synthetic
-  `--not-found-variation-selector-glyph` option so the second
-  `variation-selectors.tests` row can be retained exactly.
+  `default-ignorables.tests` rows cover CGJ/Arabic and ZWJ/mark interactions,
+  but broader upstream default-ignorable combinations still need retained gates.
 - Arabic-like joining now includes Adlam in the Arabic-style positional shaper:
   the HarfBuzz in-house `arabic-like-joining.tests` Adlam long joining row for
   `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` passes. The same in-house

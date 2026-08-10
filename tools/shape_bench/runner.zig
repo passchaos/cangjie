@@ -9,7 +9,7 @@ pub const BenchResult = struct {
         text_bytes: usize,
         glyph_count: usize,
         checksum: u64,
-        glyph_ids: []const u16 = &.{},
+        glyph_ids: []const u32 = &.{},
         clusters: []const u32 = &.{},
         x_advances: []const i32 = &.{},
         y_advances: []const i32 = &.{},
@@ -92,6 +92,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .script_position = options.script_position,
         .features = options.featureOverrides(),
         .normalized_variation_coords = options.normalizedVariationCoords(),
+        .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
     };
     const inline_text_lines = [_][]const u8{options.text};
     const text_lines = if (options.text_lines.len != 0) options.text_lines else inline_text_lines[0..];
@@ -186,9 +187,9 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     };
 }
 
-fn glyphIds(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosition) ![]const u16 {
-    const ids = try allocator.alloc(u16, glyphs.len);
-    for (glyphs, ids) |glyph, *id| id.* = glyph.glyph_id;
+fn glyphIds(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosition) ![]const u32 {
+    const ids = try allocator.alloc(u32, glyphs.len);
+    for (glyphs, ids) |glyph, *id| id.* = glyph.outputGlyphId();
     return ids;
 }
 
@@ -565,7 +566,8 @@ fn shapeOnce(
 fn glyphsChecksum(glyphs: []const cangjie.GlyphPosition) u64 {
     var hasher = std.hash.Wyhash.init(0);
     for (glyphs) |glyph| {
-        hasher.update(std.mem.asBytes(&glyph.glyph_id));
+        const glyph_id = glyph.outputGlyphId();
+        hasher.update(std.mem.asBytes(&glyph_id));
         hasher.update(std.mem.asBytes(&glyph.cluster));
         hasher.update(std.mem.asBytes(&glyph.x_advance));
         hasher.update(std.mem.asBytes(&glyph.y_advance));

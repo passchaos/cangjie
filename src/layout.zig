@@ -31,6 +31,11 @@ pub const VerticalGlyphMetrics = layout_cache.VerticalGlyphMetrics;
 /// hit testing and selection can map glyph positions back to source text.
 pub const GlyphPosition = struct {
     glyph_id: GlyphId,
+    /// Optional synthetic glyph id used only for shaping-diagnostic parity
+    /// knobs such as HarfBuzz's not-found variation-selector glyph. The real
+    /// OpenType pipeline still uses `glyph_id` for GSUB, GPOS, metrics, and
+    /// rendering.
+    synthetic_glyph_id: ?u32 = null,
     codepoint: u21,
     cluster: usize,
     /// Number of UTF-8 bytes in the source span represented by this glyph.
@@ -44,6 +49,10 @@ pub const GlyphPosition = struct {
     x_offset: f32 = 0,
     y_offset: f32 = 0,
     vertical: bool = false,
+
+    pub fn outputGlyphId(self: GlyphPosition) u32 {
+        return self.synthetic_glyph_id orelse self.glyph_id;
+    }
 };
 
 /// A contiguous range of glyphs rendered by one font at one size.
@@ -173,6 +182,11 @@ pub const ShapeOptions = struct {
     /// mapping. The default empty slice preserves legacy/default-instance
     /// shaping and lets glyph metric caches stay keyed only by glyph id.
     normalized_variation_coords: []const f32 = &.{},
+    /// Optional HarfBuzz-compatible synthetic glyph id for unsupported
+    /// variation selectors. This is a diagnostics/parity switch: it keeps the
+    /// unsupported selector visible to GSUB/GPOS matching and reports this glyph
+    /// id with zero advance, without changing the real font glyph id.
+    not_found_variation_selector_glyph: ?u32 = null,
 };
 
 /// Coarse shaping plan identity. It intentionally excludes the concrete font
@@ -189,6 +203,7 @@ pub const ShapePlanKey = struct {
     script_position: ScriptPosition = .normal,
     feature_hash: u64 = 0,
     variation_hash: u64 = 0,
+    not_found_variation_selector_glyph: ?u32 = null,
 
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
         const infer_both = options.script_tag == null and options.language_tag == null;
@@ -207,6 +222,7 @@ pub const ShapePlanKey = struct {
             .script_position = options.script_position,
             .feature_hash = featureOverridesHash(options.features),
             .variation_hash = normalizedVariationCoordsHash(options.normalized_variation_coords),
+            .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
         };
     }
 };
@@ -3284,6 +3300,7 @@ const LookupOptions = struct {
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
     normalized_variation_coords: []const f32 = &.{},
+    not_found_variation_selector_glyph: ?u32 = null,
 };
 
 const ResolvedLookupOptions = struct {
@@ -3311,6 +3328,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupO
         .writing_mode = options.writing_mode,
         .text_orientation = options.text_orientation,
         .normalized_variation_coords = options.normalized_variation_coords,
+        .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
     }, .all_ascii = infer_language and inferred.all_ascii };
 }
 
@@ -3367,7 +3385,8 @@ fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
         a.language_tag == b.language_tag and
         a.script_position == b.script_position and
         a.feature_hash == b.feature_hash and
-        a.variation_hash == b.variation_hash;
+        a.variation_hash == b.variation_hash and
+        a.not_found_variation_selector_glyph == b.not_found_variation_selector_glyph;
 }
 
 fn shapedRunCacheKeysEqual(a: ShapedRunCacheKey, b: ShapedRunCacheKey) bool {
@@ -3570,6 +3589,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .shape_profile = shape_profile,
         .profile_fast_path = buffer.profile_fast_path,
         .profile_io = profile_io,
+        .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
     };
     const gsub_start = shapeProfileNow(shape_profile, profile_io);
     const gsub_after_proof = if (buffer.gsub_table_proof_cache) |proof_cache| proof: {
@@ -3889,6 +3909,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .ligature_components = ligature_components,
         .shape_profile = shape_profile,
         .profile_io = profile_io,
+        .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
     };
     if (buffer.lookup_selection_cache) |selection_cache| {
         gpos_options.lookup_accelerators = try selection_cache.gposLookupAccelerators(font);
@@ -3970,7 +3991,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
         const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
-        const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint) and !was_substituted;
+        const visible_not_found_variation_selector = lookup_options.not_found_variation_selector_glyph != null and
+            isVariationSelector(source_codepoint) and
+            !was_substituted;
+        const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint) and
+            !was_substituted and
+            !visible_not_found_variation_selector;
         const skip_default_ignorable = hide_default_ignorable and
             (invisible_glyph_id == 0 or
                 (glyph_id == 0 and isVariationSelector(source_codepoint) and
@@ -3984,6 +4010,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             continue;
         }
         const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
+        const synthetic_glyph_id = if (visible_not_found_variation_selector)
+            lookup_options.not_found_variation_selector_glyph
+        else
+            null;
         const mark_zeroing = markAdvanceZeroingPolicy(
             early_zero_mark_shape,
             glyph_class,
@@ -4046,13 +4076,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         buffer.glyphs.appendAssumeCapacity(.{
             .glyph_id = output_glyph_id,
+            .synthetic_glyph_id = synthetic_glyph_id,
             .codepoint = source_codepoint,
             .cluster = source_span.start,
             .source_byte_len = source_span.end - source_span.start,
-            .x_advance = if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
-            .y_advance = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
-            .x_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_x_offset + gpos_x_offset + zeroed_mark_x_offset else gpos_x_offset + zeroed_mark_x_offset,
-            .y_offset = if (hide_default_ignorable) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset else @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset,
+            .x_advance = if (visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
+            .y_advance = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
+            .x_offset = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_x_offset + gpos_x_offset + zeroed_mark_x_offset else gpos_x_offset + zeroed_mark_x_offset,
+            .y_offset = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset else @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
         if (has_gpos_attachments and !hide_default_ignorable) {
@@ -5145,6 +5176,43 @@ test "cluster caret diagnostics accept variation selectors and fallback runs" {
     try std.testing.expectEqual(@as(usize, 4), report.grapheme_boundary_count);
     try std.testing.expectEqual(@as(usize, 0), report.issue_count);
     try std.testing.expectEqual(@as(usize, 0), report.issues.len);
+}
+
+test "unsupported variation selectors can report a synthetic not-found glyph" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const bytes = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const text = "B\u{fe00}";
+    const default_run = try TextShaper.shapeUtf8WithOptions(&font, &buffer, text, 20, .{});
+    try std.testing.expectEqual(@as(usize, 1), default_run.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 2), default_run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(?u32, null), default_run.glyphs[0].synthetic_glyph_id);
+    try std.testing.expectEqual(@as(u32, 2), default_run.glyphs[0].outputGlyphId());
+    try std.testing.expectEqual(@as(usize, text.len), default_run.glyphs[0].source_byte_len);
+
+    const synthetic_run = try TextShaper.shapeUtf8WithOptions(&font, &buffer, text, 20, .{
+        .not_found_variation_selector_glyph = 1_000_000,
+    });
+    try std.testing.expectEqual(@as(usize, 2), synthetic_run.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 2), synthetic_run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(u32, 2), synthetic_run.glyphs[0].outputGlyphId());
+    try std.testing.expectEqual(@as(GlyphId, 0), synthetic_run.glyphs[1].glyph_id);
+    try std.testing.expectEqual(@as(?u32, 1_000_000), synthetic_run.glyphs[1].synthetic_glyph_id);
+    try std.testing.expectEqual(@as(u32, 1_000_000), synthetic_run.glyphs[1].outputGlyphId());
+    try std.testing.expectEqual(@as(usize, 0), synthetic_run.glyphs[1].cluster);
+    try std.testing.expectEqual(@as(usize, text.len), synthetic_run.glyphs[1].source_byte_len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), synthetic_run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), synthetic_run.glyphs[1].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), synthetic_run.glyphs[1].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), synthetic_run.glyphs[1].y_offset, 0.001);
 }
 
 test "cluster caret diagnostics catch invalid UTF-8 source spans" {

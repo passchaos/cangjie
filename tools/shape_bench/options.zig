@@ -93,6 +93,7 @@ pub const Options = struct {
     profile_fast_path: bool = false,
     line_summary: bool = false,
     glyph_summary: bool = false,
+    not_found_variation_selector_glyph: ?u32 = null,
     feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
     feature_override_count: usize = 0,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
@@ -222,6 +223,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             try parseVariationCoords(&options, args[i]);
+        } else if (std.mem.eql(u8, arg, "--not-found-variation-selector-glyph")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.not_found_variation_selector_glyph = try parseGlyphCodepoint(args[i]);
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.InvalidArguments;
         } else {
@@ -253,6 +258,12 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 fn parsePositiveUsize(text: []const u8) !usize {
     const value = try std.fmt.parseInt(usize, text, 10);
     if (value == 0) return error.InvalidArguments;
+    return value;
+}
+
+fn parseGlyphCodepoint(text: []const u8) !u32 {
+    const value = try std.fmt.parseInt(u32, text, 10);
+    if (value == std.math.maxInt(u32)) return error.InvalidArguments;
     return value;
 }
 
@@ -345,6 +356,8 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --enable-feature TAG         enable one OpenType feature tag for Cangjie
         \\  --disable-feature TAG        disable one OpenType feature tag for Cangjie
         \\  --variation CSV              comma-separated normalized variation coordinates, e.g. 0.5,-0.25
+        \\  --not-found-variation-selector-glyph GLYPH
+        \\                               make unsupported variation selectors visible as a zero-advance synthetic glyph
         \\
         \\examples:
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --iterations 50000

@@ -128,7 +128,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
 const ShapedLine = struct {
     glyph_count: usize,
     checksum: u64,
-    glyph_ids: []u16 = &.{},
+    glyph_ids: []u32 = &.{},
     clusters: []u32 = &.{},
     x_advances: []i32 = &.{},
     y_advances: []i32 = &.{},
@@ -164,6 +164,9 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
             hb.hb_buffer_set_language(buffer, hb.hb_language_from_string(@ptrCast(language_text.ptr), @intCast(language_text.len)));
         }
     }
+    if (options.not_found_variation_selector_glyph) |glyph_id| {
+        hb.hb_buffer_set_not_found_variation_selector_glyph(buffer, glyph_id);
+    }
     hb.hb_buffer_add_utf8(buffer, @ptrCast(line.ptr), @intCast(line.len), 0, @intCast(line.len));
     hb.hb_shape(font, buffer, if (features.len == 0) null else features.ptr, @intCast(features.len));
 
@@ -179,7 +182,7 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
     };
     errdefer shaped.deinit(allocator);
     if (capture_summary) {
-        shaped.glyph_ids = try allocator.alloc(u16, glyph_count);
+        shaped.glyph_ids = try allocator.alloc(u32, glyph_count);
         shaped.clusters = try allocator.alloc(u32, glyph_count);
         shaped.x_advances = try allocator.alloc(i32, glyph_count);
         shaped.y_advances = try allocator.alloc(i32, glyph_count);

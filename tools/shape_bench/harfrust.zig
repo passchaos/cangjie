@@ -5,7 +5,7 @@ const options_mod = @import("options.zig");
 const runner = @import("runner.zig");
 
 const HarfRustGlyph = struct {
-    glyph_id: u16,
+    glyph_id: u32,
     cluster: u32 = 0,
     x_advance: i32 = 0,
     y_advance: i32 = 0,
@@ -119,6 +119,12 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
             try args.appendSlice(allocator, &.{ "--language", language_text });
         }
     }
+    var not_found_glyph_buf: [32]u8 = undefined;
+    if (options.not_found_variation_selector_glyph) |glyph_id| {
+        const glyph_text = try std.fmt.bufPrint(&not_found_glyph_buf, "{d}", .{glyph_id});
+        try args.append(allocator, "--not-found-variation-selector-glyph");
+        try args.append(allocator, glyph_text);
+    }
     if (options.text_path) |path| {
         try args.appendSlice(allocator, &.{ "--text-file", path });
     } else {
@@ -208,7 +214,7 @@ fn parseGlyph(item: []const u8) !HarfRustGlyph {
     const plus = std.mem.indexOfScalarPos(u8, item, equals + 1, '+');
     const id_end = at orelse plus orelse item.len;
     var glyph = HarfRustGlyph{
-        .glyph_id = try std.fmt.parseInt(u16, item[0..equals], 10),
+        .glyph_id = try std.fmt.parseInt(u32, item[0..equals], 10),
         .cluster = try std.fmt.parseInt(u32, item[equals + 1 .. id_end], 10),
     };
     if (at) |at_index| {
@@ -231,8 +237,8 @@ fn parsePairI32(text: []const u8, first: *i32, second: *i32) !void {
     second.* = 0;
 }
 
-fn glyphIds(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const u16 {
-    const ids = try allocator.alloc(u16, glyphs.len);
+fn glyphIds(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const u32 {
+    const ids = try allocator.alloc(u32, glyphs.len);
     for (glyphs, ids) |glyph, *id| id.* = glyph.glyph_id;
     return ids;
 }

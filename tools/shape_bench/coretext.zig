@@ -201,8 +201,8 @@ fn readLineGlyphs(allocator: std.mem.Allocator, line: CTLineRef) ![]CoreTextGlyp
     return try glyphs.toOwnedSlice(allocator);
 }
 
-fn glyphIds(allocator: std.mem.Allocator, glyphs: []const CoreTextGlyph) ![]const u16 {
-    const ids = try allocator.alloc(u16, glyphs.len);
+fn glyphIds(allocator: std.mem.Allocator, glyphs: []const CoreTextGlyph) ![]const u32 {
+    const ids = try allocator.alloc(u32, glyphs.len);
     for (glyphs, ids) |glyph, *id| id.* = glyph.glyph_id;
     return ids;
 }

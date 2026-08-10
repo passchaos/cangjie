@@ -1576,9 +1576,11 @@ shaping-performance superiority.
   candrabindu ligature, while the ZWNJ row keeps the dependent mark in the
   joiner's shaping cluster. The Devanagari `indic-joiners.tests` row for
   `8116e5d8fedfbec74e45dc350d2416d810bed8c4.ttf` is retained for
-  `U+091F,U+094D,U+200C,U+092F,U+093F`; Cangjie now treats `virama+ZWNJ` as a
-  syllable terminator, so the following pre-base matra targets the following
-  `ya` syllable instead of jumping before the previous `tta`. The legacy
+  `U+091F,U+094D,U+200C,U+092F,U+093F` and the mixed
+  `ZWJ/ZWNJ/ZWJ` row `U+091F,U+094D,U+200D,U+091F,U+094D,U+200C,U+091F,U+094D,U+200D,U+092F,U+093F`;
+  Cangjie now treats `virama+ZWNJ` as a syllable terminator, so the following
+  pre-base matra targets the following `ya` syllable instead of jumping before
+  the previous `tta`. The legacy
   Kannada `indic-old-spec.tests` row for
   `57a9d9f83020155cbb1d2be1f43d82388cbecc88.ttf` is retained for
   `U+0C9A,U+0CCD,U+0C9A,U+0CCD`; Cangjie now marks the trailing old-spec

@@ -237,6 +237,7 @@ fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.Gr
         if (isPreBaseMatra(codepoint)) {
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| return syllable.base_cluster;
         } else if (codepoint == 0x094d) {
+            if (previous_cluster) |cluster| return cluster;
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| return syllable.byte_start;
         } else if (isDevanagariDependentMark(codepoint)) {
             if (previous_cluster) |cluster| return cluster;

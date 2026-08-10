@@ -1,12 +1,23 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
+const build_options = @import("shape_bench_options");
 
 const coretext = @import("shape_bench/coretext.zig");
-const harfbuzz = @import("shape_bench/harfbuzz.zig");
 const harfrust = @import("shape_bench/harfrust.zig");
 const options_mod = @import("shape_bench/options.zig");
 const report = @import("shape_bench/report.zig");
 const runner = @import("shape_bench/runner.zig");
+const harfbuzz = if (build_options.enable_harfbuzz) @import("shape_bench/harfbuzz.zig") else DisabledHarfBuzz;
+
+const DisabledHarfBuzz = struct {
+    pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !runner.BenchResult {
+        _ = io;
+        _ = allocator;
+        _ = font_bytes;
+        _ = options;
+        return error.HarfBuzzUnavailable;
+    }
+};
 
 pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.smp_allocator;
@@ -30,6 +41,14 @@ pub fn main(init: std.process.Init) !void {
             return err;
         },
     };
+    if (!build_options.enable_harfbuzz and (options.engine == .harfbuzz or options.engine == .compare_harfbuzz)) {
+        std.debug.print(
+            \\error: HarfBuzz reference engine is not enabled in this build.
+            \\rebuild with -Denable-harfbuzz=true and provide HarfBuzz through pkg-config or -Dharfbuzz-prefix.
+            \\
+        , .{});
+        return error.HarfBuzzUnavailable;
+    }
     const resolved_harfrust_bin = try resolveDefaultHarfRustBin(init.io, allocator, init.environ_map, &options);
     defer if (resolved_harfrust_bin) |path| allocator.free(path);
 

@@ -49,7 +49,7 @@ pub fn validate(data: []const u8, offset: usize, length: usize, glyph_count: usi
         try validateChain(data, offset, length, chain, h.version, glyph_count);
         cursor += chain.length;
     }
-    if (cursor != length) return error.BadSfnt;
+    if (cursor > length) return error.BadSfnt;
 }
 
 pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, glyph_count: usize) Error!Info {
@@ -123,12 +123,8 @@ fn validateChain(data: []const u8, table_offset: usize, table_length: usize, cha
     const chain_start = table_offset + chain.offset;
     const chain_end = chain.offset + chain.length;
     var cursor = chain.offset + 16 + chain.feature_count * 12;
-    var previous_feature: ?u32 = null;
     for (0..chain.feature_count) |index| {
-        const feature = try readFeature(data, chain_start + 16 + index * 12);
-        const key = (@as(u32, feature.feature_type) << 16) | feature.feature_setting;
-        if (previous_feature) |last| if (key <= last) return error.BadSfnt;
-        previous_feature = key;
+        _ = try readFeature(data, chain_start + 16 + index * 12);
     }
 
     for (0..chain.subtable_count) |_| {
@@ -138,7 +134,7 @@ fn validateChain(data: []const u8, table_offset: usize, table_length: usize, cha
 
     if (version >= 3) {
         try validateSubtableGlyphCoverage(data, table_offset, chain_end, cursor, chain.subtable_count, glyph_count);
-    } else if (cursor != chain_end) {
+    } else if (cursor > chain_end) {
         return error.BadSfnt;
     }
 }
@@ -156,7 +152,7 @@ fn subtableHeader(data: []const u8, table_offset: usize, chain_end: usize, offse
     const start = table_offset + offset;
     const length: usize = @intCast(try bin.readU32At(data, start));
     const coverage = try bin.readU32At(data, start + 4);
-    if (length < 12 or length > chain_end - offset or (length & 3) != 0) return error.BadSfnt;
+    if (length < 12 or length > chain_end - offset) return error.BadSfnt;
     if ((coverage & 0x0fffff00) != 0) return error.BadSfnt;
     const format: u8 = @intCast(coverage & 0xff);
     switch (format) {
@@ -180,15 +176,12 @@ fn validateSubtableGlyphCoverage(data: []const u8, table_offset: usize, chain_en
     const coverage_table_len = chain_end - offset;
     if (subtable_count > coverage_table_len / 4) return error.BadSfnt;
     const bitfield_len = (glyph_count + 7) / 8;
-    var consumed = subtable_count * 4;
     for (0..subtable_count) |index| {
         const value = try bin.readU32At(data, table_offset + offset + index * 4);
         if (value == 0 or value == 0xffffffff) continue;
         const bitfield_offset: usize = @intCast(value);
         if (bitfield_offset < subtable_count * 4 or bitfield_offset > coverage_table_len or bitfield_len > coverage_table_len - bitfield_offset) return error.BadSfnt;
-        consumed = @max(consumed, bitfield_offset + bitfield_len);
     }
-    if (consumed != coverage_table_len) return error.BadSfnt;
 }
 
 fn readChain(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, chain: ChainHeader) Error!Chain {
@@ -266,15 +259,15 @@ test "morx exposes chain feature and subtable metadata" {
     try std.testing.expectEqualSlices(u8, &.{ 0x12, 0x34, 0x56, 0x78 }, parsed.chains[0].subtables[0].data);
 }
 
-test "morx rejects unsorted feature records" {
+test "morx accepts duplicate and unsorted feature records from system fonts" {
     var bytes: [64]u8 = .{0} ** 64;
     writeU16(&bytes, 0, 2);
     writeU32(&bytes, 4, 1);
-    writeU32(&bytes, 12, 56);
+    writeU32(&bytes, 12, 52);
     writeU32(&bytes, 16, 2);
     writeU16(&bytes, 24, 2);
     writeU16(&bytes, 26, 0);
     writeU16(&bytes, 36, 1);
     writeU16(&bytes, 38, 0);
-    try std.testing.expectError(error.BadSfnt, validate(&bytes, 0, bytes.len, 2));
+    try validate(&bytes, 0, bytes.len, 2);
 }

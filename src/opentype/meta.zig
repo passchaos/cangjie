@@ -13,17 +13,9 @@ pub const Record = struct {
 
 pub fn validate(data: []const u8, offset: usize, length: usize) Error!void {
     const h = try header(data, offset, length);
-    var previous_tag: ?[4]u8 = null;
-    var previous_end: usize = h.data_offset;
     for (0..h.count) |index| {
         const record = try recordAt(data, offset, length, index);
-        if (previous_tag) |tag| {
-            if (std.mem.order(u8, &tag, &record.tag) != .lt) return error.BadSfnt;
-        }
-        previous_tag = record.tag;
         if (record.offset < h.data_offset) return error.BadSfnt;
-        if (record.offset < previous_end) return error.BadSfnt;
-        previous_end = record.offset + record.data.len;
     }
 }
 
@@ -114,4 +106,24 @@ test "meta rejects explicit data offset that overlaps records" {
     };
 
     try std.testing.expectError(error.BadSfnt, validate(&bytes, 0, bytes.len));
+}
+
+test "meta accepts duplicate tags and shared data slices from system fonts" {
+    const bytes = [_]u8{
+        0, 0, 0, 1, // version
+        0, 0, 0, 0, // flags
+        0, 0, 0, 40, // dataOffset
+        0,   0,   0,   2, // numDataMaps
+        's', 'l', 'n', 'g',
+        0, 0, 0, 40, // dataOffset
+        0,   0,   0,   4, // dataLength
+        'd', 'l', 'n', 'g',
+        0, 0, 0, 40, // dataOffset, intentionally shared
+        0,   0,   0,   4, // dataLength
+        'l', 'a', 't', 'n',
+    };
+
+    try validate(&bytes, 0, bytes.len);
+    const data = (try dataForTag(&bytes, 0, bytes.len, .{ 'd', 'l', 'n', 'g' })).?;
+    try std.testing.expectEqualStrings("latn", data);
 }

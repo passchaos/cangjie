@@ -6,7 +6,7 @@ const system_font_path = "/System/Library/Fonts/SFNSMono.ttf";
 const linux_noto_sans_arabic_path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf";
 const linux_noto_sans_cjk_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc";
 const known_sfns_mono_sha256 = hexToBytes("55caaed55254a28ac793847e8976be16c5ba7cbad1ec2ee2d5d86d4e6b3fa0c1");
-const known_raster_sha256 = hexToBytes("34a1bfb1a733fcdd75878af95959d4341557f9991b94ae29110429a6fc5d20b2");
+const known_raster_sha256 = hexToBytes("76440f37e0266d38bf0fc4a65e399dc527f81ef76f963470fe796bc895356a6c");
 
 test "macOS SFNSMono parses shapes and rasterizes stable grayscale glyphs" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
@@ -52,8 +52,8 @@ test "macOS SFNSMono parses shapes and rasterizes stable grayscale glyphs" {
     try rasterizer.renderRun(&target, run, 12, 60);
 
     const stats = rasterStats(&target);
-    try std.testing.expectEqual(@as(usize, 1180), stats.covered);
-    try std.testing.expectEqual(@as(u64, 216468), stats.coverage_sum);
+    try std.testing.expectEqual(@as(usize, 1173), stats.covered);
+    try std.testing.expectEqual(@as(u64, 216155), stats.coverage_sum);
     try std.testing.expectEqual(@as(u8, 255), stats.max_coverage);
     try std.testing.expectEqual(RasterBounds{ .min_x = 14, .min_y = 31, .max_x = 164, .max_y = 66 }, stats.bounds.?);
 

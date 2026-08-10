@@ -50,6 +50,11 @@ zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font ~/Work/
 zig build shape-bench -Doptimize=ReleaseFast -- --engine harfbuzz --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 ```
 
+HarfBuzz reference runs require `-Denable-harfbuzz=true`. If the local
+`~/Work/harfbuzz` checkout is installed into an isolated prefix, pass
+`-Dharfbuzz-prefix=/path/to/prefix`; otherwise the build uses
+`pkg-config harfbuzz`.
+
 Use `--profile` for targeting only. Profile mode applies Arabic GSUB feature
 stages separately, so it is not the final performance number for the cached
 feature-plan hot path.
@@ -137,12 +142,13 @@ from the local HarfBuzz 14.3 checkout. System HarfBuzz 8.3 differs on the
 already-retained Batak `U+1BC7,U+1BF3,U+1BF3` case by omitting the second
 dotted circle; that older behavior is not used as the parity target.
 
-The `harfbuzz` engine links the system HarfBuzz C library in-process and is the
-preferred HarfBuzz timing baseline when the local development environment has
-`pkg-config harfbuzz` available. It supports the shared `--enable-feature` /
-`--disable-feature` overrides, `--glyph-summary` output, and
-`compare-harfbuzz`, so focused HarfBuzz/Cangjie feature-diff fixtures can be
-built without shelling out to `hb-shape`.
+The `harfbuzz` engine links a HarfBuzz C library in-process and is the
+preferred HarfBuzz timing baseline. Enable it with `-Denable-harfbuzz=true`;
+use `-Dharfbuzz-prefix` for an isolated local checkout install, or rely on
+`pkg-config harfbuzz` when HarfBuzz is installed system-wide. It supports the
+shared `--enable-feature` / `--disable-feature` overrides, `--glyph-summary`
+output, and `compare-harfbuzz`, so focused HarfBuzz/Cangjie feature-diff
+fixtures can be built without shelling out to `hb-shape`.
 
 The `harfrust` engine shells out to `hr-shape` once per sample and uses
 `hr-shape -n` for measured iterations. It is useful for batch output parity and

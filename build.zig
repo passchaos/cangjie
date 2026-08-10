@@ -3,6 +3,10 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const enable_harfbuzz = b.option(bool, "enable-harfbuzz", "Build shape-bench with the HarfBuzz reference engine") orelse false;
+    const harfbuzz_prefix = b.option([]const u8, "harfbuzz-prefix", "Prefix containing HarfBuzz include/ and lib/");
+    const harfbuzz_include_dir = b.option([]const u8, "harfbuzz-include-dir", "Directory containing hb.h and hb-ot.h");
+    const harfbuzz_lib_dir = b.option([]const u8, "harfbuzz-lib-dir", "Directory containing libharfbuzz");
     const imx_dep = b.dependency("imx", .{
         .target = target,
         .optimize = optimize,
@@ -107,30 +111,52 @@ pub fn build(b: *std.Build) void {
         reflow_bench_cmd.addArgs(args);
     }
 
-    const harfbuzz_c = b.addTranslateC(.{
-        .root_source_file = b.path("tools/shape_bench/harfbuzz.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    harfbuzz_c.linkSystemLibrary("harfbuzz", .{});
-
     const freetype_c = b.addTranslateC(.{
         .root_source_file = b.path("tools/glyph_bench/freetype.h"),
         .target = target,
         .optimize = optimize,
     });
-    freetype_c.addSystemIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
-    freetype_c.linkSystemLibrary("freetype", .{});
+    freetype_c.linkSystemLibrary("freetype2", .{ .use_pkg_config = .force });
 
+    const shape_bench_options = b.addOptions();
+    shape_bench_options.addOption(bool, "enable_harfbuzz", enable_harfbuzz);
     const shape_bench_mod = b.createModule(.{
         .root_source_file = b.path("tools/shape_bench.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "cangjie", .module = mod },
-            .{ .name = "harfbuzz", .module = harfbuzz_c.createModule() },
+            .{ .name = "shape_bench_options", .module = shape_bench_options.createModule() },
         },
     });
+    if (enable_harfbuzz) {
+        const harfbuzz_c = b.addTranslateC(.{
+            .root_source_file = b.path("tools/shape_bench/harfbuzz.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        if (harfbuzz_prefix) |prefix| {
+            const include_dir = b.fmt("{s}/include/harfbuzz", .{prefix});
+            const lib_dir = b.fmt("{s}/lib", .{prefix});
+            harfbuzz_c.addSystemIncludePath(.{ .cwd_relative = include_dir });
+            shape_bench_mod.addLibraryPath(.{ .cwd_relative = lib_dir });
+            shape_bench_mod.addRPath(.{ .cwd_relative = lib_dir });
+        }
+        if (harfbuzz_include_dir) |include_dir| {
+            harfbuzz_c.addSystemIncludePath(.{ .cwd_relative = include_dir });
+        }
+        if (harfbuzz_lib_dir) |lib_dir| {
+            shape_bench_mod.addLibraryPath(.{ .cwd_relative = lib_dir });
+            shape_bench_mod.addRPath(.{ .cwd_relative = lib_dir });
+        }
+        if (harfbuzz_prefix == null and harfbuzz_include_dir == null) {
+            harfbuzz_c.linkSystemLibrary("harfbuzz", .{ .use_pkg_config = .force });
+        }
+        shape_bench_mod.linkSystemLibrary("harfbuzz", .{
+            .use_pkg_config = if (harfbuzz_prefix == null and harfbuzz_lib_dir == null) .force else .no,
+        });
+        shape_bench_mod.addImport("harfbuzz", harfbuzz_c.createModule());
+    }
     if (target.result.os.tag == .macos) {
         shape_bench_mod.linkFramework("CoreFoundation", .{});
         shape_bench_mod.linkFramework("CoreGraphics", .{});

@@ -1157,7 +1157,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `051d92f8bc6ff724511b296c27623f824de256e9.ttf`
   (`U+0075,U+0361,U+034F,U+0301,U+0069`) is retained too, covering a CGJ that
   remains transparent to ordinary mark matching without collapsing the mark
-  sequence incorrectly.
+  sequence incorrectly. The Arabic mark row for
+  `bf962d3202883a820aed019d9b5c1838c2ff69c6.ttf`
+  (`U+0020,U+06CC,U+064E,U+034F,U+0651`) is now retained after native-direction
+  reversal learned to group by HarfBuzz-style grapheme continuation bits rather
+  than only by cluster owner. The related
+  `cee442574141a0304e780b27dd872519f7d229db.ttf` CGJ row still needs a
+  follow-up for Arabic positional forms after native-direction shaping.
 - The focused HarfBuzz in-house `variation-selectors.tests` row for
   `bbc24004e776f348a0f72287d24b0124867ee750.ttf`
   (`U+0066,U+FE00,U+0069`) passes in both upstream modes: by default unsupported

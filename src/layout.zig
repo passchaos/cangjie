@@ -4617,15 +4617,23 @@ fn reverseScratchGlyphOrderForNativeDirection(scratch: *layout_scratch.ShapeScra
     const len = scratch.glyph_ids.items.len;
     if (len < 2) return;
 
-    reverseScratchGlyphRange(scratch, 0, len);
-
     var group_start: usize = 0;
     var index: usize = 1;
     while (index <= len) : (index += 1) {
-        if (index < len and scratchGlyphCluster(scratch, index) == scratchGlyphCluster(scratch, index - 1)) continue;
+        if (index < len and scratchGlyphContinuesNativeGrapheme(scratch, index)) continue;
         reverseScratchGlyphRange(scratch, group_start, index);
         group_start = index;
     }
+    reverseScratchGlyphRange(scratch, 0, len);
+}
+
+fn scratchGlyphContinuesNativeGrapheme(scratch: *const layout_scratch.ShapeScratch, glyph_index: usize) bool {
+    const source_index = if (glyph_index < scratch.glyph_source_indices.items.len)
+        scratch.glyph_source_indices.items[glyph_index]
+    else
+        glyph_index;
+    if (source_index < scratch.codepoints.items.len and unicode.isUnicodeMarkCodepoint(scratch.codepoints.items[source_index])) return true;
+    return scratchGlyphCluster(scratch, glyph_index) == scratchGlyphCluster(scratch, glyph_index - 1);
 }
 
 fn scratchGlyphCluster(scratch: *const layout_scratch.ShapeScratch, glyph_index: usize) usize {

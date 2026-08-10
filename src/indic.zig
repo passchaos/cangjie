@@ -181,7 +181,9 @@ pub fn mergePlaceholderDependentMarks(glyph_cluster_indices: *std.ArrayList(usiz
 }
 
 pub fn mergeTrailingDependentMarks(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
-    if (script_tag != .ory2 and script_tag != .orya and script_tag != .gur2 and script_tag != .guru) return;
+    if (script_tag != .ory2 and script_tag != .orya and
+        script_tag != .gur2 and script_tag != .guru and
+        script_tag != .mlm2 and script_tag != .mlym) return;
     var glyph_index: usize = 0;
     while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
         const source = glyph_source_indices.items[glyph_index];
@@ -1403,6 +1405,21 @@ test "Malayalam logical repha reorders after base" {
 
 test "Malayalam split matra canonical decomposition is available to Indic" {
     try std.testing.expectEqualSlices(u21, &.{ 0x0d47, 0x0d3e }, unicode.canonicalDecomposition(0x0d4b).?);
+}
+
+test "Malayalam split matra components merge with conjunct syllable" {
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3, 6, 9, 9 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3, 4 });
+
+    const codepoints = [_]u21{ 0x0d17, 0x0d4d, 0x0d17, 0x0d47, 0x0d3e };
+    mergeTrailingDependentMarks(&clusters, &sources, &codepoints, .mlm2);
+
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 0 }, clusters.items);
 }
 
 test "Tamil consonant virama marks half source" {

@@ -1495,6 +1495,12 @@ shaping-performance superiority.
   coordinates `0,0.65,0` and `0,0.7,0`. Cangjie now enables `rvrn` by default
   and applies GSUB FeatureVariations condition sets so the low coordinate keeps
   `rvrn_base` while the high coordinate selects `rvrn_subst`.
+- The HarfBuzz in-house `tibetan-vowels.tests` rows for
+  `82f4f3b57bb55344e72e70231380202a52af5805.ttf` are retained for
+  `U+0F68,U+0F72` and `U+0F68,U+0F7F`. Cangjie now applies Tibetan
+  `abvs`/`blws` shaping features by default and keeps Tibetan vowel/sign marks
+  in the base cluster, covering both the `uni0F680F72` ligature and the rnam
+  bcad cluster merge case.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

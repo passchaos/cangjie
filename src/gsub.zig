@@ -2578,6 +2578,7 @@ fn featureEnabled(feature_tag: u32, options: LookupOptions) bool {
         if (override.tag == feature_tag) return override.enabled;
     }
     return defaultFeatureEnabled(feature_tag) or
+        (options.script_tag == .tibt and (feature_tag == unicode.tag("abvs") or feature_tag == unicode.tag("blws"))) or
         (options.vertical and (feature_tag == unicode.tag("vert") or feature_tag == unicode.tag("vrt2"))) or
         (options.text_direction == .ltr and (feature_tag == unicode.tag("ltra") or feature_tag == unicode.tag("ltrm"))) or
         (options.text_direction == .rtl and (feature_tag == unicode.tag("rtla") or feature_tag == unicode.tag("rtlm")));

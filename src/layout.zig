@@ -3596,6 +3596,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
             const source_cluster = if ((codepoint == 0x200d or
+                (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
                 (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint))) and
                 clusters.items.len != 0)
                 clusters.items[clusters.items.len - 1] - cluster_base
@@ -4531,6 +4532,17 @@ fn usesLateGdefMarkZeroing(script_tag: unicode.OpenTypeScriptTag) bool {
 
 fn usesThaiLaoSaraAmPreprocess(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .thai or script_tag == .lao;
+}
+
+fn isTibetanClusterExtender(codepoint: u21) bool {
+    return codepoint == 0x0f35 or
+        codepoint == 0x0f37 or
+        codepoint == 0x0f39 or
+        (codepoint >= 0x0f71 and codepoint <= 0x0f84) or
+        (codepoint >= 0x0f86 and codepoint <= 0x0f87) or
+        (codepoint >= 0x0f8d and codepoint <= 0x0f97) or
+        (codepoint >= 0x0f99 and codepoint <= 0x0fbc) or
+        codepoint == 0x0fc6;
 }
 
 fn isThaiLaoSaraAm(codepoint: u21) bool {

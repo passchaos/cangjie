@@ -27,6 +27,28 @@ const retained_compact_use_gates = [_]struct {
     },
 };
 
+const retained_corpus_parity_gates = [_]struct {
+    font_file: []const u8,
+    text_file: []const u8,
+    direction: []const u8,
+}{
+    .{
+        .font_file = "fonts/Roboto-Regular.ttf",
+        .text_file = "texts/en-words.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_file = "fonts/Amiri-Regular.ttf",
+        .text_file = "texts/fa-words.txt",
+        .direction = "rtl",
+    },
+    .{
+        .font_file = "fonts/SourceSerifVariable-Roman.ttf",
+        .text_file = "texts/en-words.txt",
+        .direction = "ltr",
+    },
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -208,12 +230,15 @@ pub fn build(b: *std.Build) void {
 
     const shaping_parity_smoke_step = b.step("shaping-parity-smoke", "Run retained HarfBuzz shaping parity smoke gates");
     const shaping_use_parity_smoke_step = b.step("shaping-use-parity-smoke", "Run retained HarfBuzz USE fixture parity smoke gates");
+    const shaping_corpus_parity_smoke_step = b.step("shaping-corpus-parity-smoke", "Run retained HarfBuzz Latin, Arabic, and variable-font corpus parity gates");
     if (!enable_harfbuzz) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires -Denable-harfbuzz=true").step);
         shaping_use_parity_smoke_step.dependOn(&b.addFail("shaping-use-parity-smoke requires -Denable-harfbuzz=true").step);
+        shaping_corpus_parity_smoke_step.dependOn(&b.addFail("shaping-corpus-parity-smoke requires -Denable-harfbuzz=true").step);
     } else if (parity_work_root == null) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
         shaping_use_parity_smoke_step.dependOn(&b.addFail("shaping-use-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
+        shaping_corpus_parity_smoke_step.dependOn(&b.addFail("shaping-corpus-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
     } else {
         const work_root = parity_work_root.?;
         const harfrust_benches = b.fmt("{s}/harfrust/harfrust/benches", .{work_root});
@@ -236,6 +261,18 @@ pub fn build(b: *std.Build) void {
             "--direction", "ltr",
         });
         shaping_parity_smoke_step.dependOn(&duployan_parity_cmd.step);
+
+        for (retained_corpus_parity_gates) |gate| {
+            const corpus_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            corpus_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}", .{ harfrust_benches, gate.font_file }),
+                "--text-file", b.fmt("{s}/{s}", .{ harfrust_benches, gate.text_file }),
+                "--direction", gate.direction,
+            });
+            shaping_corpus_parity_smoke_step.dependOn(&corpus_parity_cmd.step);
+        }
+        shaping_parity_smoke_step.dependOn(shaping_corpus_parity_smoke_step);
 
         for (retained_use_fixture_hashes) |hash| {
             const use_parity_cmd = b.addRunArtifact(shape_bench_exe);

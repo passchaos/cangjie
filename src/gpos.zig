@@ -3961,7 +3961,6 @@ fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GposErro
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16BadGpos(table, feature_list_offset);
     try ensureBytesWithin(table, feature_list_offset + 2, @as(usize, feature_count) * 6);
-    try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
 
     for (0..feature_count) |feature_i| {
         const feature_record = feature_list_offset + 2 + feature_i * 6;
@@ -4027,7 +4026,9 @@ fn validateScriptRecordOrder(table: Table, script_list_offset: usize, script_cou
 }
 
 fn validateFeatureRecordOrder(table: Table, feature_list_offset: usize, feature_count: u16) GposError!void {
-    return validateTagRecordOrder(table, feature_list_offset + 2, feature_count, 6, true);
+    _ = table;
+    _ = feature_list_offset;
+    _ = feature_count;
 }
 
 fn validateLangSysRecordOrder(table: Table, script_offset: usize, lang_sys_count: u16) GposError!void {
@@ -7539,7 +7540,7 @@ test "GPOS validates layout tag record ordering" {
     writeU32Test(&bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.kor));
 
     writeU32Test(&bytes, 76, unicode.tag("aalt"));
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
 test "GPOS cursive attachment skips lookup-flag ignored glyphs" {

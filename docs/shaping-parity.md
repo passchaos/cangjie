@@ -1155,6 +1155,15 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   ligature matching like HarfBuzz, then render as zero-advance fallback space.
   The upstream synthetic `--not-found-variation-selector-glyph` option is not yet
   exposed through `shape-bench`.
+- HarfBuzz in-house `positioning-features.tests` rows that `shape-bench` can
+  express now pass focused `compare-harfbuzz`. This includes a real GPOS table
+  whose FeatureList records are not sorted by tag (`kern` before `abvm`);
+  Cangjie now validates feature and lookup references without rejecting that
+  noncanonical but HarfBuzz-tolerated ordering.
+- The focused `positioning-features.tests` mark positioning row for
+  `f79eb71df4e4c9c273b67b89a06e5ff9e3c1f834.ttf`
+  (`U+006D,U+0315`) passes after accepting that noncanonical GPOS FeatureList
+  ordering through parse-time validation.
 - Myanmar now has a dedicated modern `mym2` shaping slice instead of falling
   through generic GSUB. Focused HarfBuzz in-house rows pass for
   `mark-attachment.tests` (`98b7887cff91f722b92a8ff800120954606354f9.ttf`,

@@ -1142,6 +1142,16 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   ordering and CursivePos placement/advance chaining. The remaining USE work is
   to validate other USE scripts and fonts before making a broader USE parity
   claim.
+- Myanmar now has a dedicated modern `mym2` shaping slice instead of falling
+  through generic GSUB. Focused HarfBuzz in-house rows pass for
+  `mark-attachment.tests` (`98b7887cff91f722b92a8ff800120954606354f9.ttf`,
+  `U+100F,U+103C,U+102F,U+1036`) and the simple `myanmar-misc.tests` rows
+  (`065b01e54f35f0d849fd43bd5b936212739a50cb.ttf` `U+101A,U+1035`, plus
+  `a232bb734d4c6c898a44506547d19768f0eba6a6.ttf`
+  `U+1000,U+1031,U+1084`). The slice covers `mym2` cluster ownership, basic
+  Myanmar initial reordering for medial RA and left matras, the `rphf/pref/blwf`
+  `/pstf` stage order, and final `pres/abvs/blws/psts` plus typographic
+  ligature features; full Myanmar syllable-machine coverage is still a follow-up.
 - NotoSansBalinese passes `compare-harfbuzz` for all 43 SHBALI rendering-test
   cases retained in `tests/data/balinese-rendering-tests.txt`, covering USE
   category assignment, syllable cluster ownership, split pre-base vowels,
@@ -1333,6 +1343,11 @@ shaping-performance superiority.
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still
   need retained gates before this can be called broad USE parity.
+- Expand the new Myanmar shaper beyond the current focused `mym2`
+  mark-attachment and simple `myanmar-misc` rows. Kinzi, dotted-circle handling,
+  complex syllable segmentation, older `mymr` fallback behavior, and broader
+  Myanmar/Zawgyi in-house coverage still need retained gates before claiming
+  broad Myanmar parity.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

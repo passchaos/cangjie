@@ -1521,7 +1521,13 @@ shaping-performance superiority.
   gates too: the Indic slice handles `mlm2`/`mlym` categories, source-scoped
   `pref`, formed `virama+ra` pre-base ligature reordering, and the blocked path
   where a contextual `pref` lookup decomposes the ligature back to visible
-  `virama,ra`.
+  `virama,ra`. The Gurmukhi standalone U+0A51 row from
+  `indic-syllable.tests` is retained for
+  `1735326da89f0818cd8c51a0600e9789812c0f94.ttf`, along with the explicit
+  `U+25CC,U+0A51` control row. Cangjie now routes `gur2`/`guru` through the
+  Indic shaper with Gurmukhi-specific consonant, mark, and virama
+  classification so broken Gurmukhi mark clusters receive the HarfBuzz
+  dotted-circle base without duplicating one already present in the input.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

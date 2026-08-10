@@ -15,7 +15,7 @@ const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng, .mlm2, .mlym => true,
+        .dev2, .bng2, .beng, .gur2, .guru, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -298,6 +298,7 @@ pub fn finalFeatureApplications() []const gsub.FeatureApplication {
 fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .bng2, .beng => codepoint == 0x09c7 or codepoint == 0x09c8,
+        .gur2, .guru => codepoint == 0x0a3f,
         .mlm2, .mlym => codepoint == 0x0d46 or codepoint == 0x0d47 or codepoint == 0x0d48,
         else => codepoint == 0x093f,
     };
@@ -305,6 +306,7 @@ fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
 
 fn startsBrokenCluster(codepoints: []const u21, source_index: usize, script_tag: unicode.OpenTypeScriptTag) bool {
     if (source_index != 0 and isIndicSyllableCodepoint(codepoints[source_index - 1], script_tag)) return false;
+    if (source_index != 0 and codepoints[source_index - 1] == 0x25cc) return false;
     if (isIndicConsonant(codepoints[source_index], script_tag) or isIndicIndependentVowel(codepoints[source_index], script_tag)) return false;
     const syllable_end = indicSyllableEnd(codepoints, source_index, script_tag);
     if (syllable_end <= source_index) return false;
@@ -601,6 +603,7 @@ fn isPostHalantConsonant(codepoints: []const u21, source: usize, syllable_start:
 fn isIndicSyllableModifier(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .bng2, .beng => codepoint >= 0x0981 and codepoint <= 0x0983,
+        .gur2, .guru => codepoint >= 0x0a01 and codepoint <= 0x0a03,
         else => codepoint >= 0x0900 and codepoint <= 0x0903,
     };
 }
@@ -627,6 +630,9 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
     return switch (script_tag) {
         .bng2, .beng => (codepoint >= 0x0995 and codepoint <= 0x09b9) or
             (codepoint >= 0x09dc and codepoint <= 0x09df),
+        .gur2, .guru => (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
+            (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
+            (codepoint >= 0x0a72 and codepoint <= 0x0a74),
         .mlm2, .mlym => (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
             (codepoint >= 0x0d54 and codepoint <= 0x0d56) or
             (codepoint >= 0x0d7a and codepoint <= 0x0d7f),
@@ -640,6 +646,9 @@ fn isIndicIndependentVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
         .bng2, .beng => (codepoint >= 0x0985 and codepoint <= 0x0994) or
             codepoint == 0x09e0 or
             codepoint == 0x09e1,
+        .gur2, .guru => (codepoint >= 0x0a05 and codepoint <= 0x0a0a) or
+            (codepoint >= 0x0a0f and codepoint <= 0x0a10) or
+            (codepoint >= 0x0a13 and codepoint <= 0x0a14),
         .mlm2, .mlym => (codepoint >= 0x0d05 and codepoint <= 0x0d14) or
             codepoint == 0x0d60 or
             codepoint == 0x0d61,
@@ -654,6 +663,14 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
         .bng2, .beng => (codepoint >= 0x0981 and codepoint <= 0x0983) or
             (codepoint >= 0x09be and codepoint <= 0x09cc) or
             codepoint == 0x09d7,
+        .gur2, .guru => (codepoint >= 0x0a01 and codepoint <= 0x0a03) or
+            codepoint == 0x0a3c or
+            (codepoint >= 0x0a3e and codepoint <= 0x0a42) or
+            (codepoint >= 0x0a47 and codepoint <= 0x0a48) or
+            (codepoint >= 0x0a4b and codepoint <= 0x0a4d) or
+            codepoint == 0x0a51 or
+            (codepoint >= 0x0a70 and codepoint <= 0x0a71) or
+            codepoint == 0x0a75,
         .mlm2, .mlym => (codepoint >= 0x0d00 and codepoint <= 0x0d03) or
             (codepoint >= 0x0d3b and codepoint <= 0x0d4c) or
             codepoint == 0x0d57,
@@ -667,6 +684,7 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
 fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09cd,
+        .gur2, .guru => 0x0a4d,
         .mlm2, .mlym => 0x0d4d,
         else => 0x094d,
     };
@@ -675,6 +693,7 @@ fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
 fn rephRaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09b0,
+        .gur2, .guru => 0x0a30,
         .mlm2, .mlym => 0x0d30,
         else => 0x0930,
     };
@@ -686,6 +705,84 @@ fn isIndicFormatOrNonspacingMark(codepoint: u21) bool {
 
 fn isJoiner(codepoint: u21) bool {
     return codepoint == 0x200c or codepoint == 0x200d;
+}
+
+test "Gurmukhi standalone udaat inserts dotted circle" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 1);
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.append(std.testing.allocator, 0);
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.append(std.testing.allocator, 0);
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.append(std.testing.allocator, false);
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.append(std.testing.allocator, .{});
+
+    const codepoints = [_]u21{0x0a51};
+    try insertDottedCirclesForBrokenClusters(
+        std.testing.allocator,
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        2,
+        .gur2,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Gurmukhi udaat after explicit dotted circle stays attached" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 2, 1 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{} });
+
+    const codepoints = [_]u21{ 0x25cc, 0x0a51 };
+    try insertDottedCirclesForBrokenClusters(
+        std.testing.allocator,
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        2,
+        .gur2,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }
 
 test "Bengali pre-base matras move before bases and mark init only at word start" {

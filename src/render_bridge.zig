@@ -654,7 +654,7 @@ test "render bridge builds glyph draw commands and deduplicated requests" {
     try std.testing.expectEqual(GlyphAtlasContent.alpha_mask, atlas_key.content);
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), draw_list.glyphs[0].x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 25.0), draw_list.glyphs[0].baseline_y, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 19.0), draw_list.glyphs[1].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20.0), draw_list.glyphs[1].x, 0.001);
     try std.testing.expect(draw_list.cursor != null);
     try std.testing.expectEqual(@as(usize, 1), draw_list.selection.len);
 }

@@ -1199,6 +1199,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   synthesizes late zero-width mark classes for no-GDEF Thai runs, and separates
   mark attachment offset propagation from mark advance zeroing so HarfBuzz's
   zero-advance and preserved-advance fixture variants both match.
+- The default-script legacy `kern` row from HarfBuzz in-house
+  `per-script-kern-fallback.tests` passes for
+  `a04cc6365876308945033b2a49f54afe899e7bf8.ttf`
+  (`U+002E,U+002E`). Cangjie now mirrors HarfBuzz's fallback kern machine by
+  splitting a legacy kern value across the first glyph's advance and the second
+  glyph's advance/offset, while still letting GPOS pair positioning suppress
+  duplicate legacy kern application.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

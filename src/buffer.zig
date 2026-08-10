@@ -893,7 +893,7 @@ test "TextBuffer preserves preferred x across vertical cursor moves" {
 
     try buffer.setCursor(2);
     var cursor = try buffer.cursorRect(config);
-    try std.testing.expectApproxEqAbs(@as(f32, 28.0), cursor.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 29.0), cursor.x, 0.001);
 
     try buffer.moveCursorVertical(config, .next, false);
     try std.testing.expectEqual(@as(usize, 5), buffer.cursor_byte);
@@ -903,7 +903,7 @@ test "TextBuffer preserves preferred x across vertical cursor moves" {
     try buffer.moveCursorVertical(config, .next, false);
     try std.testing.expectEqual(@as(usize, 8), buffer.cursor_byte);
     cursor = try buffer.cursorRect(config);
-    try std.testing.expectApproxEqAbs(@as(f32, 28.0), cursor.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 29.0), cursor.x, 0.001);
 
     try buffer.moveCursorGrapheme(.previous, false);
     try std.testing.expect(buffer.preferred_cursor_x == null);

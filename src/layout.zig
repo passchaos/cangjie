@@ -3950,7 +3950,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     var previous_glyph: ?GlyphId = null;
     var fallback_mark_base: ?fallback_mark.Base = null;
     var adjustment_cursor: usize = 0;
-    const kern_lookup = if (!lookup_options.writing_mode.isVertical() and shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true))
+    const kern_lookup = if (!lookup_options.writing_mode.isVertical() and
+        shouldApplyLegacyKernFallback(lookup_options.script_tag) and
+        shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true))
         try font.kernLookupForShaping()
     else
         null;
@@ -3986,13 +3988,19 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             SourceSpan{ .start = cluster_base, .end = cluster_base };
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id, lookup_options.normalized_variation_coords);
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
+        var kern_x_advance: f32 = 0;
+        var kern_x_offset: f32 = 0;
         if (kern_lookup) |lookup| {
             if (previous_glyph) |previous| {
                 const previous_adjustment = findAdjustmentSorted(gpos_adjustments.items, index - 1, &adjustment_cursor);
                 if (!previous_adjustment.pair_positioned) {
                     const kern = try lookup.kerning(previous, glyph_id);
                     if (kern != 0 and buffer.glyphs.items.len > 0) {
-                        buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern)) * scale;
+                        const kern_1 = kern >> 1;
+                        const kern_2 = kern - kern_1;
+                        buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern_1)) * scale;
+                        kern_x_advance = @as(f32, @floatFromInt(kern_2)) * scale;
+                        kern_x_offset = kern_x_advance;
                     }
                 }
             }
@@ -4057,7 +4065,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const horizontal_advance = if (hide_default_ignorable)
             0
         else
-            (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale;
+            (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale + kern_x_advance;
         const use_sideways_vertical_advance = lookup_options.writing_mode.isVertical() and
             glyphUsesSidewaysAdvance(source_codepoint, lookup_options.text_orientation);
         const vertical_metrics = if (lookup_options.writing_mode.isVertical())
@@ -4124,7 +4132,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         else if (lookup_options.writing_mode.isVertical())
             vertical_x_offset + gpos_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x
         else
-            gpos_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x;
+            gpos_x_offset + kern_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x;
         const output_y_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
             0
         else if (lookup_options.writing_mode.isVertical())
@@ -4320,6 +4328,14 @@ fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
 
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .arab or script_tag == .adlm or script_tag == .mong;
+}
+
+fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {
+    if (indic.shouldShape(script_tag) or use_shaper.shouldShape(script_tag) or myanmar.shouldShape(script_tag)) return false;
+    return switch (script_tag) {
+        .hang, .khmr => false,
+        else => true,
+    };
 }
 
 fn usesLateGdefMarkZeroing(script_tag: unicode.OpenTypeScriptTag) bool {

@@ -7243,8 +7243,8 @@ test "wraps CJK text at character boundaries without spaces" {
     try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
     try std.testing.expectEqual(@as(usize, 2), paragraph.lines[0].glyph_len);
     try std.testing.expectEqual(@as(usize, 1), paragraph.lines[1].glyph_len);
-    try std.testing.expectApproxEqAbs(@as(f32, 28.0), paragraph.lines[0].width, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 16.0), paragraph.lines[1].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 29.0), paragraph.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 15.0), paragraph.lines[1].width, 0.001);
     try std.testing.expectEqual(@as(u21, 0x4e00), paragraph.glyphs[0].codepoint);
     try std.testing.expectEqual(@as(u21, 0x4e01), paragraph.glyphs[1].codepoint);
     try std.testing.expectEqual(@as(u21, 0x4e02), paragraph.glyphs[2].codepoint);
@@ -7709,8 +7709,8 @@ test "applies letter and word spacing during paragraph layout" {
     });
 
     try std.testing.expectEqual(@as(usize, 2), letter_spaced.glyphs.len);
-    try std.testing.expectApproxEqAbs(@as(f32, 16.0), letter_spaced.glyphs[0].x_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 18.0), letter_spaced.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 17.0), letter_spaced.glyphs[0].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 17.0), letter_spaced.glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 34.0), letter_spaced.lines[0].width, 0.001);
 
     const word_spaced = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A A", 20, .{
@@ -8384,7 +8384,7 @@ test "builds debug overlay geometry for paragraph text" {
             },
             .cursor_rect => {
                 saw_cursor = true;
-                try std.testing.expectApproxEqAbs(@as(f32, 14.0), overlay.rect.x, 0.001);
+                try std.testing.expectApproxEqAbs(@as(f32, 15.0), overlay.rect.x, 0.001);
             },
             .selection_rect => saw_selection = true,
             .glyph_box => {

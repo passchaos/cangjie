@@ -8,14 +8,16 @@ const unicode = @import("unicode.zig");
 
 const rphf_feature = unicode.tag("rphf");
 const pref_feature = unicode.tag("pref");
+const blwf_feature = unicode.tag("blwf");
 const half_feature = unicode.tag("half");
 const rphf_source_mask = gsub.sourceFeatureMaskForTag(rphf_feature).?;
 const pref_source_mask = gsub.sourceFeatureMaskForTag(pref_feature).?;
+const blwf_source_mask = gsub.sourceFeatureMaskForTag(blwf_feature).?;
 const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng, .gur2, .guru, .mlm2, .mlym => true,
+        .dev2, .bng2, .beng, .gur2, .guru, .knd2, .knda, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -226,6 +228,7 @@ pub fn reorderRephs(
             index,
             script_tag,
         );
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, @min(index, target), @max(index, target) + 1);
         shaping_metadata.move(
             glyph_ids,
             glyph_source_indices,
@@ -246,6 +249,7 @@ const pre_reorder_feature_applications = [_]gsub.FeatureApplication{
 
 const basic_feature_applications_without_reph = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("rkrf") },
+    .{ .tag = blwf_feature, .source_scoped = true },
     .{ .tag = half_feature, .source_scoped = true },
     .{ .tag = unicode.tag("cjct") },
 };
@@ -253,6 +257,7 @@ const basic_feature_applications_without_reph = [_]gsub.FeatureApplication{
 const basic_feature_applications_with_reph = [_]gsub.FeatureApplication{
     .{ .tag = rphf_feature, .source_scoped = true },
     .{ .tag = unicode.tag("rkrf") },
+    .{ .tag = blwf_feature, .source_scoped = true },
     .{ .tag = half_feature, .source_scoped = true },
     .{ .tag = unicode.tag("cjct") },
 };
@@ -299,9 +304,50 @@ fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .bng2, .beng => codepoint == 0x09c7 or codepoint == 0x09c8,
         .gur2, .guru => codepoint == 0x0a3f,
+        .knd2, .knda => codepoint == 0x0cbf,
         .mlm2, .mlym => codepoint == 0x0d46 or codepoint == 0x0d47 or codepoint == 0x0d48,
         else => codepoint == 0x093f,
     };
+}
+
+pub fn normalizeInitialConsonantSyllableOrder(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (script_tag != .knd2 and script_tag != .knda) return;
+    if (codepoints.len < 3) return;
+    if (codepoints[0] != rephRaCodepoint(script_tag) or
+        codepoints[1] != viramaCodepoint(script_tag) or
+        codepoints[2] != 0x200d)
+    {
+        return;
+    }
+
+    const halant_glyph = glyphIndexForSource(glyph_source_indices.items, 1) orelse return;
+    const zwj_glyph = glyphIndexForSource(glyph_source_indices.items, 2) orelse return;
+    if (zwj_glyph <= halant_glyph) return;
+    shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, halant_glyph, zwj_glyph + 1);
+    shaping_metadata.move(
+        glyph_ids,
+        glyph_source_indices,
+        glyph_cluster_indices,
+        glyph_substituted,
+        ligature_components,
+        zwj_glyph,
+        halant_glyph,
+    );
+}
+
+fn glyphIndexForSource(sources: []const usize, target_source: usize) ?usize {
+    for (sources, 0..) |source, glyph_index| {
+        if (source == target_source) return glyph_index;
+    }
+    return null;
 }
 
 fn startsBrokenCluster(codepoints: []const u21, source_index: usize, script_tag: unicode.OpenTypeScriptTag) bool {
@@ -322,8 +368,14 @@ fn hasInitialReph(codepoints: []const u21, syllable_start: usize, syllable_end: 
 }
 
 fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
-    if (script_tag != .dev2) return false;
     var marked = false;
+    if (script_tag == .knd2 or script_tag == .knda) {
+        if (markKannadaRaHalfSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
+            marked = true;
+        }
+        return marked;
+    }
+    if (script_tag != .dev2) return false;
     const base_source = halfBaseSource(codepoints, syllable_start, syllable_end, script_tag);
     var index = syllable_start;
     while (index + 1 < syllable_end) : (index += 1) {
@@ -336,6 +388,34 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         marked = true;
     }
     return marked;
+}
+
+fn markKannadaRaHalfSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (syllable_start + 2 >= syllable_end) return false;
+    if (codepoints[syllable_start] != rephRaCodepoint(script_tag)) return false;
+
+    const virama_source: usize = if (codepoints[syllable_start + 1] == viramaCodepoint(script_tag))
+        syllable_start + 1
+    else if (codepoints[syllable_start + 1] == 0x200d and
+        syllable_start + 2 < syllable_end and
+        codepoints[syllable_start + 2] == viramaCodepoint(script_tag))
+        syllable_start + 2
+    else
+        return false;
+    const consonant_source = nextConsonantSource(codepoints, virama_source + 1, syllable_end, script_tag) orelse return false;
+    source_features[syllable_start] |= half_source_mask;
+    source_features[virama_source] |= blwf_source_mask;
+    source_features[virama_source] |= half_source_mask;
+    source_features[consonant_source] |= half_source_mask;
+    return true;
+}
+
+fn nextConsonantSource(codepoints: []const u21, start: usize, end: usize, script_tag: unicode.OpenTypeScriptTag) ?usize {
+    var index = start;
+    while (index < end) : (index += 1) {
+        if (isIndicConsonant(codepoints[index], script_tag)) return index;
+    }
+    return null;
 }
 
 fn markPrefSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
@@ -604,6 +684,7 @@ fn isIndicSyllableModifier(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
     return switch (script_tag) {
         .bng2, .beng => codepoint >= 0x0981 and codepoint <= 0x0983,
         .gur2, .guru => codepoint >= 0x0a01 and codepoint <= 0x0a03,
+        .knd2, .knda => codepoint >= 0x0c82 and codepoint <= 0x0c83,
         else => codepoint >= 0x0900 and codepoint <= 0x0903,
     };
 }
@@ -633,6 +714,8 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
         .gur2, .guru => (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
             (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
             (codepoint >= 0x0a72 and codepoint <= 0x0a74),
+        .knd2, .knda => (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
+            codepoint == 0x0cde,
         .mlm2, .mlym => (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
             (codepoint >= 0x0d54 and codepoint <= 0x0d56) or
             (codepoint >= 0x0d7a and codepoint <= 0x0d7f),
@@ -649,6 +732,11 @@ fn isIndicIndependentVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
         .gur2, .guru => (codepoint >= 0x0a05 and codepoint <= 0x0a0a) or
             (codepoint >= 0x0a0f and codepoint <= 0x0a10) or
             (codepoint >= 0x0a13 and codepoint <= 0x0a14),
+        .knd2, .knda => (codepoint >= 0x0c85 and codepoint <= 0x0c8c) or
+            (codepoint >= 0x0c8e and codepoint <= 0x0c90) or
+            (codepoint >= 0x0c92 and codepoint <= 0x0c94) or
+            codepoint == 0x0ce0 or
+            codepoint == 0x0ce1,
         .mlm2, .mlym => (codepoint >= 0x0d05 and codepoint <= 0x0d14) or
             codepoint == 0x0d60 or
             codepoint == 0x0d61,
@@ -671,6 +759,14 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
             codepoint == 0x0a51 or
             (codepoint >= 0x0a70 and codepoint <= 0x0a71) or
             codepoint == 0x0a75,
+        .knd2, .knda => codepoint == 0x0c81 or
+            (codepoint >= 0x0c82 and codepoint <= 0x0c83) or
+            codepoint == 0x0cbc or
+            (codepoint >= 0x0cbe and codepoint <= 0x0cc4) or
+            (codepoint >= 0x0cc6 and codepoint <= 0x0cc8) or
+            (codepoint >= 0x0cca and codepoint <= 0x0ccd) or
+            (codepoint >= 0x0cd5 and codepoint <= 0x0cd6) or
+            (codepoint >= 0x0ce2 and codepoint <= 0x0ce3),
         .mlm2, .mlym => (codepoint >= 0x0d00 and codepoint <= 0x0d03) or
             (codepoint >= 0x0d3b and codepoint <= 0x0d4c) or
             codepoint == 0x0d57,
@@ -685,6 +781,7 @@ fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09cd,
         .gur2, .guru => 0x0a4d,
+        .knd2, .knda => 0x0ccd,
         .mlm2, .mlym => 0x0d4d,
         else => 0x094d,
     };
@@ -694,6 +791,7 @@ fn rephRaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09b0,
         .gur2, .guru => 0x0a30,
+        .knd2, .knda => 0x0cb0,
         .mlm2, .mlym => 0x0d30,
         else => 0x0930,
     };
@@ -782,6 +880,73 @@ test "Gurmukhi udaat after explicit dotted circle stays attached" {
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Kannada initial ra virama ZWJ normalizes for legacy half form" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2, 3, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0, 3 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0cb0, 0x0ccd, 0x200d, 0x0c95 };
+    normalizeInitialConsonantSyllableOrder(
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        .knd2,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 2, 4 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 1, 3 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 3 }, clusters.items);
+}
+
+test "Indic reph reorder merges Kannada syllable clusters" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 5, 1 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 6 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ true, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.append(std.testing.allocator, try ligatures.addLigature(std.testing.allocator, &.{ 0, 1 }));
+    try ligatures.infos.append(std.testing.allocator, .{});
+
+    const codepoints = [_]u21{ 0x0cb0, 0x0ccd, 0x0c95 };
+    reorderRephs(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .knd2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 5 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 0 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }
 

@@ -1528,6 +1528,13 @@ shaping-performance superiority.
   Indic shaper with Gurmukhi-specific consonant, mark, and virama
   classification so broken Gurmukhi mark clusters receive the HarfBuzz
   dotted-circle base without duplicating one already present in the input.
+  The three Kannada `indic-special-cases.tests` rows for
+  `3cae6bfe5b57c07ba81ddbd54c02fe4f3a1e3bf6.ttf` are retained for
+  `U+0CB0,U+0CCD,U+0C95`, `U+0CB0,U+200D,U+0CCD,U+0C95`, and
+  `U+0CB0,U+0CCD,U+200D,U+0C95`; Cangjie now routes `knd2`/`knda` through the
+  Indic shaper, uses Kannada's virama and consonant/mark classes, preserves
+  HarfBuzz's Kannada `Ra+Halant+ZWJ` compatibility ordering, and merges the
+  formed reph cluster across the syllable.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

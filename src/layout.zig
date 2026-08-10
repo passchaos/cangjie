@@ -3978,6 +3978,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 dotted_circle_glyph,
                 lookup_options.script_tag,
             );
+            indic.normalizeInitialConsonantSyllableOrder(
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                codepoints.items,
+                lookup_options.script_tag,
+            );
 
             try source_features.resize(buffer.allocator, codepoints.items.len);
             try source_pref_substituted.resize(buffer.allocator, codepoints.items.len);

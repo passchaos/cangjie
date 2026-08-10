@@ -312,7 +312,7 @@ fn devanagariSyllableStart(codepoints: []const u21, source_index: usize) usize {
 fn isFormedReph(store: *const ligature_provenance.Store, info: ligature_provenance.Info, source_index: usize, codepoints: []const u21) bool {
     if (source_index + 1 >= codepoints.len) return false;
     if (codepoints[source_index] != 0x0930 or codepoints[source_index + 1] != 0x094d) return false;
-    if (info.component_count < 2 or info.multiplied) return false;
+    if (info.component_count < 2 or info.flags.multiplied) return false;
     const sources = store.componentSources(info) orelse return false;
     return sources[0] == source_index and sources[1] == source_index + 1;
 }

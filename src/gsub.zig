@@ -3971,7 +3971,10 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
             .{}
     else
         .{};
-    if (inserted_len > 1) component_info.multiplied = true;
+    if (inserted_len > 1) {
+        component_info.flags.multiplied = true;
+        component_info.flags.multiple_component = 0;
+    }
     if (options.glyph_source_indices) |sources| {
         if (glyph_index <= sources.items.len) {
             const remove_count = @min(removed_len, sources.items.len - glyph_index);
@@ -4019,7 +4022,10 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
             // halant) and later mark attachment. Preserve that provenance
             // across every replacement component instead of resetting it to a
             // one-source glyph.
-            @memset(replacements, component_info);
+            for (replacements, 0..) |*replacement, replacement_index| {
+                replacement.* = component_info;
+                replacement.flags.multiple_component = @intCast(@min(replacement_index, 0x0f));
+            }
             try store.infos.replaceRange(allocator, glyph_index, remove_count, replacements);
         }
     }
@@ -4065,17 +4071,17 @@ fn ligatureComponentInfoForMatch(
     component_sources[0] = sourceForGlyph(options, glyph_index);
     var synthetic_base = false;
     if (glyph_index < store.infos.items.len) {
-        synthetic_base = store.infos.items[glyph_index].synthetic_base;
+        synthetic_base = store.infos.items[glyph_index].flags.synthetic_base;
     }
     for (1..component_count) |component_index| {
         const matched_index = glyph_index + match.component_offsets[component_index];
         insertLigatureComponentSource(component_sources[0..], component_index, sourceForGlyph(options, matched_index));
         if (matched_index < store.infos.items.len) {
-            synthetic_base = synthetic_base or store.infos.items[matched_index].synthetic_base;
+            synthetic_base = synthetic_base or store.infos.items[matched_index].flags.synthetic_base;
         }
     }
     var info = try store.addLigature(allocator, component_sources[0..component_count]);
-    info.synthetic_base = synthetic_base;
+    info.flags.synthetic_base = synthetic_base;
     return info;
 }
 
@@ -9564,8 +9570,10 @@ test "GSUB multiple substitution preserves ligature provenance" {
     try std.testing.expectEqualSlices(bool, &.{ true, true }, stage_substituted.items);
     try std.testing.expectEqual(@as(u8, 2), components.infos.items[0].component_count);
     try std.testing.expectEqual(@as(u8, 2), components.infos.items[1].component_count);
-    try std.testing.expect(components.infos.items[0].multiplied);
-    try std.testing.expect(components.infos.items[1].multiplied);
+    try std.testing.expect(components.infos.items[0].flags.multiplied);
+    try std.testing.expect(components.infos.items[1].flags.multiplied);
+    try std.testing.expectEqual(@as(u4, 0), components.infos.items[0].flags.multiple_component);
+    try std.testing.expectEqual(@as(u4, 1), components.infos.items[1].flags.multiple_component);
     try std.testing.expectEqual(
         components.infos.items[0].source_start,
         components.infos.items[1].source_start,
@@ -11790,7 +11798,7 @@ test "GSUB ligature preserves synthetic base provenance" {
     var components = ligature_provenance.Store{};
     defer components.deinit(allocator);
     try components.infos.appendSlice(allocator, &.{
-        .{ .synthetic_base = true },
+        .{ .flags = .{ .synthetic_base = true } },
         .{},
     });
 
@@ -11799,7 +11807,7 @@ test "GSUB ligature preserves synthetic base provenance" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{40}, glyphs.items);
-    try std.testing.expect(components.infos.items[0].synthetic_base);
+    try std.testing.expect(components.infos.items[0].flags.synthetic_base);
 }
 
 test "GSUB ligature accelerator preserves preference and ignored component offsets" {

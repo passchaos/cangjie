@@ -2,6 +2,19 @@ const std = @import("std");
 
 pub const max_components = 64;
 
+pub const StchAction = enum(u2) {
+    none,
+    fixed,
+    repeating,
+};
+
+pub const Flags = packed struct(u8) {
+    multiplied: bool = false,
+    synthetic_base: bool = false,
+    multiple_component: u4 = 0,
+    stch_action: StchAction = .none,
+};
+
 /// Per-glyph ligature provenance.
 ///
 /// Ordinary glyphs use the all-default value and do not consume source-pool
@@ -16,13 +29,9 @@ pub const Info = struct {
     /// Number of logical source components represented by this glyph. OpenType
     /// limits supported ligatures to `max_components`.
     component_count: u8 = 1,
-    /// MultipleSubst decomposed a glyph after ligation. Each output shares the
-    /// source slice but must not be mistaken for an intact Indic reph.
-    multiplied: bool = false,
-    /// A script shaper inserted this base without adding an original scalar.
-    /// Its borrowed source must not make fallback mark classification treat the
-    /// synthetic base itself as a mark.
-    synthetic_base: bool = false,
+    /// Compact per-glyph flags and small counters. MultipleSubst uses the
+    /// component index for mark handling and Arabic/Syriac `stch` parity.
+    flags: Flags = .{},
 
     pub fn isLigature(self: Info) bool {
         return self.component_count > 1;
@@ -132,7 +141,7 @@ test "ligature handles share immutable component source slices" {
     defer store.deinit(std.testing.allocator);
 
     var info = try store.addLigature(std.testing.allocator, &.{ 2, 5, 9 });
-    info.multiplied = true;
+    info.flags.multiplied = true;
     try store.infos.appendSlice(std.testing.allocator, &.{ info, info });
 
     try std.testing.expectEqualSlices(usize, &.{ 2, 5, 9 }, store.componentSources(store.infos.items[0]).?);

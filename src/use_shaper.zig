@@ -409,7 +409,7 @@ pub fn insertDottedCirclesForBrokenSyllables(
             source,
             glyph_cluster_indices.items[glyph_index],
         );
-        ligature_components.infos.items[insert_index].synthetic_base = true;
+        ligature_components.infos.items[insert_index].flags.synthetic_base = true;
         if (insert_index <= glyph_index) glyph_index += 1;
     }
 }
@@ -1015,7 +1015,7 @@ test "USE inserts a dotted circle into each broken syllable" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 23, 58, 66, 128 }, glyph_ids.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 2 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, cluster_owners.items);
-    try std.testing.expect(components.infos.items[3].synthetic_base);
+    try std.testing.expect(components.infos.items[3].flags.synthetic_base);
 }
 
 test "USE dotted circle follows a pref-substituted broken-cluster glyph" {

@@ -1459,6 +1459,14 @@ shaping-performance superiority.
 - Retain broader default-ignorable coverage. The currently passing focused
   `default-ignorables.tests` rows cover CGJ/Arabic and ZWJ/mark interactions,
   but broader upstream default-ignorable combinations still need retained gates.
+- Arabic/Syriac stretch shaping now runs the HarfBuzz-style `stch` GSUB stage
+  before positional Arabic features, records MultipleSubst component parity as
+  fixed/repeating tiles, and stretches those tiles in the final glyph stream
+  using font-unit advances and overlap arithmetic. The three upstream
+  `arabic-stch.tests` rows for
+  `507637795ce4f2975593da54d12b46f76c7cc4cc.ttf` and
+  `d9b8bc10985f24796826c29f7ccba3d0ae11ec02.ttf` are retained as inline
+  HarfBuzz parity gates.
 - Arabic-like joining now includes Adlam in the Arabic-style positional shaper:
   the HarfBuzz in-house `arabic-like-joining.tests` Adlam long joining row for
   `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` passes. The same in-house

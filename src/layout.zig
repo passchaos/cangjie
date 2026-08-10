@@ -3445,6 +3445,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const source_rphf_substituted = &scratch.source_rphf_substituted;
     const source_pref_substituted = &scratch.source_pref_substituted;
     const glyph_output_indices = &scratch.glyph_output_indices;
+    const stch_actions = &scratch.stch_actions;
 
     const shape_profile = buffer.shape_profile;
     const profile_io = buffer.profile_io;
@@ -3753,18 +3754,34 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         var joining_options = gsub_options;
         joining_options.source_features = source_features.items;
 
+        if (shapingFeatureEnabled(unicode.tag("stch"), lookup_options.features, true)) {
+            try applyGsubFeatureApplicationsForShaping(
+                font,
+                buffer,
+                gsub_after_proof,
+                &.{.{ .tag = unicode.tag("stch"), .auto_zwj = false }},
+                glyph_ids,
+                joining_options,
+                gdef_metadata.*,
+            );
+            recordStchActions(ligature_components);
+        }
+
         // Unicode Arabic joining forms are position-scoped and must run after
         // canonical/localized substitutions but before required ligatures.
         // Keeping the order explicit mirrors the OpenType Arabic shaping plan
         // without globally enabling mutually-exclusive form features.
-        var applications_buf: [12]gsub.FeatureApplication = undefined;
+        var applications_buf: [15]gsub.FeatureApplication = undefined;
         var application_count: usize = 0;
         const planned_features = [_]gsub.FeatureApplication{
             .{ .tag = unicode.tag("ccmp"), .auto_zwj = false },
             .{ .tag = unicode.tag("locl"), .auto_zwj = false },
             .{ .tag = unicode.tag("isol"), .source_scoped = true, .auto_zwj = false },
             .{ .tag = unicode.tag("fina"), .source_scoped = true, .auto_zwj = false },
+            .{ .tag = unicode.tag("fin2"), .source_scoped = true, .auto_zwj = false },
+            .{ .tag = unicode.tag("fin3"), .source_scoped = true, .auto_zwj = false },
             .{ .tag = unicode.tag("medi"), .source_scoped = true, .auto_zwj = false },
+            .{ .tag = unicode.tag("med2"), .source_scoped = true, .auto_zwj = false },
             .{ .tag = unicode.tag("init"), .source_scoped = true, .auto_zwj = false },
             .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
             .{ .tag = unicode.tag("calt"), .auto_zwj = false },
@@ -4084,6 +4101,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             }
         }
         const adjustment = findAdjustmentSorted(gpos_adjustments.items, index, &adjustment_cursor);
+        const stch_action: ligature_provenance.StchAction = if (index < ligature_components.infos.items.len)
+            ligature_components.infos.items[index].flags.stch_action
+        else
+            .none;
         const adjustment_x_advance = if (adjustment.x_advance_absolute)
             @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
         else
@@ -4120,7 +4141,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             glyph_class,
             has_gdef_glyph_classes,
             source_codepoint,
-            index < ligature_components.infos.items.len and ligature_components.infos.items[index].synthetic_base,
+            index < ligature_components.infos.items.len and ligature_components.infos.items[index].flags.synthetic_base,
             mark_attachment,
             has_gpos_positioning,
             lookup_options,
@@ -4229,6 +4250,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .y_offset = output_y_offset,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
+        const stch_context_flag: u8 = if (stchContextCodepoint(source_codepoint)) 0x80 else 0;
+        try stch_actions.append(buffer.allocator, @intFromEnum(stch_action) | stch_context_flag);
         if (has_gpos_attachments and !hide_default_ignorable) {
             attachment_links.items[index] = attachmentLinkForAdjustment(adjustment);
         }
@@ -4249,6 +4272,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             lookup_options,
         );
     }
+    try applyStchToSegment(
+        buffer.allocator,
+        &buffer.glyphs,
+        stch_actions.items,
+        segment_glyph_start,
+        lookup_options.direction == .rtl,
+        scale,
+        font,
+        metrics_cache,
+        lookup_options.normalized_variation_coords,
+    );
     if (shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl) {
         std.mem.reverse(GlyphPosition, buffer.glyphs.items[segment_glyph_start..]);
     }
@@ -4460,7 +4494,7 @@ fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
 }
 
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .arab or script_tag == .adlm or script_tag == .mong;
+    return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong;
 }
 
 fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {
@@ -4532,11 +4566,15 @@ fn explicitOptionalFeatureApplications(out: []gsub.FeatureApplication, overrides
 }
 
 fn explicitOptionalFeatureShouldRun(feature: u32) bool {
-    return feature != unicode.tag("ccmp") and
+    return feature != unicode.tag("stch") and
+        feature != unicode.tag("ccmp") and
         feature != unicode.tag("locl") and
         feature != unicode.tag("isol") and
         feature != unicode.tag("fina") and
+        feature != unicode.tag("fin2") and
+        feature != unicode.tag("fin3") and
         feature != unicode.tag("medi") and
+        feature != unicode.tag("med2") and
         feature != unicode.tag("init") and
         feature != unicode.tag("rlig") and
         feature != unicode.tag("calt") and
@@ -4861,6 +4899,269 @@ fn propagateGlyphAttachmentOffsets(glyphs: []GlyphPosition, links: []attachment.
     };
     const axis: attachment.Axis = if (options.writing_mode.isVertical()) .vertical else .horizontal;
     attachment.propagateOffsets(GlyphPosition, glyphs, links, direction, axis);
+}
+
+fn recordStchActions(ligature_components: *ligature_provenance.Store) void {
+    for (ligature_components.infos.items) |*info| {
+        if (!info.flags.multiplied) continue;
+        info.flags.stch_action = if (info.flags.multiple_component % 2 == 0)
+            .fixed
+        else
+            .repeating;
+    }
+}
+
+fn applyStchToSegment(
+    allocator: std.mem.Allocator,
+    glyphs: *std.ArrayList(GlyphPosition),
+    stch_actions: []const u8,
+    segment_start: usize,
+    rtl: bool,
+    scale: f32,
+    font: *const Font,
+    metrics_cache: ?*GlyphMetricsCache,
+    normalized_variation_coords: []const f32,
+) !void {
+    const segment_len = glyphs.items.len - segment_start;
+    if (segment_len == 0 or stch_actions.len != segment_len) return;
+
+    var has_stch = false;
+    for (stch_actions) |raw_action| {
+        if (stchActionFromInt(raw_action) != .none) {
+            has_stch = true;
+            break;
+        }
+    }
+    if (!has_stch) return;
+
+    var extra_glyphs_needed: usize = 0;
+    var i = segment_len;
+    while (i > 0) {
+        if (stchActionFromInt(stch_actions[i - 1]) == .none) {
+            i -= 1;
+            continue;
+        }
+        const metrics = try measureStchRun(font, metrics_cache, normalized_variation_coords, glyphs.items[segment_start..], stch_actions, i, rtl, scale);
+        extra_glyphs_needed += metrics.n_copies * metrics.n_repeating;
+        i = metrics.start;
+    }
+
+    const old_len = glyphs.items.len;
+    const new_len = old_len + extra_glyphs_needed;
+    try glyphs.ensureUnusedCapacity(allocator, extra_glyphs_needed);
+    const source = glyphs.items[segment_start..old_len];
+    var output = std.ArrayList(GlyphPosition).empty;
+    defer output.deinit(allocator);
+    try output.ensureTotalCapacity(allocator, segment_len + extra_glyphs_needed);
+
+    i = 0;
+    while (i < segment_len) {
+        if (stchActionFromInt(stch_actions[i]) == .none) {
+            output.appendAssumeCapacity(source[i]);
+            i += 1;
+            continue;
+        }
+        const metrics = try measureStchRun(font, metrics_cache, normalized_variation_coords, source, stch_actions, stchRunEnd(stch_actions, i), rtl, scale);
+        try appendStchRun(font, metrics_cache, normalized_variation_coords, source[metrics.start..metrics.end], stch_actions[metrics.start..metrics.end], metrics, rtl, scale, &output);
+        i = metrics.end;
+    }
+
+    glyphs.items.len = new_len;
+    @memcpy(glyphs.items[segment_start .. segment_start + output.items.len], output.items);
+}
+
+const StchRunMetrics = struct {
+    start: usize,
+    end: usize,
+    w_remaining_units: i32,
+    extra_repeat_overlap_units: i32,
+    n_repeating: usize,
+    n_copies: usize,
+};
+
+fn measureStchRun(
+    font: *const Font,
+    metrics_cache: ?*GlyphMetricsCache,
+    normalized_variation_coords: []const f32,
+    segment: []const GlyphPosition,
+    stch_actions: []const u8,
+    end: usize,
+    rtl: bool,
+    scale: f32,
+) !StchRunMetrics {
+    var i = end;
+    var w_total: i32 = 0;
+    var w_fixed: i32 = 0;
+    var w_repeating: i32 = 0;
+    var n_fixed: usize = 0;
+    var n_repeating: usize = 0;
+
+    while (i > 0 and stchActionFromInt(stch_actions[i - 1]) != .none) {
+        i -= 1;
+        const width = try stchGlyphAdvanceUnits(font, metrics_cache, normalized_variation_coords, segment[i].glyph_id);
+        switch (stchActionFromInt(stch_actions[i])) {
+            .fixed => {
+                w_fixed += width;
+                n_fixed += 1;
+            },
+            .repeating => {
+                w_repeating += width;
+                n_repeating += 1;
+            },
+            .none => {},
+        }
+    }
+    const start = i;
+    if (rtl) {
+        var context = end;
+        while (context < segment.len and stchActionFromInt(stch_actions[context]) == .none and stchContextFromInt(stch_actions[context])) : (context += 1) {
+            w_total += floatToFontUnits(segment[context].x_advance, scale);
+        }
+    } else {
+        var context = i;
+        while (context > 0 and stchActionFromInt(stch_actions[context - 1]) == .none and stchContextFromInt(stch_actions[context - 1])) {
+            context -= 1;
+            w_total += floatToFontUnits(segment[context].x_advance, scale);
+        }
+    }
+
+    var w_remaining = w_total - w_fixed;
+    var n_copies: usize = 0;
+    if (w_remaining > w_repeating and w_repeating > 0) {
+        n_copies = @intCast(@divTrunc(w_remaining, w_repeating) - 1);
+    }
+
+    var extra_repeat_overlap: i32 = 0;
+    const shortfall = w_remaining - w_repeating * @as(i32, @intCast(n_copies + 1));
+    if (shortfall > 0 and n_repeating > 0) {
+        n_copies += 1;
+        const excess = @as(i32, @intCast(n_copies + 1)) * w_repeating - w_remaining;
+        if (excess > 0) {
+            extra_repeat_overlap = @divTrunc(excess, @as(i32, @intCast(n_copies * n_repeating)));
+            w_remaining = 0;
+        }
+    }
+
+    const stch_max_glyphs = 256;
+    var max_copies: usize = 0;
+    if (n_repeating > 0) {
+        const base_glyphs = n_fixed + n_repeating;
+        if (base_glyphs < stch_max_glyphs) max_copies = (stch_max_glyphs - base_glyphs) / n_repeating;
+    }
+    n_copies = @min(n_copies, max_copies);
+
+    return .{
+        .start = start,
+        .end = end,
+        .w_remaining_units = w_remaining,
+        .extra_repeat_overlap_units = extra_repeat_overlap,
+        .n_repeating = n_repeating,
+        .n_copies = n_copies,
+    };
+}
+
+fn stchRunEnd(stch_actions: []const u8, start: usize) usize {
+    var end = start;
+    while (end < stch_actions.len and stchActionFromInt(stch_actions[end]) != .none) : (end += 1) {}
+    return end;
+}
+
+fn appendStchRun(
+    font: *const Font,
+    metrics_cache: ?*GlyphMetricsCache,
+    normalized_variation_coords: []const f32,
+    run: []const GlyphPosition,
+    actions: []const u8,
+    metrics: StchRunMetrics,
+    rtl: bool,
+    scale: f32,
+    output: *std.ArrayList(GlyphPosition),
+) !void {
+    var x_offset_units: i32 = @divTrunc(metrics.w_remaining_units, 2);
+    if (!rtl and x_offset_units > 0) x_offset_units = 0;
+    const overlap_units = metrics.extra_repeat_overlap_units;
+    if (rtl) {
+        var k = run.len;
+        while (k > 0) {
+            k -= 1;
+            try appendStchGlyphCopies(font, metrics_cache, normalized_variation_coords, run[k], stchActionFromInt(actions[k]), metrics.n_copies, rtl, &x_offset_units, overlap_units, scale, output);
+        }
+        std.mem.reverse(GlyphPosition, output.items[output.items.len - (run.len + metrics.n_copies * metrics.n_repeating) ..]);
+    } else {
+        for (run, actions) |glyph, raw_action| {
+            try appendStchGlyphCopies(font, metrics_cache, normalized_variation_coords, glyph, stchActionFromInt(raw_action), metrics.n_copies, rtl, &x_offset_units, overlap_units, scale, output);
+        }
+    }
+}
+
+fn appendStchGlyphCopies(
+    font: *const Font,
+    metrics_cache: ?*GlyphMetricsCache,
+    normalized_variation_coords: []const f32,
+    glyph: GlyphPosition,
+    action: ligature_provenance.StchAction,
+    n_copies: usize,
+    rtl: bool,
+    x_offset_units: *i32,
+    overlap_units: i32,
+    scale: f32,
+    output: *std.ArrayList(GlyphPosition),
+) !void {
+    const repeat = if (action == .repeating) 1 + n_copies else 1;
+    const width_units = try stchGlyphAdvanceUnits(font, metrics_cache, normalized_variation_coords, glyph.glyph_id);
+    var copy_index: usize = 0;
+    while (copy_index < repeat) : (copy_index += 1) {
+        var item = glyph;
+        item.x_advance = 0;
+        if (rtl) {
+            x_offset_units.* -= width_units;
+            if (copy_index > 0) x_offset_units.* += overlap_units;
+        }
+        item.x_offset = @as(f32, @floatFromInt(x_offset_units.*)) * scale;
+        output.appendAssumeCapacity(item);
+        if (!rtl) {
+            x_offset_units.* += width_units;
+            if (copy_index > 0) x_offset_units.* -= overlap_units;
+        }
+    }
+}
+
+fn stchGlyphAdvanceUnits(font: *const Font, metrics_cache: ?*GlyphMetricsCache, normalized_variation_coords: []const f32, glyph_id: GlyphId) !i32 {
+    const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id, normalized_variation_coords);
+    return metrics.advance_width;
+}
+
+fn floatToFontUnits(value: f32, scale: f32) i32 {
+    if (scale == 0) return 0;
+    return @intFromFloat(@round(value / scale));
+}
+
+fn stchActionFromInt(value: u8) ligature_provenance.StchAction {
+    return switch (value & 0x03) {
+        @intFromEnum(ligature_provenance.StchAction.fixed) => .fixed,
+        @intFromEnum(ligature_provenance.StchAction.repeating) => .repeating,
+        else => .none,
+    };
+}
+
+fn stchContextFromInt(value: u8) bool {
+    return (value & 0x80) != 0;
+}
+
+fn stchContextCodepoint(codepoint: u21) bool {
+    return codepoint == 0x070f or
+        unicode.isDefaultIgnorableForShaping(codepoint) or
+        arabicStchWordCodepoint(codepoint);
+}
+
+fn arabicStchWordCodepoint(codepoint: u21) bool {
+    if (unicode.isUnicodeMarkCodepoint(codepoint) or unicode.isSpacingMarkCodepoint(codepoint)) return true;
+    if (isShapeNativeDirectionDecimalNumber(codepoint)) return true;
+    return switch (unicode.joiningTypeForCodepoint(codepoint)) {
+        .non_joining => false,
+        .transparent => false,
+        else => true,
+    };
 }
 
 fn shapingDirectionForGpos(options: LookupOptions) TextDirection {

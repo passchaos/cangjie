@@ -1164,6 +1164,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `f79eb71df4e4c9c273b67b89a06e5ff9e3c1f834.ttf`
   (`U+006D,U+0315`) passes after accepting that noncanonical GPOS FeatureList
   ordering through parse-time validation.
+- HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
+  express now include the Miao/Pollard fixture
+  `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`
+  (`U+16F0A,U+16F57,U+16F8F`). TrueType subset faces with stale `maxp.maxZones`
+  values remain loadable for shaping, and Miao vowel/tone signs stay in the
+  base glyph's UTF-8 cluster, matching HarfBuzz's USE category data for
+  dependent vowels and tone marks.
 - Myanmar now has a dedicated modern `mym2` shaping slice instead of falling
   through generic GSUB. Focused HarfBuzz in-house rows pass for
   `mark-attachment.tests` (`98b7887cff91f722b92a8ff800120954606354f9.ttf`,

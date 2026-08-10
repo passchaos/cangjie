@@ -6037,13 +6037,6 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
             // trusted glyph-count/summary contract is consumed identically by
             // parsers that borrow table bytes and by consumers that cache it.
             if (maxp.length != 32) return error.BadSfnt;
-            const max_zones = try bin.readU16At(data, maxp.offset + 14);
-            // maxZones is one of the few maxp v1 maxima with a fixed semantic
-            // range: TrueType programs may use either the glyph zone alone or
-            // the glyph plus twilight zone. Rejecting other values during face
-            // load keeps malformed hinting metadata from being mistaken for an
-            // unbounded interpreter resource count.
-            if (max_zones != 1 and max_zones != 2) return error.BadSfnt;
         },
         .opentype_cff => {
             // CFF-backed OpenType fonts use maxp version 0.5, whose contract is
@@ -16834,29 +16827,21 @@ test "maxp table version and length must match the outline format" {
     }
 }
 
-test "TrueType maxp maxZones is validated at parse time" {
+test "TrueType maxp maxZones is tolerated for shaping compatibility" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
-    {
+    inline for (.{ 0, 1, 2, 3 }) |max_zones| {
         const bytes = try test_font.buildMinimalTtf(allocator);
         defer allocator.free(bytes);
         const maxp_offset = try sfntTableOffset(bytes, "maxp");
-        writeU16Test(bytes, maxp_offset + 14, 1);
+        // OpenType restricts maxZones to 1 or 2, but HarfBuzz/FreeType tolerate
+        // shaping-only subset fonts with stale hinting maxima. Keep the field
+        // readable in maxpInfo(), but do not reject an otherwise usable face.
+        writeU16Test(bytes, maxp_offset + 14, max_zones);
         try updateSfntTableChecksum(bytes, "maxp");
         var font = try Font.parse(allocator, bytes);
         font.deinit();
-    }
-
-    inline for (.{ 0, 3 }) |bad_max_zones| {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const maxp_offset = try sfntTableOffset(bytes, "maxp");
-        // OpenType restricts maxZones to the glyph zone alone (1) or glyph
-        // plus twilight zone (2). Values outside that set are malformed, not
-        // larger production-font resource requests.
-        writeU16Test(bytes, maxp_offset + 14, bad_max_zones);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
 }
 

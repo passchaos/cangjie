@@ -4012,6 +4012,17 @@ test "grapheme clusters keep Myanmar dependent signs with their base letters" {
     try std.testing.expectEqualStrings("ကွာ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
 }
 
+test "grapheme clusters keep Miao vowel and tone signs with their base letters" {
+    const allocator = std.testing.allocator;
+
+    const text = "\u{16f0a}\u{16f57}\u{16f8f}";
+    const clusters = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+
+    try std.testing.expectEqual(@as(usize, 1), clusters.len);
+    try std.testing.expectEqualStrings(text, text[clusters[0].byte_start..][0..clusters[0].byte_len]);
+}
+
 test "halfwidth katakana voiced marks stay in kana grapheme and script runs" {
     const allocator = std.testing.allocator;
 
@@ -6554,6 +6565,10 @@ fn isSpacingMark(codepoint: u21) bool {
         // syllable for caret placement and shaping lookup boundaries.
         (codepoint >= 0x1c24 and codepoint <= 0x1c2b) or
         (codepoint >= 0x1c34 and codepoint <= 0x1c35) or
+        // Miao / Pollard script vowel and tone signs are encoded after the base
+        // letter but HarfBuzz's USE data keeps them in one shaping cluster.
+        (codepoint >= 0x16f51 and codepoint <= 0x16f87) or
+        (codepoint >= 0x16f8f and codepoint <= 0x16f92) or
         // Javanese spacing signs include dependent vowels, consonant signs,
         // and U+A9C0 PANGKON. These visible signs still belong to the base
         // aksara for grapheme, word, and shaping-boundary purposes.

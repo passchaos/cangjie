@@ -1538,7 +1538,12 @@ shaping-performance superiority.
   `U+0CB0,U+0CCD,U+200D,U+0C95`; Cangjie now routes `knd2`/`knda` through the
   Indic shaper, uses Kannada's virama and consonant/mark classes, preserves
   HarfBuzz's Kannada `Ra+Halant+ZWJ` compatibility ordering, and merges the
-  formed reph cluster across the syllable. The Telugu `indic-special-cases.tests`
+  formed reph cluster across the syllable. The Kannada placeholder row
+  `U+0C80,U+0C82` from `indic-syllable.tests` is retained for
+  `81c368a33816fb20e9f647e8f24e2180f4720263.ttf`; Cangjie now treats U+0C80
+  as a HarfBuzz placeholder/base and merges the following dependent mark into
+  its shaping cluster instead of inserting a dotted circle. The Telugu
+  `indic-special-cases.tests`
   word `U+0C1A,U+0C3F,U+0C32,U+0C4D,U+0C15,U+0C42,U+0C30,U+0C4D` now has a
   retained gate for `e716f6bd00a108d186b7e9f47b4515565f784f36.ttf`; Cangjie
   routes `tel2`/`telu` through the Indic shaper, applies Telugu `blwf`/`abvs`

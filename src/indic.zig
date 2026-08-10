@@ -167,6 +167,19 @@ pub fn insertDottedCirclesForBrokenClusters(
     }
 }
 
+pub fn mergePlaceholderDependentMarks(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source == 0 or source >= codepoints.len) continue;
+        if (!isIndicDependentMark(codepoints[source], script_tag)) continue;
+        const previous = source - 1;
+        if (!isIndicPlaceholderBase(codepoints[previous], script_tag)) continue;
+        const previous_glyph = glyphIndexForSource(glyph_source_indices.items, previous) orelse continue;
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, @min(previous_glyph, glyph_index), @max(previous_glyph, glyph_index) + 1);
+    }
+}
+
 pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) bool {
     @memset(source_features, 0);
     var marked = false;
@@ -812,6 +825,13 @@ fn isIndicBase(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return isIndicConsonant(codepoint, script_tag) or isIndicIndependentVowel(codepoint, script_tag);
 }
 
+fn isIndicPlaceholderBase(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    return switch (script_tag) {
+        .knd2, .knda => codepoint == 0x0c80,
+        else => false,
+    };
+}
+
 fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .bng2, .beng => (codepoint >= 0x0995 and codepoint <= 0x09b9) or
@@ -822,7 +842,8 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
         .tel2, .telu => (codepoint >= 0x0c15 and codepoint <= 0x0c39) or
             codepoint == 0x0c58 or
             codepoint == 0x0c59,
-        .knd2, .knda => (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
+        .knd2, .knda => codepoint == 0x0c80 or
+            (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
             codepoint == 0x0cde,
         .tml2, .taml => (codepoint >= 0x0b95 and codepoint <= 0x0bb9) or
             (codepoint >= 0x0bd0 and codepoint <= 0x0bd7) or
@@ -1090,6 +1111,60 @@ test "Indic reph reorder merges Kannada syllable clusters" {
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 5 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 2, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Kannada placeholder prevents broken mark dotted circle" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0c80, 0x0c82 };
+    try insertDottedCirclesForBrokenClusters(
+        std.testing.allocator,
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        3,
+        .knd2,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Kannada placeholder merges dependent mark cluster" {
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3 });
+
+    const codepoints = [_]u21{ 0x0c80, 0x0c82 };
+    mergePlaceholderDependentMarks(&clusters, &sources, &codepoints, .knd2);
+
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }
 

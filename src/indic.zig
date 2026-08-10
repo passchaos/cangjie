@@ -290,6 +290,46 @@ pub fn reorderRephs(
     }
 }
 
+pub fn reorderLogicalRepha(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (script_tag != .mlm2 and script_tag != .mlym) return;
+    if (codepoints.len < 2 or codepoints[0] != 0x0d4e) return;
+
+    const repha_glyph = glyphIndexForSource(glyph_source_indices.items, 0) orelse return;
+    const syllable_end = if (codepoints.len > 1)
+        indicSyllableEnd(codepoints, 1, script_tag)
+    else
+        1;
+    const target = logicalRephaTargetGlyph(glyph_source_indices.items, codepoints, syllable_end, script_tag) orelse return;
+    if (target <= repha_glyph) return;
+    shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, repha_glyph, target + 1);
+    shaping_metadata.move(
+        glyph_ids,
+        glyph_source_indices,
+        glyph_cluster_indices,
+        glyph_substituted,
+        ligature_components,
+        repha_glyph,
+        target,
+    );
+}
+
+fn logicalRephaTargetGlyph(sources: []const usize, codepoints: []const u21, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) ?usize {
+    var target: ?usize = null;
+    for (sources, 0..) |source, glyph_index| {
+        if (source == 0 or source >= syllable_end or source >= codepoints.len) continue;
+        if (isIndicBase(codepoints[source], script_tag)) target = glyph_index;
+    }
+    return target;
+}
+
 pub fn reorderBeforeSubscriptVowels(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
@@ -1330,6 +1370,35 @@ test "Malayalam post-base virama consonant marks pstf source" {
     try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .mlm2));
     try std.testing.expectEqual(pstf_source_mask, features[1]);
     try std.testing.expectEqual(@as(u32, 0), features[2]);
+}
+
+test "Malayalam logical repha reorders after base" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 12, 2 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0d4e, 0x0d15 };
+    reorderLogicalRepha(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .mlm2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 12 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }
 
 test "Tamil consonant virama marks half source" {

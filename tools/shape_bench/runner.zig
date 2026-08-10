@@ -343,6 +343,11 @@ fn indicSyllableClusters(allocator: std.mem.Allocator, text: []const u8) ![]cons
 
         if (codepoint == 0x094d) {
             saw_virama = true;
+        } else if (saw_virama and codepoint == 0x200c) {
+            try appendIndicSyllable(&clusters, allocator, text, syllable_start.?, syllable_end);
+            syllable_start = null;
+            saw_virama = false;
+            saw_post_virama_consonant = false;
         } else if (saw_virama and isDevanagariConsonant(codepoint)) {
             saw_post_virama_consonant = true;
             saw_virama = false;

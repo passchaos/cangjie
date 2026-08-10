@@ -719,6 +719,7 @@ fn indicSyllableEnd(codepoints: []const u21, start: usize, script_tag: unicode.O
         const codepoint = codepoints[index];
         if (!isIndicSyllableCodepoint(codepoint, script_tag)) break;
         if (index != start and isIndicBase(codepoint, script_tag) and !saw_virama) break;
+        if (saw_virama and codepoint == 0x200c) return index + 1;
 
         saw_virama = if (codepoint == viramaCodepoint(script_tag))
             true
@@ -1500,6 +1501,35 @@ test "Bengali pre-base matras move before bases and mark init only at word start
     const init_mask = gsub.sourceFeatureMaskForTag(unicode.tag("init")).?;
     try std.testing.expectEqual(init_mask, source_features[1]);
     try std.testing.expectEqual(@as(u32, 0), source_features[3]);
+}
+
+test "Devanagari ZWNJ after virama terminates pre-base matra target" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 2, 9, 1, 3, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3, 4 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 6, 9, 9 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x091f, 0x094d, 0x200c, 0x092f, 0x093f };
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .dev2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 9, 1, 4, 3 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 4, 3 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 6, 9, 9 }, clusters.items);
 }
 
 test "Malayalam pref ligature reorders after pre-base matra" {

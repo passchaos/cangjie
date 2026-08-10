@@ -1561,7 +1561,11 @@ shaping-performance superiority.
   `U+0B13,U+200D,U+0B01` and `U+0B13,U+200C,U+0B01`; Cangjie now routes
   `ory2`/`orya` through the Indic shaper so ZWJ can trigger the `abvs`
   candrabindu ligature, while the ZWNJ row keeps the dependent mark in the
-  joiner's shaping cluster.
+  joiner's shaping cluster. The legacy Kannada `indic-old-spec.tests` row for
+  `57a9d9f83020155cbb1d2be1f43d82388cbecc88.ttf` is retained for
+  `U+0C9A,U+0CCD,U+0C9A,U+0CCD`; Cangjie now marks the trailing old-spec
+  Kannada `consonant+virama` source for `blwf` and merges it into the syllable
+  cluster, while the first pair remains the visible `haln` form.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

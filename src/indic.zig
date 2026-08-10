@@ -198,6 +198,21 @@ pub fn mergeTrailingDependentMarks(glyph_cluster_indices: *std.ArrayList(usize),
     }
 }
 
+pub fn mergeKannadaOldSpecTrailingBlwf(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
+    if (script_tag != .knda) return;
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source < 2 or source >= codepoints.len) continue;
+        if (!isIndicConsonant(codepoints[source], script_tag)) continue;
+        if (source + 1 >= codepoints.len or codepoints[source + 1] != viramaCodepoint(script_tag)) continue;
+        const syllable_start = indicSyllableStart(codepoints, source, script_tag);
+        if (syllable_start >= source) continue;
+        const first_glyph = firstGlyphInSourceRange(glyph_source_indices.items, syllable_start, source) orelse continue;
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, first_glyph, glyph_index + 1);
+    }
+}
+
 pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) bool {
     @memset(source_features, 0);
     var marked = false;
@@ -488,6 +503,9 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
     }
     if (script_tag == .knd2 or script_tag == .knda) {
         if (markKannadaRaHalfSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
+            marked = true;
+        }
+        if (script_tag == .knda and markPreBaseConsonantViramaSources(source_features, codepoints, syllable_start + 1, syllable_end, script_tag, blwf_source_mask)) {
             marked = true;
         }
         return marked;
@@ -1228,6 +1246,25 @@ test "Kannada placeholder merges dependent mark cluster" {
     const codepoints = [_]u21{ 0x0c80, 0x0c82 };
     mergePlaceholderDependentMarks(&clusters, &sources, &codepoints, .knd2);
 
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Kannada old-spec trailing consonant virama uses blwf cluster" {
+    var features = [_]u32{0} ** 4;
+    const codepoints = [_]u21{ 0x0c9a, 0x0ccd, 0x0c9a, 0x0ccd };
+
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .knda));
+    try std.testing.expectEqual(blwf_source_mask, features[2]);
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 6 });
+
+    mergeKannadaOldSpecTrailingBlwf(&clusters, &sources, &codepoints, .knda);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }
 

@@ -246,6 +246,15 @@ pub fn build(b: *std.Build) void {
                 "--direction", "ltr",
             });
             shaping_use_parity_smoke_step.dependOn(&use_parity_cmd.step);
+
+            const use_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            use_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}.ttf", .{ harfbuzz_in_house_fonts, hash }),
+                "--text-file", b.fmt("tests/data/use/{s}.txt", .{hash}),
+                "--direction", "ltr",
+            });
+            shaping_use_parity_smoke_step.dependOn(&use_harfrust_parity_cmd.step);
         }
         for (retained_compact_use_gates) |gate| {
             const compact_use_parity_cmd = b.addRunArtifact(shape_bench_exe);
@@ -256,6 +265,15 @@ pub fn build(b: *std.Build) void {
                 "--direction", "ltr",
             });
             shaping_use_parity_smoke_step.dependOn(&compact_use_parity_cmd.step);
+
+            const compact_use_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            compact_use_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}.ttf", .{ harfbuzz_in_house_fonts, gate.font_hash }),
+                "--text-file", gate.text_file,
+                "--direction", "ltr",
+            });
+            shaping_use_parity_smoke_step.dependOn(&compact_use_harfrust_parity_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_use_parity_smoke_step);
     }

@@ -138,9 +138,8 @@ Two additional upstream gates close the remaining compact USE test sets:
   all 27 inputs from that upstream test now have a local corpus gate.
 
 `zig build shaping-use-parity-smoke -Doptimize=ReleaseFast -Denable-harfbuzz=true`
-runs the full `tests/data/use/*.txt` HarfBuzz gate plus these two compact extra
-HarfBuzz gates. Run the compact extra gates against `compare-harfrust` as well
-when changing USE shaping semantics. The Tai Tham slice specifically covers
+runs the full `tests/data/use/*.txt` gate plus these two compact extra gates
+against both HarfBuzz and HarfRust. The Tai Tham slice specifically covers
 independent SAKOT grapheme boundaries, three adjacent USE syllables,
 broken-syllable dotted circle insertion without GDEF classes, and a synthetic
 base retaining its advance instead of inheriting the broken mark's fallback

@@ -1485,8 +1485,10 @@ shaping-performance superiority.
 - Expand the new Myanmar shaper beyond the current focused `mym2`
   mark-attachment and simple `myanmar-misc` rows. Kinzi, dotted-circle handling,
   complex syllable segmentation, older `mymr` fallback behavior, and broader
-  Myanmar/Zawgyi in-house coverage still need retained gates before claiming
-  broad Myanmar parity.
+  Myanmar in-house coverage still need retained gates before claiming broad
+  Myanmar parity. The in-house `myanmar-zawgyi.tests` `Qaag` row now passes by
+  treating Myanmar Zawgyi as HarfBuzz does: a script tag with auto shaping,
+  normalization, zero-width-mark handling, and fallback positioning disabled.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

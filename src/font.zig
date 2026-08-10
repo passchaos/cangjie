@@ -7254,10 +7254,16 @@ fn validateKernFormat0SearchParameters(data: []const u8, pair_count: u16) FontEr
 
 fn isPostGlyphName(name: []const u8) bool {
     for (name) |byte| {
-        if (std.ascii.isAlphanumeric(byte) or byte == '.' or byte == '_' or byte == '-') continue;
+        if (std.ascii.isAlphanumeric(byte) or byte == ' ' or byte == '.' or byte == '_' or byte == '-') continue;
         return false;
     }
     return true;
+}
+
+test "post glyph names accept printable fixture spaces but reject controls" {
+    try std.testing.expect(isPostGlyphName("Dot Below"));
+    try std.testing.expect(isPostGlyphName("Virama-Killer"));
+    try std.testing.expect(!isPostGlyphName("Dot\tBelow"));
 }
 
 fn hmtxRequiredLength(glyph_count: u16, number_of_h_metrics: u16) FontError!usize {

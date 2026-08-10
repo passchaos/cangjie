@@ -796,6 +796,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     thai = tag("thai"),
     lao = tag("lao "),
     khmr = tag("khmr"),
+    qaag = tag("Qaag"),
     mym2 = tag("mym2"),
     mymr = tag("mymr"),
     dev3 = tag("dev3"),

@@ -480,9 +480,26 @@ fn featureApplicationsEqual(a: []const gsub.FeatureApplication, b: []const gsub.
         if (a_application.tag != b_application.tag or
             a_application.source_scoped != b_application.source_scoped or
             a_application.auto_zwnj != b_application.auto_zwnj or
-            a_application.auto_zwj != b_application.auto_zwj) return false;
+            a_application.auto_zwj != b_application.auto_zwj or
+            a_application.match_source_syllable != b_application.match_source_syllable) return false;
     }
     return true;
+}
+
+test "feature plan cache distinguishes syllable-scoped applications" {
+    const global = [_]gsub.FeatureApplication{
+        .{ .tag = unicode.tag("rphf"), .source_scoped = true },
+    };
+    const syllable_scoped = [_]gsub.FeatureApplication{
+        .{
+            .tag = unicode.tag("rphf"),
+            .source_scoped = true,
+            .match_source_syllable = true,
+        },
+    };
+
+    try std.testing.expect(featureApplicationsEqual(&global, &global));
+    try std.testing.expect(!featureApplicationsEqual(&global, &syllable_scoped));
 }
 
 const GlyphMetricsKey = struct {

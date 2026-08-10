@@ -930,6 +930,27 @@ Current local snapshot after the Nastaliq parity work:
   retired work remained effectively flat, with no stable cycles regression.
   Full Devanagari, Roboto, SourceSerifVariable, and Amiri corpora retained
   HarfBuzz/HarfRust parity, as did the retained USE differential matrix.
+- All explicit script-shaper stages now reuse cached `FeatureLookupPlan`
+  records after the GSUB table has been proven, extending the existing Arabic
+  path to Indic and USE. The immutable plan preserves required-feature and
+  authored lookup order plus source-feature, joiner, and source-syllable flags,
+  while removing repeated ScriptList/LangSys/FeatureList walks from every stage
+  of every word. The plan cache's exact application comparison now also
+  includes `match_source_syllable`, preventing otherwise-identical global and
+  syllable-scoped stages from aliasing. Fixed CPU-8 B/A/A/B timing reduced
+  NotoSansDevanagari `hi-words` from `1125.249` to `1005.963 ns/glyph`,
+  about `10.60%`; fixed CPU-30 B/A/A/B reduced `1339.402` to
+  `1194.031 ns/glyph`, about `10.85%`. Interleaved hardware-counter runs on
+  both cores reduced retired instructions by about `13.76%` and branches by
+  about `21.4%`; cycles fell by about `13.22%` on CPU 8 and `10.49%` on
+  CPU 30. The post-change Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix leaves
+  Cangjie about `28.74%` slower on the stable CPU-8 run; the CPU-30 reverse
+  matrix observed about a `34%` gap, with its first HarfBuzz sample showing
+  transient frequency noise. Full Devanagari and the ten retained USE corpora,
+  the Indic3/Tai Tham compact gates, the 94-case vowel-letter-spoofing corpus,
+  Roboto, SourceSerifVariable, and Amiri retained dual-reference parity.
+  Fixed-core Roboto, SourceSerifVariable, and Amiri word-list timings stayed
+  within about `0.61%` of their baselines and mostly improved slightly.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open
@@ -1150,8 +1171,11 @@ workload-dependent conclusion:
   `17.52%` faster on CPU 30.
 - Amiri `fa-thelittleprince` was about `14.86%` faster on CPU 8 but about
   `0.51%` slower on CPU 30, which is effectively the boundary of run noise.
-- NotoSansDevanagari `hi-words` remained about `42.89%` slower on CPU 8 and
-  `52.23%` slower on CPU 30.
+- Before the later cross-stage feature-plan reuse, NotoSansDevanagari
+  `hi-words` was about `42.89%` slower on CPU 8 and `52.23%` slower on CPU
+  30. The later matrix above reduced the stable CPU-8 gap to about `28.74%`;
+  Indic therefore remains the largest shaping-performance deficit, but the
+  older percentages are no longer the current state.
 
 These are serial same-host Cangjie/HarfBuzz/HarfBuzz/Cangjie measurements, not
 cross-machine headlines. Latin and selected Arabic/variable-font paths now have

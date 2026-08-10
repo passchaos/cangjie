@@ -3950,7 +3950,26 @@ fn applyGsubFeatureApplicationsForShaping(
     gdef_metadata: GdefLookupMetadata,
 ) !void {
     if (applications.len == 0) return;
-    if (gsub_after_proof) {
+    if (gsub_after_proof and buffer.lookup_selection_cache != null) {
+        // Explicit script shapers apply several ordered feature stages to each
+        // word. Cache the immutable Script/LangSys/FeatureList resolution just
+        // as the Arabic path already does; the plan preserves stage order and
+        // per-application source/joiner/syllable flags while avoiding repeated
+        // table walks on every stage of every word.
+        const plan = try buffer.lookup_selection_cache.?.gsubFeatureLookupPlan(
+            font,
+            applications,
+            options,
+            gdef_metadata,
+        );
+        try font.applyGsubFeatureLookupPlanUsingGdefAfterProof(
+            plan,
+            glyph_ids,
+            buffer.allocator,
+            options,
+            gdef_metadata,
+        );
+    } else if (gsub_after_proof) {
         try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications, glyph_ids, buffer.allocator, options, gdef_metadata);
     } else {
         try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyph_ids, buffer.allocator, options, gdef_metadata);

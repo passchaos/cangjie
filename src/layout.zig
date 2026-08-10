@@ -3472,13 +3472,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                         continue;
                     }
                     const selector_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint);
-                    if (selector_glyph == 0) {
-                        source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
-                        continue;
-                    }
+                    has_default_ignorable = true;
+                    source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
                     glyph_ids.appendAssumeCapacity(selector_glyph);
                     codepoints.appendAssumeCapacity(codepoint);
-                    const source_cluster = if (lookup_options.direction == .rtl and clusters.items.len != 0)
+                    const source_cluster = if (clusters.items.len != 0)
                         clusters.items[clusters.items.len - 1] - cluster_base
                     else
                         cluster;
@@ -3973,11 +3971,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
         const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
         const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint) and !was_substituted;
+        const skip_default_ignorable = hide_default_ignorable and
+            (invisible_glyph_id == 0 or
+                (glyph_id == 0 and isVariationSelector(source_codepoint) and
+                    !variationSelectorFallbackShouldRender(index, source_index, ligature_components)));
         // HarfBuzz removes an untouched default-ignorable when the font has no
         // usable invisible/space glyph. Do this after GPOS so the character was
         // still available to every contextual lookup, then remap attachment
         // links below for the compacted output stream.
-        if (hide_default_ignorable and invisible_glyph_id == 0) {
+        if (skip_default_ignorable) {
             previous_glyph = glyph_id;
             continue;
         }
@@ -4605,6 +4607,13 @@ fn glyphUsesSidewaysAdvance(_: u21, orientation: TextOrientation) bool {
 fn isVariationSelector(codepoint: u21) bool {
     return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
         (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
+}
+
+fn variationSelectorFallbackShouldRender(glyph_index: usize, source_index: usize, ligature_components: *const ligature_provenance.Store) bool {
+    if (glyph_index == 0 or glyph_index - 1 >= ligature_components.infos.items.len) return false;
+    const sources = ligature_components.componentSources(ligature_components.infos.items[glyph_index - 1]) orelse return false;
+    if (sources.len <= 1) return false;
+    return source_index > sources[0] and source_index < sources[sources.len - 1];
 }
 
 fn mirroredCodepointForRtlShaping(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21, lookup_options: LookupOptions) !u21 {

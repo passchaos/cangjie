@@ -3935,8 +3935,9 @@ fn contextualMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []co
 
 fn ligatureMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []const GlyphId, glyph_base: usize, relative_index: usize) bool {
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[relative_index])) return true;
-    return sourceCodepointForGlyph(options, glyph_base + relative_index) == 0x034f and
-        !cgjPreventedMarkReorder(options, glyph_base + relative_index);
+    const codepoint = sourceCodepointForGlyph(options, glyph_base + relative_index) orelse return false;
+    if (codepoint == 0x034f) return !cgjPreventedMarkReorder(options, glyph_base + relative_index);
+    return isVariationSelector(codepoint);
 }
 
 fn cgjPreventedMarkReorder(options: LookupOptions, glyph_index: usize) bool {
@@ -3949,6 +3950,11 @@ fn cgjPreventedMarkReorder(options: LookupOptions, glyph_index: usize) bool {
     const prev_class = unicode.modifiedCombiningClassForShaping(codepoints[prev_source]);
     const next_class = unicode.modifiedCombiningClassForShaping(codepoints[next_source]);
     return next_class != 0 and prev_class > next_class;
+}
+
+fn isVariationSelector(codepoint: u21) bool {
+    return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
+        (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
 }
 
 fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, glyph_index: usize, removed_len: usize, inserted_len: usize, source: usize) std.mem.Allocator.Error!void {
@@ -11982,6 +11988,38 @@ test "GSUB ligature matching does not skip CGJ that blocked mark reordering" {
     );
 
     try std.testing.expect(match == null);
+}
+
+test "GSUB ligature matching skips variation selector fallback glyphs" {
+    var bytes = [_]u8{0} ** 12;
+    writeU16Test(&bytes, 0, 1); // LigatureCount.
+    writeU16Test(&bytes, 2, 4);
+    writeU16Test(&bytes, 4, 40); // Ligature glyph.
+    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
+    writeU16Test(&bytes, 8, 2);
+
+    const glyphs = [_]GlyphId{ 1, 0, 2 };
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+    const codepoints = [_]u21{ 'f', 0xfe00, 'i' };
+
+    var component_offsets: [max_ligature_components]usize = undefined;
+    const match = (try ligatureAt(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        0,
+        &glyphs,
+        0,
+        0,
+        .{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &codepoints,
+        },
+        &component_offsets,
+    )).?;
+
+    try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
+    try std.testing.expectEqual(@as(usize, 2), match.component_offsets[1]);
 }
 
 test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {

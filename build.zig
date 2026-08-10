@@ -314,6 +314,16 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .text = "ກັຳ",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "2681c1c72d6484ed3410417f521b1b819b4e2392",
+        .text = "\u{3008}",
+        .direction = "ttb",
+    },
+    .{
+        .font_hash = "2681c1c72d6484ed3410417f521b1b819b4e2392",
+        .text = "\u{3008}",
+        .direction = "btt",
+    },
 };
 
 const retained_harfbuzz_text_parity_gates = [_]struct {

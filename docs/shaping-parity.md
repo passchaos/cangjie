@@ -1501,6 +1501,12 @@ shaping-performance superiority.
   `abvs`/`blws` shaping features by default and keeps Tibetan vowel/sign marks
   in the base cluster, covering both the `uni0F680F72` ligature and the rnam
   bcad cluster merge case.
+- The HarfBuzz in-house `vertical.tests` angle-bracket fallback rows for
+  `2681c1c72d6484ed3410417f521b1b819b4e2392.ttf` are retained for
+  `U+3008` in both `ttb` and `btt` directions. Cangjie now applies the
+  HarfBuzz vertical-presentation fallback forms when the font has the target
+  cmap glyph, and bottom-to-top vertical shaping no longer lets the horizontal
+  bidi mirroring pass replace `U+FE40` with the ordinary mirrored bracket.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

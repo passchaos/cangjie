@@ -2050,6 +2050,7 @@ fn shouldApplyBidiVisualOrder(text: []const u8, options: ShapeOptions) bool {
 
 fn shouldApplyBidiVisualOrderWithAsciiProof(text: []const u8, options: ShapeOptions, all_ascii: bool) bool {
     if (!options.reorder_bidi) return false;
+    if (options.writing_mode.isVertical()) return false;
     if (options.direction == .rtl) return true;
     // Default property inference already scans the complete run before cmap
     // construction. Reuse its all-ASCII result instead of decoding every byte
@@ -3592,7 +3593,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 it.i = value.byte_end;
                 break :glyph value.glyph_id;
             } else glyph: {
-                const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, selected_lookup_options);
+                const shaped_codepoint = try presentationCodepointForShaping(font, glyph_index_cache, codepoint, selected_lookup_options);
                 break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
             const source_cluster = if ((codepoint == 0x200d or
@@ -5343,9 +5344,18 @@ fn variationSelectorFallbackShouldRender(glyph_index: usize, source_index: usize
     return source_index > sources[0] and source_index < sources[sources.len - 1];
 }
 
-fn mirroredCodepointForRtlShaping(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21, lookup_options: LookupOptions) !u21 {
+fn presentationCodepointForShaping(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21, lookup_options: LookupOptions) !u21 {
+    if (lookup_options.writing_mode.isVertical()) {
+        const vertical_source = if (lookup_options.writing_mode == .vertical_lr)
+            unicode.mirroredCodepoint(codepoint)
+        else
+            codepoint;
+        if (unicode.verticalPresentationCodepoint(vertical_source)) |vertical| {
+            if (try glyphIndexWithOptionalCache(font, glyph_index_cache, vertical) != 0) return vertical;
+        }
+        return codepoint;
+    }
     if (lookup_options.direction != .rtl) return codepoint;
-    if (lookup_options.writing_mode.isVertical()) return codepoint;
     const mirrored = unicode.mirroredCodepoint(codepoint);
     if (mirrored == codepoint) return codepoint;
     return if (try glyphIndexWithOptionalCache(font, glyph_index_cache, mirrored) != 0) mirrored else codepoint;
@@ -6028,6 +6038,41 @@ test "vertical sideways text uses horizontal advance for rotated glyphs" {
     );
     try std.testing.expectApproxEqAbs(@as(f32, 20), upright.glyphs[0].y_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 40), upright.height(), 0.001);
+}
+
+test "vertical presentation fallback survives bottom-to-top shaping" {
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildCodepointSetTtf(std.testing.allocator, &.{
+        0x3008,
+        0x3009,
+        0xfe3f,
+        0xfe40,
+    });
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const ttb = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "\u{3008}",
+        20,
+        .{ .writing_mode = .vertical_rl, .text_orientation = .upright },
+    );
+    try std.testing.expectEqual(@as(usize, 1), ttb.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 3), ttb.glyphs[0].glyph_id);
+
+    const btt = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "\u{3008}",
+        20,
+        .{ .direction = .rtl, .writing_mode = .vertical_lr, .text_orientation = .upright },
+    );
+    try std.testing.expectEqual(@as(usize, 1), btt.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 4), btt.glyphs[0].glyph_id);
 }
 
 test "vertical shaped cache and fallback runs preserve independent y pens" {

@@ -182,6 +182,40 @@ pub fn verticalOrientationForCodepoint(codepoint: u21) VerticalOrientation {
     return .rotated;
 }
 
+pub fn verticalPresentationCodepoint(codepoint: u21) ?u21 {
+    return switch (codepoint) {
+        0x2013 => 0xfe32,
+        0x2014 => 0xfe31,
+        0x2025 => 0xfe30,
+        0x2026 => 0xfe19,
+        0x3001 => 0xfe11,
+        0x3002 => 0xfe12,
+        0x3008 => 0xfe3f,
+        0x3009 => 0xfe40,
+        0x300a => 0xfe3d,
+        0x300b => 0xfe3e,
+        0x300c => 0xfe41,
+        0x300d => 0xfe42,
+        0x300e => 0xfe43,
+        0x300f => 0xfe44,
+        0x3010 => 0xfe3b,
+        0x3011 => 0xfe3c,
+        0x3014 => 0xfe39,
+        0x3015 => 0xfe3a,
+        0x3016 => 0xfe17,
+        0x3017 => 0xfe18,
+        0xfe4f => 0xfe34,
+        0xff01 => 0xfe15,
+        0xff08 => 0xfe35,
+        0xff09 => 0xfe36,
+        0xff0c => 0xfe10,
+        0xff1a => 0xfe13,
+        0xff1b => 0xfe14,
+        0xff1f => 0xfe16,
+        else => null,
+    };
+}
+
 test "vertical orientation distinguishes upright scripts rotated Latin and transformed punctuation" {
     try std.testing.expectEqual(VerticalOrientation.upright, verticalOrientationForCodepoint('中'));
     try std.testing.expectEqual(VerticalOrientation.upright, verticalOrientationForCodepoint('あ'));
@@ -189,6 +223,13 @@ test "vertical orientation distinguishes upright scripts rotated Latin and trans
     try std.testing.expectEqual(VerticalOrientation.rotated, verticalOrientationForCodepoint('A'));
     try std.testing.expectEqual(VerticalOrientation.transformed_upright, verticalOrientationForCodepoint(0x3001));
     try std.testing.expectEqual(VerticalOrientation.transformed_rotated, verticalOrientationForCodepoint(0x3008));
+}
+
+test "vertical presentation fallback maps CJK punctuation forms" {
+    try std.testing.expectEqual(@as(?u21, 0xfe3f), verticalPresentationCodepoint(0x3008));
+    try std.testing.expectEqual(@as(?u21, 0xfe40), verticalPresentationCodepoint(0x3009));
+    try std.testing.expectEqual(@as(?u21, 0xfe35), verticalPresentationCodepoint(0xff08));
+    try std.testing.expectEqual(@as(?u21, null), verticalPresentationCodepoint('A'));
 }
 
 const JoiningTypeRange = struct {

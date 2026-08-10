@@ -3737,11 +3737,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         );
     }
     if (usesArabicJoiningShaper(lookup_options.script_tag) and codepoints.items.len != 0) {
-        try joining_forms.resize(buffer.allocator, codepoints.items.len);
-        try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
-        try source_features.resize(buffer.allocator, joining_forms.items.len);
-        for (joining_forms.items, source_features.items) |form, *feature| {
-            feature.* = joiningFormFeatureTag(form);
+        try source_features.resize(buffer.allocator, codepoints.items.len);
+        if (shape_in_native_direction) {
+            markArabicJoiningSourceFeatures(source_features.items, codepoints.items, glyph_source_indices.items);
+        } else {
+            try joining_forms.resize(buffer.allocator, codepoints.items.len);
+            try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
+            for (joining_forms.items, source_features.items) |form, *feature| {
+                feature.* = joiningFormFeatureTag(form);
+            }
         }
         if (lookup_options.script_tag == .mong) {
             inheritMongolianVariationSelectorFeatures(source_features.items, codepoints.items);
@@ -4391,6 +4395,58 @@ fn shapeProfileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {
 
 fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
     return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
+}
+
+fn markArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
+    @memset(source_features, 0);
+    if (codepoints.len == 0 or glyph_source_indices.len == 0) return;
+
+    var ordered_codepoints: [128]u21 = undefined;
+    var ordered_sources: [128]usize = undefined;
+    if (glyph_source_indices.len > ordered_codepoints.len) {
+        markArabicJoiningSourceFeaturesFallback(source_features, codepoints, glyph_source_indices);
+        return;
+    }
+
+    var ordered_len: usize = 0;
+    for (glyph_source_indices) |source| {
+        if (source >= codepoints.len) continue;
+        ordered_sources[ordered_len] = source;
+        ordered_codepoints[ordered_len] = codepoints[source];
+        ordered_len += 1;
+    }
+    if (ordered_len == 0) return;
+
+    var forms: [128]unicode.JoiningForm = undefined;
+    unicode.resolveJoiningForms(ordered_codepoints[0..ordered_len], forms[0..ordered_len]) catch return;
+    for (forms[0..ordered_len], ordered_sources[0..ordered_len]) |form, source| {
+        source_features[source] = joiningFormFeatureTag(form);
+    }
+}
+
+fn markArabicJoiningSourceFeaturesFallback(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
+    var previous_source: ?usize = null;
+    var previous_form: unicode.JoiningForm = .none;
+    for (glyph_source_indices) |source| {
+        if (source >= codepoints.len) continue;
+        var pair = [_]u21{ codepoints[source], 0 };
+        if (previous_source) |prev| {
+            pair[0] = codepoints[prev];
+            pair[1] = codepoints[source];
+            var forms: [2]unicode.JoiningForm = undefined;
+            unicode.resolveJoiningForms(&pair, &forms) catch {
+                previous_source = source;
+                previous_form = .none;
+                continue;
+            };
+            if (previous_form == .none) source_features[prev] = joiningFormFeatureTag(forms[0]);
+            previous_form = forms[1];
+            source_features[source] = joiningFormFeatureTag(forms[1]);
+        } else {
+            previous_form = .none;
+        }
+        previous_source = source;
+    }
 }
 
 fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {

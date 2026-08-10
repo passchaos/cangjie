@@ -1148,10 +1148,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `U+100F,U+103C,U+102F,U+1036`) and the simple `myanmar-misc.tests` rows
   (`065b01e54f35f0d849fd43bd5b936212739a50cb.ttf` `U+101A,U+1035`, plus
   `a232bb734d4c6c898a44506547d19768f0eba6a6.ttf`
-  `U+1000,U+1031,U+1084`). The slice covers `mym2` cluster ownership, basic
-  Myanmar initial reordering for medial RA and left matras, the `rphf/pref/blwf`
-  `/pstf` stage order, and final `pres/abvs/blws/psts` plus typographic
-  ligature features; full Myanmar syllable-machine coverage is still a follow-up.
+  `U+1000,U+1031,U+1084`). The three simple `myanmar-syllable.tests` rows now
+  also pass, including the FE00 variation-selector case
+  `U+101D,U+FE00,U+1031,U+FE00,U+1031,U+FE00`. The slice covers `mym2` cluster
+  ownership, basic Myanmar initial reordering for medial RA and left matras,
+  variation selectors inheriting the preceding Myanmar position, the
+  `rphf/pref/blwf` `/pstf` stage order, and final `pres/abvs/blws/psts` plus
+  typographic ligature features; full Myanmar syllable-machine coverage is still
+  a follow-up.
 - NotoSansBalinese passes `compare-harfbuzz` for all 43 SHBALI rendering-test
   cases retained in `tests/data/balinese-rendering-tests.txt`, covering USE
   category assignment, syllable cluster ownership, split pre-base vowels,

@@ -15,12 +15,12 @@ pub fn markSourceSyllables(source_syllables: []u8, codepoints: []const u21) void
     var index: usize = 0;
     var serial: u8 = 1;
     while (index < codepoints.len) {
-        if (!isMyanmarSyllableCodepoint(codepoints[index])) {
+        if (!isMyanmarSyllableStart(codepoints[index])) {
             index += 1;
             continue;
         }
         const start = index;
-        while (index < codepoints.len and isMyanmarSyllableCodepoint(codepoints[index])) : (index += 1) {}
+        while (index < codepoints.len and isMyanmarSyllableContinuation(codepoints[index])) : (index += 1) {}
         const syllable_id = serial << 4;
         @memset(source_syllables[start..index], syllable_id);
         serial = if (serial == 15) 1 else serial + 1;
@@ -132,8 +132,8 @@ fn reorderSyllable(
     while (index < end) : (index += 1) {
         var current = index;
         while (current > start and
-            @intFromEnum(positionForGlyph(glyph_source_indices.items[current - 1], base, codepoints)) >
-                @intFromEnum(positionForGlyph(glyph_source_indices.items[current], base, codepoints)))
+            @intFromEnum(positionForGlyphAt(glyph_source_indices.items, current - 1, start, base, codepoints)) >
+                @intFromEnum(positionForGlyphAt(glyph_source_indices.items, current, start, base, codepoints)))
         {
             shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, current - 1, current + 1);
             shaping_metadata.swap(
@@ -180,8 +180,18 @@ fn myanmarPosition(codepoint: u21, is_base: bool) MyanmarPosition {
     };
 }
 
-fn positionForGlyph(source: usize, base: usize, codepoints: []const u21) MyanmarPosition {
+fn positionForGlyphAt(sources: []const usize, glyph_index: usize, start: usize, base: usize, codepoints: []const u21) MyanmarPosition {
+    _ = start;
+    if (glyph_index >= sources.len) return .after_main;
+    return positionForSource(sources[glyph_index], base, codepoints);
+}
+
+fn positionForSource(source: usize, base: usize, codepoints: []const u21) MyanmarPosition {
     if (source >= codepoints.len) return .after_main;
+    if (myanmarCategory(codepoints[source]) == .variation_selector) {
+        if (source == 0) return .after_main;
+        return positionForSource(source - 1, base, codepoints);
+    }
     return myanmarPosition(codepoints[source], source == base);
 }
 
@@ -191,6 +201,7 @@ const MyanmarCategory = enum {
     vowel_below,
     vowel_pre,
     asat,
+    variation_selector,
     other,
 };
 
@@ -201,6 +212,7 @@ fn myanmarCategory(codepoint: u21) MyanmarCategory {
         0x102f, 0x1030, 0x1058, 0x1059 => .vowel_below,
         0x1031, 0x1084 => .vowel_pre,
         0x103a, 0x1039 => .asat,
+        0xfe00...0xfe0f, 0xe0100...0xe01ef => .variation_selector,
         else => .other,
     };
 }
@@ -219,14 +231,35 @@ fn flipLeftMatraSequence(
     var last = end;
     for (start..end) |index| {
         const source = glyph_source_indices.items[index];
-        if (source >= codepoints.len or myanmarPosition(codepoints[source], false) != .pre_m) continue;
+        if (source >= codepoints.len or positionForGlyphAt(glyph_source_indices.items, index, start, std.math.maxInt(usize), codepoints) != .pre_m) continue;
         if (first == end) first = index;
         last = index;
     }
     if (first >= last) return;
 
-    var left = first;
-    var right = last;
+    reverseGlyphRange(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, first, last + 1);
+
+    var group_start = first;
+    for (first..last + 1) |index| {
+        const source = glyph_source_indices.items[index];
+        if (source >= codepoints.len or myanmarCategory(codepoints[source]) != .vowel_pre) continue;
+        reverseGlyphRange(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, group_start, index + 1);
+        group_start = index + 1;
+    }
+}
+
+fn reverseGlyphRange(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    start: usize,
+    end: usize,
+) void {
+    if (end <= start + 1) return;
+    var left = start;
+    var right = end - 1;
     while (left < right) {
         shaping_metadata.swap(
             glyph_ids.items,
@@ -246,11 +279,15 @@ fn isMyanmarConsonant(codepoint: u21) bool {
     return myanmarCategory(codepoint) == .consonant;
 }
 
-fn isMyanmarSyllableCodepoint(codepoint: u21) bool {
+fn isMyanmarSyllableStart(codepoint: u21) bool {
     return (codepoint >= 0x1000 and codepoint <= 0x109f) or
         (codepoint >= 0xa9e0 and codepoint <= 0xa9ff) or
         (codepoint >= 0xaa60 and codepoint <= 0xaa7f) or
         (codepoint >= 0x116d0 and codepoint <= 0x116ff);
+}
+
+fn isMyanmarSyllableContinuation(codepoint: u21) bool {
+    return isMyanmarSyllableStart(codepoint) or myanmarCategory(codepoint) == .variation_selector;
 }
 
 test "Myanmar shaper selects only modern mym2 tag" {
@@ -316,4 +353,33 @@ test "Myanmar reorder flips consecutive left matras" {
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 3, 1 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 2, 1, 0 }, sources.items);
+}
+
+test "Myanmar reorder keeps variation selectors with left matras" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 4, 2, 4, 2, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3, 4, 5 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0, 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x101d, 0xfe00, 0x1031, 0xfe00, 0x1031, 0xfe00 };
+    const source_syllables = [_]u8{ 0x10, 0x10, 0x10, 0x10, 0x10, 0x10 };
+
+    reorder(&glyphs, &sources, &clusters, &substituted, &ligatures, &source_syllables, &codepoints);
+
+    try std.testing.expectEqualSlices(usize, &.{ 4, 5, 2, 3, 0, 1 }, sources.items);
 }

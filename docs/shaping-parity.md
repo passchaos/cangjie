@@ -1166,6 +1166,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `f79eb71df4e4c9c273b67b89a06e5ff9e3c1f834.ttf`
   (`U+006D,U+0315`) passes after accepting that noncanonical GPOS FeatureList
   ordering through parse-time validation.
+- HarfBuzz in-house `fallback-positioning.tests` rows that `shape-bench` can
+  express now pass for `8228d035fcd65d62ec9728fb34f42c63be93a5d3.ttf`
+  (`U+0078,U+0301,U+0058,U+0301`) and
+  `856ff9562451293cbeff6f396d4e3877c4f0a436.ttf`
+  (`U+0061,U+035C,U+0062`). Cangjie synthesizes HarfBuzz-compatible fallback
+  mark offsets from glyph extents when GPOS is absent, while leaving real
+  GPOS mark/cursive attachment paths in control when present.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

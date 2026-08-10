@@ -2,6 +2,7 @@ const std = @import("std");
 const arabic_normalization = @import("arabic_normalization.zig");
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
+const fallback_mark = @import("fallback_mark.zig");
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
 const GlyphClass = @import("font.zig").GlyphClass;
 const GlyphId = @import("glyph.zig").GlyphId;
@@ -3931,6 +3932,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const has_gdef_glyph_classes = gdef_metadata.glyph_classes != null;
     const has_gpos_positioning = font.hasGposTableForShaping();
     var previous_glyph: ?GlyphId = null;
+    var fallback_mark_base: ?fallback_mark.Base = null;
     var adjustment_cursor: usize = 0;
     const kern_lookup = if (!lookup_options.writing_mode.isVertical() and shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true))
         try font.kernLookupForShaping()
@@ -4071,9 +4073,35 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             -unzeroed_vertical_advance
         else
             0.0;
+        var fallback_mark_offset = fallback_mark.Offset{};
+        if (fallback_mark.enabled(early_zero_mark_shape, has_gpos_positioning, has_gpos_attachments, mark_attachment, lookup_options.writing_mode.isVertical()) and
+            unicode.isNonspacingMarkCodepoint(source_codepoint))
+        {
+            if (fallback_mark_base) |*base| {
+                fallback_mark_offset = fallback_mark.offset(
+                    font,
+                    glyph_id,
+                    source_codepoint,
+                    base,
+                    scale,
+                ) catch .{};
+            }
+        }
         if (has_gpos_attachments) {
             glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
         }
+        const output_x_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
+            0
+        else if (lookup_options.writing_mode.isVertical())
+            vertical_x_offset + gpos_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x
+        else
+            gpos_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x;
+        const output_y_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
+            0
+        else if (lookup_options.writing_mode.isVertical())
+            vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset + fallback_mark_offset.y
+        else
+            @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset + fallback_mark_offset.y;
         buffer.glyphs.appendAssumeCapacity(.{
             .glyph_id = output_glyph_id,
             .synthetic_glyph_id = synthetic_glyph_id,
@@ -4082,12 +4110,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .source_byte_len = source_span.end - source_span.start,
             .x_advance = if (visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
             .y_advance = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
-            .x_offset = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_x_offset + gpos_x_offset + zeroed_mark_x_offset else gpos_x_offset + zeroed_mark_x_offset,
-            .y_offset = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset else @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset,
+            .x_offset = output_x_offset,
+            .y_offset = output_y_offset,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
         if (has_gpos_attachments and !hide_default_ignorable) {
             attachment_links.items[index] = attachmentLinkForAdjustment(adjustment);
+        }
+        if (!hide_default_ignorable and !visible_not_found_variation_selector and !unicode.isNonspacingMarkCodepoint(source_codepoint)) {
+            fallback_mark_base = fallback_mark.baseForGlyph(font, glyph_id, source_span.start, output_y_offset, horizontal_advance, scale, shapingDirectionForGpos(lookup_options) == .ltr) catch null;
         }
         previous_glyph = glyph_id;
     }

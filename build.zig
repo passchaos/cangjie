@@ -91,6 +91,16 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
         .not_found_variation_selector_glyph = "1000000",
     },
+    .{
+        .font_hash = "8228d035fcd65d62ec9728fb34f42c63be93a5d3",
+        .text = "x́X́",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "856ff9562451293cbeff6f396d4e3877c4f0a436",
+        .text = "a͜b",
+        .direction = "ltr",
+    },
 };
 
 pub fn build(b: *std.Build) void {

@@ -2707,6 +2707,29 @@ pub const Font = struct {
         try gsub_mod.applyFeatureLookupPlanWithOptions(self.data, gsub.offset, gsub.length, plan, glyphs, allocator, gsub_options);
     }
 
+    /// Continue an internal multi-stage shaping run after its glyph/source
+    /// metadata was validated by the first stage.
+    ///
+    /// Validated GSUB lookup outputs stay within this font's maxp range, and
+    /// the GSUB mutation helpers keep every source-parallel array in lockstep.
+    /// Keep this narrower than the public defensive entry point above: callers
+    /// must not pass a freshly constructed or externally mutated glyph run.
+    pub fn applyGsubFeatureLookupPlanUsingGdefAfterRunProof(self: *const Font, plan: gsub_mod.FeatureLookupPlan, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        const gsub = self.gsub orelse return;
+        var gsub_options = options;
+        gsub_options.assume_validated = true;
+        gdef_metadata.applyToGsubOptions(&gsub_options);
+        try gsub_mod.applyFeatureLookupPlanWithOptionsAfterMetadataProof(
+            self.data,
+            gsub.offset,
+            gsub.length,
+            plan,
+            glyphs,
+            allocator,
+            gsub_options,
+        );
+    }
+
     pub fn applyGsubMergedFeatureLookupPlanUsingGdefAfterProof(self: *const Font, plan: gsub_mod.MergedFeatureLookupPlan, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
@@ -2714,6 +2737,22 @@ pub const Font = struct {
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
         try gsub_mod.applyMergedFeatureLookupPlanWithOptions(self.data, gsub.offset, gsub.length, plan, glyphs, allocator, gsub_options);
+    }
+
+    pub fn applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof(self: *const Font, plan: gsub_mod.MergedFeatureLookupPlan, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        const gsub = self.gsub orelse return;
+        var gsub_options = options;
+        gsub_options.assume_validated = true;
+        gdef_metadata.applyToGsubOptions(&gsub_options);
+        try gsub_mod.applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
+            self.data,
+            gsub.offset,
+            gsub.length,
+            plan,
+            glyphs,
+            allocator,
+            gsub_options,
+        );
     }
 
     pub fn collectGposAdjustments(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator) FontError!void {

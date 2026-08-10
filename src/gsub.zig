@@ -791,6 +791,35 @@ pub fn applyFeatureLookupPlanWithOptions(
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     try validateShapingMetadataForFeaturePlan(options, glyphs.items.len, plan);
+    return try applyFeatureLookupPlanWithOptionsAfterMetadataProof(
+        data,
+        offset,
+        length,
+        plan,
+        glyphs,
+        allocator,
+        options,
+    );
+}
+
+/// Apply a cached feature plan after the caller has proved glyph/source
+/// metadata for this shaping run.
+///
+/// This is an internal shaping fast path. It is sound across consecutive GSUB
+/// stages because every supported substitution updates glyph ids and all
+/// source-parallel arrays atomically, and validated lookup outputs stay within
+/// maxp. Callers must not use it for an independently supplied or externally
+/// mutated run; `applyFeatureLookupPlanWithOptions` remains the defensive API.
+pub fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    plan: FeatureLookupPlan,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     var mutation_generation: usize = 0;
     const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
@@ -821,6 +850,29 @@ pub fn applyMergedFeatureLookupPlanWithOptions(
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     try validateShapingMetadataForMergedPlan(options, glyphs.items.len, plan);
+    return try applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
+        data,
+        offset,
+        length,
+        plan,
+        glyphs,
+        allocator,
+        options,
+    );
+}
+
+/// Merged-plan counterpart to
+/// `applyFeatureLookupPlanWithOptionsAfterMetadataProof`.
+pub fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    plan: MergedFeatureLookupPlan,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     var mutation_generation: usize = 0;
     const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
@@ -3611,6 +3663,22 @@ fn validateShapingMetadataForMergedPlan(options: LookupOptions, glyph_count: usi
     return validateShapingMetadataRequirements(options, glyph_count, require_source_features, require_source_syllables);
 }
 
+/// Prove the maximal source metadata contract required by an explicit script
+/// shaper before it starts a multi-stage GSUB plan.
+///
+/// Later stages may require different subsets, but GSUB mutations preserve
+/// these bounds and parallel cardinalities. Validating the maximal contract
+/// once therefore lets trusted consecutive stages use the after-proof entry
+/// point without rescanning the whole glyph run for each feature group.
+pub fn validateScriptShaperRunMetadata(options: LookupOptions, glyph_count: usize) GsubError!void {
+    return validateShapingMetadataRequirements(
+        options,
+        glyph_count,
+        options.source_features != null,
+        options.source_syllables != null,
+    );
+}
+
 fn validateShapingMetadataRequirements(options: LookupOptions, glyph_count: usize, require_source_features: bool, require_source_syllables: bool) GsubError!void {
     if (options.glyph_source_indices) |sources| {
         if (sources.items.len != glyph_count) return error.InvalidShapingInput;
@@ -3697,6 +3765,36 @@ test "GSUB feature plans validate derived source metadata requirements once" {
         error.InvalidShapingInput,
         validateShapingMetadataForMergedPlan(.{ .glyph_source_indices = &sources }, glyphs.items.len, merged_plan),
     );
+}
+
+test "GSUB script shaper run proof validates maximal present metadata" {
+    const allocator = std.testing.allocator;
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.append(allocator, 1);
+
+    try std.testing.expectError(
+        error.InvalidShapingInput,
+        validateScriptShaperRunMetadata(.{
+            .glyph_source_indices = &sources,
+            .source_features = &.{0},
+        }, 1),
+    );
+    try std.testing.expectError(
+        error.InvalidShapingInput,
+        validateScriptShaperRunMetadata(.{
+            .glyph_source_indices = &sources,
+            .source_syllables = &.{0},
+        }, 1),
+    );
+
+    sources.items[0] = 0;
+    try validateScriptShaperRunMetadata(.{
+        .glyph_source_indices = &sources,
+        .source_features = &.{0},
+        .source_syllables = &.{0},
+        .source_codepoints = &.{0x0915},
+    }, 1);
 }
 
 fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {

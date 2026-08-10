@@ -3667,7 +3667,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             source_pref_substituted.items,
         );
         glyph_stage_substituted.clearRetainingCapacity();
-        try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        // Every earlier public stage has validated the run it received, and
+        // GSUB mutation helpers preserve glyph bounds plus source-parallel
+        // cardinalities. Prove the current maximal USE metadata contract once
+        // after stage-only scratch is detached, then reuse it through all
+        // remaining explicit stages.
+        try gsub.validateScriptShaperRunMetadata(use_options, glyph_ids.items.len);
+        try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         if (use_shaper.hasBrokenSyllable(source_syllables.items)) {
             const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
             try use_shaper.insertDottedCirclesForBrokenSyllables(
@@ -3695,9 +3701,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             source_pref_substituted.items,
             codepoints.items,
         );
-        try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.topographicalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try applyMergedGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try applyMergedGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+        try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.topographicalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
     } else {
         if (buffer.lookup_selection_cache) |selection_cache| {
             gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
@@ -3732,11 +3738,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             gsub_options.source_features = source_features.items;
 
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
-            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
+            try gsub.validateScriptShaperRunMetadata(gsub_options, glyph_ids.items.len);
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
-            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items);
-            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
         }
     }
 
@@ -3976,6 +3983,42 @@ fn applyGsubFeatureApplicationsForShaping(
     }
 }
 
+fn applyGsubFeatureApplicationsAfterRunProof(
+    font: *const Font,
+    buffer: *LayoutBuffer,
+    gsub_after_proof: bool,
+    applications: []const gsub.FeatureApplication,
+    glyph_ids: *std.ArrayList(GlyphId),
+    options: gsub.LookupOptions,
+    gdef_metadata: GdefLookupMetadata,
+) !void {
+    if (!gsub_after_proof or buffer.lookup_selection_cache == null) {
+        return try applyGsubFeatureApplicationsForShaping(
+            font,
+            buffer,
+            gsub_after_proof,
+            applications,
+            glyph_ids,
+            options,
+            gdef_metadata,
+        );
+    }
+    if (applications.len == 0) return;
+    const plan = try buffer.lookup_selection_cache.?.gsubFeatureLookupPlan(
+        font,
+        applications,
+        options,
+        gdef_metadata,
+    );
+    try font.applyGsubFeatureLookupPlanUsingGdefAfterRunProof(
+        plan,
+        glyph_ids,
+        buffer.allocator,
+        options,
+        gdef_metadata,
+    );
+}
+
 fn applyMergedGsubFeatureApplicationsForShaping(
     font: *const Font,
     buffer: *LayoutBuffer,
@@ -3993,6 +4036,46 @@ fn applyMergedGsubFeatureApplicationsForShaping(
         mutable_plan.deinit(buffer.allocator);
     }
     try font.applyGsubMergedFeatureLookupPlanUsingGdefAfterProof(plan, glyph_ids, buffer.allocator, options, gdef_metadata);
+}
+
+fn applyMergedGsubFeatureApplicationsAfterRunProof(
+    font: *const Font,
+    buffer: *LayoutBuffer,
+    gsub_after_proof: bool,
+    applications: []const gsub.FeatureApplication,
+    glyph_ids: *std.ArrayList(GlyphId),
+    options: gsub.LookupOptions,
+    gdef_metadata: GdefLookupMetadata,
+) !void {
+    if (!gsub_after_proof) {
+        return try applyMergedGsubFeatureApplicationsForShaping(
+            font,
+            buffer,
+            gsub_after_proof,
+            applications,
+            glyph_ids,
+            options,
+            gdef_metadata,
+        );
+    }
+    if (applications.len == 0) return;
+    const plan = try font.gsubMergedFeatureLookupPlanForShaping(
+        buffer.allocator,
+        applications,
+        options,
+        gdef_metadata,
+    );
+    defer {
+        var mutable_plan = plan;
+        mutable_plan.deinit(buffer.allocator);
+    }
+    try font.applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof(
+        plan,
+        glyph_ids,
+        buffer.allocator,
+        options,
+        gdef_metadata,
+    );
 }
 
 fn shapeProfileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {

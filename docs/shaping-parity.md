@@ -951,6 +951,22 @@ Current local snapshot after the Nastaliq parity work:
   Roboto, SourceSerifVariable, and Amiri retained dual-reference parity.
   Fixed-core Roboto, SourceSerifVariable, and Amiri word-list timings stayed
   within about `0.61%` of their baselines and mostly improved slightly.
+- Consecutive Indic/USE stages now validate their maximal glyph/source metadata
+  contract once, then use a narrowly scoped internal after-run-proof entry.
+  The first stage retains complete glyph-id and source-parallel validation;
+  subsequent validated GSUB lookups can only emit maxp-bounded glyphs, and the
+  centralized mutation helpers atomically preserve source, cluster,
+  substitution, and ligature-provenance cardinalities and bounds. Public and
+  independently supplied runs retain the defensive validation path. Relative
+  to `b4df999`, fixed CPU-8 A/B/B/A timing reduced NotoSansDevanagari
+  `hi-words` from `1009.933` to `995.457 ns/glyph`, about `1.43%`.
+  Fixed CPU-30 timing was effectively flat (`1193.270` versus
+  `1194.834 ns/glyph`, `+0.13%`, within run noise), while interleaved hardware
+  counters on both cores reduced retired instructions by about `1.42%` and
+  branches by about `2.27%`; CPU-8 cycles fell about `1.55%`. The 503,948-glyph
+  Duployan gate kept retired instructions and branches flat, and Devanagari,
+  all ten USE corpora, Indic3, Tai Tham, vowel-letter spoofing, Roboto,
+  SourceSerifVariable, and Amiri retained dual-reference parity.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

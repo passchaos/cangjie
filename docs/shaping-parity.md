@@ -1024,6 +1024,16 @@ Current local snapshot after the Nastaliq parity work:
   medians of `825.660` and `764.896 ns/glyph`, versus candidate medians of
   `757.872` and `735.510 ns/glyph`. Devanagari `hi-words` retained
   in-process HarfBuzz parity.
+- Top-level MarkBasePos collection now caches the most recent non-transparent
+  base candidate while walking a subtable, following HarfBuzz's `last_base`
+  strategy without changing nested contextual single-target lookup semantics.
+  The shared skip predicate preserves attached-mark, lookup-flag, GDEF mark,
+  and multiple-substitution continuation transparency. A serial B/A/A/B timing
+  check against `7fdb518` on NotoSansDevanagari `hi-words` measured baseline
+  medians of `754.726` and `753.918 ns/glyph`, versus candidate medians of
+  `743.858` and `748.150 ns/glyph`; a 21-sample B/A check measured `760.489`
+  versus `749.470 ns/glyph`. The complete Devanagari corpus retained
+  in-process HarfBuzz parity checksum `da5f74de3edfe093`.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

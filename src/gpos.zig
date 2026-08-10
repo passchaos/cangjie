@@ -2718,6 +2718,11 @@ const MarkToBaseSubtable = struct {
     base_coverage: ?NativeCoverage = null,
 };
 
+const MarkBaseSearchState = struct {
+    last_candidate: ?usize = null,
+    last_candidate_until: usize = 0,
+};
+
 fn parseMarkToBaseSubtable(table: Table, subtable_offset: usize) GposError!MarkToBaseSubtable {
     const pos_format = try readU16(table, subtable_offset);
     if (pos_format != 1) return error.UnsupportedGpos;
@@ -2928,8 +2933,9 @@ fn collectMarkToBaseAdjustmentParsed(table: Table, subtable: MarkToBaseSubtable,
     defer allocator.free(attached_marks);
     @memset(attached_marks, false);
 
+    var search_state = MarkBaseSearchState{};
     for (0..glyphs.len) |i| {
-        if (try collectMarkToBaseAdjustmentAtParsed(table, subtable, glyphs, i, adjustments, allocator, lookup_flag, options, attached_marks)) {
+        if (try collectMarkToBaseAdjustmentAtParsed(table, subtable, glyphs, i, adjustments, allocator, lookup_flag, options, attached_marks, &search_state)) {
             attached_marks[i] = true;
         }
     }
@@ -2941,10 +2947,10 @@ fn collectMarkToBaseAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     // preceding base, but it must attach only that named mark instead of
     // rescanning and positioning every mark covered by the nested lookup.
     const subtable = try parseMarkToBaseSubtable(table, subtable_offset);
-    return try collectMarkToBaseAdjustmentAtParsed(table, subtable, glyphs, mark_position, adjustments, allocator, lookup_flag, options, attached_marks);
+    return try collectMarkToBaseAdjustmentAtParsed(table, subtable, glyphs, mark_position, adjustments, allocator, lookup_flag, options, attached_marks, null);
 }
 
-fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, mark_position: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, attached_marks: []const bool) (GposError || std.mem.Allocator.Error)!bool {
+fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, mark_position: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, attached_marks: []const bool, search_state: ?*MarkBaseSearchState) (GposError || std.mem.Allocator.Error)!bool {
     if (mark_position >= glyphs.len) return false;
     const glyph = glyphs[mark_position];
     if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
@@ -2954,7 +2960,10 @@ fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtabl
         coverage.index(glyph) orelse return false
     else
         try coverageIndex(table, subtable.mark_coverage_offset, glyph) orelse return false;
-    const base_position = try previousCoveredBaseGlyphParsed(table, subtable, glyphs, mark_position, attached_marks, lookup_flag, options) orelse return false;
+    const base_position = (if (search_state) |state|
+        try previousCoveredBaseGlyphParsedCached(table, subtable, glyphs, mark_position, attached_marks, lookup_flag, options, state)
+    else
+        try previousCoveredBaseGlyphParsed(table, subtable, glyphs, mark_position, attached_marks, lookup_flag, options)) orelse return false;
     const base_glyph = glyphs[base_position];
     const base_index = if (subtable.base_coverage) |coverage|
         coverage.index(base_glyph) orelse return false
@@ -2978,29 +2987,50 @@ fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtabl
     return true;
 }
 
+fn previousCoveredBaseGlyphParsedCached(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions, state: *MarkBaseSearchState) GposError!?usize {
+    if (state.last_candidate_until > mark_index) state.* = .{};
+
+    var candidate = state.last_candidate;
+    var i = mark_index;
+    while (i > state.last_candidate_until) {
+        i -= 1;
+        if (try markBaseSearchSkipsGlyphParsed(table, subtable, glyphs, i, attached_marks, lookup_flag, options)) continue;
+        candidate = i;
+        break;
+    }
+
+    state.last_candidate = candidate;
+    state.last_candidate_until = mark_index;
+    return candidate;
+}
+
 fn previousCoveredBaseGlyphParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, mark_index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!?usize {
     var i = mark_index;
     while (i > 0) {
         i -= 1;
-        if (i < attached_marks.len and attached_marks[i]) continue;
-        if (matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
-
-        // MarkBasePos attaches to the nearest previous participating base. A
-        // non-mark glyph that is not in BaseCoverage is a real blocker for
-        // this subtable; HarfBuzz records that nearest non-mark and lets the
-        // subtable fail its BaseCoverage check rather than walking back to an
-        // older covered base. Marks remain transparent for stacked-mark
-        // clusters; use GDEF classes when present and fall back to this
-        // subtable's MarkCoverage for minimal fonts that omit GDEF.
-        const base_covered = if (subtable.base_coverage) |coverage|
-            coverage.index(glyphs[i]) != null
-        else
-            try coverageIndex(table, subtable.base_coverage_offset, glyphs[i]) != null;
-        if (base_covered) return i;
-        if (try markAttachmentSearchSkipsNonCoveredGlyphParsed(table, subtable, glyphs, i, options)) continue;
+        if (try markBaseSearchSkipsGlyphParsed(table, subtable, glyphs, i, attached_marks, lookup_flag, options)) continue;
         return i;
     }
     return null;
+}
+
+fn markBaseSearchSkipsGlyphParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!bool {
+    if (index < attached_marks.len and attached_marks[index]) return true;
+    if (matchSkipsGlyph(lookup_flag, options, glyphs, index)) return true;
+
+    // MarkBasePos attaches to the nearest previous participating base. A
+    // non-mark glyph that is not in BaseCoverage is a real blocker for this
+    // subtable; HarfBuzz records that nearest non-mark and lets the subtable
+    // fail its BaseCoverage check rather than walking back to an older covered
+    // base. Marks remain transparent for stacked-mark clusters; use GDEF
+    // classes when present and fall back to this subtable's MarkCoverage for
+    // minimal fonts that omit GDEF.
+    const base_covered = if (subtable.base_coverage) |coverage|
+        coverage.index(glyphs[index]) != null
+    else
+        try coverageIndex(table, subtable.base_coverage_offset, glyphs[index]) != null;
+    if (base_covered) return false;
+    return try markAttachmentSearchSkipsNonCoveredGlyphParsed(table, subtable, glyphs, index, options);
 }
 
 fn previousUnignoredCoveredGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, mark_index: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {
@@ -7643,6 +7673,63 @@ test "GPOS mark-to-base stops at intervening non-covered base" {
     });
 
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "GPOS mark-to-base cached search keeps attached marks transparent" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 88;
+
+    writeU16Test(&bytes, 0, 4);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const mark_base = 8;
+    writeU16Test(&bytes, mark_base + 0, 1);
+    writeU16Test(&bytes, mark_base + 2, 12);
+    writeU16Test(&bytes, mark_base + 4, 20);
+    writeU16Test(&bytes, mark_base + 6, 1);
+    writeU16Test(&bytes, mark_base + 8, 26);
+    writeU16Test(&bytes, mark_base + 10, 50);
+
+    writeCoverage1ListTest(&bytes, mark_base + 12, &.{ 12, 13 });
+    writeCoverage1Test(&bytes, mark_base + 20, 10);
+
+    const mark_array = mark_base + 26;
+    writeU16Test(&bytes, mark_array + 0, 2);
+    writeU16Test(&bytes, mark_array + 2, 0);
+    writeU16Test(&bytes, mark_array + 4, 10);
+    writeU16Test(&bytes, mark_array + 6, 0);
+    writeU16Test(&bytes, mark_array + 8, 16);
+    writeAnchor1Test(&bytes, mark_array + 10, 10, 15);
+    writeAnchor1Test(&bytes, mark_array + 16, 30, 35);
+
+    const base_array = mark_base + 50;
+    writeU16Test(&bytes, base_array + 0, 1);
+    writeU16Test(&bytes, base_array + 2, 4);
+    writeAnchor1Test(&bytes, base_array + 4, 100, 120);
+
+    const glyphs = [_]GlyphId{ 10, 12, 13 };
+    var glyph_classes = [_]u16{0} ** 14;
+    glyph_classes[10] = 1;
+    glyph_classes[12] = 3;
+    glyph_classes[13] = 3;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
+        .glyph_classes = &glyph_classes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
+    try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items[1].index);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[1].attachment_parent_index);
+    try std.testing.expectEqual(@as(i16, 70), adjustments.items[1].x_placement);
+    try std.testing.expectEqual(@as(i16, 85), adjustments.items[1].y_placement);
 }
 
 test "GPOS MarkAttachmentType uses MarkAttachClassDef without glyph classes" {

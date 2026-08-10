@@ -1147,8 +1147,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   CGJ stays transparent for ordinary contextual matching, but must not be skipped
   by a ligature lookup when it actually blocked canonical mark reordering; it
   also includes Arabic joining across CGJ so `صِ͏ّا` shapes to initial/final
-  forms while preserving separate mark glyphs. The ZWJ ligature row for
-  `fcea341ba6489536390384d8403ce5287ba71a4a.ttf` (`U+0647,U+200D`) is now
+  forms while preserving separate mark glyphs. The ZWJ rows for
+  `fcea341ba6489536390384d8403ce5287ba71a4a.ttf`,
+  `6677074106f94a2644da6aaaacd5bbd48cbdc7de.ttf`, and
+  `08b4b136f418add748dc641eb4a83033476f1170.ttf` (`U+0647,U+200D`) are now
   retained as well; ZWJ inherits the previous glyph's cluster before native
   direction reversal, so HarfBuzz-style reverse-grapheme shaping keeps the base
   and joiner in input order for `rlig`.

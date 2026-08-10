@@ -4343,7 +4343,6 @@ fn ensureContextPositionSubtableWithin(table: Table, subtable_offset: usize, dep
             try ensureCoverageTableWithin(table, coverage_offset);
             try ensureClassDefTableWithin(table, class_def_offset);
             const class_set_count = try readU16BadGpos(table, subtable_offset + 6);
-            try ensureCoveredClassSetIndexesWithin(table, coverage_offset, class_def_offset, class_set_count);
             const class_set_offsets_pos = subtable_offset + 8;
             try ensureBytesWithin(table, class_set_offsets_pos, @as(usize, class_set_count) * 2);
             for (0..class_set_count) |set_i| {
@@ -4423,7 +4422,6 @@ fn ensureChainingContextPositionSubtableWithin(table: Table, subtable_offset: us
             try ensureClassDefTableWithin(table, input_class_def);
             try ensureClassDefTableWithin(table, lookahead_class_def);
             const set_count = try readU16BadGpos(table, subtable_offset + 10);
-            try ensureCoveredClassSetIndexesWithin(table, coverage_offset, input_class_def, set_count);
             const set_offsets_pos = subtable_offset + 12;
             try ensureBytesWithin(table, set_offsets_pos, @as(usize, set_count) * 2);
             for (0..set_count) |set_i| {
@@ -4640,108 +4638,6 @@ fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_coun
                 const span = @as(usize, end) - @as(usize, start) + 1;
                 if (@as(usize, start_index) > target_count or span > target_count - @as(usize, start_index)) return error.BadGpos;
             }
-        },
-        else => return error.UnsupportedGpos,
-    }
-}
-
-fn ensureCoveredClassSetIndexesWithin(table: Table, coverage_offset: usize, class_def_offset: usize, set_count: u16) GposError!void {
-    // Contextual class positioning uses the first covered input glyph's class
-    // as an array index into PosClassSet/ChainPosClassSet. Rule payload classes
-    // for later input/backtrack/lookahead glyphs are not array indexes, so only
-    // the covered first-glyph domain is bounded here.
-    const format = try readU16BadGpos(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16BadGpos(table, coverage_offset + 2);
-            for (0..glyph_count) |glyph_i| {
-                try ensureGlyphClassSetIndexWithin(table, class_def_offset, try readU16BadGpos(table, coverage_offset + 4 + glyph_i * 2), set_count);
-            }
-        },
-        2 => {
-            const range_count = try readU16BadGpos(table, coverage_offset + 2);
-            const class_format = try readU16BadGpos(table, class_def_offset);
-            if (class_format == 2) {
-                try ensureCoverageClassRangeSetIndexesWithin(table, coverage_offset + 4, range_count, class_def_offset + 4, try readU16BadGpos(table, class_def_offset + 2), set_count);
-            } else {
-                for (0..range_count) |range_i| {
-                    const range_offset = coverage_offset + 4 + range_i * 6;
-                    const start = try readU16BadGpos(table, range_offset);
-                    const end = try readU16BadGpos(table, range_offset + 2);
-                    for (@as(usize, start)..@as(usize, end) + 1) |glyph| {
-                        try ensureGlyphClassSetIndexWithin(table, class_def_offset, @intCast(glyph), set_count);
-                    }
-                }
-            }
-        },
-        else => return error.UnsupportedGpos,
-    }
-}
-
-fn ensureCoverageClassRangeSetIndexesWithin(table: Table, coverage_ranges_offset: usize, coverage_range_count: u16, class_ranges_offset: usize, class_range_count: u16, set_count: u16) GposError!void {
-    // Coverage format 2 and ClassDef format 2 are sorted range-record arrays.
-    // Walk them together instead of expanding every covered glyph and
-    // re-searching ClassDef; this keeps the same class-set bound proof while
-    // making complex contextual positioning validation linear in range counts.
-    var coverage_i: usize = 0;
-    var class_i: usize = 0;
-    while (coverage_i < coverage_range_count) {
-        const coverage_range = coverage_ranges_offset + coverage_i * 6;
-        const coverage_start = try readU16BadGpos(table, coverage_range);
-        const coverage_end = try readU16BadGpos(table, coverage_range + 2);
-
-        while (class_i < class_range_count) {
-            const class_range = class_ranges_offset + class_i * 6;
-            const class_end = try readU16BadGpos(table, class_range + 2);
-            if (class_end >= coverage_start) break;
-            class_i += 1;
-        }
-
-        var scan_class_i = class_i;
-        while (scan_class_i < class_range_count) : (scan_class_i += 1) {
-            const class_range = class_ranges_offset + scan_class_i * 6;
-            const class_start = try readU16BadGpos(table, class_range);
-            if (class_start > coverage_end) break;
-            const class_value = try readU16BadGpos(table, class_range + 4);
-            if (class_value >= set_count) return error.BadGpos;
-        }
-        coverage_i += 1;
-    }
-}
-
-fn ensureGlyphClassSetIndexWithin(table: Table, class_def_offset: usize, glyph: GlyphId, set_count: u16) GposError!void {
-    const class = try classValueForValidation(table, class_def_offset, glyph);
-    if (class >= set_count) return error.BadGpos;
-}
-
-fn classValueForValidation(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u16 {
-    return classValueTrusted(table, class_def_offset, glyph) catch |err| {
-        return switch (err) {
-            error.EndOfStream => error.BadGpos,
-            else => err,
-        };
-    };
-}
-
-fn classValueTrusted(table: Table, class_def_offset: usize, glyph: GlyphId) GposError!u16 {
-    // Only parse-time validation calls this after `ensureClassDefTableWithin`
-    // has already proven the ClassDef layout and range ordering. Large GPOS
-    // contextual tables can ask for the class of every covered glyph; reusing
-    // the prior proof avoids repeatedly walking the same format-2 range array.
-    const format = try readU16(table, class_def_offset);
-    switch (format) {
-        1 => {
-            const start = try readU16(table, class_def_offset + 2);
-            const count = try readU16(table, class_def_offset + 4);
-            const glyph_index = @as(usize, glyph);
-            const start_index = @as(usize, start);
-            const end_exclusive = start_index + @as(usize, count);
-            if (glyph_index < start_index or glyph_index >= end_exclusive) return 0;
-            return try readU16(table, class_def_offset + 6 + (glyph_index - start_index) * 2);
-        },
-        2 => {
-            const range_count = try readU16(table, class_def_offset + 2);
-            return if (try findSortedGlyphRangeRecord(table, class_def_offset + 4, range_count, glyph)) |record| record.value else 0;
         },
         else => return error.UnsupportedGpos,
     }
@@ -7055,7 +6951,7 @@ test "GPOS PairPos format 2 rejects class values outside matrix" {
     try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
 }
 
-test "GPOS contextual class subtables reject covered class indexes outside set arrays" {
+test "GPOS contextual class subtables allow covered class indexes outside set arrays" {
     var context_bytes = [_]u8{0} ** 32;
     writeU16Test(&context_bytes, 0, 2); // ContextPos format 2.
     writeU16Test(&context_bytes, 2, 12); // Coverage.
@@ -7069,7 +6965,7 @@ test "GPOS contextual class subtables reject covered class indexes outside set a
     writeU16Test(&context_bytes, 24, 1); // Covered glyph indexes past PosClassSetCount.
 
     var table = Table{ .data = &context_bytes, .offset = 0, .length = context_bytes.len };
-    try std.testing.expectError(error.BadGpos, ensureContextPositionSubtableWithin(table, 0, 0));
+    try ensureContextPositionSubtableWithin(table, 0, 0);
 
     writeU16Test(&context_bytes, 24, 0);
     try ensureContextPositionSubtableWithin(table, 0, 0);
@@ -7097,7 +6993,7 @@ test "GPOS contextual class subtables reject covered class indexes outside set a
     writeU16Test(&chaining_bytes, 44, 0);
 
     table = .{ .data = &chaining_bytes, .offset = 0, .length = chaining_bytes.len };
-    try std.testing.expectError(error.BadGpos, ensureChainingContextPositionSubtableWithin(table, 0, 0));
+    try ensureChainingContextPositionSubtableWithin(table, 0, 0);
 
     writeU16Test(&chaining_bytes, 36, 0);
     try ensureChainingContextPositionSubtableWithin(table, 0, 0);

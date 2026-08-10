@@ -231,6 +231,9 @@ const IndicSyllableCluster = struct {
 
 fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.GraphemeCluster, indic_syllables: []const IndicSyllableCluster, byte_offset: usize, previous_cluster: ?usize, previous_raw_cluster: ?usize) usize {
     if (codepointAtByte(text, byte_offset)) |codepoint| {
+        if (previous_raw_cluster) |raw_cluster| {
+            if (raw_cluster != byte_offset and isArabicPrependClusterLeader(text, raw_cluster)) return byte_offset;
+        }
         if (isPreBaseMatra(codepoint)) {
             if (indicSyllableContainingByte(indic_syllables, byte_offset)) |syllable| return syllable.base_cluster;
         } else if (codepoint == 0x094d) {
@@ -264,6 +267,13 @@ fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.Gr
         }
     }
     return graphemeClusterStartForByte(graphemes, byte_offset);
+}
+
+fn isArabicPrependClusterLeader(text: []const u8, byte_offset: usize) bool {
+    return switch (codepointAtByte(text, byte_offset) orelse return false) {
+        0x0600...0x0605, 0x06dd, 0x0890...0x0891, 0x08e2 => true,
+        else => false,
+    };
 }
 
 fn graphemeClusterStartForByte(graphemes: []const cangjie.GraphemeCluster, byte_offset: usize) usize {

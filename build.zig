@@ -145,6 +145,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .script = "arab",
         .enable_feature = "pnum",
     },
+    .{
+        .font_hash = "a6b17da98b9f1565ba428719777bbf94a66403c1",
+        .text = "۝١٢٣",
+        .direction = "ltr",
+        .script = "arab",
+    },
 };
 
 const retained_harfbuzz_text_parity_gates = [_]struct {

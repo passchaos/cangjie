@@ -1212,6 +1212,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   caller-enabled optional GSUB features after the core Arabic shaping stages,
   and `shape-bench` can force an OpenType script tag for retained upstream rows
   that specify `--script`.
+- The U+06DD enclosed-number row from HarfBuzz in-house `digits.tests` passes
+  for `a6b17da98b9f1565ba428719777bbf94a66403c1.ttf`
+  (`U+06DD,U+0661,U+0662,U+0663`, script `arab`). Cangjie accepts contextual
+  GPOS class subtables whose covered class has no ClassSet slot, matching
+  HarfBuzz's no-match behavior, and the parity tool keeps Arabic Prepend
+  clusters in HarfBuzz buffer-cluster order for this row.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

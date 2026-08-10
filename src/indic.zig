@@ -10,10 +10,12 @@ const rphf_feature = unicode.tag("rphf");
 const pref_feature = unicode.tag("pref");
 const blwf_feature = unicode.tag("blwf");
 const half_feature = unicode.tag("half");
+const pstf_feature = unicode.tag("pstf");
 const rphf_source_mask = gsub.sourceFeatureMaskForTag(rphf_feature).?;
 const pref_source_mask = gsub.sourceFeatureMaskForTag(pref_feature).?;
 const blwf_source_mask = gsub.sourceFeatureMaskForTag(blwf_feature).?;
 const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
+const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
@@ -305,6 +307,7 @@ const basic_feature_applications_without_reph = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("rkrf") },
     .{ .tag = blwf_feature, .source_scoped = true },
     .{ .tag = half_feature, .source_scoped = true },
+    .{ .tag = pstf_feature, .source_scoped = true },
     .{ .tag = unicode.tag("cjct") },
 };
 
@@ -313,6 +316,7 @@ const basic_feature_applications_with_reph = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("rkrf") },
     .{ .tag = blwf_feature, .source_scoped = true },
     .{ .tag = half_feature, .source_scoped = true },
+    .{ .tag = pstf_feature, .source_scoped = true },
     .{ .tag = unicode.tag("cjct") },
 };
 
@@ -426,7 +430,13 @@ fn hasInitialReph(codepoints: []const u21, syllable_start: usize, syllable_end: 
 fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
     var marked = false;
     if (script_tag == .tel2 or script_tag == .telu) {
-        if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
+        if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag, blwf_source_mask)) {
+            marked = true;
+        }
+        return marked;
+    }
+    if (script_tag == .mlm2 or script_tag == .mlym) {
+        if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag, pstf_source_mask)) {
             marked = true;
         }
         return marked;
@@ -452,13 +462,13 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
     return marked;
 }
 
-fn markPostBaseViramaConsonantSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
+fn markPostBaseViramaConsonantSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag, source_mask: u32) bool {
     var marked = false;
     var index = syllable_start;
     while (index + 1 < syllable_end) : (index += 1) {
         if (codepoints[index] != viramaCodepoint(script_tag)) continue;
         if (!isIndicConsonant(codepoints[index + 1], script_tag)) continue;
-        source_features[index] |= blwf_source_mask;
+        source_features[index] |= source_mask;
         marked = true;
     }
     return marked;
@@ -1086,6 +1096,15 @@ test "Telugu before-subscript vowel reorders before subscript glyph" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 13, 4, 6, 16 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 2, 5, 3 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 6, 6, 6 }, clusters.items);
+}
+
+test "Malayalam post-base virama consonant marks pstf source" {
+    var features = [_]u32{0} ** 3;
+    const codepoints = [_]u21{ 0x0d15, 0x0d4d, 0x0d2f };
+
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .mlm2));
+    try std.testing.expectEqual(pstf_source_mask, features[1]);
+    try std.testing.expectEqual(@as(u32, 0), features[2]);
 }
 
 test "Bengali pre-base matras move before bases and mark init only at word start" {

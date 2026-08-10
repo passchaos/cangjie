@@ -1521,7 +1521,11 @@ shaping-performance superiority.
   gates too: the Indic slice handles `mlm2`/`mlym` categories, source-scoped
   `pref`, formed `virama+ra` pre-base ligature reordering, and the blocked path
   where a contextual `pref` lookup decomposes the ligature back to visible
-  `virama,ra`. The Gurmukhi standalone U+0A51 row from
+  `virama,ra`. The Malayalam `indic-special-cases.tests` stacker row for
+  `c825900b8a5b6571f0eb6c8c25c6512880bc42e9.ttf` now passes for
+  `U+0D15,U+0D4D,U+0D2F`; Cangjie marks post-base Malayalam
+  `virama+consonant` sources for `pstf`, covering the `ka + virama + ya`
+  stacker glyph. The Gurmukhi standalone U+0A51 row from
   `indic-syllable.tests` is retained for
   `1735326da89f0818cd8c51a0600e9789812c0f94.ttf`, along with the explicit
   `U+25CC,U+0A51` control row. Cangjie now routes `gur2`/`guru` through the

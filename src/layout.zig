@@ -4322,6 +4322,13 @@ fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .arab or script_tag == .adlm or script_tag == .mong;
 }
 
+fn usesLateGdefMarkZeroing(script_tag: unicode.OpenTypeScriptTag) bool {
+    return switch (script_tag) {
+        .arab, .hebr, .thai, .lao, .dflt => true,
+        else => false,
+    };
+}
+
 fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {
     for (codepoints, 0..) |codepoint, index| {
         if (!isMongolianFreeVariationSelector(codepoint) or index == 0) continue;
@@ -4644,12 +4651,12 @@ fn markAdvanceZeroingPolicy(
     // HarfBuzz only synthesizes classes when the face has no GlyphClassDef at
     // all. An unclassified glyph in a present ClassDef remains unclassified;
     // falling back per glyph would override an explicit font-author decision.
-    const synthesized_use_mark = use_shape and
-        !has_gdef_glyph_classes and
+    const synthesized_mark = !has_gdef_glyph_classes and
         unicode.isNonspacingMarkCodepoint(source_codepoint) and
-        !unicode.isDefaultIgnorableForShaping(source_codepoint);
+        !unicode.isDefaultIgnorableForShaping(source_codepoint) and
+        (use_shape or usesLateGdefMarkZeroing(options.script_tag));
     const attachment_mark_without_gdef = mark_attachment and !has_gdef_glyph_classes;
-    const zero_advance = gdef_mark or synthesized_use_mark or attachment_mark_without_gdef;
+    const zero_advance = gdef_mark or synthesized_mark or attachment_mark_without_gdef;
     if (!zero_advance) return .{};
 
     const forward_direction = options.writing_mode.isVertical() or

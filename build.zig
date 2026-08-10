@@ -126,6 +126,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .text = "กิก",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "bb0c53752e85c3d28973ebc913287b8987d3dfe8",
+        .text = "กิก",
+        .direction = "ltr",
+    },
 };
 
 const retained_harfbuzz_text_parity_gates = [_]struct {

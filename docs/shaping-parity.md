@@ -1191,12 +1191,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   fallback and uses the U+2010 glyph while preserving the original source
   cluster.
 - The Thai rows from HarfBuzz in-house `zero-width-marks.tests` pass for
-  `45855bc8d46332b39c4ab9e2ee1a26b1f896da6b.ttf` and
-  `7a37dc4d5bf018456aea291cee06daf004c0221c.ttf`
+  `45855bc8d46332b39c4ab9e2ee1a26b1f896da6b.ttf`,
+  `7a37dc4d5bf018456aea291cee06daf004c0221c.ttf`, and
+  `bb0c53752e85c3d28973ebc913287b8987d3dfe8.ttf`
   (`U+0E01,U+0E34,U+0E01`). Cangjie now keeps GPOS MarkBasePos active when a
-  Unicode mark is present even if GDEF misclassifies that glyph as a base, and
-  it separates mark attachment offset propagation from mark advance zeroing so
-  HarfBuzz's zero-advance and preserved-advance fixture variants both match.
+  Unicode mark is present even if GDEF misclassifies that glyph as a base,
+  synthesizes late zero-width mark classes for no-GDEF Thai runs, and separates
+  mark attachment offset propagation from mark advance zeroing so HarfBuzz's
+  zero-advance and preserved-advance fixture variants both match.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

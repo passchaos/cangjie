@@ -271,6 +271,15 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_corpus_parity_smoke_step.dependOn(&corpus_parity_cmd.step);
+
+            const corpus_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            corpus_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}", .{ harfrust_benches, gate.font_file }),
+                "--text-file", b.fmt("{s}/{s}", .{ harfrust_benches, gate.text_file }),
+                "--direction", gate.direction,
+            });
+            shaping_corpus_parity_smoke_step.dependOn(&corpus_harfrust_parity_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_corpus_parity_smoke_step);
 

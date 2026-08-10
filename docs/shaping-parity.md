@@ -59,8 +59,8 @@ gates for NotoSansDevanagari `hi-words`, the Duployan USE corpus, and every
 fixture under `tests/data/use/`; it defaults to `~/Work` and accepts
 `-Dparity-work-root=/path/to/Work` for other local reference roots.
 `shaping-corpus-parity-smoke` is also available for the retained Roboto
-`en-words`, Amiri `fa-words`, and SourceSerifVariable `en-words` HarfBuzz corpus
-gates.
+`en-words`, Amiri `fa-words`, and SourceSerifVariable `en-words` corpus gates
+against both HarfBuzz and HarfRust.
 
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup

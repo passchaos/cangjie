@@ -7,13 +7,15 @@ const shaping_metadata = @import("shaping_metadata.zig");
 const unicode = @import("unicode.zig");
 
 const rphf_feature = unicode.tag("rphf");
+const pref_feature = unicode.tag("pref");
 const half_feature = unicode.tag("half");
 const rphf_source_mask = gsub.sourceFeatureMaskForTag(rphf_feature).?;
+const pref_source_mask = gsub.sourceFeatureMaskForTag(pref_feature).?;
 const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng => true,
+        .dev2, .bng2, .beng, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -34,7 +36,48 @@ pub fn reorderPreBaseMatras(
         if (!isPreBaseMatra(codepoints[source_index], script_tag)) continue;
 
         const syllable_start = indicSyllableStart(codepoints, source_index, script_tag);
-        const target = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, codepoints, syllable_start, source_index, index, script_tag);
+        const target_info = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, ligature_components, codepoints, syllable_start, source_index, index, script_tag);
+        if (target_info.merge_from_syllable_start) {
+            shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, syllable_start, index + 1);
+        } else {
+            shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, target_info.index, index + 1);
+        }
+        shaping_metadata.move(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            index,
+            target_info.index,
+        );
+    }
+}
+
+pub fn reorderPrefGlyphs(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    source_pref_substituted: []const bool,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (!usesPrefSources(script_tag)) return;
+
+    var index: usize = 0;
+    while (index < glyph_source_indices.items.len) {
+        const source_index = glyph_source_indices.items[index];
+        if (!isFormedPref(ligature_components, ligature_components.infos.items[index], source_index, source_pref_substituted, codepoints, script_tag)) {
+            index += 1;
+            continue;
+        }
+
+        const syllable_start = indicSyllableStart(codepoints, source_index, script_tag);
+        const syllable_end = indicSyllableEnd(codepoints, syllable_start, script_tag);
+        const base_source = baseSource(codepoints, syllable_start, syllable_end, script_tag);
+        const target = prefTargetGlyphIndex(glyph_source_indices.items, ligature_components, codepoints, syllable_start, base_source, index, script_tag);
         shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, target, index + 1);
         shaping_metadata.move(
             glyph_ids,
@@ -45,6 +88,7 @@ pub fn reorderPreBaseMatras(
             index,
             target,
         );
+        index = target + 1;
     }
 }
 
@@ -139,10 +183,21 @@ pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21, 
         if (markHalfSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
             marked = true;
         }
+        if (markPrefSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
+            marked = true;
+        }
         index = syllable_end;
     }
 
     return marked;
+}
+
+pub fn recordPrefSubstitutions(glyph_source_indices: []const usize, glyph_stage_substituted: []const bool, source_pref_substituted: []bool) void {
+    std.debug.assert(glyph_source_indices.len == glyph_stage_substituted.len);
+    for (glyph_source_indices, glyph_stage_substituted) |source, substituted| {
+        if (!substituted) continue;
+        if (source < source_pref_substituted.len) source_pref_substituted[source] = true;
+    }
 }
 
 pub fn reorderRephs(
@@ -206,6 +261,10 @@ const pre_reph_feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("pres") },
 };
 
+const pref_feature_applications = [_]gsub.FeatureApplication{
+    .{ .tag = pref_feature, .source_scoped = true },
+};
+
 const final_feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("init"), .source_scoped = true },
     .{ .tag = unicode.tag("abvs") },
@@ -228,6 +287,10 @@ pub fn preRephFeatureApplications() []const gsub.FeatureApplication {
     return &pre_reph_feature_applications;
 }
 
+pub fn prefFeatureApplications() []const gsub.FeatureApplication {
+    return &pref_feature_applications;
+}
+
 pub fn finalFeatureApplications() []const gsub.FeatureApplication {
     return &final_feature_applications;
 }
@@ -235,6 +298,7 @@ pub fn finalFeatureApplications() []const gsub.FeatureApplication {
 fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .bng2, .beng => codepoint == 0x09c7 or codepoint == 0x09c8,
+        .mlm2, .mlym => codepoint == 0x0d46 or codepoint == 0x0d47 or codepoint == 0x0d48,
         else => codepoint == 0x093f,
     };
 }
@@ -272,6 +336,40 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
     return marked;
 }
 
+fn markPrefSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (!usesPrefSources(script_tag)) return false;
+    const base_source = baseSource(codepoints, syllable_start, syllable_end, script_tag);
+    if (base_source + 2 >= syllable_end) return false;
+
+    var index = base_source + 1;
+    while (index + 1 < syllable_end) : (index += 1) {
+        if (codepoints[index] != viramaCodepoint(script_tag)) continue;
+        if (!isPrefRa(codepoints[index + 1], script_tag)) continue;
+        source_features[index] |= pref_source_mask;
+        source_features[index + 1] |= pref_source_mask;
+        return true;
+    }
+    return false;
+}
+
+fn usesPrefSources(script_tag: unicode.OpenTypeScriptTag) bool {
+    return switch (script_tag) {
+        .mlm2, .mlym => true,
+        else => false,
+    };
+}
+
+fn baseSource(codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) usize {
+    if (usesPrefSources(script_tag)) {
+        var index = syllable_start;
+        while (index < syllable_end) : (index += 1) {
+            if (isIndicConsonant(codepoints[index], script_tag)) return index;
+        }
+        return syllable_start;
+    }
+    return halfBaseSource(codepoints, syllable_start, syllable_end, script_tag);
+}
+
 fn halfBaseSource(codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) usize {
     const has_prebase_matra = hasPreBaseMatraInRange(codepoints, syllable_start, syllable_end, script_tag);
     var base = syllable_start;
@@ -307,6 +405,13 @@ fn isPostBaseRa(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .dev2 and codepoint == 0x0930;
 }
 
+fn isPrefRa(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    return switch (script_tag) {
+        .mlm2, .mlym => codepoint == 0x0d30,
+        else => false,
+    };
+}
+
 fn halfViramaIndex(codepoints: []const u21, consonant_index: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) ?usize {
     const virama = viramaCodepoint(script_tag);
     if (consonant_index + 1 >= syllable_end) return null;
@@ -329,6 +434,8 @@ fn indicSyllableEnd(codepoints: []const u21, start: usize, script_tag: unicode.O
             true
         else if (saw_virama and isJoiner(codepoint))
             true
+        else if (isIndicDependentMark(codepoint, script_tag))
+            saw_virama
         else
             false;
     }
@@ -360,15 +467,95 @@ fn isFormedReph(store: *const ligature_provenance.Store, info: ligature_provenan
     return sources[0] == source_index and sources[1] == source_index + 1;
 }
 
-fn preBaseMatraTargetGlyphIndex(sources: []const usize, codepoints: []const u21, syllable_start: usize, matra_source: usize, fallback_index: usize, script_tag: unicode.OpenTypeScriptTag) usize {
+const PreBaseMatraTarget = struct {
+    index: usize,
+    merge_from_syllable_start: bool = false,
+};
+
+fn preBaseMatraTargetGlyphIndex(sources: []const usize, ligature_components: *const ligature_provenance.Store, codepoints: []const u21, syllable_start: usize, matra_source: usize, fallback_index: usize, script_tag: unicode.OpenTypeScriptTag) PreBaseMatraTarget {
     var fallback_target = fallback_index;
+    var blocked_pref_target: ?usize = null;
     for (sources, 0..) |source, glyph_index| {
         if (glyph_index >= fallback_index) break;
-        if (source < syllable_start or source >= matra_source) continue;
+        const effective_source = effectiveIndicSource(ligature_components, glyph_index, source, codepoints, script_tag);
+        if (effective_source < syllable_start or effective_source >= matra_source) continue;
         if (fallback_target == fallback_index) fallback_target = glyph_index;
-        if (script_tag == .dev2 and source + 1 < codepoints.len and codepoints[source] == 0x094d and codepoints[source + 1] == 0x0935) return @min(glyph_index + 1, fallback_index);
+        if (!isFormedPrefLigature(ligature_components, glyph_index, source, codepoints, script_tag) and
+            usesPrefSources(script_tag) and
+            effective_source + 1 < codepoints.len and
+            codepoints[effective_source] == viramaCodepoint(script_tag) and
+            isPrefRa(codepoints[effective_source + 1], script_tag))
+        {
+            blocked_pref_target = @min(glyph_index + 1, fallback_index);
+        }
+        if (script_tag == .dev2 and effective_source + 1 < codepoints.len and codepoints[effective_source] == 0x094d and codepoints[effective_source + 1] == 0x0935) return .{ .index = @min(glyph_index + 1, fallback_index) };
     }
-    return fallback_target;
+    if (blocked_pref_target) |target| return .{ .index = target, .merge_from_syllable_start = true };
+    return .{ .index = fallback_target };
+}
+
+fn prefTargetGlyphIndex(sources: []const usize, ligature_components: *const ligature_provenance.Store, codepoints: []const u21, syllable_start: usize, base_source: usize, fallback_index: usize, script_tag: unicode.OpenTypeScriptTag) usize {
+    var target = fallback_index;
+    for (sources, 0..) |source, glyph_index| {
+        if (glyph_index >= fallback_index) break;
+        const effective_source = effectiveIndicSource(ligature_components, glyph_index, source, codepoints, script_tag);
+        if (effective_source < syllable_start or effective_source > base_source) continue;
+        target = glyph_index;
+        if (source < codepoints.len and isPreBaseMatra(codepoints[source], script_tag)) {
+            return @min(glyph_index + 1, fallback_index);
+        }
+    }
+    return target;
+}
+
+fn effectiveIndicSource(ligature_components: *const ligature_provenance.Store, glyph_index: usize, fallback_source: usize, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) usize {
+    if (glyph_index >= ligature_components.infos.items.len) return fallback_source;
+    const info = ligature_components.infos.items[glyph_index];
+    if (!info.isLigature() or !info.flags.multiplied) return fallback_source;
+    const sources = ligature_components.componentSources(info) orelse return fallback_source;
+    const component = @as(usize, info.flags.multiple_component);
+    if (component >= sources.len) return fallback_source;
+    return repairedPrefComponentSource(sources, component, codepoints, script_tag);
+}
+
+fn isFormedPref(store: *const ligature_provenance.Store, info: ligature_provenance.Info, source_index: usize, source_pref_substituted: []const bool, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (!usesPrefSources(script_tag)) return false;
+    if (!formedPrefLigatureMatches(store, info, source_index, codepoints, script_tag)) return false;
+    return source_index >= source_pref_substituted.len or source_pref_substituted[source_index];
+}
+
+fn isFormedPrefLigature(ligature_components: *const ligature_provenance.Store, glyph_index: usize, fallback_source: usize, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (glyph_index >= ligature_components.infos.items.len) return false;
+    return formedPrefLigatureMatches(ligature_components, ligature_components.infos.items[glyph_index], fallback_source, codepoints, script_tag);
+}
+
+fn formedPrefLigatureMatches(store: *const ligature_provenance.Store, info: ligature_provenance.Info, source_index: usize, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (!usesPrefSources(script_tag)) return false;
+    if (!info.isLigature() or info.flags.multiplied) return false;
+    const sources = store.componentSources(info) orelse return false;
+    if (sources.len != 2) return false;
+    const first_source = repairedPrefComponentSource(sources, 0, codepoints, script_tag);
+    const second_source = repairedPrefComponentSource(sources, 1, codepoints, script_tag);
+    if (source_index != first_source and source_index != second_source) return false;
+    if (first_source >= codepoints.len or second_source >= codepoints.len) return false;
+    if (codepoints[first_source] != viramaCodepoint(script_tag) or !isPrefRa(codepoints[second_source], script_tag)) return false;
+    return true;
+}
+
+fn repairedPrefComponentSource(sources: []const usize, component: usize, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) usize {
+    if (component >= sources.len) return 0;
+    const source = sources[component];
+    if (usesPrefSources(script_tag) and
+        component == 1 and
+        sources.len == 2 and
+        sources[0] == source and
+        source + 1 < codepoints.len and
+        codepoints[source] == viramaCodepoint(script_tag) and
+        isPrefRa(codepoints[source + 1], script_tag))
+    {
+        return source + 1;
+    }
+    return source;
 }
 
 fn rephTargetGlyphIndex(
@@ -440,6 +627,9 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
     return switch (script_tag) {
         .bng2, .beng => (codepoint >= 0x0995 and codepoint <= 0x09b9) or
             (codepoint >= 0x09dc and codepoint <= 0x09df),
+        .mlm2, .mlym => (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
+            (codepoint >= 0x0d54 and codepoint <= 0x0d56) or
+            (codepoint >= 0x0d7a and codepoint <= 0x0d7f),
         else => (codepoint >= 0x0915 and codepoint <= 0x0939) or
             (codepoint >= 0x0958 and codepoint <= 0x095f),
     };
@@ -450,6 +640,9 @@ fn isIndicIndependentVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
         .bng2, .beng => (codepoint >= 0x0985 and codepoint <= 0x0994) or
             codepoint == 0x09e0 or
             codepoint == 0x09e1,
+        .mlm2, .mlym => (codepoint >= 0x0d05 and codepoint <= 0x0d14) or
+            codepoint == 0x0d60 or
+            codepoint == 0x0d61,
         else => (codepoint >= 0x0904 and codepoint <= 0x0914) or
             codepoint == 0x0960 or
             codepoint == 0x0961,
@@ -461,6 +654,9 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
         .bng2, .beng => (codepoint >= 0x0981 and codepoint <= 0x0983) or
             (codepoint >= 0x09be and codepoint <= 0x09cc) or
             codepoint == 0x09d7,
+        .mlm2, .mlym => (codepoint >= 0x0d00 and codepoint <= 0x0d03) or
+            (codepoint >= 0x0d3b and codepoint <= 0x0d4c) or
+            codepoint == 0x0d57,
         else => (codepoint >= 0x0900 and codepoint <= 0x0903) or
             (codepoint >= 0x093a and codepoint <= 0x094c) or
             (codepoint >= 0x094e and codepoint <= 0x094f) or
@@ -471,6 +667,7 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
 fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09cd,
+        .mlm2, .mlym => 0x0d4d,
         else => 0x094d,
     };
 }
@@ -478,6 +675,7 @@ fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
 fn rephRaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
     return switch (script_tag) {
         .bng2, .beng => 0x09b0,
+        .mlm2, .mlym => 0x0d30,
         else => 0x0930,
     };
 }
@@ -523,4 +721,73 @@ test "Bengali pre-base matras move before bases and mark init only at word start
     const init_mask = gsub.sourceFeatureMaskForTag(unicode.tag("init")).?;
     try std.testing.expectEqual(init_mask, source_features[1]);
     try std.testing.expectEqual(@as(u32, 0), source_features[3]);
+}
+
+test "Malayalam pref ligature reorders after pre-base matra" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 8, 3 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 3 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, true, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.append(std.testing.allocator, .{});
+    try ligatures.infos.append(std.testing.allocator, try ligatures.addLigature(std.testing.allocator, &.{ 1, 2 }));
+    try ligatures.infos.append(std.testing.allocator, .{});
+
+    const codepoints = [_]u21{ 0x0d2f, 0x0d4d, 0x0d30, 0x0d46 };
+    const pref_substituted = [_]bool{ false, true, false, false };
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .mlm2);
+    reorderPrefGlyphs(&glyphs, &sources, &clusters, &substituted, &ligatures, &pref_substituted, &codepoints, .mlm2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 8, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 1, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0 }, clusters.items);
+}
+
+test "Malayalam blocked pref keeps decomposed ra after pre-base matra" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 4, 3, 2 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 3, 1 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3, 3, 3 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, true, false, true });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    const pref = try ligatures.addLigature(std.testing.allocator, &.{ 1, 2 });
+    var first_component = pref;
+    first_component.flags.multiplied = true;
+    first_component.flags.multiple_component = 0;
+    var second_component = pref;
+    second_component.flags.multiplied = true;
+    second_component.flags.multiple_component = 1;
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, first_component, .{}, second_component });
+
+    const codepoints = [_]u21{ 0x0d2f, 0x0d4d, 0x0d30, 0x0d46 };
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .mlm2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 4, 3, 2 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 3, 1 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, clusters.items);
 }

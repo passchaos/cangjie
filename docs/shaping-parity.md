@@ -1498,6 +1498,13 @@ shaping-performance superiority.
   `1a3d8f381387dd29be1e897e4b5100ac8b4829e1.ttf` now passes after the Indic
   slice learned `bng2`/`beng` pre-base matra reordering, source-scoped `init`
   on word-start left matras, and cluster merging for the moved matra.
+  Malayalam `indic-pref-blocking.tests` rows for
+  `226bc2deab3846f1a682085f70c67d0421014144.ttf` and
+  `e207635780b42f898d58654b65098763e340f5c7.ttf` now pass as retained inline
+  gates too: the Indic slice handles `mlm2`/`mlym` categories, source-scoped
+  `pref`, formed `virama+ra` pre-base ligature reordering, and the blocked path
+  where a contextual `pref` lookup decomposes the ligature back to visible
+  `virama,ra`.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

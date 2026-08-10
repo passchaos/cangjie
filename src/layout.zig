@@ -3977,13 +3977,27 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
 
             try source_features.resize(buffer.allocator, codepoints.items.len);
+            try source_pref_substituted.resize(buffer.allocator, codepoints.items.len);
+            @memset(source_pref_substituted.items, false);
             const has_basic_source_features = indic.markBasicSourceFeatures(source_features.items, codepoints.items, lookup_options.script_tag);
             gsub_options.source_features = source_features.items;
 
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             try gsub.validateScriptShaperRunMetadata(gsub_options, glyph_ids.items.len);
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
+            try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
+            @memset(glyph_stage_substituted.items, false);
+            var pref_options = gsub_options;
+            pref_options.glyph_stage_substituted = glyph_stage_substituted;
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.prefFeatureApplications(), glyph_ids, pref_options, gdef_metadata.*);
+            indic.recordPrefSubstitutions(
+                glyph_source_indices.items,
+                glyph_stage_substituted.items,
+                source_pref_substituted.items,
+            );
+            glyph_stage_substituted.clearRetainingCapacity();
             indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
+            indic.reorderPrefGlyphs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, source_pref_substituted.items, codepoints.items, lookup_options.script_tag);
             _ = indic.markInitialMatraGlyphSources(source_features.items, glyph_source_indices.items, codepoints.items, lookup_options.script_tag);
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);

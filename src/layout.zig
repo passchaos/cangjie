@@ -3594,8 +3594,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, selected_lookup_options);
                 break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
-            const source_cluster = if (selected_lookup_options.direction == .rtl and
-                unicode.inheritsPreviousClusterInRtlShaping(codepoint) and
+            const source_cluster = if ((codepoint == 0x200d or
+                (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint))) and
                 clusters.items.len != 0)
                 clusters.items[clusters.items.len - 1] - cluster_base
             else
@@ -4617,6 +4617,8 @@ fn reverseScratchGlyphOrderForNativeDirection(scratch: *layout_scratch.ShapeScra
     const len = scratch.glyph_ids.items.len;
     if (len < 2) return;
 
+    reverseScratchGlyphRange(scratch, 0, len);
+
     var group_start: usize = 0;
     var index: usize = 1;
     while (index <= len) : (index += 1) {
@@ -4624,7 +4626,6 @@ fn reverseScratchGlyphOrderForNativeDirection(scratch: *layout_scratch.ShapeScra
         reverseScratchGlyphRange(scratch, group_start, index);
         group_start = index;
     }
-    reverseScratchGlyphRange(scratch, 0, len);
 }
 
 fn scratchGlyphCluster(scratch: *const layout_scratch.ShapeScratch, glyph_index: usize) usize {

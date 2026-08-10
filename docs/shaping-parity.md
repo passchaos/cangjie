@@ -1483,6 +1483,13 @@ shaping-performance superiority.
   after Cangjie enabled HarfBuzz-style direction features (`ltrm`/`rtlm`) and
   kept variation selectors with ordinary cmap glyphs visible for GSUB fallback
   matching when no cmap-14 variation record exists.
+- The Old Italic explicit-RTL row from HarfBuzz in-house
+  `none-directional.tests` now has a retained inline gate for
+  `73e84dac2fc6a2d1bc9250d1414353661088937d.ttf`
+  (`U+10300,U+10301`). Cangjie's benchmark CLI can now request native-direction
+  shaping explicitly with `--native-direction-shaping`; with
+  `--no-bidi-reorder`, this exposes HarfBuzz buffer-order semantics and keeps
+  the `rtlm` substitutions in final RTL order.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

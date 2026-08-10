@@ -231,6 +231,8 @@ pub fn parse(args: []const []const u8) !Options {
             options.language_tag = parseLanguageTag(args[i]) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--no-bidi-reorder")) {
             options.reorder_bidi = false;
+        } else if (std.mem.eql(u8, arg, "--native-direction-shaping")) {
+            options.native_direction_shaping = true;
         } else if (std.mem.eql(u8, arg, "--script-position")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -401,6 +403,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --language dflt|ara|jan|kor|zhh|zhs|zht|hin|dhv|dv
         \\                               force an OpenType language system
         \\  --no-bidi-reorder            keep logical glyph order after shaping
+        \\  --native-direction-shaping   shape in OpenType native buffer order
         \\  --script-position normal|superscript|subscript
         \\  --script TAG                 force a 4-byte OpenType script tag, e.g. arab
         \\  --no-caches                  bypass glyph metric and cmap caches

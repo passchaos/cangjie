@@ -4175,7 +4175,7 @@ fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
 }
 
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .arab or script_tag == .mong;
+    return script_tag == .arab or script_tag == .adlm or script_tag == .mong;
 }
 
 fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {

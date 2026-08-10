@@ -314,6 +314,8 @@ const joining_type_ranges = [_]JoiningTypeRange{
     .{ .first = 0x1887, .last = 0x18A8, .kind = .dual },
     .{ .first = 0x200D, .last = 0x200D, .kind = .join_causing },
     .{ .first = 0x10EFD, .last = 0x10EFF, .kind = .transparent },
+    .{ .first = 0x1E900, .last = 0x1E943, .kind = .dual },
+    .{ .first = 0x1E944, .last = 0x1E94A, .kind = .transparent },
 };
 
 pub fn joiningTypeForCodepoint(codepoint: u21) JoiningType {
@@ -434,7 +436,9 @@ fn joinsLeft(kind: JoiningType) bool {
 }
 
 fn hasArabicJoiningForms(codepoint: u21) bool {
-    return isArabicScriptCodepoint(codepoint) or isMongolianScriptCodepoint(codepoint);
+    return isArabicScriptCodepoint(codepoint) or
+        isMongolianScriptCodepoint(codepoint) or
+        isAdlamScriptCodepoint(codepoint);
 }
 
 pub const BidiRun = struct {

@@ -915,9 +915,9 @@ pub const Font = struct {
     line_gap: i16,
     number_of_h_metrics: u16,
     head: TableRecord,
-    hhea: TableRecord,
+    hhea: ?TableRecord,
     maxp: TableRecord,
-    hmtx: TableRecord,
+    hmtx: ?TableRecord,
     hdmx: ?TableRecord,
     ltsh: ?TableRecord,
     ltag: ?TableRecord,
@@ -1046,9 +1046,9 @@ pub const Font = struct {
         if (ttc_header) |header| try validateSfntTablesDoNotOverlapTtcDsig(records, header);
 
         const head = findTable(records, "head") orelse return error.MissingTable;
-        const hhea = findTable(records, "hhea") orelse return error.MissingTable;
+        const hhea = findTable(records, "hhea");
         const maxp = findTable(records, "maxp") orelse return error.MissingTable;
-        const hmtx = findTable(records, "hmtx") orelse return error.MissingTable;
+        const hmtx = findTable(records, "hmtx");
         const hdmx = findTable(records, "hdmx");
         const ltsh = findTable(records, "LTSH");
         const ltag = findTable(records, "ltag");
@@ -1101,16 +1101,18 @@ pub const Font = struct {
         const ift = findTable(records, "IFT ");
         const iftx = findTable(records, "IFTX");
 
+        const has_horizontal_metrics = hhea != null and hmtx != null;
+        if ((hhea == null) != (hmtx == null)) return error.MissingTable;
         const has_glyf_outlines = glyf != null and loca != null;
         if (format == .truetype) {
             // TrueType outlines are a glyf/loca pair; accepting only one table
-            // leaves every glyph boundary ambiguous. Modern bitmap-only emoji
-            // fonts, however, legitimately omit both and draw exclusively from
-            // sbix or CBDT/CBLC, so do not impose an outline requirement on
-            // those fonts.
-            if ((glyf == null) != (loca == null)) return error.MissingTable;
+            // leaves every glyph boundary ambiguous for outline reads. HarfBuzz
+            // in-house shaping subsets may keep layout/cmap data plus a leftover
+            // loca while omitting glyf entirely; accept those for shaping and let
+            // outline APIs report MissingTable when glyph geometry is requested.
             const has_embedded_bitmaps = sbix != null or (cblc != null and cbdt != null);
-            if (!has_glyf_outlines and !has_embedded_bitmaps) return error.MissingTable;
+            const has_layout_tables = gsub != null or gpos != null;
+            if (!has_glyf_outlines and !has_embedded_bitmaps and !has_layout_tables) return error.MissingTable;
         }
         if (format == .opentype_cff and cff == null and cff2 == null) return error.MissingTable;
 
@@ -1124,7 +1126,10 @@ pub const Font = struct {
 
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
         if (post) |post_table| try validatePostTable(data, post_table, glyph_count, .{ .compat_ttc_face = is_ttc_face });
-        const number_of_h_metrics = try validateHorizontalMetricsTables(data, hhea, hmtx, glyph_count);
+        const number_of_h_metrics = if (has_horizontal_metrics)
+            try validateHorizontalMetricsTables(data, hhea.?, hmtx.?, glyph_count)
+        else
+            0;
         _ = validateVerticalMetricsTables(data, glyph_count, vhea, vmtx) catch |err| switch (err) {
             // Vertical metrics are optional for horizontal UI text. Some widely
             // deployed fallback CJK fonts ship a present-but-unusable vhea/vmtx
@@ -1166,9 +1171,9 @@ pub const Font = struct {
 
         const units_per_em = try bin.readU16At(data, head.offset + 18);
         const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
-        const ascender = try bin.readI16At(data, hhea.offset + 4);
-        const descender = try bin.readI16At(data, hhea.offset + 6);
-        const line_gap = try bin.readI16At(data, hhea.offset + 8);
+        const ascender = if (hhea) |table| try bin.readI16At(data, table.offset + 4) else @as(i16, @intCast(units_per_em));
+        const descender = if (hhea) |table| try bin.readI16At(data, table.offset + 6) else 0;
+        const line_gap = if (hhea) |table| try bin.readI16At(data, table.offset + 8) else 0;
         const cff_parsed: ?CffParsedInfo = if (format == .opentype_cff and cff != null) blk: {
             const cff_table = cff.?;
             const parsed = try cff_mod.parse(data[cff_table.offset .. cff_table.offset + cff_table.length]);
@@ -2050,9 +2055,11 @@ pub const Font = struct {
 
     /// Read validated metadata from the SFNT `hhea` table.
     pub fn horizontalHeaderInfo(self: *const Font) FontError!MetricHeaderInfo {
-        try validateSfntTableChecksum(self.data, self.hhea);
-        _ = try validateHorizontalMetricsTables(self.data, self.hhea, self.hmtx, self.glyph_count);
-        return try readMetricHeaderInfo(self.data, self.hhea);
+        const hhea = self.hhea orelse return error.MissingTable;
+        const hmtx = self.hmtx orelse return error.MissingTable;
+        try validateSfntTableChecksum(self.data, hhea);
+        _ = try validateHorizontalMetricsTables(self.data, hhea, hmtx, self.glyph_count);
+        return try readMetricHeaderInfo(self.data, hhea);
     }
 
     /// Read validated metadata from the optional SFNT `vhea` table.
@@ -2254,19 +2261,22 @@ pub const Font = struct {
     /// Expand the SFNT `hmtx` table into one metric record per glyph.
     pub fn horizontalMetricsTable(self: *const Font, allocator: std.mem.Allocator) FontError![]HorizontalMetricInfo {
         const metric_count = try self.validateHorizontalMetricsForRead();
+        const hmtx = self.hmtx orelse return error.MissingTable;
         const metrics = try allocator.alloc(HorizontalMetricInfo, self.glyph_count);
         errdefer allocator.free(metrics);
         for (metrics, 0..) |*metric, glyph_index| {
-            metric.* = try readHorizontalMetricAt(self.data, self.hmtx, metric_count, @intCast(glyph_index));
+            metric.* = try readHorizontalMetricAt(self.data, hmtx, metric_count, @intCast(glyph_index));
         }
         return metrics;
     }
 
     fn validateHorizontalMetricsForRead(self: *const Font) FontError!u16 {
-        const current_metric_count = try validateHorizontalMetricsTables(self.data, self.hhea, self.hmtx, self.glyph_count);
+        const hhea = self.hhea orelse return error.MissingTable;
+        const hmtx = self.hmtx orelse return error.MissingTable;
+        const current_metric_count = try validateHorizontalMetricsTables(self.data, hhea, hmtx, self.glyph_count);
         if (current_metric_count != self.number_of_h_metrics) return error.InvalidMetrics;
-        try validateSfntTableChecksum(self.data, self.hhea);
-        try validateSfntTableChecksum(self.data, self.hmtx);
+        try validateSfntTableChecksum(self.data, hhea);
+        try validateSfntTableChecksum(self.data, hmtx);
         return current_metric_count;
     }
 
@@ -2283,11 +2293,15 @@ pub const Font = struct {
 
     fn horizontalMetricsForReadMode(self: *const Font, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!HorizontalMetricInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const hmtx = self.hmtx orelse return .{
+            .advance_width = @intCast(@as(u32, self.units_per_em) / 2),
+            .left_side_bearing = 0,
+        };
         const metric_count = switch (read_mode) {
             .revalidate => try self.validateHorizontalMetricsForRead(),
             .parsed => self.number_of_h_metrics,
         };
-        return try readHorizontalMetricAt(self.data, self.hmtx, metric_count, glyph_id);
+        return try readHorizontalMetricAt(self.data, hmtx, metric_count, glyph_id);
     }
 
     pub fn hasVerticalMetrics(self: *const Font) bool {

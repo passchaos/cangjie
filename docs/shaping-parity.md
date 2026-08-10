@@ -61,7 +61,9 @@ fixture under `tests/data/use/`; it defaults to `~/Work` and accepts
 `shaping-corpus-parity-smoke` is also available for the retained Roboto
 `en-words`/`en-thelittleprince`, Amiri `fa-words`/`fa-thelittleprince`, and
 SourceSerifVariable `en-words`/`en-thelittleprince` corpus gates against both
-HarfBuzz and HarfRust.
+HarfBuzz and HarfRust. It also includes a Bengali HarfBuzz in-house shaping
+subset that omits `hhea`/`hmtx` and `glyf`, exercising shape-only font parsing
+with HarfBuzz-compatible fallback advances.
 
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup

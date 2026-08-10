@@ -64,6 +64,18 @@ const retained_corpus_parity_gates = [_]struct {
     },
 };
 
+const retained_inline_harfbuzz_parity_gates = [_]struct {
+    font_hash: []const u8,
+    text: []const u8,
+    direction: []const u8,
+}{
+    .{
+        .font_hash = "932ad5132c2761297c74e9976fe25b08e5ffa10b",
+        .text = "ড় ঢ় ড় ঢ়",
+        .direction = "ltr",
+    },
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -295,6 +307,16 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_corpus_parity_smoke_step.dependOn(&corpus_harfrust_parity_cmd.step);
+        }
+        for (retained_inline_harfbuzz_parity_gates) |gate| {
+            const inline_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            inline_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}.ttf", .{ harfbuzz_in_house_fonts, gate.font_hash }),
+                "--text",      gate.text,
+                "--direction", gate.direction,
+            });
+            shaping_corpus_parity_smoke_step.dependOn(&inline_parity_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_corpus_parity_smoke_step);
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const arabic_normalization = @import("arabic_normalization.zig");
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
@@ -1038,6 +1039,18 @@ pub fn diagnoseFontFallbackUtf8(allocator: std.mem.Allocator, cascade: FontCasca
             if (isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) {
                 // Detached selectors and join controls participate in cluster
                 // selection but do not produce visible fallback decisions.
+                continue;
+            }
+
+            if (try arabicCompositionForFontAt(font, null, codepoint, cluster_text, it.i)) |composition| {
+                try decisions.append(allocator, .{
+                    .byte_start = cluster.byte_start + local_start,
+                    .byte_len = composition.byte_end - local_start,
+                    .codepoint = composition.codepoint,
+                    .font_index = font_index,
+                    .glyph_id = composition.glyph_id,
+                });
+                it.i = composition.byte_end;
                 continue;
             }
 
@@ -2095,6 +2108,24 @@ fn nextVariationSelector(text: []const u8, byte_index: usize) ?u21 {
     return if (isVariationSelector(selector)) selector else null;
 }
 
+const ArabicCompositionMatch = struct {
+    codepoint: u21,
+    glyph_id: GlyphId,
+    byte_end: usize,
+};
+
+fn arabicCompositionForFontAt(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, starter: u21, text: []const u8, mark_byte_start: usize) !?ArabicCompositionMatch {
+    if (mark_byte_start >= text.len) return null;
+    var lookahead = std.unicode.Utf8Iterator{ .bytes = text, .i = mark_byte_start };
+    const mark = lookahead.nextCodepoint() orelse return null;
+    const composition = try arabic_normalization.composePairForFont(font, glyph_index_cache, starter, mark) orelse return null;
+    return .{
+        .codepoint = composition.codepoint,
+        .glyph_id = composition.glyph_id,
+        .byte_end = lookahead.i,
+    };
+}
+
 fn selectFontForCluster(
     cascade: FontCascade,
     fallback_cache: ?*FontFallbackCache,
@@ -2176,6 +2207,11 @@ fn fontCoversCluster(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, cl
             continue;
         }
         if (isClusterCoverageIgnorable(codepoint)) continue;
+        if (try arabicCompositionForFontAt(font, glyph_index_cache, codepoint, cluster, it.i)) |composition| {
+            it.i = composition.byte_end;
+            previous_visible = composition.codepoint;
+            continue;
+        }
         if (try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint) == 0) return false;
         previous_visible = codepoint;
     }
@@ -3441,18 +3477,26 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 continue;
             }
             has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
-            const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
+            const composition = try arabicCompositionForFontAt(font, glyph_index_cache, codepoint, text, it.i);
+            const source_end = if (composition) |value| value.byte_end else it.i;
+            const normalized_codepoint = if (composition) |value| value.codepoint else codepoint;
+            const glyph_id = if (composition) |value| glyph: {
+                it.i = value.byte_end;
+                break :glyph value.glyph_id;
+            } else glyph: {
+                const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
+                break :glyph try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
+            };
             const source_cluster = if (lookup_options.direction == .rtl and
                 unicode.inheritsPreviousClusterInRtlShaping(codepoint) and
                 clusters.items.len != 0)
                 clusters.items[clusters.items.len - 1] - cluster_base
             else
                 cluster;
-            const glyph_id = try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             glyph_ids.appendAssumeCapacity(glyph_id);
-            codepoints.appendAssumeCapacity(codepoint);
+            codepoints.appendAssumeCapacity(normalized_codepoint);
             clusters.appendAssumeCapacity(cluster_base + source_cluster);
-            source_ends.appendAssumeCapacity(cluster_base + it.i);
+            source_ends.appendAssumeCapacity(cluster_base + source_end);
             glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
             const cluster_owner_index = if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
                 glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
@@ -4719,6 +4763,91 @@ test "font fallback keeps combining graphemes in a fully covering font" {
     try std.testing.expectEqual(@as(usize, 1), try fallback_cache.selectFontForCluster(cascade, &glyph_cache, "A\u{0301}"));
     try std.testing.expectEqual(@as(usize, 1), fallback_cache.hits);
     try std.testing.expectEqual(@as(usize, 1), fallback_cache.misses);
+}
+
+test "Arabic normalization composes base mark pairs when the font has the precomposed glyph" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const composed_bytes = try test_font.buildCodepointSetTtf(allocator, &.{0x0622});
+    defer allocator.free(composed_bytes);
+    var composed_font = try Font.parse(allocator, composed_bytes);
+    defer composed_font.deinit();
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const run = try TextShaper.shapeUtf8WithOptions(
+        &composed_font,
+        &buffer,
+        "آ",
+        20,
+        .{ .direction = .rtl, .script_tag = .arab },
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), run.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(u21, 0x0622), run.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), run.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, "آ".len), run.glyphs[0].source_byte_len);
+
+    const decomposed_bytes = try test_font.buildCodepointSetTtf(allocator, &.{ 0x0627, 0x0653 });
+    defer allocator.free(decomposed_bytes);
+    var decomposed_font = try Font.parse(allocator, decomposed_bytes);
+    defer decomposed_font.deinit();
+    const decomposed_run = try TextShaper.shapeUtf8WithOptions(
+        &decomposed_font,
+        &buffer,
+        "آ",
+        20,
+        .{ .direction = .rtl, .script_tag = .arab },
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), decomposed_run.glyphs.len);
+    var saw_alef = false;
+    var saw_maddah = false;
+    for (decomposed_run.glyphs) |glyph| {
+        saw_alef = saw_alef or glyph.codepoint == 0x0627;
+        saw_maddah = saw_maddah or glyph.codepoint == 0x0653;
+    }
+    try std.testing.expect(saw_alef);
+    try std.testing.expect(saw_maddah);
+}
+
+test "font fallback accepts Arabic clusters covered through normalization" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const primary_bytes = try test_font.buildCodepointSetTtf(allocator, &.{0x0627});
+    defer allocator.free(primary_bytes);
+    const fallback_bytes = try test_font.buildCodepointSetTtf(allocator, &.{0x0622});
+    defer allocator.free(fallback_bytes);
+
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var fallback = try Font.parse(allocator, fallback_bytes);
+    defer fallback.deinit();
+
+    const fonts = [_]*const Font{ &primary, &fallback };
+    const cascade = FontCascade.init(&fonts);
+    try std.testing.expectEqual(@as(usize, 1), try cascade.selectFontForCluster("آ"));
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const shaped = try TextShaper.shapeUtf8CascadeWithOptions(cascade, &buffer, "آ", 20, .{ .direction = .rtl });
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs[0].font_index);
+    try std.testing.expectEqual(@as(usize, 1), shaped.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), shaped.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(u21, 0x0622), shaped.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(usize, "آ".len), shaped.glyphs[0].source_byte_len);
+
+    const decisions = try diagnoseFontFallbackUtf8(allocator, cascade, "آ");
+    defer allocator.free(decisions);
+    try std.testing.expectEqual(@as(usize, 1), decisions.len);
+    try std.testing.expectEqual(@as(usize, 1), decisions[0].font_index);
+    try std.testing.expectEqual(@as(u21, 0x0622), decisions[0].codepoint);
+    try std.testing.expectEqual(@as(usize, "آ".len), decisions[0].byte_len);
+    try std.testing.expect(!decisions[0].missingGlyph());
 }
 
 test "font fallback keeps emoji ZWJ sequences atomic" {

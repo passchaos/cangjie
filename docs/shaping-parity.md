@@ -1288,6 +1288,15 @@ shaping-performance superiority.
   NotoNastaliqUrdu, and the active Devanagari gate; Gulzar now passes a retained
   1,000-line `fa-words` slice, but full broader Arabic font corpora, Urdu,
   Nastaliq, and mixed-script texts still need retained parity coverage.
+- Arabic normalization now composes the focused canonical base+hamza/madda
+  pairs when the selected font has the precomposed cmap glyph. The
+  HarfBuzz in-house `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`
+  `arabic-normalization.tests` slice passes for all 32 lines covered by that
+  font, including contextual forms after `beh` and repeated `yeh+hamza`
+  sequences. The same in-house file still exposes a separate `BadGsub` parser
+  gap on `3e46c3b84c1370a06594736c7f8acebf810bbb3b.ttf`, so broader Arabic
+  normalization parity should continue from that GSUB compatibility issue
+  before claiming the full fixture.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

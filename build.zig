@@ -7,6 +7,10 @@ pub fn build(b: *std.Build) void {
     const harfbuzz_prefix = b.option([]const u8, "harfbuzz-prefix", "Prefix containing HarfBuzz include/ and lib/");
     const harfbuzz_include_dir = b.option([]const u8, "harfbuzz-include-dir", "Directory containing hb.h and hb-ot.h");
     const harfbuzz_lib_dir = b.option([]const u8, "harfbuzz-lib-dir", "Directory containing libharfbuzz");
+    const parity_work_root = b.option([]const u8, "parity-work-root", "Root containing local harfbuzz/ and harfrust/ reference checkouts for shaping parity gates") orelse if (b.graph.environ_map.get("HOME")) |home|
+        b.fmt("{s}/Work", .{home})
+    else
+        null;
     const imx_dep = b.dependency("imx", .{
         .target = target,
         .optimize = optimize,
@@ -173,6 +177,34 @@ pub fn build(b: *std.Build) void {
     shape_bench_step.dependOn(&shape_bench_cmd.step);
     if (b.args) |args| {
         shape_bench_cmd.addArgs(args);
+    }
+
+    const shaping_parity_smoke_step = b.step("shaping-parity-smoke", "Run retained HarfBuzz shaping parity smoke gates");
+    if (!enable_harfbuzz) {
+        shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires -Denable-harfbuzz=true").step);
+    } else if (parity_work_root == null) {
+        shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
+    } else {
+        const work_root = parity_work_root.?;
+        const harfrust_benches = b.fmt("{s}/harfrust/harfrust/benches", .{work_root});
+
+        const dev_parity_cmd = b.addRunArtifact(shape_bench_exe);
+        dev_parity_cmd.addArgs(&.{
+            "--engine",    "compare-harfbuzz",
+            "--font",      b.fmt("{s}/fonts/NotoSansDevanagari-Regular.ttf", .{harfrust_benches}),
+            "--text-file", b.fmt("{s}/texts/hi-words.txt", .{harfrust_benches}),
+            "--direction", "ltr",
+        });
+        shaping_parity_smoke_step.dependOn(&dev_parity_cmd.step);
+
+        const duployan_parity_cmd = b.addRunArtifact(shape_bench_exe);
+        duployan_parity_cmd.addArgs(&.{
+            "--engine",    "compare-harfbuzz",
+            "--font",      b.fmt("{s}/harfbuzz/perf/fonts/NotoSansDuployan-Regular.otf", .{work_root}),
+            "--text-file", b.fmt("{s}/texts/duployan.txt", .{harfrust_benches}),
+            "--direction", "ltr",
+        });
+        shaping_parity_smoke_step.dependOn(&duployan_parity_cmd.step);
     }
 
     const glyph_bench_exe = b.addExecutable(.{

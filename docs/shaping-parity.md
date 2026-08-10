@@ -43,6 +43,7 @@ Run these after shaping hot-path changes:
 
 ```sh
 zig build test
+zig build shaping-parity-smoke -Doptimize=ReleaseFast -Denable-harfbuzz=true -Dharfbuzz-prefix=~/.cache/cangjie-next/harfbuzz-prefix
 zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-words.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/en-words.txt --direction ltr --iterations 1 --warmup 1 --samples 2
@@ -53,7 +54,10 @@ zig build shape-bench -Doptimize=ReleaseFast -- --engine harfbuzz --font ~/Work/
 HarfBuzz reference runs require `-Denable-harfbuzz=true`. If the local
 `~/Work/harfbuzz` checkout is installed into an isolated prefix, pass
 `-Dharfbuzz-prefix=/path/to/prefix`; otherwise the build uses
-`pkg-config harfbuzz`.
+`pkg-config harfbuzz`. `shaping-parity-smoke` runs retained HarfBuzz comparison
+gates for NotoSansDevanagari `hi-words` and the Duployan USE corpus; it defaults
+to `~/Work` and accepts `-Dparity-work-root=/path/to/Work` for other local
+reference roots.
 
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup

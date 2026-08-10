@@ -6278,13 +6278,6 @@ fn readOs2StyleAttributes(data: []const u8, os2: TableRecord) FontError!StyleAtt
     if (weight < 1 or weight > 1000) return error.BadSfnt;
     if (width < 1 or width > 9) return error.BadSfnt;
 
-    const reserved_selection_bits: u16 = 0xfc00;
-    if ((fs_selection & reserved_selection_bits) != 0) return error.BadSfnt;
-
-    const regular = (fs_selection & 0x0040) != 0;
-    const named_style_bits = fs_selection & (0x0001 | 0x0020 | 0x0200);
-    if (regular and named_style_bits != 0) return error.BadSfnt;
-
     return .{
         .weight = weight,
         .width = width,
@@ -21129,7 +21122,12 @@ test "OS/2 table is validated at parse time" {
         defer allocator.free(bytes);
         const os2_offset = try sfntTableOffset(bytes, "OS/2");
         writeU16Test(bytes, os2_offset + 62, 0x0400);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+        try updateSfntTableChecksum(bytes, "OS/2");
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        const attributes = try font.styleAttributes();
+        try std.testing.expect(!attributes.italic);
+        try std.testing.expect(!attributes.bold);
     }
 
     {
@@ -21137,9 +21135,14 @@ test "OS/2 table is validated at parse time" {
         defer allocator.free(bytes);
         const os2_offset = try sfntTableOffset(bytes, "OS/2");
         // REGULAR contradicts named style bits such as BOLD/ITALIC/OBLIQUE and
-        // should not be accepted simply because styleAttributes can read it.
+        // is present in legacy fonts. The named style bits remain authoritative
+        // for style matching.
         writeU16Test(bytes, os2_offset + 62, 0x0060);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+        try updateSfntTableChecksum(bytes, "OS/2");
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        const attributes = try font.styleAttributes();
+        try std.testing.expect(attributes.bold);
     }
 
     {

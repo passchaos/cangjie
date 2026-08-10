@@ -1217,7 +1217,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   (`U+06DD,U+0661,U+0662,U+0663`, script `arab`). Cangjie accepts contextual
   GPOS class subtables whose covered class has no ClassSet slot, matching
   HarfBuzz's no-match behavior, and the parity tool keeps Arabic Prepend
-  clusters in HarfBuzz buffer-cluster order for this row.
+  clusters in HarfBuzz buffer-cluster order for this row. The related
+  `b082211be29a3e2cf91f0fd43497e40b2a27b344.ttf` row
+  (`U+06DD,U+0661,U+0662,U+0628`) also passes. `compare-harfbuzz` now forwards
+  explicit `--script` tags to the in-process HarfBuzz reference, enables
+  HarfBuzz-style native-direction shaping while keeping comparison output in
+  buffer order, and preserves HarfBuzz's exception that pure Arabic numeric runs
+  stay LTR while mixed Arabic-letter runs shape internally RTL.
 - The Dhivehi row from HarfBuzz in-house `language-tags.tests` passes for
   `d3129450fafe5e5c98cfc25a4e71809b1b4d2855.ttf` (`U+007C`) with language
   `dv`. Cangjie now maps BCP-47 `dv` to OpenType `DHV ` so language-system

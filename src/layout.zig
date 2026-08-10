@@ -3304,6 +3304,8 @@ const LookupOptions = struct {
     text_orientation: TextOrientation = .mixed,
     normalized_variation_coords: []const f32 = &.{},
     not_found_variation_selector_glyph: ?u32 = null,
+    run_has_decimal_number: bool = false,
+    run_has_letter: bool = false,
 };
 
 const ResolvedLookupOptions = struct {
@@ -3426,7 +3428,6 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         selected_lookup_options.script_tag = selected_tag;
     }
     const gpos_script_tag = gpos_script.tag orelse selected_lookup_options.script_tag;
-    const lookup_options = selected_lookup_options;
     const scratch = &buffer.shape_scratch;
     scratch.clear();
     const glyph_ids = &scratch.glyph_ids;
@@ -3465,13 +3466,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     try ligature_components.infos.ensureUnusedCapacity(buffer.allocator, text.len);
 
     var has_default_ignorable = false;
-    if (resolved_lookup_options.all_ascii and lookup_options.direction == .ltr) {
+    var run_has_decimal_number = false;
+    var run_has_letter = false;
+    if (resolved_lookup_options.all_ascii and selected_lookup_options.direction == .ltr) {
         // `lookupOptionsForText` already scanned the complete validated run to
         // infer script/language. Reuse its all-ASCII proof: one byte is one
         // source scalar, no variation selector/default-ignorable exists, and
         // LTR shaping needs neither bidi mirroring nor inherited clustering.
         for (text, 0..) |byte, cluster| {
             const glyph_id = try glyphIndexWithOptionalCache(font, glyph_index_cache, byte);
+            run_has_decimal_number = run_has_decimal_number or isShapeNativeDirectionDecimalNumber(byte);
+            run_has_letter = run_has_letter or isShapeNativeDirectionLetter(byte);
             glyph_ids.appendAssumeCapacity(glyph_id);
             codepoints.appendAssumeCapacity(byte);
             clusters.appendAssumeCapacity(cluster_base + cluster);
@@ -3486,6 +3491,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         while (it.i < text.len) {
             const cluster = it.i;
             const codepoint = it.nextCodepoint() orelse break;
+            run_has_decimal_number = run_has_decimal_number or isShapeNativeDirectionDecimalNumber(codepoint);
+            run_has_letter = run_has_letter or isShapeNativeDirectionLetter(codepoint);
             if (isVariationSelector(codepoint)) {
                 if (glyph_ids.items.len != 0) {
                     if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
@@ -3521,7 +3528,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 continue;
             }
             has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
-            if (usesThaiLaoSaraAmPreprocess(lookup_options.script_tag) and isThaiLaoSaraAm(codepoint)) {
+            if (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoSaraAm(codepoint)) {
                 const source_end = cluster_base + it.i;
                 const source_cluster = if (clusters.items.len != 0)
                     clusters.items[clusters.items.len - 1] - cluster_base
@@ -3584,10 +3591,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 it.i = value.byte_end;
                 break :glyph value.glyph_id;
             } else glyph: {
-                const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
+                const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, selected_lookup_options);
                 break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
-            const source_cluster = if (lookup_options.direction == .rtl and
+            const source_cluster = if (selected_lookup_options.direction == .rtl and
                 unicode.inheritsPreviousClusterInRtlShaping(codepoint) and
                 clusters.items.len != 0)
                 clusters.items[clusters.items.len - 1] - cluster_base
@@ -3612,7 +3619,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         p.glyph_count += glyph_ids.items.len;
     }
 
-    if (shouldShapeInNativeDirection(lookup_options)) {
+    selected_lookup_options.run_has_decimal_number = run_has_decimal_number;
+    selected_lookup_options.run_has_letter = run_has_letter;
+    const lookup_options = selected_lookup_options;
+
+    const shape_in_native_direction = shouldShapeInNativeDirection(lookup_options);
+    if (shape_in_native_direction) {
         reverseScratchGlyphOrderForNativeDirection(scratch);
     }
 
@@ -4233,6 +4245,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             lookup_options,
         );
     }
+    if (shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl) {
+        std.mem.reverse(GlyphPosition, buffer.glyphs.items[segment_glyph_start..]);
+    }
     if (shape_profile) |p| p.position_ns += shapeProfileElapsed(position_start, profile_io);
 }
 
@@ -4541,10 +4556,42 @@ fn isFractionDecimalNumber(codepoint: u21) bool {
         (codepoint >= 0x0660 and codepoint <= 0x0669);
 }
 
+fn isShapeNativeDirectionDecimalNumber(codepoint: u21) bool {
+    return (codepoint >= '0' and codepoint <= '9') or
+        (codepoint >= 0x0660 and codepoint <= 0x0669) or
+        (codepoint >= 0x06f0 and codepoint <= 0x06f9);
+}
+
+fn isShapeNativeDirectionLetter(codepoint: u21) bool {
+    if (isShapeNativeDirectionDecimalNumber(codepoint) or
+        unicode.isUnicodeMarkCodepoint(codepoint) or
+        unicode.isDefaultIgnorableForShaping(codepoint) or
+        isShapeNativeDirectionFormatControl(codepoint))
+    {
+        return false;
+    }
+    return switch (unicode.bidiClassForCodepoint(codepoint)) {
+        .ltr, .rtl => true,
+        else => false,
+    };
+}
+
+fn isShapeNativeDirectionFormatControl(codepoint: u21) bool {
+    return (codepoint >= 0x0600 and codepoint <= 0x0605) or
+        codepoint == 0x06dd or
+        codepoint == 0x070f or
+        (codepoint >= 0x0890 and codepoint <= 0x0891) or
+        codepoint == 0x08e2 or
+        codepoint == 0x0d4e or
+        codepoint == 0x110bd or
+        codepoint == 0x110cd;
+}
+
 fn shouldShapeInNativeDirection(options: LookupOptions) bool {
     if (!options.reorder_bidi and !options.native_direction_shaping) return false;
     if (options.writing_mode.isVertical()) return false;
     const native_direction = textDirectionFromBidiClass(nativeHorizontalDirection(options) orelse return false);
+    if (options.direction == .ltr and native_direction == .rtl and options.run_has_decimal_number and !options.run_has_letter) return false;
     return options.direction != native_direction;
 }
 

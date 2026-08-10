@@ -158,8 +158,12 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
         .ttb => hb.HB_DIRECTION_TTB,
         .btt => hb.HB_DIRECTION_BTT,
     });
-    if (scriptTagForText(line)) |script_tag| {
-        hb.hb_buffer_set_script(buffer, hb.hb_ot_tag_to_script(script_tag));
+    const script_tag = if (options.script_tag) |tag|
+        @as(c_uint, @intCast(@intFromEnum(tag)))
+    else
+        scriptTagForText(line);
+    if (script_tag) |tag| {
+        hb.hb_buffer_set_script(buffer, hb.hb_ot_tag_to_script(tag));
     }
     if (options.language_tag) |language_tag| {
         if (options_mod.harfrustLanguageArgument(language_tag)) |language_text| {

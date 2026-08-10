@@ -153,6 +153,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .script = "arab",
     },
     .{
+        .font_hash = "b082211be29a3e2cf91f0fd43497e40b2a27b344",
+        .text = "۝١٢ب",
+        .direction = "ltr",
+        .script = "arab",
+    },
+    .{
         .font_hash = "d3129450fafe5e5c98cfc25a4e71809b1b4d2855",
         .text = "|",
         .direction = "ltr",

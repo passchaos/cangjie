@@ -15,6 +15,7 @@ const layout_scratch = @import("layout_scratch.zig");
 const myanmar = @import("myanmar.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const bidi = @import("text/bidi.zig");
+const space_fallback = @import("space_fallback.zig");
 const unicode = @import("unicode.zig");
 const use_shaper = @import("use_shaper.zig");
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
@@ -3527,7 +3528,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 break :glyph value.glyph_id;
             } else glyph: {
                 const shaped_codepoint = try mirroredCodepointForRtlShaping(font, glyph_index_cache, codepoint, lookup_options);
-                break :glyph try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
+                break :glyph (try space_fallback.glyphForCodepoint(font, shaped_codepoint)) orelse
+                    try glyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
             const source_cluster = if (lookup_options.direction == .rtl and
                 unicode.inheritsPreviousClusterInRtlShaping(codepoint) and
@@ -4026,7 +4028,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             has_gpos_positioning,
             lookup_options,
         );
-        const base_advance = if (hide_default_ignorable or mark_zeroing.zero_advance) 0 else metrics.advance_width;
+        const fallback_space_advance = if (!lookup_options.writing_mode.isVertical())
+            try space_fallback.advanceWidth(font, source_codepoint, glyph_id, metrics.advance_width)
+        else
+            null;
+        const base_advance = if (hide_default_ignorable or mark_zeroing.zero_advance)
+            0
+        else if (fallback_space_advance) |value|
+            value
+        else
+            metrics.advance_width;
         const horizontal_advance = if (hide_default_ignorable)
             0
         else

@@ -1529,14 +1529,15 @@ shaping-performance superiority.
   `55e2910dbc9ef5dd89f4e146e7e0152169545b6a.ttf` is retained for
   `U+0D4E,U+0D15`; Cangjie now reorders logical Malayalam repha after its base
   and keeps the pair in one shaping cluster. The same fixture is retained for
-  the first 12 `indic-malayalam-dot-reph.tests` rows, including Malayalam
-  split-matra rows `U+0D17,U+0D4B`, `U+0D4E,U+0D17,U+0D4B`, and
+  the first 12 `indic-malayalam-dot-reph.tests` rows plus row 15, including
+  Malayalam split-matra rows `U+0D17,U+0D4B`, `U+0D4E,U+0D17,U+0D4B`, and
   `U+0D17,U+0D4D,U+0D17,U+0D4B`;
   Cangjie now runs canonical split-matra decomposition in the Indic path so
   U+0D4B shapes as `E + AA` components before GSUB/GPOS, and merges those
-  components back into the conjunct syllable cluster. Rows 13 and 14 of that
-  fixture still differ in mark advance, and row 15 still differs in virama/repha
-  glyph order, so those are not retained yet. The Gurmukhi standalone U+0A51 row from
+  components back into the conjunct syllable cluster. Logical repha now follows
+  a visible final Malayalam virama, matching row 15's `caca, virama, repha`
+  order. Rows 13 and 14 of that fixture still differ in mark advance, so those
+  are not retained yet. The Gurmukhi standalone U+0A51 row from
   `indic-syllable.tests` is retained for
   `1735326da89f0818cd8c51a0600e9789812c0f94.ttf`, along with the explicit
   `U+25CC,U+0A51` control row. Cangjie now routes `gur2`/`guru` through the

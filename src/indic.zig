@@ -328,6 +328,13 @@ fn logicalRephaTargetGlyph(sources: []const usize, codepoints: []const u21, syll
     for (sources, 0..) |source, glyph_index| {
         if (source == 0 or source >= syllable_end or source >= codepoints.len) continue;
         if (isIndicBase(codepoints[source], script_tag)) target = glyph_index;
+        if (codepoints[source] == viramaCodepoint(script_tag) and
+            source > 0 and
+            isIndicConsonant(codepoints[source - 1], script_tag) and
+            target != null)
+        {
+            target = glyph_index;
+        }
     }
     return target;
 }
@@ -1420,6 +1427,35 @@ test "Malayalam split matra components merge with conjunct syllable" {
     mergeTrailingDependentMarks(&clusters, &sources, &codepoints, .mlm2);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 0 }, clusters.items);
+}
+
+test "Malayalam logical repha follows visible final virama" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 12, 22, 11 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 4 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 12 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, true, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0d4e, 0x0d1a, 0x0d4d, 0x0d1a, 0x0d4d };
+    reorderLogicalRepha(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .mlm2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 22, 11, 12 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 4, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0 }, clusters.items);
 }
 
 test "Tamil consonant virama marks half source" {

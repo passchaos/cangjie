@@ -1543,7 +1543,11 @@ shaping-performance superiority.
   retained gate for `e716f6bd00a108d186b7e9f47b4515565f784f36.ttf`; Cangjie
   routes `tel2`/`telu` through the Indic shaper, applies Telugu `blwf`/`abvs`
   and final `haln`, and reorders before-subscript vowels ahead of formed
-  subscript consonants.
+  subscript consonants. The Tamil `indic-syllable.tests` row for
+  `54674a3111d209fb6be0ed31745314b7a8d2c244.ttf` is retained for
+  `U+0BA4,U+0BCD,U+00B3`; Cangjie now routes `tml2`/`taml` through the Indic
+  shaper and marks Tamil `consonant+virama` sources for `half`, covering the
+  `ta + pulli` pre-half form before a non-Tamil following glyph.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

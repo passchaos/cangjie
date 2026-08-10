@@ -19,7 +19,7 @@ const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng, .gur2, .guru, .tel2, .telu, .knd2, .knda, .mlm2, .mlym => true,
+        .dev2, .bng2, .beng, .gur2, .guru, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -365,6 +365,7 @@ fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
         .gur2, .guru => codepoint == 0x0a3f,
         .tel2, .telu => codepoint == 0x0c46 or codepoint == 0x0c47 or codepoint == 0x0c48,
         .knd2, .knda => codepoint == 0x0cbf,
+        .tml2, .taml => codepoint == 0x0bc6 or codepoint == 0x0bc7 or codepoint == 0x0bc8,
         .mlm2, .mlym => codepoint == 0x0d46 or codepoint == 0x0d47 or codepoint == 0x0d48,
         else => codepoint == 0x093f,
     };
@@ -441,6 +442,12 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         }
         return marked;
     }
+    if (script_tag == .tml2 or script_tag == .taml) {
+        if (markPreBaseConsonantViramaSources(source_features, codepoints, syllable_start, syllable_end, script_tag, half_source_mask)) {
+            marked = true;
+        }
+        return marked;
+    }
     if (script_tag == .knd2 or script_tag == .knda) {
         if (markKannadaRaHalfSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
             marked = true;
@@ -457,6 +464,18 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         if (!hasConsonant(codepoints[virama_index + 1 .. syllable_end], script_tag)) continue;
 
         source_features[index] |= half_source_mask;
+        marked = true;
+    }
+    return marked;
+}
+
+fn markPreBaseConsonantViramaSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag, source_mask: u32) bool {
+    var marked = false;
+    var index = syllable_start;
+    while (index + 1 < syllable_end) : (index += 1) {
+        if (!isIndicConsonant(codepoints[index], script_tag)) continue;
+        if (codepoints[index + 1] != viramaCodepoint(script_tag)) continue;
+        source_features[index] |= source_mask;
         marked = true;
     }
     return marked;
@@ -770,6 +789,7 @@ fn isIndicSyllableModifier(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
         .gur2, .guru => codepoint >= 0x0a01 and codepoint <= 0x0a03,
         .tel2, .telu => codepoint >= 0x0c00 and codepoint <= 0x0c03,
         .knd2, .knda => codepoint >= 0x0c82 and codepoint <= 0x0c83,
+        .tml2, .taml => codepoint == 0x0b82 or codepoint == 0x0b83,
         else => codepoint >= 0x0900 and codepoint <= 0x0903,
     };
 }
@@ -804,6 +824,9 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
             codepoint == 0x0c59,
         .knd2, .knda => (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
             codepoint == 0x0cde,
+        .tml2, .taml => (codepoint >= 0x0b95 and codepoint <= 0x0bb9) or
+            (codepoint >= 0x0bd0 and codepoint <= 0x0bd7) or
+            (codepoint >= 0x11fc0 and codepoint <= 0x11ff1),
         .mlm2, .mlym => (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
             (codepoint >= 0x0d54 and codepoint <= 0x0d56) or
             (codepoint >= 0x0d7a and codepoint <= 0x0d7f),
@@ -830,6 +853,8 @@ fn isIndicIndependentVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
             (codepoint >= 0x0c92 and codepoint <= 0x0c94) or
             codepoint == 0x0ce0 or
             codepoint == 0x0ce1,
+        .tml2, .taml => (codepoint >= 0x0b85 and codepoint <= 0x0b94) or
+            codepoint >= 0x11fc0 and codepoint <= 0x11fd4,
         .mlm2, .mlym => (codepoint >= 0x0d05 and codepoint <= 0x0d14) or
             codepoint == 0x0d60 or
             codepoint == 0x0d61,
@@ -868,6 +893,12 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
             (codepoint >= 0x0cca and codepoint <= 0x0ccd) or
             (codepoint >= 0x0cd5 and codepoint <= 0x0cd6) or
             (codepoint >= 0x0ce2 and codepoint <= 0x0ce3),
+        .tml2, .taml => codepoint == 0x0b82 or
+            codepoint == 0x0b83 or
+            (codepoint >= 0x0bbe and codepoint <= 0x0bc2) or
+            (codepoint >= 0x0bc6 and codepoint <= 0x0bc8) or
+            (codepoint >= 0x0bca and codepoint <= 0x0bcd) or
+            codepoint == 0x0bd7,
         .mlm2, .mlym => (codepoint >= 0x0d00 and codepoint <= 0x0d03) or
             (codepoint >= 0x0d3b and codepoint <= 0x0d4c) or
             codepoint == 0x0d57,
@@ -891,6 +922,7 @@ fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
         .gur2, .guru => 0x0a4d,
         .tel2, .telu => 0x0c4d,
         .knd2, .knda => 0x0ccd,
+        .tml2, .taml => 0x0bcd,
         .mlm2, .mlym => 0x0d4d,
         else => 0x094d,
     };
@@ -902,6 +934,7 @@ fn rephRaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
         .gur2, .guru => 0x0a30,
         .tel2, .telu => 0x0c30,
         .knd2, .knda => 0x0cb0,
+        .tml2, .taml => 0x0bb0,
         .mlm2, .mlym => 0x0d30,
         else => 0x0930,
     };
@@ -1105,6 +1138,15 @@ test "Malayalam post-base virama consonant marks pstf source" {
     try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .mlm2));
     try std.testing.expectEqual(pstf_source_mask, features[1]);
     try std.testing.expectEqual(@as(u32, 0), features[2]);
+}
+
+test "Tamil consonant virama marks half source" {
+    var features = [_]u32{0} ** 3;
+    const codepoints = [_]u21{ 0x0ba4, 0x0bcd, 0x00b3 };
+
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .tml2));
+    try std.testing.expectEqual(half_source_mask, features[0]);
+    try std.testing.expectEqual(@as(u32, 0), features[1]);
 }
 
 test "Bengali pre-base matras move before bases and mark init only at word start" {

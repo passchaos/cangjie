@@ -1,5 +1,18 @@
 const std = @import("std");
 
+const retained_use_fixture_hashes = [_][]const u8{
+    "23406a60ab081c4fb15e1596ea1cd4f27ae8443e",
+    "2a670df15b73a5dc75a5cc491bde5ac93c5077dc",
+    "4afb0e8b9a86bb9bd73a1247de4e33fbe3c1fd93",
+    "4cce528e99f600ed9c25a2b69e32eb94a03b4ae8",
+    "573d3a3177c9a8646e94c8a0d7b224334340946a",
+    "6ff0fbead4462d9f229167b4e6839eceb8465058",
+    "7c24183f26d60df414578a0a9f5e79ab9d32a22b",
+    "dcf774ca21062e7439f98658b18974ea8b956d0c",
+    "f518eb6f6b5eec2946c9fbbbde44e45d46f5e2ac",
+    "fbb6c84c9e1fe0c39e152fbe845e51fd81f6748e",
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -180,13 +193,17 @@ pub fn build(b: *std.Build) void {
     }
 
     const shaping_parity_smoke_step = b.step("shaping-parity-smoke", "Run retained HarfBuzz shaping parity smoke gates");
+    const shaping_use_parity_smoke_step = b.step("shaping-use-parity-smoke", "Run retained HarfBuzz USE fixture parity smoke gates");
     if (!enable_harfbuzz) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires -Denable-harfbuzz=true").step);
+        shaping_use_parity_smoke_step.dependOn(&b.addFail("shaping-use-parity-smoke requires -Denable-harfbuzz=true").step);
     } else if (parity_work_root == null) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
+        shaping_use_parity_smoke_step.dependOn(&b.addFail("shaping-use-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
     } else {
         const work_root = parity_work_root.?;
         const harfrust_benches = b.fmt("{s}/harfrust/harfrust/benches", .{work_root});
+        const harfbuzz_in_house_fonts = b.fmt("{s}/harfbuzz/test/shape/data/in-house/fonts", .{work_root});
 
         const dev_parity_cmd = b.addRunArtifact(shape_bench_exe);
         dev_parity_cmd.addArgs(&.{
@@ -205,6 +222,18 @@ pub fn build(b: *std.Build) void {
             "--direction", "ltr",
         });
         shaping_parity_smoke_step.dependOn(&duployan_parity_cmd.step);
+
+        for (retained_use_fixture_hashes) |hash| {
+            const use_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            use_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}.ttf", .{ harfbuzz_in_house_fonts, hash }),
+                "--text-file", b.fmt("tests/data/use/{s}.txt", .{hash}),
+                "--direction", "ltr",
+            });
+            shaping_use_parity_smoke_step.dependOn(&use_parity_cmd.step);
+        }
+        shaping_parity_smoke_step.dependOn(shaping_use_parity_smoke_step);
     }
 
     const glyph_bench_exe = b.addExecutable(.{

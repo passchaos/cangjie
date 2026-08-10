@@ -55,9 +55,9 @@ HarfBuzz reference runs require `-Denable-harfbuzz=true`. If the local
 `~/Work/harfbuzz` checkout is installed into an isolated prefix, pass
 `-Dharfbuzz-prefix=/path/to/prefix`; otherwise the build uses
 `pkg-config harfbuzz`. `shaping-parity-smoke` runs retained HarfBuzz comparison
-gates for NotoSansDevanagari `hi-words` and the Duployan USE corpus; it defaults
-to `~/Work` and accepts `-Dparity-work-root=/path/to/Work` for other local
-reference roots.
+gates for NotoSansDevanagari `hi-words`, the Duployan USE corpus, and every
+fixture under `tests/data/use/`; it defaults to `~/Work` and accepts
+`-Dparity-work-root=/path/to/Work` for other local reference roots.
 
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup
@@ -137,11 +137,13 @@ Two additional upstream gates close the remaining compact USE test sets:
   `4f94b265e784b828`). Together with the previously retained per-script files,
   all 27 inputs from that upstream test now have a local corpus gate.
 
-Run each gate with both `compare-harfbuzz` and `compare-harfrust`, following the
-same command pattern above. The Tai Tham slice specifically covers independent
-SAKOT grapheme boundaries, three adjacent USE syllables, broken-syllable dotted
-circle insertion without GDEF classes, and a synthetic base retaining its
-advance instead of inheriting the broken mark's fallback class.
+`zig build shaping-use-parity-smoke -Doptimize=ReleaseFast -Denable-harfbuzz=true`
+runs the full `tests/data/use/*.txt` HarfBuzz gate. Run each compact extra gate
+with both `compare-harfbuzz` and `compare-harfrust`, following the same command
+pattern above. The Tai Tham slice specifically covers independent SAKOT grapheme
+boundaries, three adjacent USE syllables, broken-syllable dotted circle insertion
+without GDEF classes, and a synthetic base retaining its advance instead of
+inheriting the broken mark's fallback class.
 
 The complete 27-case set passes HarfRust 0.12 and matches the expected output
 from the local HarfBuzz 14.3 checkout. System HarfBuzz 8.3 differs on the

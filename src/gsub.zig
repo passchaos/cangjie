@@ -3918,6 +3918,11 @@ fn contextualMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []co
     // ligature component merely because the lookup is matching its input run.
     if (codepoint == 0x034f) return true;
     if (!context_match) return false;
+    // Mongolian Vowel Separator is default-ignorable, but Mongolian fonts may
+    // name it explicitly in contextual backtrack/lookahead. HarfBuzz treats
+    // default-ignorables as maybe-skippable; keeping U+180E visible here lets
+    // explicit MVS rules match instead of being skipped unconditionally.
+    if (codepoint == 0x180e) return false;
     if (glyphWasSubstituted(options, glyph_index)) return false;
     if (!unicode.isDefaultIgnorableForShaping(codepoint)) return false;
     if (codepoint == 0x200c and !options.active_auto_zwnj) return false;

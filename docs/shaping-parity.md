@@ -1310,11 +1310,10 @@ shaping-performance superiority.
   `4d4206e30b2dbf1c1ef492a8eae1c9e7829ebad8.ttf` after `gasp` parsing was
   relaxed to match FreeType/HarfBuzz-style structural validation: version-0
   tables that carry version-1 behavior bits are accepted, while behavior
-  queries mask those bits to the version-0 low-bit contract. A retained
-  follow-up remains for the MVS word case `U+182A,U+1820,U+1822,U+182D,U+180E,
-  U+1820,U+202F,U+1836,U+1822,U+1828`, where HarfBuzz selects the FVS-style
-  final forms around U+180E and Cangjie still selects the default final/isolated
-  forms.
+  queries mask those bits to the version-0 low-bit contract. The MVS word case
+  `U+182A,U+1820,U+1822,U+182D,U+180E,U+1820,U+202F,U+1836,U+1822,U+1828`
+  now also matches after contextual GSUB learned to keep U+180E visible for
+  explicit Mongolian backtrack/lookahead rules.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

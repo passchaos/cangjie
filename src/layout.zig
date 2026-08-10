@@ -10,6 +10,7 @@ const gsub = @import("gsub.zig");
 const indic = @import("indic.zig");
 const layout_cache = @import("layout_cache.zig");
 const layout_scratch = @import("layout_scratch.zig");
+const shaping_metadata = @import("shaping_metadata.zig");
 const bidi = @import("text/bidi.zig");
 const unicode = @import("unicode.zig");
 const use_shaper = @import("use_shaper.zig");
@@ -3563,6 +3564,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         ligature_components,
         codepoints.items,
     );
+    if (lookup_options.script_tag == .arab) {
+        reorderArabicModifierMarksForShaping(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            codepoints.items,
+        );
+    }
     if (lookup_options.script_tag == .arab and codepoints.items.len != 0) {
         try joining_forms.resize(buffer.allocator, codepoints.items.len);
         try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
@@ -4502,6 +4513,49 @@ fn reorderMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std
             std.mem.swap(ligature_provenance.Info, &ligature_components.infos.items[j - 1], &ligature_components.infos.items[j]);
         }
     }
+}
+
+fn reorderArabicModifierMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21) void {
+    var run_start: ?usize = null;
+    for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
+        const modified_class = markSortClass(source_index, codepoints);
+        if (modified_class == 0) {
+            if (run_start) |start| reorderArabicModifierMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_index);
+            run_start = null;
+            continue;
+        }
+        if (run_start == null) run_start = glyph_index;
+    }
+    if (run_start) |start| reorderArabicModifierMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_source_indices.items.len);
+}
+
+fn reorderArabicModifierMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, start: usize, end: usize) void {
+    var insertion = start;
+    for (start..end) |index| {
+        const source_index = glyph_source_indices.items[index];
+        if (source_index >= codepoints.len or !isArabicModifierCombiningMark(codepoints[source_index])) continue;
+        if (index == insertion) {
+            insertion += 1;
+            continue;
+        }
+        shaping_metadata.move(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            index,
+            insertion,
+        );
+        insertion += 1;
+    }
+}
+
+fn isArabicModifierCombiningMark(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x0654, 0x0655, 0x0658, 0x06dc, 0x06e3, 0x06e7, 0x06e8, 0x08ca, 0x08cb, 0x08cd, 0x08ce, 0x08cf, 0x08d3, 0x08f3 => true,
+        else => false,
+    };
 }
 
 fn markSortClass(source_index: usize, codepoints: []const u21) u8 {

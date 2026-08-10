@@ -63,7 +63,8 @@ fixture under `tests/data/use/`; it defaults to `~/Work` and accepts
 SourceSerifVariable `en-words`/`en-thelittleprince` corpus gates against both
 HarfBuzz and HarfRust. It also includes a Bengali HarfBuzz in-house shaping
 subset that omits `hhea`/`hmtx` and `glyf`, exercising shape-only font parsing
-with HarfBuzz-compatible fallback advances.
+with HarfBuzz-compatible fallback advances, plus Arabic modifier-mark ordering
+fixtures with and without CGJ.
 
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup

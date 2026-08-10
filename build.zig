@@ -74,6 +74,16 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .text = "ড় ঢ় ড় ঢ়",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "21b7fb9c1eeae260473809fbc1fe330f66a507cd",
+        .text = "ىِٕ",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "21b7fb9c1eeae260473809fbc1fe330f66a507cd",
+        .text = "ىٕ͏ِ",
+        .direction = "rtl",
+    },
 };
 
 pub fn build(b: *std.Build) void {

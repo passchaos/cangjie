@@ -158,10 +158,15 @@ const PairPosAcceleratorKind = enum(u8) {
     generic,
     format_1_x_advance,
     format_2_x_advance,
+    format_2_dense_x_advance,
 };
 
 const PairPosSubtableAccelerator = struct {
     kind: PairPosAcceleratorKind = .generic,
+    // Format 1 uses these as the global record slice. Dense format 2 has no
+    // PairPosRecord slice, so it reuses the same otherwise-idle words for the
+    // ClassDef1-coverage and ClassDef2 base glyphs without widening the hot
+    // LookupAccelerator sidecar.
     record_start: usize = 0,
     record_len: usize = 0,
     coverage_start: usize = 0,
@@ -620,6 +625,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
 
 const max_predecoded_pair_class_glyphs = 16_384;
 const max_predecoded_pair_class_matrix = 16_384;
+const max_dense_pair_class_entries = 8_192;
 
 fn appendSimplePairPosRecords(
     table: Table,
@@ -739,7 +745,43 @@ fn appendSimplePairPosFormat2Records(
         coverage_classes.shrinkRetainingCapacity(coverage_start);
         return .{};
     }
-    const class_2_len = class_entries.items.len - class_2_start;
+    const coverage_entries = coverage_classes.items[coverage_start..];
+    const class_2_entries = class_entries.items[class_2_start..];
+    const dense_ranges = pairClassDenseRanges(coverage_entries, class_2_entries);
+    var dense = false;
+    if (dense_ranges) |ranges| {
+        if (shouldBuildDensePairClasses(ranges) and
+            pairClassEntriesFitDenseRanges(coverage_entries, class_2_entries, ranges))
+        {
+            const dense_coverage = try allocator.alloc(PairClassEntry, ranges.coverage_len);
+            defer allocator.free(dense_coverage);
+            for (dense_coverage, 0..) |*entry, index| {
+                entry.* = .{
+                    .glyph = @intCast(@as(usize, ranges.coverage_base) + index),
+                    // Class zero is a valid covered class. Reserve the one
+                    // value Class1Count cannot admit as an uncovered sentinel.
+                    .class = std.math.maxInt(u16),
+                };
+            }
+            for (coverage_entries) |entry| {
+                dense_coverage[entry.glyph - ranges.coverage_base] = entry;
+            }
+            coverage_classes.shrinkRetainingCapacity(coverage_start);
+            try coverage_classes.appendSlice(allocator, dense_coverage);
+
+            const dense_class_2 = try allocator.alloc(PairClassEntry, ranges.class_2_len);
+            defer allocator.free(dense_class_2);
+            for (dense_class_2, 0..) |*entry, index| {
+                entry.* = .{ .glyph = @intCast(@as(usize, ranges.class_2_base) + index), .class = 0 };
+            }
+            for (class_2_entries) |entry| {
+                dense_class_2[entry.glyph - ranges.class_2_base] = entry;
+            }
+            class_entries.shrinkRetainingCapacity(class_2_start);
+            try class_entries.appendSlice(allocator, dense_class_2);
+            dense = true;
+        }
+    }
 
     const matrix_start = class_matrix.items.len;
     for (0..matrix_len) |record_index| {
@@ -749,15 +791,64 @@ fn appendSimplePairPosFormat2Records(
         );
     }
     return .{
-        .kind = .format_2_x_advance,
+        .kind = if (dense) .format_2_dense_x_advance else .format_2_x_advance,
+        .record_start = if (dense) dense_ranges.?.coverage_base else 0,
+        .record_len = if (dense) dense_ranges.?.class_2_base else 0,
         .coverage_start = coverage_start,
-        .coverage_len = coverage_count,
+        .coverage_len = coverage_classes.items.len - coverage_start,
         .class_2_start = class_2_start,
-        .class_2_len = class_2_len,
+        .class_2_len = class_entries.items.len - class_2_start,
         .class_1_count = class_1_count,
         .class_2_count = class_2_count,
         .matrix_start = matrix_start,
     };
+}
+
+const PairClassDenseRanges = struct {
+    coverage_base: GlyphId,
+    coverage_len: usize,
+    class_2_base: GlyphId,
+    class_2_len: usize,
+};
+
+fn pairClassDenseRanges(coverage: []const PairClassEntry, class_2: []const PairClassEntry) ?PairClassDenseRanges {
+    if (coverage.len == 0) return null;
+    const coverage_base = coverage[0].glyph;
+    const coverage_end = coverage[coverage.len - 1].glyph;
+    if (coverage_end < coverage_base) return null;
+    const class_2_base = if (class_2.len != 0) class_2[0].glyph else 0;
+    const class_2_end = if (class_2.len != 0) class_2[class_2.len - 1].glyph else 0;
+    if (class_2_end < class_2_base) return null;
+    return .{
+        .coverage_base = coverage_base,
+        .coverage_len = @as(usize, coverage_end) - coverage_base + 1,
+        .class_2_base = class_2_base,
+        .class_2_len = if (class_2.len != 0)
+            @as(usize, class_2_end) - class_2_base + 1
+        else
+            0,
+    };
+}
+
+fn pairClassEntriesFitDenseRanges(
+    coverage: []const PairClassEntry,
+    class_2: []const PairClassEntry,
+    ranges: PairClassDenseRanges,
+) bool {
+    const coverage_end = @as(usize, ranges.coverage_base) + ranges.coverage_len;
+    for (coverage) |entry| {
+        if (entry.glyph < ranges.coverage_base or entry.glyph >= coverage_end) return false;
+    }
+    const class_2_end = @as(usize, ranges.class_2_base) + ranges.class_2_len;
+    for (class_2) |entry| {
+        if (entry.glyph < ranges.class_2_base or entry.glyph >= class_2_end) return false;
+    }
+    return true;
+}
+
+fn shouldBuildDensePairClasses(ranges: PairClassDenseRanges) bool {
+    return ranges.coverage_len <= max_dense_pair_class_entries and
+        ranges.class_2_len <= max_dense_pair_class_entries - ranges.coverage_len;
 }
 
 fn coverageGlyphCount(table: Table, coverage_offset: usize) GposError!usize {
@@ -1778,6 +1869,19 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
                     }, true);
                     break;
                 },
+                .format_2_dense_x_advance => {
+                    const x_advance = acceleratedDenseClassPairAdvance(
+                        accelerator,
+                        pair_accelerator,
+                        glyphs[first_index],
+                        glyphs[second_index],
+                    ) orelse continue;
+                    try appendAdjustment(adjustments, allocator, first_index, .{
+                        .index = first_index,
+                        .x_advance = x_advance,
+                    }, true);
+                    break;
+                },
                 .generic => {},
             }
             const lookup_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
@@ -1817,6 +1921,28 @@ fn acceleratedClassPairAdvance(accelerator: *const LookupAccelerator, subtable: 
         accelerator.pair_pos_class_entries[subtable.class_2_start .. subtable.class_2_start + subtable.class_2_len],
         second,
     );
+    if (class_1 >= subtable.class_1_count or class_2 >= subtable.class_2_count) return null;
+    return accelerator.pair_pos_class_matrix[
+        subtable.matrix_start + @as(usize, class_1) * subtable.class_2_count + class_2
+    ];
+}
+
+fn acceleratedDenseClassPairAdvance(accelerator: *const LookupAccelerator, subtable: PairPosSubtableAccelerator, first: GlyphId, second: GlyphId) ?i16 {
+    const first_index: usize = first;
+    if (first_index < subtable.record_start or first_index - subtable.record_start >= subtable.coverage_len) return null;
+    const coverage_entry = accelerator.pair_pos_coverage_classes[
+        subtable.coverage_start + first_index - subtable.record_start
+    ];
+    if (coverage_entry.class == std.math.maxInt(u16)) return null;
+    const class_1 = coverage_entry.class;
+
+    const second_index: usize = second;
+    const class_2 = if (second_index >= subtable.record_len and second_index - subtable.record_len < subtable.class_2_len)
+        accelerator.pair_pos_class_entries[
+            subtable.class_2_start + second_index - subtable.record_len
+        ].class
+    else
+        0;
     if (class_1 >= subtable.class_1_count or class_2 >= subtable.class_2_count) return null;
     return accelerator.pair_pos_class_matrix[
         subtable.matrix_start + @as(usize, class_1) * subtable.class_2_count + class_2
@@ -6589,7 +6715,7 @@ test "GPOS ExtensionPos PairPos accelerator preserves device stride and preceden
     try std.testing.expect(accelerator.pair_pos_extension);
     try std.testing.expectEqual(@as(usize, 2), accelerator.pair_pos_subtables.len);
     try std.testing.expectEqual(PairPosAcceleratorKind.format_1_x_advance, accelerator.pair_pos_subtables[0].kind);
-    try std.testing.expectEqual(PairPosAcceleratorKind.format_2_x_advance, accelerator.pair_pos_subtables[1].kind);
+    try std.testing.expectEqual(PairPosAcceleratorKind.format_2_dense_x_advance, accelerator.pair_pos_subtables[1].kind);
     const candidates = chainingSubtableGroupForGlyph(
         accelerator.coverage_groups,
         accelerator.coverage_group_slots,
@@ -6745,26 +6871,113 @@ test "GPOS class PairPos accelerator honors coverage and implicit class zero" {
         &matrix,
         allocator,
     );
-    try std.testing.expectEqual(PairPosAcceleratorKind.format_2_x_advance, accelerator.kind);
+    try std.testing.expectEqual(PairPosAcceleratorKind.format_2_dense_x_advance, accelerator.kind);
     try std.testing.expectEqual(@as(usize, 1), coverage.items.len);
     try std.testing.expectEqual(PairClassEntry{ .glyph = 5, .class = 1 }, coverage.items[0]);
-    try std.testing.expectEqual(@as(?u16, 1), coveredPairClassForGlyph(coverage.items, 5));
-    try std.testing.expectEqual(@as(?u16, null), coveredPairClassForGlyph(coverage.items, 6));
-    try std.testing.expectEqual(@as(?i16, -35), acceleratedClassPairAdvance(&.{
+    try std.testing.expectEqual(@as(?i16, -35), acceleratedDenseClassPairAdvance(&.{
         .pair_pos_coverage_classes = coverage.items,
         .pair_pos_class_entries = classes.items,
         .pair_pos_class_matrix = matrix.items,
     }, accelerator, 5, 7));
-    try std.testing.expectEqual(@as(?i16, -15), acceleratedClassPairAdvance(&.{
+    try std.testing.expectEqual(@as(?i16, -15), acceleratedDenseClassPairAdvance(&.{
         .pair_pos_coverage_classes = coverage.items,
         .pair_pos_class_entries = classes.items,
         .pair_pos_class_matrix = matrix.items,
     }, accelerator, 5, 8));
-    try std.testing.expectEqual(@as(?i16, null), acceleratedClassPairAdvance(&.{
+    try std.testing.expectEqual(@as(?i16, null), acceleratedDenseClassPairAdvance(&.{
         .pair_pos_coverage_classes = coverage.items,
         .pair_pos_class_entries = classes.items,
         .pair_pos_class_matrix = matrix.items,
     }, accelerator, 6, 7));
+}
+
+test "GPOS dense class PairPos distinguishes coverage holes from class zero" {
+    const missing = std.math.maxInt(u16);
+    const accelerator = LookupAccelerator{
+        .pair_pos_coverage_classes = &.{
+            .{ .glyph = 5, .class = 0 },
+            .{ .glyph = 6, .class = missing },
+            .{ .glyph = 7, .class = 1 },
+        },
+        .pair_pos_class_entries = &.{
+            .{ .glyph = 9, .class = 2 },
+            .{ .glyph = 10, .class = 0 },
+        },
+        // [class1][class2], with three Class2 columns.
+        .pair_pos_class_matrix = &.{
+            -10, -11, -12,
+            -20, -21, -22,
+        },
+    };
+    const subtable = PairPosSubtableAccelerator{
+        .kind = .format_2_dense_x_advance,
+        .record_start = 5,
+        .record_len = 9,
+        .coverage_start = 0,
+        .coverage_len = 3,
+        .class_2_start = 0,
+        .class_2_len = 2,
+        .class_1_count = 2,
+        .class_2_count = 3,
+        .matrix_start = 0,
+    };
+
+    // Covered class zero is valid, but the explicit sentinel remains a miss.
+    try std.testing.expectEqual(@as(?i16, -12), acceleratedDenseClassPairAdvance(&accelerator, subtable, 5, 9));
+    try std.testing.expectEqual(@as(?i16, null), acceleratedDenseClassPairAdvance(&accelerator, subtable, 6, 9));
+    // A glyph outside the explicit ClassDef2 span uses implicit class zero.
+    try std.testing.expectEqual(@as(?i16, -20), acceleratedDenseClassPairAdvance(&accelerator, subtable, 7, 11));
+}
+
+test "GPOS dense class PairPos respects its total entry cap" {
+    try std.testing.expect(shouldBuildDensePairClasses(.{
+        .coverage_base = 0,
+        .coverage_len = max_dense_pair_class_entries - 1,
+        .class_2_base = 0,
+        .class_2_len = 1,
+    }));
+    try std.testing.expect(!shouldBuildDensePairClasses(.{
+        .coverage_base = 0,
+        .coverage_len = max_dense_pair_class_entries,
+        .class_2_base = 0,
+        .class_2_len = 1,
+    }));
+    try std.testing.expect(!shouldBuildDensePairClasses(.{
+        .coverage_base = 0,
+        .coverage_len = max_dense_pair_class_entries + 1,
+        .class_2_base = 0,
+        .class_2_len = 0,
+    }));
+}
+
+test "GPOS dense class PairPos rejects entries outside endpoint ranges" {
+    try std.testing.expect(pairClassDenseRanges(
+        &.{
+            .{ .glyph = 20, .class = 1 },
+            .{ .glyph = 5, .class = 0 },
+            .{ .glyph = 12, .class = 2 },
+        },
+        &.{
+            .{ .glyph = 100, .class = 1 },
+            .{ .glyph = 7, .class = 2 },
+        },
+    ) == null);
+
+    const ranges = PairClassDenseRanges{
+        .coverage_base = 5,
+        .coverage_len = 16,
+        .class_2_base = 7,
+        .class_2_len = 94,
+    };
+    try std.testing.expect(!pairClassEntriesFitDenseRanges(
+        &.{
+            .{ .glyph = 5, .class = 0 },
+            .{ .glyph = 30, .class = 1 },
+            .{ .glyph = 20, .class = 2 },
+        },
+        &.{.{ .glyph = 7, .class = 1 }},
+        ranges,
+    ));
 }
 
 test "GPOS PairPos format 2 rejects class values outside matrix" {

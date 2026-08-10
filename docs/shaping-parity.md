@@ -911,6 +911,25 @@ Current local snapshot after the Nastaliq parity work:
   `4.08%`, and cycles by about `5.8%`; fixed CPU-30 E-core reproduced `4.27%`,
   `4.11%`, and about `6.1%` reductions. Roboto and Amiri retired work remained
   flat, and all retained dual-reference parity gates were unchanged.
+- Predecoded GPOS PairPos format-2 xAdvance subtables now use bounded direct
+  class maps when the combined ClassDef1-coverage and ClassDef2 glyph spans
+  fit within 8,192 entries. The existing PairPos sidecar storage and otherwise
+  idle format-1 fields retain both dense-map bases, so the hot adjacent-pair
+  path replaces two binary searches with range checks and indexed loads
+  without widening `LookupAccelerator`. Covered class zero remains distinct
+  from a coverage hole through an impossible-class sentinel, while glyphs
+  outside the explicit ClassDef2 span retain OpenType's implicit class zero.
+  Larger or sparse tables keep the prior sorted-entry fallback. Fixed CPU-8
+  P-core and CPU-30 E-core 10-iteration A/B/B/A plus reverse B/A/A/B
+  comparisons reduced Roboto `en-words` retired instructions by about `3.36%`
+  and branches by `5.93%`; cycles improved by roughly `2.5–3.4%` on the
+  stable P-core runs and `5.2–5.7%` on E-core. SourceSerifVariable
+  `en-words` reduced instructions by about `6.86%`, branches by `10.72%`,
+  and cycles by about `14.6–16.5%`. NotoSansDevanagari retired work remained
+  flat while cycles improved by about `0.37–0.73%`; Amiri and Tai Tham
+  retired work remained effectively flat, with no stable cycles regression.
+  Full Devanagari, Roboto, SourceSerifVariable, and Amiri corpora retained
+  HarfBuzz/HarfRust parity, as did the retained USE differential matrix.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open

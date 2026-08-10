@@ -1153,7 +1153,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `08b4b136f418add748dc641eb4a83033476f1170.ttf` (`U+0647,U+200D`) are now
   retained as well; ZWJ inherits the previous glyph's cluster before native
   direction reversal, so HarfBuzz-style reverse-grapheme shaping keeps the base
-  and joiner in input order for `rlig`.
+  and joiner in input order for `rlig`. The Latin mark row for
+  `051d92f8bc6ff724511b296c27623f824de256e9.ttf`
+  (`U+0075,U+0361,U+034F,U+0301,U+0069`) is retained too, covering a CGJ that
+  remains transparent to ordinary mark matching without collapsing the mark
+  sequence incorrectly.
 - The focused HarfBuzz in-house `variation-selectors.tests` row for
   `bbc24004e776f348a0f72287d24b0124867ee750.ttf`
   (`U+0066,U+FE00,U+0069`) passes in both upstream modes: by default unsupported

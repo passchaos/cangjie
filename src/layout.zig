@@ -3950,6 +3950,22 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
     } else {
+        const indic_shape = indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
+        if (indic_shape) {
+            try use_shaper.decomposeCanonicalSources(
+                buffer.allocator,
+                font,
+                glyph_ids,
+                codepoints,
+                clusters,
+                source_ends,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+            );
+            gsub_options.source_codepoints = codepoints.items;
+        }
         if (lookup_options.normalized_variation_coords.len == 0) if (buffer.lookup_selection_cache) |selection_cache| {
             gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
         };
@@ -3965,7 +3981,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
             }
         }
-        if (indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0) {
+        if (indic_shape) {
             const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
             try indic.insertDottedCirclesForBrokenClusters(
                 buffer.allocator,

@@ -1528,7 +1528,10 @@ shaping-performance superiority.
   stacker glyph. The first Malayalam `indic-malayalam-dot-reph.tests` row for
   `55e2910dbc9ef5dd89f4e146e7e0152169545b6a.ttf` is retained for
   `U+0D4E,U+0D15`; Cangjie now reorders logical Malayalam repha after its base
-  and keeps the pair in one shaping cluster. The Gurmukhi standalone U+0A51 row from
+  and keeps the pair in one shaping cluster. The same fixture is retained for
+  Malayalam split-matra rows `U+0D17,U+0D4B` and `U+0D4E,U+0D17,U+0D4B`;
+  Cangjie now runs canonical split-matra decomposition in the Indic path so
+  U+0D4B shapes as `E + AA` components before GSUB/GPOS. The Gurmukhi standalone U+0A51 row from
   `indic-syllable.tests` is retained for
   `1735326da89f0818cd8c51a0600e9789812c0f94.ttf`, along with the explicit
   `U+25CC,U+0A51` control row. Cangjie now routes `gur2`/`guru` through the

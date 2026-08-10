@@ -1401,6 +1401,10 @@ test "Malayalam logical repha reorders after base" {
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }
 
+test "Malayalam split matra canonical decomposition is available to Indic" {
+    try std.testing.expectEqualSlices(u21, &.{ 0x0d47, 0x0d3e }, unicode.canonicalDecomposition(0x0d4b).?);
+}
+
 test "Tamil consonant virama marks half source" {
     var features = [_]u32{0} ** 3;
     const codepoints = [_]u21{ 0x0ba4, 0x0bcd, 0x00b3 };

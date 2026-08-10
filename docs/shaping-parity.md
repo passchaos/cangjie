@@ -1227,6 +1227,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `6991b13ce889466be6de3f66e891de2bc0f117ee.ttf` (`U+004A`) through OpenType
   language tag `ZHH `. Locale mapping now distinguishes `zh-HK`, `zh-MO`, and
   Hant+HK/MO from generic Traditional Chinese `ZHT `.
+- Representative Thai and Lao rows from HarfBuzz in-house `sara-am.tests` pass
+  for `63a539a90a371ccf028dc2dcced9b63b07163be7.ttf`
+  (`U+0E01,U+0E31,U+0E33` and `U+0E81,U+0EB1,U+0EB3`). Cangjie now performs
+  HarfBuzz-compatible SARA AM preprocessing by decomposing SARA AM into
+  Nikhahit plus SARA AA, moving the generated Nikhahit before preceding
+  above-base marks, and keeping the decomposed cluster attached to the base.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

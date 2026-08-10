@@ -3521,6 +3521,62 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 continue;
             }
             has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
+            if (usesThaiLaoSaraAmPreprocess(lookup_options.script_tag) and isThaiLaoSaraAm(codepoint)) {
+                const source_end = cluster_base + it.i;
+                const source_cluster = if (clusters.items.len != 0)
+                    clusters.items[clusters.items.len - 1] - cluster_base
+                else
+                    cluster;
+                const nikhahit = nikhahitFromSaraAm(codepoint);
+                const sara_aa = saraAaFromSaraAm(codepoint);
+                const nikhahit_glyph = try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, nikhahit);
+                const sara_aa_glyph = try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, sara_aa);
+
+                const nikhahit_index = glyph_ids.items.len;
+                glyph_ids.appendAssumeCapacity(nikhahit_glyph);
+                codepoints.appendAssumeCapacity(nikhahit);
+                clusters.appendAssumeCapacity(cluster_base + source_cluster);
+                source_ends.appendAssumeCapacity(source_end);
+                glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
+                glyph_cluster_indices.appendAssumeCapacity(glyph_cluster_indices.items.len);
+                glyph_substituted.appendAssumeCapacity(false);
+                ligature_components.infos.appendAssumeCapacity(.{});
+
+                glyph_ids.appendAssumeCapacity(sara_aa_glyph);
+                codepoints.appendAssumeCapacity(sara_aa);
+                clusters.appendAssumeCapacity(cluster_base + source_cluster);
+                source_ends.appendAssumeCapacity(source_end);
+                glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
+                glyph_cluster_indices.appendAssumeCapacity(glyph_cluster_indices.items.len);
+                glyph_substituted.appendAssumeCapacity(false);
+                ligature_components.infos.appendAssumeCapacity(.{});
+
+                var nikhahit_destination = nikhahit_index;
+                while (nikhahit_destination > 0) {
+                    const previous_source = glyph_source_indices.items[nikhahit_destination - 1];
+                    if (previous_source >= codepoints.items.len or !isThaiLaoSaraAmAboveBaseMark(codepoints.items[previous_source])) break;
+                    nikhahit_destination -= 1;
+                }
+                if (nikhahit_destination != nikhahit_index) {
+                    shaping_metadata.move(
+                        glyph_ids,
+                        glyph_source_indices,
+                        glyph_cluster_indices,
+                        glyph_substituted,
+                        ligature_components,
+                        nikhahit_index,
+                        nikhahit_destination,
+                    );
+                }
+                const merge_start = if (nikhahit_destination > 0) nikhahit_destination - 1 else nikhahit_destination;
+                const merge_end = glyph_ids.items.len;
+                if (merge_start < merge_end and merge_start < glyph_cluster_indices.items.len) {
+                    const owner = glyph_cluster_indices.items[merge_start];
+                    @memset(glyph_cluster_indices.items[merge_start..merge_end], owner);
+                    if (owner < source_ends.items.len) source_ends.items[owner] = @max(source_ends.items[owner], source_end);
+                }
+                continue;
+            }
             const composition = try arabicCompositionForFontAt(font, glyph_index_cache, codepoint, text, it.i);
             const source_end = if (composition) |value| value.byte_end else it.i;
             const normalized_codepoint = if (composition) |value| value.codepoint else codepoint;
@@ -4349,6 +4405,30 @@ fn usesLateGdefMarkZeroing(script_tag: unicode.OpenTypeScriptTag) bool {
         .arab, .hebr, .thai, .lao, .dflt => true,
         else => false,
     };
+}
+
+fn usesThaiLaoSaraAmPreprocess(script_tag: unicode.OpenTypeScriptTag) bool {
+    return script_tag == .thai or script_tag == .lao;
+}
+
+fn isThaiLaoSaraAm(codepoint: u21) bool {
+    return (codepoint & ~@as(u21, 0x80)) == 0x0e33;
+}
+
+fn nikhahitFromSaraAm(codepoint: u21) u21 {
+    return codepoint - 0x0e33 + 0x0e4d;
+}
+
+fn saraAaFromSaraAm(codepoint: u21) u21 {
+    return codepoint - 1;
+}
+
+fn isThaiLaoSaraAmAboveBaseMark(codepoint: u21) bool {
+    const normalized = codepoint & ~@as(u21, 0x80);
+    return (normalized >= 0x0e34 and normalized <= 0x0e37) or
+        (normalized >= 0x0e47 and normalized <= 0x0e4e) or
+        normalized == 0x0e31 or
+        normalized == 0x0e3b;
 }
 
 fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {

@@ -253,7 +253,7 @@ fn scriptTagForText(text: []const u8) ?c_uint {
     while (it.nextCodepoint()) |codepoint| {
         const script = cangjie.scriptForCodepoint(codepoint);
         if (script == .common or script == .inherited or script == .unknown) continue;
-        return runtimeOpenTypeTag(@tagName(cangjie.openTypeScriptTag(script)));
+        return @intFromEnum(cangjie.openTypeScriptTag(script));
     }
     return null;
 }

@@ -2352,6 +2352,12 @@ fn bidiClassFast(codepoint: u21) ?BidiClass {
     {
         return .rtl;
     }
+    // The complete Devanagari block is the authoritative Script range used by
+    // `scriptForCodepoint` below, and its coarse bidi class is always LTR.
+    // Hindi word shaping performs a post-shape "contains RTL?" scan; handling
+    // this modern high-traffic block here avoids walking every unrelated
+    // historic script predicate for each scalar in that scan.
+    if (codepoint >= 0x0900 and codepoint <= 0x097f) return .ltr;
     return null;
 }
 

@@ -982,6 +982,22 @@ Current local snapshot after the Nastaliq parity work:
   within `0.07%`, while Amiri `fa-words` instructions and cycles improved by
   about `0.85%` and `1%`. Devanagari, Roboto, SourceSerifVariable, Amiri, and
   all ten retained USE corpora kept dual-reference parity.
+- Coarse bidi classification now recognizes the authoritative U+0900..U+097F
+  Devanagari Script block as LTR before entering the complete all-script
+  classifier. This primarily accelerates the post-shape “does this LTR run
+  contain any strong RTL scalar?” scan; Arabic and Hebrew are resolved first,
+  and the existing full-Unicode scalar-space differential test proves every
+  fast result matches the reference number-or-script classification. Fixed
+  CPU-8 A/B/B/A timing reduced NotoSansDevanagari `hi-words` from `975.876`
+  to `956.646 ns/glyph`, about `1.97%`; CPU-30 B/A/A/B reduced `1166.333`
+  to `1146.629 ns/glyph`, about `1.69%`. Interleaved counters on both cores
+  reduced retired instructions by about `4.04%`, branches by `3.8%`, and
+  cycles by `1.46%`/`2.01%`. Roboto and Amiri retired work stayed within
+  `0.01%`, and the main Latin/variable/Arabic/Devanagari plus ten USE corpora
+  retained dual-reference parity. A post-change fixed CPU-8
+  Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix measured `957.022` versus
+  `784.909 ns/glyph`, leaving Cangjie about `21.93%` slower—still the largest
+  active shaping-performance gap, but down from the prior `28.74%`.
 - The default 4x4 grayscale raster path now expands its four horizontal
   boundary-sample comparisons instead of iterating a runtime slice for every
   partial pixel. The comparisons retain the original order and half-open
@@ -1204,7 +1220,8 @@ workload-dependent conclusion:
   `0.51%` slower on CPU 30, which is effectively the boundary of run noise.
 - Before the later cross-stage feature-plan reuse, NotoSansDevanagari
   `hi-words` was about `42.89%` slower on CPU 8 and `52.23%` slower on CPU
-  30. The later matrix above reduced the stable CPU-8 gap to about `28.74%`;
+  30. The later optimizations above reduced the stable CPU-8 gap first to
+  `28.74%` and then to about `21.93%`;
   Indic therefore remains the largest shaping-performance deficit, but the
   older percentages are no longer the current state.
 

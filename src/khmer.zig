@@ -198,6 +198,23 @@ pub fn insertDottedCirclesForBrokenMarks(
     while (glyph_index < glyph_source_indices.items.len) {
         const source = glyph_source_indices.items[glyph_index];
         if (source >= source_syllables.len or source >= codepoints.len or source_syllables[source] == 0) {
+            if (source < codepoints.len and khmerStandaloneBrokenMarkNeedsDottedCircle(codepoints, source)) {
+                try shaping_metadata.insert(
+                    allocator,
+                    glyph_ids,
+                    glyph_source_indices,
+                    glyph_cluster_indices,
+                    glyph_substituted,
+                    ligature_components,
+                    glyph_index,
+                    dotted_circle_glyph,
+                    source,
+                    glyph_cluster_indices.items[glyph_index],
+                );
+                ligature_components.infos.items[glyph_index].flags.synthetic_base = true;
+                glyph_index += 2;
+                continue;
+            }
             previous_syllable = 0;
             state = .{};
             glyph_index += 1;
@@ -232,6 +249,12 @@ pub fn insertDottedCirclesForBrokenMarks(
         state.accept(category);
         glyph_index += 1;
     }
+}
+
+fn khmerStandaloneBrokenMarkNeedsDottedCircle(codepoints: []const u21, source: usize) bool {
+    const category = khmerCategory(codepoints[source]);
+    if (category == .coeng) return true;
+    return category == .xgroup and source == 0;
 }
 
 fn markSyllableFeatureMasks(source_features: []u32, codepoints: []const u21, start: usize, end: usize) void {
@@ -508,4 +531,66 @@ test "Khmer reorder moves prebase vowel to syllable start" {
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 54, 3, 98 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 3, 0, 1 }, sources.items);
+}
+
+test "Khmer standalone coeng inserts dotted circle" {
+    const allocator = std.testing.allocator;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 1 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(allocator);
+    try clusters.appendSlice(allocator, &.{ 0, 3 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(allocator);
+    try substituted.appendSlice(allocator, &.{ false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(allocator);
+    try ligatures.infos.appendSlice(allocator, &.{ .{}, .{} });
+
+    const codepoints = [_]u21{ 0x17d2, 0x17d2 };
+    const source_syllables = [_]u8{ 0, 0 };
+    try insertDottedCirclesForBrokenMarks(allocator, &glyphs, &sources, &clusters, &substituted, &ligatures, &source_syllables, &codepoints, 2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1, 2, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 1, 1 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 3, 3 }, clusters.items);
+}
+
+test "Khmer standalone xgroup inserts dotted circle but symbol xgroup does not" {
+    const allocator = std.testing.allocator;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 4, 5, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(allocator);
+    try clusters.appendSlice(allocator, &.{ 0, 3, 6 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(allocator);
+    try substituted.appendSlice(allocator, &.{ false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(allocator);
+    try ligatures.infos.appendSlice(allocator, &.{ .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x17c9, 0x17d9, 0x17c9 };
+    const source_syllables = [_]u8{ 0, 0, 0 };
+    try insertDottedCirclesForBrokenMarks(allocator, &glyphs, &sources, &clusters, &substituted, &ligatures, &source_syllables, &codepoints, 3);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4, 5, 4 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 1, 2 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 3, 6 }, clusters.items);
 }

@@ -1843,6 +1843,11 @@ shaping-performance superiority.
   syllable-scoped `pref/blwf/abvf/pstf/cfar` sources, reorders pre-base vowels
   and `COENG+RO` sequences before the base in HarfBuzz stage order, and runs
   the Khmer `pres/abvs/blws/psts/clig` final stage against HarfRust parity.
+  The remaining `khmer-misc.tests` broken-mark rows are retained separately for
+  `ad01ab2ea1cb1a4d3a2783e2675112ef11ae6404.ttf` and
+  `086d83239e8f958391ff6cdd8fda9376a4bd3673.ttf`; standalone COENG and
+  standalone Khmer xgroup marks now synthesize dotted-circle bases, while the
+  `U+17D9,U+17C9` symbol-plus-mark control remains unchanged.
   All 25 `khmer-mark-order.tests` rows for
   `b6031119874ae9ff1dd65383a335e361c0962220.ttf` are retained as
   `tests/data/khmer-mark-order-tests.txt`; the Khmer shaper now inserts

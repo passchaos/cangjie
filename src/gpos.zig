@@ -5117,7 +5117,7 @@ fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyp
             if (options.ligature_components) |store| {
                 if (ligature_position < store.infos.items.len) {
                     const info = store.infos.items[ligature_position];
-                    if (info.flags.base_mark_ligature) return 0;
+                    if (baseMarkLigatureActsAsSingleBase(options.script_tag, info)) return 0;
                     const component_sources = store.componentSources(info) orelse return error.InvalidShapingInput;
                     const available_count = @min(component_sources.len, component_count);
                     if (available_count > 0) {
@@ -5265,7 +5265,7 @@ fn markLigatureComponentHint(table: Table, mark_coverage_offset: usize, glyphs: 
     const store = options.ligature_components orelse return null;
     if (ligature_position >= store.infos.items.len) return null;
     const info = store.infos.items[ligature_position];
-    if (info.flags.base_mark_ligature) return null;
+    if (baseMarkLigatureActsAsSingleBase(options.script_tag, info)) return null;
     if (info.component_count <= 1) return null;
     const component_sources = store.componentSources(info) orelse return error.InvalidShapingInput;
     const sources = options.glyph_source_indices orelse return null;
@@ -5278,6 +5278,10 @@ fn markLigatureComponentHint(table: Table, mark_coverage_offset: usize, glyphs: 
         component_index = index;
     }
     return .{ .ligature_position = ligature_position, .component_index = component_index };
+}
+
+fn baseMarkLigatureActsAsSingleBase(script_tag: unicode.OpenTypeScriptTag, info: ligature_provenance.Info) bool {
+    return info.flags.base_mark_ligature and script_tag == .hebr;
 }
 
 const Anchor = struct {

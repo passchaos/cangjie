@@ -1306,6 +1306,16 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "ad01ab2ea1cb1a4d3a2783e2675112ef11ae6404",
+        .text_file = "tests/data/khmer-misc-broken-coeng-tests.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "086d83239e8f958391ff6cdd8fda9376a4bd3673",
+        .text_file = "tests/data/khmer-misc-broken-xgroup-tests.txt",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "b6031119874ae9ff1dd65383a335e361c0962220",
         .text_file = "tests/data/khmer-mark-order-tests.txt",
         .direction = "ltr",

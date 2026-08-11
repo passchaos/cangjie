@@ -179,6 +179,61 @@ pub fn reorder(
     }
 }
 
+pub fn insertDottedCirclesForBrokenMarks(
+    allocator: std.mem.Allocator,
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    source_syllables: []const u8,
+    codepoints: []const u21,
+    dotted_circle_glyph: GlyphId,
+) !void {
+    if (dotted_circle_glyph == 0) return;
+
+    var previous_syllable: u8 = 0;
+    var state = KhmerMatraState{};
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source >= source_syllables.len or source >= codepoints.len or source_syllables[source] == 0) {
+            previous_syllable = 0;
+            state = .{};
+            glyph_index += 1;
+            continue;
+        }
+
+        const syllable = source_syllables[source];
+        if (syllable != previous_syllable) {
+            previous_syllable = syllable;
+            state = .{};
+        }
+
+        const category = khmerMarkOrderCategory(codepoints[source]);
+        if (state.breaksBefore(category)) {
+            try shaping_metadata.insert(
+                allocator,
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                glyph_index,
+                dotted_circle_glyph,
+                source,
+                glyph_cluster_indices.items[glyph_index],
+            );
+            ligature_components.infos.items[glyph_index].flags.synthetic_base = true;
+            glyph_index += 1;
+            state = .{};
+        }
+
+        state.accept(category);
+        glyph_index += 1;
+    }
+}
+
 fn markSyllableFeatureMasks(source_features: []u32, codepoints: []const u21, start: usize, end: usize) void {
     if (end <= start + 1) return;
 
@@ -229,10 +284,20 @@ fn reorderSyllable(
             moveRangeToStart(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, start, index, range_end);
             num_coengs = 2;
         } else if (category == .vowel_pre) {
+            if (!vowelPreMayMoveToSyllableStart(glyph_source_indices.items, start, index, codepoints)) continue;
             shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, start, index + 1);
             shaping_metadata.move(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, index, start);
         }
     }
+}
+
+fn vowelPreMayMoveToSyllableStart(glyph_sources: []const usize, start: usize, index: usize, codepoints: []const u21) bool {
+    for (start..index) |glyph_index| {
+        const source = glyph_sources[glyph_index];
+        if (source >= codepoints.len) continue;
+        if (khmerCategory(codepoints[source]).isVowelMark()) return false;
+    }
+    return true;
 }
 
 fn moveRangeToStart(
@@ -305,7 +370,63 @@ const KhmerCategory = enum {
     xgroup,
     ygroup,
     other,
+
+    fn isVowelMark(self: KhmerCategory) bool {
+        return switch (self) {
+            .vowel_above, .vowel_below, .vowel_pre, .vowel_post => true,
+            else => false,
+        };
+    }
 };
+
+const KhmerMatraState = struct {
+    seen_below: bool = false,
+    seen_above: bool = false,
+    seen_post: bool = false,
+    seen_vowel: bool = false,
+
+    fn breaksBefore(self: KhmerMatraState, category: KhmerMarkOrderCategory) bool {
+        if (category.split_component and self.seen_vowel) return true;
+        return switch (category.kind) {
+            .vowel_below => self.seen_below or self.seen_above or self.seen_post,
+            .vowel_above => self.seen_above or self.seen_post,
+            .vowel_post => self.seen_post,
+            else => false,
+        };
+    }
+
+    fn accept(self: *KhmerMatraState, category: KhmerMarkOrderCategory) void {
+        switch (category.kind) {
+            .vowel_pre => {},
+            .vowel_below => {
+                self.seen_below = true;
+                self.seen_vowel = true;
+            },
+            .vowel_above => {
+                self.seen_above = true;
+                self.seen_vowel = true;
+            },
+            .vowel_post => {
+                self.seen_post = true;
+                self.seen_vowel = true;
+            },
+            else => {},
+        }
+    }
+};
+
+const KhmerMarkOrderCategory = struct {
+    kind: KhmerCategory,
+    split_component: bool = false,
+};
+
+fn khmerMarkOrderCategory(codepoint: u21) KhmerMarkOrderCategory {
+    return switch (codepoint) {
+        0x17be => .{ .kind = .vowel_above, .split_component = true },
+        0x17bf, 0x17c0, 0x17c4, 0x17c5 => .{ .kind = .vowel_post, .split_component = true },
+        else => .{ .kind = khmerCategory(codepoint) },
+    };
+}
 
 fn khmerCategory(codepoint: u21) KhmerCategory {
     return switch (codepoint) {

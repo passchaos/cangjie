@@ -3930,6 +3930,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         khmer_options.source_features = source_features.items;
         khmer_options.source_syllables = source_syllables.items;
 
+        const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+        try khmer.insertDottedCirclesForBrokenMarks(
+            buffer.allocator,
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            source_syllables.items,
+            codepoints.items,
+            dotted_circle_glyph,
+        );
         khmer.reorder(
             glyph_ids,
             glyph_source_indices,

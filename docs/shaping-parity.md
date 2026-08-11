@@ -1746,6 +1746,11 @@ shaping-performance superiority.
   syllable-scoped `pref/blwf/abvf/pstf/cfar` sources, reorders pre-base vowels
   and `COENG+RO` sequences before the base in HarfBuzz stage order, and runs
   the Khmer `pres/abvs/blws/psts/clig` final stage against HarfRust parity.
+  All 25 `khmer-mark-order.tests` rows for
+  `b6031119874ae9ff1dd65383a335e361c0962220.ttf` are retained as
+  `tests/data/khmer-mark-order-tests.txt`; the Khmer shaper now inserts
+  dotted circles before broken dependent-mark groups, including repeated marks
+  that arise after split-matra decomposition.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

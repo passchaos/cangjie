@@ -1848,6 +1848,11 @@ shaping-performance superiority.
   `086d83239e8f958391ff6cdd8fda9376a4bd3673.ttf`; standalone COENG and
   standalone Khmer xgroup marks now synthesize dotted-circle bases, while the
   `U+17D9,U+17C9` symbol-plus-mark control remains unchanged.
+  The Khmer `indic-joiners.tests` rows for
+  `f443753e8ffe8e8aae606cfba158e00334b6efb1.ttf` are retained as
+  `tests/data/khmer-indic-joiners-tests.txt`; ZWNJ now terminates the Khmer
+  syllable and owns the following mark cluster, while the no-ZWNJ control keeps
+  the dependent marks in the preceding consonant cluster.
   All 25 `khmer-mark-order.tests` rows for
   `b6031119874ae9ff1dd65383a335e361c0962220.ttf` are retained as
   `tests/data/khmer-mark-order-tests.txt`; the Khmer shaper now inserts

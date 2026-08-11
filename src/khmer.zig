@@ -152,6 +152,33 @@ pub fn markSourceFeatures(source_features: []u32, source_syllables: []u8, codepo
     }
 }
 
+pub fn assignJoinerClusterOwners(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21) void {
+    for (glyph_cluster_indices.items, glyph_source_indices.items) |*cluster, source| {
+        if (source == 0 or source >= codepoints.len) continue;
+        if (!khmerCategory(codepoints[source]).isMark()) continue;
+        if (zwnjMarkRunContinuesWithCoeng(codepoints, source)) continue;
+        if (codepoints[source - 1] == 0x200c) {
+            cluster.* = source - 1;
+        } else if (source > 1 and khmerCategory(codepoints[source - 1]).isMark() and
+            cluster.* == source and codepoints[source - 2] == 0x200c)
+        {
+            cluster.* = source - 2;
+        }
+    }
+}
+
+fn zwnjMarkRunContinuesWithCoeng(codepoints: []const u21, source: usize) bool {
+    var cursor = source;
+    while (cursor > 0 and khmerCategory(codepoints[cursor - 1]).isMark()) : (cursor -= 1) {}
+    if (cursor == 0) return false;
+    if (codepoints[cursor - 1] != 0x200c) return false;
+    cursor = source;
+    while (cursor < codepoints.len and khmerCategory(codepoints[cursor]).isMark()) : (cursor += 1) {
+        if (khmerCategory(codepoints[cursor]) == .coeng) return true;
+    }
+    return false;
+}
+
 pub fn reorder(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
@@ -279,6 +306,20 @@ fn markSyllableFeatureMasks(source_features: []u32, codepoints: []const u21, sta
         }
         break;
     }
+    clearZwnjMarkRunFeatureMasks(source_features, codepoints, start, end);
+}
+
+fn clearZwnjMarkRunFeatureMasks(source_features: []u32, codepoints: []const u21, start: usize, end: usize) void {
+    var source = start + 1;
+    while (source < end) : (source += 1) {
+        if (codepoints[source] != 0x200c) continue;
+        var mark_source = source + 1;
+        while (mark_source < end and khmerCategory(codepoints[mark_source]).isMark()) : (mark_source += 1) {
+            if (khmerCategory(codepoints[mark_source]) == .coeng) break;
+            source_features[mark_source] = 0;
+        }
+        source = mark_source;
+    }
 }
 
 fn reorderSyllable(
@@ -397,6 +438,13 @@ const KhmerCategory = enum {
     fn isVowelMark(self: KhmerCategory) bool {
         return switch (self) {
             .vowel_above, .vowel_below, .vowel_pre, .vowel_post => true,
+            else => false,
+        };
+    }
+
+    fn isMark(self: KhmerCategory) bool {
+        return switch (self) {
+            .coeng, .robatic, .vowel_above, .vowel_below, .vowel_pre, .vowel_post, .xgroup, .ygroup => true,
             else => false,
         };
     }
@@ -531,6 +579,21 @@ test "Khmer reorder moves prebase vowel to syllable start" {
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 54, 3, 98 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 3, 0, 1 }, sources.items);
+}
+
+test "Khmer ZWNJ owns following mark clusters" {
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 3, 4, 5, 6 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 3, 4, 5, 6 });
+
+    const codepoints = [_]u21{ 0x1784, 0x17d2, 0x179f, 0x200c, 0x17ca, 0x17b8, 0x0020 };
+    assignJoinerClusterOwners(&clusters, &sources, &codepoints);
+
+    try std.testing.expectEqualSlices(usize, &.{ 3, 3, 3, 6 }, clusters.items);
 }
 
 test "Khmer standalone coeng inserts dotted circle" {

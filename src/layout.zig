@@ -4017,6 +4017,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             source_syllables.items,
             codepoints.items,
         );
+        khmer.assignJoinerClusterOwners(glyph_cluster_indices, glyph_source_indices, codepoints.items);
         try gsub.validateScriptShaperRunMetadata(khmer_options, glyph_ids.items.len);
         try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, khmer.featureApplications(.basic), glyph_ids, khmer_options, gdef_metadata.*);
         try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, khmer.featureApplications(.final), glyph_ids, khmer_options, gdef_metadata.*);

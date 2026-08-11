@@ -496,6 +496,11 @@ pub const FeatureLookupPlan = struct {
     }
 };
 
+const SelectedLookup = struct {
+    index: u16,
+    value: u32 = 1,
+};
+
 /// Apply default or explicitly enabled substitution features to the glyph
 /// stream in place. The input and output are glyph ids; source text metadata is
 /// handled by the caller because GSUB itself has no Unicode context.
@@ -515,13 +520,16 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     // When no explicit features are supplied, selectedLookupIndices returns the
     // default-enabled lookups for the requested script/language.
     const select_start = shapeProfileNow(shaping_options.shape_profile, shaping_options.profile_io);
-    var selected_lookups_owned = if (shaping_options.selected_lookups == null)
-        try selectedLookupIndices(table, allocator, shaping_options)
+    var selected_lookup_records_owned = if (shaping_options.selected_lookups == null)
+        try selectedLookupRecords(table, allocator, shaping_options)
     else
-        std.ArrayList(u16).empty;
+        std.ArrayList(SelectedLookup).empty;
     if (shaping_options.shape_profile) |profile| profile.gsub_select_ns += shapeProfileElapsed(select_start, shaping_options.profile_io);
-    defer selected_lookups_owned.deinit(allocator);
-    const selected_lookups = shaping_options.selected_lookups orelse selected_lookups_owned.items;
+    defer selected_lookup_records_owned.deinit(allocator);
+    const selected_lookup_count = if (shaping_options.selected_lookups) |selected_lookups|
+        selected_lookups.len
+    else
+        selected_lookup_records_owned.items.len;
     const script_list_offset = try readU16(table, 4);
     const feature_list_offset = try readU16(table, 6);
     const has_feature_topology = script_list_offset != 0 and
@@ -534,7 +542,7 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     // Devanagari digit substitutions for ordinary ASCII digits. Low-level
     // callers can retain the historical all-lookup behavior; the text shaper
     // explicitly disables it after Script/LangSys selection.
-    if (selected_lookups.len == 0 and
+    if (selected_lookup_count == 0 and
         (shaping_options.features.len != 0 or (!shaping_options.apply_all_if_unselected and has_feature_topology))) return;
 
     const apply_start = shapeProfileNow(shaping_options.shape_profile, shaping_options.profile_io);
@@ -544,11 +552,20 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     var run_digest_cache = RunDigestCache.init();
-    if (selected_lookups.len != 0) {
+    if (shaping_options.selected_lookups) |selected_lookups| {
         for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
             try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, shaping_options, &run_digest_cache);
+        }
+    } else if (selected_lookup_records_owned.items.len != 0) {
+        for (selected_lookup_records_owned.items) |selected_lookup| {
+            const lookup_index = selected_lookup.index;
+            if (lookup_index >= lookup_count) continue;
+            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
+            var selected_options = shaping_options;
+            selected_options.active_feature_value = selected_lookup.value;
+            try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, selected_options, &run_digest_cache);
         }
     } else {
         for (0..lookup_count) |i| {
@@ -2532,9 +2549,19 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!std.ArrayList(u16) {
+    var selected = try selectedLookupRecords(table, allocator, options);
+    defer selected.deinit(allocator);
+    var lookups = std.ArrayList(u16).empty;
+    errdefer lookups.deinit(allocator);
+    try lookups.ensureUnusedCapacity(allocator, selected.items.len);
+    for (selected.items) |item| lookups.appendAssumeCapacity(item.index);
+    return lookups;
+}
+
+fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!std.ArrayList(SelectedLookup) {
     var feature_indices = std.ArrayList(FeatureSelection).empty;
     defer feature_indices.deinit(allocator);
-    var lookups = std.ArrayList(u16).empty;
+    var lookups = std.ArrayList(SelectedLookup).empty;
     errdefer lookups.deinit(allocator);
 
     const script_list_offset = try checkedRequiredScriptListOffset(table);
@@ -2569,13 +2596,17 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
         else
             default_feature_offset;
         const lookup_index_count = try readU16(table, feature_offset + 2);
+        const feature_value = if (selection.required)
+            @as(u32, 1)
+        else
+            featureValue(feature_tag, options);
         for (0..lookup_index_count) |i| {
             const lookup_index = try readU16(table, feature_offset + 4 + i * 2);
-            try lookups.append(allocator, lookup_index);
+            try lookups.append(allocator, .{ .index = lookup_index, .value = feature_value });
         }
     }
 
-    sortUniqueLookupIndices(&lookups);
+    sortUniqueSelectedLookups(&lookups);
     return lookups;
 }
 
@@ -2588,6 +2619,13 @@ fn featureEnabled(feature_tag: u32, options: LookupOptions) bool {
         (options.vertical and (feature_tag == unicode.tag("vert") or feature_tag == unicode.tag("vrt2"))) or
         (options.text_direction == .ltr and (feature_tag == unicode.tag("ltra") or feature_tag == unicode.tag("ltrm"))) or
         (options.text_direction == .rtl and (feature_tag == unicode.tag("rtla") or feature_tag == unicode.tag("rtlm")));
+}
+
+fn featureValue(feature_tag: u32, options: LookupOptions) u32 {
+    for (options.features) |override| {
+        if (override.tag == feature_tag) return override.effectiveValue();
+    }
+    return 1;
 }
 
 fn defaultFeatureEnabled(feature_tag: u32) bool {
@@ -2741,6 +2779,28 @@ fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
         previous = lookup_index;
     }
     lookups.shrinkRetainingCapacity(write);
+}
+
+fn sortUniqueSelectedLookups(lookups: *std.ArrayList(SelectedLookup)) void {
+    if (lookups.items.len < 2) return;
+
+    std.sort.heap(SelectedLookup, lookups.items, {}, selectedLookupLessThan);
+    var write: usize = 1;
+    var previous = lookups.items[0];
+    for (lookups.items[1..]) |lookup| {
+        if (lookup.index == previous.index) {
+            if (lookups.items[write - 1].value == 1) lookups.items[write - 1].value = lookup.value;
+        } else {
+            lookups.items[write] = lookup;
+            write += 1;
+            previous = lookup;
+        }
+    }
+    lookups.shrinkRetainingCapacity(write);
+}
+
+fn selectedLookupLessThan(_: void, a: SelectedLookup, b: SelectedLookup) bool {
+    return a.index < b.index;
 }
 
 fn appendMergedFeatureLookups(

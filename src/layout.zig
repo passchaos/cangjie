@@ -3997,7 +3997,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
             gsub_options.source_codepoints = codepoints.items;
         }
-        if (lookup_options.normalized_variation_coords.len == 0) if (buffer.lookup_selection_cache) |selection_cache| {
+        if (lookup_options.normalized_variation_coords.len == 0 and !hasNonBooleanFeatureValue(gsub_options.features)) if (buffer.lookup_selection_cache) |selection_cache| {
             gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
         };
         if (gsub_after_proof) {
@@ -4704,6 +4704,13 @@ fn explicitOptionalFeatureShouldRun(feature: u32) bool {
         feature != unicode.tag("clig") and
         feature != unicode.tag("sups") and
         feature != unicode.tag("subs");
+}
+
+fn hasNonBooleanFeatureValue(features: []const unicode.FeatureOverride) bool {
+    for (features) |feature| {
+        if (feature.effectiveValue() > 1) return true;
+    }
+    return false;
 }
 
 fn scriptPositionFeatureApplication(position: ScriptPosition) ?gsub.FeatureApplication {

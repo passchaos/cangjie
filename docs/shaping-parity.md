@@ -1575,7 +1575,13 @@ shaping-performance superiority.
   classifies U+09BF as a Bengali left matra and constrains Indic contextual
   GSUB stages to source syllables, so `pres` can form `uni09BF.short01` before
   `uni09B9` without letting that syllable's `uni09B9` satisfy a later
-  cross-syllable backtrack for `uni09A8`.
+  cross-syllable backtrack for `uni09A8`. The Devanagari
+  `context-matching.tests` row for
+  `d629e7fedc0b350222d7987345fe61613fa3929a.ttf` is retained for
+  `U+0915,U+093F,U+0915,U+093F`, covering repeated pre-base matra context in a
+  compact Indic fixture. The Bengali conjunct row from the same upstream file
+  for `f499fbc23865022234775c43503bba2e63978fe1.ttf` still needs a focused
+  follow-up for `ra,virama,tha,virama,ya,ii` shaping.
   Malayalam `indic-pref-blocking.tests` rows for
   `226bc2deab3846f1a682085f70c67d0421014144.ttf` and
   `e207635780b42f898d58654b65098763e340f5c7.ttf` now pass as retained inline

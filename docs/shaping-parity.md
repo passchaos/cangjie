@@ -1857,7 +1857,9 @@ shaping-performance superiority.
   `tests/data/kannada-vowel-letter-spoofing-tests.txt`; rows 49-53 are
   retained for the Malayalam font
   `af85624080af5627fb050f570d148a62f04fda74.ttf` in
-  `tests/data/malayalam-vowel-letter-spoofing-tests.txt`. Cangjie now runs the
+  `tests/data/malayalam-vowel-letter-spoofing-tests.txt`. Together with the
+  Gujarati rows 30-37 below, all 53 upstream `indic-vowel-letter-spoofing.tests`
+  rows are retained. Cangjie now runs the
   HarfBuzz vowel-constraint dotted-circle insertion table in the traditional
   Indic path before GSUB, and treats the synthetic dotted circle as an Indic
   placeholder base so the third row's `ra,virama,i` sequence forms `reph`

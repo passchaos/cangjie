@@ -1395,6 +1395,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   ligature matching learned to skip only fallback variation-selector glyph id
   zero, while real FE00 glyphs remain visible to `rlig`. The tone-sign ordering
   row for `f4ba5a767ef56a40133844507efb98fee5635e71.ttf` is retained too. The
+  Myanmar `ligature-id.tests` row for
+  `a6c76d1bafde4a0b1026ebcc932d2e5c6fd02442.ttf` is retained as
+  `tests/data/myanmar-ligature-id-tests.txt`; the shaper now keeps the
+  `nga+asat+virama` kinzi prefix after the base for `rphf`, so the subsequent
+  `blwf` ligatures can collapse `ra+medial wa` and kinzi plus U+102D. The
   slice covers `mym2` cluster ownership, basic Myanmar initial reordering for
   medial RA and left matras, variation selectors inheriting the preceding
   Myanmar position, the `rphf/pref/blwf` `/pstf` stage order, and final

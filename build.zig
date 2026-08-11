@@ -1336,6 +1336,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "a6c76d1bafde4a0b1026ebcc932d2e5c6fd02442",
+        .text_file = "tests/data/myanmar-ligature-id-tests.txt",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "9d8c53cb64b8747abdd2b70755cce2ee0eb42ef7",
         .text_file = "tests/data/devanagari-special-prishthamatra-tests.txt",
         .direction = "ltr",

@@ -126,14 +126,15 @@ fn reorderSyllable(
     end: usize,
 ) void {
     if (end <= start + 1) return;
-    const base = baseSourceInGlyphRange(glyph_source_indices.items[start..end], codepoints) orelse return;
+    const kinzi_end = kinziPrefixEnd(glyph_source_indices.items[start..end], codepoints);
+    const base = baseSourceInGlyphRange(glyph_source_indices.items[start..end], codepoints, kinzi_end) orelse return;
 
     var index = start + 1;
     while (index < end) : (index += 1) {
         var current = index;
         while (current > start and
-            @intFromEnum(positionForGlyphAt(glyph_source_indices.items, current - 1, start, base, codepoints)) >
-                @intFromEnum(positionForGlyphAt(glyph_source_indices.items, current, start, base, codepoints)))
+            @intFromEnum(positionForGlyphAt(glyph_source_indices.items, current - 1, start, base, kinzi_end, codepoints)) >
+                @intFromEnum(positionForGlyphAt(glyph_source_indices.items, current, start, base, kinzi_end, codepoints)))
         {
             shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, current - 1, current + 1);
             shaping_metadata.swap(
@@ -152,8 +153,16 @@ fn reorderSyllable(
     flipLeftMatraSequence(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, end);
 }
 
-fn baseSourceInGlyphRange(sources: []const usize, codepoints: []const u21) ?usize {
+fn kinziPrefixEnd(sources: []const usize, codepoints: []const u21) usize {
+    if (sources.len < 3) return 0;
+    if (sources[0] >= codepoints.len or sources[1] >= codepoints.len or sources[2] >= codepoints.len) return 0;
+    if (codepoints[sources[0]] == 0x1004 and codepoints[sources[1]] == 0x103a and codepoints[sources[2]] == 0x1039) return sources[2] + 1;
+    return 0;
+}
+
+fn baseSourceInGlyphRange(sources: []const usize, codepoints: []const u21, kinzi_end: usize) ?usize {
     for (sources) |source| {
+        if (source < kinzi_end) continue;
         if (source < codepoints.len and isMyanmarConsonant(codepoints[source])) return source;
     }
     return null;
@@ -180,10 +189,12 @@ fn myanmarPosition(codepoint: u21, is_base: bool) MyanmarPosition {
     };
 }
 
-fn positionForGlyphAt(sources: []const usize, glyph_index: usize, start: usize, base: usize, codepoints: []const u21) MyanmarPosition {
+fn positionForGlyphAt(sources: []const usize, glyph_index: usize, start: usize, base: usize, kinzi_end: usize, codepoints: []const u21) MyanmarPosition {
     _ = start;
     if (glyph_index >= sources.len) return .after_main;
-    return positionForSource(sources[glyph_index], base, codepoints);
+    const source = sources[glyph_index];
+    if (source < kinzi_end) return .after_main;
+    return positionForSource(source, base, codepoints);
 }
 
 fn positionForSource(source: usize, base: usize, codepoints: []const u21) MyanmarPosition {
@@ -231,7 +242,7 @@ fn flipLeftMatraSequence(
     var last = end;
     for (start..end) |index| {
         const source = glyph_source_indices.items[index];
-        if (source >= codepoints.len or positionForGlyphAt(glyph_source_indices.items, index, start, std.math.maxInt(usize), codepoints) != .pre_m) continue;
+        if (source >= codepoints.len or positionForGlyphAt(glyph_source_indices.items, index, start, std.math.maxInt(usize), 0, codepoints) != .pre_m) continue;
         if (first == end) first = index;
         last = index;
     }
@@ -323,6 +334,36 @@ test "Myanmar reorder moves medial ra before base" {
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1, 5, 4 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 1, 0, 3, 2 }, sources.items);
+}
+
+test "Myanmar reorder keeps kinzi prefix after base for rphf" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 6, 5, 3, 7, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3, 4, 5 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0, 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x1004, 0x103a, 0x1039, 0x101b, 0x103d, 0x102d };
+    const source_syllables = [_]u8{ 0x10, 0x10, 0x10, 0x10, 0x10, 0x10 };
+
+    reorder(&glyphs, &sources, &clusters, &substituted, &ligatures, &source_syllables, &codepoints);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 1, 6, 5, 7, 4 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 0, 1, 2, 4, 5 }, sources.items);
 }
 
 test "Myanmar reorder flips consecutive left matras" {

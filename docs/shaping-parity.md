@@ -1203,9 +1203,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `tests/data/emoji-tag-sequence-tests.txt`, covering both an unsupported tag
   sequence that preserves default-ignorable tag glyphs and the supported `de`
   tag ligature path.
-- The first 20 HarfBuzz in-house `emoji-clusters.tests` rows for
-  `AdobeBlank2.ttf` are retained as `tests/data/emoji-clusters-adobeblank2.txt`.
-  Cangjie now accepts Windows full-repertoire cmap format 13 subtables, so this
+- All 3,825 HarfBuzz in-house `emoji-clusters.tests` rows for `AdobeBlank2.ttf`
+  are retained as `tests/data/emoji-clusters-adobeblank2.txt`. Cangjie now
+  accepts Windows full-repertoire cmap format 13 subtables, so this
   last-resort-style font can map emoji variation-selector and ZWJ sequences to
   its shared fallback glyph like HarfBuzz/HarfRust.
 - The simple joining rows from HarfBuzz in-house `arabic-phags-pa.tests` are

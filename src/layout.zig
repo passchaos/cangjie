@@ -3639,8 +3639,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     defer if (owned_gdef_metadata) |*metadata| metadata.deinit(buffer.allocator);
 
     var hangul_feature_overrides_buf: [17]unicode.FeatureOverride = undefined;
-    const gsub_feature_overrides = if (lookup_options.script_tag == .hang and hangulRunIsSingleJamo(codepoints.items))
-        featureOverridesWithDisabledCalt(hangul_feature_overrides_buf[0..], lookup_options.features) orelse lookup_options.features
+    const gsub_feature_overrides = if (runIsHangul(codepoints.items))
+        featureOverridesWithDefaultDisabledCalt(hangul_feature_overrides_buf[0..], lookup_options.features) orelse lookup_options.features
     else
         lookup_options.features;
 
@@ -4589,8 +4589,22 @@ fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {
     };
 }
 
-fn hangulRunIsSingleJamo(codepoints: []const u21) bool {
-    return codepoints.len == 1 and isHangulJamoCodepoint(codepoints[0]);
+fn runIsHangul(codepoints: []const u21) bool {
+    var has_hangul = false;
+    for (codepoints) |codepoint| {
+        if (isHangulCodepoint(codepoint)) {
+            has_hangul = true;
+            continue;
+        }
+        const script = unicode.scriptForCodepoint(codepoint);
+        if (script != .common and script != .inherited and script != .unknown) return false;
+    }
+    return has_hangul;
+}
+
+fn isHangulCodepoint(codepoint: u21) bool {
+    return isHangulJamoCodepoint(codepoint) or
+        (codepoint >= 0xac00 and codepoint <= 0xd7af);
 }
 
 fn isHangulJamoCodepoint(codepoint: u21) bool {
@@ -4667,11 +4681,11 @@ fn shapingFeatureEnabled(feature: u32, overrides: []const unicode.FeatureOverrid
     return default_enabled;
 }
 
-fn featureOverridesWithDisabledCalt(out: []unicode.FeatureOverride, overrides: []const unicode.FeatureOverride) ?[]const unicode.FeatureOverride {
+fn featureOverridesWithDefaultDisabledCalt(out: []unicode.FeatureOverride, overrides: []const unicode.FeatureOverride) ?[]const unicode.FeatureOverride {
     if (out.len < overrides.len + 1) return null;
     var count: usize = 0;
     for (overrides) |override| {
-        if (override.tag == unicode.tag("calt")) continue;
+        if (override.tag == unicode.tag("calt")) return overrides;
         out[count] = override;
         count += 1;
     }

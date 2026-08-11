@@ -1220,8 +1220,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `757ebd573617a24aa9dfbf0b885c54875c6fe06b.ttf` and
   `7e14e7883ed152baa158b80e207b66114c823a8b.ttf`. Cangjie now keeps `calt`
   away from a standalone Hangul Jamo scalar while leaving the multi-jamo fixture
-  intact. Broader `hangul-calt.tests` still need a full Hangul shaper masking
-  model.
+  intact. Focused `hangul-calt.tests` rows for
+  `600387433d01cd5799e421dad6510a54c862f56b.ttf` are retained for
+  `U+AC00,U+003D,U+003E`, `U+AC00,U+B098`, `U+B098,U+B098`, and explicit
+  `calt=0`; Hangul-script runs now default `calt` off even when common
+  punctuation stays in the run. The conjoining-Jamo double-L row still has a
+  UTF-8 cluster ownership follow-up.
 - The Thai rows from HarfBuzz in-house `zero-width-marks.tests` pass for
   `45855bc8d46332b39c4ab9e2ee1a26b1f896da6b.ttf`,
   `7a37dc4d5bf018456aea291cee06daf004c0221c.ttf`, and

@@ -1735,6 +1735,10 @@ shaping-performance superiority.
   a visible final Malayalam virama, matching row 15's `caca, virama, repha`
   order. Traditional Indic shaping now follows HarfBuzz's no-zero-width-mark
   policy, so rows 13 and 14 keep the Malayalam U vowel sign advance. The
+  Malayalam `indic-old-spec.tests` row for
+  `270b89df543a7e48e206a2d830c0e10e5265c630.ttf` is retained for
+  `U+0D38,U+0D4D,U+0D31,U+0D4D,U+0D31,U+0D4D`, covering the old-spec
+  `sa+virama+rra` ligature path. The
   Gurmukhi standalone U+0A51 row from
   `indic-syllable.tests` is retained for
   `1735326da89f0818cd8c51a0600e9789812c0f94.ttf`, along with the explicit

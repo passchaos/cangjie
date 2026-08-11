@@ -1642,18 +1642,24 @@ shaping-performance superiority.
   `54674a3111d209fb6be0ed31745314b7a8d2c244.ttf` is retained for
   `U+0BA4,U+0BCD,U+00B3`; Cangjie now routes `tml2`/`taml` through the Indic
   shaper and marks Tamil `consonant+virama` sources for `half`, covering the
-  `ta + pulli` pre-half form before a non-Tamil following glyph. The Gurmukhi
-  `indic-misc.tests` row for `755160ddba002332349fda3eb999e629d63dccf6.ttf`
-  is retained for `U+0A2D,U+0A4D,U+0A30,U+0A42`; Cangjie now marks
-  Gurmukhi `virama+ra` sources for `blwf` and keeps the following dependent
+  `ta + pulli` pre-half form before a non-Tamil following glyph. The Tamil
+  `pa,pa,pulli` row for `e2b17207c4b7ad78d843e1b0c4d00b09398a1137.ttf` is
+  retained too, covering same-script consonant-plus-pulli output ordering. The
+  Gurmukhi `indic-misc.tests` row for
+  `755160ddba002332349fda3eb999e629d63dccf6.ttf` is retained for
+  `U+0A2D,U+0A4D,U+0A30,U+0A42`; Cangjie now marks Gurmukhi `virama+ra` sources
+  for `blwf` and keeps the following dependent
   vowel in the syllable cluster. The Odia `indic-joiner-candrabindu.tests`
   rows for `5028afb650b1bb718ed2131e872fbcce57828fff.ttf` are retained for
   `U+0B13,U+200D,U+0B01` and `U+0B13,U+200C,U+0B01`; Cangjie now routes
   `ory2`/`orya` through the Indic shaper so ZWJ can trigger the `abvs`
   candrabindu ligature, while the ZWNJ row keeps the dependent mark in the
-  joiner's shaping cluster. The Devanagari `indic-joiners.tests` row for
-  `8116e5d8fedfbec74e45dc350d2416d810bed8c4.ttf` is retained for
-  `U+091F,U+094D,U+200C,U+092F,U+093F` and the mixed
+  joiner's shaping cluster. The Odia `indic-syllable.tests` rows for
+  `b3075ca42b27dde7341c2d0ae16703c5b6640df0.ttf` are retained for both
+  `U+0B2C,U+0B55,U+0B3E` and `U+0B2C,U+0B3E,U+0B55`, covering mark order without
+  reclassifying either mark as a broken cluster. The Devanagari
+  `indic-joiners.tests` row for `8116e5d8fedfbec74e45dc350d2416d810bed8c4.ttf`
+  is retained for `U+091F,U+094D,U+200C,U+092F,U+093F` and the mixed
   `ZWJ/ZWNJ/ZWJ` row `U+091F,U+094D,U+200D,U+091F,U+094D,U+200C,U+091F,U+094D,U+200D,U+092F,U+093F`;
   Cangjie now treats `virama+ZWNJ` as a syllable terminator, so the following
   pre-base matra targets the following `ya` syllable instead of jumping before
@@ -1663,7 +1669,10 @@ shaping-performance superiority.
   HarfBuzz vowel-constraint dotted-circle insertion table in the traditional
   Indic path before GSUB, and treats the synthetic dotted circle as an Indic
   placeholder base so the third row's `ra,virama,i` sequence forms `reph`
-  around that dotted circle. Gujarati `gjr3`/`gjr2`/`gujr` now routes through
+  around that dotted circle. The `indic-syllable.tests` Devanagari word
+  `U+0926,U+093F,U+0938,U+0902,U+092C,U+0930` still needs a focused follow-up:
+  Cangjie currently over-combines the pre-base matra with the following anusvara.
+  Gujarati `gjr3`/`gjr2`/`gujr` now routes through
   the Indic shaper as well, retaining rows 30-34 of the same fixture for
   `738d9f3b8c2dfd03875bf35a61d28fd78faf17c8.ttf`; rows 35-36 are retained too
   after Gujarati split-matra components learned to keep the candra/ai component

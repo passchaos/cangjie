@@ -476,6 +476,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "e2b17207c4b7ad78d843e1b0c4d00b09398a1137",
+        .text = "\u{0baa}\u{0baa}\u{0bcd}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "d23d76ea0909c14972796937ba072b5a40c1e257",
         .text = "r",
         .direction = "ltr",
@@ -673,6 +678,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "65d1b9099cfb3191931d8d6112d7a03d979d579f",
+        .text = "\u{00b2}\u{0b95}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "d3129450fafe5e5c98cfc25a4e71809b1b4d2855",
         .text = "|",
         .direction = "ltr",
@@ -719,6 +729,16 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     .{
         .font_hash = "5028afb650b1bb718ed2131e872fbcce57828fff",
         .text = "\u{0b13}\u{200c}\u{0b01}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "b3075ca42b27dde7341c2d0ae16703c5b6640df0",
+        .text = "\u{0b2c}\u{0b55}\u{0b3e}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "b3075ca42b27dde7341c2d0ae16703c5b6640df0",
+        .text = "\u{0b2c}\u{0b3e}\u{0b55}",
         .direction = "ltr",
     },
     .{

@@ -1501,7 +1501,7 @@ shaping-performance superiority.
   joining shaper under the `mong` ScriptList. The focused
   `arabic-feature-order.tests` FVS rows for
   `813c2f8e5512187fd982417a7fb4286728e6f4a8.ttf` and
-  `8a9fea2a7384f2116e5b84a9b31f83be7850ce21.ttf` pass, and the simple
+  `8a9fea2a7384f2116e5b84a9b31f83be7850ce21.ttf` are retained, and the simple
   `mongolian-variation-selector.tests` rows for
   `ef86fe710cfea877bbe0dbb6946a1f88d0661031.ttf` plus
   `37033cc5cf37bb223d7355153016b6ccece93b28.ttf` pass. Broader Mongolian
@@ -1512,7 +1512,8 @@ shaping-performance superiority.
   queries mask those bits to the version-0 low-bit contract. The MVS word case
   `U+182A,U+1820,U+1822,U+182D,U+180E,U+1820,U+202F,U+1836,U+1822,U+1828`
   now also matches after contextual GSUB learned to keep U+180E visible for
-  explicit Mongolian backtrack/lookahead rules.
+  explicit Mongolian backtrack/lookahead rules. The Arabic Allah-ligature and
+  `calt` rows from `arabic-feature-order.tests` still need focused follow-up.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

@@ -12,6 +12,7 @@ const HarfRustGlyph = struct {
     x_offset: i32 = 0,
     y_offset: i32 = 0,
     flags: u32 = 0,
+    extents: [4]i32 = .{ 0, 0, 0, 0 },
 };
 
 const ParsedLine = struct {
@@ -64,6 +65,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Option
                         .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, line.glyphs) else &.{},
                         .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, line.glyphs) else &.{},
                         .glyph_flags = if (options.show_flags) try glyphFlags(allocator, line.glyphs) else &.{},
+                        .glyph_extents = if (options.show_extents) try glyphExtents(allocator, line.glyphs) else &.{},
                     });
                 }
             }
@@ -127,6 +129,9 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
     }
     if (options.show_flags) {
         try args.append(allocator, "--show-flags");
+    }
+    if (options.show_extents) {
+        try args.append(allocator, "--show-extents");
     }
     if (options.language_tag) |language_tag| {
         if (options_mod.harfrustLanguageArgument(language_tag)) |language_text| {
@@ -258,7 +263,8 @@ fn parseGlyph(item: []const u8) !HarfRustGlyph {
     const at = std.mem.indexOfScalarPos(u8, item, equals + 1, '@');
     const plus = std.mem.indexOfScalarPos(u8, item, equals + 1, '+');
     const hash = std.mem.indexOfScalarPos(u8, item, equals + 1, '#');
-    const id_end = at orelse plus orelse hash orelse item.len;
+    const less = std.mem.indexOfScalarPos(u8, item, equals + 1, '<');
+    const id_end = minOptional(at, minOptional(plus, minOptional(hash, less))) orelse item.len;
     var glyph = HarfRustGlyph{
         .glyph_id = try std.fmt.parseInt(u32, item[0..equals], 10),
         .cluster = try std.fmt.parseInt(u32, item[equals + 1 .. id_end], 10),
@@ -268,13 +274,25 @@ fn parseGlyph(item: []const u8) !HarfRustGlyph {
         try parsePairI32(item[at_index + 1 .. offset_end], &glyph.x_offset, &glyph.y_offset);
     }
     if (plus) |plus_index| {
-        const advance_end = hash orelse item.len;
+        const advance_end = minOptional(hash, less) orelse item.len;
         try parsePairI32(item[plus_index + 1 .. advance_end], &glyph.x_advance, &glyph.y_advance);
+    }
+    if (less) |less_index| {
+        const greater = std.mem.indexOfScalarPos(u8, item, less_index + 1, '>') orelse return error.BadHarfRustOutput;
+        try parseExtents(item[less_index + 1 .. greater], &glyph.extents);
     }
     if (hash) |hash_index| {
         glyph.flags = try std.fmt.parseInt(u32, item[hash_index + 1 ..], 10);
     }
     return glyph;
+}
+
+fn minOptional(a: ?usize, b: ?usize) ?usize {
+    if (a) |av| {
+        if (b) |bv| return @min(av, bv);
+        return av;
+    }
+    return b;
 }
 
 fn parsePairI32(text: []const u8, first: *i32, second: *i32) !void {
@@ -285,6 +303,16 @@ fn parsePairI32(text: []const u8, first: *i32, second: *i32) !void {
     }
     first.* = try std.fmt.parseInt(i32, text, 10);
     second.* = 0;
+}
+
+fn parseExtents(text: []const u8, extents: *[4]i32) !void {
+    var it = std.mem.splitScalar(u8, text, ',');
+    var index: usize = 0;
+    while (it.next()) |part| : (index += 1) {
+        if (index >= extents.len) return error.BadHarfRustOutput;
+        extents[index] = try std.fmt.parseInt(i32, part, 10);
+    }
+    if (index != extents.len) return error.BadHarfRustOutput;
 }
 
 fn glyphIds(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const u32 {
@@ -326,6 +354,14 @@ fn glyphYOffsets(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![
 fn glyphFlags(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const u32 {
     const values = try allocator.alloc(u32, glyphs.len);
     for (glyphs, values) |glyph, *value| value.* = glyph.flags;
+    return values;
+}
+
+fn glyphExtents(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len * 4);
+    for (glyphs, 0..) |glyph, index| {
+        @memcpy(values[index * 4 ..][0..4], &glyph.extents);
+    }
     return values;
 }
 

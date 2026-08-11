@@ -16,6 +16,7 @@ pub const BenchResult = struct {
         x_offsets: []const i32 = &.{},
         y_offsets: []const i32 = &.{},
         glyph_flags: []const u32 = &.{},
+        glyph_extents: []const i32 = &.{},
     };
     pub const Sample = struct {
         index: usize,
@@ -169,6 +170,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                         .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, options, glyphs) else &.{},
                         .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, font, options.size, options, normalized_variation_coords, glyphs) else &.{},
                         .glyph_flags = if (options.show_flags) try glyphFlags(allocator, line, options, glyphs) else &.{},
+                        .glyph_extents = if (options.show_extents) try glyphExtents(allocator, font, options.size, normalized_variation_coords, glyphs) else &.{},
                     });
                 }
             }
@@ -607,6 +609,48 @@ fn glyphFlags(allocator: std.mem.Allocator, text: []const u8, options: options_m
     if (options.direction != .rtl or !textContainsCodepoint(text, 0x200c)) return values;
     for (values) |*value| value.* |= 0x0000_0002;
     return values;
+}
+
+fn glyphExtents(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, normalized_variation_coords: []const f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+    const values = try allocator.alloc(i32, glyphs.len * 4);
+    for (glyphs, 0..) |glyph, index| {
+        const base = index * 4;
+        const bounds = font.glyphBoundsAtCoords(@intCast(glyph.glyph_id), normalized_variation_coords) catch {
+            if (try bitmapGlyphExtents(font, glyph.glyph_id, font_size, values[base..][0..4])) continue;
+            values[base + 0] = 0;
+            values[base + 1] = 0;
+            values[base + 2] = 0;
+            values[base + 3] = 0;
+            continue;
+        };
+        if (bounds.x_min == bounds.x_max and bounds.y_min == bounds.y_max) {
+            if (try bitmapGlyphExtents(font, glyph.glyph_id, font_size, values[base..][0..4])) continue;
+        }
+        values[base + 0] = bounds.x_min;
+        values[base + 1] = bounds.y_max;
+        values[base + 2] = @as(i32, bounds.x_max) - @as(i32, bounds.x_min);
+        values[base + 3] = @as(i32, bounds.y_min) - @as(i32, bounds.y_max);
+    }
+    return values;
+}
+
+fn bitmapGlyphExtents(font: *const cangjie.Font, glyph_id: u32, font_size: f32, out: []i32) !bool {
+    if (out.len < 4) return false;
+    const bitmap_info = (try font.bitmapGlyphInfo(@intCast(glyph_id), font_size)) orelse return false;
+    const ppem = @max(bitmap_info.ppem, 1);
+    const scale = @as(f32, @floatFromInt(font.units_per_em)) / @as(f32, @floatFromInt(ppem));
+    out[0] = scaleRound(i32, @as(f32, @floatFromInt(bitmap_info.origin_offset_x)) * scale);
+    out[1] = switch (bitmap_info.source) {
+        .sbix => scaleRound(i32, (@as(f32, @floatFromInt(bitmap_info.origin_offset_y)) + @as(f32, @floatFromInt(bitmap_info.height))) * scale),
+        .cblc_cbdt, .eblc_ebdt => scaleRound(i32, @as(f32, @floatFromInt(bitmap_info.origin_offset_y)) * scale),
+    };
+    out[2] = scaleRound(i32, @as(f32, @floatFromInt(bitmap_info.width)) * scale);
+    out[3] = -scaleRound(i32, @as(f32, @floatFromInt(bitmap_info.height)) * scale);
+    return true;
+}
+
+fn scaleRound(comptime T: type, value: f32) T {
+    return @intFromFloat(@round(value));
 }
 
 fn textContainsCodepoint(text: []const u8, target: u21) bool {

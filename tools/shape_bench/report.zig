@@ -249,6 +249,7 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         printI32Array(" y_advances", summary.y_advances);
         printI32Array(" x_offsets", summary.x_offsets);
         printI32Array(" y_offsets", summary.y_offsets);
+        printI32Array(" glyph_extents", summary.glyph_extents);
         std.debug.print("\n", .{});
     }
 }

@@ -224,6 +224,12 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
             std.debug.print("\n{s}_glyph_flags=", .{reference_label});
             printGlyphIds(m.harfrust.glyph_flags);
         }
+        if (m.kind == .glyph_extents) {
+            std.debug.print("\ncangjie_glyph_extents=", .{});
+            printI32Values(m.cangjie.glyph_extents);
+            std.debug.print("\n{s}_glyph_extents=", .{reference_label});
+            printI32Values(m.harfrust.glyph_extents);
+        }
         std.debug.print("\n", .{});
         return error.ReferenceParityMismatch;
     }
@@ -242,6 +248,7 @@ const MismatchKind = enum {
     x_offset,
     y_offset,
     glyph_flags,
+    glyph_extents,
     line_count,
 
     fn label(self: MismatchKind) []const u8 {
@@ -253,6 +260,7 @@ const MismatchKind = enum {
             .x_offset => "x_offset",
             .y_offset => "y_offset",
             .glyph_flags => "glyph_flags",
+            .glyph_extents => "glyph_extents",
             .line_count => "line_count",
         };
     }
@@ -358,6 +366,20 @@ fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u
             };
         }
         allocator.free(cangjie_flags);
+        const cangjie_extents = try comparableExtents(allocator, cangjie_lines[line_index].glyph_extents, order);
+        errdefer allocator.free(cangjie_extents);
+        if (!std.mem.eql(i32, cangjie_extents, harfrust_lines[line_index].glyph_extents)) {
+            return .{
+                .kind = .glyph_extents,
+                .line_index = line_index,
+                .cangjie = cangjie_lines[line_index],
+                .harfrust = harfrust_lines[line_index],
+                .cangjie_glyph_ids = cangjie_ids,
+                .cangjie_clusters = cangjie_clusters,
+                .cangjie_position_values = try allocator.alloc(i32, 0),
+            };
+        }
+        allocator.free(cangjie_extents);
         allocator.free(cangjie_ids);
         allocator.free(cangjie_clusters);
     }
@@ -407,6 +429,22 @@ fn comparableSlice(comptime T: type, allocator: std.mem.Allocator, items: []cons
         .reverse_source => {
             for (items, 0..) |item, index| {
                 comparable[items.len - 1 - index] = item;
+            }
+        },
+    }
+    return comparable;
+}
+
+fn comparableExtents(allocator: std.mem.Allocator, items: []const i32, order: CompareOrder) ![]const i32 {
+    if (items.len % 4 != 0) return error.InvalidArguments;
+    const comparable = try allocator.alloc(i32, items.len);
+    const glyph_count = items.len / 4;
+    switch (order) {
+        .source => @memcpy(comparable, items),
+        .reverse_source => {
+            for (0..glyph_count) |index| {
+                const dest_index = glyph_count - 1 - index;
+                @memcpy(comparable[dest_index * 4 ..][0..4], items[index * 4 ..][0..4]);
             }
         },
     }
@@ -487,6 +525,7 @@ fn freeLineSummaries(allocator: std.mem.Allocator, summaries: []const runner.Ben
         allocator.free(summary.x_offsets);
         allocator.free(summary.y_offsets);
         allocator.free(summary.glyph_flags);
+        allocator.free(summary.glyph_extents);
     }
 }
 

@@ -105,6 +105,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
                         .x_offsets = shaped.x_offsets,
                         .y_offsets = shaped.y_offsets,
                         .glyph_flags = shaped.glyph_flags,
+                        .glyph_extents = shaped.glyph_extents,
                     });
                     shaped.transferred_summary_storage = true;
                 }
@@ -143,6 +144,7 @@ const ShapedLine = struct {
     x_offsets: []i32 = &.{},
     y_offsets: []i32 = &.{},
     glyph_flags: []u32 = &.{},
+    glyph_extents: []i32 = &.{},
     transferred_summary_storage: bool = false,
 
     fn deinit(self: *ShapedLine, allocator: std.mem.Allocator) void {
@@ -154,6 +156,7 @@ const ShapedLine = struct {
         allocator.free(self.x_offsets);
         allocator.free(self.y_offsets);
         allocator.free(self.glyph_flags);
+        allocator.free(self.glyph_extents);
     }
 };
 
@@ -217,6 +220,7 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
         shaped.x_offsets = try allocator.alloc(i32, glyph_count);
         shaped.y_offsets = try allocator.alloc(i32, glyph_count);
         shaped.glyph_flags = if (options.show_flags) try allocator.alloc(u32, glyph_count) else &.{};
+        shaped.glyph_extents = if (options.show_extents) try allocator.alloc(i32, glyph_count * 4) else &.{};
     }
 
     var hasher = std.hash.Wyhash.init(0);
@@ -231,6 +235,18 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
             shaped.x_offsets[index] = position.x_offset;
             shaped.y_offsets[index] = position.y_offset;
             if (options.show_flags) shaped.glyph_flags[index] = info.mask & 0x7;
+            if (options.show_extents) {
+                const base = index * 4;
+                var extents: hb.hb_glyph_extents_t = undefined;
+                if (hb.hb_font_get_glyph_extents(font, info.codepoint, &extents) != 0) {
+                    shaped.glyph_extents[base + 0] = extents.x_bearing;
+                    shaped.glyph_extents[base + 1] = extents.y_bearing;
+                    shaped.glyph_extents[base + 2] = extents.width;
+                    shaped.glyph_extents[base + 3] = extents.height;
+                } else {
+                    @memset(shaped.glyph_extents[base..][0..4], 0);
+                }
+            }
         }
         hasher.update(std.mem.asBytes(&info.codepoint));
         hasher.update(std.mem.asBytes(&info.cluster));

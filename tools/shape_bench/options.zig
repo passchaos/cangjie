@@ -138,6 +138,7 @@ pub const Options = struct {
     line_summary: bool = false,
     glyph_summary: bool = false,
     show_flags: bool = false,
+    show_extents: bool = false,
     unsafe_to_concat: bool = false,
     not_found_variation_selector_glyph: ?u32 = null,
     feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
@@ -293,6 +294,10 @@ pub fn parse(args: []const []const u8) !Options {
             options.line_summary = true;
             options.glyph_summary = true;
             options.show_flags = true;
+        } else if (std.mem.eql(u8, arg, "--show-extents")) {
+            options.line_summary = true;
+            options.glyph_summary = true;
+            options.show_extents = true;
         } else if (std.mem.eql(u8, arg, "--unsafe-to-concat")) {
             options.unsafe_to_concat = true;
         } else if (std.mem.eql(u8, arg, "--enable-feature")) {
@@ -483,6 +488,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --line-summary               print per-line glyph counts and checksums for the first measured iteration
         \\  --glyph-summary              include per-line glyph id lists with --line-summary
         \\  --show-flags                 include per-glyph shaping flags with --glyph-summary
+        \\  --show-extents               include per-glyph extents with --glyph-summary
         \\  --unsafe-to-concat           produce unsafe-to-concat glyph flags
         \\  --enable-feature TAG         enable one OpenType feature tag for Cangjie
         \\  --disable-feature TAG        disable one OpenType feature tag for Cangjie

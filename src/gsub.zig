@@ -58,6 +58,7 @@ pub const LookupOptions = struct {
     /// source ownership, while HarfBuzz-style output clusters merge across
     /// ligature components and deleted glyphs.
     glyph_cluster_indices: ?*std.ArrayList(usize) = null,
+    cluster_level: shaping_metadata.ClusterLevel = .monotone_graphemes,
     /// Optional GSUB substitution state parallel to `glyphs`. HarfBuzz keeps
     /// default-ignorables visible to contextual matching once GSUB has touched
     /// them, even if their glyph id later returns to the original glyph.
@@ -534,9 +535,7 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
             }
             return err;
         };
-    }
-    else
-        std.ArrayList(SelectedLookup).empty;
+    } else std.ArrayList(SelectedLookup).empty;
     if (shaping_options.shape_profile) |profile| profile.gsub_select_ns += shapeProfileElapsed(select_start, shaping_options.profile_io);
     defer selected_lookup_records_owned.deinit(allocator);
     const selected_lookup_count = if (shaping_options.selected_lookups) |selected_lookups|
@@ -4267,7 +4266,10 @@ fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, g
 fn mergeLigatureClusterMetadata(options: LookupOptions, glyph_index: usize, match: LigatureMatch) void {
     const clusters = options.glyph_cluster_indices orelse return;
     if (glyph_index >= clusters.items.len) return;
-    shaping_metadata.mergeMonotoneClusters(clusters.items, glyph_index, glyph_index + match.match_end);
+    switch (options.cluster_level) {
+        .monotone_graphemes, .monotone_characters => shaping_metadata.mergeMonotoneClusters(clusters.items, glyph_index, glyph_index + match.match_end),
+        .characters, .graphemes => {},
+    }
     mergeFollowingMarksForLigatureCluster(options, glyph_index, match);
 }
 

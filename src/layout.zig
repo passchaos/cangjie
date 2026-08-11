@@ -29,6 +29,7 @@ pub const GposTableProofCache = layout_cache.GposTableProofCache;
 pub const GsubTableProofCache = layout_cache.GsubTableProofCache;
 pub const LookupSelectionCache = layout_cache.LookupSelectionCache;
 pub const VerticalGlyphMetrics = layout_cache.VerticalGlyphMetrics;
+pub const ClusterLevel = shaping_metadata.ClusterLevel;
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
 /// adjustment. `cluster` is a byte offset into the original UTF-8 text, so
@@ -199,6 +200,7 @@ pub const ShapeOptions = struct {
     context_after: []const u8 = &.{},
     beginning_of_text: bool = false,
     end_of_text: bool = false,
+    cluster_level: ?ClusterLevel = null,
 };
 
 /// Coarse shaping plan identity. It intentionally excludes the concrete font
@@ -219,6 +221,7 @@ pub const ShapePlanKey = struct {
     beginning_of_text: bool = false,
     end_of_text: bool = false,
     not_found_variation_selector_glyph: ?u32 = null,
+    cluster_level: ?ClusterLevel = null,
 
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
         const infer_both = options.script_tag == null and options.language_tag == null;
@@ -241,6 +244,7 @@ pub const ShapePlanKey = struct {
             .beginning_of_text = options.beginning_of_text,
             .end_of_text = options.end_of_text,
             .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
+            .cluster_level = options.cluster_level,
         };
     }
 };
@@ -3326,6 +3330,7 @@ const LookupOptions = struct {
     context_after: []const u8 = &.{},
     beginning_of_text: bool = false,
     end_of_text: bool = false,
+    cluster_level: ?ClusterLevel = null,
     run_has_decimal_number: bool = false,
     run_has_letter: bool = false,
 };
@@ -3360,6 +3365,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupO
         .context_after = options.context_after,
         .beginning_of_text = options.beginning_of_text,
         .end_of_text = options.end_of_text,
+        .cluster_level = options.cluster_level,
     }, .all_ascii = infer_language and inferred.all_ascii };
 }
 
@@ -3432,7 +3438,8 @@ fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
         a.context_hash == b.context_hash and
         a.beginning_of_text == b.beginning_of_text and
         a.end_of_text == b.end_of_text and
-        a.not_found_variation_selector_glyph == b.not_found_variation_selector_glyph;
+        a.not_found_variation_selector_glyph == b.not_found_variation_selector_glyph and
+        a.cluster_level == b.cluster_level;
 }
 
 fn shapedRunCacheKeysEqual(a: ShapedRunCacheKey, b: ShapedRunCacheKey) bool {
@@ -3548,7 +3555,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                     source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
                     glyph_ids.appendAssumeCapacity(selector_glyph);
                     codepoints.appendAssumeCapacity(codepoint);
-                    const source_cluster = if (clusters.items.len != 0)
+                    const source_cluster = if ((selected_lookup_options.cluster_level == null or selected_lookup_options.cluster_level.?.groupsGraphemes()) and clusters.items.len != 0)
                         clusters.items[clusters.items.len - 1] - cluster_base
                     else
                         cluster;
@@ -3573,7 +3580,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
             if (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoSaraAm(codepoint)) {
                 const source_end = cluster_base + it.i;
-                const source_cluster = if (clusters.items.len != 0)
+                const cluster_level = selected_lookup_options.cluster_level orelse .monotone_graphemes;
+                const source_cluster = if (cluster_level.groupsGraphemes() and clusters.items.len != 0)
                     clusters.items[clusters.items.len - 1] - cluster_base
                 else
                     cluster;
@@ -3588,7 +3596,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 clusters.appendAssumeCapacity(cluster_base + source_cluster);
                 source_ends.appendAssumeCapacity(source_end);
                 glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
-                glyph_cluster_indices.appendAssumeCapacity(glyph_cluster_indices.items.len);
+                glyph_cluster_indices.appendAssumeCapacity(if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
+                    glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
+                else
+                    glyph_cluster_indices.items.len);
                 glyph_substituted.appendAssumeCapacity(false);
                 ligature_components.infos.appendAssumeCapacity(.{});
 
@@ -3597,7 +3608,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 clusters.appendAssumeCapacity(cluster_base + source_cluster);
                 source_ends.appendAssumeCapacity(source_end);
                 glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
-                glyph_cluster_indices.appendAssumeCapacity(glyph_cluster_indices.items.len);
+                glyph_cluster_indices.appendAssumeCapacity(if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
+                    glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
+                else
+                    glyph_cluster_indices.items.len);
                 glyph_substituted.appendAssumeCapacity(false);
                 ligature_components.infos.appendAssumeCapacity(.{});
 
@@ -3618,12 +3632,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                         nikhahit_destination,
                     );
                 }
-                const merge_start = if (nikhahit_destination > 0) nikhahit_destination - 1 else nikhahit_destination;
+                const merge_start = nikhahit_destination;
                 const merge_end = glyph_ids.items.len;
-                if (merge_start < merge_end and merge_start < glyph_cluster_indices.items.len) {
-                    const owner = glyph_cluster_indices.items[merge_start];
-                    @memset(glyph_cluster_indices.items[merge_start..merge_end], owner);
-                    if (owner < source_ends.items.len) source_ends.items[owner] = @max(source_ends.items[owner], source_end);
+                if (merge_start < merge_end and merge_start < glyph_cluster_indices.items.len and cluster_level.isMonotone()) {
+                    shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, merge_start, merge_end);
+                }
+                const grapheme_merge_start = if (nikhahit_destination > 0) nikhahit_destination - 1 else nikhahit_destination;
+                if (grapheme_merge_start < merge_end and cluster_level.groupsGraphemes()) {
+                    if (cluster_level.isMonotone()) {
+                        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, grapheme_merge_start, merge_end);
+                    } else {
+                        shaping_metadata.mergeClusterRange(glyph_cluster_indices.items, grapheme_merge_start, merge_end);
+                    }
                 }
                 continue;
             }
@@ -3637,12 +3657,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 const shaped_codepoint = try presentationCodepointForShaping(font, glyph_index_cache, codepoint, selected_lookup_options);
                 break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
-            const source_cluster = if ((inheritsLeadingDefaultIgnorableCluster(codepoints.items, clusters.items, if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
+            const explicit_cluster_level = selected_lookup_options.cluster_level;
+            const inherit_grapheme_cluster = if (explicit_cluster_level) |level| level.groupsGraphemes() else true;
+            const inherits_previous_cluster = inheritsLeadingDefaultIgnorableCluster(codepoints.items, clusters.items, if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
                 const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
                 default_ignorable_invisible_glyph_id = glyph;
                 break :resolve glyph;
             }) or
                 codepoint == 0x200d or
+                (explicit_cluster_level != null and unicode.isUnicodeMarkCodepoint(codepoint)) or
                 (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
                 (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoClusterExtender(codepoint)) or
                 inheritsPreviousZwnjClusterInRtlShaping(
@@ -3654,7 +3677,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                         break :resolve glyph;
                     },
                 ) or
-                (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint))) and
+                (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint));
+            const source_cluster = if (inherit_grapheme_cluster and inherits_previous_cluster and
                 clusters.items.len != 0)
                 clusters.items[clusters.items.len - 1] - cluster_base
             else
@@ -3714,6 +3738,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .apply_all_if_unselected = false,
         .glyph_source_indices = glyph_source_indices,
         .glyph_cluster_indices = glyph_cluster_indices,
+        .cluster_level = lookup_options.cluster_level orelse .monotone_characters,
         .glyph_substituted = glyph_substituted,
         .ligature_components = ligature_components,
         // The LTR ASCII cmap fast path proves there is no CGJ, joiner, or
@@ -4785,9 +4810,9 @@ fn setArabicJoiningSourceFeature(source_features: []u32, source: usize, form: un
     if (source >= source_features.len) return;
     const joining_mask =
         (gsub.sourceFeatureMaskForTag(unicode.tag("isol")).? |
-        gsub.sourceFeatureMaskForTag(unicode.tag("init")).? |
-        gsub.sourceFeatureMaskForTag(unicode.tag("medi")).? |
-        gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?) & ~gsub.source_feature_mask_marker;
+            gsub.sourceFeatureMaskForTag(unicode.tag("init")).? |
+            gsub.sourceFeatureMaskForTag(unicode.tag("medi")).? |
+            gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?) & ~gsub.source_feature_mask_marker;
     const form_mask = switch (form) {
         .isolated => gsub.sourceFeatureMaskForTag(unicode.tag("isol")).?,
         .initial => gsub.sourceFeatureMaskForTag(unicode.tag("init")).?,

@@ -119,6 +119,8 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         size_text,
         "--direction",
         direction_text,
+        "--cluster-level",
+        options_mod.clusterLevelArgument(options.cluster_level orelse .monotone_graphemes),
         "--no-glyph-names",
         "--utf8-clusters",
         "-n",

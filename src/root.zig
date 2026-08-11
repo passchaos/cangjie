@@ -255,6 +255,7 @@ pub const ReflowBuffer = @import("layout.zig").ReflowBuffer;
 pub const ShapedParagraph = @import("layout.zig").ShapedParagraph;
 pub const PositionedGlyph = @import("render_bridge.zig").PositionedGlyph;
 pub const PositionedAttributedRun = @import("core.zig").PositionedAttributedRun;
+pub const ClusterLevel = @import("layout.zig").ClusterLevel;
 pub const ScriptPosition = @import("layout.zig").ScriptPosition;
 pub const ShapeOptions = @import("layout.zig").ShapeOptions;
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;

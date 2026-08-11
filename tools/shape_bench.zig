@@ -125,7 +125,7 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
     options.glyph_summary = true;
     options.reorder_bidi = false;
     options.native_direction_shaping = true;
-    options.normalize_clusters_to_graphemes = true;
+    options.normalize_clusters_to_graphemes = base_options.cluster_level == null;
     options.language_tag = base_options.language_tag orelse .dflt;
 
     var font = try runner.parseFont(allocator, font_bytes, options);

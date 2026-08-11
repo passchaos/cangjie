@@ -1611,6 +1611,13 @@ shaping-performance superiority.
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are
   covered, but broader font/script matrices still need expansion.
+- `shape-bench` now exposes HarfBuzz-compatible `--cluster-level 0|1|2|3` and
+  forwards it to Cangjie, HarfRust, and the in-process HarfBuzz runner. The
+  x/X plus ring rows from HarfBuzz in-house `cluster.tests` are retained for
+  `4fac3929fc3332834e93673780ec0fe94342d193.ttf` at cluster levels 3 and 2,
+  covering grapheme-level cluster merging versus character-level cluster
+  retention. Remaining `cluster.tests` Hebrew and Thai SARA AM rows still need
+  separate shaper/positioning work before the full file can be retained.
 - The expressible HarfBuzz in-house `directwrite.tests` rows are represented by
   existing retained gates: Arabic high contextual forms for
   `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`, the `ffi`/disabled-`liga`

@@ -1130,6 +1130,7 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     text_before: ?[]const u8 = null,
     text_after: ?[]const u8 = null,
     size: ?[]const u8 = null,
+    cluster_level: ?[]const u8 = null,
     bot: bool = false,
     font_ext: []const u8 = "ttf",
 }{
@@ -1168,6 +1169,18 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .text = "ffif",
         .direction = "ltr",
         .disable_feature = "liga",
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = "x\u{030a}X\u{030a}",
+        .direction = "ltr",
+        .cluster_level = "3",
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = "x\u{030a}X\u{030a}",
+        .direction = "ltr",
+        .cluster_level = "2",
     },
     .{
         .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
@@ -1851,6 +1864,9 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.size) |size| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--size", size });
+            }
+            if (gate.cluster_level) |cluster_level| {
+                inline_harfrust_parity_cmd.addArgs(&.{ "--cluster-level", cluster_level });
             }
             if (gate.text_before) |text_before| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--text-before", text_before });

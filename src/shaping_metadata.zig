@@ -3,6 +3,25 @@ const std = @import("std");
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 
+pub const ClusterLevel = enum(u2) {
+    monotone_graphemes = 0,
+    monotone_characters = 1,
+    characters = 2,
+    graphemes = 3,
+
+    pub fn isMonotone(self: ClusterLevel) bool {
+        return self == .monotone_graphemes or self == .monotone_characters;
+    }
+
+    pub fn groupsGraphemes(self: ClusterLevel) bool {
+        return self == .monotone_graphemes or self == .graphemes;
+    }
+
+    pub fn usesCharacterClusters(self: ClusterLevel) bool {
+        return self == .monotone_characters or self == .characters;
+    }
+};
+
 /// Moves one glyph while preserving every array that carries post-cmap shaping
 /// metadata. Keeping this operation centralized prevents script shapers from
 /// silently desynchronizing cluster ownership or ligature attachment sources.
@@ -106,6 +125,18 @@ pub fn mergeMonotoneClusters(clusters: []usize, start_index: usize, end_index: u
         }
     }
     @memset(clusters[start..end], merged);
+}
+
+pub fn mergeClusterRange(clusters: []usize, start_index: usize, end_index: usize) void {
+    if (start_index >= clusters.len) return;
+    const end = @min(end_index, clusters.len);
+    if (end <= start_index + 1) return;
+
+    var merged = clusters[start_index];
+    for (clusters[start_index..end]) |cluster| {
+        merged = @min(merged, cluster);
+    }
+    @memset(clusters[start_index..end], merged);
 }
 
 pub fn insert(

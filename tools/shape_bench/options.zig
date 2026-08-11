@@ -127,6 +127,7 @@ pub const Options = struct {
     native_direction_shaping: bool = false,
     beginning_of_text: bool = false,
     end_of_text: bool = false,
+    cluster_level: ?cangjie.ClusterLevel = null,
     normalize_clusters_to_graphemes: bool = false,
     script_tag: ?cangjie.OpenTypeScriptTag = null,
     language_tag: ?cangjie.OpenTypeLanguageTag = null,
@@ -267,6 +268,10 @@ pub fn parse(args: []const []const u8) !Options {
             options.beginning_of_text = true;
         } else if (std.mem.eql(u8, arg, "--eot")) {
             options.end_of_text = true;
+        } else if (std.mem.eql(u8, arg, "--cluster-level")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.cluster_level = parseClusterLevel(args[i]) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--script-position")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -409,6 +414,23 @@ fn parseDirection(text: []const u8) ?Direction {
     return null;
 }
 
+fn parseClusterLevel(text: []const u8) ?cangjie.ClusterLevel {
+    if (std.mem.eql(u8, text, "0") or std.mem.eql(u8, text, "monotone-graphemes")) return .monotone_graphemes;
+    if (std.mem.eql(u8, text, "1") or std.mem.eql(u8, text, "monotone-characters")) return .monotone_characters;
+    if (std.mem.eql(u8, text, "2") or std.mem.eql(u8, text, "characters")) return .characters;
+    if (std.mem.eql(u8, text, "3") or std.mem.eql(u8, text, "graphemes")) return .graphemes;
+    return null;
+}
+
+pub fn clusterLevelArgument(level: cangjie.ClusterLevel) []const u8 {
+    return switch (level) {
+        .monotone_graphemes => "0",
+        .monotone_characters => "1",
+        .characters => "2",
+        .graphemes => "3",
+    };
+}
+
 fn parseLanguageTag(text: []const u8) ?cangjie.OpenTypeLanguageTag {
     if (std.ascii.eqlIgnoreCase(text, "dflt")) return .dflt;
     if (std.ascii.eqlIgnoreCase(text, "ara")) return .ara;
@@ -479,6 +501,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --native-direction-shaping   shape in OpenType native buffer order
         \\  --bot                        treat text as beginning of paragraph
         \\  --eot                        treat text as end of paragraph
+        \\  --cluster-level 0|1|2|3      HarfBuzz-compatible cluster merging level
         \\  --script-position normal|superscript|subscript
         \\  --script TAG                 force a 4-byte OpenType script tag, e.g. arab
         \\  --no-caches                  bypass glyph metric and cmap caches

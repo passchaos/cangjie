@@ -1588,9 +1588,10 @@ shaping-performance superiority.
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are
   covered, but broader font/script matrices still need expansion.
-- Retain broader default-ignorable coverage. The currently passing focused
-  `default-ignorables.tests` rows cover CGJ/Arabic and ZWJ/mark interactions,
-  but broader upstream default-ignorable combinations still need retained gates.
+- The full six-row HarfBuzz in-house `default-ignorables.tests` file is retained
+  as inline gates. It covers CGJ/Arabic and ZWJ/mark interactions across the
+  fixture fonts named above; broader default-ignorable work now belongs to
+  expanding other upstream files rather than this in-house fixture.
 - Arabic/Syriac stretch shaping now runs the HarfBuzz-style `stch` GSUB stage
   before positional Arabic features, records MultipleSubst component parity as
   fixed/repeating tiles, and stretches those tiles in the final glyph stream

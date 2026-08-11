@@ -2528,6 +2528,29 @@ test "GPOS cursive positioning reverses previous attachment chains" {
     try std.testing.expectEqual(@as(i16, -73), middle.?.y_placement);
 }
 
+test "GPOS later cursive lookup replaces reciprocal attachment" {
+    const allocator = std.testing.allocator;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try appendCursiveAdjustments(&adjustments, allocator, 0, 1, .{ .x = 218, .y = 40 }, .{ .x = 82, .y = 184 }, 0x0001, .ltr);
+    try appendCursiveAdjustments(&adjustments, allocator, 0, 1, .{ .x = 218, .y = 40 }, .{ .x = 82, .y = 184 }, 0, .ltr);
+
+    var first: ?Adjustment = null;
+    var second: ?Adjustment = null;
+    for (adjustments.items) |adjustment| {
+        if (adjustment.index == 0) first = adjustment;
+        if (adjustment.index == 1) second = adjustment;
+    }
+
+    try std.testing.expectEqual(AttachmentType.none, first.?.attachment_type);
+    try std.testing.expectEqual(@as(?usize, null), first.?.attachment_parent_index);
+    try std.testing.expectEqual(@as(i16, 0), first.?.y_placement);
+    try std.testing.expectEqual(AttachmentType.cursive, second.?.attachment_type);
+    try std.testing.expectEqual(@as(?usize, 0), second.?.attachment_parent_index);
+    try std.testing.expectEqual(@as(i16, -144), second.?.y_placement);
+}
+
 fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     const parsed = try parseCursivePositionSubtable(table, subtable_offset);
     try collectCursiveAdjustmentParsed(table, parsed, glyphs, adjustments, allocator, lookup_flag, options);
@@ -2620,6 +2643,7 @@ fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: 
     const child_position = if (right_to_left) previous_position else current_position;
     const parent_position = if (right_to_left) current_position else previous_position;
     try reverseCursiveAttachmentChain(adjustments, allocator, child_position, parent_position);
+    clearCursiveAttachmentTo(adjustments.items, parent_position, child_position);
 
     if (direction == .rtl) {
         const previous_x_delta = -exit.x - previous_placement.x;
@@ -2664,6 +2688,15 @@ fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: 
             .y_placement = exit.y - entry.y,
         }, .{ .attachment_type = .cursive, .attachment_parent_index = previous_position, .y_placement_absolute = true });
     }
+}
+
+fn clearCursiveAttachmentTo(adjustments: []Adjustment, child_index: usize, parent_index: usize) void {
+    var record = findAdjustmentMutable(adjustments, child_index) orelse return;
+    if (record.attachment_type != .cursive) return;
+    if (record.attachment_parent_index != parent_index) return;
+    record.attachment_type = .none;
+    record.attachment_parent_index = null;
+    record.y_placement = 0;
 }
 
 fn reverseCursiveAttachmentChain(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, child_index: usize, new_parent_index: usize) std.mem.Allocator.Error!void {

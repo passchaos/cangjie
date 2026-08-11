@@ -1523,16 +1523,19 @@ shaping-performance superiority.
   `arabic-stch.tests` rows for
   `507637795ce4f2975593da54d12b46f76c7cc4cc.ttf` and
   `d9b8bc10985f24796826c29f7ccba3d0ae11ec02.ttf` are retained as inline
-  HarfBuzz parity gates. HarfBuzz in-house `reverse-sub.tests` row 2 is also
-  retained for `3f24aff8b768e586162e9b9d03b15c36508dd2ae.ttf` with `salt=2`;
+  HarfBuzz parity gates. HarfBuzz in-house `reverse-sub.tests` rows 1 and 3
+  are retained for `a706511c65fb278fda87eaf2180ca6684a80f423.ttf` and
+  `1b66a1f4b076b734caa6397b3e57231af1feaafb.ttf`; row 2 is retained for
+  `3f24aff8b768e586162e9b9d03b15c36508dd2ae.ttf` with `salt=2`;
   the benchmark parser now preserves feature values, and the Arabic final GSUB
   stage merges default and caller-enabled optional features by lookup order so
   alternate-selection values reach contextual final forms. The explicit
   `rand=2` row from `rand.tests` is retained for
-  `5bb74492f5e0ffa1fbb72e4c881be035120b6513.ttf`; generic GSUB feature
-  selection now carries feature values to AlternateSubst lookups instead of
-  reducing selected lookups to bare indexes. The default `rand` row for the
-  same font is retained too; Cangjie enables HarfBuzz-style random
+  `5bb74492f5e0ffa1fbb72e4c881be035120b6513.ttf`; the disabled `rand=0` row is
+  retained for the same font as a control. Generic GSUB feature selection now
+  carries feature values to AlternateSubst lookups instead of reducing selected
+  lookups to bare indexes. The default `rand` row for the same font is retained
+  too; Cangjie enables HarfBuzz-style random
   AlternateSubst by default, uses the same 32-bit wrapping minstd LCG state, and
   bypasses index-only GSUB selection caching when a lookup needs feature-value
   or random metadata.

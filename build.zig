@@ -691,6 +691,22 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .enable_feature = "salt=2",
     },
     .{
+        .font_hash = "a706511c65fb278fda87eaf2180ca6684a80f423",
+        .text = "A AB",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "1b66a1f4b076b734caa6397b3e57231af1feaafb",
+        .text = "1234567890⁄1234567890",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "5bb74492f5e0ffa1fbb72e4c881be035120b6513",
+        .text = "TUV",
+        .direction = "ltr",
+        .enable_feature = "rand=0",
+    },
+    .{
         .font_hash = "5bb74492f5e0ffa1fbb72e4c881be035120b6513",
         .text = "TUV",
         .direction = "ltr",

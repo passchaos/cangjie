@@ -10947,9 +10947,15 @@ fn validateMetricVariationTopLevelPayloads(data: []const u8, table: TableRecord,
         if (map_offset == 0) continue;
         const map = try validateDeltaSetIndexMap(data, table, store_offset, store_info.item_data_count, map_offset, minimum_length);
         const map_range = VariationStoreChildRange{ .start = map.offset, .end = map.end_offset };
+        var already_owned = false;
         for (ranges[0..range_count]) |owned| {
+            if (variationStoreRangesEqual(map_range, owned)) {
+                already_owned = true;
+                break;
+            }
             if (variationStoreRangesOverlap(map_range, owned)) return error.BadSfnt;
         }
+        if (already_owned) continue;
         ranges[range_count] = map_range;
         range_count += 1;
     }
@@ -11100,6 +11106,10 @@ fn validateVariationStoreItemDataOwnership(
 
 fn variationStoreRangesOverlap(a: VariationStoreChildRange, b: VariationStoreChildRange) bool {
     return a.start < b.end and b.start < a.end;
+}
+
+fn variationStoreRangesEqual(a: VariationStoreChildRange, b: VariationStoreChildRange) bool {
+    return a.start == b.start and a.end == b.end;
 }
 
 fn itemVariationDataItemCount(data: []const u8, table: TableRecord, store_offset: usize, outer_index: usize) FontError!usize {
@@ -20729,7 +20739,7 @@ test "VariationStore data validates axis and region indexes" {
 
     var maps_alias_each_other = with_map;
     writeU32Test(&maps_alias_each_other, 12, 54); // Duplicate DeltaSetIndexMap payload.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&maps_alias_each_other, hvar_with_map, 1, 20));
+    try validateMetricVariationTable(&maps_alias_each_other, hvar_with_map, 1, 20);
 
     var peak_outside_normalized_space = bytes;
     writeI16Test(&peak_outside_normalized_space, 38, 0x4001);
@@ -20821,8 +20831,8 @@ test "Metric variation DeltaSetIndexMaps own disjoint top-level payloads" {
     try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&map_aliases_store, hvar, 1, 20));
 
     var duplicate_maps = hvar_bytes;
-    writeU32Test(&duplicate_maps, 12, 20); // lsbMappingOffset aliases advanceWidthMappingOffset.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&duplicate_maps, hvar, 1, 20));
+    writeU32Test(&duplicate_maps, 12, 20); // lsbMappingOffset reuses advanceWidthMappingOffset.
+    try validateMetricVariationTable(&duplicate_maps, hvar, 1, 20);
 
     var vvar_bytes: [66]u8 = .{0} ** 66;
     writeU16Test(&vvar_bytes, 0, 1);

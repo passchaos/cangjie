@@ -73,6 +73,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     enable_feature: ?[]const u8 = null,
     variation: ?[]const u8 = null,
     not_found_variation_selector_glyph: ?[]const u8 = null,
+    font_ext: []const u8 = "ttf",
 }{
     .{
         .font_hash = "932ad5132c2761297c74e9976fe25b08e5ffa10b",
@@ -565,6 +566,19 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "NotoSansCJK-VF.abc",
+        .font_ext = "otf",
+        .text = "AB",
+        .direction = "ttb",
+    },
+    .{
+        .font_hash = "NotoSansCJK-VF.abc",
+        .font_ext = "otf",
+        .text = "AB",
+        .direction = "ttb",
+        .variation = "0,0.7,0",
+    },
+    .{
         .font_hash = "2681c1c72d6484ed3410417f521b1b819b4e2392",
         .text = "\u{3008}",
         .direction = "ttb",
@@ -829,7 +843,7 @@ pub fn build(b: *std.Build) void {
             const inline_parity_cmd = b.addRunArtifact(shape_bench_exe);
             inline_parity_cmd.addArgs(&.{
                 "--engine",    "compare-harfbuzz",
-                "--font",      b.fmt("{s}/{s}.ttf", .{ harfbuzz_in_house_fonts, gate.font_hash }),
+                "--font",      b.fmt("{s}/{s}.{s}", .{ harfbuzz_in_house_fonts, gate.font_hash, gate.font_ext }),
                 "--text",      gate.text,
                 "--direction", gate.direction,
             });

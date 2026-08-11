@@ -1518,6 +1518,9 @@ shaping-performance superiority.
   HarfBuzz vertical-presentation fallback forms when the font has the target
   cmap glyph, and bottom-to-top vertical shaping no longer lets the horizontal
   bidi mirroring pass replace `U+FE40` with the ordinary mirrored bracket.
+  The CFF2+VORG `NotoSansCJK-VF.abc.otf` rows for `AB` in `ttb` are retained at
+  default and `wght=700`; exact duplicate HVAR/VVAR DeltaSetIndexMap payloads
+  are accepted, and the parity tool reports HarfBuzz-style VORG y origins.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

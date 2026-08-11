@@ -563,10 +563,10 @@ fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_s
 fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
-        value.* = if (options.direction == .ttb and glyph.vertical)
-            -@divTrunc(defaultVerticalAdvance(font), 2)
-        else
-            fontUnitPosition(font, font_size, glyph.y_offset);
+        value.* = if (options.direction == .ttb and glyph.vertical) vertical: {
+            if (try font.verticalOriginYAtCoords(glyph.glyph_id, options.normalizedVariationCoords())) |origin| break :vertical -@as(i32, origin);
+            break :vertical -@divTrunc(defaultVerticalAdvance(font), 2);
+        } else fontUnitPosition(font, font_size, glyph.y_offset);
     }
     return values;
 }

@@ -778,7 +778,7 @@ fn indicSyllableEnd(codepoints: []const u21, start: usize, script_tag: unicode.O
     while (index < codepoints.len) : (index += 1) {
         const codepoint = codepoints[index];
         if (!isIndicSyllableCodepoint(codepoint, script_tag)) break;
-        if (index != start and isIndicBase(codepoint, script_tag) and !saw_virama) break;
+        if (index != start and isIndicBase(codepoint, script_tag) and !saw_virama and !isConsonantWithStacker(codepoints[index - 1], script_tag)) break;
         if (saw_virama and codepoint == 0x200c) return index + 1;
 
         saw_virama = if (codepoint == viramaCodepoint(script_tag))
@@ -1018,7 +1018,9 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
             codepoint == 0x0c59,
         .knd2, .knda => codepoint == 0x0c80 or
             (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
-            codepoint == 0x0cde,
+            codepoint == 0x0cde or
+            codepoint == 0x0cf1 or
+            codepoint == 0x0cf2,
         .tml2, .taml => (codepoint >= 0x0b95 and codepoint <= 0x0bb9) or
             (codepoint >= 0x0bd0 and codepoint <= 0x0bd7) or
             (codepoint >= 0x11fc0 and codepoint <= 0x11ff1),
@@ -1131,6 +1133,10 @@ fn isBeforeSubscriptVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag)
         .tel2, .telu => codepoint >= 0x0c3e and codepoint <= 0x0c42,
         else => false,
     };
+}
+
+fn isConsonantWithStacker(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    return (script_tag == .knd2 or script_tag == .knda) and (codepoint == 0x0cf1 or codepoint == 0x0cf2);
 }
 
 fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
@@ -1417,6 +1423,15 @@ test "Kannada placeholder merges dependent mark cluster" {
     mergePlaceholderDependentMarks(&clusters, &sources, &codepoints, .knd2);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Kannada consonant-with-stacker keeps following consonant in syllable" {
+    var syllables = [_]u8{0} ** 2;
+    const codepoints = [_]u21{ 0x0cf1, 0x0c95 };
+
+    markSourceSyllables(&syllables, &codepoints, .knd2);
+
+    try std.testing.expectEqualSlices(u8, &.{ 1, 1 }, &syllables);
 }
 
 test "Kannada old-spec trailing consonant virama uses blwf cluster" {

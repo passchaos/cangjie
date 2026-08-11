@@ -330,6 +330,16 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "a014549f766436cf55b2ceb40e462038938ee899",
+        .text = "\u{0cf1}\u{0c95}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "55c88ebbe938680b08f92c3de20713183e0c7481",
+        .text = "\u{0cf2}\u{0caa}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "3cae6bfe5b57c07ba81ddbd54c02fe4f3a1e3bf6",
         .text = "\u{0cb0}\u{200d}\u{0ccd}\u{0c95}",
         .direction = "ltr",
@@ -479,6 +489,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "54674a3111d209fb6be0ed31745314b7a8d2c244",
         .text = "\u{0ba4}\u{0bcd}\u{00b3}",
         .direction = "ltr",
+    },
+    .{
+        .font_hash = "190a621e48d4af1fffd8144bd41d2027e9a32fbf",
+        .text = "\u{0b95}\u{0bc1}",
+        .direction = "ltr",
+        .enable_feature = "ss03",
     },
     .{
         .font_hash = "e2b17207c4b7ad78d843e1b0c4d00b09398a1137",

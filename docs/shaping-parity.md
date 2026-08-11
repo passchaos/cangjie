@@ -1632,7 +1632,12 @@ shaping-performance superiority.
   its shaping cluster instead of inserting a dotted circle. The Kannada
   `U+0CF1` and `U+0CF2` rows for
   `3d0b77a2360aa6faa1385aaa510509ab70dfbeff.ttf` are retained as compact
-  single-glyph syllable controls. The Telugu
+  single-glyph syllable controls. The Kannada consonant-with-stacker rows for
+  `a014549f766436cf55b2ceb40e462038938ee899.ttf` and
+  `55c88ebbe938680b08f92c3de20713183e0c7481.ttf` are retained too; Cangjie now
+  keeps `U+0CF1/U+0CF2` in the same source syllable as the following consonant,
+  allowing contextual `psts` stacker forms. The Vedic `U+1CF5,U+0915`
+  consonant-with-stacker row still needs a separate follow-up. The Telugu
   `indic-special-cases.tests`
   word `U+0C1A,U+0C3F,U+0C32,U+0C4D,U+0C15,U+0C42,U+0C30,U+0C4D` now has a
   retained gate for `e716f6bd00a108d186b7e9f47b4515565f784f36.ttf`; Cangjie
@@ -1645,6 +1650,9 @@ shaping-performance superiority.
   `ta + pulli` pre-half form before a non-Tamil following glyph. The Tamil
   `pa,pa,pulli` row for `e2b17207c4b7ad78d843e1b0c4d00b09398a1137.ttf` is
   retained too, covering same-script consonant-plus-pulli output ordering. The
+  Tamil `indic-feature-order.tests` row for
+  `190a621e48d4af1fffd8144bd41d2027e9a32fbf.ttf` is retained with `ss03`
+  enabled, covering explicit feature overrides before dependent-vowel output. The
   Gurmukhi `indic-misc.tests` row for
   `755160ddba002332349fda3eb999e629d63dccf6.ttf` is retained for
   `U+0A2D,U+0A4D,U+0A30,U+0A42`; Cangjie now marks Gurmukhi `virama+ra` sources

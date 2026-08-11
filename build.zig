@@ -1088,6 +1088,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "b895f8ff06493cc893ec44de380690ca0074edfa",
+        .text_file = "tests/data/hebrew-diacritics-27.txt",
+        .direction = "rtl",
+    },
+    .{
         .font_hash = "872d2955d326bd6676a06f66b8238ebbaabc212f",
         .text_file = "tests/data/kbts-arabic-tests.txt",
         .direction = "rtl",

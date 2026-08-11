@@ -1615,6 +1615,10 @@ shaping-performance superiority.
   Indic shaper with Gurmukhi-specific consonant, mark, and virama
   classification so broken Gurmukhi mark clusters receive the HarfBuzz
   dotted-circle base without duplicating one already present in the input.
+  Additional Gurmukhi `indic-syllable.tests` rows are retained for
+  `85fe0be440c64ac77699e21c2f1bd933a919167e.ttf` and
+  `f75c4b05a0a4d67c1a808081ae3d74a9c66509e8.ttf`, covering yakash and udaat
+  mark positioning around `U+0A47` and `U+0A42`.
   The three Kannada `indic-special-cases.tests` rows for
   `3cae6bfe5b57c07ba81ddbd54c02fe4f3a1e3bf6.ttf` are retained for
   `U+0CB0,U+0CCD,U+0C95`, `U+0CB0,U+200D,U+0CCD,U+0C95`, and
@@ -1625,7 +1629,10 @@ shaping-performance superiority.
   `U+0C80,U+0C82` from `indic-syllable.tests` is retained for
   `81c368a33816fb20e9f647e8f24e2180f4720263.ttf`; Cangjie now treats U+0C80
   as a HarfBuzz placeholder/base and merges the following dependent mark into
-  its shaping cluster instead of inserting a dotted circle. The Telugu
+  its shaping cluster instead of inserting a dotted circle. The Kannada
+  `U+0CF1` and `U+0CF2` rows for
+  `3d0b77a2360aa6faa1385aaa510509ab70dfbeff.ttf` are retained as compact
+  single-glyph syllable controls. The Telugu
   `indic-special-cases.tests`
   word `U+0C1A,U+0C3F,U+0C32,U+0C4D,U+0C15,U+0C42,U+0C30,U+0C4D` now has a
   retained gate for `e716f6bd00a108d186b7e9f47b4515565f784f36.ttf`; Cangjie

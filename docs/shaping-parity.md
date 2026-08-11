@@ -1660,7 +1660,7 @@ shaping-performance superiority.
   `5af5361ed4d1e8305780b100e1730cb09132f8d1.ttf` is retained for
   `U+0DBB,U+0DCA,U+200D,U+0DBA,U+0DCA,U+200D,U+0DBA`, covering the Sinhala
   rakaransaya/yansaya ligature path against HarfRust.
-- The HarfBuzz in-house `vertical.tests` angle-bracket fallback rows for
+- The HarfBuzz in-house `rotation.tests` / `vertical.tests` angle-bracket fallback rows for
   `2681c1c72d6484ed3410417f521b1b819b4e2392.ttf` are retained for
   `U+3008` in `rtl`, `ttb`, and `btt` directions. Cangjie now applies the
   HarfBuzz vertical-presentation fallback forms when the font has the target
@@ -1749,7 +1749,7 @@ shaping-performance superiority.
   its shaping cluster instead of inserting a dotted circle. The Kannada
   `U+0CF1` and `U+0CF2` rows for
   `3d0b77a2360aa6faa1385aaa510509ab70dfbeff.ttf` are retained as compact
-  single-glyph syllable controls. The Kannada consonant-with-stacker rows for
+  single-glyph syllable controls. The Kannada `indic-consonant-with-stacker.tests` rows for
   `a014549f766436cf55b2ceb40e462038938ee899.ttf` and
   `55c88ebbe938680b08f92c3de20713183e0c7481.ttf` are retained too; Cangjie now
   keeps `U+0CF1/U+0CF2` in the same source syllable as the following consonant,

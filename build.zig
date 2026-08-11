@@ -1131,6 +1131,7 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     text_after: ?[]const u8 = null,
     size: ?[]const u8 = null,
     cluster_level: ?[]const u8 = null,
+    no_positions: bool = false,
     bot: bool = false,
     font_ext: []const u8 = "ttf",
 }{
@@ -1187,6 +1188,62 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .text = "\u{05d4}\u{05b7}\u{05e9}\u{05bc}\u{05c1}\u{05b8}\u{05de}\u{05b4}\u{05dd}",
         .direction = "rtl",
         .cluster_level = "1",
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = " \u{0e33}",
+        .direction = "ltr",
+        .cluster_level = "0",
+        .no_positions = true,
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = " \u{0e33}",
+        .direction = "ltr",
+        .cluster_level = "1",
+        .no_positions = true,
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = " \u{0e33}",
+        .direction = "ltr",
+        .cluster_level = "2",
+        .no_positions = true,
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = " \u{0e33}",
+        .direction = "ltr",
+        .cluster_level = "3",
+        .no_positions = true,
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = " \u{0e34}\u{0e33}",
+        .direction = "ltr",
+        .cluster_level = "0",
+        .no_positions = true,
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = " \u{0e34}\u{0e33}",
+        .direction = "ltr",
+        .cluster_level = "1",
+        .no_positions = true,
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = " \u{0e34}\u{0e33}",
+        .direction = "ltr",
+        .cluster_level = "2",
+        .no_positions = true,
+    },
+    .{
+        .font_hash = "4fac3929fc3332834e93673780ec0fe94342d193",
+        .text = " \u{0e34}\u{0e33}",
+        .direction = "ltr",
+        .cluster_level = "3",
+        .no_positions = true,
     },
     .{
         .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
@@ -1873,6 +1930,9 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.cluster_level) |cluster_level| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--cluster-level", cluster_level });
+            }
+            if (gate.no_positions) {
+                inline_harfrust_parity_cmd.addArg("--no-positions");
             }
             if (gate.text_before) |text_before| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--text-before", text_before });

@@ -138,6 +138,7 @@ pub const Options = struct {
     profile_fast_path: bool = false,
     line_summary: bool = false,
     glyph_summary: bool = false,
+    compare_positions: bool = true,
     show_flags: bool = false,
     show_extents: bool = false,
     unsafe_to_concat: bool = false,
@@ -295,6 +296,8 @@ pub fn parse(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, arg, "--glyph-summary")) {
             options.line_summary = true;
             options.glyph_summary = true;
+        } else if (std.mem.eql(u8, arg, "--no-positions")) {
+            options.compare_positions = false;
         } else if (std.mem.eql(u8, arg, "--show-flags")) {
             options.line_summary = true;
             options.glyph_summary = true;
@@ -510,6 +513,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --profile-fast-path          collect timings while keeping validated lookup accelerators active
         \\  --line-summary               print per-line glyph counts and checksums for the first measured iteration
         \\  --glyph-summary              include per-line glyph id lists with --line-summary
+        \\  --no-positions               skip advance/offset comparison in compare engines
         \\  --show-flags                 include per-glyph shaping flags with --glyph-summary
         \\  --show-extents               include per-glyph extents with --glyph-summary
         \\  --unsafe-to-concat           produce unsafe-to-concat glyph flags

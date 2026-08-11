@@ -1619,9 +1619,13 @@ shaping-performance superiority.
   retention. The Hebrew RTL `cluster-level=1` row for
   `43ef465752be9af900745f72fe29cb853a1401a5.ttf` is retained too; Cangjie now
   mirrors HarfBuzz's cluster merge when mark reordering moves a Hebrew point
-  leftward under an explicit monotone cluster level. The remaining
-  `cluster.tests` Thai SARA AM rows still need separate fallback-positioning
-  work before the full file can be retained.
+  leftward under an explicit monotone cluster level. `shape-bench` also accepts
+  `--no-positions`, matching upstream cluster-only fixtures; all eight Thai
+  SARA AM `cluster.tests` rows for the same `4fac...` font are retained for
+  cluster levels 0-3 without letting fallback-positioning differences hide the
+  cluster signal. Remaining `cluster.tests` Bengali, Malayalam, and Sinhala
+  rows still need separate parser/shaper work before the full file can be
+  retained.
 - The expressible HarfBuzz in-house `directwrite.tests` rows are represented by
   existing retained gates: Arabic high contextual forms for
   `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`, the `ffi`/disabled-`liga`

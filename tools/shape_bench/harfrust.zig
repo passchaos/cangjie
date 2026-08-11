@@ -129,6 +129,9 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
     if (options.unsafe_to_concat) {
         try args.append(allocator, "--unsafe-to-concat");
     }
+    if (!options.compare_positions) {
+        try args.append(allocator, "--no-positions");
+    }
     if (options.show_flags) {
         try args.append(allocator, "--show-flags");
     }

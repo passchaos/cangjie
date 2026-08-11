@@ -146,7 +146,7 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
     };
     defer freeResult(allocator, reference_result);
 
-    const mismatch = try firstLineMismatch(allocator, base_options.text_lines, cangjie_result.line_summaries, reference_result.line_summaries, base_options.direction);
+    const mismatch = try firstLineMismatch(allocator, base_options, cangjie_result.line_summaries, reference_result.line_summaries);
     const reference_label = reference_options.engine.label();
     std.debug.print(
         \\engine={s}
@@ -306,10 +306,10 @@ fn scriptTagForText(text: []const u8) cangjie.OpenTypeScriptTag {
     return .dflt;
 }
 
-fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u8, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary, direction: options_mod.Direction) !?LineMismatch {
+fn firstLineMismatch(allocator: std.mem.Allocator, options: options_mod.Options, cangjie_lines: []const runner.BenchResult.LineSummary, harfrust_lines: []const runner.BenchResult.LineSummary) !?LineMismatch {
     const count = @min(cangjie_lines.len, harfrust_lines.len);
     for (0..count) |line_index| {
-        const order = compareOrder(if (line_index < text_lines.len) text_lines[line_index] else "", direction);
+        const order = compareOrder(if (line_index < options.text_lines.len) options.text_lines[line_index] else "", options.direction);
         const cangjie_ids = try comparableSlice(u32, allocator, cangjie_lines[line_index].glyph_ids, order);
         errdefer allocator.free(cangjie_ids);
         if (!std.mem.eql(u32, cangjie_ids, harfrust_lines[line_index].glyph_ids)) {
@@ -336,21 +336,23 @@ fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u
                 .cangjie_position_values = try allocator.alloc(i32, 0),
             };
         }
-        inline for (.{ MismatchKind.x_advance, MismatchKind.y_advance, MismatchKind.x_offset, MismatchKind.y_offset }) |kind| {
-            const cangjie_values = try comparableSlice(i32, allocator, positionValues(cangjie_lines[line_index], kind), order);
-            errdefer allocator.free(cangjie_values);
-            if (!std.mem.eql(i32, cangjie_values, positionValues(harfrust_lines[line_index], kind))) {
-                return .{
-                    .kind = kind,
-                    .line_index = line_index,
-                    .cangjie = cangjie_lines[line_index],
-                    .harfrust = harfrust_lines[line_index],
-                    .cangjie_glyph_ids = cangjie_ids,
-                    .cangjie_clusters = cangjie_clusters,
-                    .cangjie_position_values = cangjie_values,
-                };
+        if (options.compare_positions) {
+            inline for (.{ MismatchKind.x_advance, MismatchKind.y_advance, MismatchKind.x_offset, MismatchKind.y_offset }) |kind| {
+                const cangjie_values = try comparableSlice(i32, allocator, positionValues(cangjie_lines[line_index], kind), order);
+                errdefer allocator.free(cangjie_values);
+                if (!std.mem.eql(i32, cangjie_values, positionValues(harfrust_lines[line_index], kind))) {
+                    return .{
+                        .kind = kind,
+                        .line_index = line_index,
+                        .cangjie = cangjie_lines[line_index],
+                        .harfrust = harfrust_lines[line_index],
+                        .cangjie_glyph_ids = cangjie_ids,
+                        .cangjie_clusters = cangjie_clusters,
+                        .cangjie_position_values = cangjie_values,
+                    };
+                }
+                allocator.free(cangjie_values);
             }
-            allocator.free(cangjie_values);
         }
         const cangjie_flags = try comparableSlice(u32, allocator, cangjie_lines[line_index].glyph_flags, order);
         errdefer allocator.free(cangjie_flags);
@@ -385,7 +387,7 @@ fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u
     }
     if (cangjie_lines.len != harfrust_lines.len) {
         const line_index = count;
-        const order = compareOrder(if (line_index < text_lines.len) text_lines[line_index] else "", direction);
+        const order = compareOrder(if (line_index < options.text_lines.len) options.text_lines[line_index] else "", options.direction);
         const cangjie_ids = if (line_index < cangjie_lines.len)
             try comparableSlice(u32, allocator, cangjie_lines[line_index].glyph_ids, order)
         else

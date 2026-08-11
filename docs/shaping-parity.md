@@ -1838,9 +1838,10 @@ shaping-performance superiority.
   `ZWJ/ZWNJ/ZWJ` row `U+091F,U+094D,U+200D,U+091F,U+094D,U+200C,U+091F,U+094D,U+200D,U+092F,U+093F`;
   Cangjie now treats `virama+ZWNJ` as a syllable terminator, so the following
   pre-base matra targets the following `ya` syllable instead of jumping before
-  the previous `tta`. The first five Devanagari rows of
+  the previous `tta`. The first 17 Devanagari rows of
   `indic-vowel-letter-spoofing.tests` are retained for
-  `1a5face3fcbd929d228235c2f72bbd6f8eb37424.ttf`; Cangjie now runs the
+  `1a5face3fcbd929d228235c2f72bbd6f8eb37424.ttf`; rows 6-17 are retained in
+  `tests/data/devanagari-vowel-letter-spoofing-extra-tests.txt`. Cangjie now runs the
   HarfBuzz vowel-constraint dotted-circle insertion table in the traditional
   Indic path before GSUB, and treats the synthetic dotted circle as an Indic
   placeholder base so the third row's `ra,virama,i` sequence forms `reph`

@@ -1306,6 +1306,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   The Myanmar standalone U+1030 row for
   `bb9473d2403488714043bcfb946c9f78b86ad627.ttf` is retained as well, covering
   dotted-circle insertion before a zero-width vowel sign.
+  The Hebrew mark-positioning row for
+  `8454d22037f892e76614e1645d066689a0200e61.ttf` is retained too, covering a
+  zero-width Hebrew mark in an RTL run.
 - The default-script legacy `kern` row from HarfBuzz in-house
   `per-script-kern-fallback.tests` passes for
   `a04cc6365876308945033b2a49f54afe899e7bf8.ttf`

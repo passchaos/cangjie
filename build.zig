@@ -175,6 +175,16 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .script = "Qaag",
     },
     .{
+        .font_hash = "af3086380b743099c54a3b11b96766039ea62fcd",
+        .text = "\u{101d}\u{fe00}\u{1031}\u{fe00}\u{1031}\u{fe00}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "f4ba5a767ef56a40133844507efb98fee5635e71",
+        .text = "\u{1000}\u{1032}\u{1038}\u{1069}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "1a3d8f381387dd29be1e897e4b5100ac8b4829e1",
         .text = "বেবে",
         .direction = "ltr",

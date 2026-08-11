@@ -4120,7 +4120,7 @@ fn ligatureMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []cons
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[relative_index])) return true;
     const codepoint = sourceCodepointForGlyph(options, glyph_base + relative_index) orelse return false;
     if (codepoint == 0x034f) return !cgjPreventedMarkReorder(options, glyph_base + relative_index);
-    return !options.visible_variation_selectors and isVariationSelector(codepoint);
+    return !options.visible_variation_selectors and glyphs[relative_index] == 0 and isVariationSelector(codepoint);
 }
 
 fn cgjPreventedMarkReorder(options: LookupOptions, glyph_index: usize) bool {
@@ -12340,6 +12340,38 @@ test "GSUB ligature matching skips variation selector fallback glyphs" {
 
     try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
     try std.testing.expectEqual(@as(usize, 2), match.component_offsets[1]);
+}
+
+test "GSUB ligature matching keeps variation selectors with real glyphs" {
+    var bytes = [_]u8{0} ** 12;
+    writeU16Test(&bytes, 0, 1); // LigatureCount.
+    writeU16Test(&bytes, 2, 4);
+    writeU16Test(&bytes, 4, 40); // Ligature glyph.
+    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
+    writeU16Test(&bytes, 8, 4);
+
+    const glyphs = [_]GlyphId{ 1, 4, 2 };
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+    const codepoints = [_]u21{ 0x101d, 0xfe00, 0x1031 };
+
+    var component_offsets: [max_ligature_components]usize = undefined;
+    const match = (try ligatureAt(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        0,
+        &glyphs,
+        0,
+        0,
+        .{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &codepoints,
+        },
+        &component_offsets,
+    )).?;
+
+    try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
+    try std.testing.expectEqual(@as(usize, 1), match.component_offsets[1]);
 }
 
 test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {

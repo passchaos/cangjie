@@ -1317,13 +1317,15 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `U+1000,U+1031,U+1084`). The simple `myanmar-syllable.tests` common-prefix
   row for `65d1b9099cfb3191931d8d6112d7a03d979d579f.ttf`
   (`U+00B2,U+1000`) is retained as well. The FE00 variation-selector syllable
-  row and the tone-sign ordering row still need focused follow-up. The slice
-  covers `mym2` cluster ownership, basic Myanmar initial reordering for medial
-  RA and left matras,
-  variation selectors inheriting the preceding Myanmar position, the
-  `rphf/pref/blwf` `/pstf` stage order, and final `pres/abvs/blws/psts` plus
-  typographic ligature features; full Myanmar syllable-machine coverage is still
-  a follow-up.
+  row for `af3086380b743099c54a3b11b96766039ea62fcd.ttf` is retained after GSUB
+  ligature matching learned to skip only fallback variation-selector glyph id
+  zero, while real FE00 glyphs remain visible to `rlig`. The tone-sign ordering
+  row for `f4ba5a767ef56a40133844507efb98fee5635e71.ttf` is retained too. The
+  slice covers `mym2` cluster ownership, basic Myanmar initial reordering for
+  medial RA and left matras, variation selectors inheriting the preceding
+  Myanmar position, the `rphf/pref/blwf` `/pstf` stage order, and final
+  `pres/abvs/blws/psts` plus typographic ligature features; full Myanmar
+  syllable-machine coverage is still a follow-up.
 - NotoSansBalinese passes `compare-harfbuzz` for all 43 SHBALI rendering-test
   cases retained in `tests/data/balinese-rendering-tests.txt`, covering USE
   category assignment, syllable cluster ownership, split pre-base vowels,
@@ -1660,10 +1662,11 @@ shaping-performance superiority.
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still
   need retained gates before this can be called broad USE parity.
 - Expand the new Myanmar shaper beyond the current focused `mym2`
-  mark-attachment and simple `myanmar-misc` rows. Kinzi, dotted-circle handling,
-  complex syllable segmentation, older `mymr` fallback behavior, and broader
-  Myanmar in-house coverage still need retained gates before claiming broad
-  Myanmar parity. The in-house `myanmar-zawgyi.tests` `Qaag` row now passes by
+  mark-attachment, FE00 variation-selector syllable, tone-sign ordering, and
+  simple `myanmar-misc` rows. Kinzi, dotted-circle handling, complex syllable
+  segmentation, older `mymr` fallback behavior, and broader Myanmar in-house
+  coverage still need retained gates before claiming broad Myanmar parity. The
+  in-house `myanmar-zawgyi.tests` `Qaag` row now passes by
   treating Myanmar Zawgyi as HarfBuzz does: a script tag with auto shaping,
   normalization, zero-width-mark handling, and fallback positioning disabled.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`

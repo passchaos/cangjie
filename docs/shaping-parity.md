@@ -1309,6 +1309,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   The Hebrew mark-positioning row for
   `8454d22037f892e76614e1645d066689a0200e61.ttf` is retained too, covering a
   zero-width Hebrew mark in an RTL run.
+  The four Latin combining-tilde rows for
+  `ffa0f5d2d9025486d8469d8b1fdd983e7632499b.ttf`,
+  `cc5f3d2d717fb6bd4dfae1c16d48a2cb8e12233b.ttf`,
+  `fcdcffbdf1c4c97c05308d7600e4c283eb47dbca.ttf`, and
+  `56cfd0e18d07f41c38e9598545a6d369127fc6f9.ttf` are retained as inline
+  HarfRust gates, covering zero-advance and preserved-advance combining marks.
 - The default-script legacy `kern` row from HarfBuzz in-house
   `per-script-kern-fallback.tests` passes for
   `a04cc6365876308945033b2a49f54afe899e7bf8.ttf`

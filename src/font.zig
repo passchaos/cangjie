@@ -1102,6 +1102,8 @@ pub const Font = struct {
         const ift = findTable(records, "IFT ");
         const iftx = findTable(records, "IFTX");
 
+        if (morx == null and range_shift != try expectedSfntRangeShift(num_tables)) return error.BadSfnt;
+
         const has_horizontal_metrics = hhea != null and hmtx != null;
         if ((hhea == null) != (hmtx == null)) return error.MissingTable;
         const has_glyf_outlines = glyf != null and loca != null;
@@ -5801,10 +5803,21 @@ fn validateSfntSearchParameters(num_tables: u16, search_range: u16, entry_select
     const expected_search_range = max_power_of_two * 16;
     const table_record_bytes = @as(usize, num_tables) * 16;
     if (expected_search_range > std.math.maxInt(u16) or table_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
-    const expected_range_shift = table_record_bytes - expected_search_range;
-    if (search_range != expected_search_range or entry_selector != expected_entry_selector or range_shift != expected_range_shift) {
+    _ = range_shift;
+    if (search_range != expected_search_range or entry_selector != expected_entry_selector) {
         return error.BadSfnt;
     }
+}
+
+fn expectedSfntRangeShift(num_tables: u16) FontError!u16 {
+    var max_power_of_two: usize = 1;
+    while (max_power_of_two * 2 <= num_tables) {
+        max_power_of_two *= 2;
+    }
+    const expected_search_range = max_power_of_two * 16;
+    const table_record_bytes = @as(usize, num_tables) * 16;
+    if (expected_search_range > std.math.maxInt(u16) or table_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
+    return @intCast(table_record_bytes - expected_search_range);
 }
 
 fn validateSfntTableDirectory(records: []const TableRecord) FontError!void {
@@ -5900,7 +5913,9 @@ fn validateSfntTablesDoNotOverlapTtcDsig(records: []const TableRecord, header: T
 }
 
 fn validateSfntTableChecksums(data: []const u8, records: []const TableRecord) FontError!void {
+    const tolerate_stale_head_checksum = findTable(records, "morx") != null;
     for (records) |record| {
+        if (tolerate_stale_head_checksum and bin.tagEq(record.tag, "head")) continue;
         try validateSfntTableChecksum(data, record);
     }
 }

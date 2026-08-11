@@ -1611,17 +1611,16 @@ shaping-performance superiority.
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are
   covered, but broader font/script matrices still need expansion.
-- AAT and extents parity remain open. The first HarfBuzz in-house
-  `aat-morx.tests` row is retained for `MORXTwentyeight.ttf`: Cangjie now runs
-  a focused AAT `morx` ligature state-machine path that forms `A_E_D` across
-  intervening glyphs while preserving HarfBuzz-style clusters. All eight
-  `aat-trak.tests` rows are retained for `TRAK.ttf`; Cangjie now tolerates
-  malformed optional `STAT` metadata at parse time for static shaping, applies
-  AAT noncontextual `morx` alternates, and interpolates horizontal `trak`
-  advances for the requested point size. The second `aat-morx.tests` row remains
-  open. The `color-fonts.tests` rows require a `--show-extents` comparison
-  surface; the current benchmark comparison matrix does not yet capture glyph
-  extents.
+- AAT and extents parity remain open. Both HarfBuzz in-house `aat-morx.tests`
+  rows are retained: Cangjie now runs a focused AAT `morx` ligature
+  state-machine path that forms `A_E_D` across intervening glyphs while
+  preserving HarfBuzz-style clusters, and it tolerates the stale static SFNT
+  search/header checksum metadata needed by the Tamil `morx` fixture while
+  keeping public lazy table APIs strict. All eight `aat-trak.tests` rows are
+  retained for `TRAK.ttf`; Cangjie applies AAT noncontextual `morx` alternates
+  and interpolates horizontal `trak` advances for the requested point size. The
+  `color-fonts.tests` rows require a `--show-extents` comparison surface; the
+  current benchmark comparison matrix does not yet capture glyph extents.
 - The full six-row HarfBuzz in-house `default-ignorables.tests` file is retained
   as inline gates. It covers CGJ/Arabic and ZWJ/mark interactions across the
   fixture fonts named above; broader default-ignorable work now belongs to

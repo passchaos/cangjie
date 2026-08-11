@@ -1340,6 +1340,11 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "e6185e88b04432fbf373594d5971686bb7dd698d",
+        .text = "\u{0b95}\u{0bcd} \u{0b9a}\u{0bcd}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "TRAK",
         .text = "ABC",
         .direction = "ltr",

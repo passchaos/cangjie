@@ -4059,6 +4059,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 codepoints.items,
                 lookup_options.script_tag,
             );
+            indic.normalizeOldSpecBengaliRaViramaOrder(
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                codepoints.items,
+                lookup_options.script_tag,
+            );
 
             try source_features.resize(buffer.allocator, codepoints.items.len);
             try source_syllables.resize(buffer.allocator, codepoints.items.len);

@@ -11,6 +11,7 @@ const pref_feature = unicode.tag("pref");
 const blwf_feature = unicode.tag("blwf");
 const half_feature = unicode.tag("half");
 const pstf_feature = unicode.tag("pstf");
+const vatu_feature = unicode.tag("vatu");
 const rphf_source_mask = gsub.sourceFeatureMaskForTag(rphf_feature).?;
 const pref_source_mask = gsub.sourceFeatureMaskForTag(pref_feature).?;
 const blwf_source_mask = gsub.sourceFeatureMaskForTag(blwf_feature).?;
@@ -488,6 +489,7 @@ const basic_feature_applications_without_reph = [_]gsub.FeatureApplication{
     .{ .tag = blwf_feature, .source_scoped = true, .match_source_syllable = true },
     .{ .tag = half_feature, .source_scoped = true, .match_source_syllable = true },
     .{ .tag = pstf_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = vatu_feature, .match_source_syllable = true },
     .{ .tag = unicode.tag("cjct"), .match_source_syllable = true },
 };
 
@@ -497,6 +499,7 @@ const basic_feature_applications_with_reph = [_]gsub.FeatureApplication{
     .{ .tag = blwf_feature, .source_scoped = true, .match_source_syllable = true },
     .{ .tag = half_feature, .source_scoped = true, .match_source_syllable = true },
     .{ .tag = pstf_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = vatu_feature, .match_source_syllable = true },
     .{ .tag = unicode.tag("cjct"), .match_source_syllable = true },
 };
 
@@ -585,6 +588,40 @@ pub fn normalizeInitialConsonantSyllableOrder(
     );
 }
 
+pub fn normalizeOldSpecBengaliRaViramaOrder(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (script_tag != .beng) return;
+
+    var glyph_index: usize = 0;
+    while (glyph_index + 1 < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const first_source = glyph_source_indices.items[glyph_index];
+        const second_source = glyph_source_indices.items[glyph_index + 1];
+        if (first_source >= codepoints.len or second_source >= codepoints.len) continue;
+        if (codepoints[first_source] != viramaCodepoint(script_tag)) continue;
+        if (codepoints[second_source] != rephRaCodepoint(script_tag)) continue;
+        if (indicSyllableStart(codepoints, first_source, script_tag) != indicSyllableStart(codepoints, second_source, script_tag)) continue;
+
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, glyph_index, glyph_index + 2);
+        shaping_metadata.swap(
+            glyph_ids.items,
+            glyph_source_indices.items,
+            glyph_cluster_indices.items,
+            glyph_substituted.items,
+            ligature_components.infos.items,
+            glyph_index,
+            glyph_index + 1,
+        );
+        glyph_index += 1;
+    }
+}
+
 fn glyphIndexForSource(sources: []const usize, target_source: usize) ?usize {
     for (sources, 0..) |source, glyph_index| {
         if (source == target_source) return glyph_index;
@@ -630,8 +667,17 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         return marked;
     }
     if (script_tag == .bng2 or script_tag == .beng) {
-        if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag, pstf_source_mask)) {
-            marked = true;
+        if (script_tag == .beng) {
+            if (markPreBaseConsonantViramaSources(source_features, codepoints, syllable_start, syllable_end, script_tag, half_source_mask)) {
+                marked = true;
+            }
+            if (markOldSpecBengaliPostBaseRaSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
+                marked = true;
+            }
+        } else {
+            if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag, pstf_source_mask)) {
+                marked = true;
+            }
         }
         return marked;
     }
@@ -684,6 +730,19 @@ fn markPostBaseViramaConsonantSources(source_features: []u32, codepoints: []cons
         if (codepoints[index] != viramaCodepoint(script_tag)) continue;
         if (!isIndicConsonant(codepoints[index + 1], script_tag)) continue;
         source_features[index] |= source_mask;
+        marked = true;
+    }
+    return marked;
+}
+
+fn markOldSpecBengaliPostBaseRaSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (script_tag != .beng) return false;
+    var marked = false;
+    var index = syllable_start;
+    while (index + 1 < syllable_end) : (index += 1) {
+        if (codepoints[index] != viramaCodepoint(script_tag)) continue;
+        if (codepoints[index + 1] != rephRaCodepoint(script_tag)) continue;
+        source_features[index + 1] |= blwf_source_mask;
         marked = true;
     }
     return marked;
@@ -1406,6 +1465,40 @@ test "Bengali reph reorders before post-base consonant forms" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 8, 13, 6 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 2, 0, 3, 5 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, clusters.items);
+}
+
+test "Old-spec Bengali ra virama normalizes for blwf vatu" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 2, 5, 3 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0995, 0x09cd, 0x09b0 };
+    normalizeOldSpecBengaliRaViramaOrder(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .beng);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 3, 5 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 1 }, sources.items);
+
+    var features = [_]u32{0} ** 3;
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .beng));
+    try std.testing.expect((features[0] & half_source_mask) != 0);
+    try std.testing.expect((features[2] & blwf_source_mask) != 0);
+    try std.testing.expect((features[2] & (rphf_source_mask & ~gsub.source_feature_mask_marker)) == 0);
 }
 
 test "Kannada placeholder prevents broken mark dotted circle" {

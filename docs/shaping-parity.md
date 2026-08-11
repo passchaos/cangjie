@@ -1619,7 +1619,10 @@ shaping-performance superiority.
   `U+09B0,U+09CD,U+09A5,U+09CD,U+09AF,U+09C0`; Cangjie now marks Bengali
   post-base `virama+consonant` sources for `pstf` and reorders formed reph
   before the post-base consonant form so the final contextual `psts` rule can
-  collapse `reph + post-form + ii`.
+  collapse `reph + post-form + ii`. The first `ligature-id.tests` row for
+  `1c2fb74c1b2aa173262734c1f616148f1648cfd6.ttf` is retained as well;
+  old-spec Bengali now normalizes `virama+ra` to the `ra+virama` glyph order for
+  `blwf/vatu` while preserving source-scoped `half/pres` behavior.
   Malayalam `indic-pref-blocking.tests` rows for
   `226bc2deab3846f1a682085f70c67d0421014144.ttf` and
   `e207635780b42f898d58654b65098763e340f5c7.ttf` now pass as retained inline

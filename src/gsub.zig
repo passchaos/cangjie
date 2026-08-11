@@ -4049,7 +4049,7 @@ fn sourceFeatureAllowsGlyph(options: LookupOptions, glyph_index: usize) bool {
             options.active_source_feature_mask
         else
             sourceFeatureMaskForTag(options.active_source_feature.?) orelse return false;
-        return (assigned & active_mask) != 0;
+        return (assigned & (active_mask & ~source_feature_mask_marker)) != 0;
     }
     const active = options.active_source_feature orelse return false;
     return assigned == active;
@@ -9765,6 +9765,24 @@ test "GSUB source-scoped feature gates substitution starts" {
         .script_tag = .arab,
     });
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 2, 2 }, global.items);
+}
+
+test "GSUB source feature masks ignore the shared marker bit" {
+    const features = [_]u32{sourceFeatureMaskForTag(unicode.tag("blwf")).?};
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.append(std.testing.allocator, 0);
+
+    try std.testing.expect(sourceFeatureAllowsGlyph(.{
+        .glyph_source_indices = &sources,
+        .source_features = &features,
+        .active_source_feature = unicode.tag("blwf"),
+    }, 0));
+    try std.testing.expect(!sourceFeatureAllowsGlyph(.{
+        .glyph_source_indices = &sources,
+        .source_features = &features,
+        .active_source_feature = unicode.tag("rphf"),
+    }, 0));
 }
 
 test "GSUB source-scoped feature gates multiple substitutions" {

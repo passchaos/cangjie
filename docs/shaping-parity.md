@@ -1820,7 +1820,11 @@ shaping-performance superiority.
   `tests/data/devanagari-old-spec-tests.txt`; legacy `deva` fonts now run
   through the traditional Indic shaper, move old-spec halants after post-base
   consonants, and mark post-base Ra for `blwf` vattu before `vatu` forms
-  `Tra`. The `indic-syllable.tests` Devanagari word
+  `Tra`. The Devanagari `indic-special-cases.tests` U+094E rows for
+  `9d8c53cb64b8747abdd2b70755cce2ee0eb42ef7.ttf` are retained as
+  `tests/data/devanagari-special-prishthamatra-tests.txt`; U+094E now leads
+  the reordered pre-base matra group while preserving neighboring nukta order.
+  The `indic-syllable.tests` Devanagari word
   `U+0926,U+093F,U+0938,U+0902,U+092C,U+0930` is retained for
   `41071178fbce4956d151f50967af458dbf555f7b.ttf`; GSUB ligature matching now
   honors source-syllable boundaries while skipping lookup-flag ignored glyphs,

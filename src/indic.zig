@@ -60,28 +60,51 @@ pub fn reorderPreBaseMatras(
         if (source_index >= codepoints.len) continue;
         if (!isPreBaseMatra(codepoints[source_index], script_tag)) continue;
 
-        const following_mark_sources = followingMatraMarkSources(glyph_source_indices.items, codepoints, index, source_index);
+        const following_mark_sources = followingMatraMarkSources(glyph_source_indices.items, codepoints, index, source_index, script_tag);
         const syllable_start = indicSyllableStart(codepoints, source_index, script_tag);
         const target_info = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, ligature_components, codepoints, syllable_start, source_index, index, script_tag);
+        const leading_mark_start = leadingPreBaseMatraMarkStart(following_mark_sources, codepoints, script_tag);
         if (target_info.merge_from_syllable_start) {
             shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, syllable_start, index + 1);
         } else {
             shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, target_info.index, index + 1);
         }
+        var leading_marks_moved: usize = 0;
+        if (leading_mark_start) |start| {
+            var mark_slot = start;
+            while (mark_slot < following_mark_sources.len) : (mark_slot += 1) {
+                const mark_source = following_mark_sources[mark_slot] orelse break;
+                const mark_index = glyphIndexForSource(glyph_source_indices.items, mark_source) orelse continue;
+                shaping_metadata.move(
+                    glyph_ids,
+                    glyph_source_indices,
+                    glyph_cluster_indices,
+                    glyph_substituted,
+                    ligature_components,
+                    mark_index,
+                    target_info.index + leading_marks_moved,
+                );
+                leading_marks_moved += 1;
+            }
+        }
+        const matra_index = glyphIndexForSource(glyph_source_indices.items, source_index) orelse continue;
         shaping_metadata.move(
             glyph_ids,
             glyph_source_indices,
             glyph_cluster_indices,
             glyph_substituted,
             ligature_components,
-            index,
-            target_info.index,
+            matra_index,
+            target_info.index + leading_marks_moved,
         );
         var moved_marks: usize = 0;
-        for (following_mark_sources) |maybe_mark_source| {
+        for (following_mark_sources, 0..) |maybe_mark_source, mark_slot| {
+            if (leading_mark_start) |start| {
+                if (mark_slot >= start) break;
+            }
             const mark_source = maybe_mark_source orelse break;
             const mark_index = glyphIndexForSource(glyph_source_indices.items, mark_source) orelse continue;
-            const mark_target = @min(target_info.index + 1 + moved_marks, glyph_source_indices.items.len - 1);
+            const mark_target = @min(target_info.index + leading_marks_moved + 1 + moved_marks, glyph_source_indices.items.len - 1);
             shaping_metadata.move(
                 glyph_ids,
                 glyph_source_indices,
@@ -96,14 +119,28 @@ pub fn reorderPreBaseMatras(
     }
 }
 
-fn followingMatraMarkSources(glyph_sources: []const usize, codepoints: []const u21, matra_glyph_index: usize, matra_source: usize) [4]?usize {
+fn leadingPreBaseMatraMarkStart(mark_sources: [4]?usize, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) ?usize {
+    for (mark_sources, 0..) |maybe_source, index| {
+        const source = maybe_source orelse return null;
+        if (source >= codepoints.len) return null;
+        if (isLeadingPreBaseMatraMark(codepoints[source], script_tag)) return index;
+    }
+    return null;
+}
+
+fn isLeadingPreBaseMatraMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    return script_tag == .dev2 and codepoint == 0x094e;
+}
+
+fn followingMatraMarkSources(glyph_sources: []const usize, codepoints: []const u21, matra_glyph_index: usize, matra_source: usize, script_tag: unicode.OpenTypeScriptTag) [4]?usize {
     var result: [4]?usize = .{ null, null, null, null };
     var count: usize = 0;
     var glyph_index = matra_glyph_index + 1;
     while (glyph_index < glyph_sources.len and count < result.len) : (glyph_index += 1) {
         const source = glyph_sources[glyph_index];
         if (source <= matra_source or source >= codepoints.len) break;
-        if (!isIndicFormatOrNonspacingMark(codepoints[source])) break;
+        if (!isIndicFormatOrNonspacingMark(codepoints[source]) and
+            !isLeadingPreBaseMatraMark(codepoints[source], script_tag)) break;
         result[count] = source;
         count += 1;
     }
@@ -1457,6 +1494,64 @@ test "Gujarati consonant virama marks half source" {
 test "Gujarati i-matra is pre-base" {
     try std.testing.expect(isPreBaseMatra(0x0abf, .gjr2));
     try std.testing.expect(!isPreBaseMatra(0x0abe, .gjr2));
+}
+
+test "Devanagari prishthamatra stays before moved pre-base matra" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2, 3, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0915, 0x093f, 0x094e, 0x093c };
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .dev2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4, 2, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3, 1, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, clusters.items);
+}
+
+test "Devanagari prishthamatra skips earlier nukta before moved pre-base matra" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2, 3, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0915, 0x093f, 0x093c, 0x094e };
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .dev2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 4, 2, 3, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 1, 2, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, clusters.items);
 }
 
 test "Kannada initial ra virama ZWJ normalizes for legacy half form" {

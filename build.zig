@@ -1271,6 +1271,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .direction = "rtl",
     },
     .{
+        .font_hash = "3e46c3b84c1370a06594736c7f8acebf810bbb3b",
+        .text_file = "tests/data/arabic-normalization-3e46-tests.txt",
+        .direction = "rtl",
+    },
+    .{
         .font_hash = "7bbd3175734d5d291e1c15271ec0cbb97b626ebf",
         .text_file = "tests/data/kbts-mixed-tests.txt",
         .direction = "ltr",

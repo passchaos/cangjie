@@ -1539,8 +1539,9 @@ shaping-performance superiority.
   `arabic-normalization.tests` slice passes for all 32 lines covered by that
   font, including contextual forms after `beh` and repeated `yeh+hamza`
   sequences. The same in-house file's
-  `3e46c3b84c1370a06594736c7f8acebf810bbb3b.ttf` slice now also passes all
-  32 normalization lines after GSUB class-format validation learned to treat
+  `3e46c3b84c1370a06594736c7f8acebf810bbb3b.ttf` slice is retained as
+  `tests/data/arabic-normalization-3e46-tests.txt` and covers all 32
+  normalization lines after GSUB class-format validation learned to treat
   covered classes with no ClassSet slot as legal no-op matches, matching the
   runtime behavior already used by Cangjie and HarfBuzz. The `uniscribe.tests`
   `U+0628,U+0628,U+0628` row for

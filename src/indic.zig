@@ -59,6 +59,7 @@ pub fn reorderPreBaseMatras(
         if (source_index >= codepoints.len) continue;
         if (!isPreBaseMatra(codepoints[source_index], script_tag)) continue;
 
+        const following_mark_sources = followingMatraMarkSources(glyph_source_indices.items, codepoints, index, source_index);
         const syllable_start = indicSyllableStart(codepoints, source_index, script_tag);
         const target_info = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, ligature_components, codepoints, syllable_start, source_index, index, script_tag);
         if (target_info.merge_from_syllable_start) {
@@ -75,7 +76,37 @@ pub fn reorderPreBaseMatras(
             index,
             target_info.index,
         );
+        var moved_marks: usize = 0;
+        for (following_mark_sources) |maybe_mark_source| {
+            const mark_source = maybe_mark_source orelse break;
+            const mark_index = glyphIndexForSource(glyph_source_indices.items, mark_source) orelse continue;
+            const mark_target = @min(target_info.index + 1 + moved_marks, glyph_source_indices.items.len - 1);
+            shaping_metadata.move(
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                mark_index,
+                mark_target,
+            );
+            moved_marks += 1;
+        }
     }
+}
+
+fn followingMatraMarkSources(glyph_sources: []const usize, codepoints: []const u21, matra_glyph_index: usize, matra_source: usize) [4]?usize {
+    var result: [4]?usize = .{ null, null, null, null };
+    var count: usize = 0;
+    var glyph_index = matra_glyph_index + 1;
+    while (glyph_index < glyph_sources.len and count < result.len) : (glyph_index += 1) {
+        const source = glyph_sources[glyph_index];
+        if (source <= matra_source or source >= codepoints.len) break;
+        if (!isIndicFormatOrNonspacingMark(codepoints[source])) break;
+        result[count] = source;
+        count += 1;
+    }
+    return result;
 }
 
 pub fn reorderPrefGlyphs(
@@ -1117,7 +1148,8 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
             (codepoint >= 0x0bbe and codepoint <= 0x0bc2) or
             (codepoint >= 0x0bc6 and codepoint <= 0x0bc8) or
             (codepoint >= 0x0bca and codepoint <= 0x0bcd) or
-            codepoint == 0x0bd7,
+            codepoint == 0x0bd7 or
+            codepoint == 0x1133c,
         .mlm2, .mlym => (codepoint >= 0x0d00 and codepoint <= 0x0d03) or
             (codepoint >= 0x0d3b and codepoint <= 0x0d4c) or
             codepoint == 0x0d57,
@@ -1630,6 +1662,35 @@ test "Tamil consonant virama marks half source" {
     try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .tml2));
     try std.testing.expectEqual(half_source_mask, features[0]);
     try std.testing.expectEqual(@as(u32, 0), features[1]);
+}
+
+test "Tamil script-extension nukta follows moved pre-base matra" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 3, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0ba4, 0x0bc6, 0x1133c };
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .tml2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 2, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0 }, clusters.items);
 }
 
 test "Bengali source syllables split adjacent matra syllables" {

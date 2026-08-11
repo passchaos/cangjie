@@ -1688,8 +1688,9 @@ shaping-performance superiority.
   The `indic-script-extensions.tests` row for
   `b151cfcdaa77585d77f17a42158e0873fc8e2633.ttf` is retained for Tamil plus
   Grantha marks. The longer mixed Tamil/Grantha pre-base vowel row for
-  `3493e92eaded2661cadde752a39f9d58b11f0326.ttf` still needs a focused
-  script-extension mark-order follow-up. The Gurmukhi `indic-misc.tests` row for
+  `3493e92eaded2661cadde752a39f9d58b11f0326.ttf` is retained too; Cangjie now
+  treats U+1133C as a Tamil script-extension dependent mark and moves following
+  nonspacing marks with pre-base matras. The Gurmukhi `indic-misc.tests` row for
   `755160ddba002332349fda3eb999e629d63dccf6.ttf` is retained for
   `U+0A2D,U+0A4D,U+0A30,U+0A42`; Cangjie now marks Gurmukhi `virama+ra` sources
   for `blwf` and keeps the following dependent

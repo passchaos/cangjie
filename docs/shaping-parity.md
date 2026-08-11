@@ -1575,7 +1575,10 @@ shaping-performance superiority.
   classifies U+09BF as a Bengali left matra and constrains Indic contextual
   GSUB stages to source syllables, so `pres` can form `uni09BF.short01` before
   `uni09B9` without letting that syllable's `uni09B9` satisfy a later
-  cross-syllable backtrack for `uni09A8`. The Devanagari
+  cross-syllable backtrack for `uni09A8`. The Bengali `indic-decompose.tests`
+  row for `932ad5132c2761297c74e9976fe25b08e5ffa10b.ttf` is retained too,
+  covering the no-decompose treatment for RRA/RHA alongside explicit nukta
+  sequences. The Devanagari
   `context-matching.tests` row for
   `d629e7fedc0b350222d7987345fe61613fa3929a.ttf` is retained for
   `U+0915,U+093F,U+0915,U+093F`, covering repeated pre-base matra context in a
@@ -1652,8 +1655,12 @@ shaping-performance superiority.
   retained too, covering same-script consonant-plus-pulli output ordering. The
   Tamil `indic-feature-order.tests` row for
   `190a621e48d4af1fffd8144bd41d2027e9a32fbf.ttf` is retained with `ss03`
-  enabled, covering explicit feature overrides before dependent-vowel output. The
-  Gurmukhi `indic-misc.tests` row for
+  enabled, covering explicit feature overrides before dependent-vowel output.
+  The `indic-script-extensions.tests` row for
+  `b151cfcdaa77585d77f17a42158e0873fc8e2633.ttf` is retained for Tamil plus
+  Grantha marks. The longer mixed Tamil/Grantha pre-base vowel row for
+  `3493e92eaded2661cadde752a39f9d58b11f0326.ttf` still needs a focused
+  script-extension mark-order follow-up. The Gurmukhi `indic-misc.tests` row for
   `755160ddba002332349fda3eb999e629d63dccf6.ttf` is retained for
   `U+0A2D,U+0A4D,U+0A30,U+0A42`; Cangjie now marks Gurmukhi `virama+ra` sources
   for `blwf` and keeps the following dependent

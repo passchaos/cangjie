@@ -82,6 +82,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "932ad5132c2761297c74e9976fe25b08e5ffa10b",
+        .text = "\u{09dc} \u{09dd} \u{09a1}\u{09bc} \u{09a2}\u{09bc}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "21b7fb9c1eeae260473809fbc1fe330f66a507cd",
         .text = "ىِٕ",
         .direction = "rtl",
@@ -499,6 +504,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     .{
         .font_hash = "e2b17207c4b7ad78d843e1b0c4d00b09398a1137",
         .text = "\u{0baa}\u{0baa}\u{0bcd}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "b151cfcdaa77585d77f17a42158e0873fc8e2633",
+        .text = "\u{0baa}\u{11301}\u{11303}",
         .direction = "ltr",
     },
     .{

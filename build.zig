@@ -1070,6 +1070,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
     direction: []const u8,
 }{
     .{
+        .font_hash = "HarfBust",
+        .text_file = "tests/data/harfbust-tests.txt",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "1c2fb74c1b2aa173262734c1f616148f1648cfd6",
         .text_file = "tests/data/bengali-ligature-id-tests.txt",
         .direction = "ltr",

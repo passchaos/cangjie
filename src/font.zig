@@ -1210,7 +1210,7 @@ pub const Font = struct {
             else => return err,
         };
         if (gdef) |gdef_table| try validateGdefTableWithVariationData(data, gdef_table, glyph_count, fvar);
-        if (gsub) |gsub_table| try gsub_mod.validateGlyphBounds(data, gsub_table.offset, gsub_table.length, glyph_count);
+        if (gsub) |gsub_table| try gsub_mod.validateGlyphBoundsForShaping(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
         if (cpal) |cpal_table| {
             _ = try validateCpalPaletteEntries(data, cpal_table);
@@ -2546,7 +2546,7 @@ pub const Font = struct {
         // GSUB glyph-bound walk before shaping so a post-parse mutation cannot
         // smuggle an out-of-range substitution result into the glyph stream.
         try validateSfntTableChecksum(self.data, gsub);
-        try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
+        try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         var gdef_metadata = try self.gdefLookupMetadataForShaping(allocator);
         defer gdef_metadata.deinit(allocator);
         try self.applyGsubWithOptionsUsingGdef(glyphs, allocator, options, gdef_metadata);
@@ -2556,7 +2556,7 @@ pub const Font = struct {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
         try validateSfntTableChecksum(self.data, gsub);
-        try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
+        try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         try self.applyGsubWithOptionsUsingGdefForShaping(glyphs, allocator, options, gdef_metadata);
     }
 
@@ -2695,7 +2695,7 @@ pub const Font = struct {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
         try validateSfntTableChecksum(self.data, gsub);
-        try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
+        try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         var gdef_metadata = try self.gdefLookupMetadataForShaping(allocator);
         defer gdef_metadata.deinit(allocator);
         try self.applyGsubFeatureSequenceWithOptionsUsingGdef(applications, glyphs, allocator, options, gdef_metadata);
@@ -2705,7 +2705,7 @@ pub const Font = struct {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
         try validateSfntTableChecksum(self.data, gsub);
-        try gsub_mod.validateGlyphBounds(self.data, gsub.offset, gsub.length, self.glyph_count);
+        try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         try self.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyphs, allocator, options, gdef_metadata);
     }
 

@@ -1213,13 +1213,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `TTC.ttc` face indices 0 and 1. `shape-bench` now accepts `--face-index`
   and forwards it to Cangjie, HarfRust, and HarfBuzz reference engines; DFONT
   remains outside the current SFNT/TTC/WOFF container support.
-- HarfBuzz in-house `harfbust.tests` now clears the first parser blocker:
-  Cangjie accepts `HarfBust.ttf` even though its name ID 6 PostScript name
-  contains an invalid space, while explicit `postscript_name` reads and font
-  database matching still reject that value. The upstream rows are not retained
-  yet because the fixture next fails on deliberately broken GSUB ligature data;
-  matching HarfBuzz/HarfRust there needs a separate tolerant reachable-subtable
-  slice.
+- HarfBuzz in-house `harfbust.tests` rows for `HarfBust.ttf` are retained in
+  `tests/data/harfbust-tests.txt`. Cangjie accepts the font even though name ID
+  6 contains an invalid space, while explicit `postscript_name` reads and font
+  database matching still reject that value. The GSUB path now also mirrors the
+  HarfRust/HarfBuzz behavior for this stress font: malformed Script/LangSys
+  selection falls back to the reachable lookup pass, and malformed individual
+  ligature set/ligature offsets are skipped while valid ligature records in the
+  same lookup still apply.
 - HarfBuzz in-house `positioning-features.tests` rows that `shape-bench` can
   express now pass focused `compare-harfbuzz`. This includes a real GPOS table
   whose FeatureList records are not sorted by tag (`kern` before `abvm`);

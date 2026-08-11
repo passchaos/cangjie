@@ -1232,7 +1232,7 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   U+2044 while leaving one-sided fraction-slash inputs unmodified. The four
   one-sided ASCII and Arabic-Indic fraction-slash controls from the same upstream
   file are retained as well.
-- The U+2011 row from HarfBuzz in-house `hyphens.tests` passes for
+- The U+2010 and U+2011 rows from HarfBuzz in-house `hyphens.tests` pass for
   `1c04a16f32a39c26c851b7fc014d2e8d298ba2b8.ttf`. When a font lacks a nominal
   non-breaking hyphen glyph but has U+2010, Cangjie mirrors HarfBuzz's normalize
   fallback and uses the U+2010 glyph while preserving the original source

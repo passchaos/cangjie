@@ -1300,6 +1300,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   synthesizes late zero-width mark classes for no-GDEF Thai runs, and separates
   mark attachment offset propagation from mark advance zeroing so HarfBuzz's
   zero-advance and preserved-advance fixture variants both match.
+  The simple Latin `ABA` row for
+  `a98e908e2ed21b22228ea59ebcc0f05034c86f2e.ttf` is retained too, covering a
+  zero-advance middle glyph without mark attachment.
 - The default-script legacy `kern` row from HarfBuzz in-house
   `per-script-kern-fallback.tests` passes for
   `a04cc6365876308945033b2a49f54afe899e7bf8.ttf`

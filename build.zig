@@ -1263,6 +1263,11 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .text = "\u{0e01}\u{0e34}\u{0e01}",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "a98e908e2ed21b22228ea59ebcc0f05034c86f2e",
+        .text = "ABA",
+        .direction = "ltr",
+    },
 };
 
 const retained_harfrust_text_parity_gates = [_]struct {

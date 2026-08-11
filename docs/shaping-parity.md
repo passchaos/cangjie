@@ -1207,8 +1207,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   retained for `ec404b8524cd56efa5d25524cc8541a0b6604b4f.ttf` as
   `tests/data/arabic-phags-pa-tests.txt`; Cangjie now classifies Phags-Pa as
   `phag` and routes its dual-joining letters through the Arabic-style joining
-  shaper. The remaining Phags-Pa variation-selector mirror forms and leading
-  ZWJ cluster rows still need focused coverage.
+  shaper. The leading ZWJ rows from the same fixture are retained too; ZWJ
+  still triggers joining but no longer pulls the following Phags-Pa base back to
+  the leading joiner's output cluster. The remaining Phags-Pa
+  variation-selector mirror forms still need focused coverage.
 - HarfBuzz in-house `collections.tests` TTC rows are retained for
   `TTC.ttc` face indices 0 and 1. `shape-bench` now accepts `--face-index`
   and forwards it to Cangjie, HarfRust, and HarfBuzz reference engines; DFONT

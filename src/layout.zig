@@ -5659,7 +5659,8 @@ fn markSortClass(source_index: usize, codepoints: []const u21) u8 {
 
 fn inheritsLeadingDefaultIgnorableCluster(codepoints: []const u21, clusters: []const usize) bool {
     return codepoints.len == 1 and clusters.len == 1 and
-        unicode.isDefaultIgnorableForShaping(codepoints[0]);
+        unicode.isDefaultIgnorableForShaping(codepoints[0]) and
+        unicode.joiningTypeForCodepoint(codepoints[0]) != .join_causing;
 }
 
 fn isDefaultIgnorableForShaping(codepoint: u21) bool {

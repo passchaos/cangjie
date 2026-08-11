@@ -1066,6 +1066,16 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .text_file = "tests/data/arabic-phags-pa-tests.txt",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "SimpArabicTest",
+        .text_file = "tests/data/arabic-fallback-simp-tests.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "TradArabicTest",
+        .text_file = "tests/data/arabic-fallback-trad-tests.txt",
+        .direction = "ltr",
+    },
 };
 
 pub fn build(b: *std.Build) void {

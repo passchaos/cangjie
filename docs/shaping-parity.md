@@ -1240,7 +1240,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   fallback-shaping row for `df768b9c257e0c9c35786c47cae15c46571d56be.ttf`
   is retained too; Arabic/Syriac modified combining classes now fold to
   HarfBuzz-compatible above/below fallback mark categories, and reverse-order
-  fallback bases no longer add an extra base advance to mark x offsets.
+  fallback bases no longer add an extra base advance to mark x offsets. The
+  comparable `arabic-fallback-shaping.tests` rows for `SimpArabicTest.ttf` and
+  `TradArabicTest.ttf` are retained as `tests/data/arabic-fallback-simp-tests.txt`
+  and `tests/data/arabic-fallback-trad-tests.txt`.
 - HarfBuzz in-house `spaces.tests` horizontal and `ttb` rows are retained in
   `tests/data/spaces-horizontal.txt` for
   `1c2c3fc37b2d4c3cb2ef726c6cdaaabd4b7f3eb9.ttf`. Cangjie now maps Unicode

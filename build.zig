@@ -1036,6 +1036,7 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     text: []const u8,
     direction: []const u8,
     variation: ?[]const u8 = null,
+    disable_feature: ?[]const u8 = null,
     font_ext: []const u8 = "ttf",
 }{
     .{
@@ -1062,6 +1063,12 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .direction = "ltr",
         .variation = "wdth=402",
     },
+    .{
+        .font_hash = "7bbd3175734d5d291e1c15271ec0cbb97b626ebf",
+        .text = "ffif",
+        .direction = "ltr",
+        .disable_feature = "liga",
+    },
 };
 
 const retained_harfrust_text_parity_gates = [_]struct {
@@ -1072,6 +1079,16 @@ const retained_harfrust_text_parity_gates = [_]struct {
     .{
         .font_hash = "HarfBust",
         .text_file = "tests/data/harfbust-tests.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "872d2955d326bd6676a06f66b8238ebbaabc212f",
+        .text_file = "tests/data/kbts-arabic-tests.txt",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "7bbd3175734d5d291e1c15271ec0cbb97b626ebf",
+        .text_file = "tests/data/kbts-mixed-tests.txt",
         .direction = "ltr",
     },
     .{
@@ -1404,6 +1421,9 @@ pub fn build(b: *std.Build) void {
             });
             if (gate.variation) |variation| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--variation", variation });
+            }
+            if (gate.disable_feature) |feature| {
+                inline_harfrust_parity_cmd.addArgs(&.{ "--disable-feature", feature });
             }
             shaping_corpus_parity_smoke_step.dependOn(&inline_harfrust_parity_cmd.step);
         }

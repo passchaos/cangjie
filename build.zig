@@ -1114,6 +1114,7 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     font_hash: []const u8,
     text: []const u8,
     direction: []const u8,
+    script: ?[]const u8 = null,
     variation: ?[]const u8 = null,
     disable_feature: ?[]const u8 = null,
     text_before: ?[]const u8 = null,
@@ -1229,6 +1230,23 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .font_hash = "5dfad7735c6a67085f1b90d4d497e32907db4c78",
         .text = "\u{1e922}\u{1e923}\u{1e924}\u{1e925}\u{1e926}\u{1e927}\u{1e928}\u{1e929}\u{1e92a}\u{1e92b}\u{1e92c}\u{1e92d}\u{1e92e}\u{1e92f}\u{1e930}\u{1e931}\u{1e932}\u{1e933}\u{1e934}\u{1e935}\u{1e936}\u{1e937}\u{1e938}\u{1e939}\u{1e93a}\u{1e93b}\u{1e93c}\u{1e93d}\u{1e93e}\u{1e93f}\u{1e940}\u{1e941}\u{1e942}\u{1e943}",
         .direction = "rtl",
+    },
+    .{
+        .font_hash = "36b3cea27560cf68b1f3a5d5b6f29d29a96393aa",
+        .text = "..",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "36b3cea27560cf68b1f3a5d5b6f29d29a96393aa",
+        .text = "..",
+        .direction = "ltr",
+        .script = "deva",
+    },
+    .{
+        .font_hash = "36b3cea27560cf68b1f3a5d5b6f29d29a96393aa",
+        .text = "..",
+        .direction = "ltr",
+        .script = "latn",
     },
 };
 
@@ -1597,6 +1615,9 @@ pub fn build(b: *std.Build) void {
             });
             if (gate.variation) |variation| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--variation", variation });
+            }
+            if (gate.script) |script| {
+                inline_harfrust_parity_cmd.addArgs(&.{ "--script", script });
             }
             if (gate.disable_feature) |feature| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--disable-feature", feature });

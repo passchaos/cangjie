@@ -1318,6 +1318,16 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .text = "AB",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "NotoNastaliqUrdu-Regular",
+        .text = "\u{0648}\u{06cc}\u{06a9}\u{06cc}\u{200c}\u{067e}\u{062f}\u{06cc}\u{0627}",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "NotoNastaliqUrdu-Regular",
+        .text = "\u{200c}\u{0628}\u{0648}\u{062f}\u{0646}",
+        .direction = "rtl",
+    },
 };
 
 const retained_harfrust_text_parity_gates = [_]struct {

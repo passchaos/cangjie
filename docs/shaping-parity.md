@@ -1123,10 +1123,15 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `ddb -> ddb.one` substitution path. `fa-words` now passes the first 1,000-line
   `compare-harfbuzz` probe (`checksum=b30b30028735cdb5`), including the
   previously blocking `"تغییرمسیر"` reverse-chain ordering case.
-- NotoNastaliqUrdu `fa-words.txt` passes `compare-harfrust` for 10,000 lines,
+- NotoNastaliqUrdu `fa-words.txt` passes `compare-harfrust` for 10,000 lines
+  (`checksum=fc28919889b8942b`),
   and `fa-thelittleprince.txt` passes for 771 lines; focused blockers `"سلام"`,
   `"به"`, `"ویکی‌پدیا"`, `"هجری"`, `"جزء"`, `"اللَّهِ"`, and `"اللَّهُ"` pass
-  individually.
+  individually. The `"ویکی‌پدیا"` and leading-ZWNJ `"‌بودن"` rows are retained
+  as inline HarfRust gates;
+  RTL ZWNJ cluster inheritance now only applies when the joiner glyph is
+  suppressed, so visible/invisible joiner glyphs keep the following Nastaliq
+  ligature components anchored to their own post-ZWNJ source cluster.
 - NotoSansDevanagari parses and focused words `के`, `कि`, `की`, `का`,
   `श्रेणी`, `वार्ता`, `वर्षों`, `उत्तराखण्ड`, `हिन्दी`, `द्वारा`, `रूप`,
   `फ़िल्म`, `क्षेत्र`, `स्थित`, `एक्स्प्रेस`, `सन्`, `व्यक्ति`, `ा`,

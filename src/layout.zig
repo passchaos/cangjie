@@ -3510,6 +3510,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     var has_default_ignorable = false;
     var run_has_decimal_number = false;
     var run_has_letter = false;
+    var default_ignorable_invisible_glyph_id: ?GlyphId = null;
     if (resolved_lookup_options.all_ascii and selected_lookup_options.direction == .ltr) {
         // `lookupOptionsForText` already scanned the complete validated run to
         // infer script/language. Reuse its all-ASCII proof: one byte is one
@@ -3636,11 +3637,23 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 const shaped_codepoint = try presentationCodepointForShaping(font, glyph_index_cache, codepoint, selected_lookup_options);
                 break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
-            const source_cluster = if ((inheritsLeadingDefaultIgnorableCluster(codepoints.items, clusters.items) or
+            const source_cluster = if ((inheritsLeadingDefaultIgnorableCluster(codepoints.items, clusters.items, if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
+                const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
+                default_ignorable_invisible_glyph_id = glyph;
+                break :resolve glyph;
+            }) or
                 codepoint == 0x200d or
                 (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
                 (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoClusterExtender(codepoint)) or
-                inheritsPreviousZwnjClusterInRtlShaping(selected_lookup_options.direction, codepoints.items) or
+                inheritsPreviousZwnjClusterInRtlShaping(
+                    selected_lookup_options.direction,
+                    codepoints.items,
+                    if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
+                        const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
+                        default_ignorable_invisible_glyph_id = glyph;
+                        break :resolve glyph;
+                    },
+                ) or
                 (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint))) and
                 clusters.items.len != 0)
                 clusters.items[clusters.items.len - 1] - cluster_base
@@ -4313,7 +4326,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     else
         null;
     const invisible_glyph_id = if (has_default_ignorable)
-        try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ')
+        if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
+            const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
+            default_ignorable_invisible_glyph_id = glyph;
+            break :resolve glyph;
+        }
     else
         0;
     const segment_glyph_start = buffer.glyphs.items.len;
@@ -4899,14 +4916,15 @@ fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong;
 }
 
-fn inheritsPreviousZwnjClusterInRtlShaping(direction: TextDirection, prior_codepoints: []const u21) bool {
-    return direction == .rtl and prior_codepoints.len != 0 and prior_codepoints[prior_codepoints.len - 1] == 0x200c;
+fn inheritsPreviousZwnjClusterInRtlShaping(direction: TextDirection, prior_codepoints: []const u21, invisible_glyph_id: GlyphId) bool {
+    return direction == .rtl and invisible_glyph_id == 0 and prior_codepoints.len != 0 and prior_codepoints[prior_codepoints.len - 1] == 0x200c;
 }
 
 test "RTL shaping makes glyph after ZWNJ inherit join-control cluster" {
-    try std.testing.expect(inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{ 0x0628, 0x200c }));
-    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.ltr, &.{ 0x0628, 0x200c }));
-    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{0x0628}));
+    try std.testing.expect(inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{ 0x0628, 0x200c }, 0));
+    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{ 0x0628, 0x200c }, 3));
+    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.ltr, &.{ 0x0628, 0x200c }, 0));
+    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{0x0628}, 0));
 }
 
 fn useShapeUsesArabicJoiningMasks(script_tag: unicode.OpenTypeScriptTag) bool {
@@ -5914,8 +5932,9 @@ fn markSortClass(source_index: usize, codepoints: []const u21) u8 {
     return unicode.modifiedCombiningClassForShaping(codepoints[source_index]);
 }
 
-fn inheritsLeadingDefaultIgnorableCluster(codepoints: []const u21, clusters: []const usize) bool {
+fn inheritsLeadingDefaultIgnorableCluster(codepoints: []const u21, clusters: []const usize, invisible_glyph_id: GlyphId) bool {
     return codepoints.len == 1 and clusters.len == 1 and
+        invisible_glyph_id == 0 and
         unicode.isDefaultIgnorableForShaping(codepoints[0]) and
         unicode.joiningTypeForCodepoint(codepoints[0]) != .join_causing;
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const aat_morx = @import("aat_morx.zig");
 const vort = @import("vort");
 const ankr_mod = @import("opentype/ankr.zig");
 const base_mod = @import("opentype/base.zig");
@@ -2831,6 +2832,22 @@ pub const Font = struct {
     /// every glyph while final positions are assembled.
     pub fn hasGposTableForShaping(self: *const Font) bool {
         return self.gpos != null;
+    }
+
+    pub fn hasGsubTableForShaping(self: *const Font) bool {
+        return self.gsub != null;
+    }
+
+    pub fn hasMorxTableForShaping(self: *const Font) bool {
+        return self.morx != null;
+    }
+
+    pub fn applyMorxForShaping(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
+        try self.validateGlyphRun(glyphs.items);
+        const morx = self.morx orelse return;
+        try validateSfntTableChecksum(self.data, morx);
+        try validateMorxTable(self.data, morx, self.glyph_count);
+        try aat_morx.apply(allocator, self.data, morx.offset, morx.length, glyphs, options);
     }
 
     pub fn collectGposAdjustmentsWithOptionsUsingGdefAfterProof(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {

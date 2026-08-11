@@ -4168,20 +4168,26 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
             gsub_options.source_codepoints = codepoints.items;
         }
-        const gsub_needs_value_selection = needsValueAwareGsubSelection(font, gsub_options.features);
-        if (lookup_options.normalized_variation_coords.len == 0 and !gsub_needs_value_selection) if (buffer.lookup_selection_cache) |selection_cache| {
-            gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
-        };
-        if (gsub_after_proof) {
-            try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+        const apply_morx = font.hasMorxTableForShaping() and
+            (!lookup_options.writing_mode.isVertical() or !font.hasGsubTableForShaping());
+        if (apply_morx) {
+            try font.applyMorxForShaping(glyph_ids, buffer.allocator, gsub_options);
         } else {
-            try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
-        }
-        if (scriptPositionFeatureApplication(lookup_options.script_position)) |application| {
+            const gsub_needs_value_selection = needsValueAwareGsubSelection(font, gsub_options.features);
+            if (lookup_options.normalized_variation_coords.len == 0 and !gsub_needs_value_selection) if (buffer.lookup_selection_cache) |selection_cache| {
+                gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
+            };
             if (gsub_after_proof) {
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+                try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
             } else {
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+                try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+            }
+            if (scriptPositionFeatureApplication(lookup_options.script_position)) |application| {
+                if (gsub_after_proof) {
+                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+                } else {
+                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+                }
             }
         }
         if (indic_shape) {

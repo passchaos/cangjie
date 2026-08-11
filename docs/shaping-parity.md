@@ -1611,13 +1611,15 @@ shaping-performance superiority.
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are
   covered, but broader font/script matrices still need expansion.
-- AAT and extents parity remain open. HarfBuzz in-house `aat-morx.tests`
-  currently exposes missing runtime `morx` shaping (`MORXTwentyeight.ttf`
-  keeps `A,x,E,y,y,D,y` as ordinary glyphs instead of forming `A_E_D`), and
-  `aat-trak.tests` is still blocked before parity by strict optional `STAT`
-  validation and then by missing `trak` tracking/morx application. The
-  `color-fonts.tests` rows require a `--show-extents` comparison surface; the
-  current benchmark comparison matrix does not yet capture glyph extents.
+- AAT and extents parity remain open. The first HarfBuzz in-house
+  `aat-morx.tests` row is retained for `MORXTwentyeight.ttf`: Cangjie now runs
+  a focused AAT `morx` ligature state-machine path that forms `A_E_D` across
+  intervening glyphs while preserving HarfBuzz-style clusters. The second
+  `aat-morx.tests` row and `aat-trak.tests` remain open; the latter is still
+  blocked before parity by strict optional `STAT` validation and then by missing
+  `trak` tracking/morx application. The `color-fonts.tests` rows require a
+  `--show-extents` comparison surface; the current benchmark comparison matrix
+  does not yet capture glyph extents.
 - The full six-row HarfBuzz in-house `default-ignorables.tests` file is retained
   as inline gates. It covers CGJ/Arabic and ZWJ/mark interactions across the
   fixture fonts named above; broader default-ignorable work now belongs to

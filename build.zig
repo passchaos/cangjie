@@ -1333,6 +1333,11 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .text = "\u{200c}\u{0628}\u{0648}\u{062f}\u{0646}",
         .direction = "rtl",
     },
+    .{
+        .font_hash = "MORXTwentyeight",
+        .text = "AxEyyDy",
+        .direction = "ltr",
+    },
 };
 
 const retained_harfrust_text_parity_gates = [_]struct {

@@ -1725,7 +1725,11 @@ shaping-performance superiority.
   `U+09B0,U+09CD,U+09A5,U+09CD,U+09AF,U+09C0`; Cangjie now marks Bengali
   post-base `virama+consonant` sources for `pstf` and reorders formed reph
   before the post-base consonant form so the final contextual `psts` rule can
-  collapse `reph + post-form + ii`. All 35 Bengali `ligature-id.tests` rows for
+  collapse `reph + post-form + ii`. The remaining `context-matching.tests` row
+  for `a59fd13f1525a91cbe529c882e93d9d1fbb80463.ttf` is retained as an inline
+  HarfRust gate for `AB`; Cangjie now accepts HarfBuzz-style `OTTO`
+  layout-only shaping subsets without `CFF`/`CFF2` while leaving outline APIs
+  to report `MissingTable` if glyph geometry is requested. All 35 Bengali `ligature-id.tests` rows for
   `1c2fb74c1b2aa173262734c1f616148f1648cfd6.ttf` are retained as
   `tests/data/bengali-ligature-id-tests.txt`; old-spec Bengali now normalizes
   `virama+ra` to the `ra+virama` glyph order for `blwf/vatu` while preserving

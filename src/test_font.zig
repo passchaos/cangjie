@@ -588,6 +588,10 @@ pub fn buildMinimalOtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x4f54544f, try minimalOtfTables(allocator));
 }
 
+pub fn buildLayoutOnlyOtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x4f54544f, try layoutOnlyOtfTables(allocator));
+}
+
 pub fn buildCff2Otf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x4f54544f, try cff2OtfTables(allocator));
 }
@@ -2527,6 +2531,18 @@ fn minimalOtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[5] = .{ .tag = "maxp", .data = try cffMaxpTable(allocator) };
+    return tables;
+}
+
+fn layoutOnlyOtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 6);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "GSUB", .data = try gsubTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithLigature(allocator) };
+    tables[5] = .{ .tag = "maxp", .data = try cffMaxpTableWithGlyphs(allocator, 3) };
     return tables;
 }
 
@@ -6903,9 +6919,13 @@ fn compoundPointMatchMaxpTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn cffMaxpTable(allocator: std.mem.Allocator) ![]u8 {
+    return cffMaxpTableWithGlyphs(allocator, 2);
+}
+
+fn cffMaxpTableWithGlyphs(allocator: std.mem.Allocator, glyph_count: u16) ![]u8 {
     const bytes = try allocator.alloc(u8, 6);
     writeU32(bytes, 0, 0x00005000);
-    writeU16(bytes, 4, 2);
+    writeU16(bytes, 4, glyph_count);
     return bytes;
 }
 

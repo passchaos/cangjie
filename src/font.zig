@@ -1104,17 +1104,17 @@ pub const Font = struct {
         const has_horizontal_metrics = hhea != null and hmtx != null;
         if ((hhea == null) != (hmtx == null)) return error.MissingTable;
         const has_glyf_outlines = glyf != null and loca != null;
+        const has_embedded_bitmaps = sbix != null or (cblc != null and cbdt != null);
+        const has_layout_tables = gsub != null or gpos != null;
         if (format == .truetype) {
             // TrueType outlines are a glyf/loca pair; accepting only one table
             // leaves every glyph boundary ambiguous for outline reads. HarfBuzz
             // in-house shaping subsets may keep layout/cmap data plus a leftover
             // loca while omitting glyf entirely; accept those for shaping and let
             // outline APIs report MissingTable when glyph geometry is requested.
-            const has_embedded_bitmaps = sbix != null or (cblc != null and cbdt != null);
-            const has_layout_tables = gsub != null or gpos != null;
             if (!has_glyf_outlines and !has_embedded_bitmaps and !has_layout_tables) return error.MissingTable;
         }
-        if (format == .opentype_cff and cff == null and cff2 == null) return error.MissingTable;
+        if (format == .opentype_cff and cff == null and cff2 == null and !has_embedded_bitmaps and !has_layout_tables) return error.MissingTable;
 
         // The offsets in the directory have already been checked against the
         // whole SFNT byte slice. These minimum sizes deliberately check the
@@ -16995,6 +16995,21 @@ test "CFF CharStrings INDEX count must match maxp glyph count" {
 
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
+}
+
+test "OpenType layout-only subsets do not require CFF outlines for shaping" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildLayoutOnlyOtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(FontFormat.opentype_cff, font.format);
+    try std.testing.expect(!font.hasOutlineData());
+    try std.testing.expectError(error.MissingTable, font.glyphOutline(allocator, 1));
 }
 
 test "OpenType CFF table rejects malformed CFF header fields at parse time" {

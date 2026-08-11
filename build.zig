@@ -1313,6 +1313,11 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .text = "\u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627}",
         .direction = "rtl",
     },
+    .{
+        .font_hash = "a59fd13f1525a91cbe529c882e93d9d1fbb80463",
+        .text = "AB",
+        .direction = "ltr",
+    },
 };
 
 const retained_harfrust_text_parity_gates = [_]struct {

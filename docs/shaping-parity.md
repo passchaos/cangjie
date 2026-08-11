@@ -1098,6 +1098,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - Roboto `en-2letters.txt` passes `compare-harfrust` for 12,391 lines and
   `compare-harfbuzz` for 12,391 lines; focused `"ffi"` also passes
   `compare-harfbuzz --disable-feature liga`.
+- HarfBuzz in-house `simple.tests` OT baseline row for
+  `49c9f7485c1392fa09a1b801bc2ffea79275f22e.ttf` is retained for
+  `VABEabcd`, covering nominal glyph ids and advances without fallback shaping.
 - Roboto `en-words.txt` passes `compare-harfrust` for 12,391 lines.
 - Roboto `en-thelittleprince.txt` passes `compare-harfrust` for 1,172 lines.
 - SourceSerifVariable `en-words.txt` passes `compare-harfrust` for 12,391

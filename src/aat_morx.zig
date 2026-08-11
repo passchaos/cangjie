@@ -58,21 +58,91 @@ pub fn apply(
             const coverage = try readU32(data, absolute_subtable + 4);
             const sub_feature_flags = try readU32(data, absolute_subtable + 8);
             if (subtable_length < 12 or subtable_length > chain_offset + chain_length - subtable_offset) return error.BadSfnt;
-            if ((flags & sub_feature_flags) != 0 and (coverage & 0xff) == 2) {
-                try applyLigatureSubtable(
-                    allocator,
-                    data,
-                    absolute_subtable + 12,
-                    subtable_length - 12,
-                    glyphs,
-                    options,
-                );
+            if ((flags & sub_feature_flags) != 0) {
+                switch (coverage & 0xff) {
+                    2 => try applyLigatureSubtable(
+                        allocator,
+                        data,
+                        absolute_subtable + 12,
+                        subtable_length - 12,
+                        glyphs,
+                        options,
+                    ),
+                    4 => try applyNoncontextualSubtable(
+                        data,
+                        absolute_subtable + 12,
+                        subtable_length - 12,
+                        glyphs,
+                        options,
+                    ),
+                    else => {},
+                }
             }
             subtable_offset += subtable_length;
         }
         chain_offset += chain_length;
     }
     if (chain_offset > table_length) return error.BadSfnt;
+}
+
+fn applyNoncontextualSubtable(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyphs: *std.ArrayList(GlyphId),
+    options: gsub.LookupOptions,
+) Error!void {
+    if (length < 2) return error.BadSfnt;
+    for (glyphs.items, 0..) |*glyph, index| {
+        const replacement = (try lookupGlyphValue(data, offset, length, glyph.*)) orelse continue;
+        glyph.* = replacement;
+        if (options.glyph_substituted) |substituted| {
+            if (index < substituted.items.len) substituted.items[index] = true;
+        }
+        if (options.glyph_stage_substituted) |substituted| {
+            if (index < substituted.items.len) substituted.items[index] = true;
+        }
+    }
+}
+
+fn lookupGlyphValue(data: []const u8, offset: usize, length: usize, glyph: GlyphId) Error!?GlyphId {
+    const format = try readU16(data, offset);
+    switch (format) {
+        6 => {
+            if (length < 12) return error.BadSfnt;
+            const unit_size = try readU16(data, offset + 2);
+            const count: usize = @intCast(try readU16(data, offset + 4));
+            if (unit_size < 4) return error.BadSfnt;
+            const entries_offset = offset + 12;
+            if (count > (length - 12) / unit_size) return error.BadSfnt;
+            var lo: usize = 0;
+            var hi: usize = count;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                const entry = entries_offset + mid * unit_size;
+                const entry_glyph = try readU16(data, entry);
+                if (glyph < entry_glyph) {
+                    hi = mid;
+                } else if (glyph > entry_glyph) {
+                    lo = mid + 1;
+                } else {
+                    return try readU16(data, entry + 2);
+                }
+            }
+            return null;
+        },
+        8 => {
+            if (length < 6) return error.BadSfnt;
+            const first_glyph: usize = @intCast(try readU16(data, offset + 2));
+            const count: usize = @intCast(try readU16(data, offset + 4));
+            const glyph_index: usize = glyph;
+            if (glyph_index < first_glyph or glyph_index >= first_glyph + count) return null;
+            const value_offset = offset + 6 + (glyph_index - first_glyph) * 2;
+            if (value_offset > offset + length or offset + length - value_offset < 2) return error.BadSfnt;
+            return try readU16(data, value_offset);
+        },
+        else => return null,
+    }
 }
 
 fn applyLigatureSubtable(

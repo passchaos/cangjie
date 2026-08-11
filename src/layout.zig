@@ -4567,6 +4567,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         metrics_cache,
         lookup_options.normalized_variation_coords,
     );
+    if (!lookup_options.writing_mode.isVertical()) {
+        if (try font.horizontalTrackingForShaping(buffer.allocator, font_size)) |tracking| {
+            if (tracking != 0) {
+                const tracking_advance = tracking * scale;
+                for (buffer.glyphs.items[segment_glyph_start..]) |*glyph| {
+                    glyph.x_advance += tracking_advance;
+                }
+            }
+        }
+    }
     if (shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl) {
         std.mem.reverse(GlyphPosition, buffer.glyphs.items[segment_glyph_start..]);
     }

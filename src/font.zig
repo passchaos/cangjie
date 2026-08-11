@@ -1208,6 +1208,11 @@ pub const Font = struct {
         try validateVariationDataTablesWithCvar(data, glyph_count, fvar, gvar, hvar, mvar, vvar, cvar, cvt_value_count, gvar_target_context);
         validateVariationNameReferences(allocator, data, fvar, stat, name) catch |err| switch (err) {
             error.InvalidName => if (!is_ttc_face) return err,
+            // Some static shaping fixtures carry malformed optional STAT
+            // metadata that is irrelevant to cmap/GSUB/AAT shaping. Keep
+            // parse-time shaping compatibility while public STAT APIs continue
+            // to revalidate and report BadSfnt.
+            error.BadSfnt => if (fvar != null) return err,
             else => return err,
         };
         if (gdef) |gdef_table| try validateGdefTableWithVariationData(data, gdef_table, glyph_count, fvar);
@@ -1874,6 +1879,13 @@ pub const Font = struct {
 
     pub fn freeTrakInfo(_: *const Font, allocator: std.mem.Allocator, info: TrackTableInfo) void {
         trak_mod.free(allocator, info);
+    }
+
+    pub fn horizontalTrackingForShaping(self: *const Font, allocator: std.mem.Allocator, point_size: f32) FontError!?f32 {
+        const info_value = (try self.trakInfo(allocator)) orelse return null;
+        defer self.freeTrakInfo(allocator, info_value);
+        if (info_value.horizontal.len == 0) return null;
+        return trackingValueForPointSize(info_value.horizontal[0].values, if (point_size > 0) point_size else 12.0);
     }
 
     /// Read validated records from the optional AAT `feat` table.
@@ -9920,6 +9932,24 @@ fn f2dot14(value: i16) f32 {
 
 fn fixed16_16ToF32(value: i32) f32 {
     return @as(f32, @floatFromInt(value)) / 65536.0;
+}
+
+fn trackingValueForPointSize(values: []const TrackValueInfo, point_size: f32) f32 {
+    if (values.len == 0) return 0;
+    for (values, 0..) |value, index| {
+        if (value.size >= point_size) {
+            if (index == 0) return @floatFromInt(value.value);
+            const prev = values[index - 1];
+            const span = value.size - prev.size;
+            if (@abs(span) < std.math.floatEps(f32)) {
+                return (@as(f32, @floatFromInt(prev.value)) + @as(f32, @floatFromInt(value.value))) * 0.5;
+            }
+            const t = (point_size - prev.size) / span;
+            return @as(f32, @floatFromInt(prev.value)) +
+                t * (@as(f32, @floatFromInt(value.value)) - @as(f32, @floatFromInt(prev.value)));
+        }
+    }
+    return @floatFromInt(values[values.len - 1].value);
 }
 
 const FvarInfo = struct {

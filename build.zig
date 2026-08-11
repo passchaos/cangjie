@@ -1129,6 +1129,7 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     disable_feature: ?[]const u8 = null,
     text_before: ?[]const u8 = null,
     text_after: ?[]const u8 = null,
+    size: ?[]const u8 = null,
     bot: bool = false,
     font_ext: []const u8 = "ttf",
 }{
@@ -1337,6 +1338,53 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .font_hash = "MORXTwentyeight",
         .text = "AxEyyDy",
         .direction = "ltr",
+    },
+    .{
+        .font_hash = "TRAK",
+        .text = "ABC",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "TRAK",
+        .text = "ABC",
+        .direction = "ltr",
+        .size = ".5",
+    },
+    .{
+        .font_hash = "TRAK",
+        .text = "ABC",
+        .direction = "ltr",
+        .size = "1",
+    },
+    .{
+        .font_hash = "TRAK",
+        .text = "ABC",
+        .direction = "ltr",
+        .size = "2",
+    },
+    .{
+        .font_hash = "TRAK",
+        .text = "ABC",
+        .direction = "ltr",
+        .size = "9",
+    },
+    .{
+        .font_hash = "TRAK",
+        .text = "ABC",
+        .direction = "ltr",
+        .size = "24",
+    },
+    .{
+        .font_hash = "TRAK",
+        .text = "ABC",
+        .direction = "ltr",
+        .size = "72",
+    },
+    .{
+        .font_hash = "TRAK",
+        .text = "ABC",
+        .direction = "ltr",
+        .size = "144",
     },
 };
 
@@ -1791,6 +1839,9 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.disable_feature) |feature| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--disable-feature", feature });
+            }
+            if (gate.size) |size| {
+                inline_harfrust_parity_cmd.addArgs(&.{ "--size", size });
             }
             if (gate.text_before) |text_before| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--text-before", text_before });

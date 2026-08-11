@@ -1614,12 +1614,14 @@ shaping-performance superiority.
 - AAT and extents parity remain open. The first HarfBuzz in-house
   `aat-morx.tests` row is retained for `MORXTwentyeight.ttf`: Cangjie now runs
   a focused AAT `morx` ligature state-machine path that forms `A_E_D` across
-  intervening glyphs while preserving HarfBuzz-style clusters. The second
-  `aat-morx.tests` row and `aat-trak.tests` remain open; the latter is still
-  blocked before parity by strict optional `STAT` validation and then by missing
-  `trak` tracking/morx application. The `color-fonts.tests` rows require a
-  `--show-extents` comparison surface; the current benchmark comparison matrix
-  does not yet capture glyph extents.
+  intervening glyphs while preserving HarfBuzz-style clusters. All eight
+  `aat-trak.tests` rows are retained for `TRAK.ttf`; Cangjie now tolerates
+  malformed optional `STAT` metadata at parse time for static shaping, applies
+  AAT noncontextual `morx` alternates, and interpolates horizontal `trak`
+  advances for the requested point size. The second `aat-morx.tests` row remains
+  open. The `color-fonts.tests` rows require a `--show-extents` comparison
+  surface; the current benchmark comparison matrix does not yet capture glyph
+  extents.
 - The full six-row HarfBuzz in-house `default-ignorables.tests` file is retained
   as inline gates. It covers CGJ/Arabic and ZWJ/mark interactions across the
   fixture fonts named above; broader default-ignorable work now belongs to

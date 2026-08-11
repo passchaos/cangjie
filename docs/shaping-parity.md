@@ -1867,7 +1867,7 @@ shaping-performance superiority.
   so the pre-base matra does not combine with the next syllable's anusvara.
   Gujarati `gjr3`/`gjr2`/`gujr` now routes through
   the Indic shaper as well, retaining rows 30-34 of the same fixture for
-  `738d9f3b8c2dfd03875bf35a61d28fd78faf17c8.ttf`; rows 35-36 are retained too
+  `738d9f3b8c2dfd03875bf35a61d28fd78faf17c8.ttf`; rows 35-37 are retained too
   after Gujarati split-matra components learned to keep the candra/ai component
   before the AA length component inside the same Indic syllable. The Gujarati
   `indic-joiners.tests` row for `63e224dcb3d559d590f80c83b832cfca789e5dcc.ttf`

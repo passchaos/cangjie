@@ -77,6 +77,8 @@ pub const LookupOptions = struct {
     active_source_feature: ?u32 = null,
     active_source_feature_mask: u32 = 0,
     active_feature_value: u32 = 1,
+    active_feature_random: bool = false,
+    random_state: ?*u32 = null,
     /// Optional source-level syllable id parallel to original source codepoints.
     /// When `match_source_syllable` is true, contextual matching stops at the
     /// candidate glyph's syllable instead of matching across orthographic units.
@@ -499,7 +501,10 @@ pub const FeatureLookupPlan = struct {
 const SelectedLookup = struct {
     index: u16,
     value: u32 = 1,
+    random: bool = false,
 };
+
+const random_feature_value: u32 = 255;
 
 /// Apply default or explicitly enabled substitution features to the glyph
 /// stream in place. The input and output are glyph ids; source text metadata is
@@ -565,6 +570,7 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
             const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
             var selected_options = shaping_options;
             selected_options.active_feature_value = selected_lookup.value;
+            selected_options.active_feature_random = selected_lookup.random;
             try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, selected_options, &run_digest_cache);
         }
     } else {
@@ -582,6 +588,19 @@ pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: 
     if (major != 1) return error.UnsupportedGsub;
     var lookups = try selectedLookupIndices(table, allocator, options);
     return try lookups.toOwnedSlice(allocator);
+}
+
+pub fn hasFeature(data: []const u8, offset: usize, length: usize, feature_tag: u32) GsubError!bool {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = true };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
+    const feature_count = try readU16(table, feature_list_offset);
+    for (0..feature_count) |feature_i| {
+        if (try readU32(table, feature_list_offset + 2 + feature_i * 6) == feature_tag) return true;
+    }
+    return false;
 }
 
 /// Apply one Script/LangSys feature to the source positions carrying its tag.
@@ -2600,9 +2619,10 @@ fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: Lo
             @as(u32, 1)
         else
             featureValue(feature_tag, options);
+        const random = !selection.required and feature_tag == unicode.tag("rand") and feature_value == random_feature_value;
         for (0..lookup_index_count) |i| {
             const lookup_index = try readU16(table, feature_offset + 4 + i * 2);
-            try lookups.append(allocator, .{ .index = lookup_index, .value = feature_value });
+            try lookups.append(allocator, .{ .index = lookup_index, .value = feature_value, .random = random });
         }
     }
 
@@ -2614,6 +2634,7 @@ fn featureEnabled(feature_tag: u32, options: LookupOptions) bool {
     for (options.features) |override| {
         if (override.tag == feature_tag) return override.enabled;
     }
+    if (feature_tag == unicode.tag("rand")) return true;
     return defaultFeatureEnabled(feature_tag) or
         (options.script_tag == .tibt and (feature_tag == unicode.tag("abvs") or feature_tag == unicode.tag("blws"))) or
         (options.vertical and (feature_tag == unicode.tag("vert") or feature_tag == unicode.tag("vrt2"))) or
@@ -2625,6 +2646,7 @@ fn featureValue(feature_tag: u32, options: LookupOptions) u32 {
     for (options.features) |override| {
         if (override.tag == feature_tag) return override.effectiveValue();
     }
+    if (feature_tag == unicode.tag("rand")) return random_feature_value;
     return 1;
 }
 
@@ -2790,6 +2812,7 @@ fn sortUniqueSelectedLookups(lookups: *std.ArrayList(SelectedLookup)) void {
     for (lookups.items[1..]) |lookup| {
         if (lookup.index == previous.index) {
             if (lookups.items[write - 1].value == 1) lookups.items[write - 1].value = lookup.value;
+            lookups.items[write - 1].random = lookups.items[write - 1].random or lookup.random;
         } else {
             lookups.items[write] = lookup;
             write += 1;
@@ -4353,8 +4376,8 @@ fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyp
     if (subst_format != 1) return error.UnsupportedGsub;
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const alternate_set_count = try readU16(table, subtable_offset + 4);
-    const alternate_index = options.active_feature_value;
-    if (alternate_index == 0) return;
+    const configured_alternate_index = options.active_feature_value;
+    if (configured_alternate_index == 0) return;
 
     for (glyphs.items, 0..) |*glyph, glyph_index| {
         if (matched) |items| {
@@ -4367,10 +4390,27 @@ fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyp
         const alternate_set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
         const glyph_count = try readU16(table, alternate_set_offset);
         if (glyph_count == 0) continue;
+        const alternate_index = if (options.active_feature_random and configured_alternate_index == random_feature_value)
+            randomAlternateIndex(options.random_state orelse return error.InvalidShapingInput, glyph_count)
+        else
+            configured_alternate_index;
         if (alternate_index > glyph_count) continue;
         glyph.* = try readU16(table, alternate_set_offset + 2 + @as(usize, alternate_index - 1) * 2);
         markGlyphSubstituted(options, glyph_index);
         if (matched) |items| items[glyph_index] = true;
+    }
+}
+
+fn randomAlternateIndex(random_state: *u32, alternate_count: u16) u32 {
+    random_state.* = random_state.* *% 48271 % 2147483647;
+    return random_state.* % @as(u32, alternate_count) + 1;
+}
+
+test "GSUB random AlternateSubst uses HarfBuzz wrapping minstd sequence" {
+    var state: u32 = 1;
+    const expected = [_]u32{ 2, 1, 1, 1, 1, 1, 3, 3, 1, 2, 2, 3 };
+    for (expected) |alternate| {
+        try std.testing.expectEqual(alternate, randomAlternateIndex(&state, 3));
     }
 }
 

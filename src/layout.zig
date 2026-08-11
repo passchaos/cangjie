@@ -3644,6 +3644,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     else
         lookup_options.features;
 
+    var gsub_random_state: u32 = 1;
     // Keep source metadata parallel to glyph ids through GSUB. GPOS MarkLigPos
     // needs the original component sources for a ligature glyph; otherwise a
     // mark after a ligature can only guess a component from post-substitution
@@ -3672,6 +3673,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .profile_fast_path = buffer.profile_fast_path,
         .profile_io = profile_io,
         .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
+        .random_state = &gsub_random_state,
     };
     const gsub_start = shapeProfileNow(shape_profile, profile_io);
     const gsub_after_proof = if (buffer.gsub_table_proof_cache) |proof_cache| proof: {
@@ -3997,7 +3999,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
             gsub_options.source_codepoints = codepoints.items;
         }
-        if (lookup_options.normalized_variation_coords.len == 0 and !hasNonBooleanFeatureValue(gsub_options.features)) if (buffer.lookup_selection_cache) |selection_cache| {
+        const gsub_needs_value_selection = needsValueAwareGsubSelection(font, gsub_options.features);
+        if (lookup_options.normalized_variation_coords.len == 0 and !gsub_needs_value_selection) if (buffer.lookup_selection_cache) |selection_cache| {
             gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
         };
         if (gsub_after_proof) {
@@ -4706,11 +4709,13 @@ fn explicitOptionalFeatureShouldRun(feature: u32) bool {
         feature != unicode.tag("subs");
 }
 
-fn hasNonBooleanFeatureValue(features: []const unicode.FeatureOverride) bool {
+fn needsValueAwareGsubSelection(font: *const Font, features: []const unicode.FeatureOverride) bool {
+    var rand_disabled = false;
     for (features) |feature| {
         if (feature.effectiveValue() > 1) return true;
+        if (feature.tag == unicode.tag("rand") and !feature.enabled) rand_disabled = true;
     }
-    return false;
+    return !rand_disabled and (font.hasGsubFeatureForShaping(unicode.tag("rand")) catch false);
 }
 
 fn scriptPositionFeatureApplication(position: ScriptPosition) ?gsub.FeatureApplication {

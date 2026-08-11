@@ -1494,7 +1494,11 @@ shaping-performance superiority.
   `rand=2` row from `rand.tests` is retained for
   `5bb74492f5e0ffa1fbb72e4c881be035120b6513.ttf`; generic GSUB feature
   selection now carries feature values to AlternateSubst lookups instead of
-  reducing selected lookups to bare indexes.
+  reducing selected lookups to bare indexes. The default `rand` row for the
+  same font is retained too; Cangjie enables HarfBuzz-style random
+  AlternateSubst by default, uses the same 32-bit wrapping minstd LCG state, and
+  bypasses index-only GSUB selection caching when a lookup needs feature-value
+  or random metadata.
 - Arabic-like joining now includes Adlam in the Arabic-style positional shaper:
   the HarfBuzz in-house `arabic-like-joining.tests` Adlam long joining row for
   `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` passes. The same in-house

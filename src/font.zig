@@ -2650,6 +2650,12 @@ pub const Font = struct {
         return try gsub_mod.selectedLookupIndicesForOptions(self.data, gsub.offset, gsub.length, allocator, gsub_options);
     }
 
+    pub fn hasGsubFeatureForShaping(self: *const Font, feature_tag: u32) FontError!bool {
+        const gsub = self.gsub orelse return false;
+        try validateSfntTableChecksum(self.data, gsub);
+        return try gsub_mod.hasFeature(self.data, gsub.offset, gsub.length, feature_tag);
+    }
+
     pub fn gsubLookupAcceleratorsForShaping(self: *const Font, allocator: std.mem.Allocator) FontError![]gsub_mod.LookupAccelerator {
         const gsub = self.gsub orelse return try allocator.alloc(gsub_mod.LookupAccelerator, 0);
         try validateSfntTableChecksum(self.data, gsub);

@@ -4123,6 +4123,14 @@ fn ligatureMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []cons
     return !options.visible_variation_selectors and glyphs[relative_index] == 0 and isVariationSelector(codepoint);
 }
 
+fn ligatureAnchorSyllable(options: LookupOptions, glyph_base: usize) ?u8 {
+    return sourceSyllableForGlyph(options, glyph_base);
+}
+
+fn ligatureAllowsRelativeGlyph(options: LookupOptions, anchor_syllable: ?u8, glyph_base: usize, relative_index: usize) bool {
+    return sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_base + relative_index);
+}
+
 fn cgjPreventedMarkReorder(options: LookupOptions, glyph_index: usize) bool {
     const sources = options.glyph_source_indices orelse return false;
     const codepoints = options.source_codepoints orelse return false;
@@ -4557,6 +4565,7 @@ fn ligatureSetHash(glyph: GlyphId) usize {
 
 fn ligatureAtAccelerated(accelerator: LigatureSubstAccelerator, set: LigatureSetEntry, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) ?LigatureMatch {
     const definition_end = set.definition_start + set.definition_len;
+    const anchor_syllable = ligatureAnchorSyllable(options, glyph_base);
     for (accelerator.definitions[set.definition_start..definition_end]) |definition| {
         component_offsets[0] = 0;
         var cursor: usize = 1;
@@ -4564,7 +4573,11 @@ fn ligatureAtAccelerated(accelerator: LigatureSubstAccelerator, set: LigatureSet
         const component_count: usize = definition.component_count;
         const expected_components = accelerator.components[definition.component_start .. definition.component_start + component_count - 1];
         for (expected_components, 1..) |expected, component_index| {
-            while (cursor < glyphs.len and ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
+            while (cursor < glyphs.len and ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor) and ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
+            if (cursor < glyphs.len and !ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor)) {
+                matched = false;
+                break;
+            }
             if (cursor >= glyphs.len or glyphs[cursor] != expected) {
                 matched = false;
                 break;
@@ -4586,11 +4599,12 @@ fn ligatureAtAccelerated(accelerator: LigatureSubstAccelerator, set: LigatureSet
 }
 
 fn ligatureAtAcceleratedPrefiltered(accelerator: LigatureSubstAccelerator, set: LigatureSetEntry, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) ?LigatureMatch {
+    const anchor_syllable = ligatureAnchorSyllable(options, glyph_base);
     var second_offset: ?usize = null;
     if (glyphs.len > 1) {
         var cursor: usize = 1;
-        while (cursor < glyphs.len and ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
-        if (cursor < glyphs.len) second_offset = cursor;
+        while (cursor < glyphs.len and ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor) and ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
+        if (cursor < glyphs.len and ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor)) second_offset = cursor;
     }
 
     component_offsets[0] = 0;
@@ -4613,7 +4627,11 @@ fn ligatureAtAcceleratedPrefiltered(accelerator: LigatureSubstAccelerator, set: 
         var cursor = second + 1;
         var matched = true;
         for (expected_components[1..], 2..) |expected, component_index| {
-            while (cursor < glyphs.len and ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
+            while (cursor < glyphs.len and ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor) and ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
+            if (cursor < glyphs.len and !ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor)) {
+                matched = false;
+                break;
+            }
             if (cursor >= glyphs.len or glyphs[cursor] != expected) {
                 matched = false;
                 break;
@@ -7741,6 +7759,7 @@ const max_ligature_components = 64;
 
 fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) GsubError!?LigatureMatch {
     const ligature_count = try readU16(table, set_offset);
+    const anchor_syllable = ligatureAnchorSyllable(options, glyph_base);
     for (0..ligature_count) |i| {
         const lig_offset = try checkedRequiredSubtableOffset(table, set_offset, try readU16(table, set_offset + 2 + i * 2));
         const ligature = try readU16(table, lig_offset);
@@ -7751,7 +7770,11 @@ fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, glyph_ba
         var cursor: usize = 1;
         for (1..component_count) |component_index| {
             const expected = try readU16(table, lig_offset + 4 + (component_index - 1) * 2);
-            while (cursor < glyphs.len and ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
+            while (cursor < glyphs.len and ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor) and ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
+            if (cursor < glyphs.len and !ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor)) {
+                ok = false;
+                break;
+            }
             if (cursor >= glyphs.len or glyphs[cursor] != expected) {
                 ok = false;
                 break;
@@ -12372,6 +12395,38 @@ test "GSUB ligature matching keeps variation selectors with real glyphs" {
 
     try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
     try std.testing.expectEqual(@as(usize, 1), match.component_offsets[1]);
+}
+
+test "GSUB ligature matching stops skipped components at source syllable boundary" {
+    var bytes = [_]u8{0} ** 12;
+    writeU16Test(&bytes, 0, 1); // LigatureCount.
+    writeU16Test(&bytes, 2, 4);
+    writeU16Test(&bytes, 4, 40); // Ligature glyph.
+    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
+    writeU16Test(&bytes, 8, 3);
+
+    const glyphs = [_]GlyphId{ 1, 2, 3 };
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+    const syllables = [_]u8{ 1, 2, 2 };
+
+    var component_offsets: [max_ligature_components]usize = undefined;
+    const match = try ligatureAt(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        0,
+        &glyphs,
+        0,
+        0x0002, // ignoreBaseGlyphs skips glyph 2 but must not cross its syllable.
+        .{
+            .glyph_source_indices = &sources,
+            .source_syllables = &syllables,
+            .match_source_syllable = true,
+        },
+        &component_offsets,
+    );
+
+    try std.testing.expect(match == null);
 }
 
 test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {

@@ -1670,8 +1670,10 @@ shaping-performance superiority.
   Indic path before GSUB, and treats the synthetic dotted circle as an Indic
   placeholder base so the third row's `ra,virama,i` sequence forms `reph`
   around that dotted circle. The `indic-syllable.tests` Devanagari word
-  `U+0926,U+093F,U+0938,U+0902,U+092C,U+0930` still needs a focused follow-up:
-  Cangjie currently over-combines the pre-base matra with the following anusvara.
+  `U+0926,U+093F,U+0938,U+0902,U+092C,U+0930` is retained for
+  `41071178fbce4956d151f50967af458dbf555f7b.ttf`; GSUB ligature matching now
+  honors source-syllable boundaries while skipping lookup-flag ignored glyphs,
+  so the pre-base matra does not combine with the next syllable's anusvara.
   Gujarati `gjr3`/`gjr2`/`gujr` now routes through
   the Indic shaper as well, retaining rows 30-34 of the same fixture for
   `738d9f3b8c2dfd03875bf35a61d28fd78faf17c8.ttf`; rows 35-36 are retained too

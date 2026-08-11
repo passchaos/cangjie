@@ -977,6 +977,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .text = "\u{3008}",
         .direction = "btt",
     },
+    .{
+        .font_hash = "5af5361ed4d1e8305780b100e1730cb09132f8d1",
+        .text = "\u{0dbb}\u{0dca}\u{200d}\u{0dba}\u{0dca}\u{200d}\u{0dba}",
+        .direction = "ltr",
+    },
 };
 
 const retained_harfbuzz_text_parity_gates = [_]struct {

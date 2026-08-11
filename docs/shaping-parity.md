@@ -1582,6 +1582,10 @@ shaping-performance superiority.
   `abvs`/`blws` shaping features by default and keeps Tibetan vowel/sign marks
   in the base cluster, covering both the `uni0F680F72` ligature and the rnam
   bcad cluster merge case.
+- The single HarfBuzz in-house `sinhala.tests` row for
+  `5af5361ed4d1e8305780b100e1730cb09132f8d1.ttf` is retained for
+  `U+0DBB,U+0DCA,U+200D,U+0DBA,U+0DCA,U+200D,U+0DBA`, covering the Sinhala
+  rakaransaya/yansaya ligature path against HarfRust.
 - The HarfBuzz in-house `vertical.tests` angle-bracket fallback rows for
   `2681c1c72d6484ed3410417f521b1b819b4e2392.ttf` are retained for
   `U+3008` in both `ttb` and `btt` directions. Cangjie now applies the

@@ -1524,7 +1524,10 @@ shaping-performance superiority.
   `3e46c3b84c1370a06594736c7f8acebf810bbb3b.ttf` slice now also passes all
   32 normalization lines after GSUB class-format validation learned to treat
   covered classes with no ClassSet slot as legal no-op matches, matching the
-  runtime behavior already used by Cangjie and HarfBuzz.
+  runtime behavior already used by Cangjie and HarfBuzz. The `uniscribe.tests`
+  `U+0628,U+0628,U+0628` row for
+  `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf` is retained too, covering the
+  high contextual medial form.
 - Mongolian Free Variation Selectors now participate in the Arabic-style
   joining shaper under the `mong` ScriptList. The focused
   `arabic-feature-order.tests` FVS rows for

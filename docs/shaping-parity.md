@@ -1618,10 +1618,11 @@ shaping-performance superiority.
   or random metadata.
 - Arabic-like joining now includes Adlam in the Arabic-style positional shaper:
   the HarfBuzz in-house `arabic-like-joining.tests` Adlam long joining row for
-  `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` passes. The same in-house
-  file's `ec404b8524cd56efa5d25524cc8541a0b6604b4f.ttf` Phags-Pa rows now pass
-  after Cangjie enabled HarfBuzz-style direction features (`ltrm`/`rtlm`) and
-  kept variation selectors with ordinary cmap glyphs visible for GSUB fallback
+  `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` is retained as an inline
+  HarfRust gate. The same in-house file's
+  `ec404b8524cd56efa5d25524cc8541a0b6604b4f.ttf` Phags-Pa rows now pass after
+  Cangjie enabled HarfBuzz-style direction features (`ltrm`/`rtlm`) and kept
+  variation selectors with ordinary cmap glyphs visible for GSUB fallback
   matching when no cmap-14 variation record exists.
 - The Old Italic explicit-RTL row from HarfBuzz in-house
   `none-directional.tests` now has a retained inline gate for

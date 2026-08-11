@@ -1572,7 +1572,8 @@ shaping-performance superiority.
   runtime behavior already used by Cangjie and HarfBuzz. The `uniscribe.tests`
   `U+0628,U+0628,U+0628` row for
   `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf` is retained too, covering the
-  high contextual medial form.
+  high contextual medial form. The expressible `coretext.tests` file contains
+  the same Arabic high-contextual row and is represented by this retained gate.
 - HarfBuzz in-house `kbts.tests` rows that `shape-bench` can express are
   retained against HarfRust. `tests/data/kbts-arabic-tests.txt` covers the high
   contextual Arabic forms for `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`;

@@ -996,6 +996,18 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
     },
 };
 
+const retained_harfrust_text_parity_gates = [_]struct {
+    font_hash: []const u8,
+    text_file: []const u8,
+    direction: []const u8,
+}{
+    .{
+        .font_hash = "1c2fb74c1b2aa173262734c1f616148f1648cfd6",
+        .text_file = "tests/data/bengali-ligature-id-tests.txt",
+        .direction = "ltr",
+    },
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -1265,6 +1277,16 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_corpus_parity_smoke_step.dependOn(&text_parity_cmd.step);
+        }
+        for (retained_harfrust_text_parity_gates) |gate| {
+            const text_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            text_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}.ttf", .{ harfbuzz_in_house_fonts, gate.font_hash }),
+                "--text-file", gate.text_file,
+                "--direction", gate.direction,
+            });
+            shaping_corpus_parity_smoke_step.dependOn(&text_harfrust_parity_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_corpus_parity_smoke_step);
 

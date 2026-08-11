@@ -598,6 +598,12 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         }
         return marked;
     }
+    if (script_tag == .bng2 or script_tag == .beng) {
+        if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag, pstf_source_mask)) {
+            marked = true;
+        }
+        return marked;
+    }
     if (script_tag == .tml2 or script_tag == .taml) {
         if (markPreBaseConsonantViramaSources(source_features, codepoints, syllable_start, syllable_end, script_tag, half_source_mask)) {
             marked = true;
@@ -917,6 +923,7 @@ fn rephTargetGlyphIndex(
         if (source < syllable_start or source >= syllable_end) continue;
         if (source < codepoints.len and isIndicSyllableModifier(codepoints[source], script_tag)) break;
         if (isPostHalantConsonant(codepoints, source, syllable_start, script_tag)) {
+            if (script_tag == .bng2 or script_tag == .beng) return glyph_index;
             if (hasVisibleViramaBeforeSource(sources, glyph_index, source)) break;
         }
         target = glyph_index;
@@ -1324,6 +1331,38 @@ test "Indic reph reorder merges Kannada syllable clusters" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 5 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 2, 0 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Bengali reph reorders before post-base consonant forms" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 8, 1, 13, 6 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 2, 3, 5 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, true, false, true });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.append(std.testing.allocator, try ligatures.addLigature(std.testing.allocator, &.{ 0, 1 }));
+    try ligatures.infos.append(std.testing.allocator, .{});
+    try ligatures.infos.append(std.testing.allocator, try ligatures.addLigature(std.testing.allocator, &.{ 3, 4 }));
+    try ligatures.infos.append(std.testing.allocator, .{});
+
+    const codepoints = [_]u21{ 0x09b0, 0x09cd, 0x09a5, 0x09cd, 0x09af, 0x09c0 };
+    reorderRephs(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .bng2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 8, 13, 6 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 0, 3, 5 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, clusters.items);
 }
 
 test "Kannada placeholder prevents broken mark dotted circle" {

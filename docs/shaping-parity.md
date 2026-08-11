@@ -1580,8 +1580,11 @@ shaping-performance superiority.
   `d629e7fedc0b350222d7987345fe61613fa3929a.ttf` is retained for
   `U+0915,U+093F,U+0915,U+093F`, covering repeated pre-base matra context in a
   compact Indic fixture. The Bengali conjunct row from the same upstream file
-  for `f499fbc23865022234775c43503bba2e63978fe1.ttf` still needs a focused
-  follow-up for `ra,virama,tha,virama,ya,ii` shaping.
+  is retained for `f499fbc23865022234775c43503bba2e63978fe1.ttf` with
+  `U+09B0,U+09CD,U+09A5,U+09CD,U+09AF,U+09C0`; Cangjie now marks Bengali
+  post-base `virama+consonant` sources for `pstf` and reorders formed reph
+  before the post-base consonant form so the final contextual `psts` rule can
+  collapse `reph + post-form + ii`.
   Malayalam `indic-pref-blocking.tests` rows for
   `226bc2deab3846f1a682085f70c67d0421014144.ttf` and
   `e207635780b42f898d58654b65098763e340f5c7.ttf` now pass as retained inline

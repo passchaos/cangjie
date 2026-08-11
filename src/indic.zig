@@ -585,6 +585,196 @@ pub fn reorderGujaratiSplitMatraComponents(
     }
 }
 
+pub fn reorderBengaliBelowVowelsAfterBase(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (script_tag != .bng2 and script_tag != .beng) return;
+
+    mergeBengaliSplitMatraBelowVowelClusters(glyph_cluster_indices, glyph_source_indices.items, codepoints, script_tag);
+
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source >= codepoints.len or !isBengaliBelowVowel(codepoints[source])) continue;
+        const base_source = previousBengaliBaseSource(codepoints, source, script_tag) orelse continue;
+        const matra_source = previousBengaliSplitPreBaseMatraSource(codepoints, base_source, source) orelse continue;
+        const base_glyph = glyphIndexForSource(glyph_source_indices.items, base_source) orelse continue;
+        {
+            const target_cluster = if (hasBengaliSplitPostMatraAfter(codepoints, source, bengaliMatraClusterSearchEnd(codepoints, source + 1, script_tag)))
+                base_source
+            else
+                matra_source;
+            if (glyph_index < glyph_cluster_indices.items.len) glyph_cluster_indices.items[glyph_index] = target_cluster;
+            if (bengaliSplitPostMatraGlyph(glyph_source_indices.items, base_glyph, matra_source)) |post_glyph| {
+                if (post_glyph < glyph_cluster_indices.items.len) glyph_cluster_indices.items[post_glyph] = target_cluster;
+            }
+        }
+        const target = if (glyph_index < base_glyph) base_glyph else @min(base_glyph + 1, glyph_source_indices.items.len - 1);
+        if (target == glyph_index) continue;
+
+        shaping_metadata.move(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            glyph_index,
+            target,
+        );
+        glyph_index = @min(target, glyph_source_indices.items.len - 1);
+    }
+}
+
+fn mergeBengaliSplitMatraBelowVowelClusters(glyph_cluster_indices: *std.ArrayList(usize), sources: []const usize, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
+    var base_source: usize = 0;
+    while (base_source < codepoints.len) : (base_source += 1) {
+        if (!isIndicBase(codepoints[base_source], script_tag)) continue;
+        const base_glyph = glyphIndexForSource(sources, base_source) orelse continue;
+        const search_end = bengaliMatraClusterSearchEnd(codepoints, base_source + 1, script_tag);
+        var matra_source = base_source + 1;
+        while (matra_source < search_end) : (matra_source += 1) {
+            if (!isBengaliSplitPreBaseMatra(codepoints[matra_source])) continue;
+            const below_source = firstBengaliBelowVowelAfter(codepoints, matra_source, search_end) orelse continue;
+            if (!hasBengaliSplitPostMatraAfter(codepoints, below_source, search_end)) continue;
+            mergeBengaliSourceGlyphClustersAfterBase(glyph_cluster_indices, sources, base_glyph, matra_source, base_source);
+            mergeBengaliSourceGlyphClustersAfterBase(glyph_cluster_indices, sources, base_glyph, below_source, base_source);
+        }
+    }
+}
+
+fn mergeBengaliSourceGlyphClustersAfterBase(glyph_cluster_indices: *std.ArrayList(usize), sources: []const usize, base_glyph: usize, source: usize, cluster_source: usize) void {
+    var glyph_index = base_glyph + 1;
+    while (glyph_index < sources.len and glyph_index < glyph_cluster_indices.items.len) : (glyph_index += 1) {
+        if (sources[glyph_index] == source) glyph_cluster_indices.items[glyph_index] = cluster_source;
+    }
+}
+
+fn firstBengaliBelowVowelAfter(codepoints: []const u21, source: usize, search_end: usize) ?usize {
+    var index = source + 1;
+    while (index < search_end and index < codepoints.len) : (index += 1) {
+        if (isBengaliBelowVowel(codepoints[index])) return index;
+    }
+    return null;
+}
+
+fn previousBengaliBaseSource(codepoints: []const u21, before_source: usize, script_tag: unicode.OpenTypeScriptTag) ?usize {
+    var source = before_source;
+    while (source > 0) {
+        source -= 1;
+        if (isIndicBase(codepoints[source], script_tag)) return source;
+    }
+    return null;
+}
+
+fn previousBengaliSplitPreBaseMatraSource(codepoints: []const u21, base_source: usize, before_source: usize) ?usize {
+    var source = before_source;
+    while (source > base_source + 1) {
+        source -= 1;
+        if (isBengaliSplitPreBaseMatra(codepoints[source])) return source;
+    }
+    return null;
+}
+
+fn bengaliSplitPostMatraGlyph(sources: []const usize, base_glyph: usize, matra_source: usize) ?usize {
+    var glyph_index = base_glyph + 1;
+    while (glyph_index < sources.len) : (glyph_index += 1) {
+        if (sources[glyph_index] == matra_source) return glyph_index;
+    }
+    return null;
+}
+
+fn hasBengaliSplitPostMatraAfter(codepoints: []const u21, source: usize, syllable_end: usize) bool {
+    var index = source + 1;
+    while (index < syllable_end and index < codepoints.len) : (index += 1) {
+        if (isBengaliSplitPostMatraComponent(codepoints[index])) return true;
+    }
+    return false;
+}
+
+fn bengaliMatraClusterSearchEnd(codepoints: []const u21, start: usize, script_tag: unicode.OpenTypeScriptTag) usize {
+    var index = start;
+    while (index < codepoints.len) : (index += 1) {
+        if (isIndicBase(codepoints[index], script_tag)) return index;
+    }
+    return codepoints.len;
+}
+
+fn isBengaliBelowVowel(codepoint: u21) bool {
+    return codepoint >= 0x09c1 and codepoint <= 0x09c4;
+}
+
+fn isBengaliSplitPreBaseMatra(codepoint: u21) bool {
+    return codepoint == 0x09c7 or codepoint == 0x09c8 or codepoint == 0x09cb or codepoint == 0x09cc;
+}
+
+fn isBengaliSplitPostMatraComponent(codepoint: u21) bool {
+    return codepoint == 0x09be or codepoint == 0x09d7;
+}
+
+test "Bengali below vowel after split matra reorders after base" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 9, 2, 4, 5 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 1, 0, 1, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 3, 6 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x099b, 0x09cb, 0x09c2 };
+    reorderBengaliBelowVowelsAfterBase(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .bng2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 9, 2, 5, 4 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0, 2, 1 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 1, 1 }, clusters.items);
+}
+
+test "Bengali below vowel before split post component inherits base cluster" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 9, 2, 4, 5, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 1, 0, 1, 2, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 3, 6, 9 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x099b, 0x09c7, 0x09c2, 0x09cb };
+    reorderBengaliBelowVowelsAfterBase(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .bng2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 9, 2, 5, 4, 4 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0, 2, 1, 3 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 1, 1, 9 }, clusters.items);
+}
+
 const pre_reorder_feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("nukt"), .match_source_syllable = true },
     .{ .tag = unicode.tag("akhn"), .match_source_syllable = true },

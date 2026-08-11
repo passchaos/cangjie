@@ -1198,6 +1198,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `--not-found-variation-selector-glyph=1000000`, the selector remains visible
   to matching and is reported as that zero-advance synthetic glyph. The latter
   row is retained in `shaping-corpus-parity-smoke`.
+- The two HarfBuzz in-house `emoji.tests` tag-sequence rows for
+  `53374c7ca3657be37efde7ed02ae34229a56ae1f.ttf` are retained as
+  `tests/data/emoji-tag-sequence-tests.txt`, covering both an unsupported tag
+  sequence that preserves default-ignorable tag glyphs and the supported `de`
+  tag ligature path.
 - HarfBuzz in-house `positioning-features.tests` rows that `shape-bench` can
   express now pass focused `compare-harfbuzz`. This includes a real GPOS table
   whose FeatureList records are not sorted by tag (`kern` before `abvm`);

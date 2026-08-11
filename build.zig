@@ -1031,6 +1031,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .text_file = "tests/data/tibetan-contraction-2-tests.txt",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "53374c7ca3657be37efde7ed02ae34229a56ae1f",
+        .text_file = "tests/data/emoji-tag-sequence-tests.txt",
+        .direction = "ltr",
+    },
 };
 
 pub fn build(b: *std.Build) void {

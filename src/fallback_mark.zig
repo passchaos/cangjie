@@ -60,7 +60,7 @@ pub fn baseForGlyph(font: *const Font, glyph_id: GlyphId, cluster: usize, y_offs
             .width = advance_units,
             .height = @as(i32, bounds.y_min) - @as(i32, bounds.y_max),
         },
-        .x_offset = if (forward) -advance_units else advance_units,
+        .x_offset = if (forward) -advance_units else 0,
         .y_offset = 0,
     };
 }
@@ -160,8 +160,8 @@ fn recategorizedMarkClass(codepoint: u21) MarkClass {
             23 => 214,
             24, 107, 122 => 232,
             25, 19 => 228,
-            26, 27, 28, 30, 31, 33, 34, 35, 36, 130 => 230,
-            29, 32, 103, 118, 129, 132 => 220,
+            26, 27, 28, 29, 31, 32, 34, 35, 36, 130 => 230,
+            30, 33, 103, 118, 129, 132 => 220,
             else => class,
         };
     }

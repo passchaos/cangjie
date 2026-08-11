@@ -1230,7 +1230,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `856ff9562451293cbeff6f396d4e3877c4f0a436.ttf`
   (`U+0061,U+035C,U+0062`). Cangjie synthesizes HarfBuzz-compatible fallback
   mark offsets from glyph extents when GPOS is absent, while leaving real
-  GPOS mark/cursive attachment paths in control when present.
+  GPOS mark/cursive attachment paths in control when present. The Arabic
+  fallback-shaping row for `df768b9c257e0c9c35786c47cae15c46571d56be.ttf`
+  is retained too; Arabic/Syriac modified combining classes now fold to
+  HarfBuzz-compatible above/below fallback mark categories, and reverse-order
+  fallback bases no longer add an extra base advance to mark x offsets.
 - HarfBuzz in-house `spaces.tests` horizontal and `ttb` rows are retained in
   `tests/data/spaces-horizontal.txt` for
   `1c2c3fc37b2d4c3cb2ef726c6cdaaabd4b7f3eb9.ttf`. Cangjie now maps Unicode

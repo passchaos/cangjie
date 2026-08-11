@@ -564,6 +564,26 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "rtl",
     },
     .{
+        .font_hash = "NotoNastaliqUrdu-Regular",
+        .text = "ببے",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "NotoNastaliqUrdu-Regular",
+        .text = "بببے",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "NotoNastaliqUrdu-Regular",
+        .text = "ببببے",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "NotoNastaliqUrdu-Regular",
+        .text = "بببببے",
+        .direction = "rtl",
+    },
+    .{
         .font_hash = "e39391c77a6321c2ac7a2d644de0396470cd4bfe",
         .text = "abcdefghijklmnop",
         .direction = "ltr",

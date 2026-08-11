@@ -1207,6 +1207,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `f22416c692720a7d46fadf4af99f4c9e094f00b9.ttf` are retained, covering Arabic
   mark attachment through lookup-level mark filtering sets and cached lookup
   flag metadata.
+- All four HarfBuzz in-house `nested-mark-filtering-sets.tests` rows for
+  `NotoNastaliqUrdu-Regular.ttf` are retained too, covering nested contextual
+  Nastaliq mark filtering and attachment propagation across increasingly long
+  Beh chains.
 - HarfBuzz in-house `fallback-positioning.tests` rows that `shape-bench` can
   express now pass for `8228d035fcd65d62ec9728fb34f42c63be93a5d3.ttf`
   (`U+0078,U+0301,U+0058,U+0301`) and

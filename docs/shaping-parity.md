@@ -1229,7 +1229,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   (`U+0661,U+0662,U+0663,U+2044,U+0664,U+0665,U+0666`) pass for
   `15dfc433a135a658b9f4b1a861b5cdd9658ccbb9.ttf`. Cangjie now assigns
   fraction-scoped `numr/frac/dnom` features when digits appear on both sides of
-  U+2044 while leaving one-sided fraction-slash inputs unmodified.
+  U+2044 while leaving one-sided fraction-slash inputs unmodified. The four
+  one-sided ASCII and Arabic-Indic fraction-slash controls from the same upstream
+  file are retained as well.
 - The U+2011 row from HarfBuzz in-house `hyphens.tests` passes for
   `1c04a16f32a39c26c851b7fc014d2e8d298ba2b8.ttf`. When a font lacks a nominal
   non-breaking hyphen glyph but has U+2010, Cangjie mirrors HarfBuzz's normalize
@@ -1284,7 +1286,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   explicit `--script` tags to the in-process HarfBuzz reference, enables
   HarfBuzz-style native-direction shaping while keeping comparison output in
   buffer order, and preserves HarfBuzz's exception that pure Arabic numeric runs
-  stay LTR while mixed Arabic-letter runs shape internally RTL.
+  stay LTR while mixed Arabic-letter runs shape internally RTL. The enclosed
+  Arabic-number rows for `3b791518a9ba89675df02f1eefbc9026a50648a6.ttf` are
+  retained in both LTR and RTL directions.
 - The Dhivehi row from HarfBuzz in-house `language-tags.tests` passes for
   `d3129450fafe5e5c98cfc25a4e71809b1b4d2855.ttf` (`U+007C`) with language
   `dv`. Cangjie now maps BCP-47 `dv` to OpenType `DHV ` so language-system

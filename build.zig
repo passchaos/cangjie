@@ -630,6 +630,26 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "15dfc433a135a658b9f4b1a861b5cdd9658ccbb9",
+        .text = "123⁄",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "15dfc433a135a658b9f4b1a861b5cdd9658ccbb9",
+        .text = "١٢٣⁄",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "15dfc433a135a658b9f4b1a861b5cdd9658ccbb9",
+        .text = "⁄456",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "15dfc433a135a658b9f4b1a861b5cdd9658ccbb9",
+        .text = "⁄٤٥٦",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "1c04a16f32a39c26c851b7fc014d2e8d298ba2b8",
         .text = "‑",
         .direction = "ltr",
@@ -682,6 +702,18 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "b082211be29a3e2cf91f0fd43497e40b2a27b344",
         .text = "۝١٢ب",
         .direction = "ltr",
+        .script = "arab",
+    },
+    .{
+        .font_hash = "3b791518a9ba89675df02f1eefbc9026a50648a6",
+        .text = "۝١٢٣",
+        .direction = "ltr",
+        .script = "arab",
+    },
+    .{
+        .font_hash = "3b791518a9ba89675df02f1eefbc9026a50648a6",
+        .text = "۝١٢٣",
+        .direction = "rtl",
         .script = "arab",
     },
     .{

@@ -265,9 +265,17 @@ fn normalizedClusterStartForByte(text: []const u8, graphemes: []const cangjie.Gr
             return byte_offset;
         } else if (codepoint == 0x200c) {
             return byte_offset;
+        } else if (isHangulConjoiningJamo(codepoint)) {
+            return byte_offset;
         }
     }
     return graphemeClusterStartForByte(graphemes, byte_offset);
+}
+
+fn isHangulConjoiningJamo(codepoint: u21) bool {
+    return (codepoint >= 0x1100 and codepoint <= 0x11ff) or
+        (codepoint >= 0xa960 and codepoint <= 0xa97f) or
+        (codepoint >= 0xd7b0 and codepoint <= 0xd7ff);
 }
 
 fn isArabicPrependClusterLeader(text: []const u8, byte_offset: usize) bool {

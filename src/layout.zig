@@ -3848,6 +3848,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         var final_features_buf: [24]gsub.FeatureApplication = undefined;
         var final_feature_count: usize = 0;
+        if (lookup_options.script_tag == .arab and shapingFeatureEnabled(unicode.tag("rlig"), lookup_options.features, true)) {
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("rlig"), .auto_zwj = false }}, glyph_ids, joining_options, gdef_metadata.*);
+        }
         const final_features = [_]gsub.FeatureApplication{
             .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
             .{ .tag = unicode.tag("calt"), .auto_zwj = false },
@@ -3856,6 +3859,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .{ .tag = unicode.tag("clig"), .auto_zwj = false },
         };
         for (final_features) |application| {
+            if (lookup_options.script_tag == .arab and application.tag == unicode.tag("rlig")) continue;
             if (lookup_options.script_tag == .mong and (application.tag == unicode.tag("rlig") or application.tag == unicode.tag("calt"))) continue;
             if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
             final_features_buf[final_feature_count] = application;

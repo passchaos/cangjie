@@ -1518,8 +1518,11 @@ shaping-performance superiority.
   queries mask those bits to the version-0 low-bit contract. The MVS word case
   `U+182A,U+1820,U+1822,U+182D,U+180E,U+1820,U+202F,U+1836,U+1822,U+1828`
   now also matches after contextual GSUB learned to keep U+180E visible for
-  explicit Mongolian backtrack/lookahead rules. The Arabic Allah-ligature and
-  `calt` rows from `arabic-feature-order.tests` still need focused follow-up.
+  explicit Mongolian backtrack/lookahead rules. The Arabic Allah-ligature row
+  for `a919b33197965846f21074b24e30250d67277bce.ttf` is retained after Arabic
+  shaping learned HarfBuzz's required pause between `rlig` and `calt`; the
+  remaining Arabic `calt` row from `arabic-feature-order.tests` still needs
+  focused follow-up.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

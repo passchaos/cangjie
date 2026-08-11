@@ -1209,8 +1209,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `phag` and routes its dual-joining letters through the Arabic-style joining
   shaper. The leading ZWJ rows from the same fixture are retained too; ZWJ
   still triggers joining but no longer pulls the following Phags-Pa base back to
-  the leading joiner's output cluster. The remaining Phags-Pa
-  variation-selector mirror forms still need focused coverage.
+  the leading joiner's output cluster. The `U+A86A,U+A85E` mirror row and the
+  `U+A849,U+A85E,U+FE00` variation-selector mirror row are retained after
+  Phags-Pa applies its `ltrm` direction feature before positional forms. The
+  remaining `U+A86A,U+A85E,U+FE00` unmirror row still needs focused handling
+  because the FE00 ligature consumes the lookahead glyph before the later
+  `ltrm` contextual lookup can unmirror A86A.
 - HarfBuzz in-house `collections.tests` TTC rows are retained for
   `TTC.ttc` face indices 0 and 1. `shape-bench` now accepts `--face-index`
   and forwards it to Cangjie, HarfRust, and HarfBuzz reference engines; DFONT

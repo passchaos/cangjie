@@ -3792,6 +3792,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const planned_features = [_]gsub.FeatureApplication{
             .{ .tag = unicode.tag("ccmp"), .auto_zwj = false },
             .{ .tag = unicode.tag("locl"), .auto_zwj = false },
+            .{ .tag = unicode.tag("ltrm"), .auto_zwj = false },
+            .{ .tag = unicode.tag("rtlm"), .auto_zwj = false },
             .{ .tag = unicode.tag("isol"), .source_scoped = true, .auto_zwj = false },
             .{ .tag = unicode.tag("fina"), .source_scoped = true, .auto_zwj = false },
             .{ .tag = unicode.tag("fin2"), .source_scoped = true, .auto_zwj = false },
@@ -3802,6 +3804,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         };
         for (planned_features) |application| {
             if (lookup_options.script_tag == .mong and (application.tag == unicode.tag("rlig") or application.tag == unicode.tag("calt"))) continue;
+            if (lookup_options.script_tag != .phag and (application.tag == unicode.tag("ltrm") or application.tag == unicode.tag("rtlm"))) continue;
             if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
             applications_buf[application_count] = application;
             application_count += 1;

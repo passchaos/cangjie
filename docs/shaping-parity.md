@@ -1148,6 +1148,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `4cce528e99f600ed9c25a2b69e32eb94a03b4ae8.ttf` now retains the
   `U+1A48,U+1A58,U+1A25,U+1A48,U+1A58,U+1A25,U+1A6E,U+1A63` row after USE
   zeroing learned to honor explicit GDEF mark classes on spacing marks. The
+  same upstream file now retains the regional-indicator context row for
+  `5bbf3712e6f79775c66a4407837a90e591efbef2.ttf` and the dotted punctuation
+  ligature row for `bef923f4ccb474f961c43b63a9c74b7d9b7a023f.ttf`, covering
+  compact non-Brahmic contextual matching in the retained inline gate set. The
   remaining USE work is
   to validate other USE scripts and fonts before making a broader USE parity
   claim.

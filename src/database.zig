@@ -237,7 +237,7 @@ pub const FontDatabase = struct {
         errdefer self.allocator.free(subfamily);
         const full_name = try self.allocator.dupe(u8, (try font.fullName(&scratch)) orelse family);
         errdefer self.allocator.free(full_name);
-        const postscript_name = try self.allocator.dupe(u8, (try font.nameString(.postscript_name, &scratch)) orelse "");
+        const postscript_name = try self.allocator.dupe(u8, try databasePostScriptName(font, &scratch));
         errdefer self.allocator.free(postscript_name);
         const attributes = try font.styleAttributes();
         const weight = if (font.hasStyleAttributes()) attributes.weight else inferWeight(subfamily);
@@ -733,6 +733,13 @@ fn fontListCovers(fonts: []const *const Font, codepoint: u21) bool {
 
 fn fontCovers(font: *const Font, codepoint: u21) bool {
     return (font.glyphIndex(codepoint) catch 0) != 0;
+}
+
+fn databasePostScriptName(font: *const Font, scratch: []u8) ![]const u8 {
+    return font.nameString(.postscript_name, scratch) catch |err| switch (err) {
+        error.InvalidName => "",
+        else => return err,
+    } orelse "";
 }
 
 fn validateCascadeTextInput(text: []const u8) !void {

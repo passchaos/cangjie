@@ -6580,6 +6580,27 @@ test "font database uses PostScript names as stable duplicate ids" {
     try std.testing.expect(database.match(.{ .family = "", .postscript_name = "MissingPS-Regular" }) == null);
 }
 
+test "font database ignores invalid PostScript names" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Invalid PS", "Regular", "Invalid PS Regular", "Bad Name");
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var database = FontDatabase.init(allocator);
+    defer database.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try database.addFont(&font));
+    try std.testing.expectEqual(@as(usize, 1), database.faces.items.len);
+    try std.testing.expectEqualStrings("", database.faces.items[0].postscript_name);
+
+    try std.testing.expect(database.match(.{ .family = "", .postscript_name = "Bad Name" }) == null);
+    const matched = database.match(.{ .family = "Invalid PS" }).?;
+    try std.testing.expectEqualStrings("Invalid PS", matched.family);
+}
+
 test "font database ingests all faces from a TTC collection" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

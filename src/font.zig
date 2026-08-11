@@ -17847,13 +17847,23 @@ test "PostScript name strings validate FontName syntax" {
     {
         const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "Bad Name");
         defer allocator.free(bytes);
-        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var out: [64]u8 = undefined;
+        try std.testing.expectError(error.InvalidName, font.nameString(.postscript_name, &out));
     }
 
     {
         const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "Bad/Name");
         defer allocator.free(bytes);
-        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        var out: [64]u8 = undefined;
+        try std.testing.expectError(error.InvalidName, font.nameString(.postscript_name, &out));
     }
 }
 

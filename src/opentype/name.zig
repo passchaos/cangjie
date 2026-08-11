@@ -92,6 +92,11 @@ const NameTableLayout = struct {
     lang_tag_count: usize = 0,
 };
 
+const PostScriptNamePolicy = enum {
+    tolerate_invalid,
+    strict,
+};
+
 const name_records_start: usize = 6;
 const name_record_size: usize = 12;
 const lang_tag_record_size: usize = 4;
@@ -108,7 +113,7 @@ pub fn validate(data: []const u8, name: Table) Error!void {
         previous_key = record.key();
         try validateNameRecordMetadata(layout, record);
         const string_data = try nameRecordString(table, layout, record);
-        try validateNameRecordEncoding(record, string_data);
+        try validateNameRecordEncoding(record, string_data, .tolerate_invalid);
     }
 }
 
@@ -127,7 +132,7 @@ pub fn records(allocator: std.mem.Allocator, data: []const u8, name: Table) Erro
         previous_key = record.key();
         try validateNameRecordMetadata(layout, record);
         const string_data = try nameRecordString(table, layout, record);
-        try validateNameRecordEncoding(record, string_data);
+        try validateNameRecordEncoding(record, string_data, .tolerate_invalid);
         info.* = .{
             .platform_id = record.platform_id,
             .encoding_id = record.encoding_id,
@@ -221,7 +226,7 @@ pub fn idIndex(data: []const u8, name: Table) Error!NameIdIndex {
         previous_key = record.key();
         try validateNameRecordMetadata(layout, record);
         const string_data = try nameRecordString(table, layout, record);
-        try validateNameRecordEncoding(record, string_data);
+        try validateNameRecordEncoding(record, string_data, .tolerate_invalid);
         index.add(record.name_id);
     }
     return index;
@@ -425,9 +430,9 @@ fn nameStorageString(table: []const u8, layout: NameTableLayout, offset: usize, 
     return table[start .. start + length];
 }
 
-fn validateNameRecordEncoding(record: NameRecord, string_data: []const u8) Error!void {
+fn validateNameRecordEncoding(record: NameRecord, string_data: []const u8, postscript_name_policy: PostScriptNamePolicy) Error!void {
     if (isUtf16Name(record)) try validateUtf16BeNameData(string_data);
-    if (record.name_id == @intFromEnum(NameId.postscript_name)) {
+    if (record.name_id == @intFromEnum(NameId.postscript_name) and postscript_name_policy == .strict) {
         // The PostScript font name is consumed as a stable ASCII identifier by
         // font databases and document formats, unlike localized family names.
         // Validate its restricted syntax at every name-table read so a borrowed
@@ -510,7 +515,7 @@ pub fn readString(data: []const u8, name: Table, name_id: u16, out: []u8) Error!
         previous_key = record.key();
         try validateNameRecordMetadata(layout, record);
         const string_data = try nameRecordString(table, layout, record);
-        try validateNameRecordEncoding(record, string_data);
+        try validateNameRecordEncoding(record, string_data, if (record.name_id == name_id) .strict else .tolerate_invalid);
         if (record.name_id != name_id) continue;
         if (best == null or scoreNameRecord(record) > scoreNameRecord(best.?)) best = record;
     }

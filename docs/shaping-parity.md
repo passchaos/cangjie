@@ -1520,7 +1520,10 @@ shaping-performance superiority.
   bidi mirroring pass replace `U+FE40` with the ordinary mirrored bracket.
   The CFF2+VORG `NotoSansCJK-VF.abc.otf` rows for `AB` in `ttb` are retained at
   default and `wght=700`; exact duplicate HVAR/VVAR DeltaSetIndexMap payloads
-  are accepted, and the parity tool reports HarfBuzz-style VORG y origins.
+  are accepted, and the parity tool reports HarfBuzz-style VORG y origins. The
+  glyf+vmtx `NotoSansCJK-VF.abc.ttf` rows for the same text and variation
+  settings are retained too; when VORG is absent, `shape-bench` derives the
+  HarfBuzz vertical origin from glyf bounds plus vmtx top side bearing.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

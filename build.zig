@@ -579,6 +579,19 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .variation = "0,0.7,0",
     },
     .{
+        .font_hash = "NotoSansCJK-VF.abc",
+        .font_ext = "ttf",
+        .text = "AB",
+        .direction = "ttb",
+    },
+    .{
+        .font_hash = "NotoSansCJK-VF.abc",
+        .font_ext = "ttf",
+        .text = "AB",
+        .direction = "ttb",
+        .variation = "0,0.7,0",
+    },
+    .{
         .font_hash = "2681c1c72d6484ed3410417f521b1b819b4e2392",
         .text = "\u{3008}",
         .direction = "ttb",

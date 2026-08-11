@@ -565,10 +565,17 @@ fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_s
     for (glyphs, values) |glyph, *value| {
         value.* = if (options.direction == .ttb and glyph.vertical) vertical: {
             if (try font.verticalOriginYAtCoords(glyph.glyph_id, options.normalizedVariationCoords())) |origin| break :vertical -@as(i32, origin);
+            if (try glyfVerticalOrigin(font, glyph.glyph_id, options.normalizedVariationCoords())) |origin| break :vertical -origin;
             break :vertical -@divTrunc(defaultVerticalAdvance(font), 2);
         } else fontUnitPosition(font, font_size, glyph.y_offset);
     }
     return values;
+}
+
+fn glyfVerticalOrigin(font: *const cangjie.Font, glyph_id: cangjie.GlyphId, normalized_coords: []const f32) !?i32 {
+    const metrics = (try font.verticalMetricsAtCoords(glyph_id, normalized_coords)) orelse return null;
+    const bounds = font.glyphBoundsAtCoords(glyph_id, normalized_coords) catch return null;
+    return @as(i32, bounds.y_max) + @as(i32, metrics.top_side_bearing);
 }
 
 fn harfBuzzVerticalAdvance(font: *const cangjie.Font, glyph: cangjie.GlyphPosition) !i32 {

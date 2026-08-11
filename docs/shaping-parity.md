@@ -1611,6 +1611,13 @@ shaping-performance superiority.
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are
   covered, but broader font/script matrices still need expansion.
+- The expressible HarfBuzz in-house `directwrite.tests` rows are represented by
+  existing retained gates: Arabic high contextual forms for
+  `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`, the `ffi`/disabled-`liga`
+  and Arabic `waw beh alef` rows for
+  `7bbd3175734d5d291e1c15271ec0cbb97b626ebf.ttf`, plus the variable-font
+  spacing rows for `HBTest-VF.ttf`, `ab40c89624a6104e5d0a2308e448a989302f515b.ttf`,
+  and `e8691822f6a705e3e9fb48a0405c645b1a036590.ttf`.
 - AAT and extents parity remain open. Both HarfBuzz in-house `aat-morx.tests`
   rows are retained: Cangjie now runs a focused AAT `morx` ligature
   state-machine path that forms `A_E_D` across intervening glyphs while

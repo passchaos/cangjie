@@ -1626,8 +1626,10 @@ shaping-performance superiority.
   cluster signal. The Malayalam `cluster-level=1` dot-reph broken-cluster row
   for `fd07ea46e4d8368ada1776208c07fd596f727852.ttf` is retained too; the
   inserted dotted circle, virama, and ZWJ now keep HarfBuzz-compatible cluster
-  ownership on U+0D4E. Remaining `cluster.tests` Bengali and Sinhala rows still
-  need separate parser/shaper work before the full file can be retained.
+  ownership on U+0D4E. The Sinhala row for
+  `c2d320136762887c43d245ecd2ffc2c0d57cfcb3.ttf` is retained as well. The
+  remaining `cluster.tests` Bengali row still fails earlier in GSUB validation
+  and needs separate parser/shaper work before the full file can be retained.
 - The expressible HarfBuzz in-house `directwrite.tests` rows are represented by
   existing retained gates: Arabic high contextual forms for
   `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`, the `ffi`/disabled-`liga`

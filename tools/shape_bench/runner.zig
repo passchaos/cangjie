@@ -57,6 +57,10 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
     };
 }
 
+pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !cangjie.Font {
+    return try cangjie.Font.parseFace(allocator, font_bytes, options.face_index);
+}
+
 pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.Font, options: options_mod.Options) !BenchResult {
     var layout_buffer = cangjie.LayoutBuffer.init(allocator);
     defer layout_buffer.deinit();

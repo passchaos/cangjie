@@ -75,6 +75,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     variation: ?[]const u8 = null,
     not_found_variation_selector_glyph: ?[]const u8 = null,
     font_ext: []const u8 = "ttf",
+    face_index: ?[]const u8 = null,
 }{
     .{
         .font_hash = "932ad5132c2761297c74e9976fe25b08e5ffa10b",
@@ -982,6 +983,20 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .text = "\u{0dbb}\u{0dca}\u{200d}\u{0dba}\u{0dca}\u{200d}\u{0dba}",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "TTC",
+        .font_ext = "ttc",
+        .text = "\u{2026} \u{002e}",
+        .direction = "ltr",
+        .face_index = "0",
+    },
+    .{
+        .font_hash = "TTC",
+        .font_ext = "ttc",
+        .text = "\u{2026} \u{002e}",
+        .direction = "ltr",
+        .face_index = "1",
+    },
 };
 
 const retained_harfbuzz_text_parity_gates = [_]struct {
@@ -1280,6 +1295,9 @@ pub fn build(b: *std.Build) void {
             });
             if (gate.not_found_variation_selector_glyph) |glyph_id| {
                 inline_parity_cmd.addArgs(&.{ "--not-found-variation-selector-glyph", glyph_id });
+            }
+            if (gate.face_index) |face_index| {
+                inline_parity_cmd.addArgs(&.{ "--face-index", face_index });
             }
             if (gate.script) |script| {
                 inline_parity_cmd.addArgs(&.{ "--script", script });

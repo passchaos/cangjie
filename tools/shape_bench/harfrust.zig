@@ -96,6 +96,8 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
     var iterations_buf: [32]u8 = undefined;
     const iterations_text = try std.fmt.bufPrint(&iterations_buf, "{d}", .{iterations});
     const direction_text = options.direction.label();
+    var face_index_buf: [32]u8 = undefined;
+    const face_index_text = try std.fmt.bufPrint(&face_index_buf, "{d}", .{options.face_index});
     var args = std.ArrayList([]const u8).empty;
     defer args.deinit(allocator);
     var owned_args = std.ArrayList([]const u8).empty;
@@ -107,6 +109,8 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         options.harfrust_bin,
         "--font-file",
         options.font_path.?,
+        "--face-index",
+        face_index_text,
         "--font-ptem",
         size_text,
         "--direction",

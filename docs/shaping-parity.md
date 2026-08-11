@@ -1203,6 +1203,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `tests/data/emoji-tag-sequence-tests.txt`, covering both an unsupported tag
   sequence that preserves default-ignorable tag glyphs and the supported `de`
   tag ligature path.
+- HarfBuzz in-house `collections.tests` TTC rows are retained for
+  `TTC.ttc` face indices 0 and 1. `shape-bench` now accepts `--face-index`
+  and forwards it to Cangjie, HarfRust, and HarfBuzz reference engines; DFONT
+  remains outside the current SFNT/TTC/WOFF container support.
 - HarfBuzz in-house `positioning-features.tests` rows that `shape-bench` can
   express now pass focused `compare-harfbuzz`. This includes a real GPOS table
   whose FeatureList records are not sorted by tag (`kern` before `abvm`);

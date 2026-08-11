@@ -72,7 +72,7 @@ pub fn main(init: std.process.Init) !void {
 
     const result = switch (options.engine) {
         .cangjie => result: {
-            var font = try cangjie.Font.parse(allocator, font_bytes);
+            var font = try runner.parseFont(allocator, font_bytes, options);
             defer font.deinit();
             break :result try runner.runCangjie(init.io, allocator, &font, options);
         },
@@ -128,7 +128,7 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
     options.normalize_clusters_to_graphemes = true;
     options.language_tag = base_options.language_tag orelse .dflt;
 
-    var font = try cangjie.Font.parse(allocator, font_bytes);
+    var font = try runner.parseFont(allocator, font_bytes, options);
     defer font.deinit();
     const cangjie_result = try runner.runCangjie(io, allocator, &font, options);
     defer freeResult(allocator, cangjie_result);

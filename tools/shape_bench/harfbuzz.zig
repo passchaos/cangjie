@@ -10,8 +10,9 @@ const HarfBuzzFont = struct {
     face: *hb.hb_face_t,
     font: *hb.hb_font_t,
 
-    fn init(font_bytes: []const u8, size: f32) !HarfBuzzFont {
+    fn init(font_bytes: []const u8, size: f32, face_index: usize) !HarfBuzzFont {
         if (font_bytes.len > std.math.maxInt(c_uint)) return error.InvalidArguments;
+        if (face_index > std.math.maxInt(c_uint)) return error.InvalidArguments;
         const blob = hb.hb_blob_create(
             @ptrCast(font_bytes.ptr),
             @intCast(font_bytes.len),
@@ -21,7 +22,7 @@ const HarfBuzzFont = struct {
         ) orelse return error.HarfBuzzFailed;
         errdefer hb.hb_blob_destroy(blob);
 
-        const face = hb.hb_face_create(blob, 0) orelse return error.HarfBuzzFailed;
+        const face = hb.hb_face_create(blob, @intCast(face_index)) orelse return error.HarfBuzzFailed;
         errdefer hb.hb_face_destroy(face);
 
         const font = hb.hb_font_create(face) orelse return error.HarfBuzzFailed;
@@ -42,7 +43,7 @@ const HarfBuzzFont = struct {
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !runner.BenchResult {
     if (options.font_path == null) return error.InvalidArguments;
-    const hb_font = try HarfBuzzFont.init(font_bytes, options.size);
+    const hb_font = try HarfBuzzFont.init(font_bytes, options.size, options.face_index);
     defer hb_font.deinit();
     const normalized_coords = try harfBuzzNormalizedCoords(allocator, options.normalizedVariationCoords());
     defer allocator.free(normalized_coords);

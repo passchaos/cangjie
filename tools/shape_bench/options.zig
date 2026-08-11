@@ -109,6 +109,7 @@ pub const Options = struct {
     engine: Engine = .cangjie,
     output_format: OutputFormat = .text,
     font_path: ?[]const u8 = null,
+    face_index: usize = 0,
     harfrust_bin: []const u8 = default_harfrust_bin,
     harfrust_bin_explicit: bool = false,
     builtin_font: BuiltinFont = .script_feature,
@@ -186,6 +187,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.font_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--face-index")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.face_index = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--harfrust-bin")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -391,13 +396,14 @@ fn parseScriptTag(text: []const u8) ?cangjie.OpenTypeScriptTag {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "shape-bench";
     std.debug.print(
-        \\usage: {s} [--font font.ttf|font.ttc] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
+        \\usage: {s} [--font font.ttf|font.ttc] [--face-index n] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
         \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-harfrust|compare-harfbuzz
         \\                               shaping engine, default cangjie
         \\  --format text|tsv            output format, default text
         \\  --font PATH                  use a real TTF/OTF/TTC font
+        \\  --face-index N              select face N from a font collection
         \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature
         \\  --text TEXT                  input text, default "A"

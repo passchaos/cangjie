@@ -7905,7 +7905,7 @@ fn validateCmapEncodingCompatibility(platform_id: u16, encoding_id: u16, format:
             // mixed-byte format 2 and segmented format 4 encodings are seen in
             // legacy fonts.
             2, 3, 4, 5, 6 => format == 2 or format == 4,
-            10 => format == 12,
+            10 => format == 12 or format == 13,
             else => false,
         },
         // Custom and user-defined platforms can use the ordinary character-code
@@ -9274,7 +9274,7 @@ fn scoreCmap(subtable: CmapSubtable) u8 {
     if (subtable.format == 8 and subtable.platform_id == 0 and subtable.encoding_id == 4) return 6;
     if (subtable.format == 4 and subtable.platform_id == 3 and subtable.encoding_id == 1) return 5;
     if (subtable.format == 4 and subtable.platform_id == 0) return 4;
-    if (subtable.format == 13 and subtable.platform_id == 0 and subtable.encoding_id == 6) return 2;
+    if (subtable.format == 13 and ((subtable.platform_id == 0 and subtable.encoding_id == 6) or (subtable.platform_id == 3 and subtable.encoding_id == 10))) return 2;
     if (subtable.format == 10 and subtable.platform_id == 0 and subtable.encoding_id == 4) return 2;
     if (subtable.format == 2 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 1;
     if (subtable.format == 6 and (subtable.platform_id == 0 or subtable.platform_id == 3)) return 1;
@@ -15671,7 +15671,8 @@ test "cmap platform and encoding records allow only compatible formats" {
         var windows_format13 = format13;
         writeU16Test(&windows_format13, 4, 3);
         writeU16Test(&windows_format13, 6, 10);
-        try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &windows_format13, cmap, 512));
+        const windows_format13_subtables = try parseCmapSubtables(allocator, &windows_format13, cmap, 512);
+        allocator.free(windows_format13_subtables);
     }
 
     {
@@ -16093,6 +16094,14 @@ test "cmap extended subtables require a zero reserved field" {
 
         const cmap: TableRecord = .{ .tag = .{ 'c', 'm', 'a', 'p' }, .checksum = 0, .offset = 0, .length = format13.len };
         try std.testing.expectError(error.BadSfnt, parseCmapSubtables(allocator, &format13, cmap, 4));
+
+        writeU16Test(&format13, 4, 3); // Windows platform.
+        writeU16Test(&format13, 6, 10); // Unicode full repertoire.
+        writeU16Test(&format13, 14, 0);
+        const subtables = try parseCmapSubtables(allocator, &format13, cmap, 4);
+        defer allocator.free(subtables);
+        try std.testing.expectEqual(@as(usize, 1), subtables.len);
+        try std.testing.expectEqual(@as(u16, 13), subtables[0].format);
     }
 }
 

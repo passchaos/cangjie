@@ -1292,7 +1292,8 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   clusters instead of folding them to the grapheme start.
 - The Thai rows from HarfBuzz in-house `zero-width-marks.tests` pass for
   `45855bc8d46332b39c4ab9e2ee1a26b1f896da6b.ttf`,
-  `7a37dc4d5bf018456aea291cee06daf004c0221c.ttf`, and
+  `7a37dc4d5bf018456aea291cee06daf004c0221c.ttf`,
+  `8099955657a54e9ee38a6ba1d6f950ce58e3cc25.ttf`, and
   `bb0c53752e85c3d28973ebc913287b8987d3dfe8.ttf`
   (`U+0E01,U+0E34,U+0E01`). Cangjie now keeps GPOS MarkBasePos active when a
   Unicode mark is present even if GDEF misclassifies that glyph as a base,

@@ -426,10 +426,13 @@ Current local snapshot after the Nastaliq parity work:
   table for every scalar. This also closes missing modern Arabic Mn coverage
   for U+0898–U+089F, U+08CA–U+08FF, and supplementary
   U+10EFD–U+10EFF. Hebrew nonspacing marks now share the same RTL cluster
-  inheritance path; the first 27 HarfBuzz `hebrew-diacritics.tests` rows for
+  inheritance path; the first 31 HarfBuzz `hebrew-diacritics.tests` rows for
   `b895f8ff06493cc893ec44de380690ca0074edfa.ttf` are retained as
-  `tests/data/hebrew-diacritics-27.txt`. The remaining rows still need focused
-  meteg/mark offset work before the full file can be retained. Focused
+  `tests/data/hebrew-diacritics-31.txt`. Base-plus-mark GSUB ligatures such as
+  `nun+dagesh` no longer create multi-component ligature provenance, matching
+  HarfBuzz so later Hebrew `mkmk` positioning can attach meteg/qamats marks to
+  the same base. The remaining rows still need focused mark-offset work before
+  the full file can be retained. Focused
   HarfBuzz/HarfRust Arabic output matches at checksum `7cb1b7bd03a57f5d`. A
   fixed-CPU-30 A/B/B/A comparison with 31-sample medians
   reduced Amiri `fa-thelittleprince` from `944.499` to

@@ -1170,7 +1170,7 @@ const retained_harfrust_text_parity_gates = [_]struct {
     },
     .{
         .font_hash = "b895f8ff06493cc893ec44de380690ca0074edfa",
-        .text_file = "tests/data/hebrew-diacritics-27.txt",
+        .text_file = "tests/data/hebrew-diacritics-31.txt",
         .direction = "rtl",
     },
     .{

@@ -4299,6 +4299,7 @@ fn ligatureComponentInfoForMatch(
     const store = options.ligature_components orelse return .{};
     const component_count = @min(match.component_count, ligature_provenance.max_components);
     if (component_count <= 1) return .{};
+    if (ligatureIsBaseWithMarks(options, glyph_index, match, component_count)) return .{};
 
     var component_sources: [ligature_provenance.max_components]usize = undefined;
     component_sources[0] = sourceForGlyph(options, glyph_index);
@@ -4324,6 +4325,68 @@ fn insertLigatureComponentSource(sources: []usize, end: usize, source: usize) vo
         sources[index] = sources[index - 1];
     }
     sources[index] = source;
+}
+
+fn ligatureIsBaseWithMarks(options: LookupOptions, glyph_index: usize, match: LigatureMatch, component_count: usize) bool {
+    const codepoints = options.source_codepoints orelse return false;
+    const first_source = sourceForGlyph(options, glyph_index);
+    if (first_source >= codepoints.len or unicode.isUnicodeMarkCodepoint(codepoints[first_source])) return false;
+    for (1..component_count) |component_index| {
+        const matched_index = glyph_index + match.component_offsets[component_index];
+        const source = sourceForGlyph(options, matched_index);
+        if (source >= codepoints.len or !unicode.isUnicodeMarkCodepoint(codepoints[source])) return false;
+    }
+    return true;
+}
+
+test "GSUB base plus mark ligatures do not create component provenance" {
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
+
+    var components = ligature_provenance.Store{};
+    defer components.deinit(std.testing.allocator);
+    try components.infos.resize(std.testing.allocator, 2);
+    @memset(components.infos.items, .{});
+    var component_offsets = [_]usize{0} ** max_ligature_components;
+    component_offsets[1] = 1;
+
+    const base_mark_codepoints = [_]u21{ 0x05e0, 0x05bc };
+    const base_mark = try ligatureComponentInfoForMatch(
+        std.testing.allocator,
+        .{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &base_mark_codepoints,
+            .ligature_components = &components,
+        },
+        0,
+        .{
+            .ligature = 83,
+            .component_count = 2,
+            .component_offsets = &component_offsets,
+            .match_end = 2,
+        },
+    );
+    try std.testing.expectEqual(@as(u8, 1), base_mark.component_count);
+
+    const mark_mark_codepoints = [_]u21{ 0x05b8, 0x05bd };
+    const mark_mark = try ligatureComponentInfoForMatch(
+        std.testing.allocator,
+        .{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &mark_mark_codepoints,
+            .ligature_components = &components,
+        },
+        0,
+        .{
+            .ligature = 97,
+            .component_count = 2,
+            .component_offsets = &component_offsets,
+            .match_end = 2,
+        },
+    );
+    try std.testing.expectEqual(@as(u8, 2), mark_mark.component_count);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, components.componentSources(mark_mark).?);
 }
 
 fn setLigatureMetadata(options: LookupOptions, glyph_index: usize, info: ligature_provenance.Info) void {

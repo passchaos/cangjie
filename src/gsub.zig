@@ -454,6 +454,8 @@ pub fn sourceFeatureMaskForTag(feature_tag: u32) ?u32 {
         28
     else if (feature_tag == unicode.tag("rclt"))
         29
+    else if (feature_tag == unicode.tag("cfar"))
+        30
     else
         return null;
     return source_feature_mask_marker | (@as(u32, 1) << bit);

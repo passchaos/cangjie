@@ -1738,6 +1738,14 @@ shaping-performance superiority.
   `U+0C9A,U+0CCD,U+0C9A,U+0CCD`; Cangjie now marks the trailing old-spec
   Kannada `consonant+virama` source for `blwf` and merges it into the syllable
   cluster, while the first pair remains the visible `haln` form.
+- Add a focused Khmer shaper for the `khmr` script tag. The 89
+  `khmer-misc.tests` rows for
+  `3998336402905b8be8301ef7f47cf7e050cbb1bd.ttf` are retained as
+  `tests/data/khmer-misc-tests.txt`; Cangjie now applies Khmer split-matra
+  decomposition for `U+17BE/U+17BF/U+17C0/U+17C4/U+17C5`, marks Khmer
+  syllable-scoped `pref/blwf/abvf/pstf/cfar` sources, reorders pre-base vowels
+  and `COENG+RO` sequences before the base in HarfBuzz stage order, and runs
+  the Khmer `pres/abvs/blws/psts/clig` final stage against HarfRust parity.
 - Expand USE shaping parity beyond the retained Duployan, Balinese, Javanese,
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still

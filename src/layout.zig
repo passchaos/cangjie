@@ -7,6 +7,7 @@ const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
 const GlyphClass = @import("font.zig").GlyphClass;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
+const khmer = @import("khmer.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const gsub = @import("gsub.zig");
 const indic = @import("indic.zig");
@@ -3685,6 +3686,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     }
     const use_shape = use_shaper.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
     const myanmar_shape = myanmar.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
+    const khmer_shape = khmer.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
     const early_zero_mark_shape = use_shape or myanmar_shape;
     if (use_shape or myanmar_shape) {
         // Cluster ownership for source text must be established before vowel
@@ -3907,6 +3909,39 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.blwf), glyph_ids, myanmar_options, gdef_metadata.*);
         try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.pstf), glyph_ids, myanmar_options, gdef_metadata.*);
         try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.final), glyph_ids, myanmar_options, gdef_metadata.*);
+    } else if (khmer_shape) {
+        try khmer.decomposeSplitMatraSources(
+            buffer.allocator,
+            font,
+            glyph_ids,
+            codepoints,
+            clusters,
+            source_ends,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+        );
+        try source_features.resize(buffer.allocator, codepoints.items.len);
+        try source_syllables.resize(buffer.allocator, codepoints.items.len);
+        khmer.markSourceFeatures(source_features.items, source_syllables.items, codepoints.items);
+        var khmer_options = gsub_options;
+        khmer_options.source_codepoints = codepoints.items;
+        khmer_options.source_features = source_features.items;
+        khmer_options.source_syllables = source_syllables.items;
+
+        khmer.reorder(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            source_syllables.items,
+            codepoints.items,
+        );
+        try gsub.validateScriptShaperRunMetadata(khmer_options, glyph_ids.items.len);
+        try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, khmer.featureApplications(.basic), glyph_ids, khmer_options, gdef_metadata.*);
+        try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, khmer.featureApplications(.final), glyph_ids, khmer_options, gdef_metadata.*);
     } else if (use_shape) {
         try source_features.resize(buffer.allocator, codepoints.items.len);
         try source_syllables.resize(buffer.allocator, codepoints.items.len);

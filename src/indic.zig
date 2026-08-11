@@ -20,7 +20,7 @@ const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng, .ory2, .orya, .gur2, .guru, .gjr3, .gjr2, .gujr, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
+        .dev2, .deva, .bng2, .beng, .ory2, .orya, .gur2, .guru, .gjr3, .gjr2, .gujr, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -264,6 +264,52 @@ pub fn mergeKannadaOldSpecTrailingBlwf(glyph_cluster_indices: *std.ArrayList(usi
         if (syllable_start >= source) continue;
         const first_glyph = firstGlyphInSourceRange(glyph_source_indices.items, syllable_start, source) orelse continue;
         shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, first_glyph, glyph_index + 1);
+    }
+}
+
+pub fn normalizeOldSpecDevanagariHalantOrder(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (script_tag != .deva) return;
+
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source == 0 or source >= codepoints.len) continue;
+        if (codepoints[source] != viramaCodepoint(script_tag)) continue;
+        if (!isIndicConsonant(codepoints[source - 1], script_tag)) continue;
+        if (codepoints[source - 1] == rephRaCodepoint(script_tag)) continue;
+
+        const syllable_start = indicSyllableStart(codepoints, source, script_tag);
+        const syllable_end = indicSyllableEnd(codepoints, syllable_start, script_tag);
+        if (source < syllable_start or source >= syllable_end) continue;
+
+        var target_source: ?usize = null;
+        var cursor = source + 1;
+        while (cursor < syllable_end) : (cursor += 1) {
+            if (isIndicConsonant(codepoints[cursor], script_tag)) target_source = cursor;
+        }
+        const target = target_source orelse continue;
+        const target_glyph = glyphIndexForSource(glyph_source_indices.items, target) orelse continue;
+        if (target_glyph <= glyph_index) continue;
+
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, glyph_index, target_glyph + 1);
+        shaping_metadata.move(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            glyph_index,
+            target_glyph,
+        );
+        glyph_index = target_glyph;
     }
 }
 
@@ -696,6 +742,12 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         }
         return marked;
     }
+    if (script_tag == .deva) {
+        if (markOldSpecDevanagariRaViramaSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
+            marked = true;
+        }
+        return marked;
+    }
     if (script_tag != .dev2) return false;
     const base_source = halfBaseSource(codepoints, syllable_start, syllable_end, script_tag);
     var index = syllable_start;
@@ -743,6 +795,22 @@ fn markOldSpecBengaliPostBaseRaSources(source_features: []u32, codepoints: []con
         if (codepoints[index] != viramaCodepoint(script_tag)) continue;
         if (codepoints[index + 1] != rephRaCodepoint(script_tag)) continue;
         source_features[index + 1] |= blwf_source_mask;
+        marked = true;
+    }
+    return marked;
+}
+
+fn markOldSpecDevanagariRaViramaSources(source_features: []u32, codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (script_tag != .deva) return false;
+    var marked = false;
+    var index = syllable_start + 1;
+    while (index < syllable_end) : (index += 1) {
+        if (codepoints[index] != rephRaCodepoint(script_tag)) continue;
+        if (codepoints[index - 1] != viramaCodepoint(script_tag)) continue;
+        if (index + 2 < syllable_end and
+            codepoints[index + 1] == viramaCodepoint(script_tag) and
+            codepoints[index + 2] == 0x200d) continue;
+        source_features[index] |= blwf_source_mask;
         marked = true;
     }
     return marked;
@@ -1500,6 +1568,65 @@ test "Old-spec Bengali ra virama normalizes for blwf vatu" {
     try std.testing.expect((features[0] & half_source_mask) != 0);
     try std.testing.expect((features[2] & blwf_source_mask) != 0);
     try std.testing.expect((features[2] & (rphf_source_mask & ~gsub.source_feature_mask_marker)) == 0);
+}
+
+test "Old-spec Devanagari ra virama marks blwf vattu" {
+    var features = [_]u32{0} ** 5;
+    const codepoints = [_]u21{ 0x091f, 0x094d, 0x0930, 0x094d, 0x0020 };
+
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .deva));
+    try std.testing.expectEqual(@as(u32, 0), features[0]);
+    try std.testing.expectEqual(@as(u32, 0), features[1]);
+    try std.testing.expect((features[2] & blwf_source_mask) != 0);
+    try std.testing.expectEqual(@as(u32, 0), features[3]);
+}
+
+test "Old-spec Devanagari post-base ra before vowel marks blwf vattu" {
+    var features = [_]u32{0} ** 4;
+    const codepoints = [_]u21{ 0x091f, 0x094d, 0x0930, 0x0942 };
+
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .deva));
+    try std.testing.expectEqual(@as(u32, 0), features[0]);
+    try std.testing.expectEqual(@as(u32, 0), features[1]);
+    try std.testing.expect((features[2] & blwf_source_mask) != 0);
+    try std.testing.expectEqual(@as(u32, 0), features[3]);
+}
+
+test "Old-spec Devanagari ra virama zwj skips blwf vattu" {
+    var features = [_]u32{0} ** 6;
+    const codepoints = [_]u21{ 0x091f, 0x094d, 0x0930, 0x094d, 0x200d, 0x0915 };
+
+    try std.testing.expect(!markBasicSourceFeatures(&features, &codepoints, .deva));
+    try std.testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0, 0, 0 }, &features);
+}
+
+test "Old-spec Devanagari moves halant after post-base ra" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 7, 4, 6, 4, 1 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3, 4 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 6, 6, 12 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x091f, 0x094d, 0x0930, 0x094d, 0x0020 };
+    normalizeOldSpecDevanagariHalantOrder(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .deva);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 7, 6, 4, 4, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 1, 3, 4 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 12 }, clusters.items);
 }
 
 test "Kannada placeholder prevents broken mark dotted circle" {

@@ -1815,7 +1815,12 @@ shaping-performance superiority.
   HarfBuzz vowel-constraint dotted-circle insertion table in the traditional
   Indic path before GSUB, and treats the synthetic dotted circle as an Indic
   placeholder base so the third row's `ra,virama,i` sequence forms `reph`
-  around that dotted circle. The `indic-syllable.tests` Devanagari word
+  around that dotted circle. The Devanagari `indic-old-spec.tests` rows for
+  `b722a7d09e60421f3efbc706ad348ab47b88567b.ttf` are retained as
+  `tests/data/devanagari-old-spec-tests.txt`; legacy `deva` fonts now run
+  through the traditional Indic shaper, move old-spec halants after post-base
+  consonants, and mark post-base Ra for `blwf` vattu before `vatu` forms
+  `Tra`. The `indic-syllable.tests` Devanagari word
   `U+0926,U+093F,U+0938,U+0902,U+092C,U+0930` is retained for
   `41071178fbce4956d151f50967af458dbf555f7b.ttf`; GSUB ligature matching now
   honors source-syllable boundaries while skipping lookup-flag ignored glyphs,

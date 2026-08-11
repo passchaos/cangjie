@@ -4186,6 +4186,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             indic.mergePlaceholderDependentMarks(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
             indic.mergeTrailingDependentMarks(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
             indic.mergeKannadaOldSpecTrailingBlwf(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
+            indic.normalizeOldSpecDevanagariHalantOrder(
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                codepoints.items,
+                lookup_options.script_tag,
+            );
             indic.normalizeInitialConsonantSyllableOrder(
                 glyph_ids,
                 glyph_source_indices,

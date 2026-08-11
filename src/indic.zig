@@ -593,6 +593,7 @@ fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
         .bng2, .beng => codepoint == 0x09bf or codepoint == 0x09c7 or codepoint == 0x09c8,
         .ory2, .orya => codepoint == 0x0b47 or codepoint == 0x0b48,
         .gur2, .guru => codepoint == 0x0a3f,
+        .gjr3, .gjr2, .gujr => codepoint == 0x0abf,
         .tel2, .telu => codepoint == 0x0c46 or codepoint == 0x0c47 or codepoint == 0x0c48,
         .knd2, .knda => codepoint == 0x0cbf,
         .tml2, .taml => codepoint == 0x0bc6 or codepoint == 0x0bc7 or codepoint == 0x0bc8,
@@ -728,6 +729,12 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
         return marked;
     }
     if (script_tag == .tml2 or script_tag == .taml) {
+        if (markPreBaseConsonantViramaSources(source_features, codepoints, syllable_start, syllable_end, script_tag, half_source_mask)) {
+            marked = true;
+        }
+        return marked;
+    }
+    if (script_tag == .gjr3 or script_tag == .gjr2 or script_tag == .gujr) {
         if (markPreBaseConsonantViramaSources(source_features, codepoints, syllable_start, syllable_end, script_tag, half_source_mask)) {
             marked = true;
         }
@@ -1435,6 +1442,21 @@ test "Gurmukhi virama ra marks blwf and trailing vowel cluster" {
 
     mergeTrailingDependentMarks(&clusters, &sources, &codepoints, .gur2);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0 }, clusters.items);
+}
+
+test "Gujarati consonant virama marks half source" {
+    var features = [_]u32{0} ** 6;
+    const codepoints = [_]u21{ 0x0abe, 0x0aa8, 0x0acd, 0x200d, 0x0aa4, 0x0abf };
+
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .gjr2));
+    try std.testing.expectEqual(@as(u32, 0), features[0]);
+    try std.testing.expect((features[1] & half_source_mask) != 0);
+    try std.testing.expectEqual(@as(u32, 0), features[2]);
+}
+
+test "Gujarati i-matra is pre-base" {
+    try std.testing.expect(isPreBaseMatra(0x0abf, .gjr2));
+    try std.testing.expect(!isPreBaseMatra(0x0abe, .gjr2));
 }
 
 test "Kannada initial ra virama ZWJ normalizes for legacy half form" {

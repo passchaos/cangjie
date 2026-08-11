@@ -1829,7 +1829,12 @@ shaping-performance superiority.
   the Indic shaper as well, retaining rows 30-34 of the same fixture for
   `738d9f3b8c2dfd03875bf35a61d28fd78faf17c8.ttf`; rows 35-36 are retained too
   after Gujarati split-matra components learned to keep the candra/ai component
-  before the AA length component inside the same Indic syllable. The legacy
+  before the AA length component inside the same Indic syllable. The Gujarati
+  `indic-joiners.tests` row for `63e224dcb3d559d590f80c83b832cfca789e5dcc.ttf`
+  is retained as `tests/data/gujarati-indic-joiners-tests.txt`; Gujarati now
+  marks `consonant+virama` sources for `half` and treats U+0ABF as a pre-base
+  matra so the joined `na+virama` half form shapes before the following `ta`.
+  The legacy
   Kannada `indic-old-spec.tests` row for
   `57a9d9f83020155cbb1d2be1f43d82388cbecc88.ttf` is retained for
   `U+0C9A,U+0CCD,U+0C9A,U+0CCD`; Cangjie now marks the trailing old-spec

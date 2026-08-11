@@ -1672,7 +1672,9 @@ shaping-performance superiority.
   `55c88ebbe938680b08f92c3de20713183e0c7481.ttf` are retained too; Cangjie now
   keeps `U+0CF1/U+0CF2` in the same source syllable as the following consonant,
   allowing contextual `psts` stacker forms. The Vedic `U+1CF5,U+0915`
-  consonant-with-stacker row still needs a separate follow-up. The Telugu
+  consonant-with-stacker row for `4fbf14f4f51c21480971aa9ea81c229660924caa.ttf`
+  is retained as well; U+1CF5 now participates as a Devanagari
+  consonant-with-stacker base. The Telugu
   `indic-special-cases.tests`
   word `U+0C1A,U+0C3F,U+0C32,U+0C4D,U+0C15,U+0C42,U+0C30,U+0C4D` now has a
   retained gate for `e716f6bd00a108d186b7e9f47b4515565f784f36.ttf`; Cangjie

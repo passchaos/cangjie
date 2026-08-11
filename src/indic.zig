@@ -1059,7 +1059,8 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
             (codepoint >= 0x0d54 and codepoint <= 0x0d56) or
             (codepoint >= 0x0d7a and codepoint <= 0x0d7f),
         else => (codepoint >= 0x0915 and codepoint <= 0x0939) or
-            (codepoint >= 0x0958 and codepoint <= 0x095f),
+            (codepoint >= 0x0958 and codepoint <= 0x095f) or
+            codepoint == 0x1cf5,
     };
 }
 
@@ -1168,7 +1169,11 @@ fn isBeforeSubscriptVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag)
 }
 
 fn isConsonantWithStacker(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
-    return (script_tag == .knd2 or script_tag == .knda) and (codepoint == 0x0cf1 or codepoint == 0x0cf2);
+    return switch (script_tag) {
+        .knd2, .knda => codepoint == 0x0cf1 or codepoint == 0x0cf2,
+        .dev2, .deva => codepoint == 0x1cf5,
+        else => false,
+    };
 }
 
 fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
@@ -1462,6 +1467,15 @@ test "Kannada consonant-with-stacker keeps following consonant in syllable" {
     const codepoints = [_]u21{ 0x0cf1, 0x0c95 };
 
     markSourceSyllables(&syllables, &codepoints, .knd2);
+
+    try std.testing.expectEqualSlices(u8, &.{ 1, 1 }, &syllables);
+}
+
+test "Devanagari consonant-with-stacker keeps following consonant in syllable" {
+    var syllables = [_]u8{0} ** 2;
+    const codepoints = [_]u21{ 0x1cf5, 0x0915 };
+
+    markSourceSyllables(&syllables, &codepoints, .dev2);
 
     try std.testing.expectEqualSlices(u8, &.{ 1, 1 }, &syllables);
 }

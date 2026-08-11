@@ -3597,7 +3597,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 const shaped_codepoint = try presentationCodepointForShaping(font, glyph_index_cache, codepoint, selected_lookup_options);
                 break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
             };
-            const source_cluster = if ((codepoint == 0x200d or
+            const source_cluster = if ((inheritsLeadingDefaultIgnorableCluster(codepoints.items, clusters.items) or
+                codepoint == 0x200d or
                 (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
                 (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoClusterExtender(codepoint)) or
                 (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint))) and
@@ -5654,6 +5655,11 @@ fn isArabicModifierCombiningMark(codepoint: u21) bool {
 fn markSortClass(source_index: usize, codepoints: []const u21) u8 {
     if (source_index >= codepoints.len) return 0;
     return unicode.modifiedCombiningClassForShaping(codepoints[source_index]);
+}
+
+fn inheritsLeadingDefaultIgnorableCluster(codepoints: []const u21, clusters: []const usize) bool {
+    return codepoints.len == 1 and clusters.len == 1 and
+        unicode.isDefaultIgnorableForShaping(codepoints[0]);
 }
 
 fn isDefaultIgnorableForShaping(codepoint: u21) bool {

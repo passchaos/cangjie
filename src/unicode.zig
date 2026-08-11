@@ -2140,7 +2140,7 @@ fn isArabicScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x0870 and codepoint <= 0x08ff) or
         (codepoint >= 0x10efd and codepoint <= 0x10eff) or
         (codepoint >= 0xfb50 and codepoint <= 0xfdff) or
-        (codepoint >= 0xfe70 and codepoint <= 0xfeff);
+        (codepoint >= 0xfe70 and codepoint <= 0xfefc);
 }
 
 // Keep this compact range chain out of the mixed-direction scalar loop that
@@ -3524,6 +3524,8 @@ test "Arabic presentation forms keep Arabic script and RTL direction" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(OpenTypeScriptTag.arab, openTypeScriptTag(scriptForCodepoint(0xfedf)));
     try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0xfedf));
+    try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0xfeff));
+    try std.testing.expectEqual(BidiClass.neutral, bidiClassForCodepoint(0xfeff));
 }
 
 test "Arabic joining forms skip transparent marks and honor join controls" {

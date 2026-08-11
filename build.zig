@@ -1021,6 +1021,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .text_file = "tests/data/khmer-mark-order-tests.txt",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "a02a7f0ad42c2922cb37ad1358c9df4eb81f1bca",
+        .text_file = "tests/data/tibetan-contraction-feff-tests.txt",
+        .direction = "ltr",
+    },
 };
 
 pub fn build(b: *std.Build) void {

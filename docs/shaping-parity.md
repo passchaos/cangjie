@@ -1708,7 +1708,10 @@ shaping-performance superiority.
   `1c2fb74c1b2aa173262734c1f616148f1648cfd6.ttf` are retained as
   `tests/data/bengali-ligature-id-tests.txt`; old-spec Bengali now normalizes
   `virama+ra` to the `ra+virama` glyph order for `blwf/vatu` while preserving
-  source-scoped `half/pres` behavior.
+  source-scoped `half/pres` behavior. The Bengali `indic-syllable.tests`
+  placeholder row for `87f85d17d26f1fe9ad28d7365101958edaefb967.ttf` is
+  retained too; U+0980 now acts as a placeholder base so the following
+  candrabindu merges into the same shaping cluster.
   Malayalam `indic-pref-blocking.tests` rows for
   `226bc2deab3846f1a682085f70c67d0421014144.ttf` and
   `e207635780b42f898d58654b65098763e340f5c7.ttf` now pass as retained inline

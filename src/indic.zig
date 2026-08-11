@@ -1082,6 +1082,7 @@ fn isIndicBase(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
 fn isIndicPlaceholderBase(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     if (codepoint == 0x25cc) return true;
     return switch (script_tag) {
+        .bng2, .beng => codepoint == 0x0980,
         .knd2, .knda => codepoint == 0x0c80,
         else => false,
     };
@@ -1551,6 +1552,21 @@ test "Kannada placeholder merges dependent mark cluster" {
 
     const codepoints = [_]u21{ 0x0c80, 0x0c82 };
     mergePlaceholderDependentMarks(&clusters, &sources, &codepoints, .knd2);
+
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Bengali placeholder merges dependent mark cluster" {
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3 });
+
+    const codepoints = [_]u21{ 0x0980, 0x0981 };
+    mergePlaceholderDependentMarks(&clusters, &sources, &codepoints, .bng2);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }

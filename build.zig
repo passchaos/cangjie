@@ -1248,6 +1248,11 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .direction = "ltr",
         .script = "latn",
     },
+    .{
+        .font_hash = "87f85d17d26f1fe9ad28d7365101958edaefb967",
+        .text = "\u{0980}\u{0981}",
+        .direction = "ltr",
+    },
 };
 
 const retained_harfrust_text_parity_gates = [_]struct {

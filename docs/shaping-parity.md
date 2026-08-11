@@ -1266,8 +1266,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   glyph's advance/offset, while still letting GPOS pair positioning suppress
   duplicate legacy kern application. The explicit `deva` script row for the
   same fixture also passes with legacy kern fallback disabled, matching
-  HarfBuzz's `dist`-script exception. Apple/AAT `kern` format-2 class subtables
-  are now applied for horizontal fallback kerning as well; all three
+  HarfBuzz's `dist`-script exception. GPOS-only and GPOS-plus-legacy-kern rows
+  from the same upstream file are retained for
+  `96fcf8dc57095c3d89f69b0f74f0d802c213f4da.ttf` and
+  `8a312e38b9b90183ef154a0c2ab92a9def6cb82f.ttf`; `tt-kern-gpos.tests` is
+  retained for `b121d4306b2e3add5abbaad21d95fcf04aacbd64.ttf`. Apple/AAT
+  `kern` format-2 class subtables are now applied for horizontal fallback
+  kerning as well; all three
   `kern-format2.tests` rows for
   `e39391c77a6321c2ac7a2d644de0396470cd4bfe.ttf` are retained.
 - The explicit `pnum` row from HarfBuzz in-house `digits.tests` passes for

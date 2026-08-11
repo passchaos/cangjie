@@ -3640,6 +3640,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 codepoint == 0x200d or
                 (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
                 (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoClusterExtender(codepoint)) or
+                inheritsPreviousZwnjClusterInRtlShaping(selected_lookup_options.direction, codepoints.items) or
                 (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint))) and
                 clusters.items.len != 0)
                 clusters.items[clusters.items.len - 1] - cluster_base
@@ -4886,6 +4887,16 @@ test "Arabic item context influences only joining forms" {
 
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong;
+}
+
+fn inheritsPreviousZwnjClusterInRtlShaping(direction: TextDirection, prior_codepoints: []const u21) bool {
+    return direction == .rtl and prior_codepoints.len != 0 and prior_codepoints[prior_codepoints.len - 1] == 0x200c;
+}
+
+test "RTL shaping makes glyph after ZWNJ inherit join-control cluster" {
+    try std.testing.expect(inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{ 0x0628, 0x200c }));
+    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.ltr, &.{ 0x0628, 0x200c }));
+    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{0x0628}));
 }
 
 fn useShapeUsesArabicJoiningMasks(script_tag: unicode.OpenTypeScriptTag) bool {

@@ -180,6 +180,10 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
     if (options.not_found_variation_selector_glyph) |glyph_id| {
         hb.hb_buffer_set_not_found_variation_selector_glyph(buffer, glyph_id);
     }
+    var flags: hb.hb_buffer_flags_t = hb.HB_BUFFER_FLAG_DEFAULT;
+    if (options.beginning_of_text) flags |= hb.HB_BUFFER_FLAG_BOT;
+    if (options.end_of_text) flags |= hb.HB_BUFFER_FLAG_EOT;
+    if (flags != hb.HB_BUFFER_FLAG_DEFAULT) hb.hb_buffer_set_flags(buffer, flags);
     var context_text: []u8 = &.{};
     defer if (context_text.len != 0) allocator.free(context_text);
     const item_text = if (options.text_before.len != 0 or options.text_after.len != 0) item: {

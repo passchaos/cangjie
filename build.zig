@@ -1049,6 +1049,7 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     disable_feature: ?[]const u8 = null,
     text_before: ?[]const u8 = null,
     text_after: ?[]const u8 = null,
+    bot: bool = false,
     font_ext: []const u8 = "ttf",
 }{
     .{
@@ -1141,6 +1142,19 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .text = "\u{0643}\u{062a}\u{0628}\u{0627}",
         .direction = "rtl",
         .text_after = "\u{0627}",
+    },
+    .{
+        .font_hash = "3105b51976b879032c66aa93a634b3b3672cd344",
+        .text = "\u{064e}",
+        .direction = "rtl",
+        .bot = true,
+    },
+    .{
+        .font_hash = "3105b51976b879032c66aa93a634b3b3672cd344",
+        .text = "\u{064e}",
+        .direction = "rtl",
+        .text_before = "\u{0627}",
+        .bot = true,
     },
 };
 
@@ -1513,6 +1527,9 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.text_after) |text_after| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--text-after", text_after });
+            }
+            if (gate.bot) {
+                inline_harfrust_parity_cmd.addArg("--bot");
             }
             shaping_corpus_parity_smoke_step.dependOn(&inline_harfrust_parity_cmd.step);
         }

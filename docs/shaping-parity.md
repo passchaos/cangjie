@@ -1560,8 +1560,9 @@ shaping-performance superiority.
   Arabic joining context are retained as inline HarfRust gates. `shape-bench`
   now accepts `--text-before`/`--text-after`; Cangjie uses those contexts only
   to resolve item-boundary Arabic joining forms while keeping GSUB/GPOS matching
-  scoped to the shaped item. The remaining `--bot` dotted-circle rows still
-  need explicit beginning-of-text handling.
+  scoped to the shaped item. The `--bot` dotted-circle rows are retained too;
+  beginning-of-text Arabic marks insert a synthetic dotted-circle base unless a
+  pre-context is supplied.
 - Mongolian Free Variation Selectors now participate in the Arabic-style
   joining shaper under the `mong` ScriptList. The focused
   `arabic-feature-order.tests` FVS rows for

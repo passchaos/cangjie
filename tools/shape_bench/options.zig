@@ -125,6 +125,8 @@ pub const Options = struct {
     direction: Direction = .ltr,
     reorder_bidi: bool = true,
     native_direction_shaping: bool = false,
+    beginning_of_text: bool = false,
+    end_of_text: bool = false,
     normalize_clusters_to_graphemes: bool = false,
     script_tag: ?cangjie.OpenTypeScriptTag = null,
     language_tag: ?cangjie.OpenTypeLanguageTag = null,
@@ -258,6 +260,10 @@ pub fn parse(args: []const []const u8) !Options {
             options.reorder_bidi = false;
         } else if (std.mem.eql(u8, arg, "--native-direction-shaping")) {
             options.native_direction_shaping = true;
+        } else if (std.mem.eql(u8, arg, "--bot")) {
+            options.beginning_of_text = true;
+        } else if (std.mem.eql(u8, arg, "--eot")) {
+            options.end_of_text = true;
         } else if (std.mem.eql(u8, arg, "--script-position")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -456,6 +462,8 @@ pub fn printUsage(args: []const []const u8) void {
         \\                               force an OpenType language system
         \\  --no-bidi-reorder            keep logical glyph order after shaping
         \\  --native-direction-shaping   shape in OpenType native buffer order
+        \\  --bot                        treat text as beginning of paragraph
+        \\  --eot                        treat text as end of paragraph
         \\  --script-position normal|superscript|subscript
         \\  --script TAG                 force a 4-byte OpenType script tag, e.g. arab
         \\  --no-caches                  bypass glyph metric and cmap caches

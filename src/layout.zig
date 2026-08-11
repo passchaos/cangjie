@@ -197,6 +197,8 @@ pub const ShapeOptions = struct {
     /// item boundaries, matching the common use of hb_buffer pre/post context.
     context_before: []const u8 = &.{},
     context_after: []const u8 = &.{},
+    beginning_of_text: bool = false,
+    end_of_text: bool = false,
 };
 
 /// Coarse shaping plan identity. It intentionally excludes the concrete font
@@ -214,6 +216,8 @@ pub const ShapePlanKey = struct {
     feature_hash: u64 = 0,
     variation_hash: u64 = 0,
     context_hash: u64 = 0,
+    beginning_of_text: bool = false,
+    end_of_text: bool = false,
     not_found_variation_selector_glyph: ?u32 = null,
 
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
@@ -234,6 +238,8 @@ pub const ShapePlanKey = struct {
             .feature_hash = featureOverridesHash(options.features),
             .variation_hash = normalizedVariationCoordsHash(options.normalized_variation_coords),
             .context_hash = contextHash(options.context_before, options.context_after),
+            .beginning_of_text = options.beginning_of_text,
+            .end_of_text = options.end_of_text,
             .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
         };
     }
@@ -3318,6 +3324,8 @@ const LookupOptions = struct {
     not_found_variation_selector_glyph: ?u32 = null,
     context_before: []const u8 = &.{},
     context_after: []const u8 = &.{},
+    beginning_of_text: bool = false,
+    end_of_text: bool = false,
     run_has_decimal_number: bool = false,
     run_has_letter: bool = false,
 };
@@ -3350,6 +3358,8 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupO
         .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
         .context_before = options.context_before,
         .context_after = options.context_after,
+        .beginning_of_text = options.beginning_of_text,
+        .end_of_text = options.end_of_text,
     }, .all_ascii = infer_language and inferred.all_ascii };
 }
 
@@ -3420,6 +3430,8 @@ fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
         a.feature_hash == b.feature_hash and
         a.variation_hash == b.variation_hash and
         a.context_hash == b.context_hash and
+        a.beginning_of_text == b.beginning_of_text and
+        a.end_of_text == b.end_of_text and
         a.not_found_variation_selector_glyph == b.not_found_variation_selector_glyph;
 }
 
@@ -3711,6 +3723,22 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     } else false;
     if (buffer.lookup_selection_cache) |selection_cache| {
         gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
+    }
+    if (lookup_options.beginning_of_text and lookup_options.context_before.len == 0 and codepoints.items.len != 0 and unicode.isUnicodeMarkCodepoint(codepoints.items[0])) {
+        const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+        try insertBeginningDottedCircle(
+            buffer.allocator,
+            glyph_ids,
+            codepoints,
+            clusters,
+            source_ends,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            dotted_circle_glyph,
+        );
+        gsub_options.source_codepoints = codepoints.items;
     }
     const use_shape = use_shaper.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
     const myanmar_shape = myanmar.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
@@ -4721,6 +4749,82 @@ fn appendUtf8Codepoints(allocator: std.mem.Allocator, out: *std.ArrayList(u21), 
     while (iterator.nextCodepoint()) |codepoint| {
         try out.append(allocator, codepoint);
     }
+}
+
+fn insertBeginningDottedCircle(
+    allocator: std.mem.Allocator,
+    glyph_ids: *std.ArrayList(GlyphId),
+    codepoints: *std.ArrayList(u21),
+    clusters: *std.ArrayList(usize),
+    source_ends: *std.ArrayList(usize),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    dotted_circle_glyph: GlyphId,
+) !void {
+    if (dotted_circle_glyph == 0 or codepoints.items.len == 0 or glyph_ids.items.len == 0) return;
+    const source_start = clusters.items[0];
+    const source_end = source_ends.items[0];
+
+    try codepoints.replaceRange(allocator, 0, 0, &.{0x25cc});
+    errdefer _ = codepoints.orderedRemove(0);
+    try clusters.replaceRange(allocator, 0, 0, &.{source_start});
+    errdefer _ = clusters.orderedRemove(0);
+    try source_ends.replaceRange(allocator, 0, 0, &.{source_end});
+    errdefer _ = source_ends.orderedRemove(0);
+
+    for (glyph_source_indices.items) |*source| source.* += 1;
+    for (glyph_cluster_indices.items) |*owner| owner.* += 1;
+    ligature_components.shiftSourceIndices(0, 1);
+
+    try shaping_metadata.insert(
+        allocator,
+        glyph_ids,
+        glyph_source_indices,
+        glyph_cluster_indices,
+        glyph_substituted,
+        ligature_components,
+        0,
+        dotted_circle_glyph,
+        0,
+        0,
+    );
+}
+
+test "beginning item dotted circle creates a synthetic base source" {
+    const allocator = std.testing.allocator;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 3);
+    var codepoints = std.ArrayList(u21).empty;
+    defer codepoints.deinit(allocator);
+    try codepoints.append(allocator, 0x064e);
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(allocator);
+    try clusters.append(allocator, 0);
+    var source_ends = std.ArrayList(usize).empty;
+    defer source_ends.deinit(allocator);
+    try source_ends.append(allocator, 2);
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.append(allocator, 0);
+    var cluster_owners = std.ArrayList(usize).empty;
+    defer cluster_owners.deinit(allocator);
+    try cluster_owners.append(allocator, 0);
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(allocator);
+    try substituted.append(allocator, false);
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(allocator);
+    try ligatures.infos.append(allocator, .{});
+
+    try insertBeginningDottedCircle(allocator, &glyphs, &codepoints, &clusters, &source_ends, &sources, &cluster_owners, &substituted, &ligatures, 4);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 4, 3 }, glyphs.items);
+    try std.testing.expectEqualSlices(u21, &.{ 0x25cc, 0x064e }, codepoints.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, cluster_owners.items);
 }
 
 test "Arabic item context influences only joining forms" {

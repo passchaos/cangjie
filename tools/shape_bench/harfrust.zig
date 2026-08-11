@@ -143,6 +143,12 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
     if (options.text_after.len != 0) {
         try args.appendSlice(allocator, &.{ "--text-after", options.text_after });
     }
+    if (options.beginning_of_text) {
+        try args.append(allocator, "--bot");
+    }
+    if (options.end_of_text) {
+        try args.append(allocator, "--eot");
+    }
     if (options.text_path) |path| {
         try args.appendSlice(allocator, &.{ "--text-file", path });
     } else {

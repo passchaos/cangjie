@@ -1601,6 +1601,13 @@ shaping-performance superiority.
   coordinates `0,0.65,0` and `0,0.7,0`. Cangjie now enables `rvrn` by default
   and applies GSUB FeatureVariations condition sets so the low coordinate keeps
   `rvrn_base` while the high coordinate selects `rvrn_subst`.
+- `shape-bench --variation` now accepts HarfBuzz-style `tag=value` design
+  coordinates in addition to normalized CSV coordinates. Four HarfRust retained
+  inline gates cover `variations.tests` rows for `HBTest-VF.ttf` (`TEST=491`
+  and `TEST=509`) and `ab40c89624a6104e5d0a2308e448a989302f515b.ttf`
+  (`wdth=60` and `wdth=402`). The
+  `e8691822f6a705e3e9fb48a0405c645b1a036590.ttf` row remains blocked by
+  duplicate `fvar` axis validation and needs separate parser-tolerance work.
 - The HarfBuzz in-house `tibetan-vowels.tests` rows for
   `82f4f3b57bb55344e72e70231380202a52af5805.ttf` are retained for
   `U+0F68,U+0F72` and `U+0F68,U+0F7F`. Cangjie now applies Tibetan

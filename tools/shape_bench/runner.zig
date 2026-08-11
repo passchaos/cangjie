@@ -61,6 +61,13 @@ pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: 
     return try cangjie.Font.parseFace(allocator, font_bytes, options.face_index);
 }
 
+pub fn resolvedVariationCoords(allocator: std.mem.Allocator, font: *const cangjie.Font, options: *const options_mod.Options) ![]f32 {
+    if (options.designVariationCoords().len == 0) {
+        return try allocator.dupe(f32, options.normalizedVariationCoords());
+    }
+    return try font.normalizedVariationCoordinates(allocator, options.designVariationCoords());
+}
+
 pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.Font, options: options_mod.Options) !BenchResult {
     var layout_buffer = cangjie.LayoutBuffer.init(allocator);
     defer layout_buffer.deinit();
@@ -88,6 +95,9 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
 
     const cascade_fonts = [_]*const cangjie.Font{font};
     const cascade = cangjie.FontCascade.init(&cascade_fonts);
+    const normalized_variation_coords = try resolvedVariationCoords(allocator, font, &options);
+    defer allocator.free(normalized_variation_coords);
+
     const shape_options = cangjie.ShapeOptions{
         .direction = options.direction.textDirection(),
         .reorder_bidi = options.reorder_bidi,
@@ -98,7 +108,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .language_tag = options.language_tag,
         .script_position = options.script_position,
         .features = options.featureOverrides(),
-        .normalized_variation_coords = options.normalizedVariationCoords(),
+        .normalized_variation_coords = normalized_variation_coords,
         .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
     };
     const inline_text_lines = [_][]const u8{options.text};
@@ -152,7 +162,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                         .x_advances = if (options.glyph_summary) try glyphXAdvances(allocator, font, options.size, options, glyphs) else &.{},
                         .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, font, options.size, options, glyphs) else &.{},
                         .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, options, glyphs) else &.{},
-                        .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, font, options.size, options, glyphs) else &.{},
+                        .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, font, options.size, options, normalized_variation_coords, glyphs) else &.{},
                     });
                 }
             }
@@ -572,12 +582,12 @@ fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_s
     return values;
 }
 
-fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, normalized_variation_coords: []const f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
         value.* = if (options.direction == .ttb and glyph.vertical) vertical: {
-            if (try font.verticalOriginYAtCoords(glyph.glyph_id, options.normalizedVariationCoords())) |origin| break :vertical -@as(i32, origin);
-            if (try glyfVerticalOrigin(font, glyph.glyph_id, options.normalizedVariationCoords())) |origin| break :vertical -origin;
+            if (try font.verticalOriginYAtCoords(glyph.glyph_id, normalized_variation_coords)) |origin| break :vertical -@as(i32, origin);
+            if (try glyfVerticalOrigin(font, glyph.glyph_id, normalized_variation_coords)) |origin| break :vertical -origin;
             break :vertical -@divTrunc(defaultVerticalAdvance(font), 2);
         } else fontUnitPosition(font, font_size, glyph.y_offset);
     }

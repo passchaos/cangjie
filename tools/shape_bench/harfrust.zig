@@ -131,6 +131,12 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         try args.append(allocator, "--not-found-variation-selector-glyph");
         try args.append(allocator, glyph_text);
     }
+    if (options.designVariationCoords().len != 0) {
+        const variation_text = try harfrustVariationText(allocator, options.designVariationCoords());
+        try owned_args.append(allocator, variation_text);
+        try args.append(allocator, "--variations");
+        try args.append(allocator, variation_text);
+    }
     if (options.text_path) |path| {
         try args.appendSlice(allocator, &.{ "--text-file", path });
     } else {
@@ -166,6 +172,20 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         },
     }
     return result.stdout;
+}
+
+fn harfrustVariationText(allocator: std.mem.Allocator, coords: []const cangjie.VariationCoordinate) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    for (coords, 0..) |coord, index| {
+        if (index != 0) try out.append(allocator, ',');
+        try out.appendSlice(allocator, &coord.tag);
+        try out.append(allocator, '=');
+        const value_text = try std.fmt.allocPrint(allocator, "{d}", .{coord.value});
+        defer allocator.free(value_text);
+        try out.appendSlice(allocator, value_text);
+    }
+    return try out.toOwnedSlice(allocator);
 }
 
 fn parseGlyphLines(allocator: std.mem.Allocator, output: []const u8, text_lines: []const []const u8) ![]ParsedLine {

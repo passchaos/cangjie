@@ -1026,6 +1026,39 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
     },
 };
 
+const retained_inline_harfrust_parity_gates = [_]struct {
+    font_hash: []const u8,
+    text: []const u8,
+    direction: []const u8,
+    variation: ?[]const u8 = null,
+    font_ext: []const u8 = "ttf",
+}{
+    .{
+        .font_hash = "HBTest-VF",
+        .text = "A",
+        .direction = "ltr",
+        .variation = "TEST=491",
+    },
+    .{
+        .font_hash = "HBTest-VF",
+        .text = "A",
+        .direction = "ltr",
+        .variation = "TEST=509",
+    },
+    .{
+        .font_hash = "ab40c89624a6104e5d0a2308e448a989302f515b",
+        .text = " ",
+        .direction = "ltr",
+        .variation = "wdth=60",
+    },
+    .{
+        .font_hash = "ab40c89624a6104e5d0a2308e448a989302f515b",
+        .text = " ",
+        .direction = "ltr",
+        .variation = "wdth=402",
+    },
+};
+
 const retained_harfrust_text_parity_gates = [_]struct {
     font_hash: []const u8,
     text_file: []const u8,
@@ -1350,6 +1383,19 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_corpus_parity_smoke_step.dependOn(&text_parity_cmd.step);
+        }
+        for (retained_inline_harfrust_parity_gates) |gate| {
+            const inline_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            inline_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}.{s}", .{ harfbuzz_in_house_fonts, gate.font_hash, gate.font_ext }),
+                "--text",      gate.text,
+                "--direction", gate.direction,
+            });
+            if (gate.variation) |variation| {
+                inline_harfrust_parity_cmd.addArgs(&.{ "--variation", variation });
+            }
+            shaping_corpus_parity_smoke_step.dependOn(&inline_harfrust_parity_cmd.step);
         }
         for (retained_harfrust_text_parity_gates) |gate| {
             const text_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);

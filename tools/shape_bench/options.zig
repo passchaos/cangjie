@@ -138,6 +138,8 @@ pub const Options = struct {
     feature_override_count: usize = 0,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
     variation_coord_count: usize = 0,
+    variation_design_coord_buf: [max_variation_coords]cangjie.VariationCoordinate = undefined,
+    variation_design_coord_count: usize = 0,
 
     pub fn fontLabel(self: Options) []const u8 {
         if (self.font_path) |path| return path;
@@ -157,8 +159,16 @@ pub const Options = struct {
         return self.feature_override_count;
     }
 
+    pub fn variationCoordCount(self: *const Options) usize {
+        return self.variation_coord_count + self.variation_design_coord_count;
+    }
+
     pub fn normalizedVariationCoords(self: *const Options) []const f32 {
         return self.variation_coord_buf[0..self.variation_coord_count];
+    }
+
+    pub fn designVariationCoords(self: *const Options) []const cangjie.VariationCoordinate {
+        return self.variation_design_coord_buf[0..self.variation_design_coord_count];
     }
 };
 
@@ -292,16 +302,33 @@ pub fn parse(args: []const []const u8) !Options {
 
 fn parseVariationCoords(options: *Options, text: []const u8) !void {
     options.variation_coord_count = 0;
+    options.variation_design_coord_count = 0;
     if (text.len == 0) return;
+    const design_coords = std.mem.indexOfScalar(u8, text, '=') != null;
     var it = std.mem.splitScalar(u8, text, ',');
     while (it.next()) |raw_item| {
         const item = std.mem.trim(u8, raw_item, " \t\r\n");
         if (item.len == 0) return error.InvalidArguments;
-        if (options.variation_coord_count >= options.variation_coord_buf.len) return error.InvalidArguments;
-        const value = try std.fmt.parseFloat(f32, item);
-        if (!std.math.isFinite(value) or value < -1 or value > 1) return error.InvalidArguments;
-        options.variation_coord_buf[options.variation_coord_count] = value;
-        options.variation_coord_count += 1;
+        if (design_coords) {
+            if (options.variation_design_coord_count >= options.variation_design_coord_buf.len) return error.InvalidArguments;
+            const equals = std.mem.indexOfScalar(u8, item, '=') orelse return error.InvalidArguments;
+            const tag_text = item[0..equals];
+            if (tag_text.len != 4 or equals + 1 >= item.len) return error.InvalidArguments;
+            const value = try std.fmt.parseFloat(f32, item[equals + 1 ..]);
+            if (!std.math.isFinite(value)) return error.InvalidArguments;
+            options.variation_design_coord_buf[options.variation_design_coord_count] = .{
+                .tag = tag_text[0..4].*,
+                .value = value,
+            };
+            options.variation_design_coord_count += 1;
+        } else {
+            if (std.mem.indexOfScalar(u8, item, '=') != null) return error.InvalidArguments;
+            if (options.variation_coord_count >= options.variation_coord_buf.len) return error.InvalidArguments;
+            const value = try std.fmt.parseFloat(f32, item);
+            if (!std.math.isFinite(value) or value < -1 or value > 1) return error.InvalidArguments;
+            options.variation_coord_buf[options.variation_coord_count] = value;
+            options.variation_coord_count += 1;
+        }
     }
 }
 
@@ -427,7 +454,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --glyph-summary              include per-line glyph id lists with --line-summary
         \\  --enable-feature TAG         enable one OpenType feature tag for Cangjie
         \\  --disable-feature TAG        disable one OpenType feature tag for Cangjie
-        \\  --variation CSV              comma-separated normalized variation coordinates, e.g. 0.5,-0.25
+        \\  --variation CSV              comma-separated normalized coordinates or tag=value design coordinates
         \\  --not-found-variation-selector-glyph GLYPH
         \\                               make unsupported variation selectors visible as a zero-advance synthetic glyph
         \\

@@ -45,10 +45,16 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     if (options.font_path == null) return error.InvalidArguments;
     const hb_font = try HarfBuzzFont.init(font_bytes, options.size, options.face_index);
     defer hb_font.deinit();
-    const normalized_coords = try harfBuzzNormalizedCoords(allocator, options.normalizedVariationCoords());
-    defer allocator.free(normalized_coords);
-    if (normalized_coords.len != 0) {
-        hb.hb_font_set_var_coords_normalized(hb_font.font, normalized_coords.ptr, @intCast(normalized_coords.len));
+    if (options.designVariationCoords().len != 0) {
+        const variations = try harfBuzzDesignVariations(allocator, options.designVariationCoords());
+        defer allocator.free(variations);
+        hb.hb_font_set_variations(hb_font.font, variations.ptr, @intCast(variations.len));
+    } else {
+        const normalized_coords = try harfBuzzNormalizedCoords(allocator, options.normalizedVariationCoords());
+        defer allocator.free(normalized_coords);
+        if (normalized_coords.len != 0) {
+            hb.hb_font_set_var_coords_normalized(hb_font.font, normalized_coords.ptr, @intCast(normalized_coords.len));
+        }
     }
     const features = try harfBuzzFeatures(allocator, options);
     defer allocator.free(features);
@@ -249,6 +255,17 @@ fn harfBuzzNormalizedCoords(allocator: std.mem.Allocator, coords: []const f32) !
     const out = try allocator.alloc(c_int, coords.len);
     for (coords, out) |coord, *value| {
         value.* = @intFromFloat(@round(coord * 16384.0));
+    }
+    return out;
+}
+
+fn harfBuzzDesignVariations(allocator: std.mem.Allocator, coords: []const cangjie.VariationCoordinate) ![]hb.hb_variation_t {
+    const out = try allocator.alloc(hb.hb_variation_t, coords.len);
+    for (coords, out) |coord, *variation| {
+        variation.* = .{
+            .tag = runtimeOpenTypeTag(&coord.tag),
+            .value = coord.value,
+        };
     }
     return out;
 }

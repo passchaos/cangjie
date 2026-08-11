@@ -1183,6 +1183,12 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .cluster_level = "2",
     },
     .{
+        .font_hash = "43ef465752be9af900745f72fe29cb853a1401a5",
+        .text = "\u{05d4}\u{05b7}\u{05e9}\u{05bc}\u{05c1}\u{05b8}\u{05de}\u{05b4}\u{05dd}",
+        .direction = "rtl",
+        .cluster_level = "1",
+    },
+    .{
         .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
         .text = "\u{0643}\u{0650}\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}\u{0646}\u{064e}\u{0627}",
         .direction = "rtl",

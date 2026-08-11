@@ -3836,6 +3836,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         glyph_substituted,
         ligature_components,
         codepoints.items,
+        lookup_options.cluster_level,
     );
     if (lookup_options.script_tag == .arab) {
         reorderArabicModifierMarksForShaping(
@@ -5887,32 +5888,64 @@ fn presentationCodepointForShaping(font: *const Font, glyph_index_cache: ?*Glyph
     return if (try glyphIndexWithOptionalCache(font, glyph_index_cache, mirrored) != 0) mirrored else codepoint;
 }
 
-fn reorderMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21) void {
+fn reorderMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, cluster_level: ?ClusterLevel) void {
     var run_start: ?usize = null;
     for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
         const modified_class = markSortClass(source_index, codepoints);
         if (modified_class == 0) {
-            if (run_start) |start| reorderMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_index);
+            if (run_start) |start| reorderMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_index, cluster_level);
             run_start = null;
             continue;
         }
         if (run_start == null) run_start = glyph_index;
     }
-    if (run_start) |start| reorderMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_source_indices.items.len);
+    if (run_start) |start| reorderMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_source_indices.items.len, cluster_level);
 }
 
-fn reorderMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, start: usize, end: usize) void {
+fn reorderMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, start: usize, end: usize, cluster_level: ?ClusterLevel) void {
     var i = start + 1;
     while (i < end) : (i += 1) {
         var j = i;
-        while (j > start and markSortClass(glyph_source_indices.items[j - 1], codepoints) > markSortClass(glyph_source_indices.items[j], codepoints)) : (j -= 1) {
-            std.mem.swap(GlyphId, &glyph_ids.items[j - 1], &glyph_ids.items[j]);
-            std.mem.swap(usize, &glyph_source_indices.items[j - 1], &glyph_source_indices.items[j]);
-            std.mem.swap(usize, &glyph_cluster_indices.items[j - 1], &glyph_cluster_indices.items[j]);
-            std.mem.swap(bool, &glyph_substituted.items[j - 1], &glyph_substituted.items[j]);
-            std.mem.swap(ligature_provenance.Info, &ligature_components.infos.items[j - 1], &ligature_components.infos.items[j]);
+        const current_class = markSortClass(glyph_source_indices.items[i], codepoints);
+        while (j > start and markSortClass(glyph_source_indices.items[j - 1], codepoints) > current_class) : (j -= 1) {}
+        if (j == i) continue;
+        if (cluster_level) |level| {
+            if (level.isMonotone()) shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, j, i + 1);
+        }
+        var move_index = i;
+        while (move_index > j) {
+            std.mem.swap(GlyphId, &glyph_ids.items[move_index - 1], &glyph_ids.items[move_index]);
+            std.mem.swap(usize, &glyph_source_indices.items[move_index - 1], &glyph_source_indices.items[move_index]);
+            std.mem.swap(usize, &glyph_cluster_indices.items[move_index - 1], &glyph_cluster_indices.items[move_index]);
+            std.mem.swap(bool, &glyph_substituted.items[move_index - 1], &glyph_substituted.items[move_index]);
+            std.mem.swap(ligature_provenance.Info, &ligature_components.infos.items[move_index - 1], &ligature_components.infos.items[move_index]);
+            move_index -= 1;
         }
     }
+}
+
+test "mark reorder merges clusters for explicit monotone cluster levels" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 2 });
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false });
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{} });
+    const codepoints = [_]u21{ 0x05bc, 0x05c1 };
+
+    reorderMarkRun(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, 0, 2, .monotone_characters);
+
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }
 
 fn reorderArabicModifierMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21) void {

@@ -1616,8 +1616,12 @@ shaping-performance superiority.
   x/X plus ring rows from HarfBuzz in-house `cluster.tests` are retained for
   `4fac3929fc3332834e93673780ec0fe94342d193.ttf` at cluster levels 3 and 2,
   covering grapheme-level cluster merging versus character-level cluster
-  retention. Remaining `cluster.tests` Hebrew and Thai SARA AM rows still need
-  separate shaper/positioning work before the full file can be retained.
+  retention. The Hebrew RTL `cluster-level=1` row for
+  `43ef465752be9af900745f72fe29cb853a1401a5.ttf` is retained too; Cangjie now
+  mirrors HarfBuzz's cluster merge when mark reordering moves a Hebrew point
+  leftward under an explicit monotone cluster level. The remaining
+  `cluster.tests` Thai SARA AM rows still need separate fallback-positioning
+  work before the full file can be retained.
 - The expressible HarfBuzz in-house `directwrite.tests` rows are represented by
   existing retained gates: Arabic high contextual forms for
   `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`, the `ffi`/disabled-`liga`

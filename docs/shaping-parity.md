@@ -1213,6 +1213,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   non-breaking hyphen glyph but has U+2010, Cangjie mirrors HarfBuzz's normalize
   fallback and uses the U+2010 glyph while preserving the original source
   cluster.
+- The two HarfBuzz in-house `hangul-jamo.tests` rows are retained for
+  `757ebd573617a24aa9dfbf0b885c54875c6fe06b.ttf` and
+  `7e14e7883ed152baa158b80e207b66114c823a8b.ttf`. Cangjie now keeps `calt`
+  away from a standalone Hangul Jamo scalar while leaving the multi-jamo fixture
+  intact. Broader `hangul-calt.tests` still need a full Hangul shaper masking
+  model.
 - The Thai rows from HarfBuzz in-house `zero-width-marks.tests` pass for
   `45855bc8d46332b39c4ab9e2ee1a26b1f896da6b.ttf`,
   `7a37dc4d5bf018456aea291cee06daf004c0221c.ttf`, and

@@ -3637,6 +3637,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     if (shape_profile) |p| p.gdef_ns += shapeProfileElapsed(gdef_start, profile_io);
     defer if (owned_gdef_metadata) |*metadata| metadata.deinit(buffer.allocator);
 
+    var hangul_feature_overrides_buf: [17]unicode.FeatureOverride = undefined;
+    const gsub_feature_overrides = if (lookup_options.script_tag == .hang and hangulRunIsSingleJamo(codepoints.items))
+        featureOverridesWithDisabledCalt(hangul_feature_overrides_buf[0..], lookup_options.features) orelse lookup_options.features
+    else
+        lookup_options.features;
+
     // Keep source metadata parallel to glyph ids through GSUB. GPOS MarkLigPos
     // needs the original component sources for a ligature glyph; otherwise a
     // mark after a ligature can only guess a component from post-substitution
@@ -3645,7 +3651,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .text_direction = if (lookup_options.direction == .rtl) .rtl else .ltr,
-        .features = lookup_options.features,
+        .features = gsub_feature_overrides,
         .normalized_variation_coords = lookup_options.normalized_variation_coords,
         .vertical = lookup_options.writing_mode.isVertical(),
         .apply_all_if_unselected = false,
@@ -4569,6 +4575,17 @@ fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {
     };
 }
 
+fn hangulRunIsSingleJamo(codepoints: []const u21) bool {
+    return codepoints.len == 1 and isHangulJamoCodepoint(codepoints[0]);
+}
+
+fn isHangulJamoCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x1100 and codepoint <= 0x11ff) or
+        (codepoint >= 0x3130 and codepoint <= 0x318f) or
+        (codepoint >= 0xa960 and codepoint <= 0xa97f) or
+        (codepoint >= 0xd7b0 and codepoint <= 0xd7ff);
+}
+
 fn usesLateGdefMarkZeroing(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .arab, .hebr, .thai, .lao, .dflt => true,
@@ -4627,6 +4644,18 @@ fn shapingFeatureEnabled(feature: u32, overrides: []const unicode.FeatureOverrid
         if (override.tag == feature) return override.enabled;
     }
     return default_enabled;
+}
+
+fn featureOverridesWithDisabledCalt(out: []unicode.FeatureOverride, overrides: []const unicode.FeatureOverride) ?[]const unicode.FeatureOverride {
+    if (out.len < overrides.len + 1) return null;
+    var count: usize = 0;
+    for (overrides) |override| {
+        if (override.tag == unicode.tag("calt")) continue;
+        out[count] = override;
+        count += 1;
+    }
+    out[count] = .{ .tag = unicode.tag("calt"), .enabled = false };
+    return out[0 .. count + 1];
 }
 
 fn explicitOptionalFeatureApplications(out: []gsub.FeatureApplication, overrides: []const unicode.FeatureOverride) usize {

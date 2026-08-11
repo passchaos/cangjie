@@ -1629,7 +1629,7 @@ shaping-performance superiority.
   rakaransaya/yansaya ligature path against HarfRust.
 - The HarfBuzz in-house `vertical.tests` angle-bracket fallback rows for
   `2681c1c72d6484ed3410417f521b1b819b4e2392.ttf` are retained for
-  `U+3008` in both `ttb` and `btt` directions. Cangjie now applies the
+  `U+3008` in `rtl`, `ttb`, and `btt` directions. Cangjie now applies the
   HarfBuzz vertical-presentation fallback forms when the font has the target
   cmap glyph, and bottom-to-top vertical shaping no longer lets the horizontal
   bidi mirroring pass replace `U+FE40` with the ordinary mirrored bracket.

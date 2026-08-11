@@ -30,6 +30,7 @@ pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
         .sinh,
         .tirh,
         .modi,
+        .phag,
         .takr,
         => true,
         else => false,
@@ -814,6 +815,7 @@ test "USE shaping includes Balinese" {
     try @import("std").testing.expect(shouldShape(.lana));
     try @import("std").testing.expect(shouldShape(.marc));
     try @import("std").testing.expect(shouldShape(.newa));
+    try @import("std").testing.expect(shouldShape(.phag));
     try @import("std").testing.expect(shouldShape(.saur));
     try @import("std").testing.expect(shouldShape(.gran));
     try @import("std").testing.expect(shouldShape(.shrd));

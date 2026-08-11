@@ -4033,10 +4033,33 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             codepoints.items,
             glyph_source_indices.items,
         );
+        if (useShapeUsesArabicJoiningMasks(lookup_options.script_tag)) {
+            overlayArabicJoiningSourceFeatures(source_features.items, codepoints.items, glyph_source_indices.items);
+        }
         var use_options = gsub_options;
         use_options.source_features = source_features.items;
         use_options.source_syllables = source_syllables.items;
 
+        if (useShapeUsesDirectionFeatures(lookup_options.script_tag)) {
+            var direction_features_buf: [2]gsub.FeatureApplication = undefined;
+            var direction_feature_count: usize = 0;
+            const direction_features = if (lookup_options.direction == .rtl)
+                [_]gsub.FeatureApplication{
+                    .{ .tag = unicode.tag("rtla") },
+                    .{ .tag = unicode.tag("rtlm") },
+                }
+            else
+                [_]gsub.FeatureApplication{
+                    .{ .tag = unicode.tag("ltra") },
+                    .{ .tag = unicode.tag("ltrm") },
+                };
+            for (direction_features) |application| {
+                if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
+                direction_features_buf[direction_feature_count] = application;
+                direction_feature_count += 1;
+            }
+            try applyMergedGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, direction_features_buf[0..direction_feature_count], glyph_ids, use_options, gdef_metadata.*);
+        }
         try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, use_shaper.defaultPreprocessingFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
         @memset(glyph_stage_substituted.items, false);
@@ -4660,6 +4683,10 @@ fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
 
 fn markArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
     @memset(source_features, 0);
+    overlayArabicJoiningSourceFeatures(source_features, codepoints, glyph_source_indices);
+}
+
+fn overlayArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
     if (codepoints.len == 0 or glyph_source_indices.len == 0) return;
 
     var ordered_codepoints: [128]u21 = undefined;
@@ -4681,7 +4708,7 @@ fn markArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u
     var forms: [128]unicode.JoiningForm = undefined;
     unicode.resolveJoiningForms(ordered_codepoints[0..ordered_len], forms[0..ordered_len]) catch return;
     for (forms[0..ordered_len], ordered_sources[0..ordered_len]) |form, source| {
-        source_features[source] = joiningFormFeatureTag(form);
+        setArabicJoiningSourceFeature(source_features, source, form);
     }
 }
 
@@ -4700,14 +4727,32 @@ fn markArabicJoiningSourceFeaturesFallback(source_features: []u32, codepoints: [
                 previous_form = .none;
                 continue;
             };
-            if (previous_form == .none) source_features[prev] = joiningFormFeatureTag(forms[0]);
+            if (previous_form == .none) setArabicJoiningSourceFeature(source_features, prev, forms[0]);
             previous_form = forms[1];
-            source_features[source] = joiningFormFeatureTag(forms[1]);
+            setArabicJoiningSourceFeature(source_features, source, forms[1]);
         } else {
             previous_form = .none;
         }
         previous_source = source;
     }
+}
+
+fn setArabicJoiningSourceFeature(source_features: []u32, source: usize, form: unicode.JoiningForm) void {
+    if (source >= source_features.len) return;
+    const joining_mask =
+        (gsub.sourceFeatureMaskForTag(unicode.tag("isol")).? |
+        gsub.sourceFeatureMaskForTag(unicode.tag("init")).? |
+        gsub.sourceFeatureMaskForTag(unicode.tag("medi")).? |
+        gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?) & ~gsub.source_feature_mask_marker;
+    const form_mask = switch (form) {
+        .isolated => gsub.sourceFeatureMaskForTag(unicode.tag("isol")).?,
+        .initial => gsub.sourceFeatureMaskForTag(unicode.tag("init")).?,
+        .medial => gsub.sourceFeatureMaskForTag(unicode.tag("medi")).?,
+        .final => gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?,
+        .none => 0,
+    };
+    const existing = source_features[source];
+    source_features[source] = (existing & ~joining_mask) | form_mask;
 }
 
 fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
@@ -4840,7 +4885,15 @@ test "Arabic item context influences only joining forms" {
 }
 
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong or script_tag == .phag;
+    return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong;
+}
+
+fn useShapeUsesArabicJoiningMasks(script_tag: unicode.OpenTypeScriptTag) bool {
+    return script_tag == .phag;
+}
+
+fn useShapeUsesDirectionFeatures(script_tag: unicode.OpenTypeScriptTag) bool {
+    return script_tag == .phag;
 }
 
 fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {

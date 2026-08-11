@@ -1170,7 +1170,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   (`U+0635,U+0650,U+034F,U+0651,U+0627`) CGJ row is retained too; Arabic
   positional feature masks are now assigned in the post-native-direction glyph
   order so bases separated by marks/CGJ keep HarfBuzz's nominal forms when they
-  do not join in the native shaping buffer.
+  do not join in the native shaping buffer. All six `arabic-mark-order.tests`
+  rows are now retained as well; Cangjie mirrors HarfBuzz's Arabic modifier
+  combining mark reordering by moving only same-CCC MCM groups instead of
+  hoisting every MCM to the start of the mark run.
 - The focused HarfBuzz in-house `variation-selectors.tests` row for
   `bbc24004e776f348a0f72287d24b0124867ee750.ttf`
   (`U+0066,U+FE00,U+0069`) passes in both upstream modes: by default unsupported

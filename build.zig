@@ -122,6 +122,36 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .script = "arab",
     },
     .{
+        .font_hash = "21b7fb9c1eeae260473809fbc1fe330f66a507cd",
+        .text = "ىٕ͏ِ",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "24b8d24d00ae86f49791b746da4c9d3f717a51a8",
+        .text = "\u{0628}\u{0618}\u{0619}\u{064e}\u{064f}\u{0654}\u{0658}\u{0653}\u{0654}\u{0651}\u{0656}\u{0651}\u{065c}\u{0655}\u{0650}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "94a5d6fb15a27521fba9ea4aee9cb39b2d03322a",
+        .text = "\u{064a}\u{064e}\u{0670}\u{0653}\u{0640}\u{0654}\u{064e}\u{0627}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "21b7fb9c1eeae260473809fbc1fe330f66a507cd",
+        .text = "ىِٕ",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "21b7fb9c1eeae260473809fbc1fe330f66a507cd",
+        .text = "ىِٕ",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "21b7fb9c1eeae260473809fbc1fe330f66a507cd",
+        .text = "ىِ͏ٕ",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "507637795ce4f2975593da54d12b46f76c7cc4cc",
         .text = "࢑١٢٣٤٫",
         .direction = "ltr",

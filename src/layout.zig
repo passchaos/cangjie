@@ -5485,24 +5485,34 @@ fn reorderArabicModifierMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyp
 }
 
 fn reorderArabicModifierMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, start: usize, end: usize) void {
-    var insertion = start;
-    for (start..end) |index| {
-        const source_index = glyph_source_indices.items[index];
-        if (source_index >= codepoints.len or !isArabicModifierCombiningMark(codepoints[source_index])) continue;
-        if (index == insertion) {
-            insertion += 1;
-            continue;
+    var group_start = start;
+    for ([_]u8{ 220, 230 }) |target_class| {
+        var index = group_start;
+        while (index < end and markSortClass(glyph_source_indices.items[index], codepoints) < target_class) : (index += 1) {}
+        if (index == end) break;
+        if (markSortClass(glyph_source_indices.items[index], codepoints) > target_class) continue;
+
+        var group_end = index;
+        while (group_end < end and
+            markSortClass(glyph_source_indices.items[group_end], codepoints) == target_class and
+            glyph_source_indices.items[group_end] < codepoints.len and
+            isArabicModifierCombiningMark(codepoints[glyph_source_indices.items[group_end]])) : (group_end += 1)
+        {}
+
+        if (group_end == index) continue;
+        var move_index = index;
+        while (move_index < group_end) : (move_index += 1) {
+            shaping_metadata.move(
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                move_index,
+                group_start,
+            );
+            group_start += 1;
         }
-        shaping_metadata.move(
-            glyph_ids,
-            glyph_source_indices,
-            glyph_cluster_indices,
-            glyph_substituted,
-            ligature_components,
-            index,
-            insertion,
-        );
-        insertion += 1;
     }
 }
 

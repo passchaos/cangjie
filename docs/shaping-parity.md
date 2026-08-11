@@ -1203,6 +1203,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `f79eb71df4e4c9c273b67b89a06e5ff9e3c1f834.ttf`
   (`U+006D,U+0315`) passes after accepting that noncanonical GPOS FeatureList
   ordering through parse-time validation.
+- The first five HarfBuzz in-house `mark-filtering-sets.tests` rows for
+  `f22416c692720a7d46fadf4af99f4c9e094f00b9.ttf` are retained, covering Arabic
+  mark attachment through lookup-level mark filtering sets and cached lookup
+  flag metadata.
 - HarfBuzz in-house `fallback-positioning.tests` rows that `shape-bench` can
   express now pass for `8228d035fcd65d62ec9728fb34f42c63be93a5d3.ttf`
   (`U+0078,U+0301,U+0058,U+0301`) and
@@ -1349,6 +1353,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
     --font ~/Work/harfbuzz/test/shape/data/in-house/fonts/f70f345188472b93f565d1d7fae8c668dd6a3244.ttf \
     --text-file tests/data/javanese-use-tests.txt --direction ltr
   ```
+  The `glyph-props-no-gdef.tests` Javanese fallback row for
+  `FallbackPlus-Javanese-no-GDEF.otf` is retained as well, covering mark/base
+  property fallback when a font lacks GDEF.
 - Marchen passes `compare-harfbuzz` for all 35 upstream
   `in-house/use-marchen.tests` inputs retained in
   `tests/data/marchen-use-tests.txt`, covering subjoined consonants, pre/above/

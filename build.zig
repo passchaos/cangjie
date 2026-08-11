@@ -539,6 +539,31 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "rtl",
     },
     .{
+        .font_hash = "f22416c692720a7d46fadf4af99f4c9e094f00b9",
+        .text = "تختة",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "f22416c692720a7d46fadf4af99f4c9e094f00b9",
+        .text = "تخنة",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "f22416c692720a7d46fadf4af99f4c9e094f00b9",
+        .text = "تخئة",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "f22416c692720a7d46fadf4af99f4c9e094f00b9",
+        .text = "تخثة",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "f22416c692720a7d46fadf4af99f4c9e094f00b9",
+        .text = "تخٹة",
+        .direction = "rtl",
+    },
+    .{
         .font_hash = "e39391c77a6321c2ac7a2d644de0396470cd4bfe",
         .text = "abcdefghijklmnop",
         .direction = "ltr",
@@ -745,6 +770,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     .{
         .font_hash = "63a539a90a371ccf028dc2dcced9b63b07163be7",
         .text = "ກັຳ",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "FallbackPlus-Javanese-no-GDEF",
+        .font_ext = "otf",
+        .text = "\u{a995}\u{a9bf}",
         .direction = "ltr",
     },
     .{

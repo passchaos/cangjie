@@ -1143,7 +1143,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   stay visible to later matching and final hiding. This matches the HarfBuzz
   `_hb_glyph_info_is_default_ignorable()` contract used by HarfRust.
   Earlier focused slices also fixed extension-wrapped chaining-context lookup
-  ordering and CursivePos placement/advance chaining. The remaining USE work is
+  ordering and CursivePos placement/advance chaining. Tai Tham
+  `context-matching.tests` coverage for
+  `4cce528e99f600ed9c25a2b69e32eb94a03b4ae8.ttf` now retains the
+  `U+1A48,U+1A58,U+1A25,U+1A48,U+1A58,U+1A25,U+1A6E,U+1A63` row after USE
+  zeroing learned to honor explicit GDEF mark classes on spacing marks. The
+  remaining USE work is
   to validate other USE scripts and fonts before making a broader USE parity
   claim.
 - HarfBuzz in-house `default-ignorables.tests` rows that `shape-bench` can

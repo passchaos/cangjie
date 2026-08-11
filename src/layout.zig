@@ -5338,7 +5338,7 @@ fn markAdvanceZeroingPolicy(
     if (synthetic_base) return .{};
 
     const gdef_mark = glyph_class == .mark and
-        !unicode.isSpacingMarkCodepoint(source_codepoint) and
+        (!unicode.isSpacingMarkCodepoint(source_codepoint) or use_shape) and
         !indic.shouldShape(options.script_tag);
     // HarfBuzz only synthesizes classes when the face has no GlyphClassDef at
     // all. An unclassified glyph in a present ClassDef remains unclassified;
@@ -5382,6 +5382,12 @@ test "USE mark zeroing synthesizes only nonspacing marks without GDEF classes" {
 test "Indic shaper preserves GDEF mark advances" {
     const malayalam = markAdvanceZeroingPolicy(false, .mark, true, 0x0d41, false, false, false, .{ .script_tag = .mlm2 });
     try std.testing.expectEqual(MarkAdvanceZeroing{}, malayalam);
+}
+
+test "USE mark zeroing honors explicit GDEF spacing marks" {
+    const tai_tham = markAdvanceZeroingPolicy(true, .mark, true, 0x1a6e, false, false, false, .{ .script_tag = .lana });
+    try std.testing.expect(tai_tham.zero_advance);
+    try std.testing.expect(tai_tham.adjust_offsets);
 }
 
 test "USE mark zeroing leaves offset adjustment to GPOS and honors native direction" {

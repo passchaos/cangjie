@@ -303,6 +303,31 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "738d9f3b8c2dfd03875bf35a61d28fd78faf17c8",
+        .text = "\u{0a86} \u{0a85}\u{0abe}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "738d9f3b8c2dfd03875bf35a61d28fd78faf17c8",
+        .text = "\u{0a8d} \u{0a85}\u{0ac5}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "738d9f3b8c2dfd03875bf35a61d28fd78faf17c8",
+        .text = "\u{0a8f} \u{0a85}\u{0ac7}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "738d9f3b8c2dfd03875bf35a61d28fd78faf17c8",
+        .text = "\u{0a90} \u{0a85}\u{0ac8}",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "738d9f3b8c2dfd03875bf35a61d28fd78faf17c8",
+        .text = "\u{0a91} \u{0a85}\u{0ac9}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "81c368a33816fb20e9f647e8f24e2180f4720263",
         .text = "\u{0c80}\u{0c82}",
         .direction = "ltr",

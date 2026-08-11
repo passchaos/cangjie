@@ -19,7 +19,7 @@ const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng, .ory2, .orya, .gur2, .guru, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
+        .dev2, .bng2, .beng, .ory2, .orya, .gur2, .guru, .gjr2, .gujr, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -947,6 +947,11 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
         .gur2, .guru => (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
             (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
             (codepoint >= 0x0a72 and codepoint <= 0x0a74),
+        .gjr2, .gujr => (codepoint >= 0x0a95 and codepoint <= 0x0aa8) or
+            (codepoint >= 0x0aaa and codepoint <= 0x0ab0) or
+            (codepoint >= 0x0ab2 and codepoint <= 0x0ab3) or
+            (codepoint >= 0x0ab5 and codepoint <= 0x0ab9) or
+            codepoint == 0x0ad0,
         .tel2, .telu => (codepoint >= 0x0c15 and codepoint <= 0x0c39) or
             codepoint == 0x0c58 or
             codepoint == 0x0c59,
@@ -975,6 +980,10 @@ fn isIndicIndependentVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
         .gur2, .guru => (codepoint >= 0x0a05 and codepoint <= 0x0a0a) or
             (codepoint >= 0x0a0f and codepoint <= 0x0a10) or
             (codepoint >= 0x0a13 and codepoint <= 0x0a14),
+        .gjr2, .gujr => (codepoint >= 0x0a85 and codepoint <= 0x0a8d) or
+            (codepoint >= 0x0a8f and codepoint <= 0x0a91) or
+            (codepoint >= 0x0a93 and codepoint <= 0x0a94) or
+            (codepoint >= 0x0ae0 and codepoint <= 0x0ae1),
         .tel2, .telu => (codepoint >= 0x0c05 and codepoint <= 0x0c0c) or
             (codepoint >= 0x0c0e and codepoint <= 0x0c10) or
             (codepoint >= 0x0c12 and codepoint <= 0x0c14) or
@@ -1018,6 +1027,12 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
             codepoint == 0x0a51 or
             (codepoint >= 0x0a70 and codepoint <= 0x0a71) or
             codepoint == 0x0a75,
+        .gjr2, .gujr => (codepoint >= 0x0a81 and codepoint <= 0x0a83) or
+            codepoint == 0x0abc or
+            (codepoint >= 0x0abe and codepoint <= 0x0ac5) or
+            (codepoint >= 0x0ac7 and codepoint <= 0x0ac9) or
+            (codepoint >= 0x0acb and codepoint <= 0x0acd) or
+            (codepoint >= 0x0ae2 and codepoint <= 0x0ae3),
         .tel2, .telu => (codepoint >= 0x0c00 and codepoint <= 0x0c04) or
             codepoint == 0x0c3c or
             (codepoint >= 0x0c3e and codepoint <= 0x0c44) or
@@ -1062,6 +1077,7 @@ fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
         .bng2, .beng => 0x09cd,
         .ory2, .orya => 0x0b4d,
         .gur2, .guru => 0x0a4d,
+        .gjr2, .gujr => 0x0acd,
         .tel2, .telu => 0x0c4d,
         .knd2, .knda => 0x0ccd,
         .tml2, .taml => 0x0bcd,
@@ -1075,6 +1091,7 @@ fn rephRaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
         .bng2, .beng => 0x09b0,
         .ory2, .orya => 0x0b30,
         .gur2, .guru => 0x0a30,
+        .gjr2, .gujr => 0x0ab0,
         .tel2, .telu => 0x0c30,
         .knd2, .knda => 0x0cb0,
         .tml2, .taml => 0x0bb0,

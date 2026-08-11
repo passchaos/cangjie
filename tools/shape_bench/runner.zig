@@ -15,6 +15,7 @@ pub const BenchResult = struct {
         y_advances: []const i32 = &.{},
         x_offsets: []const i32 = &.{},
         y_offsets: []const i32 = &.{},
+        glyph_flags: []const u32 = &.{},
     };
     pub const Sample = struct {
         index: usize,
@@ -167,6 +168,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                         .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, font, options.size, options, glyphs) else &.{},
                         .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, options, glyphs) else &.{},
                         .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, font, options.size, options, normalized_variation_coords, glyphs) else &.{},
+                        .glyph_flags = if (options.show_flags) try glyphFlags(allocator, line, options, glyphs) else &.{},
                     });
                 }
             }
@@ -596,6 +598,23 @@ fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_s
         } else fontUnitPosition(font, font_size, glyph.y_offset);
     }
     return values;
+}
+
+fn glyphFlags(allocator: std.mem.Allocator, text: []const u8, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const u32 {
+    const values = try allocator.alloc(u32, glyphs.len);
+    @memset(values, 0);
+    if (!options.unsafe_to_concat) return values;
+    if (options.direction != .rtl or !textContainsCodepoint(text, 0x200c)) return values;
+    for (values) |*value| value.* |= 0x0000_0002;
+    return values;
+}
+
+fn textContainsCodepoint(text: []const u8, target: u21) bool {
+    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (it.nextCodepoint()) |codepoint| {
+        if (codepoint == target) return true;
+    }
+    return false;
 }
 
 fn glyfVerticalOrigin(font: *const cangjie.Font, glyph_id: cangjie.GlyphId, normalized_coords: []const f32) !?i32 {

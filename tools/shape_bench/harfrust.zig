@@ -11,6 +11,7 @@ const HarfRustGlyph = struct {
     y_advance: i32 = 0,
     x_offset: i32 = 0,
     y_offset: i32 = 0,
+    flags: u32 = 0,
 };
 
 const ParsedLine = struct {
@@ -62,6 +63,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Option
                         .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, line.glyphs) else &.{},
                         .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, line.glyphs) else &.{},
                         .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, line.glyphs) else &.{},
+                        .glyph_flags = if (options.show_flags) try glyphFlags(allocator, line.glyphs) else &.{},
                     });
                 }
             }
@@ -120,6 +122,12 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         "-n",
         iterations_text,
     });
+    if (options.unsafe_to_concat) {
+        try args.append(allocator, "--unsafe-to-concat");
+    }
+    if (options.show_flags) {
+        try args.append(allocator, "--show-flags");
+    }
     if (options.language_tag) |language_tag| {
         if (options_mod.harfrustLanguageArgument(language_tag)) |language_text| {
             try args.appendSlice(allocator, &.{ "--language", language_text });
@@ -249,7 +257,8 @@ fn parseGlyph(item: []const u8) !HarfRustGlyph {
     const equals = std.mem.indexOfScalar(u8, item, '=') orelse return error.BadHarfRustOutput;
     const at = std.mem.indexOfScalarPos(u8, item, equals + 1, '@');
     const plus = std.mem.indexOfScalarPos(u8, item, equals + 1, '+');
-    const id_end = at orelse plus orelse item.len;
+    const hash = std.mem.indexOfScalarPos(u8, item, equals + 1, '#');
+    const id_end = at orelse plus orelse hash orelse item.len;
     var glyph = HarfRustGlyph{
         .glyph_id = try std.fmt.parseInt(u32, item[0..equals], 10),
         .cluster = try std.fmt.parseInt(u32, item[equals + 1 .. id_end], 10),
@@ -259,7 +268,11 @@ fn parseGlyph(item: []const u8) !HarfRustGlyph {
         try parsePairI32(item[at_index + 1 .. offset_end], &glyph.x_offset, &glyph.y_offset);
     }
     if (plus) |plus_index| {
-        try parsePairI32(item[plus_index + 1 ..], &glyph.x_advance, &glyph.y_advance);
+        const advance_end = hash orelse item.len;
+        try parsePairI32(item[plus_index + 1 .. advance_end], &glyph.x_advance, &glyph.y_advance);
+    }
+    if (hash) |hash_index| {
+        glyph.flags = try std.fmt.parseInt(u32, item[hash_index + 1 ..], 10);
     }
     return glyph;
 }
@@ -307,6 +320,12 @@ fn glyphXOffsets(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![
 fn glyphYOffsets(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| value.* = glyph.y_offset;
+    return values;
+}
+
+fn glyphFlags(allocator: std.mem.Allocator, glyphs: []const HarfRustGlyph) ![]const u32 {
+    const values = try allocator.alloc(u32, glyphs.len);
+    for (glyphs, values) |glyph, *value| value.* = glyph.flags;
     return values;
 }
 

@@ -104,6 +104,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
                         .y_advances = shaped.y_advances,
                         .x_offsets = shaped.x_offsets,
                         .y_offsets = shaped.y_offsets,
+                        .glyph_flags = shaped.glyph_flags,
                     });
                     shaped.transferred_summary_storage = true;
                 }
@@ -141,6 +142,7 @@ const ShapedLine = struct {
     y_advances: []i32 = &.{},
     x_offsets: []i32 = &.{},
     y_offsets: []i32 = &.{},
+    glyph_flags: []u32 = &.{},
     transferred_summary_storage: bool = false,
 
     fn deinit(self: *ShapedLine, allocator: std.mem.Allocator) void {
@@ -151,6 +153,7 @@ const ShapedLine = struct {
         allocator.free(self.y_advances);
         allocator.free(self.x_offsets);
         allocator.free(self.y_offsets);
+        allocator.free(self.glyph_flags);
     }
 };
 
@@ -183,6 +186,7 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
     var flags: hb.hb_buffer_flags_t = hb.HB_BUFFER_FLAG_DEFAULT;
     if (options.beginning_of_text) flags |= hb.HB_BUFFER_FLAG_BOT;
     if (options.end_of_text) flags |= hb.HB_BUFFER_FLAG_EOT;
+    if (options.unsafe_to_concat) flags |= hb.HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT;
     if (flags != hb.HB_BUFFER_FLAG_DEFAULT) hb.hb_buffer_set_flags(buffer, flags);
     var context_text: []u8 = &.{};
     defer if (context_text.len != 0) allocator.free(context_text);
@@ -212,6 +216,7 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
         shaped.y_advances = try allocator.alloc(i32, glyph_count);
         shaped.x_offsets = try allocator.alloc(i32, glyph_count);
         shaped.y_offsets = try allocator.alloc(i32, glyph_count);
+        shaped.glyph_flags = if (options.show_flags) try allocator.alloc(u32, glyph_count) else &.{};
     }
 
     var hasher = std.hash.Wyhash.init(0);
@@ -225,6 +230,7 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
             shaped.y_advances[index] = position.y_advance;
             shaped.x_offsets[index] = position.x_offset;
             shaped.y_offsets[index] = position.y_offset;
+            if (options.show_flags) shaped.glyph_flags[index] = info.mask & 0x7;
         }
         hasher.update(std.mem.asBytes(&info.codepoint));
         hasher.update(std.mem.asBytes(&info.cluster));
@@ -232,6 +238,10 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
         hasher.update(std.mem.asBytes(&position.y_advance));
         hasher.update(std.mem.asBytes(&position.x_offset));
         hasher.update(std.mem.asBytes(&position.y_offset));
+        if (options.show_flags) {
+            const glyph_flags = info.mask & 0x7;
+            hasher.update(std.mem.asBytes(&glyph_flags));
+        }
     }
     shaped.checksum = hasher.final();
     return shaped;

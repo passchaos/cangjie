@@ -218,6 +218,12 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
             std.debug.print("\n{s}_{s}=", .{ reference_label, m.kind.label() });
             printI32Values(positionValues(m.harfrust, m.kind));
         }
+        if (m.kind == .glyph_flags) {
+            std.debug.print("\ncangjie_glyph_flags=", .{});
+            printGlyphIds(m.cangjie.glyph_flags);
+            std.debug.print("\n{s}_glyph_flags=", .{reference_label});
+            printGlyphIds(m.harfrust.glyph_flags);
+        }
         std.debug.print("\n", .{});
         return error.ReferenceParityMismatch;
     }
@@ -235,6 +241,7 @@ const MismatchKind = enum {
     y_advance,
     x_offset,
     y_offset,
+    glyph_flags,
     line_count,
 
     fn label(self: MismatchKind) []const u8 {
@@ -245,6 +252,7 @@ const MismatchKind = enum {
             .y_advance => "y_advance",
             .x_offset => "x_offset",
             .y_offset => "y_offset",
+            .glyph_flags => "glyph_flags",
             .line_count => "line_count",
         };
     }
@@ -336,6 +344,20 @@ fn firstLineMismatch(allocator: std.mem.Allocator, text_lines: []const []const u
             }
             allocator.free(cangjie_values);
         }
+        const cangjie_flags = try comparableSlice(u32, allocator, cangjie_lines[line_index].glyph_flags, order);
+        errdefer allocator.free(cangjie_flags);
+        if (!std.mem.eql(u32, cangjie_flags, harfrust_lines[line_index].glyph_flags)) {
+            return .{
+                .kind = .glyph_flags,
+                .line_index = line_index,
+                .cangjie = cangjie_lines[line_index],
+                .harfrust = harfrust_lines[line_index],
+                .cangjie_glyph_ids = cangjie_ids,
+                .cangjie_clusters = cangjie_clusters,
+                .cangjie_position_values = try allocator.alloc(i32, 0),
+            };
+        }
+        allocator.free(cangjie_flags);
         allocator.free(cangjie_ids);
         allocator.free(cangjie_clusters);
     }
@@ -464,6 +486,7 @@ fn freeLineSummaries(allocator: std.mem.Allocator, summaries: []const runner.Ben
         allocator.free(summary.y_advances);
         allocator.free(summary.x_offsets);
         allocator.free(summary.y_offsets);
+        allocator.free(summary.glyph_flags);
     }
 }
 

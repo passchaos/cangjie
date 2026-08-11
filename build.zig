@@ -1392,6 +1392,8 @@ const retained_harfrust_text_parity_gates = [_]struct {
     font_hash: []const u8,
     text_file: []const u8,
     direction: []const u8,
+    show_flags: bool = false,
+    unsafe_to_concat: bool = false,
 }{
     .{
         .font_hash = "HarfBust",
@@ -1537,6 +1539,8 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .font_hash = "34da9aab7bee86c4dfc3b85e423435822fdf4b62",
         .text_file = "tests/data/unsafe-to-concat-tests.txt",
         .direction = "rtl",
+        .show_flags = true,
+        .unsafe_to_concat = true,
     },
     .{
         .font_hash = "SimpArabicTest",
@@ -1862,6 +1866,12 @@ pub fn build(b: *std.Build) void {
                 "--text-file", gate.text_file,
                 "--direction", gate.direction,
             });
+            if (gate.unsafe_to_concat) {
+                text_harfrust_parity_cmd.addArg("--unsafe-to-concat");
+            }
+            if (gate.show_flags) {
+                text_harfrust_parity_cmd.addArg("--show-flags");
+            }
             shaping_corpus_parity_smoke_step.dependOn(&text_harfrust_parity_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_corpus_parity_smoke_step);

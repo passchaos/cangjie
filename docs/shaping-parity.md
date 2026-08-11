@@ -1629,10 +1629,10 @@ shaping-performance superiority.
 - The HarfBuzz in-house `unsafe-to-concat.tests` glyph/cluster/advance row is
   retained for `34da9aab7bee86c4dfc3b85e423435822fdf4b62.ttf` as
   `tests/data/unsafe-to-concat-tests.txt`; RTL ZWNJ now keeps the following
-  visible Arabic glyph on the join-control cluster like HarfBuzz/HarfRust. The
-  `--show-flags --unsafe-to-concat` flag surface itself is still not exposed by
-  `shape-bench`, so this gate covers shaping output parity, not unsafe flag
-  serialization.
+  visible Arabic glyph on the join-control cluster like HarfBuzz/HarfRust.
+  `shape-bench` now exposes `--show-flags --unsafe-to-concat` and compares the
+  HarfBuzz-style `HB_GLYPH_FLAG_UNSAFE_TO_CONCAT` value against HarfRust for
+  the retained row.
 - Arabic/Syriac stretch shaping now runs the HarfBuzz-style `stch` GSUB stage
   before positional Arabic features, records MultipleSubst component parity as
   fixed/repeating tiles, and stretches those tiles in the final glyph stream

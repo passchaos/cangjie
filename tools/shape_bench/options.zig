@@ -137,6 +137,8 @@ pub const Options = struct {
     profile_fast_path: bool = false,
     line_summary: bool = false,
     glyph_summary: bool = false,
+    show_flags: bool = false,
+    unsafe_to_concat: bool = false,
     not_found_variation_selector_glyph: ?u32 = null,
     feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
     feature_override_count: usize = 0,
@@ -287,6 +289,12 @@ pub fn parse(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, arg, "--glyph-summary")) {
             options.line_summary = true;
             options.glyph_summary = true;
+        } else if (std.mem.eql(u8, arg, "--show-flags")) {
+            options.line_summary = true;
+            options.glyph_summary = true;
+            options.show_flags = true;
+        } else if (std.mem.eql(u8, arg, "--unsafe-to-concat")) {
+            options.unsafe_to_concat = true;
         } else if (std.mem.eql(u8, arg, "--enable-feature")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -474,6 +482,8 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --profile-fast-path          collect timings while keeping validated lookup accelerators active
         \\  --line-summary               print per-line glyph counts and checksums for the first measured iteration
         \\  --glyph-summary              include per-line glyph id lists with --line-summary
+        \\  --show-flags                 include per-glyph shaping flags with --glyph-summary
+        \\  --unsafe-to-concat           produce unsafe-to-concat glyph flags
         \\  --enable-feature TAG         enable one OpenType feature tag for Cangjie
         \\  --disable-feature TAG        disable one OpenType feature tag for Cangjie
         \\  --variation CSV              comma-separated normalized coordinates or tag=value design coordinates

@@ -1294,7 +1294,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   The Lao row `U+0E81,U+0ECE,U+0ECD,U+0EB2` is retained too; Thai/Lao
   combining marks now inherit the preceding cluster before shaping.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
-  express now include the Miao/Pollard fixture
+  express now include the Arabic fixtures
+  `c4e48b0886ef460f532fb49f00047ec92c432ec0.ttf` and
+  `298c9e1d955f10f6f72c6915c3c6ff9bf9695cec.ttf` for `U+0643,U+0645,U+0645,U+062B,U+0644`,
+  plus the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`
   (`U+16F0A,U+16F57,U+16F8F`). TrueType subset faces with stale `maxp.maxZones`
   values remain loadable for shaping, and Miao vowel/tone signs stay in the

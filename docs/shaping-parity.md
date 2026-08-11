@@ -1749,7 +1749,11 @@ shaping-performance superiority.
   Additional Gurmukhi `indic-syllable.tests` rows are retained for
   `85fe0be440c64ac77699e21c2f1bd933a919167e.ttf` and
   `f75c4b05a0a4d67c1a808081ae3d74a9c66509e8.ttf`, covering yakash and udaat
-  mark positioning around `U+0A47` and `U+0A42`.
+  mark positioning around `U+0A47` and `U+0A42`. The Gurmukhi
+  `indic-special-cases.tests` rows for
+  `5f73fff1ffc07b5a99a90c0909609f2b09fef274.ttf` are retained as
+  `tests/data/gurmukhi-special-mark-order-tests.txt`, covering the two
+  `ka + ii + bindi` mark-order permutations.
   The three Kannada `indic-special-cases.tests` rows for
   `3cae6bfe5b57c07ba81ddbd54c02fe4f3a1e3bf6.ttf` are retained for
   `U+0CB0,U+0CCD,U+0C95`, `U+0CB0,U+200D,U+0CCD,U+0C95`, and

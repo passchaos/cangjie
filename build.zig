@@ -1361,6 +1361,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "604026ae5aaca83c49cd8416909d71ba3e1c1194",
+        .text_file = "tests/data/gurmukhi-vowel-letter-spoofing-tests.txt",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "5f73fff1ffc07b5a99a90c0909609f2b09fef274",
         .text_file = "tests/data/gurmukhi-special-mark-order-tests.txt",
         .direction = "ltr",

@@ -1844,7 +1844,10 @@ shaping-performance superiority.
   `tests/data/devanagari-vowel-letter-spoofing-extra-tests.txt`. Rows 18-20
   are retained for the Bengali font
   `881642af1667ae30a54e58de8be904566d00508f.ttf` in
-  `tests/data/bengali-vowel-letter-spoofing-tests.txt`. Cangjie now runs the
+  `tests/data/bengali-vowel-letter-spoofing-tests.txt`; rows 21-29 are
+  retained for the Gurmukhi font
+  `604026ae5aaca83c49cd8416909d71ba3e1c1194.ttf` in
+  `tests/data/gurmukhi-vowel-letter-spoofing-tests.txt`. Cangjie now runs the
   HarfBuzz vowel-constraint dotted-circle insertion table in the traditional
   Indic path before GSUB, and treats the synthetic dotted circle as an Indic
   placeholder base so the third row's `ra,virama,i` sequence forms `reph`

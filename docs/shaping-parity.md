@@ -65,6 +65,8 @@ HarfBuzz and HarfRust. It also includes a Bengali HarfBuzz in-house shaping
 subset that omits `hhea`/`hmtx` and `glyf`, exercising shape-only font parsing
 with HarfBuzz-compatible fallback advances, plus Arabic modifier-mark ordering
 fixtures with and without CGJ.
+It also retains focused Indic in-house rows including Bengali contextual `pres`
+at syllable boundaries.
 
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup
@@ -1565,7 +1567,13 @@ shaping-performance superiority.
   `indic-init.tests` Bengali row for
   `1a3d8f381387dd29be1e897e4b5100ac8b4829e1.ttf` now passes after the Indic
   slice learned `bng2`/`beng` pre-base matra reordering, source-scoped `init`
-  on word-start left matras, and cluster merging for the moved matra.
+  on word-start left matras, and cluster merging for the moved matra. The
+  Bengali `context-matching.tests` row for
+  `49bd922bd447fb15bb05abab5c7ceac8d547a3a2.ttf` is retained too; Cangjie now
+  classifies U+09BF as a Bengali left matra and constrains Indic contextual
+  GSUB stages to source syllables, so `pres` can form `uni09BF.short01` before
+  `uni09B9` without letting that syllable's `uni09B9` satisfy a later
+  cross-syllable backtrack for `uni09A8`.
   Malayalam `indic-pref-blocking.tests` rows for
   `226bc2deab3846f1a682085f70c67d0421014144.ttf` and
   `e207635780b42f898d58654b65098763e340f5c7.ttf` now pass as retained inline

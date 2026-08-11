@@ -4042,10 +4042,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
 
             try source_features.resize(buffer.allocator, codepoints.items.len);
+            try source_syllables.resize(buffer.allocator, codepoints.items.len);
+            indic.markSourceSyllables(source_syllables.items, codepoints.items, lookup_options.script_tag);
             try source_pref_substituted.resize(buffer.allocator, codepoints.items.len);
             @memset(source_pref_substituted.items, false);
             const has_basic_source_features = indic.markBasicSourceFeatures(source_features.items, codepoints.items, lookup_options.script_tag);
             gsub_options.source_features = source_features.items;
+            gsub_options.source_syllables = source_syllables.items;
 
             try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             try gsub.validateScriptShaperRunMetadata(gsub_options, glyph_ids.items.len);

@@ -24,6 +24,26 @@ pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     };
 }
 
+pub fn markSourceSyllables(source_syllables: []u8, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
+    @memset(source_syllables, 0);
+
+    var source: usize = 0;
+    var serial: u8 = 1;
+    while (source < codepoints.len) {
+        if (!isIndicSyllableCodepoint(codepoints[source], script_tag)) {
+            source += 1;
+            continue;
+        }
+
+        const syllable_start = source;
+        const syllable_end = indicSyllableEnd(codepoints, syllable_start, script_tag);
+        @memset(source_syllables[syllable_start..syllable_end], serial);
+        serial +%= 1;
+        if (serial == 0) serial = 1;
+        source = syllable_end;
+    }
+}
+
 pub fn reorderPreBaseMatras(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
@@ -428,41 +448,41 @@ pub fn reorderGujaratiSplitMatraComponents(
 }
 
 const pre_reorder_feature_applications = [_]gsub.FeatureApplication{
-    .{ .tag = unicode.tag("nukt") },
-    .{ .tag = unicode.tag("akhn") },
+    .{ .tag = unicode.tag("nukt"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("akhn"), .match_source_syllable = true },
 };
 
 const basic_feature_applications_without_reph = [_]gsub.FeatureApplication{
-    .{ .tag = unicode.tag("rkrf") },
-    .{ .tag = blwf_feature, .source_scoped = true },
-    .{ .tag = half_feature, .source_scoped = true },
-    .{ .tag = pstf_feature, .source_scoped = true },
-    .{ .tag = unicode.tag("cjct") },
+    .{ .tag = unicode.tag("rkrf"), .match_source_syllable = true },
+    .{ .tag = blwf_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = half_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = pstf_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = unicode.tag("cjct"), .match_source_syllable = true },
 };
 
 const basic_feature_applications_with_reph = [_]gsub.FeatureApplication{
-    .{ .tag = rphf_feature, .source_scoped = true },
-    .{ .tag = unicode.tag("rkrf") },
-    .{ .tag = blwf_feature, .source_scoped = true },
-    .{ .tag = half_feature, .source_scoped = true },
-    .{ .tag = pstf_feature, .source_scoped = true },
-    .{ .tag = unicode.tag("cjct") },
+    .{ .tag = rphf_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = unicode.tag("rkrf"), .match_source_syllable = true },
+    .{ .tag = blwf_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = half_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = pstf_feature, .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = unicode.tag("cjct"), .match_source_syllable = true },
 };
 
 const pre_reph_feature_applications = [_]gsub.FeatureApplication{
-    .{ .tag = unicode.tag("pres") },
+    .{ .tag = unicode.tag("pres"), .match_source_syllable = true },
 };
 
 const pref_feature_applications = [_]gsub.FeatureApplication{
-    .{ .tag = pref_feature, .source_scoped = true },
+    .{ .tag = pref_feature, .source_scoped = true, .match_source_syllable = true },
 };
 
 const final_feature_applications = [_]gsub.FeatureApplication{
-    .{ .tag = unicode.tag("init"), .source_scoped = true },
-    .{ .tag = unicode.tag("abvs") },
-    .{ .tag = unicode.tag("blws") },
-    .{ .tag = unicode.tag("psts") },
-    .{ .tag = unicode.tag("haln") },
+    .{ .tag = unicode.tag("init"), .source_scoped = true, .match_source_syllable = true },
+    .{ .tag = unicode.tag("abvs"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("blws"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("psts"), .match_source_syllable = true },
+    .{ .tag = unicode.tag("haln"), .match_source_syllable = true },
 };
 
 pub fn preReorderFeatureApplications() []const gsub.FeatureApplication {
@@ -490,7 +510,7 @@ pub fn finalFeatureApplications() []const gsub.FeatureApplication {
 
 fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .bng2, .beng => codepoint == 0x09c7 or codepoint == 0x09c8,
+        .bng2, .beng => codepoint == 0x09bf or codepoint == 0x09c7 or codepoint == 0x09c8,
         .ory2, .orya => codepoint == 0x0b47 or codepoint == 0x0b48,
         .gur2, .guru => codepoint == 0x0a3f,
         .tel2, .telu => codepoint == 0x0c46 or codepoint == 0x0c47 or codepoint == 0x0c48,
@@ -1558,39 +1578,49 @@ test "Tamil consonant virama marks half source" {
     try std.testing.expectEqual(@as(u32, 0), features[1]);
 }
 
+test "Bengali source syllables split adjacent matra syllables" {
+    var syllables = [_]u8{0} ** 6;
+    const codepoints = [_]u21{ 0x0995, 0x09be, 0x09b9, 0x09bf, 0x09a8, 0x09c0 };
+
+    markSourceSyllables(&syllables, &codepoints, .bng2);
+
+    try std.testing.expectEqualSlices(u8, &.{ 1, 1, 2, 2, 3, 3 }, &syllables);
+}
+
 test "Bengali pre-base matras move before bases and mark init only at word start" {
     var glyphs = std.ArrayList(GlyphId).empty;
     defer glyphs.deinit(std.testing.allocator);
-    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2, 1, 2 });
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2, 1, 2, 1, 2 });
 
     var sources = std.ArrayList(usize).empty;
     defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3, 4, 5 });
 
     var clusters = std.ArrayList(usize).empty;
     defer clusters.deinit(std.testing.allocator);
-    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 2, 2 });
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 2, 2, 4, 4 });
 
     var substituted = std.ArrayList(bool).empty;
     defer substituted.deinit(std.testing.allocator);
-    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false });
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false, false, false });
 
     var ligatures = ligature_provenance.Store{};
     defer ligatures.deinit(std.testing.allocator);
-    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{}, .{}, .{} });
 
-    const codepoints = [_]u21{ 0x09ac, 0x09c7, 0x09ac, 0x09c7 };
+    const codepoints = [_]u21{ 0x09ac, 0x09c7, 0x09ac, 0x09c7, 0x09b9, 0x09bf };
     reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .bng2);
 
-    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1, 2, 1 }, glyphs.items);
-    try std.testing.expectEqualSlices(usize, &.{ 1, 0, 3, 2 }, sources.items);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, clusters.items);
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1, 2, 1, 2, 1 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0, 3, 2, 5, 4 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2, 4, 4 }, clusters.items);
 
-    var source_features = [_]u32{0} ** 4;
+    var source_features = [_]u32{0} ** 6;
     try std.testing.expect(markInitialMatraGlyphSources(&source_features, sources.items, &codepoints, .bng2));
     const init_mask = gsub.sourceFeatureMaskForTag(unicode.tag("init")).?;
     try std.testing.expectEqual(init_mask, source_features[1]);
     try std.testing.expectEqual(@as(u32, 0), source_features[3]);
+    try std.testing.expectEqual(@as(u32, 0), source_features[5]);
 }
 
 test "Devanagari ZWNJ after virama terminates pre-base matra target" {

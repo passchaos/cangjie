@@ -4229,6 +4229,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 dotted_circle_glyph,
                 lookup_options.script_tag,
             );
+            indic.mergeMalayalamDotRephBrokenCluster(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
             indic.mergePlaceholderDependentMarks(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
             indic.mergeTrailingDependentMarks(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
             indic.mergeKannadaOldSpecTrailingBlwf(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);

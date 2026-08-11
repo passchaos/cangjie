@@ -1623,9 +1623,11 @@ shaping-performance superiority.
   `--no-positions`, matching upstream cluster-only fixtures; all eight Thai
   SARA AM `cluster.tests` rows for the same `4fac...` font are retained for
   cluster levels 0-3 without letting fallback-positioning differences hide the
-  cluster signal. Remaining `cluster.tests` Bengali, Malayalam, and Sinhala
-  rows still need separate parser/shaper work before the full file can be
-  retained.
+  cluster signal. The Malayalam `cluster-level=1` dot-reph broken-cluster row
+  for `fd07ea46e4d8368ada1776208c07fd596f727852.ttf` is retained too; the
+  inserted dotted circle, virama, and ZWJ now keep HarfBuzz-compatible cluster
+  ownership on U+0D4E. Remaining `cluster.tests` Bengali and Sinhala rows still
+  need separate parser/shaper work before the full file can be retained.
 - The expressible HarfBuzz in-house `directwrite.tests` rows are represented by
   existing retained gates: Arabic high contextual forms for
   `872d2955d326bd6676a06f66b8238ebbaabc212f.ttf`, the `ffi`/disabled-`liga`

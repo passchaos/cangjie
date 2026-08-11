@@ -269,6 +269,29 @@ pub fn mergePlaceholderDependentMarks(glyph_cluster_indices: *std.ArrayList(usiz
     }
 }
 
+pub fn mergeMalayalamDotRephBrokenCluster(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
+    if (script_tag != .mlm2 and script_tag != .mlym) return;
+    if (codepoints.len < 3 or codepoints[0] != 0x0d4e or codepoints[1] != viramaCodepoint(script_tag) or codepoints[2] != 0x200d) return;
+
+    const first_glyph = glyphIndexForSource(glyph_source_indices.items, 0) orelse return;
+    const last_glyph = glyphIndexForSource(glyph_source_indices.items, 2) orelse return;
+    shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, @min(first_glyph, last_glyph), @max(first_glyph, last_glyph) + 1);
+}
+
+test "Malayalam dot reph broken cluster merges inserted dotted circle" {
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3, 3, 6 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 1, 2 });
+    const codepoints = [_]u21{ 0x0d4e, 0x0d4d, 0x200d };
+
+    mergeMalayalamDotRephBrokenCluster(&clusters, &sources, &codepoints, .mlm2);
+
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, clusters.items);
+}
+
 pub fn mergeTrailingDependentMarks(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
     if (script_tag != .ory2 and script_tag != .orya and
         script_tag != .gur2 and script_tag != .guru and

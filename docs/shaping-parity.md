@@ -1852,7 +1852,9 @@ shaping-performance superiority.
   `2c25beb56d9c556622d56b0b5d02b4670c034f89.ttf` in
   `tests/data/odia-vowel-letter-spoofing-tests.txt`; rows 41-45 are retained
   for the Telugu font `03e3f463c3a985bc42096620cc415342818454fb.ttf` in
-  `tests/data/telugu-vowel-letter-spoofing-tests.txt`. Cangjie now runs the
+  `tests/data/telugu-vowel-letter-spoofing-tests.txt`; rows 46-48 are retained
+  for the Kannada font `7d18685e1529e4ceaad5b6095dfab2f9789e5bce.ttf` in
+  `tests/data/kannada-vowel-letter-spoofing-tests.txt`. Cangjie now runs the
   HarfBuzz vowel-constraint dotted-circle insertion table in the traditional
   Indic path before GSUB, and treats the synthetic dotted circle as an Indic
   placeholder base so the third row's `ra,virama,i` sequence forms `reph`

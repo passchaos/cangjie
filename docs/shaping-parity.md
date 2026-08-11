@@ -1582,8 +1582,8 @@ shaping-performance superiority.
   `abvs`/`blws` shaping features by default and keeps Tibetan vowel/sign marks
   in the base cluster, covering both the `uni0F680F72` ligature and the rnam
   bcad cluster merge case.
-- A focused Tibetan contractions gate is retained for
-  `a02a7f0ad42c2922cb37ad1358c9df4eb81f1bca.ttf` as
+- All 60 HarfBuzz in-house `tibetan-contractions-1.tests` rows for
+  `a02a7f0ad42c2922cb37ad1358c9df4eb81f1bca.ttf` are retained as
   `tests/data/tibetan-contraction-feff-tests.txt`; leading `U+FEFF` no longer
   misclassifies the run as Arabic presentation-form text during
   native-direction parity shaping, and the first visible Tibetan glyph inherits

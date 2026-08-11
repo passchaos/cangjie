@@ -1588,6 +1588,9 @@ shaping-performance superiority.
   misclassifies the run as Arabic presentation-form text during
   native-direction parity shaping, and the first visible Tibetan glyph inherits
   the leading default-ignorable cluster to match HarfBuzz/HarfRust.
+  All 53 `tibetan-contractions-2.tests` rows for
+  `2de1ab4907ab688c0cfc236b0bf51151db38bf2e.ttf` are retained as
+  `tests/data/tibetan-contraction-2-tests.txt`.
 - The single HarfBuzz in-house `sinhala.tests` row for
   `5af5361ed4d1e8305780b100e1730cb09132f8d1.ttf` is retained for
   `U+0DBB,U+0DCA,U+200D,U+0DBA,U+0DCA,U+200D,U+0DBA`, covering the Sinhala

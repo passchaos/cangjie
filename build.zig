@@ -1056,6 +1056,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
         .text_file = "tests/data/emoji-tag-sequence-tests.txt",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "ec404b8524cd56efa5d25524cc8541a0b6604b4f",
+        .text_file = "tests/data/arabic-phags-pa-tests.txt",
+        .direction = "ltr",
+    },
 };
 
 pub fn build(b: *std.Build) void {

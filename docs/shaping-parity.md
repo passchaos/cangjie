@@ -1203,6 +1203,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `tests/data/emoji-tag-sequence-tests.txt`, covering both an unsupported tag
   sequence that preserves default-ignorable tag glyphs and the supported `de`
   tag ligature path.
+- The simple joining rows from HarfBuzz in-house `arabic-phags-pa.tests` are
+  retained for `ec404b8524cd56efa5d25524cc8541a0b6604b4f.ttf` as
+  `tests/data/arabic-phags-pa-tests.txt`; Cangjie now classifies Phags-Pa as
+  `phag` and routes its dual-joining letters through the Arabic-style joining
+  shaper. The remaining Phags-Pa variation-selector mirror forms and leading
+  ZWJ cluster rows still need focused coverage.
 - HarfBuzz in-house `collections.tests` TTC rows are retained for
   `TTC.ttc` face indices 0 and 1. `shape-bench` now accepts `--face-index`
   and forwards it to Cangjie, HarfRust, and HarfBuzz reference engines; DFONT

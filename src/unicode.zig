@@ -57,6 +57,7 @@ pub const Script = enum {
     cherokee,
     tifinagh,
     tibetan,
+    phags_pa,
     nko,
     thaana,
     adlam,
@@ -355,6 +356,7 @@ const joining_type_ranges = [_]JoiningTypeRange{
     .{ .first = 0x1844, .last = 0x1878, .kind = .dual },
     .{ .first = 0x1887, .last = 0x18A8, .kind = .dual },
     .{ .first = 0x200D, .last = 0x200D, .kind = .join_causing },
+    .{ .first = 0xA840, .last = 0xA872, .kind = .dual },
     .{ .first = 0x10EFD, .last = 0x10EFF, .kind = .transparent },
     .{ .first = 0x1E900, .last = 0x1E943, .kind = .dual },
     .{ .first = 0x1E944, .last = 0x1E94A, .kind = .transparent },
@@ -480,7 +482,8 @@ fn joinsLeft(kind: JoiningType) bool {
 fn hasArabicJoiningForms(codepoint: u21) bool {
     return isArabicScriptCodepoint(codepoint) or
         isMongolianScriptCodepoint(codepoint) or
-        isAdlamScriptCodepoint(codepoint);
+        isAdlamScriptCodepoint(codepoint) or
+        isPhagsPaScriptCodepoint(codepoint);
 }
 
 pub const BidiRun = struct {
@@ -873,6 +876,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     cher = tag("cher"),
     tfng = tag("tfng"),
     tibt = tag("tibt"),
+    phag = tag("phag"),
     nko = tag("nko "),
     thaa = tag("thaa"),
     adlm = tag("adlm"),
@@ -1013,6 +1017,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .cherokee => .cher,
         .tifinagh => .tfng,
         .tibetan => .tibt,
+        .phags_pa => .phag,
         .nko => .nko,
         .thaana => .thaa,
         .adlam => .adlm,
@@ -1312,6 +1317,7 @@ pub fn scriptForCodepoint(codepoint: u21) Script {
     if (isCherokeeScriptCodepoint(codepoint)) return .cherokee;
     if (isTifinaghScriptCodepoint(codepoint)) return .tifinagh;
     if (isTibetanScriptCodepoint(codepoint)) return .tibetan;
+    if (isPhagsPaScriptCodepoint(codepoint)) return .phags_pa;
     if (isThaanaScriptCodepoint(codepoint)) return .thaana;
     if (isNkoScriptCodepoint(codepoint)) return .nko;
     if (isAdlamScriptCodepoint(codepoint)) return .adlam;
@@ -2024,6 +2030,11 @@ fn isTibetanScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x0f00 and codepoint <= 0x0fff;
 }
 
+fn isPhagsPaScriptCodepoint(codepoint: u21) bool {
+    // Phags-Pa uses Arabic-style positional forms in OpenType.
+    return codepoint >= 0xa840 and codepoint <= 0xa877;
+}
+
 fn isEthiopicScriptCodepoint(codepoint: u21) bool {
     // Ethiopic has no complex OpenType shaper, but fonts still commonly put
     // language and punctuation-sensitive substitutions/positioning under the
@@ -2440,7 +2451,7 @@ fn bidiClassFast(codepoint: u21) ?BidiClass {
 fn bidiClassForScript(script: Script) BidiClass {
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
@@ -4598,6 +4609,18 @@ test "Tibetan stacks keep marks and select Tibetan OpenType script" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(OpenTypeScriptTag.tibt, openTypeScriptTag(scriptForCodepoint(0x0f56)));
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x0f56));
+}
+
+test "Phags-Pa selects joining script primitives" {
+    const text = "\u{a85e}\u{a85e}\u{a85e} \u{a85e}";
+    const runs = try itemizeScriptRuns(std.testing.allocator, text);
+    defer std.testing.allocator.free(runs);
+
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(Script.phags_pa, runs[0].script);
+    try std.testing.expectEqual(OpenTypeScriptTag.phag, openTypeScriptTag(scriptForCodepoint(0xa85e)));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0xa85e));
+    try std.testing.expectEqual(JoiningType.dual, joiningTypeForCodepoint(0xa85e));
 }
 
 test "Balinese syllables keep marks and select Balinese OpenType script" {

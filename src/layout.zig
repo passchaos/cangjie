@@ -4657,7 +4657,7 @@ fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
 }
 
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong;
+    return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong or script_tag == .phag;
 }
 
 fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {

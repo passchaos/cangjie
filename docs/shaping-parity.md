@@ -1520,9 +1520,10 @@ shaping-performance superiority.
   now also matches after contextual GSUB learned to keep U+180E visible for
   explicit Mongolian backtrack/lookahead rules. The Arabic Allah-ligature row
   for `a919b33197965846f21074b24e30250d67277bce.ttf` is retained after Arabic
-  shaping learned HarfBuzz's required pause between `rlig` and `calt`; the
-  remaining Arabic `calt` row from `arabic-feature-order.tests` still needs
-  focused follow-up.
+  shaping learned HarfBuzz's required pause between `rlig` and `calt`. The
+  remaining Arabic `calt` row for `bf39b0e91ef9807f15a9e283a21a14a209fd2cfc.ttf`
+  is retained too; Arabic now runs `calt/rclt` before later `liga/clig`, matching
+  HarfBuzz's additional post-`calt` pause.
 - Track output parity, not only timing. `compare-harfrust` and
   `compare-harfbuzz` both compare glyph ids, clusters, advances, and offsets in
   HarfBuzz-style buffer order; focused in-process HarfBuzz feature checks are

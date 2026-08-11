@@ -3851,6 +3851,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         if (lookup_options.script_tag == .arab and shapingFeatureEnabled(unicode.tag("rlig"), lookup_options.features, true)) {
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("rlig"), .auto_zwj = false }}, glyph_ids, joining_options, gdef_metadata.*);
         }
+        if (lookup_options.script_tag == .arab) {
+            var arabic_calt_features_buf: [2]gsub.FeatureApplication = undefined;
+            var arabic_calt_feature_count: usize = 0;
+            const arabic_calt_features = [_]gsub.FeatureApplication{
+                .{ .tag = unicode.tag("calt"), .auto_zwj = false },
+                .{ .tag = unicode.tag("rclt"), .auto_zwj = false },
+            };
+            for (arabic_calt_features) |application| {
+                if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
+                arabic_calt_features_buf[arabic_calt_feature_count] = application;
+                arabic_calt_feature_count += 1;
+            }
+            try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, arabic_calt_features_buf[0..arabic_calt_feature_count], glyph_ids, joining_options, gdef_metadata.*);
+        }
         const final_features = [_]gsub.FeatureApplication{
             .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
             .{ .tag = unicode.tag("calt"), .auto_zwj = false },
@@ -3860,6 +3874,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         };
         for (final_features) |application| {
             if (lookup_options.script_tag == .arab and application.tag == unicode.tag("rlig")) continue;
+            if (lookup_options.script_tag == .arab and (application.tag == unicode.tag("calt") or application.tag == unicode.tag("rclt"))) continue;
             if (lookup_options.script_tag == .mong and (application.tag == unicode.tag("rlig") or application.tag == unicode.tag("calt"))) continue;
             if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
             final_features_buf[final_feature_count] = application;

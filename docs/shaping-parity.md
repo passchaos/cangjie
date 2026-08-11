@@ -1339,16 +1339,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   stay LTR while mixed Arabic-letter runs shape internally RTL. The enclosed
   Arabic-number rows for `3b791518a9ba89675df02f1eefbc9026a50648a6.ttf` are
   retained in both LTR and RTL directions.
-- The Dhivehi row from HarfBuzz in-house `language-tags.tests` passes for
-  `d3129450fafe5e5c98cfc25a4e71809b1b4d2855.ttf` (`U+007C`) with language
-  `dv`. Cangjie now maps BCP-47 `dv` to OpenType `DHV ` so language-system
-  selection can reach Dhivehi-localized substitutions.
-- The Hong Kong/Macau Traditional Chinese rows from HarfBuzz in-house
-  `language-tags.tests` pass for
-  `6991b13ce889466be6de3f66e891de2bc0f117ee.ttf` (`U+004A`) through OpenType
-  language tag `ZHH `. Locale mapping now distinguishes `zh-HK`, `zh-MO`, and
-  Hant+HK/MO from generic Traditional Chinese `ZHT `, and `shape-bench`
-  accepts those BCP-47 language strings directly in retained gates.
+- All 13 HarfBuzz in-house `language-tags.tests` rows are retained. Cangjie maps
+  BCP-47 `dv` to OpenType `DHV ` for the Dhivehi-localized `U+007C` row, maps
+  Persian `fa` to `FAR `, and distinguishes generic Simplified/Traditional
+  Chinese (`ZHS `/`ZHT `) from Hong Kong/Macau Traditional Chinese (`ZHH `).
+  `shape-bench` accepts the upstream BCP-47 spellings directly in retained
+  gates, including `zh-cn`, `zh-sg`, `zh-tw`, `zh-hans`, `zh-hant`,
+  `zh-hant-hk`, `zh-HK`, `zh-mo`, and `zh-Hant-mo`.
 - Representative Thai and Lao rows from HarfBuzz in-house `sara-am.tests` pass
   for `63a539a90a371ccf028dc2dcced9b63b07163be7.ttf`
   (`U+0E01,U+0E31,U+0E33` and `U+0E81,U+0EB1,U+0EB3`). Cangjie now performs

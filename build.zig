@@ -897,6 +897,54 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
         .text = "J",
         .direction = "ltr",
+        .language = "fa",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "ja",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-cn",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-sg",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-tw",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-hans",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-hant",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-hant-hk",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
         .language = "zhh",
     },
     .{
@@ -904,6 +952,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .text = "J",
         .direction = "ltr",
         .language = "zh-HK",
+    },
+    .{
+        .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",
+        .text = "J",
+        .direction = "ltr",
+        .language = "zh-mo",
     },
     .{
         .font_hash = "6991b13ce889466be6de3f66e891de2bc0f117ee",

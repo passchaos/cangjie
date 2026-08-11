@@ -3709,6 +3709,7 @@ test "detects scripts and itemizes script runs" {
     try std.testing.expectEqual(OpenTypeLanguageTag.dflt, ascii.language);
     try std.testing.expect(ascii.all_ascii);
     try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .jan), openTypeLanguageTagForLocale("ja-JP"));
+    try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .far), openTypeLanguageTagForLocale("fa-IR"));
     try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .zhs), openTypeLanguageTagForLocale("zh-Hans-CN"));
     try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .zht), openTypeLanguageTagForLocale("zh-Hant-TW"));
     try std.testing.expectEqual(@as(?OpenTypeLanguageTag, .zhh), openTypeLanguageTagForLocale("zh-HK"));

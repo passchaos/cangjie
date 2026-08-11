@@ -948,6 +948,7 @@ pub fn openTypeScriptTagCandidates(script: Script) ScriptTagCandidates {
 pub const OpenTypeLanguageTag = enum(u32) {
     dflt = tag("dflt"),
     ara = tag("ARA "),
+    far = tag("FAR "),
     jan = tag("JAN "),
     kor = tag("KOR "),
     zhh = tag("ZHH "),
@@ -1184,6 +1185,7 @@ pub fn openTypeLanguageTagForLocale(locale_tag: []const u8) ?OpenTypeLanguageTag
     if (asciiEqlIgnoreCase(language, "ja")) return .jan;
     if (asciiEqlIgnoreCase(language, "ko")) return .kor;
     if (asciiEqlIgnoreCase(language, "ar")) return .ara;
+    if (asciiEqlIgnoreCase(language, "fa")) return .far;
     if (asciiEqlIgnoreCase(language, "hi")) return .hin;
     if (asciiEqlIgnoreCase(language, "dv")) return .dhv;
     if (asciiEqlIgnoreCase(language, "zh")) {

@@ -399,6 +399,7 @@ fn parseDirection(text: []const u8) ?Direction {
 fn parseLanguageTag(text: []const u8) ?cangjie.OpenTypeLanguageTag {
     if (std.ascii.eqlIgnoreCase(text, "dflt")) return .dflt;
     if (std.ascii.eqlIgnoreCase(text, "ara")) return .ara;
+    if (std.ascii.eqlIgnoreCase(text, "far") or std.ascii.eqlIgnoreCase(text, "fa")) return .far;
     if (std.ascii.eqlIgnoreCase(text, "jan")) return .jan;
     if (std.ascii.eqlIgnoreCase(text, "kor")) return .kor;
     if (std.ascii.eqlIgnoreCase(text, "zhh")) return .zhh;
@@ -413,6 +414,7 @@ pub fn harfrustLanguageArgument(tag_value: cangjie.OpenTypeLanguageTag) ?[]const
     return switch (tag_value) {
         .dflt => null,
         .ara => "ar",
+        .far => "fa",
         .jan => "ja",
         .kor => "ko",
         .zhh => "zh-Hant-HK",
@@ -458,7 +460,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --warmup N                   unmeasured warmup iterations, default 1000
         \\  --samples N                  independent measured samples, default 1
         \\  --direction ltr|rtl|ttb|btt  shaping direction, default ltr
-        \\  --language dflt|ara|jan|kor|zhh|zhs|zht|hin|dhv|dv
+        \\  --language dflt|ara|far|fa|jan|kor|zhh|zhs|zht|hin|dhv|dv
         \\                               force an OpenType language system
         \\  --no-bidi-reorder            keep logical glyph order after shaping
         \\  --native-direction-shaping   shape in OpenType native buffer order

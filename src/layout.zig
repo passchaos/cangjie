@@ -3598,6 +3598,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             };
             const source_cluster = if ((codepoint == 0x200d or
                 (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
+                (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoClusterExtender(codepoint)) or
                 (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint))) and
                 clusters.items.len != 0)
                 clusters.items[clusters.items.len - 1] - cluster_base
@@ -4626,6 +4627,13 @@ fn isThaiLaoSaraAmAboveBaseMark(codepoint: u21) bool {
         (normalized >= 0x0e47 and normalized <= 0x0e4e) or
         normalized == 0x0e31 or
         normalized == 0x0e3b;
+}
+
+fn isThaiLaoClusterExtender(codepoint: u21) bool {
+    const normalized = codepoint & ~@as(u21, 0x80);
+    return normalized == 0x0e31 or
+        (normalized >= 0x0e34 and normalized <= 0x0e3a) or
+        (normalized >= 0x0e47 and normalized <= 0x0e4e);
 }
 
 fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {

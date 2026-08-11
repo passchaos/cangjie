@@ -1277,6 +1277,8 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   HarfBuzz-compatible SARA AM preprocessing by decomposing SARA AM into
   Nikhahit plus SARA AA, moving the generated Nikhahit before preceding
   above-base marks, and keeping the decomposed cluster attached to the base.
+  The Lao row `U+0E81,U+0ECE,U+0ECD,U+0EB2` is retained too; Thai/Lao
+  combining marks now inherit the preceding cluster before shaping.
 - HarfBuzz in-house `cursive-positioning.tests` rows that `shape-bench` can
   express now include the Miao/Pollard fixture
   `9fc3e6960b3520e5304033ef5fd540285f72f14d.ttf`

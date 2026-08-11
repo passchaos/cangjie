@@ -3350,8 +3350,8 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
     var hasher = std.hash.Wyhash.init(0);
     for (features) |feature| {
         hasher.update(std.mem.asBytes(&feature.tag));
-        const enabled: u8 = @intFromBool(feature.enabled);
-        hasher.update(std.mem.asBytes(&enabled));
+        const value = feature.effectiveValue();
+        hasher.update(std.mem.asBytes(&value));
     }
     return hasher.final();
 }
@@ -3794,11 +3794,6 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .{ .tag = unicode.tag("medi"), .source_scoped = true, .auto_zwj = false },
             .{ .tag = unicode.tag("med2"), .source_scoped = true, .auto_zwj = false },
             .{ .tag = unicode.tag("init"), .source_scoped = true, .auto_zwj = false },
-            .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
-            .{ .tag = unicode.tag("calt"), .auto_zwj = false },
-            .{ .tag = unicode.tag("rclt"), .auto_zwj = false },
-            .{ .tag = unicode.tag("liga"), .auto_zwj = false },
-            .{ .tag = unicode.tag("clig"), .auto_zwj = false },
         };
         for (planned_features) |application| {
             if (lookup_options.script_tag == .mong and (application.tag == unicode.tag("rlig") or application.tag == unicode.tag("calt"))) continue;
@@ -3849,12 +3844,26 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             }
             try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, merged_features_buf[0..merged_feature_count], glyph_ids, joining_options, gdef_metadata.*);
         }
-        var optional_features_buf: [16]gsub.FeatureApplication = undefined;
-        const optional_feature_count = explicitOptionalFeatureApplications(
-            optional_features_buf[0..],
+        var final_features_buf: [24]gsub.FeatureApplication = undefined;
+        var final_feature_count: usize = 0;
+        const final_features = [_]gsub.FeatureApplication{
+            .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
+            .{ .tag = unicode.tag("calt"), .auto_zwj = false },
+            .{ .tag = unicode.tag("rclt"), .auto_zwj = false },
+            .{ .tag = unicode.tag("liga"), .auto_zwj = false },
+            .{ .tag = unicode.tag("clig"), .auto_zwj = false },
+        };
+        for (final_features) |application| {
+            if (lookup_options.script_tag == .mong and (application.tag == unicode.tag("rlig") or application.tag == unicode.tag("calt"))) continue;
+            if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
+            final_features_buf[final_feature_count] = application;
+            final_feature_count += 1;
+        }
+        final_feature_count += explicitOptionalFeatureApplications(
+            final_features_buf[final_feature_count..],
             lookup_options.features,
         );
-        try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, optional_features_buf[0..optional_feature_count], glyph_ids, gsub_options, gdef_metadata.*);
+        try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, final_features_buf[0..final_feature_count], glyph_ids, gsub_options, gdef_metadata.*);
     } else if (myanmar_shape) {
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
         myanmar.markSourceSyllables(source_syllables.items, codepoints.items);
@@ -4671,7 +4680,7 @@ fn explicitOptionalFeatureApplications(out: []gsub.FeatureApplication, overrides
     for (overrides) |override| {
         if (!override.enabled or !explicitOptionalFeatureShouldRun(override.tag)) continue;
         if (count >= out.len) break;
-        out[count] = .{ .tag = override.tag, .auto_zwj = false };
+        out[count] = .{ .tag = override.tag, .auto_zwj = false, .value = override.value };
         count += 1;
     }
     return count;

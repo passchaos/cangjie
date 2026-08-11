@@ -1486,7 +1486,11 @@ shaping-performance superiority.
   `arabic-stch.tests` rows for
   `507637795ce4f2975593da54d12b46f76c7cc4cc.ttf` and
   `d9b8bc10985f24796826c29f7ccba3d0ae11ec02.ttf` are retained as inline
-  HarfBuzz parity gates.
+  HarfBuzz parity gates. HarfBuzz in-house `reverse-sub.tests` row 2 is also
+  retained for `3f24aff8b768e586162e9b9d03b15c36508dd2ae.ttf` with `salt=2`;
+  the benchmark parser now preserves feature values, and the Arabic final GSUB
+  stage merges default and caller-enabled optional features by lookup order so
+  alternate-selection values reach contextual final forms.
 - Arabic-like joining now includes Adlam in the Arabic-style positional shaper:
   the HarfBuzz in-house `arabic-like-joining.tests` Adlam long joining row for
   `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` passes. The same in-house

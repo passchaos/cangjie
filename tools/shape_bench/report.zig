@@ -96,11 +96,12 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         var tag_buf: [4]u8 = undefined;
         options_mod.writeFeatureTag(&tag_buf, feature.tag);
         std.debug.print(
-            \\feature_override index={d} tag={s} enabled={any}
+            \\feature_override index={d} tag={s} value={d} enabled={any}
             \\
         , .{
             index,
             tag_buf[0..],
+            feature.effectiveValue(),
             feature.enabled,
         });
     }

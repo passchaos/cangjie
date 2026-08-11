@@ -512,7 +512,8 @@ test "lookup selection reserves zero feature hash for defaults" {
 fn featureOverridesEqual(a: []const unicode.FeatureOverride, b: []const unicode.FeatureOverride) bool {
     if (a.len != b.len) return false;
     for (a, b) |a_feature, b_feature| {
-        if (a_feature.tag != b_feature.tag or a_feature.enabled != b_feature.enabled) return false;
+        if (a_feature.tag != b_feature.tag or
+            a_feature.effectiveValue() != b_feature.effectiveValue()) return false;
     }
     return true;
 }
@@ -524,7 +525,8 @@ fn featureApplicationsEqual(a: []const gsub.FeatureApplication, b: []const gsub.
             a_application.source_scoped != b_application.source_scoped or
             a_application.auto_zwnj != b_application.auto_zwnj or
             a_application.auto_zwj != b_application.auto_zwj or
-            a_application.match_source_syllable != b_application.match_source_syllable) return false;
+            a_application.match_source_syllable != b_application.match_source_syllable or
+            a_application.value != b_application.value) return false;
     }
     return true;
 }
@@ -543,6 +545,24 @@ test "feature plan cache distinguishes syllable-scoped applications" {
 
     try std.testing.expect(featureApplicationsEqual(&global, &global));
     try std.testing.expect(!featureApplicationsEqual(&global, &syllable_scoped));
+}
+
+test "feature plan cache distinguishes feature application values" {
+    const salt_one = [_]gsub.FeatureApplication{
+        .{ .tag = unicode.tag("salt"), .value = 1 },
+    };
+    const salt_two = [_]gsub.FeatureApplication{
+        .{ .tag = unicode.tag("salt"), .value = 2 },
+    };
+    const override_one = [_]unicode.FeatureOverride{
+        .{ .tag = unicode.tag("salt"), .enabled = true, .value = 1 },
+    };
+    const override_two = [_]unicode.FeatureOverride{
+        .{ .tag = unicode.tag("salt"), .enabled = true, .value = 2 },
+    };
+
+    try std.testing.expect(!featureApplicationsEqual(&salt_one, &salt_two));
+    try std.testing.expect(!featureOverridesEqual(&override_one, &override_two));
 }
 
 const GlyphMetricsKey = struct {

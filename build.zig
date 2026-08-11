@@ -517,6 +517,12 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .script = "arab",
     },
     .{
+        .font_hash = "3f24aff8b768e586162e9b9d03b15c36508dd2ae",
+        .text = "صلطخلطج",
+        .direction = "rtl",
+        .enable_feature = "salt=2",
+    },
+    .{
         .font_hash = "d3129450fafe5e5c98cfc25a4e71809b1b4d2855",
         .text = "|",
         .direction = "ltr",

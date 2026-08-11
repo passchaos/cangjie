@@ -956,6 +956,11 @@ pub const OpenTypeLanguageTag = enum(u32) {
 pub const FeatureOverride = struct {
     tag: u32,
     enabled: bool,
+    value: u32 = 1,
+
+    pub fn effectiveValue(self: FeatureOverride) u32 {
+        return if (self.enabled) self.value else 0;
+    }
 };
 
 /// Map the internal script enum to the OpenType script tag used for GSUB/GPOS

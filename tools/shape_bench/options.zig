@@ -259,11 +259,11 @@ pub fn parse(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, arg, "--enable-feature")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
-            try appendFeatureOverride(&options, args[i], true);
+            try appendFeatureOverride(&options, args[i], 1);
         } else if (std.mem.eql(u8, arg, "--disable-feature")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
-            try appendFeatureOverride(&options, args[i], false);
+            try appendFeatureOverride(&options, args[i], 0);
         } else if (std.mem.eql(u8, arg, "--variation") or std.mem.eql(u8, arg, "--variations")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -312,8 +312,14 @@ fn parseGlyphCodepoint(text: []const u8) !u32 {
     return value;
 }
 
-fn appendFeatureOverride(options: *Options, tag_text: []const u8, enabled: bool) !void {
+fn appendFeatureOverride(options: *Options, text: []const u8, default_value: u32) !void {
+    const equals = std.mem.indexOfScalar(u8, text, '=');
+    const tag_text = if (equals) |index| text[0..index] else text;
     if (tag_text.len != 4) return error.InvalidArguments;
+    const value = if (equals) |index| value: {
+        if (index + 1 >= text.len) return error.InvalidArguments;
+        break :value try std.fmt.parseInt(u32, text[index + 1 ..], 10);
+    } else default_value;
     if (options.feature_override_count >= options.feature_override_buf.len) return error.InvalidArguments;
     const tag_value = runtimeOpenTypeTag(tag_text[0..4]);
     for (options.feature_override_buf[0..options.feature_override_count]) |existing| {
@@ -321,7 +327,8 @@ fn appendFeatureOverride(options: *Options, tag_text: []const u8, enabled: bool)
     }
     options.feature_override_buf[options.feature_override_count] = .{
         .tag = tag_value,
-        .enabled = enabled,
+        .enabled = value != 0,
+        .value = if (value == 0) 1 else value,
     };
     options.feature_override_count += 1;
 }

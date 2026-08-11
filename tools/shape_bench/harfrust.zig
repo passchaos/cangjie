@@ -98,6 +98,11 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
     const direction_text = options.direction.label();
     var args = std.ArrayList([]const u8).empty;
     defer args.deinit(allocator);
+    var owned_args = std.ArrayList([]const u8).empty;
+    defer {
+        for (owned_args.items) |arg| allocator.free(arg);
+        owned_args.deinit(allocator);
+    }
     try args.appendSlice(allocator, &.{
         options.harfrust_bin,
         "--font-file",
@@ -131,9 +136,8 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
     for (options.featureOverrides()) |feature| {
         var tag_buf: [4]u8 = undefined;
         options_mod.writeFeatureTag(&tag_buf, feature.tag);
-        const value: u8 = if (feature.enabled) '1' else '0';
-        const feature_text = try std.fmt.allocPrint(allocator, "{s}={c}", .{ tag_buf[0..], value });
-        defer allocator.free(feature_text);
+        const feature_text = try std.fmt.allocPrint(allocator, "{s}={d}", .{ tag_buf[0..], feature.effectiveValue() });
+        try owned_args.append(allocator, feature_text);
         try args.append(allocator, "--features");
         try args.append(allocator, feature_text);
     }

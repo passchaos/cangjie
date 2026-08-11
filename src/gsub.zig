@@ -76,6 +76,7 @@ pub const LookupOptions = struct {
     source_features: ?[]const u32 = null,
     active_source_feature: ?u32 = null,
     active_source_feature_mask: u32 = 0,
+    active_feature_value: u32 = 1,
     /// Optional source-level syllable id parallel to original source codepoints.
     /// When `match_source_syllable` is true, contextual matching stops at the
     /// candidate glyph's syllable instead of matching across orthographic units.
@@ -385,6 +386,7 @@ pub const FeatureApplication = struct {
     match_source_syllable: bool = false,
     auto_zwnj: bool = true,
     auto_zwj: bool = true,
+    value: u32 = 1,
 };
 
 pub const source_feature_mask_marker: u32 = 0x80000000;
@@ -467,6 +469,7 @@ pub const MergedFeatureLookup = struct {
     auto_zwnj: bool = true,
     auto_zwj: bool = true,
     match_source_syllable: bool = false,
+    value: u32 = 1,
 };
 
 pub const MergedFeatureLookupPlan = struct {
@@ -668,6 +671,7 @@ pub fn applyFeatureSequenceWithOptions(
         selected_options.match_source_syllable = application.match_source_syllable;
         selected_options.active_auto_zwnj = application.auto_zwnj;
         selected_options.active_auto_zwj = application.auto_zwj;
+        selected_options.active_feature_value = application.value;
         try applySelectedFeatureFromPlan(table, application.tag, feature_indices, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -842,6 +846,7 @@ pub fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
         selected_options.match_source_syllable = entry.application.match_source_syllable;
         selected_options.active_auto_zwnj = entry.application.auto_zwnj;
         selected_options.active_auto_zwj = entry.application.auto_zwj;
+        selected_options.active_feature_value = entry.application.value;
         try applyLookupPlanEntry(table, lookup_count, entry, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -898,6 +903,7 @@ pub fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
         selected_options.active_auto_zwnj = lookup.auto_zwnj;
         selected_options.active_auto_zwj = lookup.auto_zwj;
         selected_options.match_source_syllable = lookup.match_source_syllable;
+        selected_options.active_feature_value = lookup.value;
         try applyLookupWithIndex(table, lookup_offset, lookup.lookup, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -2754,6 +2760,7 @@ fn appendMergedFeatureLookups(
             .auto_zwnj = application.auto_zwnj,
             .auto_zwj = application.auto_zwj,
             .match_source_syllable = application.match_source_syllable,
+            .value = application.value,
         });
     }
 }
@@ -2770,6 +2777,7 @@ fn sortMergeFeatureLookups(lookups: *std.ArrayList(MergedFeatureLookup)) void {
             lookups.items[write - 1].auto_zwnj = lookups.items[write - 1].auto_zwnj and lookup.auto_zwnj;
             lookups.items[write - 1].auto_zwj = lookups.items[write - 1].auto_zwj and lookup.auto_zwj;
             lookups.items[write - 1].match_source_syllable = lookups.items[write - 1].match_source_syllable or lookup.match_source_syllable;
+            if (lookups.items[write - 1].value == 1) lookups.items[write - 1].value = lookup.value;
         } else {
             lookups.items[write] = lookup;
             write += 1;
@@ -4285,6 +4293,8 @@ fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyp
     if (subst_format != 1) return error.UnsupportedGsub;
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const alternate_set_count = try readU16(table, subtable_offset + 4);
+    const alternate_index = options.active_feature_value;
+    if (alternate_index == 0) return;
 
     for (glyphs.items, 0..) |*glyph, glyph_index| {
         if (matched) |items| {
@@ -4297,7 +4307,8 @@ fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyp
         const alternate_set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
         const glyph_count = try readU16(table, alternate_set_offset);
         if (glyph_count == 0) continue;
-        glyph.* = try readU16(table, alternate_set_offset + 2);
+        if (alternate_index > glyph_count) continue;
+        glyph.* = try readU16(table, alternate_set_offset + 2 + @as(usize, alternate_index - 1) * 2);
         markGlyphSubstituted(options, glyph_index);
         if (matched) |items| items[glyph_index] = true;
     }
@@ -11668,6 +11679,36 @@ test "GSUB alternate substitution skips lookup-flag ignored glyphs" {
     });
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4, 3 }, glyphs.items);
+}
+
+test "GSUB alternate substitution uses feature value as one-based alternate index" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 36;
+
+    writeU16Test(&bytes, 0, 3);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+
+    const alternate = 8;
+    writeU16Test(&bytes, alternate + 0, 1);
+    writeU16Test(&bytes, alternate + 2, 12);
+    writeU16Test(&bytes, alternate + 4, 1);
+    writeU16Test(&bytes, alternate + 6, 18);
+    writeCoverage1(&bytes, alternate + 12, 10);
+    const alternate_set = alternate + 18;
+    writeU16Test(&bytes, alternate_set + 0, 2);
+    writeU16Test(&bytes, alternate_set + 2, 20);
+    writeU16Test(&bytes, alternate_set + 4, 30);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 10);
+
+    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
+        .active_feature_value = 2,
+    });
+
+    try std.testing.expectEqualSlices(GlyphId, &.{30}, glyphs.items);
 }
 
 test "GSUB alternate substitution subtables do not cascade within lookup" {

@@ -236,7 +236,7 @@ fn harfBuzzFeatures(allocator: std.mem.Allocator, options: options_mod.Options) 
     for (overrides, features) |feature, *hb_feature| {
         hb_feature.* = .{
             .tag = feature.tag,
-            .value = @intFromBool(feature.enabled),
+            .value = feature.effectiveValue(),
             .start = 0,
             .end = std.math.maxInt(c_uint),
         };

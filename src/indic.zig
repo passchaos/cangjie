@@ -19,7 +19,7 @@ const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .dev2, .bng2, .beng, .ory2, .orya, .gur2, .guru, .gjr2, .gujr, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
+        .dev2, .bng2, .beng, .ory2, .orya, .gur2, .guru, .gjr3, .gjr2, .gujr, .tel2, .telu, .knd2, .knda, .tml2, .taml, .mlm2, .mlym => true,
         else => false,
     };
 }
@@ -391,6 +391,40 @@ fn firstGlyphInSourceRange(sources: []const usize, start_source: usize, end_sour
         if (source >= start_source and source <= end_source) return glyph_index;
     }
     return null;
+}
+
+pub fn reorderGujaratiSplitMatraComponents(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (script_tag != .gjr3 and script_tag != .gjr2 and script_tag != .gujr) return;
+
+    var glyph_index: usize = 0;
+    while (glyph_index + 1 < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const first_source = glyph_source_indices.items[glyph_index];
+        const second_source = glyph_source_indices.items[glyph_index + 1];
+        if (first_source >= codepoints.len or second_source >= codepoints.len) continue;
+        if (codepoints[first_source] != 0x0abe) continue;
+        if (codepoints[second_source] != 0x0ac5 and codepoints[second_source] != 0x0ac8) continue;
+        if (indicSyllableStart(codepoints, first_source, script_tag) != indicSyllableStart(codepoints, second_source, script_tag)) continue;
+
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, glyph_index, glyph_index + 2);
+        shaping_metadata.move(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            glyph_index,
+            glyph_index + 1,
+        );
+        glyph_index += 1;
+    }
 }
 
 const pre_reorder_feature_applications = [_]gsub.FeatureApplication{
@@ -947,7 +981,7 @@ fn isIndicConsonant(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool 
         .gur2, .guru => (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
             (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
             (codepoint >= 0x0a72 and codepoint <= 0x0a74),
-        .gjr2, .gujr => (codepoint >= 0x0a95 and codepoint <= 0x0aa8) or
+        .gjr3, .gjr2, .gujr => (codepoint >= 0x0a95 and codepoint <= 0x0aa8) or
             (codepoint >= 0x0aaa and codepoint <= 0x0ab0) or
             (codepoint >= 0x0ab2 and codepoint <= 0x0ab3) or
             (codepoint >= 0x0ab5 and codepoint <= 0x0ab9) or
@@ -980,7 +1014,7 @@ fn isIndicIndependentVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag
         .gur2, .guru => (codepoint >= 0x0a05 and codepoint <= 0x0a0a) or
             (codepoint >= 0x0a0f and codepoint <= 0x0a10) or
             (codepoint >= 0x0a13 and codepoint <= 0x0a14),
-        .gjr2, .gujr => (codepoint >= 0x0a85 and codepoint <= 0x0a8d) or
+        .gjr3, .gjr2, .gujr => (codepoint >= 0x0a85 and codepoint <= 0x0a8d) or
             (codepoint >= 0x0a8f and codepoint <= 0x0a91) or
             (codepoint >= 0x0a93 and codepoint <= 0x0a94) or
             (codepoint >= 0x0ae0 and codepoint <= 0x0ae1),
@@ -1027,7 +1061,7 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
             codepoint == 0x0a51 or
             (codepoint >= 0x0a70 and codepoint <= 0x0a71) or
             codepoint == 0x0a75,
-        .gjr2, .gujr => (codepoint >= 0x0a81 and codepoint <= 0x0a83) or
+        .gjr3, .gjr2, .gujr => (codepoint >= 0x0a81 and codepoint <= 0x0a83) or
             codepoint == 0x0abc or
             (codepoint >= 0x0abe and codepoint <= 0x0ac5) or
             (codepoint >= 0x0ac7 and codepoint <= 0x0ac9) or
@@ -1077,7 +1111,7 @@ fn viramaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
         .bng2, .beng => 0x09cd,
         .ory2, .orya => 0x0b4d,
         .gur2, .guru => 0x0a4d,
-        .gjr2, .gujr => 0x0acd,
+        .gjr3, .gjr2, .gujr => 0x0acd,
         .tel2, .telu => 0x0c4d,
         .knd2, .knda => 0x0ccd,
         .tml2, .taml => 0x0bcd,
@@ -1091,7 +1125,7 @@ fn rephRaCodepoint(script_tag: unicode.OpenTypeScriptTag) u21 {
         .bng2, .beng => 0x09b0,
         .ory2, .orya => 0x0b30,
         .gur2, .guru => 0x0a30,
-        .gjr2, .gujr => 0x0ab0,
+        .gjr3, .gjr2, .gujr => 0x0ab0,
         .tel2, .telu => 0x0c30,
         .knd2, .knda => 0x0cb0,
         .tml2, .taml => 0x0bb0,
@@ -1398,6 +1432,35 @@ test "Telugu before-subscript vowel reorders before subscript glyph" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 13, 4, 6, 16 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 2, 5, 3 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 6, 6, 6 }, clusters.items);
+}
+
+test "Gujarati split matra components keep candra or ai before aa length mark" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 2, 17, 10, 11, 2, 17, 10, 13 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 0, 1, 2, 4, 4, 5, 6 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0, 0, 4, 4, 4, 4 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, true, false, false, false, true, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0a85, 0x0abe, 0x0ac5, 0x0020, 0x0a85, 0x0abe, 0x0ac8 };
+    reorderGujaratiSplitMatraComponents(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .gjr2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 17, 11, 10, 2, 17, 13, 10 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 1, 4, 4, 6, 5 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 4, 4, 4, 4 }, clusters.items);
 }
 
 test "Malayalam post-base virama consonant marks pstf source" {

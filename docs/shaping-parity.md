@@ -1615,10 +1615,11 @@ shaping-performance superiority.
   HarfBuzz vowel-constraint dotted-circle insertion table in the traditional
   Indic path before GSUB, and treats the synthetic dotted circle as an Indic
   placeholder base so the third row's `ra,virama,i` sequence forms `reph`
-  around that dotted circle. Gujarati `gjr2`/`gujr` now routes through the
-  Indic shaper as well, retaining rows 30-34 of the same fixture for
-  `738d9f3b8c2dfd03875bf35a61d28fd78faf17c8.ttf`; row 35's split-vowel
-  component ordering still needs follow-up work. The legacy
+  around that dotted circle. Gujarati `gjr3`/`gjr2`/`gujr` now routes through
+  the Indic shaper as well, retaining rows 30-34 of the same fixture for
+  `738d9f3b8c2dfd03875bf35a61d28fd78faf17c8.ttf`; rows 35-36 are retained too
+  after Gujarati split-matra components learned to keep the candra/ai component
+  before the AA length component inside the same Indic syllable. The legacy
   Kannada `indic-old-spec.tests` row for
   `57a9d9f83020155cbb1d2be1f43d82388cbecc88.ttf` is retained for
   `U+0C9A,U+0CCD,U+0C9A,U+0CCD`; Cangjie now marks the trailing old-spec

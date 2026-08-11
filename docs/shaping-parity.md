@@ -1653,8 +1653,8 @@ shaping-performance superiority.
   Cangjie enabled HarfBuzz-style direction features (`ltrm`/`rtlm`) and kept
   variation selectors with ordinary cmap glyphs visible for GSUB fallback
   matching when no cmap-14 variation record exists.
-- The Old Italic explicit-RTL row from HarfBuzz in-house
-  `none-directional.tests` now has a retained inline gate for
+- The Old Italic LTR/default and explicit-RTL rows from HarfBuzz in-house
+  `none-directional.tests` now have retained inline gates for
   `73e84dac2fc6a2d1bc9250d1414353661088937d.ttf`
   (`U+10300,U+10301`). Cangjie's benchmark CLI can now request native-direction
   shaping explicitly with `--native-direction-shaping`; with

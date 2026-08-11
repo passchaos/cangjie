@@ -1047,6 +1047,8 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     direction: []const u8,
     variation: ?[]const u8 = null,
     disable_feature: ?[]const u8 = null,
+    text_before: ?[]const u8 = null,
+    text_after: ?[]const u8 = null,
     font_ext: []const u8 = "ttf",
 }{
     .{
@@ -1084,6 +1086,61 @@ const retained_inline_harfrust_parity_gates = [_]struct {
         .text = "ffif",
         .direction = "ltr",
         .disable_feature = "liga",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{0650}\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}\u{0646}\u{064e}\u{0627}",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}\u{0646}\u{064e}\u{0627}",
+        .direction = "rtl",
+        .text_before = "\u{0643}\u{0650}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}\u{0646}\u{064e}\u{0627}",
+        .direction = "rtl",
+        .text_before = "\u{0643}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{0650}\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}",
+        .direction = "rtl",
+        .text_after = "\u{0646}\u{064e}\u{0627}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{0650}\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}",
+        .direction = "rtl",
+        .text_after = "\u{0646}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}",
+        .direction = "rtl",
+        .text_before = "\u{0643}\u{0650}",
+        .text_after = "\u{0646}\u{064e}\u{0627}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}",
+        .direction = "rtl",
+        .text_before = "\u{0643}",
+        .text_after = "\u{0646}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{062a}\u{0628}",
+        .direction = "rtl",
+        .text_before = "\u{0627}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{062a}\u{0628}\u{0627}",
+        .direction = "rtl",
+        .text_after = "\u{0627}",
     },
 };
 
@@ -1450,6 +1507,12 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.disable_feature) |feature| {
                 inline_harfrust_parity_cmd.addArgs(&.{ "--disable-feature", feature });
+            }
+            if (gate.text_before) |text_before| {
+                inline_harfrust_parity_cmd.addArgs(&.{ "--text-before", text_before });
+            }
+            if (gate.text_after) |text_after| {
+                inline_harfrust_parity_cmd.addArgs(&.{ "--text-after", text_after });
             }
             shaping_corpus_parity_smoke_step.dependOn(&inline_harfrust_parity_cmd.step);
         }

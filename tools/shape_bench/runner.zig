@@ -110,6 +110,8 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .features = options.featureOverrides(),
         .normalized_variation_coords = normalized_variation_coords,
         .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
+        .context_before = options.text_before,
+        .context_after = options.text_after,
     };
     const inline_text_lines = [_][]const u8{options.text};
     const text_lines = if (options.text_lines.len != 0) options.text_lines else inline_text_lines[0..];

@@ -191,6 +191,12 @@ pub const ShapeOptions = struct {
     /// unsupported selector visible to GSUB/GPOS matching and reports this glyph
     /// id with zero advance, without changing the real font glyph id.
     not_found_variation_selector_glyph: ?u32 = null,
+    /// Optional item context used for HarfBuzz-style shaping of a substring.
+    ///
+    /// The context is not emitted. It only influences joining decisions at the
+    /// item boundaries, matching the common use of hb_buffer pre/post context.
+    context_before: []const u8 = &.{},
+    context_after: []const u8 = &.{},
 };
 
 /// Coarse shaping plan identity. It intentionally excludes the concrete font
@@ -207,6 +213,7 @@ pub const ShapePlanKey = struct {
     script_position: ScriptPosition = .normal,
     feature_hash: u64 = 0,
     variation_hash: u64 = 0,
+    context_hash: u64 = 0,
     not_found_variation_selector_glyph: ?u32 = null,
 
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
@@ -226,6 +233,7 @@ pub const ShapePlanKey = struct {
             .script_position = options.script_position,
             .feature_hash = featureOverridesHash(options.features),
             .variation_hash = normalizedVariationCoordsHash(options.normalized_variation_coords),
+            .context_hash = contextHash(options.context_before, options.context_after),
             .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
         };
     }
@@ -1883,6 +1891,8 @@ fn textMetricsFromParagraph(paragraph: ParagraphLayout) TextMetrics {
 
 fn validateShapingInput(text: []const u8, font_size: f32, options: ShapeOptions) !void {
     try validateShapingUtf8(text);
+    try validateShapingUtf8(options.context_before);
+    try validateShapingUtf8(options.context_after);
     try validateShapingFontSize(font_size);
     try validateFeatureOverrides(options.features);
     try validateNormalizedVariationCoords(options.normalized_variation_coords);
@@ -3306,6 +3316,8 @@ const LookupOptions = struct {
     text_orientation: TextOrientation = .mixed,
     normalized_variation_coords: []const f32 = &.{},
     not_found_variation_selector_glyph: ?u32 = null,
+    context_before: []const u8 = &.{},
+    context_after: []const u8 = &.{},
     run_has_decimal_number: bool = false,
     run_has_letter: bool = false,
 };
@@ -3336,6 +3348,8 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupO
         .text_orientation = options.text_orientation,
         .normalized_variation_coords = options.normalized_variation_coords,
         .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
+        .context_before = options.context_before,
+        .context_after = options.context_after,
     }, .all_ascii = infer_language and inferred.all_ascii };
 }
 
@@ -3371,15 +3385,27 @@ fn normalizedVariationCoordsHash(coords: []const f32) u64 {
     return hasher.final();
 }
 
+fn contextHash(before: []const u8, after: []const u8) u64 {
+    if (before.len == 0 and after.len == 0) return 0;
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(std.mem.asBytes(&before.len));
+    hasher.update(before);
+    hasher.update(std.mem.asBytes(&after.len));
+    hasher.update(after);
+    return hasher.final();
+}
+
 test "default shape-plan inputs use zero hashes" {
     try std.testing.expectEqual(@as(u64, 0), featureOverridesHash(&.{}));
     try std.testing.expectEqual(@as(u64, 0), normalizedVariationCoordsHash(&.{}));
+    try std.testing.expectEqual(@as(u64, 0), contextHash("", ""));
 
     // Non-empty values must still take the payload-sensitive hash path.
     try std.testing.expect(featureOverridesHash(&.{
         .{ .tag = unicode.tag("liga"), .enabled = false },
     }) != 0);
     try std.testing.expect(normalizedVariationCoordsHash(&.{0.25}) != 0);
+    try std.testing.expect(contextHash("a", "") != 0);
 }
 
 fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
@@ -3393,6 +3419,7 @@ fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
         a.script_position == b.script_position and
         a.feature_hash == b.feature_hash and
         a.variation_hash == b.variation_hash and
+        a.context_hash == b.context_hash and
         a.not_found_variation_selector_glyph == b.not_found_variation_selector_glyph;
 }
 
@@ -3759,7 +3786,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             markArabicJoiningSourceFeatures(source_features.items, codepoints.items, glyph_source_indices.items);
         } else {
             try joining_forms.resize(buffer.allocator, codepoints.items.len);
-            try unicode.resolveJoiningForms(codepoints.items, joining_forms.items);
+            try resolveJoiningFormsWithItemContext(
+                buffer.allocator,
+                lookup_options.context_before,
+                codepoints.items,
+                lookup_options.context_after,
+                joining_forms.items,
+            );
             for (joining_forms.items, source_features.items) |form, *feature| {
                 feature.* = joiningFormFeatureTag(form);
             }
@@ -4657,6 +4690,49 @@ fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
         .final => unicode.tag("fina"),
         .none => 0,
     };
+}
+
+fn resolveJoiningFormsWithItemContext(
+    allocator: std.mem.Allocator,
+    before: []const u8,
+    item_codepoints: []const u21,
+    after: []const u8,
+    item_forms: []unicode.JoiningForm,
+) !void {
+    if (before.len == 0 and after.len == 0) {
+        return try unicode.resolveJoiningForms(item_codepoints, item_forms);
+    }
+
+    var context_codepoints = std.ArrayList(u21).empty;
+    defer context_codepoints.deinit(allocator);
+    try appendUtf8Codepoints(allocator, &context_codepoints, before);
+    const item_start = context_codepoints.items.len;
+    try context_codepoints.appendSlice(allocator, item_codepoints);
+    try appendUtf8Codepoints(allocator, &context_codepoints, after);
+
+    const context_forms = try allocator.alloc(unicode.JoiningForm, context_codepoints.items.len);
+    defer allocator.free(context_forms);
+    try unicode.resolveJoiningForms(context_codepoints.items, context_forms);
+    @memcpy(item_forms, context_forms[item_start..][0..item_codepoints.len]);
+}
+
+fn appendUtf8Codepoints(allocator: std.mem.Allocator, out: *std.ArrayList(u21), text: []const u8) !void {
+    var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (iterator.nextCodepoint()) |codepoint| {
+        try out.append(allocator, codepoint);
+    }
+}
+
+test "Arabic item context influences only joining forms" {
+    const allocator = std.testing.allocator;
+    const item = [_]u21{0x0628};
+    var forms: [1]unicode.JoiningForm = undefined;
+
+    try resolveJoiningFormsWithItemContext(allocator, "", &item, "", &forms);
+    try std.testing.expectEqual(unicode.JoiningForm.isolated, forms[0]);
+
+    try resolveJoiningFormsWithItemContext(allocator, "ب", &item, "ب", &forms);
+    try std.testing.expectEqual(unicode.JoiningForm.medial, forms[0]);
 }
 
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {

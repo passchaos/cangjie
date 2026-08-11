@@ -1556,6 +1556,12 @@ shaping-performance superiority.
   `tests/data/kbts-mixed-tests.txt` covers the `ffi` ligature and the `waw beh
   alef` Arabic row for `7bbd3175734d5d291e1c15271ec0cbb97b626ebf.ttf`. The
   disabled-`liga` `ffif` row is retained as an inline HarfRust gate.
+- HarfBuzz in-house `item-context.tests` rows that only require before/after
+  Arabic joining context are retained as inline HarfRust gates. `shape-bench`
+  now accepts `--text-before`/`--text-after`; Cangjie uses those contexts only
+  to resolve item-boundary Arabic joining forms while keeping GSUB/GPOS matching
+  scoped to the shaped item. The remaining `--bot` dotted-circle rows still
+  need explicit beginning-of-text handling.
 - Mongolian Free Variation Selectors now participate in the Arabic-style
   joining shaper under the `mong` ScriptList. The focused
   `arabic-feature-order.tests` FVS rows for

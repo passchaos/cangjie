@@ -137,6 +137,12 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         try args.append(allocator, "--variations");
         try args.append(allocator, variation_text);
     }
+    if (options.text_before.len != 0) {
+        try args.appendSlice(allocator, &.{ "--text-before", options.text_before });
+    }
+    if (options.text_after.len != 0) {
+        try args.appendSlice(allocator, &.{ "--text-after", options.text_after });
+    }
     if (options.text_path) |path| {
         try args.appendSlice(allocator, &.{ "--text-file", path });
     } else {

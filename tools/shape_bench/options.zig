@@ -116,6 +116,8 @@ pub const Options = struct {
     text: []const u8 = "A",
     text_path: ?[]const u8 = null,
     text_lines: []const []const u8 = &.{},
+    text_before: []const u8 = "",
+    text_after: []const u8 = "",
     size: f32 = 20,
     iterations: usize = 10_000,
     warmup: usize = 1_000,
@@ -220,6 +222,14 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.text_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--text-before")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.text_before = args[i];
+        } else if (std.mem.eql(u8, arg, "--text-after")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.text_after = args[i];
         } else if (std.mem.eql(u8, arg, "--size")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -435,6 +445,8 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature
         \\  --text TEXT                  input text, default "A"
         \\  --text-file PATH             read input text from a UTF-8 file
+        \\  --text-before TEXT           pre-context for item shaping
+        \\  --text-after TEXT            post-context for item shaping
         \\  --size PX                    font size, default 20
         \\  --iterations N               measured iterations, default 10000
         \\  --warmup N                   unmeasured warmup iterations, default 1000

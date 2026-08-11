@@ -180,7 +180,14 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
     if (options.not_found_variation_selector_glyph) |glyph_id| {
         hb.hb_buffer_set_not_found_variation_selector_glyph(buffer, glyph_id);
     }
-    hb.hb_buffer_add_utf8(buffer, @ptrCast(line.ptr), @intCast(line.len), 0, @intCast(line.len));
+    var context_text: []u8 = &.{};
+    defer if (context_text.len != 0) allocator.free(context_text);
+    const item_text = if (options.text_before.len != 0 or options.text_after.len != 0) item: {
+        context_text = try std.mem.concat(allocator, u8, &.{ options.text_before, line, options.text_after });
+        break :item context_text;
+    } else line;
+    const item_offset = if (context_text.len != 0) options.text_before.len else 0;
+    hb.hb_buffer_add_utf8(buffer, @ptrCast(item_text.ptr), @intCast(item_text.len), @intCast(item_offset), @intCast(line.len));
     hb.hb_shape(font, buffer, if (features.len == 0) null else features.ptr, @intCast(features.len));
 
     var length: c_uint = 0;

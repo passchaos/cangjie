@@ -1624,10 +1624,12 @@ shaping-performance superiority.
 - `shape-bench --variation` now accepts HarfBuzz-style `tag=value` design
   coordinates in addition to normalized CSV coordinates. Four HarfRust retained
   inline gates cover `variations.tests` rows for `HBTest-VF.ttf` (`TEST=491`
-  and `TEST=509`) and `ab40c89624a6104e5d0a2308e448a989302f515b.ttf`
-  (`wdth=60` and `wdth=402`). The
-  `e8691822f6a705e3e9fb48a0405c645b1a036590.ttf` row remains blocked by
-  duplicate `fvar` axis validation and needs separate parser-tolerance work.
+  and `TEST=509`), `ab40c89624a6104e5d0a2308e448a989302f515b.ttf`
+  (`wdth=60` and `wdth=402`), and
+  `e8691822f6a705e3e9fb48a0405c645b1a036590.ttf` (`0001=500`). Cangjie now
+  tolerates hidden duplicate `fvar` axes and matching duplicate STAT design axes
+  so this FontForge/HOI-style variation font can map one public design tag onto
+  every same-tag internal axis, matching HarfBuzz/HarfRust.
 - The HarfBuzz in-house `tibetan-vowels.tests` rows for
   `82f4f3b57bb55344e72e70231380202a52af5805.ttf` are retained for
   `U+0F68,U+0F72` and `U+0F68,U+0F7F`. Cangjie now applies Tibetan

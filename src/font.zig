@@ -9982,7 +9982,8 @@ fn validateFvarTable(data: []const u8, fvar: TableRecord) FontError!void {
         for (0..axis_index) |previous_index| {
             const previous_offset = fvarAxisOffset(fvar, info, previous_index);
             const previous_tag = try bin.readTagAt(data, previous_offset);
-            if (std.mem.eql(u8, &previous_tag, &tag)) return error.BadSfnt;
+            const previous_flags = try bin.readU16At(data, previous_offset + 16);
+            if (std.mem.eql(u8, &previous_tag, &tag) and (flags & 0x0001) == 0 and (previous_flags & 0x0001) == 0) return error.BadSfnt;
         }
     }
 
@@ -10005,12 +10006,11 @@ fn validateStatTable(allocator: std.mem.Allocator, data: []const u8, stat: Table
     const info = try readStatInfo(data, stat);
     if (info.minor >= 1) try validateNameIdReference(name_index, try bin.readU16At(data, stat.offset + 18));
 
-    _ = fvar;
     for (0..info.design_axis_count) |index| {
         const stat_axis = stat.offset + info.design_axes_offset + index * info.design_axis_size;
         const stat_tag = try bin.readTagAt(data, stat_axis);
         try validateOpenTypeTag(stat_tag);
-        try validateStatDesignAxisOrder(data, stat, info.design_axes_offset, info.design_axis_size, index, &stat_tag);
+        try validateStatDesignAxisOrder(data, stat, fvar, info.design_axes_offset, info.design_axis_size, index, &stat_tag);
         try validateNameIdReference(name_index, try bin.readU16At(data, stat_axis + 4));
     }
 
@@ -10071,19 +10071,30 @@ fn readStatInfo(data: []const u8, stat: TableRecord) FontError!StatInfo {
     };
 }
 
-fn validateStatDesignAxisOrder(data: []const u8, stat: TableRecord, design_axes_offset: usize, design_axis_size: usize, axis_index: usize, axis_tag: *const [4]u8) FontError!void {
+fn validateStatDesignAxisOrder(data: []const u8, stat: TableRecord, fvar: ?TableRecord, design_axes_offset: usize, design_axis_size: usize, axis_index: usize, axis_tag: *const [4]u8) FontError!void {
     const axis_record = stat.offset + design_axes_offset + axis_index * design_axis_size;
     const axis_ordering = try bin.readU16At(data, axis_record + 6);
     for (0..axis_index) |previous_index| {
         const previous_record = stat.offset + design_axes_offset + previous_index * design_axis_size;
         const previous_tag = try bin.readTagAt(data, previous_record);
-        if (std.mem.eql(u8, axis_tag, &previous_tag)) return error.BadSfnt;
+        if (std.mem.eql(u8, axis_tag, &previous_tag) and !try statDuplicateAxisTagsAllowedByFvar(data, fvar, previous_index, axis_index)) return error.BadSfnt;
         const previous_ordering = try bin.readU16At(data, previous_record + 6);
         // AxisOrdering is the canonical presentation sort key for STAT axes.
         // Duplicate ordering values leave style UIs with no deterministic
         // canonical axis order, even when the axis tags themselves differ.
         if (axis_ordering == previous_ordering) return error.BadSfnt;
     }
+}
+
+fn statDuplicateAxisTagsAllowedByFvar(data: []const u8, fvar: ?TableRecord, previous_index: usize, axis_index: usize) FontError!bool {
+    const fvar_table = fvar orelse return false;
+    const info = try readFvarInfo(data, fvar_table);
+    if (previous_index >= info.axis_count or axis_index >= info.axis_count) return false;
+    const previous_offset = fvarAxisOffset(fvar_table, info, previous_index);
+    const axis_offset = fvarAxisOffset(fvar_table, info, axis_index);
+    const previous_flags = try bin.readU16At(data, previous_offset + 16);
+    const flags = try bin.readU16At(data, axis_offset + 16);
+    return (previous_flags & 0x0001) != 0 or (flags & 0x0001) != 0;
 }
 
 fn resolveStatAxisValueOffset(data: []const u8, stat: TableRecord, axis_value_offsets_offset: usize, entry_offset: usize) FontError!usize {
@@ -20032,6 +20043,25 @@ test "fvar axis records require ordered ranges and unique tags" {
 
     const duplicate_font = fvarOnlyFont(&duplicate_tags);
     try std.testing.expectError(error.BadSfnt, duplicate_font.variationAxes(allocator));
+
+    var hidden_duplicate_tags = duplicate_tags;
+    writeU16Test(&hidden_duplicate_tags, 36 + 16, 0x0001);
+    const hidden_duplicate_font = fvarOnlyFont(&hidden_duplicate_tags);
+    const axes = try hidden_duplicate_font.variationAxes(allocator);
+    defer allocator.free(axes);
+    try std.testing.expectEqual(@as(usize, 2), axes.len);
+    try std.testing.expectEqualSlices(u8, "wght", &axes[0].tag);
+    try std.testing.expectEqualSlices(u8, "wght", &axes[1].tag);
+    try std.testing.expectEqual(@as(u16, 0), axes[0].flags);
+    try std.testing.expectEqual(@as(u16, 1), axes[1].flags);
+
+    const normalized = try hidden_duplicate_font.normalizedVariationCoordinates(allocator, &.{
+        .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 700.0 },
+    });
+    defer allocator.free(normalized);
+    try std.testing.expectEqual(@as(usize, 2), normalized.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6), normalized[0], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), normalized[1], 0.0001);
 }
 
 test "fvar public axes API revalidates borrowed axis name references" {

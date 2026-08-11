@@ -4299,7 +4299,7 @@ fn ligatureComponentInfoForMatch(
     const store = options.ligature_components orelse return .{};
     const component_count = @min(match.component_count, ligature_provenance.max_components);
     if (component_count <= 1) return .{};
-    if (ligatureIsBaseWithMarks(options, glyph_index, match, component_count)) return .{};
+    const base_mark_ligature = ligatureIsBaseWithMarks(options, glyph_index, match, component_count);
 
     var component_sources: [ligature_provenance.max_components]usize = undefined;
     component_sources[0] = sourceForGlyph(options, glyph_index);
@@ -4316,6 +4316,7 @@ fn ligatureComponentInfoForMatch(
     }
     var info = try store.addLigature(allocator, component_sources[0..component_count]);
     info.flags.synthetic_base = synthetic_base;
+    info.flags.base_mark_ligature = base_mark_ligature;
     return info;
 }
 
@@ -4339,7 +4340,7 @@ fn ligatureIsBaseWithMarks(options: LookupOptions, glyph_index: usize, match: Li
     return true;
 }
 
-test "GSUB base plus mark ligatures do not create component provenance" {
+test "GSUB base plus mark ligatures retain provenance with a GPOS hint" {
     var sources = std.ArrayList(usize).empty;
     defer sources.deinit(std.testing.allocator);
     try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
@@ -4367,7 +4368,9 @@ test "GSUB base plus mark ligatures do not create component provenance" {
             .match_end = 2,
         },
     );
-    try std.testing.expectEqual(@as(u8, 1), base_mark.component_count);
+    try std.testing.expectEqual(@as(u8, 2), base_mark.component_count);
+    try std.testing.expect(base_mark.flags.base_mark_ligature);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, components.componentSources(base_mark).?);
 
     const mark_mark_codepoints = [_]u21{ 0x05b8, 0x05bd };
     const mark_mark = try ligatureComponentInfoForMatch(
@@ -4386,6 +4389,7 @@ test "GSUB base plus mark ligatures do not create component provenance" {
         },
     );
     try std.testing.expectEqual(@as(u8, 2), mark_mark.component_count);
+    try std.testing.expect(!mark_mark.flags.base_mark_ligature);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, components.componentSources(mark_mark).?);
 }
 

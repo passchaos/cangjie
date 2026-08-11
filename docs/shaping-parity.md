@@ -429,9 +429,9 @@ Current local snapshot after the Nastaliq parity work:
   inheritance path; all 31 HarfBuzz `hebrew-diacritics.tests` rows for
   `b895f8ff06493cc893ec44de380690ca0074edfa.ttf` are retained as
   `tests/data/hebrew-diacritics-31.txt`. Base-plus-mark GSUB ligatures such as
-  `nun+dagesh` no longer create multi-component ligature provenance, matching
-  HarfBuzz so later Hebrew `mkmk` positioning can attach meteg/qamats marks to
-  the same base. Focused
+  `nun+dagesh` now retain source-component provenance for Indic reorder logic
+  while carrying a GPOS hint that makes Hebrew MarkLig/MarkMark attachment treat
+  the ligature as one base. Focused
   HarfBuzz/HarfRust Arabic output matches at checksum `7cb1b7bd03a57f5d`. A
   fixed-CPU-30 A/B/B/A comparison with 31-sample medians
   reduced Amiri `fa-thelittleprince` from `944.499` to

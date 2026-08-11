@@ -8,11 +8,13 @@ pub const StchAction = enum(u2) {
     repeating,
 };
 
-pub const Flags = packed struct(u8) {
+pub const Flags = packed struct(u16) {
     multiplied: bool = false,
     synthetic_base: bool = false,
+    base_mark_ligature: bool = false,
     multiple_component: u4 = 0,
     stch_action: StchAction = .none,
+    reserved: u7 = 0,
 };
 
 /// Per-glyph ligature provenance.

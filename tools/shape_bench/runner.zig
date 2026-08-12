@@ -303,7 +303,7 @@ fn isHangulConjoiningJamo(codepoint: u21) bool {
 
 fn isArabicPrependClusterLeader(text: []const u8, byte_offset: usize) bool {
     return switch (codepointAtByte(text, byte_offset) orelse return false) {
-        0x0600...0x0605, 0x06dd, 0x0890...0x0891, 0x08e2 => true,
+        0x0600...0x0605, 0x06dd, 0x070f, 0x0890...0x0891, 0x08e2 => true,
         else => false,
     };
 }

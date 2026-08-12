@@ -5770,12 +5770,9 @@ fn appendStchRun(
     const overlap_units = metrics.extra_repeat_overlap_units;
     const output_start = output.items.len;
     if (rtl) {
-        var k = run.len;
-        while (k > 0) {
-            k -= 1;
-            try appendStchGlyphCopies(font, metrics_cache, normalized_variation_coords, run[k], stchActionFromInt(actions[k]), metrics.n_copies, rtl, &x_offset_units, overlap_units, scale, output);
+        for (run, actions) |glyph, raw_action| {
+            try appendStchGlyphCopies(font, metrics_cache, normalized_variation_coords, glyph, stchActionFromInt(raw_action), metrics.n_copies, rtl, &x_offset_units, overlap_units, scale, output);
         }
-        std.mem.reverse(GlyphPosition, output.items[output_start..]);
     } else {
         for (run, actions) |glyph, raw_action| {
             try appendStchGlyphCopies(font, metrics_cache, normalized_variation_coords, glyph, stchActionFromInt(raw_action), metrics.n_copies, rtl, &x_offset_units, overlap_units, scale, output);

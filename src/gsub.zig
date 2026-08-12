@@ -10048,13 +10048,15 @@ test "GSUB explicit feature sequence can chain Bengali half and pres ligatures" 
     defer staged_clusters.deinit(allocator);
     try staged_clusters.appendSlice(allocator, &.{ 0, 0, 0 });
     const staged_syllables = [_]u8{ 1, 1, 1 };
+    const staged_features = [_]u32{ sourceFeatureMaskForTag(unicode.tag("half")).?, 0, 0 };
     try applyFeatureSequenceWithOptions(&bytes, 0, bytes.len, &.{
-        .{ .tag = unicode.tag("half"), .match_source_syllable = true, .auto_zwj = false },
+        .{ .tag = unicode.tag("half"), .source_scoped = true, .match_source_syllable = true, .auto_zwj = false },
         .{ .tag = unicode.tag("pres"), .auto_zwj = false },
     }, &staged, allocator, .{
         .script_tag = .beng,
         .glyph_source_indices = &staged_sources,
         .glyph_cluster_indices = &staged_clusters,
+        .source_features = &staged_features,
         .source_syllables = &staged_syllables,
     });
     try std.testing.expectEqualSlices(GlyphId, &.{6}, staged.items);

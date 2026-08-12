@@ -399,7 +399,7 @@ pub fn normalizeOldSpecPostBaseHalantOrder(
         var target_source: ?usize = null;
         var cursor = source + 1;
         while (cursor < syllable_end) : (cursor += 1) {
-            if (isIndicConsonant(codepoints[cursor], script_tag)) target_source = cursor;
+            if (isOldSpecPostBaseHalantMoveTarget(codepoints[cursor], script_tag)) target_source = cursor;
         }
         const target = target_source orelse continue;
         const target_glyph = glyphIndexForSource(glyph_source_indices.items, target) orelse continue;
@@ -458,6 +458,15 @@ fn mergeOldSpecPostBaseHalantCluster(clusters: []usize, sources: []const usize, 
 fn usesOldSpecPostBaseHalantMove(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .mlym, .mlm2, .beng, .deva => true,
+        else => false,
+    };
+}
+
+fn isOldSpecPostBaseHalantMoveTarget(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    return switch (script_tag) {
+        .deva => codepoint == 0x0930,
+        .beng => codepoint == 0x09af,
+        .mlym, .mlm2 => isIndicConsonant(codepoint, script_tag),
         else => false,
     };
 }
@@ -862,6 +871,62 @@ test "Bengali below vowel before split post component inherits base cluster" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 9, 2, 5, 4, 4 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 1, 0, 2, 1, 3 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 1, 1, 9 }, clusters.items);
+}
+
+test "Old-spec Bengali half-form virama stays before base consonant" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 2, 5, 2 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0995, 0x09cd, 0x0995 };
+    normalizeOldSpecPostBaseHalantOrder(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .beng);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 5, 2 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, sources.items);
+}
+
+test "Old-spec Devanagari post-base ra target moves preceding virama" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 7, 4, 6, 4 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 6, 6 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x091f, 0x094d, 0x0930, 0x094d };
+    normalizeOldSpecPostBaseHalantOrder(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .deva);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 7, 6, 4, 4 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 1, 3 }, sources.items);
 }
 
 const pre_reorder_feature_applications = [_]gsub.FeatureApplication{

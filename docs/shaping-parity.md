@@ -2140,3 +2140,22 @@ shaping-performance superiority.
   `205.716` to `202.203 ns/glyph`). Amiri cycles stayed within `0.06%`.
   Focused common/mark-filtering path tests, existing GPOS mark-set and nested
   extension gates, and the full dual-reference corpus all pass.
+- Indic syllable-boundary scanning now resolves the script-specific virama
+  once per scan and classifies each scalar's base, dependent-mark, and joiner
+  properties once. The previous loop called the composite syllable predicate,
+  then repeated base, mark, joiner, and virama classification while advancing
+  the same scalar. Keeping one out-of-line scanner also prevents its many
+  source-marking and reorder callers from cloning that script-dependent work:
+  the ReleaseFast function body shrank from 1,043 to 657 bytes and total text
+  fell by 384 bytes. A differential test compares the new traversal with the
+  former algorithm for every supported Indic script generation and all
+  representative base/virama/mark/joiner/stacker triples. Fixed-CPU-30
+  A/B/B/A counters reduced NotoSansDevanagari `hi-words` retired instructions
+  by `1.68%`, branches by `4.28%`, cycles by `1.58%`, and branch misses by
+  `0.67%`; combined 31-sample medians improved from `1556.913` to
+  `1534.526 ns/glyph`, about `1.44%`. Roboto and both Amiri workloads remained
+  flat in retired work; their combined medians changed by `-3.80%`, `-0.07%`,
+  and `-0.02%`, respectively, with identical checksums. Both retained parity
+  gates pass, including Hindi plus Bengali, Gurmukhi, Gujarati, Odia, Tamil,
+  Telugu, Kannada, Malayalam, all USE fixtures, and the full Latin/Arabic
+  corpora against HarfBuzz and HarfRust.

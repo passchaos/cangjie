@@ -1382,7 +1382,79 @@ fn halfViramaIndex(codepoints: []const u21, consonant_index: usize, syllable_end
     return null;
 }
 
-fn indicSyllableEnd(codepoints: []const u21, start: usize, script_tag: unicode.OpenTypeScriptTag) usize {
+// This scanner is shared by source marking and several reorder stages. Keep
+// one out-of-line copy: duplicating the script-dependent property dispatch in
+// each caller increases the already-large shaping frame and instruction-cache
+// footprint, while the call boundary is amortized across a complete syllable.
+noinline fn indicSyllableEnd(codepoints: []const u21, start: usize, script_tag: unicode.OpenTypeScriptTag) usize {
+    const virama = viramaCodepoint(script_tag);
+    var index = start;
+    var saw_virama = false;
+    while (index < codepoints.len) : (index += 1) {
+        const codepoint = codepoints[index];
+        const is_base = isIndicBase(codepoint, script_tag);
+        const is_dependent_mark = isIndicDependentMark(codepoint, script_tag);
+        const is_joiner = codepoint == 0x200c or codepoint == 0x200d;
+        if (!(is_base or is_dependent_mark or codepoint == virama or is_joiner)) break;
+        if (index != start and is_base and !saw_virama and !isConsonantWithStacker(codepoints[index - 1], script_tag)) break;
+        if (saw_virama and codepoint == 0x200c) return index + 1;
+
+        saw_virama = if (codepoint == virama)
+            true
+        else if (saw_virama and is_joiner)
+            true
+        else if (is_dependent_mark)
+            saw_virama
+        else
+            false;
+    }
+    return index;
+}
+
+test "one-pass Indic syllable scan matches former property traversal" {
+    const scripts = [_]unicode.OpenTypeScriptTag{
+        .dev2, .deva,
+        .bng2, .beng,
+        .ory2, .orya,
+        .gur2, .guru,
+        .gjr3, .gjr2,
+        .gujr, .tel2,
+        .telu, .knd2,
+        .knda, .tml2,
+        .taml, .mlm2,
+        .mlym,
+    };
+    const representatives = [_]u21{
+        0x0915, 0x094d, 0x093e, 0x1cf5, // Devanagari base/virama/mark/stacker.
+        0x0995, 0x09cd, 0x09be, // Bengali.
+        0x0a15, 0x0a4d, 0x0a3e, // Gurmukhi.
+        0x0a95, 0x0acd, 0x0abe, // Gujarati.
+        0x0b15, 0x0b4d, 0x0b3e, // Odia.
+        0x0b95, 0x0bcd, 0x0bbe, // Tamil.
+        0x0c15, 0x0c4d, 0x0c3e, // Telugu.
+        0x0c95, 0x0ccd, 0x0cbe, 0x0cf1, // Kannada, including stacker.
+        0x0d15, 0x0d4d, 0x0d3e, // Malayalam.
+        0x200c, 0x200d, 0x25cc, ' ', // Joiners, placeholder, and boundary.
+    };
+
+    for (scripts) |script_tag| {
+        for (representatives) |first| {
+            for (representatives) |second| {
+                for (representatives) |third| {
+                    const codepoints = [_]u21{ first, second, third };
+                    for (0..codepoints.len + 1) |start| {
+                        try std.testing.expectEqual(
+                            indicSyllableEndReference(&codepoints, start, script_tag),
+                            indicSyllableEnd(&codepoints, start, script_tag),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn indicSyllableEndReference(codepoints: []const u21, start: usize, script_tag: unicode.OpenTypeScriptTag) usize {
     var index = start;
     var saw_virama = false;
     while (index < codepoints.len) : (index += 1) {

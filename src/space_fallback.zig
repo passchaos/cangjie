@@ -16,11 +16,8 @@ const Kind = enum {
     narrow,
 };
 
-pub fn glyphForCodepoint(font: *const Font, codepoint: u21) !?GlyphId {
-    if (kindForCodepoint(codepoint) == null) return null;
-    if (try font.glyphIndex(codepoint) != 0) return null;
-    const space_glyph = try font.glyphIndex(' ');
-    return if (space_glyph != 0) space_glyph else null;
+pub fn mayUseSpaceGlyphFallback(codepoint: u21) bool {
+    return kindForCodepoint(codepoint) != null;
 }
 
 pub fn advanceWidth(font: *const Font, codepoint: u21, glyph_id: GlyphId, current_advance: u16) !?i32 {

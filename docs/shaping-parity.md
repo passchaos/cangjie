@@ -2044,3 +2044,18 @@ shaping-performance superiority.
   `fa-thelittleprince`. All three full in-process HarfBuzz parity checks remain
   unchanged (`fd03166ae7017b20`, `246e98435cc9c642`, and
   `f2da7bb39eb7323a`).
+- Space-glyph fallback now runs only after the primary cmap lookup reports a
+  missing glyph, and both that lookup and the fallback U+0020 lookup use
+  `GlyphIndexCache` when supplied. Ordinary U+0020 previously bypassed the
+  cache through the fallback helper, revalidating the borrowed cmap table
+  13,881 times per Amiri `fa-thelittleprince` pass. A fixed-CPU-8 A/B/B/A
+  comparison with 31-sample medians reduced the two-run mean from
+  `1745.866` to `1431.046 ns/glyph`, about `18.0%`. Interleaved five-iteration
+  hardware-counter runs reduced retired instructions by about `34.8%`,
+  branches by `36.9%`, and cycles by `18.4%`; the profiled cmap/input stage
+  fell from about `14.7 ms` to `5.9 ms`. Roboto `en-words` retired
+  instructions and branches stayed within `0.02%`, while cycles varied by
+  about `0.5%`. Focused tests retain the public borrowed-cmap mutation defense
+  and missing Unicode-space fallback, and the full corpus gate passes both
+  references, including `spaces-horizontal.txt`, Amiri, Roboto, and variable
+  fonts.

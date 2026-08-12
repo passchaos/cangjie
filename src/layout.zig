@@ -6264,10 +6264,66 @@ fn glyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, code
 }
 
 fn fallbackGlyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {
-    if (try space_fallback.glyphForCodepoint(font, codepoint)) |glyph| return glyph;
     const glyph = try glyphIndexWithOptionalCache(font, cache, codepoint);
     if (glyph != 0) return glyph;
+
+    // Space fallback is needed only after the primary cmap proved this Unicode
+    // space missing. Resolve U+0020 through the same optional cache rather than
+    // bypassing it through Font.glyphIndex: ordinary spaces dominate prose and
+    // must not revalidate a borrowed cmap table once per occurrence.
+    if (space_fallback.mayUseSpaceGlyphFallback(codepoint)) {
+        const space_glyph = try glyphIndexWithOptionalCache(font, cache, ' ');
+        if (space_glyph != 0) return space_glyph;
+    }
     return (try unicode_glyph_fallback.glyphForMissingCodepoint(font, codepoint)) orelse glyph;
+}
+
+test "mapped spaces use the glyph index cache before fallback" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const bytes = try test_font.buildSingleCodepointTtf(allocator, ' ');
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var cache = GlyphIndexCache.init(allocator);
+    defer cache.deinit();
+
+    try std.testing.expectEqual(@as(GlyphId, 1), try fallbackGlyphIndexWithOptionalCache(&font, &cache, ' '));
+    try std.testing.expectEqual(@as(usize, 1), cache.misses);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    const cmap = for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "cmap")) break table;
+    } else return error.TestUnexpectedResult;
+    bytes[cmap.offset + cmap.length - 1] ^= 1;
+
+    // Public cmap lookup remains deliberately defensive for borrowed bytes.
+    // The explicit cache, however, is the caller's immutable-font proof and
+    // must serve ordinary U+0020 just like every other cached codepoint.
+    try std.testing.expectError(error.BadSfnt, font.glyphIndex(' '));
+    try std.testing.expectEqual(@as(GlyphId, 1), try fallbackGlyphIndexWithOptionalCache(&font, &cache, ' '));
+    try std.testing.expectEqual(@as(usize, 1), cache.hits);
+    try std.testing.expectEqual(@as(usize, 1), cache.misses);
+}
+
+test "missing Unicode spaces still fall back to the cached ASCII space" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const bytes = try test_font.buildSingleCodepointTtf(allocator, ' ');
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var cache = GlyphIndexCache.init(allocator);
+    defer cache.deinit();
+
+    try std.testing.expectEqual(@as(GlyphId, 1), try fallbackGlyphIndexWithOptionalCache(&font, &cache, 0x2002));
+    try std.testing.expectEqual(@as(usize, 2), cache.misses);
+    try std.testing.expectEqual(@as(GlyphId, 1), try fallbackGlyphIndexWithOptionalCache(&font, &cache, 0x2002));
+    try std.testing.expectEqual(@as(usize, 2), cache.hits);
+    try std.testing.expectEqual(@as(usize, 2), cache.misses);
 }
 
 fn runMayHaveMarkAttachments(glyphs: []const GlyphId, codepoints: []const u21, glyph_source_indices: []const usize, metadata: GdefLookupMetadata) bool {

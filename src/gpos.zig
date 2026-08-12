@@ -151,6 +151,7 @@ pub const LookupAccelerator = struct {
     pair_pos_class_entries: []const PairClassEntry = &.{},
     pair_pos_class_matrix: []const i16 = &.{},
     pair_pos_extension: bool = false,
+    cursive_subtables: []const CursivePositionSubtable = &.{},
     mark_to_base_subtables: []const MarkToBaseSubtable = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
@@ -478,6 +479,7 @@ fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: [
         allocator.free(accelerator.pair_pos_coverage_classes);
         allocator.free(accelerator.pair_pos_class_entries);
         allocator.free(accelerator.pair_pos_class_matrix);
+        deinitCursivePositionSubtables(allocator, accelerator.cursive_subtables);
         deinitMarkToBaseSubtables(allocator, accelerator.mark_to_base_subtables);
         for (accelerator.chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(accelerator.chaining_groups);
@@ -547,6 +549,12 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         try allocator.alloc(MarkToBaseSubtable, 0);
     @memset(mark_to_base_subtables, .{});
     errdefer deinitMarkToBaseSubtables(allocator, mark_to_base_subtables);
+    const cursive_subtables = if (lookup_type == 3)
+        try allocator.alloc(CursivePositionSubtable, subtable_count)
+    else
+        try allocator.alloc(CursivePositionSubtable, 0);
+    @memset(cursive_subtables, .{ .subtable_offset = 0, .coverage_offset = 0, .entry_exit_count = 0 });
+    errdefer deinitCursivePositionSubtables(allocator, cursive_subtables);
     var coverage_pairs = std.ArrayList(ChainingSubtablePair).empty;
     errdefer coverage_pairs.deinit(allocator);
     var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
@@ -583,6 +591,9 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
             if (mark_to_base_subtables.len != 0) {
                 mark_to_base_subtables[subtable_i] = try buildMarkToBaseSubtable(table, subtable_offset, allocator);
             }
+            if (cursive_subtables.len != 0) {
+                cursive_subtables[subtable_i] = try buildCursivePositionSubtable(table, subtable_offset, allocator);
+            }
             if (chaining_subtables.len != 0) {
                 chaining_subtables[subtable_i] = try buildChainingCoverageSubtable(table, subtable_offset, allocator) orelse continue;
                 try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
@@ -601,6 +612,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     accelerator.pair_pos_class_matrix = try pair_pos_class_matrix.toOwnedSlice(allocator);
     accelerator.pair_pos_extension = extension_type == 2;
     errdefer allocator.free(accelerator.pair_pos_class_matrix);
+    accelerator.cursive_subtables = cursive_subtables;
     accelerator.mark_to_base_subtables = mark_to_base_subtables;
     if (coverage_pairs.items.len != 0) {
         accelerator.coverage_groups = try buildChainingSubtableGroups(coverage_pairs.items, allocator);
@@ -1501,7 +1513,13 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         switch (lookup_type) {
             1 => {}, // SinglePos needs whole-lookup subtable ordering; handled above.
             2 => {}, // PairPos needs whole-lookup subtable ordering; handled above.
-            3 => try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            3 => if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                if (i < accelerator.cursive_subtables.len) {
+                    try collectCursiveAdjustmentParsed(table, accelerator.cursive_subtables[i], glyphs, adjustments, allocator, lookup_flag, lookup_options);
+                    continue;
+                }
+                try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+            } else try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             4 => if (runMayHaveMarkAttachments(glyphs, lookup_options)) {
                 if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
                     if (i < accelerator.mark_to_base_subtables.len) {
@@ -2560,6 +2578,7 @@ const CursivePositionSubtable = struct {
     subtable_offset: usize,
     coverage_offset: usize,
     entry_exit_count: u16,
+    coverage: ?NativeCoverage = null,
 };
 
 fn parseCursivePositionSubtable(table: Table, subtable_offset: usize) GposError!CursivePositionSubtable {
@@ -2572,6 +2591,20 @@ fn parseCursivePositionSubtable(table: Table, subtable_offset: usize) GposError!
     };
 }
 
+fn buildCursivePositionSubtable(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!CursivePositionSubtable {
+    var subtable = try parseCursivePositionSubtable(table, subtable_offset);
+    errdefer if (subtable.coverage) |coverage| deinitNativeCoverage(allocator, coverage);
+    subtable.coverage = try buildNativeCoverage(table, subtable.coverage_offset, allocator);
+    return subtable;
+}
+
+fn deinitCursivePositionSubtables(allocator: std.mem.Allocator, subtables: []const CursivePositionSubtable) void {
+    for (subtables) |subtable| {
+        if (subtable.coverage) |coverage| deinitNativeCoverage(allocator, coverage);
+    }
+    allocator.free(subtables);
+}
+
 fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (glyphs.len < 2) return;
 
@@ -2579,7 +2612,10 @@ fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable,
     var previous_coverage_index: usize = 0;
     for (glyphs, 0..) |glyph, i| {
         if (matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
-        const current_index = try coverageIndex(table, parsed.coverage_offset, glyph) orelse {
+        const current_index = (if (parsed.coverage) |coverage|
+            coverage.index(glyph)
+        else
+            try coverageIndex(table, parsed.coverage_offset, glyph)) orelse {
             // A non-ignored, non-covered glyph breaks cursive adjacency. Ignored
             // glyphs are skipped above, matching OpenType LookupFlag semantics.
             previous_covered_position = null;
@@ -7531,6 +7567,38 @@ test "GPOS cursive attachment skips lookup-flag ignored glyphs" {
     try std.testing.expectEqual(@as(i16, -20), adjustments.items[1].x_advance);
     try std.testing.expectEqual(@as(i16, -20), adjustments.items[1].x_placement);
     try std.testing.expectEqual(@as(i16, 25), adjustments.items[1].y_placement);
+}
+
+test "GPOS parsed cursive subtable reuses native coverage" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+
+    const cursive = 0;
+    writeU16Test(&bytes, cursive + 0, 1);
+    writeU16Test(&bytes, cursive + 2, 14);
+    writeU16Test(&bytes, cursive + 4, 2);
+    writeU16Test(&bytes, cursive + 6, 0);
+    writeU16Test(&bytes, cursive + 8, 22);
+    writeU16Test(&bytes, cursive + 10, 28);
+    writeU16Test(&bytes, cursive + 12, 0);
+    writeCoverage1ListTest(&bytes, cursive + 14, &.{ 10, 12 });
+    writeAnchor1Test(&bytes, cursive + 22, 100, 30);
+    writeAnchor1Test(&bytes, cursive + 28, 20, 5);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
+    const parsed = try buildCursivePositionSubtable(table, cursive, allocator);
+    defer if (parsed.coverage) |coverage| deinitNativeCoverage(allocator, coverage);
+
+    const glyphs = [_]GlyphId{ 10, 12 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try collectCursiveAdjustmentParsed(table, parsed, &glyphs, &adjustments, allocator, 0, .{});
+
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 100), adjustments.items[0].x_advance);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[1].index);
+    try std.testing.expectEqual(@as(i16, -20), adjustments.items[1].x_advance);
 }
 
 test "GPOS cursive attachment skips only unsubstituted default ignorables" {

@@ -2157,6 +2157,7 @@ const ArabicCompositionMatch = struct {
 };
 
 fn arabicCompositionForFontAt(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, starter: u21, text: []const u8, mark_byte_start: usize) !?ArabicCompositionMatch {
+    if (!arabic_normalization.canStartComposition(starter)) return null;
     if (mark_byte_start >= text.len) return null;
     var lookahead = std.unicode.Utf8Iterator{ .bytes = text, .i = mark_byte_start };
     const mark = lookahead.nextCodepoint() orelse return null;

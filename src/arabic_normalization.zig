@@ -25,6 +25,13 @@ pub fn composePair(starter: u21, mark: u21) ?u21 {
     };
 }
 
+pub fn canStartComposition(starter: u21) bool {
+    return switch (starter) {
+        0x0627, 0x0648, 0x064a, 0x06d5, 0x06c1, 0x06d2 => true,
+        else => false,
+    };
+}
+
 pub fn composePairForFont(font: *const Font, cache: ?*GlyphIndexCache, starter: u21, mark: u21) !?Composition {
     const composed = composePair(starter, mark) orelse return null;
     const glyph_id = if (cache) |glyph_cache|
@@ -45,4 +52,6 @@ test "Arabic canonical pairs compose to Unicode precomposed scalars" {
     try std.testing.expectEqual(@as(?u21, 0x06c2), composePair(0x06c1, 0x0654));
     try std.testing.expectEqual(@as(?u21, 0x06d3), composePair(0x06d2, 0x0654));
     try std.testing.expectEqual(@as(?u21, null), composePair(0x0628, 0x0654));
+    try std.testing.expect(canStartComposition(0x0627));
+    try std.testing.expect(!canStartComposition(0x0628));
 }

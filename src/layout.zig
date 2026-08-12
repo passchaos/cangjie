@@ -4194,6 +4194,23 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
             gsub_options.source_codepoints = codepoints.items;
         }
+        if (lookup_options.script_tag == .hang and hasHangulJamo(codepoints.items)) {
+            try source_features.resize(buffer.allocator, codepoints.items.len);
+            if (markHangulJamoSourceFeatures(source_features.items, codepoints.items) and
+                hangulJamoFeaturesCoverAllJamo(source_features.items, codepoints.items))
+            {
+                mergeHangulJamoClusters(glyph_cluster_indices.items, glyph_source_indices.items, codepoints.items);
+                var hangul_jamo_feature_overrides_buf: [32]unicode.FeatureOverride = undefined;
+                const hangul_features = hangulFeatureOverridesWithJamoFeatures(hangul_jamo_feature_overrides_buf[0..], gsub_options.features) orelse gsub_options.features;
+                var hangul_options = gsub_options;
+                hangul_options.features = hangul_features;
+                if (gsub_after_proof) {
+                    try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, hangul_options, gdef_metadata.*);
+                } else {
+                    try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, hangul_options, gdef_metadata.*);
+                }
+            }
+        }
         const apply_morx = font.hasMorxTableForShaping() and
             (!lookup_options.writing_mode.isVertical() or !font.hasGsubTableForShaping());
         if (apply_morx) {
@@ -5077,6 +5094,120 @@ fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints:
 
 fn isMongolianFreeVariationSelector(codepoint: u21) bool {
     return (codepoint >= 0x180b and codepoint <= 0x180d) or codepoint == 0x180f;
+}
+
+fn hasHangulJamo(codepoints: []const u21) bool {
+    for (codepoints) |codepoint| {
+        if (hangulJamoFeatureTag(codepoint) != null) return true;
+    }
+    return false;
+}
+
+fn markHangulJamoSourceFeatures(source_features: []u32, codepoints: []const u21) bool {
+    @memset(source_features, 0);
+    var any = false;
+    var source: usize = 0;
+    while (source < codepoints.len) {
+        if (!isHangulLeadingJamo(codepoints[source]) or source + 1 >= codepoints.len or !isHangulVowelJamo(codepoints[source + 1])) {
+            source += 1;
+            continue;
+        }
+        source_features[source] = unicode.tag("ljmo");
+        source_features[source + 1] = unicode.tag("vjmo");
+        any = true;
+        if (source + 2 < codepoints.len and isHangulTrailingJamo(codepoints[source + 2])) {
+            source_features[source + 2] = unicode.tag("tjmo");
+            source += 3;
+        } else {
+            source += 2;
+        }
+    }
+    return any;
+}
+
+fn hangulJamoFeaturesCoverAllJamo(source_features: []const u32, codepoints: []const u21) bool {
+    for (codepoints, source_features) |codepoint, feature| {
+        if (hangulJamoFeatureTag(codepoint) != null and feature == 0) return false;
+    }
+    return true;
+}
+
+fn mergeHangulJamoClusters(clusters: []usize, sources: []const usize, codepoints: []const u21) void {
+    var glyph_index: usize = 0;
+    while (glyph_index < sources.len) {
+        const source = sources[glyph_index];
+        if (source >= codepoints.len or !isHangulLeadingJamo(codepoints[source])) {
+            glyph_index += 1;
+            continue;
+        }
+        var end = glyph_index + 1;
+        var saw_vowel = false;
+        while (end < sources.len) : (end += 1) {
+            const next_source = sources[end];
+            if (next_source >= codepoints.len) break;
+            const codepoint = codepoints[next_source];
+            if (!saw_vowel and isHangulVowelJamo(codepoint)) {
+                saw_vowel = true;
+                continue;
+            }
+            if (saw_vowel and isHangulTrailingJamo(codepoint)) continue;
+            break;
+        }
+        if (saw_vowel) {
+            shaping_metadata.mergeMonotoneClusters(clusters, glyph_index, end);
+        }
+        glyph_index = end;
+    }
+}
+
+fn hangulFeatureOverridesWithJamoFeatures(out: []unicode.FeatureOverride, overrides: []const unicode.FeatureOverride) ?[]const unicode.FeatureOverride {
+    if (out.len < overrides.len + 3) return null;
+    var count: usize = 0;
+    var has_ljmo = false;
+    var has_vjmo = false;
+    var has_tjmo = false;
+    for (overrides) |override| {
+        if (override.tag == unicode.tag("ljmo")) has_ljmo = true;
+        if (override.tag == unicode.tag("vjmo")) has_vjmo = true;
+        if (override.tag == unicode.tag("tjmo")) has_tjmo = true;
+        out[count] = override;
+        count += 1;
+    }
+    if (!has_ljmo) {
+        out[count] = .{ .tag = unicode.tag("ljmo"), .enabled = true };
+        count += 1;
+    }
+    if (!has_vjmo) {
+        out[count] = .{ .tag = unicode.tag("vjmo"), .enabled = true };
+        count += 1;
+    }
+    if (!has_tjmo) {
+        out[count] = .{ .tag = unicode.tag("tjmo"), .enabled = true };
+        count += 1;
+    }
+    return out[0..count];
+}
+
+fn hangulJamoFeatureTag(codepoint: u21) ?u32 {
+    if (isHangulLeadingJamo(codepoint)) return unicode.tag("ljmo");
+    if (isHangulVowelJamo(codepoint)) return unicode.tag("vjmo");
+    if (isHangulTrailingJamo(codepoint)) return unicode.tag("tjmo");
+    return null;
+}
+
+fn isHangulLeadingJamo(codepoint: u21) bool {
+    return (codepoint >= 0x1100 and codepoint <= 0x115f) or
+        (codepoint >= 0xa960 and codepoint <= 0xa97f);
+}
+
+fn isHangulVowelJamo(codepoint: u21) bool {
+    return (codepoint >= 0x1160 and codepoint <= 0x11a7) or
+        (codepoint >= 0xd7b0 and codepoint <= 0xd7c7);
+}
+
+fn isHangulTrailingJamo(codepoint: u21) bool {
+    return (codepoint >= 0x11a8 and codepoint <= 0x11ff) or
+        (codepoint >= 0xd7cb and codepoint <= 0xd7fb);
 }
 
 fn shapingFeatureEnabled(feature: u32, overrides: []const unicode.FeatureOverride, default_enabled: bool) bool {

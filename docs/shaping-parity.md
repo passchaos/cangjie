@@ -2126,3 +2126,17 @@ shaping-performance superiority.
   `424.264` and `427.709` to `425.305 ns/glyph`). Focused common/rare-path
   tests, existing mark-filtering and source-syllable tests, and the full
   dual-reference corpus all pass.
+- GPOS lookup dispatch now applies the same structural split. `LookupOptions`
+  is 216 bytes, and the previous monolithic collector compiled to an
+  approximately 5.9 KiB frame while copying the options for every lookup. The
+  common wrapper is now about 328 bytes and delegates to an approximately
+  872-byte noinline prepared worker; only `UseMarkFilteringSet` lookups make a
+  customized options copy. Fixed-CPU-8 A/B/B/A counters reduced retired
+  instructions by about `0.50%`, `0.72%`, and `0.28%` for Roboto
+  `en-words`, Devanagari `hi-words`, and Amiri `fa-thelittleprince`.
+  Devanagari nine-sample medians improved from a two-run mean of `1284.334`
+  to `1277.833 ns/glyph`, about `0.51%`. Roboto again crossed frequency
+  states, but both order-matched pairs improved (`345.080` to `202.118` and
+  `205.716` to `202.203 ns/glyph`). Amiri cycles stayed within `0.06%`.
+  Focused common/mark-filtering path tests, existing GPOS mark-set and nested
+  extension gates, and the full dual-reference corpus all pass.

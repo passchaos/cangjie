@@ -1384,20 +1384,71 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
     const dispatch = try lookupDispatch(lookup_offset, lookup_index, table, options);
     const lookup_type = dispatch.lookup_type;
     const lookup_flag = dispatch.lookup_flag;
-    const subtable_count = dispatch.subtable_count;
     recordGposLookupProfile(options.shape_profile, lookup_type);
+    if (lookupNeedsCustomizedOptions(lookup_flag)) {
+        // UseMarkFilteringSet stores its set index after the variable-length
+        // SubTable offset array. The high byte remains reserved for the older
+        // MarkAttachmentType mechanism when bit 4 is clear.
+        // LookupOptions includes all post-GSUB source metadata. Copy it only
+        // for this lookup-local override; ordinary positioning lookups pass
+        // the caller's immutable value directly to the prepared worker.
+        var customized_options = options;
+        customized_options.active_mark_filtering_set = dispatch.mark_filtering_set;
+        try validateMarkFilteringSetIndex(customized_options);
+        return collectLookupWithIndexPrepared(
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            adjustments,
+            allocator,
+            customized_options,
+            run_digest_cache,
+            dispatch,
+        );
+    }
+    return collectLookupWithIndexPrepared(
+        table,
+        lookup_offset,
+        lookup_index,
+        glyphs,
+        adjustments,
+        allocator,
+        options,
+        run_digest_cache,
+        dispatch,
+    );
+}
+
+fn lookupNeedsCustomizedOptions(lookup_flag: u16) bool {
+    return (lookup_flag & 0x0010) != 0;
+}
+
+test "GPOS lookup customization is limited to mark filtering sets" {
+    try std.testing.expect(!lookupNeedsCustomizedOptions(0));
+    try std.testing.expect(!lookupNeedsCustomizedOptions(0xff00));
+    try std.testing.expect(lookupNeedsCustomizedOptions(0x0010));
+    try std.testing.expect(lookupNeedsCustomizedOptions(0xff10));
+}
+
+noinline fn collectLookupWithIndexPrepared(
+    table: Table,
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    lookup_options: LookupOptions,
+    run_digest_cache: ?*RunDigestCache,
+    dispatch: LookupDispatch,
+) (GposError || std.mem.Allocator.Error)!void {
+    const lookup_type = dispatch.lookup_type;
+    const lookup_flag = dispatch.lookup_flag;
+    const subtable_count = dispatch.subtable_count;
     // Positioning results are appended incrementally, but OpenType lookups are
     // atomic units. Preflight supported direct subtables before collecting any
     // adjustment so malformed later subtables cannot leave partial positioning.
     if (!table.assume_validated) try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
-    var lookup_options = options;
-    if ((lookup_flag & 0x0010) != 0) {
-        // UseMarkFilteringSet stores its set index after the variable-length
-        // SubTable offset array. The high byte remains reserved for the older
-        // MarkAttachmentType mechanism when bit 4 is clear.
-        lookup_options.active_mark_filtering_set = dispatch.mark_filtering_set;
-        try validateMarkFilteringSetIndex(lookup_options);
-    }
     if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
         const run_digest = if (run_digest_cache) |cache|
             cache.get(glyphs, lookup_flag, lookup_options)

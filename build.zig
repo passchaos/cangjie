@@ -76,6 +76,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     not_found_variation_selector_glyph: ?[]const u8 = null,
     font_ext: []const u8 = "ttf",
     face_index: ?[]const u8 = null,
+    show_extents: bool = false,
 }{
     .{
         .font_hash = "932ad5132c2761297c74e9976fe25b08e5ffa10b",
@@ -198,6 +199,18 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "d9b8bc10985f24796826c29f7ccba3d0ae11ec02",
         .text = "ܘ\u{070f}ܘܘ.",
         .direction = "rtl",
+    },
+    .{
+        .font_hash = "ee39587d13b2afa5499cc79e45780aa79293bbd4",
+        .text = "\u{1f42f}",
+        .direction = "ltr",
+        .show_extents = true,
+    },
+    .{
+        .font_hash = "fcbaa518d3cce441ed37ae3b1fed6a19e9b54efd",
+        .text = "\u{1f600}",
+        .direction = "ltr",
+        .show_extents = true,
     },
     .{
         .font_hash = "ab14b4eb9d7a67e293f51d30d719add06c9d6e06",
@@ -1951,6 +1964,9 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.variation) |variation| {
                 inline_parity_cmd.addArgs(&.{ "--variation", variation });
+            }
+            if (gate.show_extents) {
+                inline_parity_cmd.addArg("--show-extents");
             }
             shaping_corpus_parity_smoke_step.dependOn(&inline_parity_cmd.step);
         }

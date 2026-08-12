@@ -186,7 +186,7 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
     if (options.not_found_variation_selector_glyph) |glyph_id| {
         hb.hb_buffer_set_not_found_variation_selector_glyph(buffer, glyph_id);
     }
-    hb.hb_buffer_set_cluster_level(buffer, @enumFromInt(@intFromEnum(options.cluster_level orelse .monotone_graphemes)));
+    hb.hb_buffer_set_cluster_level(buffer, @intFromEnum(options.cluster_level orelse .monotone_graphemes));
     var flags: hb.hb_buffer_flags_t = hb.HB_BUFFER_FLAG_DEFAULT;
     if (options.beginning_of_text) flags |= hb.HB_BUFFER_FLAG_BOT;
     if (options.end_of_text) flags |= hb.HB_BUFFER_FLAG_EOT;

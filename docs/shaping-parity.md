@@ -1663,12 +1663,11 @@ shaping-performance superiority.
   keeping public lazy table APIs strict. All eight `aat-trak.tests` rows are
   retained for `TRAK.ttf`; Cangjie applies AAT noncontextual `morx` alternates
   and interpolates horizontal `trak` advances for the requested point size. The
-  `shape-bench` now has a `--show-extents` summary surface, and Cangjie reports
-  HarfBuzz-compatible font-unit bitmap extents for the `color-fonts.tests`
-  CBDT and sbix rows (`0,2179,2963,-2789` and `0,1898,2555,-2405`). Retaining
-  these rows against an automated reference still requires a HarfBuzz extents
-  comparison path because the current local HarfRust reference reports zero
-  color-glyph extents for them.
+  `shape-bench` now has a `--show-extents` summary surface, and the
+  `color-fonts.tests` CBDT and sbix rows are retained against in-process
+  HarfBuzz extents (`0,2179,2963,-2789` and `0,1898,2555,-2405`). The HarfRust
+  CLI still reports zero color-glyph extents for these rows, so the retained
+  automated reference is HarfBuzz rather than HarfRust.
 - The full six-row HarfBuzz in-house `default-ignorables.tests` file is retained
   as inline gates. It covers CGJ/Arabic and ZWJ/mark interactions across the
   fixture fonts named above; broader default-ignorable work now belongs to

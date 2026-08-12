@@ -940,6 +940,36 @@ test "USE pref substitutions reorder as prebase glyphs" {
     try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, &sources);
 }
 
+test "USE prebase vowel reorders before synthetic dotted circle" {
+    var glyph_ids = [_]GlyphId{ 134, 67 };
+    var sources = [_]usize{ 0, 1 };
+    var cluster_owners = [_]usize{ 0, 0 };
+    var substituted = [_]bool{ false, false };
+    var components = [_]ligature_provenance.Info{ .{}, .{} };
+    components[0].flags.synthetic_base = true;
+    const syllable_serials = [_]u8{ 0x12, 0x12 };
+    const rphf_substituted = [_]bool{ false, false };
+    const pref_substituted = [_]bool{ false, false };
+    const codepoints = [_]u21{ 0x25cc, 0x093f };
+
+    reorderGlyphs(
+        &glyph_ids,
+        &sources,
+        &cluster_owners,
+        &substituted,
+        &components,
+        &syllable_serials,
+        &rphf_substituted,
+        &pref_substituted,
+        &codepoints,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 67, 134 }, &glyph_ids);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, &sources);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, &cluster_owners);
+    try std.testing.expect(components[1].flags.synthetic_base);
+}
+
 test "USE records only the first rphf substitution in each syllable" {
     const rphf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("rphf")).?;
     const sources = [_]usize{ 0, 0, 2, 3, 4 };

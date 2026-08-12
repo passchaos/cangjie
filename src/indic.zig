@@ -54,11 +54,15 @@ pub fn reorderPreBaseMatras(
     codepoints: []const u21,
     script_tag: unicode.OpenTypeScriptTag,
 ) void {
+    var processed_source: ?usize = null;
     var index: usize = 0;
     while (index < glyph_source_indices.items.len) : (index += 1) {
         const source_index = glyph_source_indices.items[index];
         if (source_index >= codepoints.len) continue;
         if (!isPreBaseMatra(codepoints[source_index], script_tag)) continue;
+        if (keepsBrokenPreBaseMatraBeforeDottedCircle(script_tag) and
+            processed_source != null and processed_source.? == source_index) continue;
+        processed_source = source_index;
 
         const following_mark_sources = followingMatraMarkSources(glyph_source_indices.items, codepoints, index, source_index, script_tag);
         const syllable_start = indicSyllableStart(codepoints, source_index, script_tag);
@@ -139,12 +143,21 @@ fn followingMatraMarkSources(glyph_sources: []const usize, codepoints: []const u
     while (glyph_index < glyph_sources.len and count < result.len) : (glyph_index += 1) {
         const source = glyph_sources[glyph_index];
         if (source <= matra_source or source >= codepoints.len) break;
-        if (!isIndicFormatOrNonspacingMark(codepoints[source]) and
-            !isLeadingPreBaseMatraMark(codepoints[source], script_tag)) break;
+        if (!isPreBaseMatraCompanionMark(codepoints[source], script_tag)) break;
         result[count] = source;
         count += 1;
     }
     return result;
+}
+
+fn isPreBaseMatraCompanionMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
+    if (isLeadingPreBaseMatraMark(codepoint, script_tag)) return true;
+    if (!unicode.isNonspacingMarkCodepoint(codepoint)) return false;
+    return unicode.modifiedCombiningClassForShaping(codepoint) != 0;
+}
+
+fn keepsBrokenPreBaseMatraBeforeDottedCircle(script_tag: unicode.OpenTypeScriptTag) bool {
+    return script_tag == .dev2 or script_tag == .deva;
 }
 
 pub fn reorderPrefGlyphs(
@@ -1947,6 +1960,143 @@ test "Devanagari prishthamatra skips earlier nukta before moved pre-base matra" 
     try std.testing.expectEqualSlices(GlyphId, &.{ 4, 2, 3, 1 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 3, 1, 2, 0 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, clusters.items);
+}
+
+test "Devanagari pre-base matra leaves following anusvara after base" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 60, 67, 6, 61 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0, 9 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0938, 0x093f, 0x0902, 0x0939 };
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .dev2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 67, 60, 6, 61 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0, 2, 3 }, sources.items);
+}
+
+test "Devanagari standalone pre-base matra moves before dotted circle" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 134, 67 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{} });
+
+    const codepoints = [_]u21{ 0x25cc, 0x093f };
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .dev2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 67, 134 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Devanagari broken pre-base matra remains before inserted dotted circle" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 67);
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.append(std.testing.allocator, 0);
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.append(std.testing.allocator, 0);
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.append(std.testing.allocator, false);
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.append(std.testing.allocator, .{});
+
+    const codepoints = [_]u21{0x093f};
+    try insertDottedCirclesForBrokenClusters(
+        std.testing.allocator,
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        134,
+        .dev2,
+    );
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .dev2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 67, 134 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Telugu broken pre-base matra reorders after inserted dotted circle" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 8);
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.append(std.testing.allocator, 0);
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.append(std.testing.allocator, 0);
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.append(std.testing.allocator, false);
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.append(std.testing.allocator, .{});
+
+    const codepoints = [_]u21{0x0c47};
+    try insertDottedCirclesForBrokenClusters(
+        std.testing.allocator,
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        13,
+        .tel2,
+    );
+    reorderPreBaseMatras(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .tel2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 13, 8 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
 }
 
 test "Kannada initial ra virama ZWJ normalizes for legacy half form" {

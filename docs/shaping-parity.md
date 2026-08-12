@@ -1649,11 +1649,12 @@ shaping-performance superiority.
   and `e8691822f6a705e3e9fb48a0405c645b1a036590.ttf`.
 - The `synthetic.tests` fixture font `NotoSans-VF.abc.ttf` now parses for
   shaping even though its optional STAT table carries stale name references;
-  public STAT APIs still revalidate and report the invalid metadata. The actual
-  synthetic slant/bold rows remain open because the current local `hr-shape`
-  reference runner does not expose upstream `--font-slant` / `--font-bold`, and
-  Cangjie still needs an explicit synthetic-font shaping surface before those
-  rows can be retained.
+  public STAT APIs still revalidate and report the invalid metadata. The
+  `shape-bench` now exposes `--font-slant` and `--font-bold`, and retained
+  Cangjie expected-output gates cover both upstream `synthetic.tests` rows:
+  slanted `abc` in `ttb` with offsets `-280,-948`, `-307,-1056`,
+  `-240,-949`, and synthetic-bold `abc` with offsets `-430,-1148`,
+  `-457,-1256`, `-390,-1149`.
 - AAT and extents parity remain open. Both HarfBuzz in-house `aat-morx.tests`
   rows are retained: Cangjie now runs a focused AAT `morx` ligature
   state-machine path that forms `A_E_D` across intervening glyphs while

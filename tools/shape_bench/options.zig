@@ -122,6 +122,9 @@ pub const Options = struct {
     text_before: []const u8 = "",
     text_after: []const u8 = "",
     size: f32 = 20,
+    font_slant: f32 = 0,
+    font_bold_x: f32 = 0,
+    font_bold_y: f32 = 0,
     iterations: usize = 10_000,
     warmup: usize = 1_000,
     samples: usize = 1,
@@ -142,6 +145,12 @@ pub const Options = struct {
     line_summary: bool = false,
     glyph_summary: bool = false,
     compare_positions: bool = true,
+    expected_glyph_ids: ?[]const u8 = null,
+    expected_clusters: ?[]const u8 = null,
+    expected_x_advances: ?[]const u8 = null,
+    expected_y_advances: ?[]const u8 = null,
+    expected_x_offsets: ?[]const u8 = null,
+    expected_y_offsets: ?[]const u8 = null,
     show_flags: bool = false,
     show_extents: bool = false,
     unsafe_to_concat: bool = false,
@@ -244,6 +253,14 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.size = try std.fmt.parseFloat(f32, args[i]);
+        } else if (std.mem.eql(u8, arg, "--font-slant")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.font_slant = try parseFiniteFloat(args[i]);
+        } else if (std.mem.eql(u8, arg, "--font-bold")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            try parseFontBold(&options, args[i]);
         } else if (std.mem.eql(u8, arg, "--iterations")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -301,6 +318,30 @@ pub fn parse(args: []const []const u8) !Options {
             options.glyph_summary = true;
         } else if (std.mem.eql(u8, arg, "--no-positions")) {
             options.compare_positions = false;
+        } else if (std.mem.eql(u8, arg, "--expect-glyph-ids")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.expected_glyph_ids = args[i];
+        } else if (std.mem.eql(u8, arg, "--expect-clusters")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.expected_clusters = args[i];
+        } else if (std.mem.eql(u8, arg, "--expect-x-advances")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.expected_x_advances = args[i];
+        } else if (std.mem.eql(u8, arg, "--expect-y-advances")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.expected_y_advances = args[i];
+        } else if (std.mem.eql(u8, arg, "--expect-x-offsets")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.expected_x_offsets = args[i];
+        } else if (std.mem.eql(u8, arg, "--expect-y-offsets")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.expected_y_offsets = args[i];
         } else if (std.mem.eql(u8, arg, "--show-flags")) {
             options.line_summary = true;
             options.glyph_summary = true;
@@ -336,8 +377,25 @@ pub fn parse(args: []const []const u8) !Options {
     }
 
     if (!std.math.isFinite(options.size) or options.size <= 0) return error.InvalidArguments;
+    if (!std.math.isFinite(options.font_slant) or !std.math.isFinite(options.font_bold_x) or !std.math.isFinite(options.font_bold_y)) return error.InvalidArguments;
     if ((options.engine == .coretext or options.engine == .harfrust or options.engine == .harfbuzz or options.engine == .compare_coretext or options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) and options.font_path == null) return error.InvalidArguments;
     return options;
+}
+
+fn parseFiniteFloat(text: []const u8) !f32 {
+    const value = try std.fmt.parseFloat(f32, text);
+    if (!std.math.isFinite(value)) return error.InvalidArguments;
+    return value;
+}
+
+fn parseFontBold(options: *Options, text: []const u8) !void {
+    var parts = std.mem.tokenizeAny(u8, text, " ,");
+    const x_text = parts.next() orelse return error.InvalidArguments;
+    const x = try parseFiniteFloat(x_text);
+    const y = if (parts.next()) |y_text| try parseFiniteFloat(y_text) else x;
+    if (parts.next() != null) return error.InvalidArguments;
+    options.font_bold_x = x;
+    options.font_bold_y = y;
 }
 
 fn parseVariationCoords(options: *Options, text: []const u8) !void {
@@ -497,6 +555,8 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --text-before TEXT           pre-context for item shaping
         \\  --text-after TEXT            post-context for item shaping
         \\  --size PX                    font size, default 20
+        \\  --font-slant VALUE           synthetic slant ratio for parity output
+        \\  --font-bold VALUE[,Y]        synthetic bold x/y strength ratios
         \\  --iterations N               measured iterations, default 10000
         \\  --warmup N                   unmeasured warmup iterations, default 1000
         \\  --samples N                  independent measured samples, default 1
@@ -517,6 +577,12 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --line-summary               print per-line glyph counts and checksums for the first measured iteration
         \\  --glyph-summary              include per-line glyph id lists with --line-summary
         \\  --no-positions               skip advance/offset comparison in compare engines
+        \\  --expect-glyph-ids CSV       require first line glyph ids to match
+        \\  --expect-clusters CSV        require first line clusters to match
+        \\  --expect-x-advances CSV      require first line x advances to match
+        \\  --expect-y-advances CSV      require first line y advances to match
+        \\  --expect-x-offsets CSV       require first line x offsets to match
+        \\  --expect-y-offsets CSV       require first line y offsets to match
         \\  --show-flags                 include per-glyph shaping flags with --glyph-summary
         \\  --show-extents               include per-glyph extents with --glyph-summary
         \\  --unsafe-to-concat           produce unsafe-to-concat glyph flags

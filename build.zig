@@ -1652,6 +1652,45 @@ const retained_harfrust_text_parity_gates = [_]struct {
     },
 };
 
+const retained_inline_cangjie_expected_gates = [_]struct {
+    font_hash: []const u8,
+    text: []const u8,
+    direction: []const u8,
+    font_slant: ?[]const u8 = null,
+    font_bold: ?[]const u8 = null,
+    expected_glyph_ids: []const u8,
+    expected_clusters: []const u8,
+    expected_x_advances: []const u8,
+    expected_y_advances: []const u8,
+    expected_x_offsets: []const u8,
+    expected_y_offsets: []const u8,
+}{
+    .{
+        .font_hash = "NotoSans-VF.abc",
+        .text = "abc",
+        .direction = "ttb",
+        .font_slant = "0.5",
+        .expected_glyph_ids = "1,2,3",
+        .expected_clusters = "0,1,2",
+        .expected_x_advances = "0,0,0",
+        .expected_y_advances = "-1362,-1362,-1362",
+        .expected_x_offsets = "-280,-307,-240",
+        .expected_y_offsets = "-948,-1056,-949",
+    },
+    .{
+        .font_hash = "NotoSans-VF.abc",
+        .text = "abc",
+        .direction = "ttb",
+        .font_bold = "0.1",
+        .expected_glyph_ids = "1,2,3",
+        .expected_clusters = "0,1,2",
+        .expected_x_advances = "0,0,0",
+        .expected_y_advances = "-1362,-1362,-1362",
+        .expected_x_offsets = "-430,-457,-390",
+        .expected_y_offsets = "-1148,-1256,-1149",
+    },
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -1961,6 +2000,31 @@ pub fn build(b: *std.Build) void {
                 inline_harfrust_parity_cmd.addArg("--bot");
             }
             shaping_corpus_parity_smoke_step.dependOn(&inline_harfrust_parity_cmd.step);
+        }
+        for (retained_inline_cangjie_expected_gates) |gate| {
+            const expected_cmd = b.addRunArtifact(shape_bench_exe);
+            expected_cmd.addArgs(&.{
+                "--font",                 b.fmt("{s}/{s}.ttf", .{ harfbuzz_in_house_fonts, gate.font_hash }),
+                "--text",                 gate.text,
+                "--direction",            gate.direction,
+                "--glyph-summary",        "--iterations",
+                "1",                      "--warmup",
+                "0",                      "--samples",
+                "1",                      "--expect-glyph-ids",
+                gate.expected_glyph_ids,  "--expect-clusters",
+                gate.expected_clusters,   "--expect-x-advances",
+                gate.expected_x_advances, "--expect-y-advances",
+                gate.expected_y_advances, "--expect-x-offsets",
+                gate.expected_x_offsets,  "--expect-y-offsets",
+                gate.expected_y_offsets,
+            });
+            if (gate.font_slant) |font_slant| {
+                expected_cmd.addArgs(&.{ "--font-slant", font_slant });
+            }
+            if (gate.font_bold) |font_bold| {
+                expected_cmd.addArgs(&.{ "--font-bold", font_bold });
+            }
+            shaping_corpus_parity_smoke_step.dependOn(&expected_cmd.step);
         }
         for (retained_harfrust_text_parity_gates) |gate| {
             const text_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);

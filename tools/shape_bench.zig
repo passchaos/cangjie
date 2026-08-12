@@ -86,6 +86,7 @@ pub fn main(init: std.process.Init) !void {
         allocator.free(result.line_summaries);
         allocator.free(result.samples);
     }
+    try verifyExpectedSummary(allocator, options, result.line_summaries);
     report.print(options, result);
 }
 
@@ -427,6 +428,44 @@ fn positionValues(summary: runner.BenchResult.LineSummary, kind: MismatchKind) [
 
 fn emptyLineSummary(line_index: usize) runner.BenchResult.LineSummary {
     return .{ .index = line_index, .text_bytes = 0, .glyph_count = 0, .checksum = 0 };
+}
+
+fn verifyExpectedSummary(allocator: std.mem.Allocator, options: options_mod.Options, summaries: []const runner.BenchResult.LineSummary) !void {
+    if (options.expected_glyph_ids == null and
+        options.expected_clusters == null and
+        options.expected_x_advances == null and
+        options.expected_y_advances == null and
+        options.expected_x_offsets == null and
+        options.expected_y_offsets == null)
+    {
+        return;
+    }
+    if (summaries.len == 0) return error.ExpectedSummaryMismatch;
+    const summary = summaries[0];
+    if (options.expected_glyph_ids) |text| try expectCsv(u32, allocator, text, summary.glyph_ids);
+    if (options.expected_clusters) |text| try expectCsv(u32, allocator, text, summary.clusters);
+    if (options.expected_x_advances) |text| try expectCsv(i32, allocator, text, summary.x_advances);
+    if (options.expected_y_advances) |text| try expectCsv(i32, allocator, text, summary.y_advances);
+    if (options.expected_x_offsets) |text| try expectCsv(i32, allocator, text, summary.x_offsets);
+    if (options.expected_y_offsets) |text| try expectCsv(i32, allocator, text, summary.y_offsets);
+}
+
+fn expectCsv(comptime T: type, allocator: std.mem.Allocator, text: []const u8, actual: []const T) !void {
+    const expected = try parseCsv(T, allocator, text);
+    defer allocator.free(expected);
+    if (!std.mem.eql(T, expected, actual)) return error.ExpectedSummaryMismatch;
+}
+
+fn parseCsv(comptime T: type, allocator: std.mem.Allocator, text: []const u8) ![]T {
+    var values = std.ArrayList(T).empty;
+    errdefer values.deinit(allocator);
+    var parts = std.mem.splitScalar(u8, text, ',');
+    while (parts.next()) |raw_part| {
+        const part = std.mem.trim(u8, raw_part, " \t\r\n");
+        if (part.len == 0) return error.InvalidArguments;
+        try values.append(allocator, try std.fmt.parseInt(T, part, 10));
+    }
+    return try values.toOwnedSlice(allocator);
 }
 
 fn comparableSlice(comptime T: type, allocator: std.mem.Allocator, items: []const T, order: CompareOrder) ![]const T {

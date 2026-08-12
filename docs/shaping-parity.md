@@ -1794,12 +1794,11 @@ shaping-performance superiority.
   layout-only shaping subsets without `CFF`/`CFF2` while leaving outline APIs
   to report `MissingTable` if glyph geometry is requested. The Bengali
   `ligature-id.tests` file for
-  `1c2fb74c1b2aa173262734c1f616148f1648cfd6.ttf` remains open: the current
-  retained corpus still fails on the leading `U+0995,U+09CD,U+0995` conjunct
-  because Cangjie forms the half glyph but does not yet form HarfBuzz's
-  subsequent `pres` ligature. Old-spec Bengali does normalize `virama+ra` to
-  the `ra+virama` glyph order for `blwf/vatu`, but broader source-scoped
-  `half/pres` parity is not complete. The Arabic `ligature-id.tests` row for
+  `1c2fb74c1b2aa173262734c1f616148f1648cfd6.ttf` now retains the leading
+  `U+0995,U+09CD,U+0995` conjunct by keeping the pre-base virama available for
+  `half` before the `pres` ligature stage. Old-spec Bengali still normalizes
+  `virama+ra` to the `ra+virama` glyph order for `blwf/vatu`. The Arabic
+  `ligature-id.tests` row for
   `b31e6c52a31edadc16f1bec9efe6019e2d59824a.ttf` is retained too, covering a
   `lam + fatha + lam + damma + heh` ligature with mark positioning; the long
   repeated `fa + alef` Arabic row for `8339c821814d9bad7c77169332327ad8b0f33c81.ttf`
@@ -1819,11 +1818,13 @@ shaping-performance superiority.
   the stacker consonant until `pstf` can form the stacker glyph. The first
   Malayalam `indic-malayalam-dot-reph.tests` row for
   `55e2910dbc9ef5dd89f4e146e7e0152169545b6a.ttf` is retained for
-  `U+0D4E,U+0D15`; broader rows from the same fixture remain open, including
-  `U+0D17,U+0D4D,U+0D17`, `U+0D17,U+0D4D,U+0D17,U+0D4B`, and their logical
-  repha variants. Cangjie now runs canonical split-matra decomposition in the
-  Indic path so U+0D4B shapes as `E + AA` components before GSUB/GPOS, but the
-  old Malayalam stacker/pref ligature stage still needs broader parity work.
+  `U+0D4E,U+0D15`; the same modern Malayalam ordering fix now also retains
+  doubled-consonant stackers such as `U+0D17,U+0D4D,U+0D17`,
+  `U+0D17,U+0D4D,U+0D17,U+0D4B`, and logical-repha combinations such as
+  `U+0D4E,U+0D28,U+0D4D,U+0D28`. Cangjie now runs canonical split-matra
+  decomposition in the Indic path so U+0D4B shapes as `E + AA` components before
+  GSUB/GPOS, but the old Malayalam stacker/pref ligature stage still needs
+  broader parity work.
   Traditional Indic shaping now follows HarfBuzz's no-zero-width-mark policy,
   so rows 13 and 14 keep the Malayalam U vowel sign advance. The Malayalam
   `indic-old-spec.tests` row for

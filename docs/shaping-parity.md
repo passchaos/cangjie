@@ -2092,3 +2092,21 @@ shaping-performance superiority.
   Roboto's profiled `position_stch_ns` fell from about `6.3 ms` to zero.
   The full dual-reference corpus and all three retained Arabic/Syriac active
   `stch` rows pass unchanged.
+- Unicode mark predicates now reject scalars below their authoritative first
+  members (U+0300 for combining/nonspacing marks and U+0903 for spacing marks)
+  before entering long script-range chains. The complete Devanagari block uses
+  one early block dispatch and compact exact nonspacing/spacing predicates, so
+  Hindi letters also avoid testing the preceding Latin, RTL, and Tibetan mark
+  families. Tests exhaust every scalar below both boundaries and all 128
+  Devanagari-block scalars against the retained mark sets. Fixed-CPU-8
+  A/B/B/A comparisons kept identical checksums. Roboto changed frequency
+  plateaus during the run, but both order-matched five-iteration/11-sample
+  pairs improved (`439.991` to `295.033` and `242.339` to
+  `209.900 ns/glyph`, about `32.9%` and `13.4%`). Stable
+  three-iteration/nine-sample Devanagari medians improved from a two-run mean
+  of `1333.864` to `1305.386 ns/glyph`, about `2.13%`. Interleaved
+  hardware counters reduced retired instructions by about `17.0%`, `2.65%`,
+  and `3.07%` for Roboto, Devanagari, and Amiri `fa-thelittleprince`;
+  branches fell about `28.2%`, `4.24%`, and `4.93%`, respectively. The full
+  dual-reference corpus, including Latin combining-mark zero-width and Indic
+  mark/cluster gates, passes unchanged.

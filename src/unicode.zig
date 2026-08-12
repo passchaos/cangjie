@@ -5994,6 +5994,14 @@ fn hangulGraphemeClass(codepoint: u21) HangulGraphemeClass {
 }
 
 fn isCombiningMark(codepoint: u21) bool {
+    // U+0300 is Unicode's first combining/mark scalar. Keep the compact
+    // script-specific range chain out of ASCII and Latin-1 shaping loops.
+    if (codepoint < 0x0300) return false;
+    // One shift identifies the complete Devanagari block. It is worth
+    // dispatching before the multi-script range chain because ordinary Hindi
+    // letters dominate Indic shaping but are not marks; falling through would
+    // test every earlier Latin/RTL/Tibetan mark family first.
+    if (codepoint >> 7 == 0x12) return isDevanagariNonspacingMark(codepoint);
     return (codepoint >= 0x0300 and codepoint <= 0x036f) or
         // These compact script-specific ranges cover combining marks for the
         // non-Latin scripts Cangjie already itemizes. Without them, accents,
@@ -6061,13 +6069,6 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x0f8d and codepoint <= 0x0f97) or
         (codepoint >= 0x0f99 and codepoint <= 0x0fbc) or
         codepoint == 0x0fc6 or
-        (codepoint >= 0x0900 and codepoint <= 0x0902) or
-        codepoint == 0x093a or
-        codepoint == 0x093c or
-        (codepoint >= 0x0941 and codepoint <= 0x0948) or
-        codepoint == 0x094d or
-        (codepoint >= 0x0951 and codepoint <= 0x0957) or
-        (codepoint >= 0x0962 and codepoint <= 0x0963) or
         // Bengali nonspacing signs include nukta, dependent vowels, virama,
         // and vocalic marks. These are typed after the base consonant but
         // shape as one orthographic unit, so grapheme and word boundaries must
@@ -6388,11 +6389,73 @@ pub fn isSpacingMarkCodepoint(codepoint: u21) bool {
 /// use Mn to synthesize glyph classes when GDEF lacks a GlyphClassDef, whereas
 /// Extend also includes spacing modifier letters and default-ignorables.
 pub fn isNonspacingMarkCodepoint(codepoint: u21) bool {
+    if (codepoint < 0x0300) return false;
+    if (codepoint >> 7 == 0x12) return isDevanagariNonspacingMark(codepoint);
     return nonspacing_mark.contains(codepoint);
 }
 
 pub fn isUnicodeMarkCodepoint(codepoint: u21) bool {
+    if (codepoint < 0x0300) return false;
+    if (codepoint >> 7 == 0x12) {
+        return isDevanagariNonspacingMark(codepoint) or
+            isDevanagariSpacingMark(codepoint);
+    }
     return isCombiningMark(codepoint) or isSpacingMark(codepoint);
+}
+
+fn isDevanagariNonspacingMark(codepoint: u21) bool {
+    return (codepoint >= 0x0900 and codepoint <= 0x0902) or
+        codepoint == 0x093a or
+        codepoint == 0x093c or
+        (codepoint >= 0x0941 and codepoint <= 0x0948) or
+        codepoint == 0x094d or
+        (codepoint >= 0x0951 and codepoint <= 0x0957) or
+        (codepoint >= 0x0962 and codepoint <= 0x0963);
+}
+
+fn isDevanagariSpacingMark(codepoint: u21) bool {
+    return codepoint == 0x0903 or
+        (codepoint >= 0x093e and codepoint <= 0x0940) or
+        (codepoint >= 0x0949 and codepoint <= 0x094c);
+}
+
+test "Unicode mark predicates preserve their lowest scalar boundaries" {
+    for (0..0x0300) |codepoint| {
+        const scalar: u21 = @intCast(codepoint);
+        try std.testing.expect(!isCombiningMark(scalar));
+        try std.testing.expect(!isNonspacingMarkCodepoint(scalar));
+        try std.testing.expect(!isUnicodeMarkCodepoint(scalar));
+    }
+    for (0..0x0903) |codepoint| {
+        try std.testing.expect(!isSpacingMarkCodepoint(@intCast(codepoint)));
+    }
+
+    try std.testing.expect(isCombiningMark(0x0300));
+    try std.testing.expect(isNonspacingMarkCodepoint(0x0300));
+    try std.testing.expect(isUnicodeMarkCodepoint(0x0300));
+    try std.testing.expect(isSpacingMarkCodepoint(0x0903));
+    try std.testing.expect(isUnicodeMarkCodepoint(0x0903));
+
+    // Exhaust the complete block so the early block dispatch cannot classify
+    // an ordinary letter as a mark or drift from the exact retained ranges.
+    for (0x0900..0x0980) |codepoint| {
+        const scalar: u21 = @intCast(codepoint);
+        const expected_nonspacing =
+            (codepoint >= 0x0900 and codepoint <= 0x0902) or
+            codepoint == 0x093a or
+            codepoint == 0x093c or
+            (codepoint >= 0x0941 and codepoint <= 0x0948) or
+            codepoint == 0x094d or
+            (codepoint >= 0x0951 and codepoint <= 0x0957) or
+            (codepoint >= 0x0962 and codepoint <= 0x0963);
+        const expected_spacing = codepoint == 0x0903 or
+            (codepoint >= 0x093e and codepoint <= 0x0940) or
+            (codepoint >= 0x0949 and codepoint <= 0x094c);
+        try std.testing.expectEqual(expected_nonspacing, isCombiningMark(scalar));
+        try std.testing.expectEqual(expected_nonspacing, isNonspacingMarkCodepoint(scalar));
+        try std.testing.expectEqual(expected_spacing, isSpacingMarkCodepoint(scalar));
+        try std.testing.expectEqual(expected_nonspacing or expected_spacing, isUnicodeMarkCodepoint(scalar));
+    }
 }
 
 fn isEmojiTagCodepoint(codepoint: u21) bool {
@@ -6558,10 +6621,10 @@ fn isExtendedPictographic(codepoint: u21) bool {
 }
 
 fn isSpacingMark(codepoint: u21) bool {
-    return (codepoint >= 0x0903 and codepoint <= 0x0903) or
-        (codepoint >= 0x093e and codepoint <= 0x0940) or
-        (codepoint >= 0x0949 and codepoint <= 0x094c) or
-        (codepoint >= 0x0982 and codepoint <= 0x0983) or
+    // U+0903 DEVANAGARI SIGN VISARGA is the first Unicode spacing mark.
+    if (codepoint < 0x0903) return false;
+    if (codepoint >> 7 == 0x12) return isDevanagariSpacingMark(codepoint);
+    return (codepoint >= 0x0982 and codepoint <= 0x0983) or
         // Telugu and Kannada dependent vowels/viramas are encoded after the
         // consonant but form a single orthographic unit. Covering both Extend
         // and SpacingMark classes here prevents layout/caret primitives from

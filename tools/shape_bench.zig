@@ -65,7 +65,7 @@ pub fn main(init: std.process.Init) !void {
     const font_bytes = try runner.loadFontBytes(init.io, allocator, options);
     defer allocator.free(font_bytes);
 
-    if (options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) {
+    if (options.engine == .compare_coretext or options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) {
         try runReferenceComparison(init.io, allocator, font_bytes, options);
         return;
     }
@@ -79,7 +79,7 @@ pub fn main(init: std.process.Init) !void {
         .coretext => try coretext.run(init.io, allocator, font_bytes, options),
         .harfrust => try harfrust.run(init.io, allocator, options),
         .harfbuzz => try harfbuzz.run(init.io, allocator, font_bytes, options),
-        .compare_harfrust, .compare_harfbuzz => unreachable,
+        .compare_coretext, .compare_harfrust, .compare_harfbuzz => unreachable,
     };
     defer {
         freeLineSummaries(allocator, result.line_summaries);
@@ -127,6 +127,9 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
     options.native_direction_shaping = true;
     options.normalize_clusters_to_graphemes = base_options.cluster_level == null;
     options.language_tag = base_options.language_tag orelse .dflt;
+    if (base_options.engine == .compare_coretext) {
+        options.compare_positions = false;
+    }
 
     var font = try runner.parseFont(allocator, font_bytes, options);
     defer font.deinit();
@@ -135,11 +138,13 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
 
     var reference_options = options;
     reference_options.engine = switch (base_options.engine) {
+        .compare_coretext => .coretext,
         .compare_harfrust => .harfrust,
         .compare_harfbuzz => .harfbuzz,
         else => unreachable,
     };
     const reference_result = switch (reference_options.engine) {
+        .coretext => try coretext.run(io, allocator, font_bytes, reference_options),
         .harfrust => try harfrust.run(io, allocator, reference_options),
         .harfbuzz => try harfbuzz.run(io, allocator, font_bytes, reference_options),
         else => unreachable,
@@ -325,7 +330,7 @@ fn firstLineMismatch(allocator: std.mem.Allocator, options: options_mod.Options,
         }
         const cangjie_clusters = try comparableSlice(u32, allocator, cangjie_lines[line_index].clusters, order);
         errdefer allocator.free(cangjie_clusters);
-        if (!std.mem.eql(u32, cangjie_clusters, harfrust_lines[line_index].clusters)) {
+        if (harfrust_lines[line_index].clusters.len != 0 and !std.mem.eql(u32, cangjie_clusters, harfrust_lines[line_index].clusters)) {
             return .{
                 .kind = .cluster,
                 .line_index = line_index,
@@ -336,7 +341,7 @@ fn firstLineMismatch(allocator: std.mem.Allocator, options: options_mod.Options,
                 .cangjie_position_values = try allocator.alloc(i32, 0),
             };
         }
-        if (options.compare_positions) {
+        if (options.compare_positions and options.engine != .compare_coretext) {
             inline for (.{ MismatchKind.x_advance, MismatchKind.y_advance, MismatchKind.x_offset, MismatchKind.y_offset }) |kind| {
                 const cangjie_values = try comparableSlice(i32, allocator, positionValues(cangjie_lines[line_index], kind), order);
                 errdefer allocator.free(cangjie_values);

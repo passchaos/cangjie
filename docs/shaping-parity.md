@@ -180,6 +180,11 @@ compare mode forces Cangjie to `dflt` because the current `hr-shape` runner
 guesses script and direction but does not guess language. Pass `--language ara`,
 `--language zhs`, etc. to compare an explicit LangSys on both engines.
 
+`compare-coretext` is available for local macOS glyph-id parity probes against
+CoreText. It compares glyph IDs and intentionally skips positions because the
+current CoreText runner does not yet capture clusters or advances. The focused
+SFNS `hello` probe passes locally with matching glyph IDs.
+
 ## Current Evidence Snapshot
 
 Latest retained optimization commit before this parity work:

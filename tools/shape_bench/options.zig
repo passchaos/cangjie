@@ -10,6 +10,7 @@ pub const Engine = enum {
     coretext,
     harfrust,
     harfbuzz,
+    compare_coretext,
     compare_harfrust,
     compare_harfbuzz,
 
@@ -18,6 +19,7 @@ pub const Engine = enum {
         if (std.mem.eql(u8, name, "coretext")) return .coretext;
         if (std.mem.eql(u8, name, "harfrust")) return .harfrust;
         if (std.mem.eql(u8, name, "harfbuzz")) return .harfbuzz;
+        if (std.mem.eql(u8, name, "compare-coretext")) return .compare_coretext;
         if (std.mem.eql(u8, name, "compare-harfrust")) return .compare_harfrust;
         if (std.mem.eql(u8, name, "compare-harfbuzz")) return .compare_harfbuzz;
         return null;
@@ -29,6 +31,7 @@ pub const Engine = enum {
             .coretext => "coretext",
             .harfrust => "harfrust",
             .harfbuzz => "harfbuzz",
+            .compare_coretext => "compare-coretext",
             .compare_harfrust => "compare-harfrust",
             .compare_harfbuzz => "compare-harfbuzz",
         };
@@ -333,7 +336,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
 
     if (!std.math.isFinite(options.size) or options.size <= 0) return error.InvalidArguments;
-    if ((options.engine == .coretext or options.engine == .harfrust or options.engine == .harfbuzz or options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) and options.font_path == null) return error.InvalidArguments;
+    if ((options.engine == .coretext or options.engine == .harfrust or options.engine == .harfbuzz or options.engine == .compare_coretext or options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) and options.font_path == null) return error.InvalidArguments;
     return options;
 }
 
@@ -482,7 +485,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\usage: {s} [--font font.ttf|font.ttc] [--face-index n] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
-        \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-harfrust|compare-harfbuzz
+        \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-coretext|compare-harfrust|compare-harfbuzz
         \\                               shaping engine, default cangjie
         \\  --format text|tsv            output format, default text
         \\  --font PATH                  use a real TTF/OTF/TTC font

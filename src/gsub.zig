@@ -9995,6 +9995,71 @@ test "GSUB source-scoped feature gates multiple substitutions" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 3, 1 }, scoped.items);
 }
 
+test "GSUB explicit feature sequence can chain Bengali half and pres ligatures" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 160;
+    writeU32Test(&bytes, 0, 0x00010000);
+    writeU16Test(&bytes, 4, 10); // ScriptList.
+    writeU16Test(&bytes, 6, 34); // FeatureList.
+    writeU16Test(&bytes, 8, 62); // LookupList.
+
+    writeU16Test(&bytes, 10, 1);
+    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.beng));
+    writeU16Test(&bytes, 16, 8);
+    writeU16Test(&bytes, 18, 4);
+    writeU16Test(&bytes, 20, 0);
+    writeU16Test(&bytes, 22, 0);
+    writeU16Test(&bytes, 24, 0xffff);
+    writeU16Test(&bytes, 26, 2);
+    writeU16Test(&bytes, 28, 0);
+    writeU16Test(&bytes, 30, 1);
+
+    writeU16Test(&bytes, 34, 2);
+    writeFeatureRecord(&bytes, 36, unicode.tag("half"), 14);
+    writeFeatureRecord(&bytes, 42, unicode.tag("pres"), 20);
+    writeFeature(&bytes, 48, 0);
+    writeFeature(&bytes, 54, 1);
+
+    writeU16Test(&bytes, 62, 2);
+    writeU16Test(&bytes, 64, 6);
+    writeU16Test(&bytes, 66, 58);
+    writeLigatureLookupTest(&bytes, 68, 1, 2, 4);
+    writeLigatureLookupTest(&bytes, 120, 4, 1, 6);
+
+    var full = std.ArrayList(GlyphId).empty;
+    defer full.deinit(allocator);
+    try full.appendSlice(allocator, &.{ 1, 2, 1 });
+    try applyWithOptions(&bytes, 0, bytes.len, &full, allocator, .{
+        .script_tag = .beng,
+        .features = &.{
+            .{ .tag = unicode.tag("half"), .enabled = true },
+            .{ .tag = unicode.tag("pres"), .enabled = true },
+        },
+    });
+    try std.testing.expectEqualSlices(GlyphId, &.{6}, full.items);
+
+    var staged = std.ArrayList(GlyphId).empty;
+    defer staged.deinit(allocator);
+    try staged.appendSlice(allocator, &.{ 1, 2, 1 });
+    var staged_sources = std.ArrayList(usize).empty;
+    defer staged_sources.deinit(allocator);
+    try staged_sources.appendSlice(allocator, &.{ 0, 1, 2 });
+    var staged_clusters = std.ArrayList(usize).empty;
+    defer staged_clusters.deinit(allocator);
+    try staged_clusters.appendSlice(allocator, &.{ 0, 0, 0 });
+    const staged_syllables = [_]u8{ 1, 1, 1 };
+    try applyFeatureSequenceWithOptions(&bytes, 0, bytes.len, &.{
+        .{ .tag = unicode.tag("half"), .match_source_syllable = true, .auto_zwj = false },
+        .{ .tag = unicode.tag("pres"), .auto_zwj = false },
+    }, &staged, allocator, .{
+        .script_tag = .beng,
+        .glyph_source_indices = &staged_sources,
+        .glyph_cluster_indices = &staged_clusters,
+        .source_syllables = &staged_syllables,
+    });
+    try std.testing.expectEqualSlices(GlyphId, &.{6}, staged.items);
+}
+
 test "GSUB multiple substitution preserves ligature provenance" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 32;

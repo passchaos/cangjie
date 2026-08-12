@@ -4365,7 +4365,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 
     const position_start = shapeProfileNow(shape_profile, profile_io);
+    const position_sort_start = shapeProfileNow(shape_profile, profile_io);
     std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, adjustmentIndexLessThan);
+    if (shape_profile) |p| p.position_sort_ns += shapeProfileElapsed(position_sort_start, profile_io);
     const has_gpos_attachments = adjustmentsHaveAttachments(gpos_adjustments.items);
     // GPOS adjustments and legacy kern are accumulated in font units, then
     // scaled into user-space coordinates for the final GlyphPosition stream.
@@ -4411,6 +4413,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try glyph_output_indices.resize(buffer.allocator, glyph_ids.items.len);
         @memset(glyph_output_indices.items, std.math.maxInt(usize));
     }
+    const position_loop_start = shapeProfileNow(shape_profile, profile_io);
     for (glyph_ids.items, 0..) |input_glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
@@ -4607,7 +4610,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         previous_glyph = glyph_id;
     }
+    if (shape_profile) |p| {
+        p.position_loop_ns += shapeProfileElapsed(position_loop_start, profile_io);
+        p.position_output_glyphs += buffer.glyphs.items.len - segment_glyph_start;
+    }
     if (has_gpos_attachments) {
+        const attachment_start = shapeProfileNow(shape_profile, profile_io);
         compactAttachmentLinks(
             attachment_links.items,
             glyph_output_indices.items,
@@ -4618,7 +4626,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             attachment_links.items[0 .. buffer.glyphs.items.len - segment_glyph_start],
             lookup_options,
         );
+        if (shape_profile) |p| p.position_attachment_ns += shapeProfileElapsed(attachment_start, profile_io);
     }
+    const stch_start = shapeProfileNow(shape_profile, profile_io);
     if (segment_has_stch_actions) {
         markStchContextActions(buffer.glyphs.items[segment_glyph_start..], stch_actions.items);
     }
@@ -4634,7 +4644,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         metrics_cache,
         lookup_options.normalized_variation_coords,
     );
+    if (shape_profile) |p| p.position_stch_ns += shapeProfileElapsed(stch_start, profile_io);
     if (!lookup_options.writing_mode.isVertical()) {
+        const tracking_start = shapeProfileNow(shape_profile, profile_io);
         if (try font.horizontalTrackingForShaping(buffer.allocator, font_size)) |tracking| {
             if (tracking != 0) {
                 const tracking_advance = tracking * scale;
@@ -4643,9 +4655,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 }
             }
         }
+        if (shape_profile) |p| p.position_tracking_ns += shapeProfileElapsed(tracking_start, profile_io);
     }
     if (shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl) {
+        const reverse_start = shapeProfileNow(shape_profile, profile_io);
         std.mem.reverse(GlyphPosition, buffer.glyphs.items[segment_glyph_start..]);
+        if (shape_profile) |p| p.position_reverse_ns += shapeProfileElapsed(reverse_start, profile_io);
     }
     if (shape_profile) |p| p.position_ns += shapeProfileElapsed(position_start, profile_io);
 }

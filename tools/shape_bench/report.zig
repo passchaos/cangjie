@@ -119,8 +119,41 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         \\profile_gpos_select_ns={d}
         \\profile_gpos_apply_ns={d}
         \\profile_position_ns={d}
+        \\profile_position_sort_ns={d}
+        \\profile_position_loop_ns={d}
+        \\profile_position_attachment_ns={d}
+        \\profile_position_stch_ns={d}
+        \\profile_position_tracking_ns={d}
+        \\profile_position_reverse_ns={d}
+        \\profile_position_output_glyphs={d}
         \\profile_bidi_ns={d}
         \\profile_glyphs={d}
+        \\
+    , .{
+        result.profile.total_ns,
+        result.profile.validate_ns,
+        result.profile.options_ns,
+        result.profile.cmap_ns,
+        result.profile.gdef_ns,
+        result.profile.gsub_ns,
+        result.profile.gsub_select_ns,
+        result.profile.gsub_apply_ns,
+        result.profile.gpos_ns,
+        result.profile.gpos_select_ns,
+        result.profile.gpos_apply_ns,
+        result.profile.position_ns,
+        result.profile.position_sort_ns,
+        result.profile.position_loop_ns,
+        result.profile.position_attachment_ns,
+        result.profile.position_stch_ns,
+        result.profile.position_tracking_ns,
+        result.profile.position_reverse_ns,
+        result.profile.position_output_glyphs,
+        result.profile.bidi_ns,
+        result.profile.glyph_count,
+    });
+    std.debug.print(
+        \\
         \\profile_gsub_lookups={d}
         \\profile_gsub_single_lookups={d}
         \\profile_gsub_multiple_lookups={d}
@@ -136,20 +169,6 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         \\profile_gpos_extension_lookups={d}
         \\
     , .{
-        result.profile.total_ns,
-        result.profile.validate_ns,
-        result.profile.options_ns,
-        result.profile.cmap_ns,
-        result.profile.gdef_ns,
-        result.profile.gsub_ns,
-        result.profile.gsub_select_ns,
-        result.profile.gsub_apply_ns,
-        result.profile.gpos_ns,
-        result.profile.gpos_select_ns,
-        result.profile.gpos_apply_ns,
-        result.profile.position_ns,
-        result.profile.bidi_ns,
-        result.profile.glyph_count,
         result.profile.gsub_lookup_count,
         result.profile.gsub_single_lookup_count,
         result.profile.gsub_multiple_lookup_count,

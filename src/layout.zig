@@ -4370,9 +4370,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // scaled into user-space coordinates for the final GlyphPosition stream.
     const has_gdef_glyph_classes = gdef_metadata.glyph_classes != null;
     const has_gpos_positioning = font.hasGposTableForShaping();
+    const fallback_mark_enabled = fallback_mark.enabled(
+        early_zero_mark_shape,
+        has_gpos_positioning,
+        has_gpos_attachments,
+        false,
+        lookup_options.writing_mode.isVertical(),
+    );
     var previous_glyph: ?GlyphId = null;
     var fallback_mark_base: ?fallback_mark.Base = null;
     var adjustment_cursor: usize = 0;
+    var segment_has_stch_actions = false;
     const kern_lookup = if (!lookup_options.writing_mode.isVertical() and
         shouldApplyLegacyKernFallback(lookup_options.script_tag) and
         shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true))
@@ -4548,7 +4556,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         else
             0.0;
         var fallback_mark_offset = fallback_mark.Offset{};
-        if (fallback_mark.enabled(early_zero_mark_shape, has_gpos_positioning, has_gpos_attachments, mark_attachment, lookup_options.writing_mode.isVertical()) and
+        if (fallback_mark_enabled and
             unicode.isNonspacingMarkCodepoint(source_codepoint))
         {
             if (fallback_mark_base) |*base| {
@@ -4588,12 +4596,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .y_offset = output_y_offset,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
-        const stch_context_flag: u8 = if (stchContextCodepoint(source_codepoint)) 0x80 else 0;
-        try stch_actions.append(buffer.allocator, @intFromEnum(stch_action) | stch_context_flag);
+        if (stch_action != .none) segment_has_stch_actions = true;
+        try stch_actions.append(buffer.allocator, @intFromEnum(stch_action));
         if (has_gpos_attachments and !hide_default_ignorable) {
             attachment_links.items[index] = attachmentLinkForAdjustment(adjustment);
         }
-        if (!hide_default_ignorable and !visible_not_found_variation_selector and !unicode.isNonspacingMarkCodepoint(source_codepoint)) {
+        if (fallback_mark_enabled and !hide_default_ignorable and !visible_not_found_variation_selector and !unicode.isNonspacingMarkCodepoint(source_codepoint)) {
             fallback_mark_base = fallback_mark.baseForGlyph(font, glyph_id, source_span.start, output_y_offset, horizontal_advance, scale, shapingDirectionForGpos(lookup_options) == .ltr) catch null;
         }
         previous_glyph = glyph_id;
@@ -4609,6 +4617,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             attachment_links.items[0 .. buffer.glyphs.items.len - segment_glyph_start],
             lookup_options,
         );
+    }
+    if (segment_has_stch_actions) {
+        markStchContextActions(buffer.glyphs.items[segment_glyph_start..], stch_actions.items);
     }
     try applyStchToSegment(
         buffer.allocator,
@@ -5651,6 +5662,13 @@ fn recordStchActions(ligature_components: *ligature_provenance.Store) void {
             .fixed
         else
             .repeating;
+    }
+}
+
+fn markStchContextActions(glyphs: []const GlyphPosition, stch_actions: []u8) void {
+    if (glyphs.len != stch_actions.len) return;
+    for (glyphs, stch_actions) |glyph, *raw_action| {
+        if (stchContextCodepoint(glyph.codepoint)) raw_action.* |= 0x80;
     }
 }
 

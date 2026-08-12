@@ -4503,12 +4503,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             has_gpos_positioning,
             lookup_options,
         );
-        const fallback_space_advance = if (!lookup_options.writing_mode.isVertical())
+        const fallback_space_advance = if (!lookup_options.writing_mode.isVertical() and space_fallback.mayNeedHorizontalAdvanceFallback(source_codepoint))
             try space_fallback.advanceWidth(font, source_codepoint, glyph_id, metrics.advance_width)
         else
             null;
         const default_vertical_advance_units: i32 = @as(i32, font.ascender) - @as(i32, font.descender);
-        const fallback_space_vertical_advance = if (lookup_options.writing_mode.isVertical())
+        const fallback_space_vertical_advance = if (lookup_options.writing_mode.isVertical() and space_fallback.mayNeedVerticalAdvanceFallback(source_codepoint))
             try space_fallback.advanceHeight(font, source_codepoint, glyph_id, default_vertical_advance_units)
         else
             null;

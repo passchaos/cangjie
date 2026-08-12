@@ -70,6 +70,19 @@ pub fn advanceHeight(font: *const Font, codepoint: u21, glyph_id: GlyphId, defau
     return -length;
 }
 
+pub fn mayNeedHorizontalAdvanceFallback(codepoint: u21) bool {
+    return switch (kindForCodepoint(codepoint) orelse return false) {
+        // U+0020 and U+00A0 fallback returns the current space advance, so the
+        // normal glyph metrics path is already equivalent in horizontal text.
+        .space => false,
+        else => true,
+    };
+}
+
+pub fn mayNeedVerticalAdvanceFallback(codepoint: u21) bool {
+    return kindForCodepoint(codepoint) != null;
+}
+
 fn kindForCodepoint(codepoint: u21) ?Kind {
     return switch (codepoint) {
         0x0020, 0x00a0 => .space,

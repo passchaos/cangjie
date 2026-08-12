@@ -359,6 +359,7 @@ pub fn normalizeOldSpecDevanagariHalantOrder(
         const target_glyph = glyphIndexForSource(glyph_source_indices.items, target) orelse continue;
         if (target_glyph <= glyph_index) continue;
 
+        mergeOldSpecPostBaseHalantCluster(glyph_cluster_indices.items, glyph_source_indices.items, codepoints, syllable_start, target, script_tag);
         shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, glyph_index, target_glyph + 1);
         shaping_metadata.move(
             glyph_ids,
@@ -371,6 +372,94 @@ pub fn normalizeOldSpecDevanagariHalantOrder(
         );
         glyph_index = target_glyph;
     }
+}
+
+pub fn normalizeOldSpecPostBaseHalantOrder(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (!usesOldSpecPostBaseHalantMove(script_tag)) return;
+
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source == 0 or source >= codepoints.len) continue;
+        if (codepoints[source] != viramaCodepoint(script_tag)) continue;
+        if (!isIndicConsonant(codepoints[source - 1], script_tag)) continue;
+
+        const syllable_start = indicSyllableStart(codepoints, source, script_tag);
+        const syllable_end = indicSyllableEnd(codepoints, syllable_start, script_tag);
+        if (source < syllable_start or source >= syllable_end) continue;
+
+        var target_source: ?usize = null;
+        var cursor = source + 1;
+        while (cursor < syllable_end) : (cursor += 1) {
+            if (isIndicConsonant(codepoints[cursor], script_tag)) target_source = cursor;
+        }
+        const target = target_source orelse continue;
+        const target_glyph = glyphIndexForSource(glyph_source_indices.items, target) orelse continue;
+        if (target_glyph <= glyph_index) continue;
+
+        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, glyph_index, target_glyph + 1);
+        shaping_metadata.move(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            glyph_index,
+            target_glyph,
+        );
+        glyph_index = target_glyph;
+        break;
+    }
+}
+
+pub fn mergeMalayalamOldSpecTrailingViramaClusters(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), ligature_components: *const ligature_provenance.Store, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
+    if (script_tag != .mlm2 and script_tag != .mlym) return;
+    var glyph_index: usize = 1;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source = glyph_source_indices.items[glyph_index];
+        if (source >= codepoints.len or codepoints[source] != viramaCodepoint(script_tag)) continue;
+        const previous = glyph_index - 1;
+        if (previous >= ligature_components.infos.items.len) continue;
+        const info = ligature_components.infos.items[previous];
+        if (!info.isLigature()) continue;
+        const sources = ligature_components.componentSources(info) orelse continue;
+        if (sources.len == 0) continue;
+        const syllable_start = indicSyllableStart(codepoints, sources[0], script_tag);
+        const syllable_end = indicSyllableEnd(codepoints, syllable_start, script_tag);
+        if (source < syllable_start or source >= syllable_end) continue;
+        if (previous < glyph_cluster_indices.items.len and glyph_index < glyph_cluster_indices.items.len) {
+            glyph_cluster_indices.items[glyph_index] = glyph_cluster_indices.items[previous];
+        }
+    }
+}
+
+fn mergeOldSpecPostBaseHalantCluster(clusters: []usize, sources: []const usize, codepoints: []const u21, syllable_start: usize, target_source: usize, script_tag: unicode.OpenTypeScriptTag) void {
+    var source_end = target_source + 1;
+    while (source_end < codepoints.len and codepoints[source_end] == viramaCodepoint(script_tag)) {
+        source_end += 1;
+    }
+    const first_glyph = firstGlyphInSourceRange(sources, syllable_start, source_end) orelse return;
+    var last_glyph = first_glyph;
+    for (sources, 0..) |source, glyph_index| {
+        if (source < syllable_start or source >= source_end) continue;
+        last_glyph = @max(last_glyph, glyph_index);
+    }
+    shaping_metadata.mergeMonotoneClusters(clusters, first_glyph, last_glyph + 1);
+}
+
+fn usesOldSpecPostBaseHalantMove(script_tag: unicode.OpenTypeScriptTag) bool {
+    return switch (script_tag) {
+        .mlym, .mlm2, .beng, .deva => true,
+        else => false,
+    };
 }
 
 pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) bool {

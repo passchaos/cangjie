@@ -4250,7 +4250,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             indic.mergePlaceholderDependentMarks(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
             indic.mergeTrailingDependentMarks(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
             indic.mergeKannadaOldSpecTrailingBlwf(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
-            indic.normalizeOldSpecDevanagariHalantOrder(
+            indic.normalizeOldSpecPostBaseHalantOrder(
                 glyph_ids,
                 glyph_source_indices,
                 glyph_cluster_indices,
@@ -4310,6 +4310,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             indic.reorderBeforeSubscriptVowels(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
             indic.reorderBengaliBelowVowelsAfterBase(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+            indic.mergeMalayalamOldSpecTrailingViramaClusters(glyph_cluster_indices, glyph_source_indices, ligature_components, codepoints.items, lookup_options.script_tag);
             indic.reorderGujaratiSplitMatraComponents(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
         }
     }

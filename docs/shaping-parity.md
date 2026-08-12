@@ -68,6 +68,16 @@ fixtures with and without CGJ.
 It also retains focused Indic in-house rows including Bengali contextual `pres`
 at syllable boundaries.
 
+As of the local `1ed2cf3` state, the full retained corpus command below
+completes successfully with the isolated HarfBuzz prefix:
+
+```sh
+zig build shaping-corpus-parity-smoke -Doptimize=ReleaseFast -Denable-harfbuzz=true -Dharfbuzz-prefix=/Users/bytedance/.cache/cangjie-next/harfbuzz-prefix --summary none
+```
+
+This is a retained correctness-corpus result, not a completion signal for the
+broader performance and cross-script coverage objectives below.
+
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup
 dispatcher. Use `--profile-fast-path` when investigating optimized production

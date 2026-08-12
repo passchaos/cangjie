@@ -457,7 +457,7 @@ fn mergeOldSpecPostBaseHalantCluster(clusters: []usize, sources: []const usize, 
 
 fn usesOldSpecPostBaseHalantMove(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
-        .mlym, .mlm2, .beng, .deva => true,
+        .mlym, .beng, .deva => true,
         else => false,
     };
 }
@@ -927,6 +927,34 @@ test "Old-spec Devanagari post-base ra target moves preceding virama" {
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 7, 6, 4, 4 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 2, 1, 3 }, sources.items);
+}
+
+test "Modern Malayalam keeps virama before stacker consonant" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 3, 2 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 0, 0 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0d15, 0x0d4d, 0x0d2f };
+    normalizeOldSpecPostBaseHalantOrder(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, .mlm2);
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 2 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, sources.items);
 }
 
 const pre_reorder_feature_applications = [_]gsub.FeatureApplication{

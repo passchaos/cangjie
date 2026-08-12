@@ -1815,9 +1815,9 @@ shaping-performance superiority.
   where a contextual `pref` lookup decomposes the ligature back to visible
   `virama,ra`. The Malayalam `indic-special-cases.tests` stacker row for
   `c825900b8a5b6571f0eb6c8c25c6512880bc42e9.ttf`
-  (`U+0D15,U+0D4D,U+0D2F`) remains open: Cangjie still leaves
-  `ka,virama,ya` decomposed where HarfBuzz/HarfRust form the stacker glyph.
-  The first Malayalam `indic-malayalam-dot-reph.tests` row for
+  (`U+0D15,U+0D4D,U+0D2F`) now passes by keeping the modern `mlm2` virama before
+  the stacker consonant until `pstf` can form the stacker glyph. The first
+  Malayalam `indic-malayalam-dot-reph.tests` row for
   `55e2910dbc9ef5dd89f4e146e7e0152169545b6a.ttf` is retained for
   `U+0D4E,U+0D15`; broader rows from the same fixture remain open, including
   `U+0D17,U+0D4D,U+0D17`, `U+0D17,U+0D4D,U+0D17,U+0D4B`, and their logical

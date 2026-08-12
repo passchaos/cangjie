@@ -3838,6 +3838,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         codepoints.items,
         lookup_options.cluster_level,
     );
+    var arabic_joining_features: ?[]const u32 = null;
     if (lookup_options.script_tag == .arab) {
         reorderArabicModifierMarksForShaping(
             glyph_ids,
@@ -3870,6 +3871,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         var joining_options = gsub_options;
         joining_options.source_features = source_features.items;
+        arabic_joining_features = source_features.items;
 
         if (shapingFeatureEnabled(unicode.tag("stch"), lookup_options.features, true)) {
             try applyGsubFeatureApplicationsForShaping(
@@ -4400,7 +4402,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try glyph_output_indices.resize(buffer.allocator, glyph_ids.items.len);
         @memset(glyph_output_indices.items, std.math.maxInt(usize));
     }
-    for (glyph_ids.items, 0..) |glyph_id, index| {
+    for (glyph_ids.items, 0..) |input_glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
             @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
         else
@@ -4411,6 +4413,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             source_index;
         const source_span = sourceSpanForGlyph(index, source_index, cluster_index, clusters.items, source_ends.items, ligature_components) orelse
             SourceSpan{ .start = cluster_base, .end = cluster_base };
+        const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
+        var glyph_id = input_glyph_id;
+        if (arabic_joining_features) |features| {
+            if (try arabicPresentationFallbackGlyph(font, glyph_index_cache, glyph_id, source_codepoint, source_index, features)) |fallback_glyph| {
+                glyph_id = fallback_glyph;
+            }
+        }
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id, lookup_options.normalized_variation_coords);
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
         var kern_x_advance: f32 = 0;
@@ -4439,7 +4448,6 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
         else
             @as(f32, @floatFromInt(adjustment.x_advance));
-        const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
         const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
         const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
         const mark_attachment = adjustment.attachment_type == .mark;
@@ -4777,6 +4785,45 @@ fn markArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u
     overlayArabicJoiningSourceFeatures(source_features, codepoints, glyph_source_indices);
 }
 
+fn arabicPresentationFallbackGlyph(
+    font: *const Font,
+    glyph_index_cache: ?*GlyphIndexCache,
+    glyph_id: GlyphId,
+    codepoint: u21,
+    source: usize,
+    source_features: []const u32,
+) !?GlyphId {
+    if (font.hasGsubTableForShaping()) return null;
+    if (source >= source_features.len) return null;
+    const fallback_codepoint = arabicPresentationFallbackCodepoint(codepoint, source_features[source]) orelse return null;
+    const fallback_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, fallback_codepoint);
+    if (fallback_glyph == 0 or fallback_glyph == glyph_id) return null;
+    return fallback_glyph;
+}
+
+fn arabicPresentationFallbackCodepoint(codepoint: u21, source_feature: u32) ?u21 {
+    const bare_features = source_feature & ~gsub.source_feature_mask_marker;
+    const fina_mask = gsub.sourceFeatureMaskForTag(unicode.tag("fina")).? & ~gsub.source_feature_mask_marker;
+    const medi_mask = gsub.sourceFeatureMaskForTag(unicode.tag("medi")).? & ~gsub.source_feature_mask_marker;
+    if ((bare_features & fina_mask) != 0) {
+        return switch (codepoint) {
+            0x0627 => 0xfe8e,
+            0x06cc => 0xfbfd,
+            else => null,
+        };
+    }
+    if ((bare_features & medi_mask) != 0) {
+        return switch (codepoint) {
+            0x062a => 0xfe98,
+            0x0644 => 0xfee0,
+            0x0645 => 0xfee4,
+            0x06cc => 0xfbff,
+            else => null,
+        };
+    }
+    return null;
+}
+
 fn overlayArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
     if (codepoints.len == 0 or glyph_source_indices.len == 0) return;
 
@@ -4973,6 +5020,16 @@ test "Arabic item context influences only joining forms" {
 
     try resolveJoiningFormsWithItemContext(allocator, "ب", &item, "ب", &forms);
     try std.testing.expectEqual(unicode.JoiningForm.medial, forms[0]);
+}
+
+test "Arabic presentation fallback maps retained positional cmap forms" {
+    const fina_mask = gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?;
+    const medi_mask = gsub.sourceFeatureMaskForTag(unicode.tag("medi")).?;
+
+    try std.testing.expectEqual(@as(?u21, 0xfe8e), arabicPresentationFallbackCodepoint(0x0627, fina_mask));
+    try std.testing.expectEqual(@as(?u21, 0xfee0), arabicPresentationFallbackCodepoint(0x0644, medi_mask));
+    try std.testing.expectEqual(@as(?u21, 0xfe98), arabicPresentationFallbackCodepoint(0x062a, medi_mask));
+    try std.testing.expectEqual(@as(?u21, null), arabicPresentationFallbackCodepoint(0x0644, fina_mask));
 }
 
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {

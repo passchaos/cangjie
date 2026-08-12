@@ -3660,15 +3660,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             };
             const explicit_cluster_level = selected_lookup_options.cluster_level;
             const inherit_grapheme_cluster = if (explicit_cluster_level) |level| level.groupsGraphemes() else true;
-            const inherits_previous_cluster = inheritsLeadingDefaultIgnorableCluster(codepoints.items, clusters.items, if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
-                const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
-                default_ignorable_invisible_glyph_id = glyph;
-                break :resolve glyph;
-            }) or
-                codepoint == 0x200d or
-                (explicit_cluster_level != null and unicode.isUnicodeMarkCodepoint(codepoint)) or
-                (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
-                (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoClusterExtender(codepoint)) or
+            const leading_default_ignorable_cluster = codepoints.items.len == 1 and
+                clusters.items.len == 1 and
+                inheritsLeadingDefaultIgnorableCluster(codepoints.items, clusters.items, if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
+                    const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
+                    default_ignorable_invisible_glyph_id = glyph;
+                    break :resolve glyph;
+                });
+            const previous_zwnj_cluster = selected_lookup_options.direction == .rtl and
+                codepoints.items.len != 0 and
+                codepoints.items[codepoints.items.len - 1] == 0x200c and
                 inheritsPreviousZwnjClusterInRtlShaping(
                     selected_lookup_options.direction,
                     codepoints.items,
@@ -3677,7 +3678,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                         default_ignorable_invisible_glyph_id = glyph;
                         break :resolve glyph;
                     },
-                ) or
+                );
+            const inherits_previous_cluster = leading_default_ignorable_cluster or
+                codepoint == 0x200d or
+                (explicit_cluster_level != null and unicode.isUnicodeMarkCodepoint(codepoint)) or
+                (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
+                (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoClusterExtender(codepoint)) or
+                previous_zwnj_cluster or
                 (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint));
             const source_cluster = if (inherit_grapheme_cluster and inherits_previous_cluster and
                 clusters.items.len != 0)

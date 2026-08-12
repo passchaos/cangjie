@@ -2161,17 +2161,21 @@ fn isArabicScriptCodepoint(codepoint: u21) bool {
 // one out-of-line call per RTL scalar is cheaper than inlining the former
 // all-script classification path into that shared loop.
 noinline fn isArabicNonspacingMark(codepoint: u21) bool {
+    return isArabicBaseNonspacingMark(codepoint) or
+        (codepoint >= 0x0897 and codepoint <= 0x089f) or
+        (codepoint >= 0x08ca and codepoint <= 0x08e1) or
+        (codepoint >= 0x08e3 and codepoint <= 0x08ff) or
+        (codepoint >= 0x10efd and codepoint <= 0x10eff);
+}
+
+inline fn isArabicBaseNonspacingMark(codepoint: u21) bool {
     return (codepoint >= 0x0610 and codepoint <= 0x061a) or
         (codepoint >= 0x064b and codepoint <= 0x065f) or
         codepoint == 0x0670 or
         (codepoint >= 0x06d6 and codepoint <= 0x06dc) or
         (codepoint >= 0x06df and codepoint <= 0x06e4) or
         (codepoint >= 0x06e7 and codepoint <= 0x06e8) or
-        (codepoint >= 0x06ea and codepoint <= 0x06ed) or
-        (codepoint >= 0x0897 and codepoint <= 0x089f) or
-        (codepoint >= 0x08ca and codepoint <= 0x08e1) or
-        (codepoint >= 0x08e3 and codepoint <= 0x08ff) or
-        (codepoint >= 0x10efd and codepoint <= 0x10eff);
+        (codepoint >= 0x06ea and codepoint <= 0x06ed);
 }
 
 fn isHebrewNonspacingMark(codepoint: u21) bool {
@@ -6002,6 +6006,12 @@ fn isCombiningMark(codepoint: u21) bool {
     // letters dominate Indic shaping but are not marks; falling through would
     // test every earlier Latin/RTL/Tibetan mark family first.
     if (codepoint >> 7 == 0x12) return isDevanagariNonspacingMark(codepoint);
+    // Likewise, Arabic shaping repeatedly asks this predicate while building
+    // grapheme and bidi items. Resolve the base U+0600 block with its exact Mn
+    // predicate before ordinary Arabic letters walk the complete Latin and
+    // Hebrew mark chain. Arabic supplement/extended blocks remain in the
+    // general chain because their sparse assignments cross block boundaries.
+    if (codepoint >> 8 == 0x06) return isArabicBaseNonspacingMark(codepoint);
     return (codepoint >= 0x0300 and codepoint <= 0x036f) or
         // These compact script-specific ranges cover combining marks for the
         // non-Latin scripts Cangjie already itemizes. Without them, accents,
@@ -6012,13 +6022,6 @@ fn isCombiningMark(codepoint: u21) bool {
         (codepoint >= 0x05c1 and codepoint <= 0x05c2) or
         (codepoint >= 0x05c4 and codepoint <= 0x05c5) or
         codepoint == 0x05c7 or
-        (codepoint >= 0x0610 and codepoint <= 0x061a) or
-        (codepoint >= 0x064b and codepoint <= 0x065f) or
-        codepoint == 0x0670 or
-        (codepoint >= 0x06d6 and codepoint <= 0x06dc) or
-        (codepoint >= 0x06df and codepoint <= 0x06e4) or
-        (codepoint >= 0x06e7 and codepoint <= 0x06e8) or
-        (codepoint >= 0x06ea and codepoint <= 0x06ed) or
         // Syriac superscript alaph plus pointing/vowel marks are nonspacing
         // signs typed after right-to-left bases. Treat them as Extend so
         // grapheme, word, and shaping boundaries preserve one Syriac syllable
@@ -6435,6 +6438,17 @@ test "Unicode mark predicates preserve their lowest scalar boundaries" {
     try std.testing.expect(isUnicodeMarkCodepoint(0x0300));
     try std.testing.expect(isSpacingMarkCodepoint(0x0903));
     try std.testing.expect(isUnicodeMarkCodepoint(0x0903));
+
+    // Exhaust the base Arabic block against the generated Unicode Mn set so
+    // its early dispatch cannot classify ordinary letters or punctuation as
+    // grapheme extenders.
+    for (0x0600..0x0700) |codepoint| {
+        const scalar: u21 = @intCast(codepoint);
+        try std.testing.expectEqual(
+            nonspacing_mark.contains(scalar),
+            isCombiningMark(scalar),
+        );
+    }
 
     // Exhaust the complete block so the early block dispatch cannot classify
     // an ordinary letter as a mark or drift from the exact retained ranges.

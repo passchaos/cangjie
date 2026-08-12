@@ -2159,3 +2159,21 @@ shaping-performance superiority.
   gates pass, including Hindi plus Bengali, Gurmukhi, Gujarati, Odia, Tamil,
   Telugu, Kannada, Malayalam, all USE fixtures, and the full Latin/Arabic
   corpora against HarfBuzz and HarfRust.
+- Combining-mark classification now dispatches the complete U+0600 Arabic
+  block to a compact exact Mn predicate before entering the all-script range
+  chain. Ordinary Arabic letters previously tested the Latin and Hebrew mark
+  families plus seven Arabic ranges on every grapheme and bidi query. The same
+  base-block predicate remains part of the broader out-of-line Arabic helper,
+  while the now-unreachable U+0600 ranges were removed from the general chain;
+  exhaustive comparison of all 256 block scalars against the generated Unicode
+  Mn set protects the dispatch boundary. Fixed-CPU-30 A/B/B/A and B/A/A/B
+  matrices with 31-sample medians improved Amiri `fa-words` from `1666.889` to
+  `1607.510 ns/glyph`, about `3.56%`, and `fa-thelittleprince` from `857.701`
+  to `810.376 ns/glyph`, about `5.52%`. Roboto `en-words` and
+  NotoSansDevanagari `hi-words` also improved by about `1.15%` and `0.75%`.
+  Reverse-order hardware counters reduced Amiri words/long-text instructions
+  by `6.95%`/`9.69%`, branches by `11.43%`/`14.52%`, and cycles by
+  `3.53%`/`5.35%`; Roboto and Devanagari retired instructions stayed within
+  `0.01%`, while cycles improved `2.43%` and `0.82%`. All checksums were
+  identical, and both retained parity gates pass against HarfBuzz and
+  HarfRust, including Arabic, Syriac, Hebrew, and Indic mark coverage.

@@ -3718,7 +3718,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     defer if (owned_gdef_metadata) |*metadata| metadata.deinit(buffer.allocator);
 
     var hangul_feature_overrides_buf: [17]unicode.FeatureOverride = undefined;
-    const gsub_feature_overrides = if (runIsHangul(codepoints.items))
+    const gsub_feature_overrides = if (runNeedsHangulDefaultDisabledCalt(codepoints.items))
         featureOverridesWithDefaultDisabledCalt(hangul_feature_overrides_buf[0..], lookup_options.features) orelse lookup_options.features
     else
         lookup_options.features;
@@ -4987,22 +4987,29 @@ fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {
     };
 }
 
-fn runIsHangul(codepoints: []const u21) bool {
-    var has_hangul = false;
+fn runNeedsHangulDefaultDisabledCalt(codepoints: []const u21) bool {
+    var has_hangul_jamo = false;
     for (codepoints) |codepoint| {
-        if (isHangulCodepoint(codepoint)) {
-            has_hangul = true;
+        if (isHangulJamoCodepoint(codepoint)) {
+            has_hangul_jamo = true;
+            continue;
+        }
+        if (isHangulSyllableCodepoint(codepoint)) {
             continue;
         }
         const script = unicode.scriptForCodepoint(codepoint);
         if (script != .common and script != .inherited and script != .unknown) return false;
     }
-    return has_hangul;
+    return has_hangul_jamo;
 }
 
 fn isHangulCodepoint(codepoint: u21) bool {
     return isHangulJamoCodepoint(codepoint) or
-        (codepoint >= 0xac00 and codepoint <= 0xd7af);
+        isHangulSyllableCodepoint(codepoint);
+}
+
+fn isHangulSyllableCodepoint(codepoint: u21) bool {
+    return codepoint >= 0xac00 and codepoint <= 0xd7af;
 }
 
 fn isHangulJamoCodepoint(codepoint: u21) bool {

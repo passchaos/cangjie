@@ -1297,9 +1297,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `600387433d01cd5799e421dad6510a54c862f56b.ttf` are retained for
   `U+AC00,U+003D,U+003E`, `U+AC00,U+B098`, conjoining Jamo `U+1100,U+1100`,
   `U+B098,U+B098`, and explicit
-  `calt=0`; Hangul-script runs now default `calt` off even when common
-  punctuation stays in the run, and the parity tool keeps conjoining-Jamo byte
-  clusters instead of folding them to the grapheme start.
+  `calt=0`; conjoining-Jamo runs now default `calt` off, while precomposed
+  Hangul syllables and common punctuation keep HarfBuzz's default contextual
+  alternates. The parity tool keeps conjoining-Jamo byte clusters instead of
+  folding them to the grapheme start.
 - The Thai rows from HarfBuzz in-house `zero-width-marks.tests` pass for
   `45855bc8d46332b39c4ab9e2ee1a26b1f896da6b.ttf`,
   `7a37dc4d5bf018456aea291cee06daf004c0221c.ttf`,

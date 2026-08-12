@@ -1702,6 +1702,17 @@ const retained_inline_cangjie_expected_gates = [_]struct {
         .expected_x_offsets = "-430,-457,-390",
         .expected_y_offsets = "-1148,-1256,-1149",
     },
+    .{
+        .font_hash = "2681c1c72d6484ed3410417f521b1b819b4e2392",
+        .text = "\u{3008}",
+        .direction = "btt",
+        .expected_glyph_ids = "4",
+        .expected_clusters = "0",
+        .expected_x_advances = "0",
+        .expected_y_advances = "-2048",
+        .expected_x_offsets = "-1024",
+        .expected_y_offsets = "-1720",
+    },
 };
 
 pub fn build(b: *std.Build) void {

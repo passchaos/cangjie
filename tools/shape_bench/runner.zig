@@ -572,7 +572,7 @@ fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
         const runtime_value = fontUnitPosition(font, font_size, glyph.y_advance);
-        value.* = if (options.direction == .ttb and glyph.vertical and runtime_value > 0)
+        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical and runtime_value > 0)
             try harfBuzzVerticalAdvance(font, glyph)
         else
             runtime_value;
@@ -583,7 +583,7 @@ fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_
 fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
-        value.* = if (options.direction == .ttb and glyph.vertical)
+        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical)
             -try syntheticVerticalOriginX(font, glyph.glyph_id, options)
         else
             fontUnitPosition(font, font_size, glyph.x_offset);
@@ -594,7 +594,7 @@ fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_s
 fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, normalized_variation_coords: []const f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
-        value.* = if (options.direction == .ttb and glyph.vertical) vertical: {
+        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) vertical: {
             if (options.font_slant != 0 or options.font_bold_x != 0 or options.font_bold_y != 0) {
                 break :vertical -try syntheticVerticalOriginY(font, glyph.glyph_id, options, normalized_variation_coords);
             }
@@ -604,6 +604,10 @@ fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_s
         } else fontUnitPosition(font, font_size, glyph.y_offset);
     }
     return values;
+}
+
+fn usesHarfBuzzVerticalSummary(direction: options_mod.Direction) bool {
+    return direction == .ttb or direction == .btt;
 }
 
 fn glyphFlags(allocator: std.mem.Allocator, text: []const u8, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const u32 {

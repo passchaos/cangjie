@@ -726,7 +726,7 @@ const GlyphIndexKey = struct {
 
 pub const GlyphIndexCache = struct {
     const ascii_capacity = 128;
-    const direct_capacity = 512;
+    const direct_capacity = 2048;
     const AsciiEntry = struct {
         font_addr: usize = 0,
         glyph_id: GlyphId = 0,

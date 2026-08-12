@@ -208,8 +208,28 @@ const LigatureSubstAccelerator = struct {
     definitions: []const LigatureDefinition = &.{},
     components: []const GlyphId = &.{},
     first_component_digest: GlyphDigest = .{},
+    /// Range in `components` containing a sorted exact set of legal second
+    /// components. Compact range metadata fits existing tail padding; a slice
+    /// here would widen every lookup accelerator, including unrelated scripts.
+    required_second_start: u32 = 0,
+    required_second_len: u16 = 0,
     prefilter_second: bool = false,
 };
+
+comptime {
+    const LayoutWithoutRequiredSecondRange = struct {
+        sets: []const LigatureSetEntry = &.{},
+        set_slots: []const u16 = &.{},
+        definitions: []const LigatureDefinition = &.{},
+        components: []const GlyphId = &.{},
+        first_component_digest: GlyphDigest = .{},
+        prefilter_second: bool = false,
+    };
+    // The compact range must consume existing tail padding rather than make
+    // every GSUB LookupAccelerator larger on any supported pointer width.
+    std.debug.assert(@sizeOf(LigatureSubstAccelerator) ==
+        @sizeOf(LayoutWithoutRequiredSecondRange));
+}
 
 const LigatureSetEntry = struct {
     glyph: GlyphId,
@@ -228,6 +248,10 @@ const LigatureDefinition = struct {
 // enough alternatives beyond each set's first definition, so choose once per
 // lookup rather than adding a branch to every candidate glyph.
 const min_competing_ligature_definitions_for_second_prefilter = 32;
+// An exact whole-run scan has a higher fixed cost than extracting one second
+// glyph per candidate. Reserve it for authored sets large enough to amortize
+// that scan over many otherwise-competing definition probes.
+const min_competing_ligature_definitions_for_required_second = 128;
 
 const ContextClassSubtableAccelerator = struct {
     subtable_offset: usize = 0,
@@ -2469,8 +2493,11 @@ fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator
     errdefer definitions.deinit(allocator);
     var components = std.ArrayList(GlyphId).empty;
     errdefer components.deinit(allocator);
+    var second_components = std.ArrayList(GlyphId).empty;
+    defer second_components.deinit(allocator);
     var competing_definition_count: usize = 0;
     var first_component_digest = GlyphDigest.empty();
+    var all_definitions_require_second = true;
 
     var set_i: usize = 0;
     while (set_i < lig_set_count) : (set_i += 1) {
@@ -2499,11 +2526,11 @@ fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator
                 continue;
             }
             const component_start = components.items.len;
+            all_definitions_require_second = all_definitions_require_second and component_count > 1;
             for (1..component_count) |component_index| {
-                try components.append(
-                    allocator,
-                    try readU16(table, ligature_offset + 4 + (component_index - 1) * 2),
-                );
+                const component = try readU16(table, ligature_offset + 4 + (component_index - 1) * 2);
+                try components.append(allocator, component);
+                if (component_index == 1) try second_components.append(allocator, component);
             }
             try definitions.append(allocator, .{
                 .ligature = try readU16(table, ligature_offset),
@@ -2521,6 +2548,24 @@ fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator
     std.sort.heap(LigatureSetEntry, sets, {}, ligatureSetEntryLessThan);
     const set_slots = try buildLigatureSetSlots(sets, allocator);
     errdefer allocator.free(set_slots);
+    const prefilter_second = shouldPrefilterLigatureSecond(competing_definition_count);
+    var required_second_start: u32 = 0;
+    var required_second_len: u16 = 0;
+    if (shouldBuildRequiredLigatureSecondIndex(
+        competing_definition_count,
+        all_definitions_require_second,
+    )) {
+        std.sort.heap(GlyphId, second_components.items, {}, glyphIdLessThan);
+        deduplicateSortedGlyphs(&second_components);
+        if (components.items.len <= std.math.maxInt(u32) and
+            second_components.items.len <= std.math.maxInt(u16) and
+            second_components.items.len <= std.math.maxInt(u32) - components.items.len)
+        {
+            required_second_start = @intCast(components.items.len);
+            required_second_len = @intCast(second_components.items.len);
+            try components.appendSlice(allocator, second_components.items);
+        }
+    }
     const owned_definitions = try definitions.toOwnedSlice(allocator);
     errdefer allocator.free(owned_definitions);
     const owned_components = try components.toOwnedSlice(allocator);
@@ -2530,12 +2575,41 @@ fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator
         .definitions = owned_definitions,
         .components = owned_components,
         .first_component_digest = first_component_digest,
-        .prefilter_second = shouldPrefilterLigatureSecond(competing_definition_count),
+        .required_second_start = required_second_start,
+        .required_second_len = required_second_len,
+        // A compact range denotes a third dispatch mode that still uses the
+        // second-prefiltered matcher after its exact run proof. Keep the
+        // ordinary prefiltered flag false so unrelated lookups continue
+        // through their original specialized worker.
+        .prefilter_second = prefilter_second and required_second_len == 0,
     };
 }
 
 fn shouldPrefilterLigatureSecond(competing_definition_count: usize) bool {
     return competing_definition_count >= min_competing_ligature_definitions_for_second_prefilter;
+}
+
+fn shouldBuildRequiredLigatureSecondIndex(
+    competing_definition_count: usize,
+    all_definitions_require_second: bool,
+) bool {
+    return all_definitions_require_second and
+        competing_definition_count >= min_competing_ligature_definitions_for_required_second;
+}
+
+fn glyphIdLessThan(_: void, lhs: GlyphId, rhs: GlyphId) bool {
+    return lhs < rhs;
+}
+
+fn deduplicateSortedGlyphs(glyphs: *std.ArrayList(GlyphId)) void {
+    if (glyphs.items.len < 2) return;
+    var write: usize = 1;
+    for (glyphs.items[1..]) |glyph| {
+        if (glyph == glyphs.items[write - 1]) continue;
+        glyphs.items[write] = glyph;
+        write += 1;
+    }
+    glyphs.shrinkRetainingCapacity(write);
 }
 
 fn coverageGlyphAt(table: Table, coverage_offset: usize, index: usize) GsubError!?GlyphId {
@@ -3133,6 +3207,16 @@ noinline fn applyValidatedAcceleratedLookupPrepared(
                     accelerator.lookup_flag,
                     lookup_options,
                 );
+            } else if (accelerator.ligature_subst.required_second_len != 0) {
+                @branchHint(.unlikely);
+                try applyLigatureSubstitutionRequiredSecondPrefiltered(
+                    table,
+                    accelerator.ligature_subst,
+                    glyphs,
+                    allocator,
+                    accelerator.lookup_flag,
+                    lookup_options,
+                );
             } else {
                 try applyLigatureSubstitutionAccelerated(
                     table,
@@ -3387,6 +3471,9 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             }
             if (accelerator.prefilter_second) {
                 try applyLigatureSubstitutionPrefiltered(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
+            } else if (accelerator.required_second_len != 0) {
+                @branchHint(.unlikely);
+                try applyLigatureSubstitutionRequiredSecondPrefiltered(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
             } else {
                 try applyLigatureSubstitutionAccelerated(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
             }
@@ -4742,6 +4829,31 @@ fn applyLigatureSubstitutionPrefiltered(table: Table, accelerator: LigatureSubst
     return applyLigatureSubstitutionAcceleratedImpl(true, table, accelerator, glyphs, allocator, lookup_flag, options);
 }
 
+noinline fn applyLigatureSubstitutionRequiredSecondPrefiltered(
+    table: Table,
+    accelerator: LigatureSubstAccelerator,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    @branchHint(.cold);
+    const second_components = requiredLigatureSecondComponents(accelerator);
+    if (second_components.len == 0 or
+        !runHasAnyGlyph(glyphs.items, second_components))
+    {
+        return;
+    }
+    return applyLigatureSubstitutionPrefiltered(
+        table,
+        accelerator,
+        glyphs,
+        allocator,
+        lookup_flag,
+        options,
+    );
+}
+
 fn applyLigatureSubstitutionAcceleratedImpl(comptime prefilter_second: bool, table: Table, accelerator: LigatureSubstAccelerator, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     _ = table;
     var component_offsets: [max_ligature_components]usize = undefined;
@@ -4771,6 +4883,13 @@ fn applyLigatureSubstitutionAcceleratedImpl(comptime prefilter_second: bool, tab
             }
         }
     }
+}
+
+fn requiredLigatureSecondComponents(accelerator: LigatureSubstAccelerator) []const GlyphId {
+    const start: usize = accelerator.required_second_start;
+    const len: usize = accelerator.required_second_len;
+    if (start > accelerator.components.len or len > accelerator.components.len - start) return &.{};
+    return accelerator.components[start .. start + len];
 }
 
 const min_ligature_sets_for_hash = 8;
@@ -5438,6 +5557,45 @@ fn glyphRunDigest(glyphs: []const GlyphId, lookup_flag: u16, options: LookupOpti
         digest.add(glyph);
     }
     return digest;
+}
+
+fn runHasAnyGlyph(
+    glyphs: []const GlyphId,
+    candidates: []const GlyphId,
+) bool {
+    // This is only a necessary-condition proof. Search every glyph id: lookup
+    // flags, source feature scope, and syllable bounds can make an occurrence
+    // unusable (a harmless false positive), but filtering here could hide a
+    // valid non-leading ligature component and create a false negative.
+    for (glyphs) |glyph| {
+        if (std.sort.binarySearch(GlyphId, candidates, glyph, glyphIdOrder) != null) return true;
+    }
+    return false;
+}
+
+fn glyphIdOrder(target: GlyphId, item: GlyphId) std.math.Order {
+    return std.math.order(target, item);
+}
+
+test "GSUB required ligature components scan exact run glyphs" {
+    const candidates = [_]GlyphId{ 2, 7, 11 };
+    try std.testing.expect(runHasAnyGlyph(&.{ 1, 7 }, &candidates));
+    try std.testing.expect(!runHasAnyGlyph(&.{ 1, 8 }, &candidates));
+
+    const accelerator = LigatureSubstAccelerator{
+        .components = &.{ 20, 21, 2, 7, 11 },
+        .required_second_start = 2,
+        .required_second_len = 3,
+    };
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &candidates,
+        requiredLigatureSecondComponents(accelerator),
+    );
+    var stale = accelerator;
+    stale.required_second_start = 4;
+    stale.required_second_len = 2;
+    try std.testing.expectEqual(@as(usize, 0), requiredLigatureSecondComponents(stale).len);
 }
 
 test "GSUB run digest cache reuses no-op runs and invalidates on substitution" {
@@ -12834,6 +12992,7 @@ test "GSUB ligature accelerator preserves preference and ignored component offse
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 2, 3 }, accelerator.components);
     try std.testing.expect(accelerator.first_component_digest.mayHave(1));
     try std.testing.expect(!accelerator.first_component_digest.mayHave(99));
+    try std.testing.expectEqual(@as(usize, 0), requiredLigatureSecondComponents(accelerator).len);
     try std.testing.expect(!accelerator.prefilter_second);
 
     const set = ligatureSetForGlyph(accelerator.sets, accelerator.set_slots, 1).?;
@@ -12884,6 +13043,18 @@ test "GSUB ligature second prefilter cost model counts competing definitions" {
     try std.testing.expect(!shouldPrefilterLigatureSecond(0));
     try std.testing.expect(!shouldPrefilterLigatureSecond(min_competing_ligature_definitions_for_second_prefilter - 1));
     try std.testing.expect(shouldPrefilterLigatureSecond(min_competing_ligature_definitions_for_second_prefilter));
+    try std.testing.expect(shouldBuildRequiredLigatureSecondIndex(
+        min_competing_ligature_definitions_for_required_second,
+        true,
+    ));
+    try std.testing.expect(!shouldBuildRequiredLigatureSecondIndex(
+        min_competing_ligature_definitions_for_required_second - 1,
+        true,
+    ));
+    try std.testing.expect(!shouldBuildRequiredLigatureSecondIndex(
+        min_competing_ligature_definitions_for_required_second,
+        false,
+    ));
 }
 
 test "GSUB ligature set slots preserve exact hits misses and small fallback" {

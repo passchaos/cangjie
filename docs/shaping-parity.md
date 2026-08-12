@@ -2177,3 +2177,23 @@ shaping-performance superiority.
   `0.01%`, while cycles improved `2.43%` and `0.82%`. All checksums were
   identical, and both retained parity gates pass against HarfBuzz and
   HarfRust, including Arabic, Syriac, Hebrew, and Indic mark coverage.
+- Large LigatureSubst lookups now retain a sorted exact set of required second
+  components when every definition needs a following glyph and the lookup has
+  at least 128 competing definitions. A cold necessary-condition scan can then
+  reject the whole lookup before probing hundreds of authored alternatives;
+  it deliberately inspects every glyph id so lookup flags, feature scope, and
+  syllable bounds can cause only harmless false positives, never false
+  negatives. The index is appended to the existing component allocation and
+  described by a compact range in prior tail padding, so
+  `LigatureSubstAccelerator` does not grow for other scripts or lookups.
+  Fixed-CPU-30 A/B/B/A plus B/A/A/B matrices with four 31-sample medians per
+  binary improved Roboto `en-words` from `218.502` to
+  `191.886 ns/glyph`, about `12.18%`; NotoSansDevanagari `hi-words`,
+  Amiri `fa-words`, and Amiri `fa-thelittleprince` improved by about
+  `0.58%`, `0.64%`, and `0.54%`. Reverse-order counters on the exact retained
+  binary reduced Roboto retired instructions by `9.96%`, cycles by `10.91%`,
+  branches by `6.61%`, and branch misses by `18.25%`; the three nontarget
+  workloads kept instructions within `0.01%` and branches within `0.01%`.
+  Profiled Roboto GSUB lookup 6 fell from about `8.77 ms` to `3.13 ms`.
+  All corpus checksums remained identical, and both retained parity gates pass
+  against HarfBuzz and HarfRust.

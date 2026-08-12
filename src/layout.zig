@@ -4395,7 +4395,6 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     var previous_glyph: ?GlyphId = null;
     var fallback_mark_base: ?fallback_mark.Base = null;
     var adjustment_cursor: usize = 0;
-    var segment_has_stch_actions = false;
     const kern_lookup = if (!lookup_options.writing_mode.isVertical() and
         shouldApplyLegacyKernFallback(lookup_options.script_tag) and
         shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true))
@@ -4612,8 +4611,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .y_offset = output_y_offset,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
-        if (stch_action != .none) segment_has_stch_actions = true;
-        try stch_actions.append(buffer.allocator, @intFromEnum(stch_action));
+        try appendStchActionForOutput(
+            buffer.allocator,
+            stch_actions,
+            stch_action,
+            buffer.glyphs.items.len - segment_glyph_start,
+        );
         if (has_gpos_attachments and !hide_default_ignorable) {
             attachment_links.items[index] = attachmentLinkForAdjustment(adjustment);
         }
@@ -4640,23 +4643,23 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         );
         if (shape_profile) |p| p.position_attachment_ns += shapeProfileElapsed(attachment_start, profile_io);
     }
-    const stch_start = shapeProfileNow(shape_profile, profile_io);
-    if (segment_has_stch_actions) {
+    if (stch_actions.items.len != 0) {
+        const stch_start = shapeProfileNow(shape_profile, profile_io);
         markStchContextActions(buffer.glyphs.items[segment_glyph_start..], stch_actions.items);
+        try applyStchToSegment(
+            buffer.allocator,
+            &buffer.glyphs,
+            stch_actions.items,
+            segment_glyph_start,
+            lookup_options.direction == .rtl,
+            shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl,
+            scale,
+            font,
+            metrics_cache,
+            lookup_options.normalized_variation_coords,
+        );
+        if (shape_profile) |p| p.position_stch_ns += shapeProfileElapsed(stch_start, profile_io);
     }
-    try applyStchToSegment(
-        buffer.allocator,
-        &buffer.glyphs,
-        stch_actions.items,
-        segment_glyph_start,
-        lookup_options.direction == .rtl,
-        shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl,
-        scale,
-        font,
-        metrics_cache,
-        lookup_options.normalized_variation_coords,
-    );
-    if (shape_profile) |p| p.position_stch_ns += shapeProfileElapsed(stch_start, profile_io);
     if (!lookup_options.writing_mode.isVertical()) {
         const tracking_start = shapeProfileNow(shape_profile, profile_io);
         if (try font.horizontalTrackingForShaping(buffer.allocator, font_size)) |tracking| {
@@ -5706,6 +5709,69 @@ fn recordStchActions(ligature_components: *ligature_provenance.Store) void {
     }
 }
 
+fn appendStchActionForOutput(
+    allocator: std.mem.Allocator,
+    stch_actions: *std.ArrayList(u8),
+    action: ligature_provenance.StchAction,
+    output_len: usize,
+) std.mem.Allocator.Error!void {
+    std.debug.assert(output_len != 0);
+    if (stch_actions.items.len == 0 and action == .none) return;
+    if (stch_actions.items.len == 0) {
+        // Keep the overwhelmingly common no-stretch sidecar empty. Once an
+        // actual stch tile reaches the emitted stream, materialize preceding
+        // output slots (not GSUB input slots: hidden ignorables may have been
+        // removed) so action indexes remain exactly parallel to public glyphs.
+        try stch_actions.resize(allocator, output_len - 1);
+        @memset(stch_actions.items, @intFromEnum(ligature_provenance.StchAction.none));
+    }
+    std.debug.assert(stch_actions.items.len == output_len - 1);
+    try stch_actions.append(allocator, @intFromEnum(action));
+}
+
+test "stch action sidecar stays lazy and backfills emitted output" {
+    var actions = std.ArrayList(u8).empty;
+    defer actions.deinit(std.testing.allocator);
+
+    try appendStchActionForOutput(std.testing.allocator, &actions, .none, 1);
+    try appendStchActionForOutput(std.testing.allocator, &actions, .none, 2);
+    try std.testing.expectEqual(@as(usize, 0), actions.items.len);
+
+    // `output_len` deliberately jumps from two processed inputs to four emitted
+    // outputs. The helper must align with output glyphs, including any earlier
+    // one-to-many expansion, rather than infer cardinality from input indexes.
+    try appendStchActionForOutput(std.testing.allocator, &actions, .fixed, 4);
+    try std.testing.expectEqualSlices(u8, &.{
+        @intFromEnum(ligature_provenance.StchAction.none),
+        @intFromEnum(ligature_provenance.StchAction.none),
+        @intFromEnum(ligature_provenance.StchAction.none),
+        @intFromEnum(ligature_provenance.StchAction.fixed),
+    }, actions.items);
+    try appendStchActionForOutput(std.testing.allocator, &actions, .none, 5);
+    try std.testing.expectEqual(@as(usize, 5), actions.items.len);
+}
+
+test "ordinary shaping clears and leaves stch sidecar empty" {
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    // Model reuse after a prior stretch-bearing segment. ShapeScratch.clear
+    // must drop that old length, and the ordinary output loop must not regrow
+    // the sidecar with `.none` entries.
+    try buffer.shape_scratch.stch_actions.append(
+        std.testing.allocator,
+        @intFromEnum(ligature_provenance.StchAction.fixed),
+    );
+    const run = try TextShaper.shapeUtf8(&font, &buffer, "AA", 20);
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 0), buffer.shape_scratch.stch_actions.items.len);
+}
+
 fn markStchContextActions(glyphs: []const GlyphPosition, stch_actions: []u8) void {
     if (glyphs.len != stch_actions.len) return;
     for (glyphs, stch_actions) |glyph, *raw_action| {
@@ -5727,15 +5793,7 @@ fn applyStchToSegment(
 ) !void {
     const segment_len = glyphs.items.len - segment_start;
     if (segment_len == 0 or stch_actions.len != segment_len) return;
-
-    var has_stch = false;
-    for (stch_actions) |raw_action| {
-        if (stchActionFromInt(raw_action) != .none) {
-            has_stch = true;
-            break;
-        }
-    }
-    if (!has_stch) return;
+    std.debug.assert(stchActionsHaveStretch(stch_actions));
 
     var extra_glyphs_needed: usize = 0;
     var i = segment_len;
@@ -5771,6 +5829,13 @@ fn applyStchToSegment(
 
     glyphs.items.len = new_len;
     @memcpy(glyphs.items[segment_start .. segment_start + output.items.len], output.items);
+}
+
+fn stchActionsHaveStretch(stch_actions: []const u8) bool {
+    for (stch_actions) |raw_action| {
+        if (stchActionFromInt(raw_action) != .none) return true;
+    }
+    return false;
 }
 
 const StchRunMetrics = struct {

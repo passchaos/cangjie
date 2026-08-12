@@ -2077,3 +2077,18 @@ shaping-performance superiority.
   `0.05%`, confirming the explicit Arabic-stage path does not regress. The
   full dual-reference corpus passes, and focused default `rand`, disabled
   `rand=0`, and valued `rand=2` comparisons retain HarfBuzz parity.
+- Stretch-action scratch is now lazy: ordinary runs keep the sidecar empty,
+  while the first real `stch` tile backfills preceding emitted output slots
+  before subsequent actions remain parallel to public glyphs. This distinction
+  matters when default-ignorables are suppressed or GSUB changes cardinality;
+  focused tests cover output-count backfill and reuse after a prior active
+  sidecar. No-action runs also skip context marking and the stretch dispatcher
+  entirely, removing a second full glyph scan. A fixed-CPU-8 A/B/B/A
+  comparison with 21-sample medians improved Roboto `en-words` from a two-run
+  mean of `245.150` to `241.699 ns/glyph`, about `1.41%`; retired instructions
+  fell about `1.36%` and branches about `0.83%`. Devanagari wall time remained
+  within `0.1%`, while instructions improved `0.31%`; Amiri
+  `fa-thelittleprince` instructions improved `0.55%` and cycles `0.67%`.
+  Roboto's profiled `position_stch_ns` fell from about `6.3 ms` to zero.
+  The full dual-reference corpus and all three retained Arabic/Syriac active
+  `stch` rows pass unchanged.

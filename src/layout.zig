@@ -4608,6 +4608,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         stch_actions.items,
         segment_glyph_start,
         lookup_options.direction == .rtl,
+        shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl,
         scale,
         font,
         metrics_cache,
@@ -5602,6 +5603,7 @@ fn applyStchToSegment(
     stch_actions: []const u8,
     segment_start: usize,
     rtl: bool,
+    reverse_after_stch: bool,
     scale: f32,
     font: *const Font,
     metrics_cache: ?*GlyphMetricsCache,
@@ -5647,7 +5649,7 @@ fn applyStchToSegment(
             continue;
         }
         const metrics = try measureStchRun(font, metrics_cache, normalized_variation_coords, source, stch_actions, stchRunEnd(stch_actions, i), rtl, scale);
-        try appendStchRun(font, metrics_cache, normalized_variation_coords, source[metrics.start..metrics.end], stch_actions[metrics.start..metrics.end], metrics, rtl, scale, &output);
+        try appendStchRun(font, metrics_cache, normalized_variation_coords, source[metrics.start..metrics.end], stch_actions[metrics.start..metrics.end], metrics, rtl, reverse_after_stch, scale, &output);
         i = metrics.end;
     }
 
@@ -5759,23 +5761,26 @@ fn appendStchRun(
     actions: []const u8,
     metrics: StchRunMetrics,
     rtl: bool,
+    reverse_after_stch: bool,
     scale: f32,
     output: *std.ArrayList(GlyphPosition),
 ) !void {
     var x_offset_units: i32 = @divTrunc(metrics.w_remaining_units, 2);
     if (!rtl and x_offset_units > 0) x_offset_units = 0;
     const overlap_units = metrics.extra_repeat_overlap_units;
+    const output_start = output.items.len;
     if (rtl) {
         var k = run.len;
         while (k > 0) {
             k -= 1;
             try appendStchGlyphCopies(font, metrics_cache, normalized_variation_coords, run[k], stchActionFromInt(actions[k]), metrics.n_copies, rtl, &x_offset_units, overlap_units, scale, output);
         }
-        std.mem.reverse(GlyphPosition, output.items[output.items.len - (run.len + metrics.n_copies * metrics.n_repeating) ..]);
+        std.mem.reverse(GlyphPosition, output.items[output_start..]);
     } else {
         for (run, actions) |glyph, raw_action| {
             try appendStchGlyphCopies(font, metrics_cache, normalized_variation_coords, glyph, stchActionFromInt(raw_action), metrics.n_copies, rtl, &x_offset_units, overlap_units, scale, output);
         }
+        if (reverse_after_stch) std.mem.reverse(GlyphPosition, output.items[output_start..]);
     }
 }
 

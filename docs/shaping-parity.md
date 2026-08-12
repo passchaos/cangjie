@@ -1683,11 +1683,11 @@ shaping-performance superiority.
 - Arabic/Syriac stretch shaping now runs the HarfBuzz-style `stch` GSUB stage
   before positional Arabic features, records MultipleSubst component parity as
   fixed/repeating tiles, and stretches those tiles in the final glyph stream
-  using font-unit advances and overlap arithmetic. The three upstream
-  `arabic-stch.tests` rows for
-  `507637795ce4f2975593da54d12b46f76c7cc4cc.ttf` and
-  `d9b8bc10985f24796826c29f7ccba3d0ae11ec02.ttf` are retained as inline
-  HarfBuzz parity gates. HarfBuzz in-house `reverse-sub.tests` rows 1 and 3
+  using font-unit advances and overlap arithmetic. The two LTR piastre rows from
+  upstream `arabic-stch.tests` for
+  `507637795ce4f2975593da54d12b46f76c7cc4cc.ttf` are retained as inline
+  HarfBuzz parity gates; the Syriac `d9b8bc10985f24796826c29f7ccba3d0ae11ec02.ttf`
+  row still has a cluster mismatch. HarfBuzz in-house `reverse-sub.tests` rows 1 and 3
   are retained for `a706511c65fb278fda87eaf2180ca6684a80f423.ttf` and
   `1b66a1f4b076b734caa6397b3e57231af1feaafb.ttf`; row 2 is retained for
   `3f24aff8b768e586162e9b9d03b15c36508dd2ae.ttf` with `salt=2`;

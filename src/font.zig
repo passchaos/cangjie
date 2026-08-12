@@ -1208,15 +1208,7 @@ pub const Font = struct {
         else
             null;
         try validateVariationDataTablesWithCvar(data, glyph_count, fvar, gvar, hvar, mvar, vvar, cvar, cvt_value_count, gvar_target_context);
-        validateVariationNameReferences(allocator, data, fvar, stat, name) catch |err| switch (err) {
-            error.InvalidName => if (!is_ttc_face) return err,
-            // Some static shaping fixtures carry malformed optional STAT
-            // metadata that is irrelevant to cmap/GSUB/AAT shaping. Keep
-            // parse-time shaping compatibility while public STAT APIs continue
-            // to revalidate and report BadSfnt.
-            error.BadSfnt => if (fvar != null) return err,
-            else => return err,
-        };
+        try validateVariationNameReferences(allocator, data, fvar, stat, name, .{ .compat_ttc_face = is_ttc_face });
         if (gdef) |gdef_table| try validateGdefTableWithVariationData(data, gdef_table, glyph_count, fvar);
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBoundsForShaping(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
@@ -9987,7 +9979,11 @@ const StatInfo = struct {
     axis_value_offsets_offset: usize,
 };
 
-fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u8, fvar: ?TableRecord, stat: ?TableRecord, name: ?TableRecord) FontError!void {
+const VariationNameValidationOptions = struct {
+    compat_ttc_face: bool = false,
+};
+
+fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u8, fvar: ?TableRecord, stat: ?TableRecord, name: ?TableRecord, options: VariationNameValidationOptions) FontError!void {
     if (fvar == null and stat == null) return;
 
     var name_index_storage: NameIdIndex = undefined;
@@ -9996,11 +9992,26 @@ fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u
         break :blk &name_index_storage;
     } else null;
 
-    // fvar and STAT carry user-visible IDs rather than inline strings. Missing
-    // or undecodable references make style/axis selection ambiguous, so reject
-    // them at parse time instead of surfacing null names much later.
-    if (fvar) |fvar_table| try validateFvarNameReferences(data, fvar_table, name_index);
-    if (stat) |stat_table| try validateStatTable(allocator, data, stat_table, fvar, name_index);
+    // fvar carries user-visible IDs that affect variation selection, so keep it
+    // strict for ordinary faces. TTC system faces historically need a broader
+    // parse-time name tolerance to stay aligned with CoreText font loading.
+    if (fvar) |fvar_table| {
+        validateFvarNameReferences(data, fvar_table, name_index) catch |err| switch (err) {
+            error.InvalidName => if (!options.compat_ttc_face) return err,
+            else => return err,
+        };
+    }
+    if (stat) |stat_table| {
+        validateStatTable(allocator, data, stat_table, fvar, name_index) catch |err| switch (err) {
+            // STAT is optional for shaping, and several upstream shaping
+            // fixtures carry stale STAT name IDs even though cmap/GSUB/GPOS
+            // bytes are usable. Keep public STAT APIs strict; they revalidate
+            // borrowed STAT bytes before exposing user-facing metadata.
+            error.InvalidName => return,
+            error.BadSfnt => if (fvar != null) return err,
+            else => return err,
+        };
+    }
 }
 
 fn validateFvarNameReferences(data: []const u8, fvar: TableRecord, name_index: ?*const NameIdIndex) FontError!void {
@@ -20362,7 +20373,10 @@ test "fvar and STAT user-facing name IDs resolve through name table" {
         defer allocator.free(bytes);
         const stat_offset: usize = @intCast(try sfntTableOffset(bytes, "STAT"));
         writeU16Test(bytes, stat_offset + 44, 400); // AxisValue nameID.
-        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
+        try updateSfntTableChecksum(bytes, "STAT");
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(error.InvalidName, font.statAxisValues(allocator));
     }
 
     {

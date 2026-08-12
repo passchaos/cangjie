@@ -3046,13 +3046,72 @@ fn applyValidatedAcceleratedLookup(
     const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
     const glyph_count_before = if (options.shape_profile != null) glyphs.items.len else 0;
 
-    var lookup_options = options;
-    if ((accelerator.lookup_flag & 0x0010) != 0) {
-        lookup_options.active_mark_filtering_set = accelerator.mark_filtering_set;
-        try validateMarkFilteringSetIndex(lookup_options);
+    const scoped_syllable = lookupMatchesSourceSyllable(lookup_index, options);
+    if (acceleratedLookupNeedsCustomizedOptions(accelerator.lookup_flag, scoped_syllable, options)) {
+        // LookupOptions carries all source-parallel shaping metadata and is
+        // intentionally large. Materialize a customized copy only for lookups
+        // that actually override mark-filtering or syllable scope; ordinary
+        // cached lookups can pass the caller's immutable value straight into
+        // the prepared dispatcher.
+        var customized_options = options;
+        if ((accelerator.lookup_flag & 0x0010) != 0) {
+            customized_options.active_mark_filtering_set = accelerator.mark_filtering_set;
+            try validateMarkFilteringSetIndex(customized_options);
+        }
+        customized_options.match_source_syllable = scoped_syllable;
+        return applyValidatedAcceleratedLookupPrepared(
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            customized_options,
+            run_digest_cache,
+            accelerator,
+            lookup_start,
+            glyph_count_before,
+        );
     }
-    lookup_options.match_source_syllable = lookupMatchesSourceSyllable(lookup_index, options);
+    return applyValidatedAcceleratedLookupPrepared(
+        table,
+        lookup_offset,
+        lookup_index,
+        glyphs,
+        allocator,
+        options,
+        run_digest_cache,
+        accelerator,
+        lookup_start,
+        glyph_count_before,
+    );
+}
 
+fn acceleratedLookupNeedsCustomizedOptions(lookup_flag: u16, scoped_syllable: bool, options: LookupOptions) bool {
+    return (lookup_flag & 0x0010) != 0 or
+        scoped_syllable != options.match_source_syllable;
+}
+
+test "accelerated lookup customization is limited to lookup-local overrides" {
+    try std.testing.expect(!acceleratedLookupNeedsCustomizedOptions(0, false, .{}));
+    try std.testing.expect(acceleratedLookupNeedsCustomizedOptions(0x0010, false, .{}));
+    try std.testing.expect(acceleratedLookupNeedsCustomizedOptions(0, true, .{}));
+    try std.testing.expect(!acceleratedLookupNeedsCustomizedOptions(0, true, .{
+        .match_source_syllable = true,
+    }));
+}
+
+noinline fn applyValidatedAcceleratedLookupPrepared(
+    table: Table,
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    lookup_options: LookupOptions,
+    run_digest_cache: ?*RunDigestCache,
+    accelerator: *const LookupAccelerator,
+    lookup_start: i128,
+    glyph_count_before: usize,
+) (GsubError || std.mem.Allocator.Error)!bool {
     switch (accelerator.lookup_type) {
         4 => {
             if (accelerator.subtable_count != 1 or accelerator.ligature_subst.sets.len == 0) return false;
@@ -3061,7 +3120,7 @@ fn applyValidatedAcceleratedLookup(
                 if (run_digest.isEmpty() or
                     !accelerator.ligature_subst.first_component_digest.mayIntersect(run_digest))
                 {
-                    recordAcceleratedGsubLookupProfile(options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
+                    recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
                     return true;
                 }
             }
@@ -3084,7 +3143,7 @@ fn applyValidatedAcceleratedLookup(
                     lookup_options,
                 );
             }
-            recordAcceleratedGsubLookupProfile(options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
+            recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
             return true;
         },
         5 => {
@@ -3099,7 +3158,7 @@ fn applyValidatedAcceleratedLookup(
                     lookup_options,
                     accelerator,
                 );
-                recordAcceleratedGsubLookupProfile(options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
+                recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
                 return true;
             }
             if (accelerator.context_coverage_subtables.len != 0) {
@@ -3111,7 +3170,7 @@ fn applyValidatedAcceleratedLookup(
                     lookup_options,
                     accelerator,
                 );
-                recordAcceleratedGsubLookupProfile(options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
+                recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
                 return true;
             }
             return false;
@@ -3123,7 +3182,7 @@ fn applyValidatedAcceleratedLookup(
             else
                 glyphRunDigest(glyphs.items, accelerator.lookup_flag, lookup_options);
             if (run_digest.isEmpty() or !accelerator.chaining_input_digest.mayIntersect(run_digest)) {
-                recordAcceleratedGsubLookupProfile(options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
+                recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
                 return true;
             }
             try applyChainingContextSubstitutionLookup(
@@ -3136,7 +3195,7 @@ fn applyValidatedAcceleratedLookup(
                 lookup_options,
                 accelerator,
             );
-            recordAcceleratedGsubLookupProfile(options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
+            recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
             return true;
         },
         else => return false,

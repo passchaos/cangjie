@@ -2110,3 +2110,19 @@ shaping-performance superiority.
   branches fell about `28.2%`, `4.24%`, and `4.93%`, respectively. The full
   dual-reference corpus, including Latin combining-mark zero-width and Indic
   mark/cluster gates, passes unchanged.
+- Validated accelerated GSUB dispatch now keeps the common immutable
+  `LookupOptions` value on the caller's path and uses a separate noinline
+  prepared worker. The options object is 304 bytes; the old inlined wrapper
+  copied it unconditionally and compiled to an approximately 3.1 KiB frame per
+  lookup. Only lookups that actually override `UseMarkFilteringSet` or
+  lookup-local source-syllable scope now materialize a customized copy. The
+  common wrapper frame is about 440 bytes and the prepared worker about 312
+  bytes. Fixed-CPU-8 A/B/B/A counters reduced retired instructions by about
+  `1.55%`, `1.48%`, and `0.51%`, and cycles by `2.41%`, `2.48%`, and
+  `0.99%`, for Roboto `en-words`, Devanagari `hi-words`, and Amiri
+  `fa-thelittleprince`. Stable Devanagari medians improved from a two-run mean
+  of `2720.665` to `2668.695 ns/glyph`, about `1.91%`. Roboto crossed CPU
+  frequency states, but both order-matched pairs improved (`724.840` to
+  `424.264` and `427.709` to `425.305 ns/glyph`). Focused common/rare-path
+  tests, existing mark-filtering and source-syllable tests, and the full
+  dual-reference corpus all pass.

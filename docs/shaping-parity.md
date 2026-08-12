@@ -2059,3 +2059,21 @@ shaping-performance superiority.
   and missing Unicode-space fallback, and the full corpus gate passes both
   references, including `spaces-horizontal.txt`, Amiri, Roboto, and variable
   fonts.
+- The validated GSUB feature index now retains a table-wide `rand` capability
+  bit. Generic script shaping previously checks whether default random
+  alternates require value-aware lookup selection once per separately shaped
+  line, and that check recalculated the complete borrowed GSUB checksum even
+  though the table proof and exact feature accelerator were already cached.
+  The fast query verifies the full data pointer/length and table offset/length
+  identity, is consumed only after the GSUB proof succeeds, and returns to the
+  checksum-validating parser for absent, stale-range, or foreign accelerators.
+  Fixed-CPU-8 A/B/B/A comparisons with 15-sample medians reduced Roboto
+  `en-words` from a two-run mean of `579.626` to `244.505 ns/glyph`, about
+  `57.8%`, and NotoSansDevanagari `hi-words` from `6069.798` to
+  `2841.555 ns/glyph`, about `53.2%`. Three-iteration hardware-counter runs
+  reduced retired instructions by about `72.6%`/`75.2%`, branches by
+  `74.1%`/`75.7%`, and cycles by `56.9%`/`54.6%` for Roboto/Devanagari.
+  Amiri `fa-words` and `fa-thelittleprince` retired instructions stayed within
+  `0.05%`, confirming the explicit Arabic-stage path does not regress. The
+  full dual-reference corpus passes, and focused default `rand`, disabled
+  `rand=0`, and valued `rand=2` comparisons retain HarfBuzz parity.

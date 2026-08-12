@@ -169,6 +169,7 @@ const FeatureLookupIndex = struct {
     data_len: usize,
     table_offset: usize,
     table_length: usize,
+    has_random_feature: bool,
     records: []FeatureLookupRecord,
     lookups: []u16,
 };
@@ -633,6 +634,30 @@ pub fn hasFeature(data: []const u8, offset: usize, length: usize, feature_tag: u
         if (try readU32(table, feature_list_offset + 2 + feature_i * 6) == feature_tag) return true;
     }
     return false;
+}
+
+/// Return the table-wide `rand` capability retained by an exact accelerator.
+///
+/// `null` means the caller must use the defensive parser. In particular, this
+/// refuses foreign table bytes and accelerators built for a different table
+/// range; the shaping hot path may trust the boolean only after separately
+/// proving the borrowed GSUB table for the current cache lifetime.
+pub fn hasRandomFeatureWithAccelerators(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    accelerators: []const LookupAccelerator,
+) ?bool {
+    if (accelerators.len == 0) return null;
+    const feature_index = accelerators[0].feature_index orelse return null;
+    if (feature_index.data_ptr != data.ptr or
+        feature_index.data_len != data.len or
+        feature_index.table_offset != offset or
+        feature_index.table_length != length)
+    {
+        return null;
+    }
+    return feature_index.has_random_feature;
 }
 
 /// Apply one Script/LangSys feature to the source positions carrying its tag.
@@ -1272,6 +1297,7 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
                 .data_len = table.data.len,
                 .table_offset = table.offset,
                 .table_length = table.length,
+                .has_random_feature = feature_data.has_random_feature,
                 .records = feature_data.records,
                 .lookups = feature_data.lookups,
             };
@@ -1287,6 +1313,7 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
 }
 
 const FeatureLookupData = struct {
+    has_random_feature: bool,
     records: []FeatureLookupRecord,
     lookups: []u16,
 };
@@ -1298,10 +1325,12 @@ fn buildFeatureLookupRecords(table: Table, lookup_count: u16, allocator: std.mem
     errdefer allocator.free(records);
     var lookups = std.ArrayList(u16).empty;
     errdefer lookups.deinit(allocator);
+    var has_random_feature = false;
 
     for (records, 0..) |*record, feature_index| {
         const feature_record = feature_list_offset + 2 + feature_index * 6;
         const tag = try readU32(table, feature_record);
+        has_random_feature = has_random_feature or tag == unicode.tag("rand");
         const feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
         const lookup_len = try readU16(table, feature_offset + 2);
         const lookup_start = lookups.items.len;
@@ -1328,6 +1357,7 @@ fn buildFeatureLookupRecords(table: Table, lookup_count: u16, allocator: std.mem
         };
     }
     return .{
+        .has_random_feature = has_random_feature,
         .records = records,
         .lookups = try lookups.toOwnedSlice(allocator),
     };
@@ -10448,6 +10478,7 @@ test "GSUB feature lookup accelerator borrows canonical unique records only" {
         .data_len = unique_bytes.len,
         .table_offset = 0,
         .table_length = unique_bytes.len,
+        .has_random_feature = false,
         .records = unique_data.records,
         .lookups = unique_data.lookups,
     };
@@ -10495,6 +10526,7 @@ test "GSUB feature lookup accelerator borrows canonical unique records only" {
         .data_len = repeated_bytes.len,
         .table_offset = 0,
         .table_length = repeated_bytes.len,
+        .has_random_feature = false,
         .records = repeated_data.records,
         .lookups = repeated_data.lookups,
     };
@@ -10506,6 +10538,87 @@ test "GSUB feature lookup accelerator borrows canonical unique records only" {
         &repeated_features,
         2,
         .{ .lookup_accelerators = &repeated_accelerators },
+    ) == null);
+}
+
+test "GSUB random capability requires an exact feature accelerator" {
+    const allocator = std.testing.allocator;
+
+    var random_bytes = [_]u8{0} ** 72;
+    writeRequiredFeatureSelectionTable(&random_bytes, unicode.tag("rand"), unicode.tag("liga"));
+    const random_table = Table{
+        .data = &random_bytes,
+        .offset = 0,
+        .length = random_bytes.len,
+        .assume_validated = true,
+    };
+    const random_data = try buildFeatureLookupRecords(random_table, 2, allocator);
+    defer allocator.free(random_data.records);
+    defer allocator.free(random_data.lookups);
+    try std.testing.expect(random_data.has_random_feature);
+    const random_index = FeatureLookupIndex{
+        .data_ptr = random_bytes[0..].ptr,
+        .data_len = random_bytes.len,
+        .table_offset = 0,
+        .table_length = random_bytes.len,
+        .has_random_feature = random_data.has_random_feature,
+        .records = random_data.records,
+        .lookups = random_data.lookups,
+    };
+    const random_accelerators = [_]LookupAccelerator{.{ .feature_index = &random_index }};
+    try std.testing.expectEqual(
+        @as(?bool, true),
+        hasRandomFeatureWithAccelerators(&random_bytes, 0, random_bytes.len, &random_accelerators),
+    );
+
+    var ordinary_bytes = [_]u8{0} ** 72;
+    writeRequiredFeatureSelectionTable(&ordinary_bytes, unicode.tag("ordn"), unicode.tag("liga"));
+    const ordinary_table = Table{
+        .data = &ordinary_bytes,
+        .offset = 0,
+        .length = ordinary_bytes.len,
+        .assume_validated = true,
+    };
+    const ordinary_data = try buildFeatureLookupRecords(ordinary_table, 2, allocator);
+    defer allocator.free(ordinary_data.records);
+    defer allocator.free(ordinary_data.lookups);
+    try std.testing.expect(!ordinary_data.has_random_feature);
+    const ordinary_index = FeatureLookupIndex{
+        .data_ptr = ordinary_bytes[0..].ptr,
+        .data_len = ordinary_bytes.len,
+        .table_offset = 0,
+        .table_length = ordinary_bytes.len,
+        .has_random_feature = ordinary_data.has_random_feature,
+        .records = ordinary_data.records,
+        .lookups = ordinary_data.lookups,
+    };
+    const ordinary_accelerators = [_]LookupAccelerator{.{ .feature_index = &ordinary_index }};
+    try std.testing.expectEqual(
+        @as(?bool, false),
+        hasRandomFeatureWithAccelerators(&ordinary_bytes, 0, ordinary_bytes.len, &ordinary_accelerators),
+    );
+
+    // A copied table, mismatched range, or accelerator without feature
+    // metadata cannot borrow this capability. Callers must retain the
+    // checksum-validating parser for all three cases.
+    var foreign_bytes = random_bytes;
+    try std.testing.expect(hasRandomFeatureWithAccelerators(
+        &foreign_bytes,
+        0,
+        foreign_bytes.len,
+        &random_accelerators,
+    ) == null);
+    try std.testing.expect(hasRandomFeatureWithAccelerators(
+        &random_bytes,
+        1,
+        random_bytes.len - 1,
+        &random_accelerators,
+    ) == null);
+    try std.testing.expect(hasRandomFeatureWithAccelerators(
+        &random_bytes,
+        0,
+        random_bytes.len,
+        &.{.{}},
     ) == null);
 }
 

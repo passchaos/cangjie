@@ -2663,6 +2663,11 @@ pub const Font = struct {
         return try gsub_mod.hasFeature(self.data, gsub.offset, gsub.length, feature_tag);
     }
 
+    pub fn hasGsubRandomFeatureWithAcceleratorsForShaping(self: *const Font, accelerators: []const gsub_mod.LookupAccelerator) ?bool {
+        const gsub = self.gsub orelse return false;
+        return gsub_mod.hasRandomFeatureWithAccelerators(self.data, gsub.offset, gsub.length, accelerators);
+    }
+
     pub fn gsubLookupAcceleratorsForShaping(self: *const Font, allocator: std.mem.Allocator) FontError![]gsub_mod.LookupAccelerator {
         const gsub = self.gsub orelse return try allocator.alloc(gsub_mod.LookupAccelerator, 0);
         try validateSfntTableChecksum(self.data, gsub);

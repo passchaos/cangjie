@@ -4226,7 +4226,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         if (apply_morx) {
             try font.applyMorxForShaping(glyph_ids, buffer.allocator, gsub_options);
         } else {
-            const gsub_needs_value_selection = needsValueAwareGsubSelection(font, gsub_options.features);
+            const gsub_needs_value_selection = needsValueAwareGsubSelection(
+                font,
+                gsub_options.features,
+                gsub_options.lookup_accelerators,
+                gsub_after_proof,
+            );
             if (lookup_options.normalized_variation_coords.len == 0 and !gsub_needs_value_selection) if (buffer.lookup_selection_cache) |selection_cache| {
                 gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
             };
@@ -5353,13 +5358,26 @@ fn explicitOptionalFeatureShouldRun(feature: u32) bool {
         feature != unicode.tag("subs");
 }
 
-fn needsValueAwareGsubSelection(font: *const Font, features: []const unicode.FeatureOverride) bool {
+fn needsValueAwareGsubSelection(
+    font: *const Font,
+    features: []const unicode.FeatureOverride,
+    lookup_accelerators: ?[]const gsub.LookupAccelerator,
+    table_proved: bool,
+) bool {
     var rand_disabled = false;
     for (features) |feature| {
         if (feature.effectiveValue() > 1) return true;
         if (feature.tag == unicode.tag("rand") and !feature.enabled) rand_disabled = true;
     }
-    return !rand_disabled and (font.hasGsubFeatureForShaping(unicode.tag("rand")) catch false);
+    if (rand_disabled) return false;
+    if (table_proved) {
+        if (lookup_accelerators) |accelerators| {
+            if (font.hasGsubRandomFeatureWithAcceleratorsForShaping(accelerators)) |has_random| {
+                return has_random;
+            }
+        }
+    }
+    return font.hasGsubFeatureForShaping(unicode.tag("rand")) catch false;
 }
 
 fn scriptPositionFeatureApplication(position: ScriptPosition) ?gsub.FeatureApplication {

@@ -572,7 +572,7 @@ const GlyphMetricsKey = struct {
 };
 
 pub const GlyphMetricsCache = struct {
-    const direct_capacity = 512;
+    const direct_capacity = 2048;
     const HorizontalDirectEntry = struct {
         key: GlyphMetricsKey = .{ .font_addr = 0, .glyph_id = 0 },
         metrics: GlyphMetrics = .{ .advance_width = 0, .left_side_bearing = 0 },

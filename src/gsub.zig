@@ -315,6 +315,8 @@ const empty_class_def_offset = std.math.maxInt(usize);
 const ChainingSubtableGroup = struct {
     glyph: GlyphId,
     subtable_indices: []const u16,
+    second_input_digest: GlyphDigest = .{},
+    has_no_second_input: bool = false,
 };
 
 const ChainingSubtablePair = struct {
@@ -1638,6 +1640,7 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         for (chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(chaining_groups);
     }
+    fillChainingGroupSecondInputMetadata(chaining_groups, chaining_subtables);
     const chaining_group_slots = try buildChainingGroupSlots(chaining_groups, allocator);
     errdefer allocator.free(chaining_group_slots);
     return .{
@@ -5601,12 +5604,17 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             if (!accel.chaining_input_digest.mayHave(current_glyph)) continue;
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
-            const grouped_subtables = chainingSubtableGroupForGlyph(accel.chaining_groups, accel.chaining_group_slots, current_glyph) orelse continue;
+            const group = chainingSubtableGroupEntryForGlyph(accel.chaining_groups, accel.chaining_group_slots, current_glyph) orelse continue;
+            const grouped_subtables = group.subtable_indices;
             const second_glyph_index = if (accel.chaining_needs_second_input)
                 nextUnignoredGlyphIndex(glyphs.items, pos + 1, lookup_flag, options, false, pos)
             else
                 null;
             const second_glyph = if (second_glyph_index) |index| glyphs.items[index] else null;
+            if (!group.has_no_second_input and !group.second_input_digest.isEmpty()) {
+                const glyph = second_glyph orelse continue;
+                if (!group.second_input_digest.mayHave(glyph)) continue;
+            }
             const first_backtrack_glyph = if (accel.chaining_needs_backtrack)
                 previousUnignoredGlyph(glyphs.items, pos, lookup_flag, options, true, pos)
             else
@@ -8083,6 +8091,29 @@ fn buildChainingSubtableGroups(pairs: []ChainingSubtablePair, allocator: std.mem
     return groups;
 }
 
+fn fillChainingGroupSecondInputMetadata(groups: []ChainingSubtableGroup, subtables: []const ChainingCoverageSubtable) void {
+    for (groups) |*group| {
+        var digest = GlyphDigest.empty();
+        var has_second_input = false;
+        var has_no_second_input = false;
+        for (group.subtable_indices) |subtable_i| {
+            if (subtable_i >= subtables.len) {
+                has_no_second_input = true;
+                continue;
+            }
+            const subtable = subtables[subtable_i];
+            if (subtable.input_count <= 1) {
+                has_no_second_input = true;
+                continue;
+            }
+            has_second_input = true;
+            digest.unionWith(subtable.second_input_digest);
+        }
+        group.has_no_second_input = has_no_second_input;
+        if (has_second_input) group.second_input_digest = digest;
+    }
+}
+
 const min_chaining_groups_for_hash = 8;
 
 fn buildChainingGroupSlots(groups: []const ChainingSubtableGroup, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u16 {
@@ -8102,11 +8133,16 @@ fn buildChainingGroupSlots(groups: []const ChainingSubtableGroup, allocator: std
 }
 
 fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, slots: []const u16, glyph: GlyphId) ?[]const u16 {
+    const group = chainingSubtableGroupEntryForGlyph(groups, slots, glyph) orelse return null;
+    return group.subtable_indices;
+}
+
+fn chainingSubtableGroupEntryForGlyph(groups: []const ChainingSubtableGroup, slots: []const u16, glyph: GlyphId) ?ChainingSubtableGroup {
     if (slots.len != 0) {
         var slot = chainingGroupHash(glyph) & (slots.len - 1);
         while (slots[slot] != 0) : (slot = (slot + 1) & (slots.len - 1)) {
             const group = groups[slots[slot] - 1];
-            if (group.glyph == glyph) return group.subtable_indices;
+            if (group.glyph == glyph) return group;
         }
         return null;
     }
@@ -8121,7 +8157,7 @@ fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, slots: [
         } else if (glyph > candidate) {
             lo = mid + 1;
         } else {
-            return groups[mid].subtable_indices;
+            return groups[mid];
         }
     }
     return null;

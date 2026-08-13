@@ -80,6 +80,12 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .kerx_format_4 => try cangjie.testing.test_font.buildKerxFormat4Ttf(allocator),
         .kerx_format_4_ankr => try cangjie.testing.test_font.buildKerxFormat4AnkrTtf(allocator),
         .kerx_format_6 => try cangjie.testing.test_font.buildKerxFormat6Ttf(allocator),
+        .kerx_cross_format_0 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 0, false),
+        .kerx_cross_format_2 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 2, false),
+        .kerx_cross_format_6 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 6, false),
+        .kerx_cross_vertical_format_0 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 0, true),
+        .kerx_cross_vertical_format_2 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 2, true),
+        .kerx_cross_vertical_format_6 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 6, true),
     };
 }
 
@@ -599,13 +605,45 @@ fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_
 
 fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
+    const preserve_vertical_position_delta = verticalKerningFeatureRequested(options);
     for (glyphs, values) |glyph, *value| {
-        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical)
-            -try syntheticVerticalOriginX(font, glyph.glyph_id, options)
-        else
-            fontUnitPosition(font, font_size, glyph.x_offset);
+        if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) {
+            const origin = try syntheticVerticalOriginX(font, glyph.glyph_id, options);
+            if (preserve_vertical_position_delta) {
+                const default_runtime_origin = @as(f32, @floatFromInt((try font.horizontalMetrics(glyph.glyph_id)).advance_width)) *
+                    0.5 * font_size / @as(f32, @floatFromInt(font.units_per_em));
+                const runtime_delta = fontUnitPosition(
+                    font,
+                    font_size,
+                    glyph.x_offset - default_runtime_origin,
+                );
+                // Explicit `vkrn` may change x after the default origin is
+                // installed. Preserve that delta for vertical kerning probes
+                // instead of replacing the complete result with the
+                // synthesized origin.
+                value.* = -origin + runtime_delta;
+            } else {
+                // Existing synthetic-bold/slant and fallback-space fixtures
+                // intentionally summarize only HarfBuzz's vertical origin;
+                // their transformed public x coordinate is not a GPOS delta.
+                value.* = -origin;
+            }
+        } else {
+            value.* = fontUnitPosition(font, font_size, glyph.x_offset);
+        }
     }
     return values;
+}
+
+fn verticalKerningFeatureRequested(options: options_mod.Options) bool {
+    const vkrn_tag = (@as(u32, 'v') << 24) |
+        (@as(u32, 'k') << 16) |
+        (@as(u32, 'r') << 8) |
+        @as(u32, 'n');
+    for (options.featureOverrides()) |feature| {
+        if (feature.tag == vkrn_tag) return feature.enabled;
+    }
+    return false;
 }
 
 fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, normalized_variation_coords: []const f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {

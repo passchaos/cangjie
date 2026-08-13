@@ -907,7 +907,7 @@ pub const KerxLookupForShaping = struct {
     font: *const Font,
     kerx: TableRecord,
 
-    pub fn kerning(self: KerxLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, vertical: bool) FontError!i32 {
+    pub fn kerning(self: KerxLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, vertical: bool) FontError!kerx_mod.PairAdjustment {
         if (left >= self.font.glyph_count or right >= self.font.glyph_count) return error.InvalidGlyph;
         return try kerx_mod.pairKerning(
             self.font.data,
@@ -948,6 +948,15 @@ pub const KerxLookupForShaping = struct {
             self.font.data,
             self.kerx.offset,
             self.kerx.length,
+        );
+    }
+
+    pub fn hasSimpleCrossStream(self: KerxLookupForShaping, vertical: bool) FontError!bool {
+        return try kerx_mod.hasSimpleCrossStream(
+            self.font.data,
+            self.kerx.offset,
+            self.kerx.length,
+            vertical,
         );
     }
 

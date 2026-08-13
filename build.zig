@@ -2410,6 +2410,8 @@ pub fn build(b: *std.Build) void {
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_6_cmd.step);
 
+        addKerxCrossStreamParityGates(b, shape_bench_exe, shaping_aat_parity_smoke_step);
+
         const global_vert_harfbuzz_cmd = b.addRunArtifact(shape_bench_exe);
         global_vert_harfbuzz_cmd.addArgs(&.{
             "--engine",    "compare-harfbuzz",
@@ -2559,4 +2561,72 @@ pub fn build(b: *std.Build) void {
         "--variation",  "0.5",
     });
     bench_smoke_step.dependOn(&glyph_raster_prepared_smoke_cmd.step);
+}
+
+fn addKerxCrossStreamParityGates(
+    b: *std.Build,
+    shape_bench_exe: *std.Build.Step.Compile,
+    parity_step: *std.Build.Step,
+) void {
+    const specs = [_]struct {
+        format: []const u8,
+        horizontal_builtin: []const u8,
+        vertical_builtin: []const u8,
+    }{
+        .{ .format = "0", .horizontal_builtin = "kerx-cross-format-0", .vertical_builtin = "kerx-cross-vertical-format-0" },
+        .{ .format = "2", .horizontal_builtin = "kerx-cross-format-2", .vertical_builtin = "kerx-cross-vertical-format-2" },
+        .{ .format = "6", .horizontal_builtin = "kerx-cross-format-6", .vertical_builtin = "kerx-cross-vertical-format-6" },
+    };
+    for (specs) |spec| {
+        const horizontal_font = exportedBuiltinFont(
+            b,
+            shape_bench_exe,
+            spec.horizontal_builtin,
+            b.fmt("kerx-cross-format-{s}.ttf", .{spec.format}),
+        );
+        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, horizontal_font, "compare-harfbuzz", false);
+        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, horizontal_font, "compare-harfrust", false);
+
+        const vertical_font = exportedBuiltinFont(
+            b,
+            shape_bench_exe,
+            spec.vertical_builtin,
+            b.fmt("kerx-cross-vertical-format-{s}.ttf", .{spec.format}),
+        );
+        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, vertical_font, "compare-harfbuzz", true);
+        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, vertical_font, "compare-harfrust", true);
+    }
+}
+
+fn exportedBuiltinFont(
+    b: *std.Build,
+    shape_bench_exe: *std.Build.Step.Compile,
+    builtin: []const u8,
+    basename: []const u8,
+) std.Build.LazyPath {
+    const command = b.addRunArtifact(shape_bench_exe);
+    command.addArgs(&.{ "--builtin", builtin, "--export-font" });
+    return command.addOutputFileArg(basename);
+}
+
+fn addCrossStreamReferenceGate(
+    b: *std.Build,
+    shape_bench_exe: *std.Build.Step.Compile,
+    parity_step: *std.Build.Step,
+    font: std.Build.LazyPath,
+    engine: []const u8,
+    vertical: bool,
+) void {
+    const command = b.addRunArtifact(shape_bench_exe);
+    command.addArgs(&.{ "--engine", engine, "--font" });
+    command.addFileArg(font);
+    command.addArgs(&.{
+        "--text",       "AAA",
+        "--direction",  if (vertical) "ttb" else "ltr",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    if (vertical) command.addArgs(&.{ "--enable-feature", "vkrn" });
+    parity_step.dependOn(&command.step);
 }

@@ -9219,6 +9219,56 @@ test "AAT kerx format 6 sparse positioning takes precedence over legacy kern" {
     try std.testing.expectApproxEqAbs(@as(f32, -15), run.glyphs[1].x_offset, 0.001);
 }
 
+test "AAT kerx simple cross-stream formats position the minor axis" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    for ([_]u8{ 0, 2, 6 }) |format| {
+        const horizontal_bytes = try test_font.buildKerxCrossStreamTtf(allocator, format, false);
+        defer allocator.free(horizontal_bytes);
+        var horizontal_font = try Font.parse(allocator, horizontal_bytes);
+        defer horizontal_font.deinit();
+
+        var layout_buffer = LayoutBuffer.init(allocator);
+        defer layout_buffer.deinit();
+        const horizontal = try TextShaper.shapeUtf8(&horizontal_font, &layout_buffer, "AAA", 1000);
+
+        try std.testing.expectEqual(@as(usize, 3), horizontal.glyphs.len);
+        try std.testing.expectApproxEqAbs(@as(f32, 2400), horizontal.width(), 0.001);
+        for (horizontal.glyphs) |glyph| {
+            try std.testing.expectApproxEqAbs(@as(f32, 800), glyph.x_advance, 0.001);
+        }
+        try std.testing.expectApproxEqAbs(@as(f32, 0), horizontal.glyphs[0].y_offset, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, -30), horizontal.glyphs[1].y_offset, 0.001);
+        // Cross-stream subtables cursively chain the run, so the third glyph
+        // accumulates the second pair's assignment through its parent.
+        try std.testing.expectApproxEqAbs(@as(f32, -60), horizontal.glyphs[2].y_offset, 0.001);
+
+        const vertical_bytes = try test_font.buildKerxCrossStreamTtf(allocator, format, true);
+        defer allocator.free(vertical_bytes);
+        var vertical_font = try Font.parse(allocator, vertical_bytes);
+        defer vertical_font.deinit();
+
+        layout_buffer.clear();
+        const vertical = try TextShaper.shapeUtf8WithOptions(&vertical_font, &layout_buffer, "AAA", 1000, .{
+            .writing_mode = .vertical_rl,
+            .text_orientation = .upright,
+            // HarfBuzz does not enable `vkrn` by default; an explicit request
+            // is required to exercise simple vertical kerx subtables.
+            .features = &.{.{ .tag = @import("unicode.zig").tag("vkrn"), .enabled = true }},
+        });
+
+        try std.testing.expectEqual(@as(usize, 3), vertical.glyphs.len);
+        for (vertical.glyphs) |glyph| {
+            try std.testing.expectApproxEqAbs(@as(f32, 0), glyph.x_advance, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 1000), glyph.y_advance, 0.001);
+        }
+        try std.testing.expectApproxEqAbs(@as(f32, 400), vertical.glyphs[0].x_offset, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, 370), vertical.glyphs[1].x_offset, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, 340), vertical.glyphs[2].x_offset, 0.001);
+    }
+}
+
 test "AAT kerx selection yields to GPOS only with GSUB" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

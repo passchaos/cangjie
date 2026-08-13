@@ -64,6 +64,10 @@ pub fn main(init: std.process.Init) !void {
 
     const font_bytes = try runner.loadFontBytes(init.io, allocator, options);
     defer allocator.free(font_bytes);
+    if (options.export_font_path) |path| {
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = font_bytes });
+        return;
+    }
 
     if (options.engine == .compare_coretext or options.engine == .compare_harfrust or options.engine == .compare_harfbuzz) {
         try runReferenceComparison(init.io, allocator, font_bytes, options);

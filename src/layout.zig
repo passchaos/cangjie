@@ -3,6 +3,7 @@ const aat_kerx = @import("aat_kerx.zig");
 const arabic_normalization = @import("arabic_normalization.zig");
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
+const KerxPairAdjustment = @import("opentype/kerx.zig").PairAdjustment;
 const fallback_mark = @import("fallback_mark.zig");
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
 const GlyphClass = @import("font.zig").GlyphClass;
@@ -4473,7 +4474,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const has_gdef_glyph_classes = gdef_metadata.glyph_classes != null;
     const has_gpos_positioning = font.hasGposTableForShaping() and !use_kerx_positioning;
     const kerning_enabled = shapingFeatureEnabled(
-        unicode.tag("kern"),
+        if (lookup_options.writing_mode.isVertical()) unicode.tag("vkrn") else unicode.tag("kern"),
         lookup_options.features,
         !lookup_options.writing_mode.isVertical(),
     );
@@ -4498,13 +4499,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
         }
     }
-    const has_kerx_attachments = adjustmentsHaveKerxAttachments(kerx_adjustments.items);
+    const selects_kerx_simple_cross_stream = if (kerx_lookup) |lookup|
+        try lookup.hasSimpleCrossStream(lookup_options.writing_mode.isVertical())
+    else
+        false;
+    const has_kerx_state_attachments = adjustmentsHaveKerxAttachments(kerx_adjustments.items);
     // GPOS and kerx adjustments are accumulated in font units, then scaled
     // into user-space coordinates for the final GlyphPosition stream.
     const fallback_mark_enabled = fallback_mark.enabled(
         early_zero_mark_shape,
         has_gpos_positioning,
-        has_gpos_attachments or has_kerx_attachments,
+        has_gpos_attachments or has_kerx_state_attachments,
         use_kerx_positioning,
         lookup_options.writing_mode.isVertical(),
     );
@@ -4534,15 +4539,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // the output loop does not repeat a large GlyphPosition capacity check.
     try buffer.glyphs.ensureUnusedCapacity(buffer.allocator, glyph_ids.items.len);
     const attachment_links = &scratch.attachment_links;
-    if (has_gpos_attachments or has_kerx_attachments) {
-        // Parent indexes refer to the post-GSUB input stream. Allocate the
-        // remapping arrays only when GPOS actually emitted a mark/cursive
-        // attachment; ordinary PairPos-only Latin runs need neither array.
+    const needs_attachment_remapping = has_gpos_attachments or
+        has_kerx_state_attachments or
+        selects_kerx_simple_cross_stream;
+    if (needs_attachment_remapping) {
+        // Parent indexes refer to the post-GSUB input stream. Simple
+        // cross-stream kerx activates the whole run's cursive chain even when
+        // only one pair has a non-zero value, so reserve the reusable sidecars
+        // before walking output rather than allocating inside the pair loop.
         try attachment_links.resize(buffer.allocator, glyph_ids.items.len);
         @memset(attachment_links.items, .{});
         try glyph_output_indices.resize(buffer.allocator, glyph_ids.items.len);
         @memset(glyph_output_indices.items, std.math.maxInt(usize));
     }
+    var has_kerx_cross_stream_adjustment = false;
     const position_loop_start = shapeProfileNow(shape_profile, profile_io);
     for (glyph_ids.items, 0..) |input_glyph_id, index| {
         const source_index = if (index < glyph_source_indices.items.len)
@@ -4578,13 +4588,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             source_codepoint,
             was_substituted,
         );
-        const active_kern = if (kerx_lookup) |lookup|
+        const active_kerx: KerxPairAdjustment = if (kerx_lookup) |lookup|
             if (!kerx_skips_glyph) if (previous_kern_glyph) |previous|
                 try lookup.kerning(previous, glyph_id, lookup_options.writing_mode.isVertical())
             else
-                0
-            else
-                0
+                .{} else .{}
+        else
+            .{};
+        const active_kern = if (kerx_lookup != null)
+            active_kerx.along_stream
         else if (kern_lookup) |lookup|
             if (previous_kern_glyph) |previous|
                 try lookup.kerning(previous, glyph_id)
@@ -4639,6 +4651,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         // still available to every contextual lookup, then remap attachment
         // links below for the compacted output stream.
         if (skip_default_ignorable) {
+            // Removed controls must not become pair candidates, but still
+            // record their absent output slot so a later cross-stream chain
+            // can compact around them safely.
+            if (needs_attachment_remapping) {
+                glyph_output_indices.items[index] = std.math.maxInt(usize);
+            }
             if (kerx_lookup == null) previous_kern_glyph = glyph_id;
             continue;
         }
@@ -4736,13 +4754,28 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 ) catch .{};
             }
         }
-        if (has_gpos_attachments or has_kerx_attachments) {
+        if (needs_attachment_remapping) {
             glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
         }
+        // Simple cross-stream kerning writes the current minor-axis offset
+        // directly and links the whole run as a cursive chain. Propagation
+        // then accumulates earlier cross-stream values without involving
+        // advances on the major axis.
+        const kerx_cross_stream_offset = @as(f32, @floatFromInt(active_kerx.cross_stream)) * scale;
+        has_kerx_cross_stream_adjustment = has_kerx_cross_stream_adjustment or
+            active_kerx.cross_stream != 0;
         const output_x_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
             0
         else if (lookup_options.writing_mode.isVertical())
-            vertical_x_offset + gpos_x_offset + kerx_state_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x
+            if (active_kerx.cross_stream != 0)
+                // Cross-stream kerning assigns the current minor-axis offset;
+                // it does not add to the default vertical origin. The cursive
+                // chain below then accumulates the parent's origin and prior
+                // cross-stream assignments exactly once.
+                kerx_cross_stream_offset
+            else
+                vertical_x_offset + gpos_x_offset + kerx_state_x_offset +
+                    zeroed_mark_x_offset + fallback_mark_offset.x
         else
             gpos_x_offset + kerx_state_x_offset + kern_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x;
         const output_y_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
@@ -4753,6 +4786,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 zeroed_mark_y_offset + fallback_mark_offset.y
         else
             @as(f32, @floatFromInt(adjustment.y_placement + kerx_adjustment.y_offset)) * scale +
+                kerx_cross_stream_offset +
                 zeroed_mark_y_offset + fallback_mark_offset.y;
         buffer.glyphs.appendAssumeCapacity(.{
             .glyph_id = output_glyph_id,
@@ -4779,7 +4813,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             stch_action,
             buffer.glyphs.items.len - segment_glyph_start,
         );
-        if ((has_gpos_attachments or has_kerx_attachments) and !hide_default_ignorable) {
+        if (needs_attachment_remapping and !hide_default_ignorable) {
             attachment_links.items[index] = if (kerx_adjustment.attachment_parent_index) |parent_index|
                 .{ .kind = .mark, .parent_index = parent_index }
             else
@@ -4797,8 +4831,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         p.position_loop_ns += shapeProfileElapsed(position_loop_start, profile_io);
         p.position_output_glyphs += buffer.glyphs.items.len - segment_glyph_start;
     }
+    const has_kerx_attachments = has_kerx_state_attachments or has_kerx_cross_stream_adjustment;
     if (has_gpos_attachments or has_kerx_attachments) {
         const attachment_start = shapeProfileNow(shape_profile, profile_io);
+        if (has_kerx_cross_stream_adjustment) {
+            initializeKerxCrossStreamLinks(
+                attachment_links.items,
+                glyph_output_indices.items,
+                shapingDirectionForGpos(lookup_options) == .rtl,
+            );
+        }
         compactAttachmentLinks(
             attachment_links.items,
             glyph_output_indices.items,
@@ -5848,6 +5890,59 @@ fn compactAttachmentLinks(links: []attachment.Link, output_indices: []const usiz
         if (output_index == std.math.maxInt(usize) or output_index >= output_len) continue;
         links[output_index] = remapAttachmentLinkForOutput(links[input_index], output_indices);
     }
+}
+
+fn initializeKerxCrossStreamLinks(links: []attachment.Link, output_indices: []const usize, backward: bool) void {
+    const len = @min(links.len, output_indices.len);
+    const removed = std.math.maxInt(usize);
+    if (backward) {
+        var parent: ?usize = null;
+        var index = len;
+        while (index > 0) {
+            index -= 1;
+            if (output_indices[index] == removed) continue;
+            // Format-4 mark attachments are more specific than the generic
+            // cursive chain. Preserve them while filling every other emitted
+            // glyph, including marks skipped by simple pair matching.
+            if (links[index].kind == .none and parent != null) {
+                links[index] = .{ .kind = .cursive, .parent_index = parent };
+            }
+            parent = index;
+        }
+    } else {
+        var parent: ?usize = null;
+        for (output_indices[0..len], 0..) |output_index, index| {
+            if (output_index == removed) continue;
+            if (links[index].kind == .none and parent != null) {
+                links[index] = .{ .kind = .cursive, .parent_index = parent };
+            }
+            parent = index;
+        }
+    }
+}
+
+test "kerx cross-stream links follow emitted glyphs in both directions" {
+    const removed = std.math.maxInt(usize);
+    const output_indices = [_]usize{ 0, removed, 1, 2 };
+
+    var forward = [_]attachment.Link{
+        .{},
+        .{},
+        .{ .kind = .mark, .parent_index = 0 },
+        .{},
+    };
+    initializeKerxCrossStreamLinks(&forward, &output_indices, false);
+    try std.testing.expectEqual(attachment.Link{}, forward[0]);
+    try std.testing.expectEqual(attachment.Link{}, forward[1]);
+    try std.testing.expectEqual(attachment.Link{ .kind = .mark, .parent_index = 0 }, forward[2]);
+    try std.testing.expectEqual(attachment.Link{ .kind = .cursive, .parent_index = 2 }, forward[3]);
+
+    var backward = [_]attachment.Link{.{}} ** 4;
+    initializeKerxCrossStreamLinks(&backward, &output_indices, true);
+    try std.testing.expectEqual(attachment.Link{ .kind = .cursive, .parent_index = 2 }, backward[0]);
+    try std.testing.expectEqual(attachment.Link{}, backward[1]);
+    try std.testing.expectEqual(attachment.Link{ .kind = .cursive, .parent_index = 3 }, backward[2]);
+    try std.testing.expectEqual(attachment.Link{}, backward[3]);
 }
 
 test "attachment links remap after hidden glyph removal" {

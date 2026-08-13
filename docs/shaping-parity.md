@@ -1815,12 +1815,20 @@ shaping-performance superiority.
   Format 6 supports both 16-bit and 32-bit scalar matrices, while the shared
   AAT lookup reader handles typed `u16`/`u32` values and format 10. Matrix
   indexes and state-machine bounds are validated against maxp before shaping.
+  Simple cross-stream positioning is retained for formats 0, 2, and 6 on both
+  axes against HarfBuzz and HarfRust. Horizontal `"AAA"` keeps advances
+  `800,800,800` and cursively accumulates y offsets `0,-30,-60`. Vertical
+  fixtures carry an inert GPOS `vkrn` feature so an explicit `vkrn=1` receives
+  the same feature mask in both references; they keep three `-1000` advances
+  and report HarfBuzz-space x offsets `-400,-430,-460`. The benchmark's
+  vertical x-offset normalization now preserves runtime positioning deltas
+  instead of replacing the complete result with the synthesized origin.
   Selection follows
   HarfBuzz's table plan: when GSUB and GPOS are both active, GPOS owns
   positioning even if the selected LangSys's applicable feature is not named
   `kern`; otherwise `kerx` takes precedence over legacy `kern`.
-  Format 4 outline-control-point actions, cross-stream positioning, and
-  variation tuples remain open.
+  Format 4 outline-control-point actions, state-machine format-1 cross-stream
+  actions, and variation tuples remain open.
 
   The `shape-bench` now has a `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process

@@ -48,6 +48,12 @@ pub const BuiltinFont = enum {
     kerx_format_4,
     kerx_format_4_ankr,
     kerx_format_6,
+    kerx_cross_format_0,
+    kerx_cross_format_2,
+    kerx_cross_format_6,
+    kerx_cross_vertical_format_0,
+    kerx_cross_vertical_format_2,
+    kerx_cross_vertical_format_6,
 
     pub fn fromName(name: []const u8) ?BuiltinFont {
         if (std.mem.eql(u8, name, "minimal")) return .minimal;
@@ -59,6 +65,12 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "kerx-format-4")) return .kerx_format_4;
         if (std.mem.eql(u8, name, "kerx-format-4-ankr")) return .kerx_format_4_ankr;
         if (std.mem.eql(u8, name, "kerx-format-6")) return .kerx_format_6;
+        if (std.mem.eql(u8, name, "kerx-cross-format-0")) return .kerx_cross_format_0;
+        if (std.mem.eql(u8, name, "kerx-cross-format-2")) return .kerx_cross_format_2;
+        if (std.mem.eql(u8, name, "kerx-cross-format-6")) return .kerx_cross_format_6;
+        if (std.mem.eql(u8, name, "kerx-cross-vertical-format-0")) return .kerx_cross_vertical_format_0;
+        if (std.mem.eql(u8, name, "kerx-cross-vertical-format-2")) return .kerx_cross_vertical_format_2;
+        if (std.mem.eql(u8, name, "kerx-cross-vertical-format-6")) return .kerx_cross_vertical_format_6;
         return null;
     }
 
@@ -73,6 +85,12 @@ pub const BuiltinFont = enum {
             .kerx_format_4 => "builtin:kerx-format-4",
             .kerx_format_4_ankr => "builtin:kerx-format-4-ankr",
             .kerx_format_6 => "builtin:kerx-format-6",
+            .kerx_cross_format_0 => "builtin:kerx-cross-format-0",
+            .kerx_cross_format_2 => "builtin:kerx-cross-format-2",
+            .kerx_cross_format_6 => "builtin:kerx-cross-format-6",
+            .kerx_cross_vertical_format_0 => "builtin:kerx-cross-vertical-format-0",
+            .kerx_cross_vertical_format_2 => "builtin:kerx-cross-vertical-format-2",
+            .kerx_cross_vertical_format_6 => "builtin:kerx-cross-vertical-format-6",
         };
     }
 };
@@ -130,6 +148,7 @@ pub const Options = struct {
     engine: Engine = .cangjie,
     output_format: OutputFormat = .text,
     font_path: ?[]const u8 = null,
+    export_font_path: ?[]const u8 = null,
     face_index: usize = 0,
     harfrust_bin: []const u8 = default_harfrust_bin,
     harfrust_bin_explicit: bool = false,
@@ -236,6 +255,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.font_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--export-font")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.export_font_path = args[i];
         } else if (std.mem.eql(u8, arg, "--face-index")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -558,13 +581,14 @@ fn parseScriptTag(text: []const u8) ?cangjie.OpenTypeScriptTag {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "shape-bench";
     std.debug.print(
-        \\usage: {s} [--font font.ttf|font.ttc|font.dfont] [--face-index n] [--builtin minimal|minimal-gsub|script-feature|kerx|kerx-format-1|kerx-format-2|kerx-format-4|kerx-format-4-ankr|kerx-format-6] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
+        \\usage: {s} [--font font.ttf|font.ttc|font.dfont] [--face-index n] [--builtin NAME] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
         \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-coretext|compare-harfrust|compare-harfbuzz
         \\                               shaping engine, default cangjie
         \\  --format text|tsv            output format, default text
         \\  --font PATH                  use a real SFNT/TTC/WOFF/DFONT font
+        \\  --export-font PATH           write the selected built-in font and exit
         \\  --face-index N              select face N from a font collection
         \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature

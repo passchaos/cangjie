@@ -49,6 +49,10 @@ pub fn buildKerxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxTtfTables(allocator));
 }
 
+pub fn buildKerxCrossStreamTtf(allocator: std.mem.Allocator, format: u8, vertical: bool) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxCrossStreamTtfTables(allocator, format, vertical));
+}
+
 pub fn buildKerxFormat1Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat1TtfTables(allocator));
 }
@@ -940,6 +944,31 @@ fn kerxTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxCrossStreamTtfTables(allocator: std.mem.Allocator, format: u8, vertical: bool) ![]Table {
+    const tables = try allocator.alloc(Table, if (vertical) 12 else 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kerx", .data = try kerxCrossStreamTable(allocator, format, vertical) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    if (vertical) {
+        tables[9] = .{ .tag = "vhea", .data = try vheaTableWithMetrics(allocator, 1) };
+        tables[10] = .{ .tag = "vmtx", .data = try vmtxTable(allocator) };
+        // HarfBuzz only allocates a `vkrn` feature mask when the feature is
+        // present in GPOS. Kerx still owns positioning because this fixture
+        // deliberately has no GSUB table, so the inert competing PairPos
+        // exists solely to make the explicit vertical-kerning request visible
+        // to both reference engines.
+        tables[11] = .{ .tag = "GPOS", .data = try gposPairFeatureTable(allocator, "vkrn") };
+    }
     return tables;
 }
 
@@ -3471,6 +3500,22 @@ fn kerxTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 42, 1);
     writeU16(bytes, 44, 1);
     writeI16(bytes, 46, -30);
+    return bytes;
+}
+
+fn kerxCrossStreamTable(allocator: std.mem.Allocator, format: u8, vertical: bool) ![]u8 {
+    const bytes = switch (format) {
+        0 => try kerxTable(allocator),
+        2 => try kerxFormat2Table(allocator),
+        6 => try kerxFormat6Table(allocator),
+        else => return error.InvalidKerxFormat,
+    };
+    // The high coverage bits select the writing axis and make the scalar a
+    // minor-axis offset. Keep the low byte authored by the format builder.
+    const coverage = @as(u32, format) |
+        @as(u32, 0x4000_0000) |
+        (if (vertical) @as(u32, 0x8000_0000) else 0);
+    writeU32(bytes, 12, coverage);
     return bytes;
 }
 

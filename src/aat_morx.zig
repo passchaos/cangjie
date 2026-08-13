@@ -4,16 +4,12 @@ const GlyphId = @import("glyph.zig").GlyphId;
 const gsub = @import("gsub.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
+const rearrangement = @import("aat_morx/rearrangement.zig");
+const state_table = @import("aat_morx/state_table.zig");
 
-const Error = error{BadSfnt} || std.mem.Allocator.Error || error{EndOfStream};
-
-const class_end_of_text: u16 = 0;
-const class_out_of_bounds: u16 = 1;
-const class_deleted_glyph: u16 = 2;
-const class_end_of_line: u16 = 3;
+const Error = error{ BadSfnt, InvalidShapingInput } || std.mem.Allocator.Error || error{EndOfStream};
 
 const set_component: u16 = 0x8000;
-const dont_advance: u16 = 0x4000;
 const perform_action: u16 = 0x2000;
 
 const lig_action_last: u32 = 0x8000_0000;
@@ -31,6 +27,7 @@ pub fn apply(
     glyphs: *std.ArrayList(GlyphId),
     options: gsub.LookupOptions,
 ) Error!void {
+    try validateParallelMetadata(glyphs.items.len, options);
     if (table_offset > data.len or table_length > data.len - table_offset or table_length < 8) return error.BadSfnt;
     const version = try readU16(data, table_offset);
     if (version != 2 and version != 3) return error.BadSfnt;
@@ -60,6 +57,13 @@ pub fn apply(
             if (subtable_length < 12 or subtable_length > chain_offset + chain_length - subtable_offset) return error.BadSfnt;
             if ((flags & sub_feature_flags) != 0) {
                 switch (coverage & 0xff) {
+                    0 => try rearrangement.apply(
+                        data,
+                        absolute_subtable + 12,
+                        subtable_length - 12,
+                        glyphs,
+                        options,
+                    ),
                     2 => try applyLigatureSubtable(
                         allocator,
                         data,
@@ -85,6 +89,24 @@ pub fn apply(
     if (chain_offset > table_length) return error.BadSfnt;
 }
 
+fn validateParallelMetadata(glyph_count: usize, options: gsub.LookupOptions) Error!void {
+    if (options.glyph_source_indices) |values| {
+        if (values.items.len != glyph_count) return error.InvalidShapingInput;
+    }
+    if (options.glyph_cluster_indices) |values| {
+        if (values.items.len != glyph_count) return error.InvalidShapingInput;
+    }
+    if (options.glyph_substituted) |values| {
+        if (values.items.len != glyph_count) return error.InvalidShapingInput;
+    }
+    if (options.glyph_stage_substituted) |values| {
+        if (values.items.len != glyph_count) return error.InvalidShapingInput;
+    }
+    if (options.ligature_components) |store| {
+        if (store.infos.items.len != glyph_count or !store.isValid()) return error.InvalidShapingInput;
+    }
+}
+
 fn applyNoncontextualSubtable(
     data: []const u8,
     offset: usize,
@@ -94,7 +116,7 @@ fn applyNoncontextualSubtable(
 ) Error!void {
     if (length < 2) return error.BadSfnt;
     for (glyphs.items, 0..) |*glyph, index| {
-        const replacement = (try lookupGlyphValue(data, offset, length, glyph.*)) orelse continue;
+        const replacement = (try state_table.lookupGlyphValue(data, offset, length, glyph.*)) orelse continue;
         glyph.* = replacement;
         if (options.glyph_substituted) |substituted| {
             if (index < substituted.items.len) substituted.items[index] = true;
@@ -102,46 +124,6 @@ fn applyNoncontextualSubtable(
         if (options.glyph_stage_substituted) |substituted| {
             if (index < substituted.items.len) substituted.items[index] = true;
         }
-    }
-}
-
-fn lookupGlyphValue(data: []const u8, offset: usize, length: usize, glyph: GlyphId) Error!?GlyphId {
-    const format = try readU16(data, offset);
-    switch (format) {
-        6 => {
-            if (length < 12) return error.BadSfnt;
-            const unit_size = try readU16(data, offset + 2);
-            const count: usize = @intCast(try readU16(data, offset + 4));
-            if (unit_size < 4) return error.BadSfnt;
-            const entries_offset = offset + 12;
-            if (count > (length - 12) / unit_size) return error.BadSfnt;
-            var lo: usize = 0;
-            var hi: usize = count;
-            while (lo < hi) {
-                const mid = lo + (hi - lo) / 2;
-                const entry = entries_offset + mid * unit_size;
-                const entry_glyph = try readU16(data, entry);
-                if (glyph < entry_glyph) {
-                    hi = mid;
-                } else if (glyph > entry_glyph) {
-                    lo = mid + 1;
-                } else {
-                    return try readU16(data, entry + 2);
-                }
-            }
-            return null;
-        },
-        8 => {
-            if (length < 6) return error.BadSfnt;
-            const first_glyph: usize = @intCast(try readU16(data, offset + 2));
-            const count: usize = @intCast(try readU16(data, offset + 4));
-            const glyph_index: usize = glyph;
-            if (glyph_index < first_glyph or glyph_index >= first_glyph + count) return null;
-            const value_offset = offset + 6 + (glyph_index - first_glyph) * 2;
-            if (value_offset > offset + length or offset + length - value_offset < 2) return error.BadSfnt;
-            return try readU16(data, value_offset);
-        },
-        else => return null,
     }
 }
 
@@ -186,9 +168,9 @@ fn applyLigatureSubtable(
 
     while (true) {
         const class = if (index < glyphs.items.len)
-            try classForGlyph(data, offset, length, class_table_offset, glyphs.items[index])
+            try ligatureClassForGlyph(data, offset, length, class_table_offset, glyphs.items[index])
         else
-            class_end_of_text;
+            state_table.class_end_of_text;
         const entry = try stateEntry(data, offset, length, state_array_offset, entry_table_offset, class_count, state, class);
         if (entry.flags & set_component != 0 and index < glyphs.items.len) {
             if (match_len != 0 and match_positions[(match_len - 1) % max_ligature_matches] == out_glyphs.items.len) {
@@ -224,45 +206,29 @@ fn applyLigatureSubtable(
 
         state = entry.new_state;
         if (index >= glyphs.items.len) break;
-        if (entry.flags & dont_advance == 0) index += 1;
+        if (entry.flags & state_table.dont_advance == 0) index += 1;
     }
 
     try replaceRun(allocator, glyphs, options, out_glyphs.items, out_sources.items, out_clusters.items, out_substituted.items, &out_ligatures);
 }
 
-const StateEntry = struct {
-    new_state: usize,
-    flags: u16,
-    payload: u16,
-};
-
-fn stateEntry(data: []const u8, offset: usize, length: usize, state_array_offset: usize, entry_table_offset: usize, class_count: usize, state: usize, class: u16) Error!StateEntry {
-    if (class >= class_count) return error.BadSfnt;
-    const state_entry_index_offset = offset + state_array_offset + (state * class_count + class) * 2;
-    if (state_entry_index_offset > offset + length or offset + length - state_entry_index_offset < 2) return error.BadSfnt;
-    const entry_index: usize = @intCast(try readU16(data, state_entry_index_offset));
-    const entry_offset = offset + entry_table_offset + entry_index * 6;
-    if (entry_offset > offset + length or offset + length - entry_offset < 6) return error.BadSfnt;
-    return .{
-        .new_state = @intCast(try readU16(data, entry_offset)),
-        .flags = try readU16(data, entry_offset + 2),
-        .payload = try readU16(data, entry_offset + 4),
-    };
+fn stateEntry(data: []const u8, offset: usize, length: usize, state_array_offset: usize, entry_table_offset: usize, class_count: usize, state: usize, class: u16) Error!state_table.Entry {
+    return state_table.entry(data, offset, length, state_array_offset, entry_table_offset, class_count, state, class, 6);
 }
 
-fn classForGlyph(data: []const u8, offset: usize, length: usize, class_table_offset: usize, glyph: GlyphId) Error!u16 {
+fn ligatureClassForGlyph(data: []const u8, offset: usize, length: usize, class_table_offset: usize, glyph: GlyphId) Error!u16 {
+    if (glyph == 0xffff) return state_table.class_deleted_glyph;
+    if (class_table_offset > length) return error.BadSfnt;
     const lookup = offset + class_table_offset;
-    if (lookup > offset + length or offset + length - lookup < 2) return error.BadSfnt;
-    const format = try readU16(data, lookup);
-    if (format != 8) return class_out_of_bounds;
-    if (offset + length - lookup < 6) return error.BadSfnt;
-    const first_glyph: usize = @intCast(try readU16(data, lookup + 2));
-    const glyph_count: usize = @intCast(try readU16(data, lookup + 4));
-    const glyph_index: usize = glyph;
-    if (glyph_index < first_glyph or glyph_index >= first_glyph + glyph_count) return class_out_of_bounds;
-    const class_offset = lookup + 6 + (glyph_index - first_glyph) * 2;
-    if (class_offset > offset + length or offset + length - class_offset < 2) return error.BadSfnt;
-    return try readU16(data, class_offset);
+
+    // The existing out-buffer ligature executor is validated for trimmed
+    // format-8 class tables. Sparse format-6 machines can take epsilon
+    // transitions after mutating the current glyph, which requires an in-place
+    // driver; treating those glyphs as out-of-bounds preserves the previously
+    // verified behavior until that executor is implemented rather than
+    // duplicating the current glyph on DontAdvance transitions.
+    if (try readU16(data, lookup) != 8) return state_table.class_out_of_bounds;
+    return (try state_table.lookupGlyphValue(data, lookup, length - class_table_offset, glyph)) orelse state_table.class_out_of_bounds;
 }
 
 fn appendGlyph(

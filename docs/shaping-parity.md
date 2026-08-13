@@ -1670,14 +1670,43 @@ shaping-performance superiority.
   `-240,-949`, and synthetic-bold `abc` with offsets `-430,-1148`,
   `-457,-1256`, `-390,-1149`.
 - AAT and extents parity remain open. Both HarfBuzz in-house `aat-morx.tests`
-  rows are retained: Cangjie now runs a focused AAT `morx` ligature
-  state-machine path that forms `A_E_D` across intervening glyphs while
-  preserving HarfBuzz-style clusters, and it tolerates the stale static SFNT
-  search/header checksum metadata needed by the Tamil `morx` fixture while
-  keeping public lazy table APIs strict. All eight `aat-trak.tests` rows are
-  retained for `TRAK.ttf`; Cangjie applies AAT noncontextual `morx` alternates
-  and interpolates horizontal `trak` advances for the requested point size. The
-  `shape-bench` now has a `--show-extents` summary surface, and the
+  rows are retained: Cangjie runs the AAT `morx` ligature state machine that
+  forms `A_E_D` across intervening glyphs while preserving HarfBuzz-style
+  clusters, and it tolerates the stale static SFNT search/header checksum
+  metadata needed by the Tamil `morx` fixture while keeping public lazy table
+  APIs strict. AAT Indic rearrangement (`morx` type 0) is now covered by every
+  one of the 61 upstream `text-rendering-tests/MORX-{2,3,4,8,9,10,11,12,13,14,16,17}`
+  rows across 12 fonts. The retained corpora live under
+  `tests/data/aat/morx-rearrangement/` and run against both HarfBuzz and
+  HarfRust through `shaping-aat-parity-smoke`; their aggregate per-font
+  checksums are:
+
+  | Font | Rows | Checksum |
+  | --- | ---: | ---: |
+  | `TestMORXTwo` | 16 | `1e2842ace57db2eb` |
+  | `TestMORXThree` | 16 | `a7050f4349495469` |
+  | `TestMORXFour` | 15 | `3abd150741e44bb1` |
+  | `TestMORXEight` | 3 | `14b90ee97e2f5ced` |
+  | `TestMORXNine` | 1 | `4bb4c1172c636cff` |
+  | `TestMORXTen` | 1 | `580235edc2bd6ec1` |
+  | `TestMORXEleven` | 1 | `ffafc3f2446fb103` |
+  | `TestMORXTwelve` | 3 | `338aa5e8b5af1f7b` |
+  | `TestMORXThirteen` | 1 | `c002b2bbca134649` |
+  | `TestMORXFourteen` | 2 | `1cf260dbb8e90b47` |
+  | `TestMORXSixteen` | 1 | `c002b2bbca134649` |
+  | `TestMORXSeventeen` | 1 | `7fa25edf22ddbdc5` |
+
+  The implementation keeps glyph ids, source ownership, cluster ownership,
+  substitution flags, and ligature provenance in lockstep for all 15 AAT
+  rearrangement verbs, bounds rearranged spans to HarfBuzz's 64-glyph context
+  limit, and rejects non-terminating malformed state cycles under a
+  HarfBuzz-compatible operation budget. All eight
+  `aat-trak.tests` rows are retained for `TRAK.ttf`; Cangjie applies AAT
+  noncontextual `morx` alternates and interpolates horizontal `trak` advances
+  for the requested point size. Contextual `morx` substitution (type 1) and
+  insertion (type 5) remain open and are represented by additional upstream
+  MORX fixtures not yet in the gate. The `shape-bench` now has a
+  `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process
   HarfBuzz extents (`0,2179,2963,-2789` and `0,1898,2555,-2405`). The HarfRust
   CLI still reports zero color-glyph extents for these rows, so the retained

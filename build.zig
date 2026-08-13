@@ -31,6 +31,24 @@ const retained_compact_use_gates = [_]struct {
     },
 };
 
+const retained_morx_rearrangement_gates = [_]struct {
+    font_file: []const u8,
+    text_file: []const u8,
+}{
+    .{ .font_file = "TestMORXTwo.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXTwo.txt" },
+    .{ .font_file = "TestMORXThree.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXThree.txt" },
+    .{ .font_file = "TestMORXFour.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXFour.txt" },
+    .{ .font_file = "TestMORXEight.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXEight.txt" },
+    .{ .font_file = "TestMORXNine.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXNine.txt" },
+    .{ .font_file = "TestMORXTen.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXTen.txt" },
+    .{ .font_file = "TestMORXEleven.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXEleven.txt" },
+    .{ .font_file = "TestMORXTwelve.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXTwelve.txt" },
+    .{ .font_file = "TestMORXThirteen.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXThirteen.txt" },
+    .{ .font_file = "TestMORXFourteen.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXFourteen.txt" },
+    .{ .font_file = "TestMORXSixteen.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXSixteen.txt" },
+    .{ .font_file = "TestMORXSeventeen.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXSeventeen.txt" },
+};
+
 const retained_corpus_parity_gates = [_]struct {
     font_file: []const u8,
     text_file: []const u8,
@@ -1917,19 +1935,23 @@ pub fn build(b: *std.Build) void {
 
     const shaping_parity_smoke_step = b.step("shaping-parity-smoke", "Run retained HarfBuzz shaping parity smoke gates");
     const shaping_use_parity_smoke_step = b.step("shaping-use-parity-smoke", "Run retained HarfBuzz USE fixture parity smoke gates");
+    const shaping_aat_parity_smoke_step = b.step("shaping-aat-parity-smoke", "Run retained AAT shaping parity gates");
     const shaping_corpus_parity_smoke_step = b.step("shaping-corpus-parity-smoke", "Run retained HarfBuzz Latin, Arabic, and variable-font corpus parity gates");
     if (!enable_harfbuzz) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires -Denable-harfbuzz=true").step);
         shaping_use_parity_smoke_step.dependOn(&b.addFail("shaping-use-parity-smoke requires -Denable-harfbuzz=true").step);
+        shaping_aat_parity_smoke_step.dependOn(&b.addFail("shaping-aat-parity-smoke requires -Denable-harfbuzz=true").step);
         shaping_corpus_parity_smoke_step.dependOn(&b.addFail("shaping-corpus-parity-smoke requires -Denable-harfbuzz=true").step);
     } else if (parity_work_root == null) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
         shaping_use_parity_smoke_step.dependOn(&b.addFail("shaping-use-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
+        shaping_aat_parity_smoke_step.dependOn(&b.addFail("shaping-aat-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
         shaping_corpus_parity_smoke_step.dependOn(&b.addFail("shaping-corpus-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
     } else {
         const work_root = parity_work_root.?;
         const harfrust_benches = b.fmt("{s}/harfrust/harfrust/benches", .{work_root});
         const harfbuzz_in_house_fonts = b.fmt("{s}/harfbuzz/test/shape/data/in-house/fonts", .{work_root});
+        const harfbuzz_text_rendering_fonts = b.fmt("{s}/harfbuzz/test/shape/data/text-rendering-tests/fonts", .{work_root});
 
         const dev_parity_cmd = b.addRunArtifact(shape_bench_exe);
         dev_parity_cmd.addArgs(&.{
@@ -2131,6 +2153,27 @@ pub fn build(b: *std.Build) void {
             shaping_use_parity_smoke_step.dependOn(&compact_use_harfrust_parity_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_use_parity_smoke_step);
+
+        for (retained_morx_rearrangement_gates) |gate| {
+            const morx_harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_harfbuzz_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", "ltr",
+            });
+            shaping_aat_parity_smoke_step.dependOn(&morx_harfbuzz_parity_cmd.step);
+
+            const morx_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", "ltr",
+            });
+            shaping_aat_parity_smoke_step.dependOn(&morx_harfrust_parity_cmd.step);
+        }
+        shaping_parity_smoke_step.dependOn(shaping_aat_parity_smoke_step);
     }
 
     const glyph_bench_exe = b.addExecutable(.{

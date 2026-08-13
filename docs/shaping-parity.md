@@ -2232,3 +2232,22 @@ shaping-performance superiority.
   were identical. The full ReleaseFast test suite and complete retained parity
   umbrella pass against both HarfBuzz and HarfRust, including the 10,000-line
   Hindi corpus and all retained USE/Indic fixtures.
+- Devanagari syllable-boundary scans now use a compact script-specialized
+  classifier for bases, dependent marks, virama, joiners, and the Vedic
+  stacker. The generic all-Indic scanner remains byte-for-byte separate for
+  every other script, while a 29-byte dispatcher and the specialization live
+  in a dedicated text section; this avoids shifting unrelated Latin and Arabic
+  hot code, which earlier inline predicate experiments had regressed. An
+  exhaustive one-scalar differential checks all Unicode scalar values for both
+  `dev2` and legacy `deva`, and the existing multi-scalar differential covers
+  virama/joiner and stacker state transitions. Fixed-CPU-30 A/B/B/A plus
+  B/A/A/B matrices with four 31-sample medians per binary improved
+  NotoSansDevanagari `hi-words` from `1467.521` to `1426.814 ns/glyph`, about
+  `2.77%`. Roboto `en-words`, SourceSerifVariable `en-words`, Amiri
+  `fa-words`, and Amiri `fa-thelittleprince` changed by `-0.61%`, `-0.78%`,
+  `-0.02%`, and `-0.03%`, respectively. Interleaved hardware counters reduced
+  Devanagari retired instructions by `5.01%`, branches by `8.82%`, and
+  cycles/ref-cycles by `2.86%`; nontarget instructions and branches stayed
+  within `0.002%`, and nontarget cycles stayed within `0.12%`. All checksums
+  were identical. The full ReleaseFast test suite and complete retained parity
+  umbrella pass against both HarfBuzz and HarfRust.

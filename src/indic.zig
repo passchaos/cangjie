@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
@@ -17,6 +18,12 @@ const pref_source_mask = gsub.sourceFeatureMaskForTag(pref_feature).?;
 const blwf_source_mask = gsub.sourceFeatureMaskForTag(blwf_feature).?;
 const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
 const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
+const scanner_text_section = switch (builtin.object_format) {
+    .elf => ".cangjie_indic_scanner",
+    .macho => "__TEXT,__cangjie_indic",
+    .coff => ".text$cangjie_indic",
+    else => ".text",
+};
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
@@ -1386,7 +1393,18 @@ fn halfViramaIndex(codepoints: []const u21, consonant_index: usize, syllable_end
 // one out-of-line copy: duplicating the script-dependent property dispatch in
 // each caller increases the already-large shaping frame and instruction-cache
 // footprint, while the call boundary is amortized across a complete syllable.
-noinline fn indicSyllableEnd(codepoints: []const u21, start: usize, script_tag: unicode.OpenTypeScriptTag) usize {
+noinline fn indicSyllableEnd(codepoints: []const u21, start: usize, script_tag: unicode.OpenTypeScriptTag) linksection(scanner_text_section) usize {
+    if (script_tag == .dev2 or script_tag == .deva) {
+        return devanagariSyllableEnd(codepoints, start);
+    }
+    return genericIndicSyllableEnd(codepoints, start, script_tag);
+}
+
+// Keep the all-script implementation as a distinct copy with the same body as
+// the former scanner. The dispatcher and Devanagari specialization live in a
+// separate section, so adding the fast path does not shift unrelated `.text`
+// functions used by Latin and Arabic shaping.
+noinline fn genericIndicSyllableEnd(codepoints: []const u21, start: usize, script_tag: unicode.OpenTypeScriptTag) usize {
     const virama = viramaCodepoint(script_tag);
     var index = start;
     var saw_virama = false;
@@ -1409,6 +1427,57 @@ noinline fn indicSyllableEnd(codepoints: []const u21, start: usize, script_tag: 
             false;
     }
     return index;
+}
+
+noinline fn devanagariSyllableEnd(codepoints: []const u21, start: usize) linksection(scanner_text_section) usize {
+    var index = start;
+    var saw_virama = false;
+    while (index < codepoints.len) : (index += 1) {
+        const codepoint = codepoints[index];
+        // Devanagari's vowel and consonant ranges are adjacent, so the
+        // scanner can classify a base with two compact ranges instead of
+        // dispatching through the generic consonant, vowel, and placeholder
+        // predicates independently for every source scalar.
+        const is_base = (codepoint >= 0x0904 and codepoint <= 0x0939) or
+            (codepoint >= 0x0958 and codepoint <= 0x0961) or
+            codepoint == 0x1cf5 or
+            codepoint == 0x25cc;
+        const is_dependent_mark = (codepoint >= 0x0900 and codepoint <= 0x0903) or
+            (codepoint >= 0x093a and codepoint <= 0x094c) or
+            (codepoint >= 0x094e and codepoint <= 0x094f) or
+            (codepoint >= 0x0951 and codepoint <= 0x0957);
+        const is_joiner = codepoint == 0x200c or codepoint == 0x200d;
+        if (!(is_base or is_dependent_mark or codepoint == 0x094d or is_joiner)) break;
+        if (index != start and is_base and !saw_virama and codepoints[index - 1] != 0x1cf5) break;
+        if (saw_virama and codepoint == 0x200c) return index + 1;
+
+        saw_virama = if (codepoint == 0x094d)
+            true
+        else if (saw_virama and is_joiner)
+            true
+        else if (is_dependent_mark)
+            saw_virama
+        else
+            false;
+    }
+    return index;
+}
+
+test "specialized Devanagari syllable scanner classifies every Unicode scalar like the generic scanner" {
+    // A one-scalar run isolates membership in the base, dependent-mark,
+    // virama, and joiner sets. The multi-scalar differential below separately
+    // exercises state transitions such as virama+joiner and stacker handling.
+    for (0..0x110000) |value| {
+        const codepoints = [_]u21{@intCast(value)};
+        try std.testing.expectEqual(
+            genericIndicSyllableEnd(&codepoints, 0, .dev2),
+            devanagariSyllableEnd(&codepoints, 0),
+        );
+        try std.testing.expectEqual(
+            genericIndicSyllableEnd(&codepoints, 0, .deva),
+            devanagariSyllableEnd(&codepoints, 0),
+        );
+    }
 }
 
 test "one-pass Indic syllable scan matches former property traversal" {

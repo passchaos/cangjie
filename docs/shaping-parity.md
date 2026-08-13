@@ -1425,7 +1425,7 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   medial RA and left matras, variation selectors inheriting the preceding
   Myanmar position, the `rphf/pref/blwf` `/pstf` stage order, and final
   `pres/abvs/blws/psts` plus typographic ligature features; full Myanmar
-  syllable-machine coverage is still a follow-up.
+  syllable-machine coverage is described in the later retained-evidence entry.
 - NotoSansBalinese passes `compare-harfbuzz` for all 43 SHBALI rendering-test
   cases retained in `tests/data/balinese-rendering-tests.txt`, covering USE
   category assignment, syllable cluster ownership, split pre-base vowels,
@@ -1996,12 +1996,13 @@ shaping-performance superiority.
   Marchen, Cham, Batak, Brahmi, Chakma, Tai Tham, Newa, Saurashtra, Grantha,
   and Sharada gates. Other USE scripts/fonts and fuzz/corpus failures still
   need retained gates before this can be called broad USE parity.
-- Expand the new Myanmar shaper beyond the current focused `mym2`
-  mark-attachment, FE00 variation-selector syllable, tone-sign ordering, and
-  simple `myanmar-misc` rows. Kinzi, dotted-circle handling, complex syllable
-  segmentation, older `mymr` fallback behavior, and broader Myanmar in-house
-  coverage still need retained gates before claiming broad Myanmar parity. The
-  in-house `myanmar-zawgyi.tests` `Qaag` row now passes by
+- Expand Myanmar parity beyond the current focused `mym2` fonts and in-house
+  rows. The Unicode 17 maximal-munch syllable grammar, kinzi, broken-cluster
+  dotted circles, explicit FE00 handling, and the legacy `mymr` default-shaper
+  selection now have retained coverage, but broader production fonts,
+  extension-block combinations, malformed tables, and fuzz/corpus failures
+  still need retained gates before claiming broad Myanmar parity. The in-house
+  `myanmar-zawgyi.tests` `Qaag` row passes by
   treating Myanmar Zawgyi as HarfBuzz does: a script tag with auto shaping,
   normalization, zero-width-mark handling, and fallback positioning disabled.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
@@ -2320,3 +2321,19 @@ shaping-performance superiority.
   `fa-thelittleprince` remained neutral or improved. All five A/B checksums
   were identical. The focused test, full ReleaseFast suite, USE parity gate,
   general shaping parity gate, and corpus parity gate all pass.
+- Myanmar `mym2` shaping now uses the complete maximal-munch syllable grammar
+  instead of grouping every adjacent Myanmar scalar into one run. Its Unicode
+  17 category ranges are reproducibly decoded from HarfBuzz's generated Indic
+  table; an independent differential against HarfRust's generated Ragel
+  machine covered all 475,254 category strings of length one through four and
+  1.2 million deterministic random strings of length five through sixteen.
+  Broken syllables now receive one dotted circle each, including standalone
+  pre-base vowels, incomplete kinzi, adjacent broken clusters, and unsupported
+  variation selectors. Synthetic bases retain glyph-level categories through
+  reordering and cannot be hidden merely because they share a default-
+  ignorable source. The modern shaper also preserves FE00 as an explicit
+  Myanmar grammar glyph instead of folding cmap-14 variants into the preceding
+  base; legacy `mymr` continues to use the default shaper as HarfBuzz requires.
+  The retained 19-line corpus passes HarfBuzz and HarfRust with checksum
+  `6ea4513597b3e062`, while the pre-change binary fails its first standalone
+  U+1031 row by omitting the dotted circle.

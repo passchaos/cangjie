@@ -20,6 +20,7 @@ pub const ShapeScratch = struct {
     source_syllables: std.ArrayList(u8) = .empty,
     source_rphf_substituted: std.ArrayList(bool) = .empty,
     source_pref_substituted: std.ArrayList(bool) = .empty,
+    glyph_script_positions: std.ArrayList(u8) = .empty,
     glyph_output_indices: std.ArrayList(usize) = .empty,
     stch_actions: std.ArrayList(u8) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
@@ -30,6 +31,7 @@ pub const ShapeScratch = struct {
         self.gpos_adjustments.deinit(allocator);
         self.stch_actions.deinit(allocator);
         self.glyph_output_indices.deinit(allocator);
+        self.glyph_script_positions.deinit(allocator);
         self.source_pref_substituted.deinit(allocator);
         self.source_rphf_substituted.deinit(allocator);
         self.source_syllables.deinit(allocator);
@@ -62,6 +64,7 @@ pub const ShapeScratch = struct {
         self.source_syllables.clearRetainingCapacity();
         self.source_rphf_substituted.clearRetainingCapacity();
         self.source_pref_substituted.clearRetainingCapacity();
+        self.glyph_script_positions.clearRetainingCapacity();
         self.glyph_output_indices.clearRetainingCapacity();
         self.stch_actions.clearRetainingCapacity();
         self.gpos_adjustments.clearRetainingCapacity();

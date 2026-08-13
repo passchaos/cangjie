@@ -1131,6 +1131,11 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
         .text_file = "tests/data/spaces-horizontal.txt",
         .direction = "ttb",
     },
+    .{
+        .font_hash = "f4ba5a767ef56a40133844507efb98fee5635e71",
+        .text_file = "tests/data/myanmar-syllable-machine-tests.txt",
+        .direction = "ltr",
+    },
 };
 
 const retained_inline_harfrust_parity_gates = [_]struct {
@@ -1534,6 +1539,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
     .{
         .font_hash = "a6c76d1bafde4a0b1026ebcc932d2e5c6fd02442",
         .text_file = "tests/data/myanmar-ligature-id-tests.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "f4ba5a767ef56a40133844507efb98fee5635e71",
+        .text_file = "tests/data/myanmar-syllable-machine-tests.txt",
         .direction = "ltr",
     },
     .{

@@ -3493,6 +3493,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const source_syllables = &scratch.source_syllables;
     const source_rphf_substituted = &scratch.source_rphf_substituted;
     const source_pref_substituted = &scratch.source_pref_substituted;
+    const glyph_script_positions = &scratch.glyph_script_positions;
     const glyph_output_indices = &scratch.glyph_output_indices;
     const stch_actions = &scratch.stch_actions;
 
@@ -3546,11 +3547,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             run_has_letter = run_has_letter or isShapeNativeDirectionLetter(codepoint);
             if (isVariationSelector(codepoint)) {
                 if (glyph_ids.items.len != 0) {
-                    if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
-                        glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
-                        source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
-                        continue;
+                    if (selected_lookup_options.script_tag != .mym2) {
+                        if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
+                            glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
+                            source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
+                            continue;
+                        }
                     }
+                    // Myanmar's syllable grammar gives VS an explicit category,
+                    // so mym2 keeps the selector's nominal glyph (or glyph 0)
+                    // instead of folding a cmap-14 variant into the base.
                     const selector_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint);
                     has_default_ignorable = true;
                     source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
@@ -3771,7 +3777,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     if (buffer.lookup_selection_cache) |selection_cache| {
         gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
     }
-    if (lookup_options.beginning_of_text and lookup_options.context_before.len == 0 and codepoints.items.len != 0 and unicode.isUnicodeMarkCodepoint(codepoints.items[0])) {
+    if (lookup_options.beginning_of_text and
+        lookup_options.context_before.len == 0 and
+        codepoints.items.len != 0 and
+        unicode.isUnicodeMarkCodepoint(codepoints.items[0]) and
+        lookup_options.script_tag != .mym2)
+    {
         const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
         try insertBeginningDottedCircle(
             buffer.allocator,
@@ -4004,17 +4015,44 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, final_features_buf[0..final_feature_count], glyph_ids, gsub_options, gdef_metadata.*);
     } else if (myanmar_shape) {
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
-        myanmar.markSourceSyllables(source_syllables.items, codepoints.items);
+        myanmar.markSourceSyllables(
+            source_syllables.items,
+            glyph_source_indices.items,
+            codepoints.items,
+        );
         var myanmar_options = gsub_options;
         myanmar_options.source_syllables = source_syllables.items;
 
-        try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, myanmar.featureApplications(.preprocessing), glyph_ids, myanmar_options, gdef_metadata.*);
-        myanmar.reorder(
+        // Myanmar marks syllables before `locl`/`ccmp`, but HarfBuzz applies
+        // those features before dotted-circle insertion and reordering.
+        try applyGsubFeatureApplicationsForShaping(
+            font,
+            buffer,
+            gsub_after_proof,
+            &.{ .{ .tag = unicode.tag("locl") }, .{ .tag = unicode.tag("ccmp") } },
+            glyph_ids,
+            gsub_options,
+            gdef_metadata.*,
+        );
+        const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+        try myanmar.insertDottedCirclesForBrokenSyllables(
+            buffer.allocator,
             glyph_ids,
             glyph_source_indices,
             glyph_cluster_indices,
             glyph_substituted,
             ligature_components,
+            source_syllables.items,
+            dotted_circle_glyph,
+        );
+        try myanmar.reorder(
+            buffer.allocator,
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            glyph_script_positions,
             source_syllables.items,
             codepoints.items,
         );
@@ -4023,7 +4061,41 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.pref), glyph_ids, myanmar_options, gdef_metadata.*);
         try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.blwf), glyph_ids, myanmar_options, gdef_metadata.*);
         try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.pstf), glyph_ids, myanmar_options, gdef_metadata.*);
-        try applyMergedGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.final), glyph_ids, myanmar_options, gdef_metadata.*);
+
+        var myanmar_final_buf: [20]gsub.FeatureApplication = undefined;
+        var myanmar_final_count: usize = 0;
+        for (myanmar.featureApplications(.final)) |application| {
+            if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
+            myanmar_final_buf[myanmar_final_count] = application;
+            myanmar_final_count += 1;
+        }
+        const myanmar_typographic_features = [_]gsub.FeatureApplication{
+            .{ .tag = unicode.tag("rlig") },
+            .{ .tag = unicode.tag("calt") },
+            .{ .tag = unicode.tag("clig") },
+            .{ .tag = unicode.tag("liga") },
+        };
+        for (myanmar_typographic_features) |application| {
+            if (!shapingFeatureEnabled(application.tag, lookup_options.features, true)) continue;
+            myanmar_final_buf[myanmar_final_count] = application;
+            myanmar_final_count += 1;
+        }
+        myanmar_final_count += explicitOptionalFeatureApplications(
+            myanmar_final_buf[myanmar_final_count..],
+            lookup_options.features,
+        );
+        // HarfBuzz places Myanmar's four post-reorder features and the common
+        // typographic features in one map stage. Merge them before sorting by
+        // LookupList index; applying two batches changes authored lookup order.
+        try applyMergedGsubFeatureApplicationsAfterRunProof(
+            font,
+            buffer,
+            gsub_after_proof,
+            myanmar_final_buf[0..myanmar_final_count],
+            glyph_ids,
+            gsub_options,
+            gdef_metadata.*,
+        );
     } else if (khmer_shape) {
         try khmer.decomposeSplitMatraSources(
             buffer.allocator,
@@ -4479,11 +4551,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
         const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
         const mark_attachment = adjustment.attachment_type == .mark;
+        const synthetic_base = index < ligature_components.infos.items.len and
+            ligature_components.infos.items[index].flags.synthetic_base;
         const visible_not_found_variation_selector = lookup_options.not_found_variation_selector_glyph != null and
             isVariationSelector(source_codepoint) and
-            !was_substituted;
+            !was_substituted and
+            !synthetic_base;
         const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint) and
             !was_substituted and
+            !synthetic_base and
             !visible_not_found_variation_selector;
         const skip_default_ignorable = hide_default_ignorable and
             (invisible_glyph_id == 0 or
@@ -4507,7 +4583,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             glyph_class,
             has_gdef_glyph_classes,
             source_codepoint,
-            index < ligature_components.infos.items.len and ligature_components.infos.items[index].flags.synthetic_base,
+            synthetic_base,
             mark_attachment,
             has_gpos_positioning,
             lookup_options,

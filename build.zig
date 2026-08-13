@@ -25,6 +25,10 @@ const retained_compact_use_gates = [_]struct {
         .font_hash = "3cc01fede4debd4b7794ccb1b16cdb9987ea7571",
         .text_file = "tests/data/tai-tham-use-syllable-tests.txt",
     },
+    .{
+        .font_hash = "46669c8860cbfea13562a6ca0d83130ee571137b",
+        .text_file = "tests/data/use-vowel-letter-spoofing.txt",
+    },
 };
 
 const retained_corpus_parity_gates = [_]struct {

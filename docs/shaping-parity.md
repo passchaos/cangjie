@@ -1533,7 +1533,8 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   capture spacing modifiers and default-ignorables.
 - All 94 upstream `in-house/use-vowel-letter-spoofing.tests` cases pass both
   HarfBuzz and HarfRust (`tests/data/use-vowel-letter-spoofing.txt`, checksum
-  `3081b548579c2cfc`). This multi-script gate covers font-dependent Indic
+  `5dc56e2fc3a8a313`) and are part of `shaping-use-parity-smoke`. This
+  multi-script gate covers font-dependent Indic
   ScriptList negotiation (`v3` → `v2` → legacy), USE vowel-constraint dotted
   circles, Unicode canonical split-matra decomposition, and Unicode 17
   grapheme/category data through Devanagari, Bengali, Gurmukhi, Gujarati,

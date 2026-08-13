@@ -82,6 +82,20 @@ const retained_morx_insertion_gates = [_]struct {
     .{ .font_file = "TestMORXThirtyfive.ttf", .text_file = "tests/data/aat/morx-insertion/TestMORXThirtyfive.txt" },
 };
 
+const retained_morx_complete_gates = [_]struct {
+    font_file: []const u8,
+    text_file: []const u8,
+}{
+    .{ .font_file = "TestMORXOne.ttf", .text_file = "tests/data/aat/morx-complete/TestMORXOne.txt" },
+    .{ .font_file = "TestMORXTwo.ttf", .text_file = "tests/data/aat/morx-complete/TestMORXTwo.txt" },
+    .{ .font_file = "TestMORXFour.ttf", .text_file = "tests/data/aat/morx-complete/TestMORXFour.txt" },
+    .{ .font_file = "TestMORXEighteen.ttf", .text_file = "tests/data/aat/morx-complete/TestMORXEighteen.txt" },
+    .{ .font_file = "TestMORXTwentyseven.ttf", .text_file = "tests/data/aat/morx-complete/TestMORXTwentyseven.txt" },
+    .{ .font_file = "TestMORXTwentyeight.ttf", .text_file = "tests/data/aat/morx-complete/TestMORXTwentyeight.txt" },
+    .{ .font_file = "TestMORXTwentynine.ttf", .text_file = "tests/data/aat/morx-complete/TestMORXTwentynine.txt" },
+    .{ .font_file = "TestMORXFourtyone.ttf", .text_file = "tests/data/aat/morx-complete/TestMORXFourtyone.txt" },
+};
+
 const retained_morx_rejection_gates = [_]struct {
     font_file: []const u8,
     text: []const u8,
@@ -2235,6 +2249,25 @@ pub fn build(b: *std.Build) void {
             shaping_aat_parity_smoke_step.dependOn(&morx_harfrust_parity_cmd.step);
         }
         for (retained_morx_insertion_gates) |gate| {
+            const morx_harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_harfbuzz_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", "ltr",
+            });
+            shaping_aat_parity_smoke_step.dependOn(&morx_harfbuzz_parity_cmd.step);
+
+            const morx_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", "ltr",
+            });
+            shaping_aat_parity_smoke_step.dependOn(&morx_harfrust_parity_cmd.step);
+        }
+        for (retained_morx_complete_gates) |gate| {
             const morx_harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
             morx_harfbuzz_parity_cmd.addArgs(&.{
                 "--engine",    "compare-harfbuzz",

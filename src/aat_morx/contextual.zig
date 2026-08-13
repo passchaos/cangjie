@@ -60,7 +60,12 @@ pub fn apply(
         // CoreText and HarfBuzz suppress the implicit end-of-text action until
         // a transition has explicitly established a marked glyph.
         if (index < glyphs.items.len or mark_set) {
-            if (current_entry.payload != no_lookup and mark_set and mark < glyphs.items.len) {
+            // Before an explicit SetMark transition, AAT's marked location is
+            // glyph zero. Only the unmarked end-of-text transition is
+            // suppressed above; live-glyph actions still substitute that
+            // default mark, and a following current lookup observes the
+            // possibly mutated glyph when both locations coincide.
+            if (current_entry.payload != no_lookup and mark < glyphs.items.len) {
                 try replaceFromLookup(
                     data,
                     offset,

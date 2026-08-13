@@ -1757,10 +1757,28 @@ shaping-performance superiority.
   `aat-trak.tests` rows are retained for `TRAK.ttf`; Cangjie applies AAT
   noncontextual `morx` alternates and interpolates horizontal `trak` advances
   for the requested point size. The retained upstream MORX matrix now covers
-  every supported AAT subtable kind (types 0, 1, 2, 4, and 5); broader
-  production-font and malformed-table fuzzing remains open. The `shape-bench`
-  now has a
-  `--show-extents` summary surface, and the
+  all 166 deterministic rows from `MORX-1..41` against both HarfBuzz and
+  HarfRust, not only one sample per subtable kind. The final 44 previously
+  ungated rows are grouped by font under `tests/data/aat/morx-complete/`:
+
+  | Font | Additional rows | Checksum |
+  | --- | ---: | ---: |
+  | `TestMORXOne` | 1 | `5f518e0f6eb70fea` |
+  | `TestMORXTwo` | 2 | `76be31541670cbf9` |
+  | `TestMORXFour` | 25 | `a9e1174e95b66144` |
+  | `TestMORXEighteen` | 2 | `154a67efee1f3287` |
+  | `TestMORXTwentyseven` | 3 | `5b7aeceae7187a16` |
+  | `TestMORXTwentyeight` | 5 | `4d7edf40aece359e` |
+  | `TestMORXTwentynine` | 4 | `4393caf7918f470d` |
+  | `TestMORXFourtyone` | 2 | `44bacca4c5faa8a4` |
+
+  This audit also found that a live contextual action uses glyph zero as its
+  default marked location before the first explicit `SetMark`; only an
+  unmarked end-of-text transition suppresses actions. The two `MORX-19` rows
+  retain that distinction. The matrix exercises every supported AAT subtable
+  kind (types 0, 1, 2, 4, and 5); broader production-font and malformed-table
+  fuzzing remains open. The `shape-bench` now has a `--show-extents` summary
+  surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process
   HarfBuzz extents (`0,2179,2963,-2789` and `0,1898,2555,-2405`). The HarfRust
   CLI still reports zero color-glyph extents for these rows, so the retained

@@ -1823,12 +1823,15 @@ shaping-performance superiority.
   and report HarfBuzz-space x offsets `-400,-430,-460`. The benchmark's
   vertical x-offset normalization now preserves runtime positioning deltas
   instead of replacing the complete result with the synthesized origin.
+  Stateful format-1 cross-stream actions are retained on both axes as well:
+  they add to the preinstalled cursive chain, honor the undocumented
+  `-0x8000` attachment/reset action, and remain ordered relative to simple
+  format-0/2/6 assignments rather than being applied in a separate pass.
   Selection follows
   HarfBuzz's table plan: when GSUB and GPOS are both active, GPOS owns
   positioning even if the selected LangSys's applicable feature is not named
   `kern`; otherwise `kerx` takes precedence over legacy `kern`.
-  Format 4 outline-control-point actions, state-machine format-1 cross-stream
-  actions, and variation tuples remain open.
+  Format 4 outline-control-point actions and variation tuples remain open.
 
   The `shape-bench` now has a `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process

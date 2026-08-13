@@ -57,6 +57,10 @@ pub fn buildKerxFormat1Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat1TtfTables(allocator));
 }
 
+pub fn buildKerxFormat1CrossStreamTtf(allocator: std.mem.Allocator, vertical: bool, reset_action: bool) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxFormat1CrossStreamTtfTables(allocator, vertical, reset_action));
+}
+
 pub fn buildKerxFormat2Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat2TtfTables(allocator));
 }
@@ -984,6 +988,26 @@ fn kerxFormat1TtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxFormat1CrossStreamTtfTables(allocator: std.mem.Allocator, vertical: bool, reset_action: bool) ![]Table {
+    const tables = try allocator.alloc(Table, if (vertical) 12 else 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kerx", .data = try kerxFormat1CrossStreamTable(allocator, vertical, reset_action) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    if (vertical) {
+        tables[9] = .{ .tag = "vhea", .data = try vheaTableWithMetrics(allocator, 1) };
+        tables[10] = .{ .tag = "vmtx", .data = try vmtxTable(allocator) };
+        tables[11] = .{ .tag = "GPOS", .data = try gposPairFeatureTable(allocator, "vkrn") };
+    }
     return tables;
 }
 
@@ -3548,6 +3572,16 @@ fn kerxFormat1Table(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 8 + 12 + 52 + 16, 0);
     writeI16(bytes, 8 + 12 + 96, -30);
     writeI16(bytes, 8 + 12 + 98, -1);
+    return bytes;
+}
+
+fn kerxFormat1CrossStreamTable(allocator: std.mem.Allocator, vertical: bool, reset_action: bool) ![]u8 {
+    const bytes = try kerxFormat1Table(allocator);
+    const coverage = @as(u32, 1) |
+        @as(u32, 0x4000_0000) |
+        (if (vertical) @as(u32, 0x8000_0000) else 0);
+    writeU32(bytes, 12, coverage);
+    if (reset_action) writeI16(bytes, 8 + 12 + 96, std.math.minInt(i16));
     return bytes;
 }
 

@@ -86,6 +86,9 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .kerx_cross_vertical_format_0 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 0, true),
         .kerx_cross_vertical_format_2 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 2, true),
         .kerx_cross_vertical_format_6 => try cangjie.testing.test_font.buildKerxCrossStreamTtf(allocator, 6, true),
+        .kerx_cross_format_1 => try cangjie.testing.test_font.buildKerxFormat1CrossStreamTtf(allocator, false, false),
+        .kerx_cross_vertical_format_1 => try cangjie.testing.test_font.buildKerxFormat1CrossStreamTtf(allocator, true, false),
+        .kerx_cross_format_1_reset => try cangjie.testing.test_font.buildKerxFormat1CrossStreamTtf(allocator, false, true),
     };
 }
 

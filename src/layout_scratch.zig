@@ -24,6 +24,7 @@ pub const ShapeScratch = struct {
     glyph_script_positions: std.ArrayList(u8) = .empty,
     glyph_output_indices: std.ArrayList(usize) = .empty,
     stch_actions: std.ArrayList(u8) = .empty,
+    kerx_simple_pair_eligible: std.ArrayList(bool) = .empty,
     kerx_adjustments: std.ArrayList(aat_kerx.Adjustment) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
     attachment_links: std.ArrayList(@import("attachment.zig").Link) = .empty,
@@ -32,6 +33,7 @@ pub const ShapeScratch = struct {
         self.attachment_links.deinit(allocator);
         self.gpos_adjustments.deinit(allocator);
         self.kerx_adjustments.deinit(allocator);
+        self.kerx_simple_pair_eligible.deinit(allocator);
         self.stch_actions.deinit(allocator);
         self.glyph_output_indices.deinit(allocator);
         self.glyph_script_positions.deinit(allocator);
@@ -70,6 +72,7 @@ pub const ShapeScratch = struct {
         self.glyph_script_positions.clearRetainingCapacity();
         self.glyph_output_indices.clearRetainingCapacity();
         self.stch_actions.clearRetainingCapacity();
+        self.kerx_simple_pair_eligible.clearRetainingCapacity();
         self.kerx_adjustments.clearRetainingCapacity();
         self.gpos_adjustments.clearRetainingCapacity();
         self.attachment_links.clearRetainingCapacity();

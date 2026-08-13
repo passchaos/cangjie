@@ -54,6 +54,9 @@ pub const BuiltinFont = enum {
     kerx_cross_vertical_format_0,
     kerx_cross_vertical_format_2,
     kerx_cross_vertical_format_6,
+    kerx_cross_format_1,
+    kerx_cross_vertical_format_1,
+    kerx_cross_format_1_reset,
 
     pub fn fromName(name: []const u8) ?BuiltinFont {
         if (std.mem.eql(u8, name, "minimal")) return .minimal;
@@ -71,6 +74,9 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "kerx-cross-vertical-format-0")) return .kerx_cross_vertical_format_0;
         if (std.mem.eql(u8, name, "kerx-cross-vertical-format-2")) return .kerx_cross_vertical_format_2;
         if (std.mem.eql(u8, name, "kerx-cross-vertical-format-6")) return .kerx_cross_vertical_format_6;
+        if (std.mem.eql(u8, name, "kerx-cross-format-1")) return .kerx_cross_format_1;
+        if (std.mem.eql(u8, name, "kerx-cross-vertical-format-1")) return .kerx_cross_vertical_format_1;
+        if (std.mem.eql(u8, name, "kerx-cross-format-1-reset")) return .kerx_cross_format_1_reset;
         return null;
     }
 
@@ -91,6 +97,9 @@ pub const BuiltinFont = enum {
             .kerx_cross_vertical_format_0 => "builtin:kerx-cross-vertical-format-0",
             .kerx_cross_vertical_format_2 => "builtin:kerx-cross-vertical-format-2",
             .kerx_cross_vertical_format_6 => "builtin:kerx-cross-vertical-format-6",
+            .kerx_cross_format_1 => "builtin:kerx-cross-format-1",
+            .kerx_cross_vertical_format_1 => "builtin:kerx-cross-vertical-format-1",
+            .kerx_cross_format_1_reset => "builtin:kerx-cross-format-1-reset",
         };
     }
 };

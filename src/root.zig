@@ -9269,6 +9269,58 @@ test "AAT kerx simple cross-stream formats position the minor axis" {
     }
 }
 
+test "AAT kerx format 1 cross-stream actions accumulate and reset offsets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const horizontal_bytes = try test_font.buildKerxFormat1CrossStreamTtf(allocator, false, false);
+    defer allocator.free(horizontal_bytes);
+    var horizontal_font = try Font.parse(allocator, horizontal_bytes);
+    defer horizontal_font.deinit();
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const horizontal = try TextShaper.shapeUtf8(&horizontal_font, &layout_buffer, "AA", 1000);
+    try std.testing.expectEqual(@as(usize, 2), horizontal.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 800), horizontal.glyphs[0].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 800), horizontal.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -30), horizontal.glyphs[0].y_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -30), horizontal.glyphs[1].y_offset, 0.001);
+
+    layout_buffer.clear();
+    const disabled_horizontal = try TextShaper.shapeUtf8WithOptions(&horizontal_font, &layout_buffer, "AA", 1000, .{
+        .features = &.{.{ .tag = @import("unicode.zig").tag("kern"), .enabled = false }},
+    });
+    // Cross-stream format 1 remains active when ordinary pair kerning is
+    // disabled, matching HarfBuzz's separate `requested_kerning || cross`
+    // applicability rule.
+    try std.testing.expectApproxEqAbs(@as(f32, -30), disabled_horizontal.glyphs[0].y_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -30), disabled_horizontal.glyphs[1].y_offset, 0.001);
+
+    const reset_bytes = try test_font.buildKerxFormat1CrossStreamTtf(allocator, false, true);
+    defer allocator.free(reset_bytes);
+    var reset_font = try Font.parse(allocator, reset_bytes);
+    defer reset_font.deinit();
+    layout_buffer.clear();
+    const reset = try TextShaper.shapeUtf8(&reset_font, &layout_buffer, "AA", 1000);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), reset.glyphs[0].y_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), reset.glyphs[1].y_offset, 0.001);
+
+    const vertical_bytes = try test_font.buildKerxFormat1CrossStreamTtf(allocator, true, false);
+    defer allocator.free(vertical_bytes);
+    var vertical_font = try Font.parse(allocator, vertical_bytes);
+    defer vertical_font.deinit();
+    layout_buffer.clear();
+    const vertical = try TextShaper.shapeUtf8WithOptions(&vertical_font, &layout_buffer, "AA", 1000, .{
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+        .features = &.{.{ .tag = @import("unicode.zig").tag("vkrn"), .enabled = true }},
+    });
+    try std.testing.expectEqual(@as(usize, 2), vertical.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 370), vertical.glyphs[0].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -30), vertical.glyphs[1].x_offset, 0.001);
+}
+
 test "AAT kerx selection yields to GPOS only with GSUB" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

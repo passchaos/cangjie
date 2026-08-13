@@ -2,16 +2,35 @@ const std = @import("std");
 
 const GlyphId = @import("glyph.zig").GlyphId;
 const ankr = @import("opentype/ankr.zig");
+const kerx = @import("opentype/kerx.zig");
 const state_table = @import("aat_morx/state_table.zig");
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error || error{EndOfStream};
+
+pub const AttachmentType = enum {
+    none,
+    mark,
+    cursive,
+};
 
 pub const Adjustment = struct {
     x_advance: i32 = 0,
     x_offset: i32 = 0,
     y_advance: i32 = 0,
     y_offset: i32 = 0,
+    /// A simple cross-stream subtable assigned (rather than added to) this
+    /// glyph's minor-axis offset. Vertical layout uses this to replace its
+    /// synthesized origin before attachment propagation.
+    cross_stream_assigned: bool = false,
+    /// The format-1 -0x8000 action clears both the attachment and the
+    /// cross-stream coordinate, including the preinstalled vertical origin.
+    cross_stream_reset: bool = false,
+    attachment_type: AttachmentType = .none,
     attachment_parent_index: ?usize = null,
+};
+
+pub const Summary = struct {
+    has_cross_stream_adjustment: bool = false,
 };
 
 pub const AnkrTable = struct {
@@ -27,12 +46,13 @@ const reset: u16 = 0x2000;
 const no_action: u16 = 0xffff;
 const stack_capacity = 8;
 
-/// Apply state-machine `kerx` subtables to one post-GSUB glyph stream.
+/// Apply output-side `kerx` subtables to one post-GSUB glyph stream.
 ///
 /// The result is a dense, glyph-indexed sidecar in font units. Keeping the
-/// state executor separate from final GlyphPosition construction makes its
-/// stack/action invariants independently testable and leaves room for format 4
-/// attachment actions without embedding another state machine in layout.zig.
+/// ordered executor separate from final GlyphPosition construction makes its
+/// stack/action invariants independently testable. Cross-stream format 1
+/// actions are order-sensitive with simple format 0/2/6 assignments and format
+/// 4 attachments, so all output-side operations share this one table walk.
 pub fn collectAdjustments(
     data: []const u8,
     table_offset: usize,
@@ -43,11 +63,14 @@ pub fn collectAdjustments(
     allocator: std.mem.Allocator,
     vertical: bool,
     direction_backward: bool,
+    requested_kerning: bool,
+    simple_pair_eligible: []const bool,
     ankr_table: ?AnkrTable,
-) Error!void {
+) Error!Summary {
     if (table_offset > data.len or table_length > data.len - table_offset or table_length < 8) return error.BadSfnt;
     if (try readU16(data, table_offset) < 2 or try readU16(data, table_offset) > 4) return error.BadSfnt;
     if (try readU16(data, table_offset + 2) != 0) return error.BadSfnt;
+    if (simple_pair_eligible.len != glyphs.len) return error.BadSfnt;
     const subtable_count: usize = @intCast(try readU32(data, table_offset + 4));
 
     try out.resize(allocator, glyphs.len);
@@ -58,6 +81,9 @@ pub fn collectAdjustments(
     }
 
     var operations_left = try state_table.operationBudget(glyphs.len);
+    var summary = Summary{};
+    var cross_stream_initialized = false;
+    var previous_cross_stream_adjustment = false;
     var subtable_relative: usize = 8;
     for (0..subtable_count) |_| {
         if (subtable_relative > table_length or table_length - subtable_relative < 12) return error.BadSfnt;
@@ -68,12 +94,42 @@ pub fn collectAdjustments(
         if (subtable_length < 12 or subtable_length > table_length - subtable_relative) return error.BadSfnt;
         const format = coverage & 0xff;
         const axis_matches = ((coverage & 0x80000000) != 0) == vertical;
+        const cross_stream = (coverage & 0x40000000) != 0;
         const not_variable = (coverage & 0x20000000) == 0;
-        if (format == 1 and
-            axis_matches and
-            (coverage & 0x40000000) == 0 and
-            not_variable)
-        {
+        const simple_cross_stream = requested_kerning and
+            (format == 0 or format == 2 or format == 6) and
+            cross_stream and
+            (coverage & 0x10000000) == 0 and
+            tuple_count == 0;
+        const format1_enabled = format == 1 and (requested_kerning or cross_stream);
+        const format4_enabled = format == 4;
+        const applies = axis_matches and not_variable and
+            (simple_cross_stream or format1_enabled or format4_enabled);
+
+        if (applies and cross_stream and !cross_stream_initialized) {
+            initializeCrossStreamAttachments(
+                out.items,
+                direction_backward,
+            );
+            cross_stream_initialized = true;
+        }
+
+        if (simple_cross_stream and axis_matches and not_variable) {
+            const changed = try applySimpleCrossStream(
+                data,
+                table_offset,
+                table_length,
+                subtable_relative,
+                glyph_count,
+                glyphs,
+                simple_pair_eligible,
+                out.items,
+                vertical,
+            );
+            previous_cross_stream_adjustment = changed or previous_cross_stream_adjustment;
+            summary.has_cross_stream_adjustment = previous_cross_stream_adjustment;
+        } else if (format1_enabled and axis_matches and not_variable) {
+            var format1_summary = Summary{};
             try applyFormat1(
                 data,
                 subtable_start,
@@ -84,9 +140,14 @@ pub fn collectAdjustments(
                 tuple_count,
                 if (((coverage & 0x10000000) != 0) != direction_backward) .backward else .forward,
                 vertical,
+                cross_stream,
+                &format1_summary,
                 &operations_left,
             );
-        } else if (format == 4 and axis_matches and not_variable) {
+            previous_cross_stream_adjustment = format1_summary.has_cross_stream_adjustment or
+                previous_cross_stream_adjustment;
+            summary.has_cross_stream_adjustment = previous_cross_stream_adjustment;
+        } else if (format4_enabled and axis_matches and not_variable) {
             try applyFormat4(
                 data,
                 subtable_start,
@@ -102,6 +163,66 @@ pub fn collectAdjustments(
         subtable_relative += subtable_length;
     }
     if (subtable_relative != table_length) return error.BadSfnt;
+    return summary;
+}
+
+fn initializeCrossStreamAttachments(adjustments: []Adjustment, backward: bool) void {
+    if (backward) {
+        for (adjustments, 0..) |*adjustment, index| {
+            // HarfBuzz marks every slot as cursive, including the edge whose
+            // relative parent falls outside the buffer. Format-1 actions test
+            // the attachment type before adding to that edge glyph.
+            adjustment.attachment_type = .cursive;
+            adjustment.attachment_parent_index = if (index + 1 < adjustments.len) index + 1 else null;
+        }
+    } else {
+        for (adjustments, 0..) |*adjustment, index| {
+            adjustment.attachment_type = .cursive;
+            adjustment.attachment_parent_index = if (index > 0) index - 1 else null;
+        }
+    }
+}
+
+fn applySimpleCrossStream(
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    subtable_relative: usize,
+    glyph_count: usize,
+    glyphs: []const GlyphId,
+    eligible: []const bool,
+    adjustments: []Adjustment,
+    vertical: bool,
+) Error!bool {
+    if (glyphs.len != eligible.len or glyphs.len != adjustments.len) return error.BadSfnt;
+    var changed = false;
+    var previous: ?usize = null;
+    for (glyphs, eligible, 0..) |glyph, participates, index| {
+        if (!participates) continue;
+        if (previous) |left_index| {
+            const value = (try kerx.simpleSubtableKerning(
+                data,
+                table_offset,
+                table_length,
+                glyph_count,
+                subtable_relative,
+                glyphs[left_index],
+                glyph,
+            )) orelse return error.BadSfnt;
+            if (value != 0) {
+                if (vertical) {
+                    adjustments[index].x_offset = value;
+                } else {
+                    adjustments[index].y_offset = value;
+                }
+                adjustments[index].cross_stream_assigned = true;
+                adjustments[index].cross_stream_reset = false;
+                changed = true;
+            }
+        }
+        previous = index;
+    }
+    return changed;
 }
 
 fn applyFormat4(
@@ -269,6 +390,9 @@ fn applyAnkrAttachment(
     );
     adjustments[current_index].x_offset = @as(i32, mark_anchor.x) - current_anchor.x;
     adjustments[current_index].y_offset = @as(i32, mark_anchor.y) - current_anchor.y;
+    adjustments[current_index].cross_stream_assigned = false;
+    adjustments[current_index].cross_stream_reset = false;
+    adjustments[current_index].attachment_type = .mark;
     adjustments[current_index].attachment_parent_index = mark_index;
 }
 
@@ -291,6 +415,9 @@ fn applyCoordinateAttachment(
     const current_y: i32 = try readI16(data, machine_start + relative + 6);
     adjustments[current_index].x_offset = mark_x - current_x;
     adjustments[current_index].y_offset = mark_y - current_y;
+    adjustments[current_index].cross_stream_assigned = false;
+    adjustments[current_index].cross_stream_reset = false;
+    adjustments[current_index].attachment_type = .mark;
     adjustments[current_index].attachment_parent_index = mark_index;
 }
 
@@ -304,6 +431,8 @@ fn applyFormat1(
     tuple_count_raw: u32,
     direction: Direction,
     vertical: bool,
+    cross_stream: bool,
+    summary: *Summary,
     operations_left: *usize,
 ) Error!void {
     if (subtable_length < 32 or glyphs.len != adjustments.len) return error.BadSfnt;
@@ -402,7 +531,26 @@ fn applyFormat1(
                 if (last) break;
                 depth -= 1;
                 const glyph_index = stack[depth];
-                if (vertical) {
+                if (cross_stream) {
+                    if (value == std.math.minInt(i16)) {
+                        adjustments[glyph_index].attachment_type = .none;
+                        adjustments[glyph_index].attachment_parent_index = null;
+                        adjustments[glyph_index].cross_stream_assigned = false;
+                        adjustments[glyph_index].cross_stream_reset = true;
+                        if (vertical) {
+                            adjustments[glyph_index].x_offset = 0;
+                        } else {
+                            adjustments[glyph_index].y_offset = 0;
+                        }
+                    } else if (adjustments[glyph_index].attachment_type != .none) {
+                        if (vertical) {
+                            adjustments[glyph_index].x_offset = std.math.add(i32, adjustments[glyph_index].x_offset, value) catch return error.BadSfnt;
+                        } else {
+                            adjustments[glyph_index].y_offset = std.math.add(i32, adjustments[glyph_index].y_offset, value) catch return error.BadSfnt;
+                        }
+                        summary.has_cross_stream_adjustment = true;
+                    }
+                } else if (vertical) {
                     adjustments[glyph_index].y_advance = std.math.add(i32, adjustments[glyph_index].y_advance, value) catch return error.BadSfnt;
                     adjustments[glyph_index].y_offset = std.math.add(i32, adjustments[glyph_index].y_offset, value) catch return error.BadSfnt;
                 } else {
@@ -450,7 +598,7 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
 
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(std.testing.allocator);
-    try collectAdjustments(
+    _ = try collectAdjustments(
         &bytes,
         0,
         bytes.len,
@@ -460,6 +608,8 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
         std.testing.allocator,
         false,
         false,
+        true,
+        &.{ true, true },
         null,
     );
 
@@ -470,7 +620,7 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
     try std.testing.expectEqual(@as(i32, 0), adjustments.items[1].x_offset);
 
     // Re-running into retained scratch must overwrite rather than accumulate.
-    try collectAdjustments(
+    _ = try collectAdjustments(
         &bytes,
         0,
         bytes.len,
@@ -480,10 +630,87 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
         std.testing.allocator,
         false,
         false,
+        true,
+        &.{true},
         null,
     );
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);
+}
+
+test "ordered cross-stream subtables preserve assignment and action order" {
+    var bytes = [_]u8{0} ** 160;
+    writeU16Test(&bytes, 0, 2);
+    writeU32Test(&bytes, 4, 2);
+
+    // First assign -20 to the second glyph through a simple format-0 pair.
+    writeU32Test(&bytes, 8, 40);
+    writeU32Test(&bytes, 12, 0x4000_0000);
+    writeU32Test(&bytes, 20, 1);
+    writeU32Test(&bytes, 24, 6);
+    writeU32Test(&bytes, 32, 0);
+    writeU16Test(&bytes, 36, 1);
+    writeU16Test(&bytes, 38, 1);
+    writeI16Test(&bytes, 40, -20);
+
+    writeFormat1SubtableTest(&bytes, 48);
+    // Process the state machine backwards so it pushes the second glyph and
+    // then applies its action there when visiting the first glyph.
+    writeU32Test(&bytes, 52, 0x5000_0001);
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+    const summary = try collectAdjustments(
+        &bytes,
+        0,
+        bytes.len,
+        2,
+        &.{ 1, 1 },
+        &adjustments,
+        std.testing.allocator,
+        false,
+        false,
+        true,
+        &.{ true, true },
+        null,
+    );
+
+    try std.testing.expect(summary.has_cross_stream_adjustment);
+    try std.testing.expectEqual(@as(i32, 0), adjustments.items[0].y_offset);
+    try std.testing.expectEqual(@as(i32, -50), adjustments.items[1].y_offset);
+
+    // Reverse subtable order: the later simple assignment replaces the second
+    // glyph's prior state-machine value instead of accumulating with it.
+    var reversed = [_]u8{0} ** 160;
+    writeU16Test(&reversed, 0, 2);
+    writeU32Test(&reversed, 4, 2);
+    writeFormat1SubtableTest(&reversed, 8);
+    writeU32Test(&reversed, 12, 0x5000_0001);
+    writeU32Test(&reversed, 120, 40);
+    writeU32Test(&reversed, 124, 0x4000_0000);
+    writeU32Test(&reversed, 132, 1);
+    writeU32Test(&reversed, 136, 6);
+    writeU32Test(&reversed, 144, 0);
+    writeU16Test(&reversed, 148, 1);
+    writeU16Test(&reversed, 150, 1);
+    writeI16Test(&reversed, 152, -20);
+
+    _ = try collectAdjustments(
+        &reversed,
+        0,
+        reversed.len,
+        2,
+        &.{ 1, 1 },
+        &adjustments,
+        std.testing.allocator,
+        false,
+        false,
+        true,
+        &.{ true, true },
+        null,
+    );
+    try std.testing.expectEqual(@as(i32, 0), adjustments.items[0].y_offset);
+    try std.testing.expectEqual(@as(i32, -20), adjustments.items[1].y_offset);
 }
 
 test "format 4 coordinate action attaches current glyph to marked glyph" {
@@ -494,7 +721,7 @@ test "format 4 coordinate action attaches current glyph to marked glyph" {
 
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(std.testing.allocator);
-    try collectAdjustments(
+    _ = try collectAdjustments(
         &bytes,
         0,
         bytes.len,
@@ -504,6 +731,8 @@ test "format 4 coordinate action attaches current glyph to marked glyph" {
         std.testing.allocator,
         false,
         false,
+        true,
+        &.{ true, true },
         null,
     );
 

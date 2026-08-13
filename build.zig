@@ -2574,6 +2574,7 @@ fn addKerxCrossStreamParityGates(
         vertical_builtin: []const u8,
     }{
         .{ .format = "0", .horizontal_builtin = "kerx-cross-format-0", .vertical_builtin = "kerx-cross-vertical-format-0" },
+        .{ .format = "1", .horizontal_builtin = "kerx-cross-format-1", .vertical_builtin = "kerx-cross-vertical-format-1" },
         .{ .format = "2", .horizontal_builtin = "kerx-cross-format-2", .vertical_builtin = "kerx-cross-vertical-format-2" },
         .{ .format = "6", .horizontal_builtin = "kerx-cross-format-6", .vertical_builtin = "kerx-cross-vertical-format-6" },
     };
@@ -2584,8 +2585,12 @@ fn addKerxCrossStreamParityGates(
             spec.horizontal_builtin,
             b.fmt("kerx-cross-format-{s}.ttf", .{spec.format}),
         );
-        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, horizontal_font, "compare-harfbuzz", false);
-        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, horizontal_font, "compare-harfrust", false);
+        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, horizontal_font, "compare-harfbuzz", false, false);
+        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, horizontal_font, "compare-harfrust", false, false);
+        if (std.mem.eql(u8, spec.format, "1")) {
+            addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, horizontal_font, "compare-harfbuzz", false, true);
+            addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, horizontal_font, "compare-harfrust", false, true);
+        }
 
         const vertical_font = exportedBuiltinFont(
             b,
@@ -2593,9 +2598,18 @@ fn addKerxCrossStreamParityGates(
             spec.vertical_builtin,
             b.fmt("kerx-cross-vertical-format-{s}.ttf", .{spec.format}),
         );
-        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, vertical_font, "compare-harfbuzz", true);
-        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, vertical_font, "compare-harfrust", true);
+        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, vertical_font, "compare-harfbuzz", true, false);
+        addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, vertical_font, "compare-harfrust", true, false);
     }
+
+    const reset_font = exportedBuiltinFont(
+        b,
+        shape_bench_exe,
+        "kerx-cross-format-1-reset",
+        "kerx-cross-format-1-reset.ttf",
+    );
+    addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, reset_font, "compare-harfbuzz", false, false);
+    addCrossStreamReferenceGate(b, shape_bench_exe, parity_step, reset_font, "compare-harfrust", false, false);
 }
 
 fn exportedBuiltinFont(
@@ -2616,6 +2630,7 @@ fn addCrossStreamReferenceGate(
     font: std.Build.LazyPath,
     engine: []const u8,
     vertical: bool,
+    disable_kerning: bool,
 ) void {
     const command = b.addRunArtifact(shape_bench_exe);
     command.addArgs(&.{ "--engine", engine, "--font" });
@@ -2628,5 +2643,6 @@ fn addCrossStreamReferenceGate(
         "--samples",    "1",
     });
     if (vertical) command.addArgs(&.{ "--enable-feature", "vkrn" });
+    if (disable_kerning) command.addArgs(&.{ "--disable-feature", "kern" });
     parity_step.dependOn(&command.step);
 }

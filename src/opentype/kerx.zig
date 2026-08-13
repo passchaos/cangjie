@@ -12,11 +12,6 @@ pub const Pair = struct {
     value: i16,
 };
 
-pub const PairAdjustment = struct {
-    along_stream: i32 = 0,
-    cross_stream: i32 = 0,
-};
-
 pub const Subtable = struct {
     offset: usize,
     length: usize,
@@ -102,14 +97,12 @@ pub fn free(allocator: std.mem.Allocator, value: Info) void {
     allocator.free(value.subtables);
 }
 
-/// Resolve applicable simple `kerx` values for one adjacent glyph pair.
+/// Sum applicable same-stream `kerx` values for one adjacent glyph pair.
 ///
 /// This is the hot-path counterpart to `info`: it walks table headers without
 /// allocating metadata arrays and supports sorted format-0 pairs plus
-/// format-2/6 matrices. Along-stream values accumulate across subtables.
-/// Cross-stream values do not: each simple AAT machine assigns the current
-/// glyph's minor-axis offset, so the last non-zero applicable subtable wins
-/// before the caller propagates the cursive attachment chain.
+/// format-2/6 matrices. Cross-stream values are handled by the ordered executor
+/// because format-1 actions between simple subtables can add to or clear them.
 pub fn pairKerning(
     data: []const u8,
     offset: usize,
@@ -118,12 +111,11 @@ pub fn pairKerning(
     left: GlyphId,
     right: GlyphId,
     vertical: bool,
-) Error!PairAdjustment {
+) Error!i32 {
     if (left >= glyph_count or right >= glyph_count) return error.BadSfnt;
     const h = try header(data, offset, length);
     var subtable_offset: usize = 8;
-    var along_stream: i64 = 0;
-    var cross_stream_value: i64 = 0;
+    var total: i64 = 0;
     for (0..h.table_count) |_| {
         const subtable = try subtableHeader(data, offset, length, subtable_offset);
         try validateSubtable(data, offset, length, subtable, glyph_count);
@@ -133,41 +125,60 @@ pub fn pairKerning(
         const variation = (coverage & 0x20000000) != 0;
         const backwards = (coverage & 0x10000000) != 0;
         if (subtable_vertical == vertical and
+            !is_cross_stream and
             !variation and
             !backwards and
             subtable.tuple_count == 0)
         {
-            const value: i64 = switch (subtable.format) {
+            total += switch (subtable.format) {
                 0 => try format0PairKerning(data, offset, subtable, left, right),
                 2 => try format2PairKerning(data, offset, subtable, glyph_count, left, right),
                 6 => try format6PairKerning(data, offset, subtable, glyph_count, left, right),
                 else => 0,
             };
-            if (is_cross_stream) {
-                // The reference engines leave an earlier assignment intact
-                // when a later subtable misses or returns zero.
-                if (value != 0) cross_stream_value = value;
-            } else {
-                along_stream += value;
-            }
         }
         subtable_offset += subtable.length;
     }
     if (subtable_offset != length) return error.BadSfnt;
-    return .{
-        .along_stream = @intCast(std.math.clamp(along_stream, std.math.minInt(i32), std.math.maxInt(i32))),
-        .cross_stream = @intCast(std.math.clamp(cross_stream_value, std.math.minInt(i32), std.math.maxInt(i32))),
+    return @intCast(std.math.clamp(total, std.math.minInt(i32), std.math.maxInt(i32)));
+}
+
+/// Resolve one simple format-0/2/6 subtable without folding table order.
+///
+/// The ordered AAT executor uses this for cross-stream assignments, which can
+/// be interleaved with format-1 additive/reset actions. Returning `null`
+/// distinguishes a non-simple or inapplicable subtable from a valid zero
+/// kerning value.
+pub fn simpleSubtableKerning(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyph_count: usize,
+    subtable_relative: usize,
+    left: GlyphId,
+    right: GlyphId,
+) Error!?i32 {
+    if (left >= glyph_count or right >= glyph_count) return error.BadSfnt;
+    const subtable = try subtableHeader(data, offset, length, subtable_relative);
+    try validateSubtable(data, offset, length, subtable, glyph_count);
+    return switch (subtable.format) {
+        0 => try format0PairKerning(data, offset, subtable, left, right),
+        2 => try format2PairKerning(data, offset, subtable, glyph_count, left, right),
+        6 => try format6PairKerning(data, offset, subtable, glyph_count, left, right),
+        else => null,
     };
 }
 
-/// Return whether the selected axis contains a supported simple cross-stream
-/// subtable. Callers use this once per run to activate the otherwise-empty
-/// cross-stream output sidecar; pair values are still resolved lazily.
-pub fn hasSimpleCrossStream(
+/// Report whether this axis needs the ordered output-side executor.
+///
+/// Ordinary same-stream format-0/2/6 fonts stay on the scalar pair fast path
+/// and therefore avoid materializing glyph-parallel adjustment sidecars.
+pub fn hasOutputSideAdjustments(
     data: []const u8,
     offset: usize,
     length: usize,
     vertical: bool,
+    requested_kerning: bool,
 ) Error!bool {
     const h = try header(data, offset, length);
     var subtable_offset: usize = 8;
@@ -177,28 +188,15 @@ pub fn hasSimpleCrossStream(
         const coverage = subtable.coverage;
         const axis_matches = ((coverage & 0x80000000) != 0) == vertical;
         const cross_stream = (coverage & 0x40000000) != 0;
-        const variation = (coverage & 0x20000000) != 0;
+        const not_variable = (coverage & 0x20000000) == 0;
         const backwards = (coverage & 0x10000000) != 0;
-        const simple_format = subtable.format == 0 or subtable.format == 2 or subtable.format == 6;
-        found = found or (axis_matches and cross_stream and !variation and
-            !backwards and subtable.tuple_count == 0 and simple_format);
-        subtable_offset += subtable.length;
-    }
-    if (subtable_offset != length) return error.BadSfnt;
-    return found;
-}
-
-pub fn hasStateMachine(
-    data: []const u8,
-    offset: usize,
-    length: usize,
-) Error!bool {
-    const h = try header(data, offset, length);
-    var subtable_offset: usize = 8;
-    var found = false;
-    for (0..h.table_count) |_| {
-        const subtable = try subtableHeader(data, offset, length, subtable_offset);
-        found = found or subtable.format == 1 or subtable.format == 4;
+        const applies = switch (subtable.format) {
+            0, 2, 6 => requested_kerning and cross_stream and !backwards and subtable.tuple_count == 0,
+            1 => requested_kerning or cross_stream,
+            4 => true,
+            else => false,
+        };
+        found = found or (axis_matches and not_variable and applies);
         subtable_offset += subtable.length;
     }
     if (subtable_offset != length) return error.BadSfnt;
@@ -214,24 +212,24 @@ test "format 0 pair lookup sums applicable subtables and clamps totals" {
 
     try validate(&bytes, 0, bytes.len, 3);
     try std.testing.expectEqual(
-        PairAdjustment{ .along_stream = 40000 },
+        @as(i32, 40000),
         try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, false),
     );
     try std.testing.expectEqual(
-        PairAdjustment{},
+        @as(i32, 0),
         try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, true),
     );
     try std.testing.expectEqual(
-        PairAdjustment{},
+        @as(i32, 0),
         try pairKerning(&bytes, 0, bytes.len, 3, 2, 1, false),
     );
 
-    // Cross-stream values are reported separately, while variation subtables
-    // remain inactive until tuple-coordinate evaluation is implemented.
+    // Cross-stream and variation subtables are valid metadata but do not
+    // contribute to the same-stream pair result.
     writeU32Test(&bytes, 12, 0x40000000);
     writeU32Test(&bytes, 52, 0x20000000);
     try std.testing.expectEqual(
-        PairAdjustment{ .cross_stream = 20000 },
+        @as(i32, 0),
         try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, false),
     );
 }
@@ -252,12 +250,12 @@ test "format 2 class matrix uses AAT lookup offsets without allocation" {
     for (0..4) |left| {
         for (0..4) |right| {
             try std.testing.expectEqual(
-                PairAdjustment{ .along_stream = expected[left * 4 + right] },
+                expected[left * 4 + right],
                 try pairKerning(&bytes, 0, bytes.len, 4, @intCast(left), @intCast(right), false),
             );
         }
     }
-    try std.testing.expectEqual(PairAdjustment{}, try pairKerning(&bytes, 0, bytes.len, 4, 1, 2, true));
+    try std.testing.expectEqual(@as(i32, 0), try pairKerning(&bytes, 0, bytes.len, 4, 1, 2, true));
 
     // Class lookups are bounded by maxp, and every reachable row/column index
     // must remain inside the declared matrix.
@@ -271,15 +269,15 @@ test "format 6 sparse matrix supports short and long scalar values" {
     writeU32Test(&short_bytes, 4, 1);
     writeFormat6SubtableTest(&short_bytes, 8, false);
     try validate(&short_bytes, 0, short_bytes.len, 2);
-    try std.testing.expectEqual(PairAdjustment{ .along_stream = -30 }, try pairKerning(&short_bytes, 0, short_bytes.len, 2, 1, 1, false));
-    try std.testing.expectEqual(PairAdjustment{ .along_stream = -30 }, try pairKerning(&short_bytes, 0, short_bytes.len, 2, 0, 1, false));
+    try std.testing.expectEqual(@as(i32, -30), try pairKerning(&short_bytes, 0, short_bytes.len, 2, 1, 1, false));
+    try std.testing.expectEqual(@as(i32, -30), try pairKerning(&short_bytes, 0, short_bytes.len, 2, 0, 1, false));
 
     var long_bytes = [_]u8{0} ** 76;
     writeU16Test(&long_bytes, 0, 2);
     writeU32Test(&long_bytes, 4, 1);
     writeFormat6SubtableTest(&long_bytes, 8, true);
     try validate(&long_bytes, 0, long_bytes.len, 2);
-    try std.testing.expectEqual(PairAdjustment{ .along_stream = -40000 }, try pairKerning(&long_bytes, 0, long_bytes.len, 2, 1, 1, false));
+    try std.testing.expectEqual(@as(i32, -40000), try pairKerning(&long_bytes, 0, long_bytes.len, 2, 1, 1, false));
 
     writeU16Test(&short_bytes, 46, 2); // row index is outside rowCount=1.
     try std.testing.expectError(error.BadSfnt, validate(&short_bytes, 0, short_bytes.len, 2));

@@ -907,7 +907,7 @@ pub const KerxLookupForShaping = struct {
     font: *const Font,
     kerx: TableRecord,
 
-    pub fn kerning(self: KerxLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, vertical: bool) FontError!kerx_mod.PairAdjustment {
+    pub fn kerning(self: KerxLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, vertical: bool) FontError!i32 {
         if (left >= self.font.glyph_count or right >= self.font.glyph_count) return error.InvalidGlyph;
         return try kerx_mod.pairKerning(
             self.font.data,
@@ -920,16 +920,18 @@ pub const KerxLookupForShaping = struct {
         );
     }
 
-    pub fn collectStateMachineAdjustments(
+    pub fn collectOrderedAdjustments(
         self: KerxLookupForShaping,
         glyphs: []const glyph_mod.GlyphId,
         adjustments: *std.ArrayList(aat_kerx.Adjustment),
         allocator: std.mem.Allocator,
         vertical: bool,
         direction_backward: bool,
-    ) FontError!void {
+        requested_kerning: bool,
+        simple_pair_eligible: []const bool,
+    ) FontError!aat_kerx.Summary {
         try self.font.validateGlyphRun(glyphs);
-        try aat_kerx.collectAdjustments(
+        return try aat_kerx.collectAdjustments(
             self.font.data,
             self.kerx.offset,
             self.kerx.length,
@@ -939,24 +941,23 @@ pub const KerxLookupForShaping = struct {
             allocator,
             vertical,
             direction_backward,
+            requested_kerning,
+            simple_pair_eligible,
             if (self.font.ankr) |table| .{ .offset = table.offset, .length = table.length } else null,
         );
     }
 
-    pub fn hasStateMachine(self: KerxLookupForShaping) FontError!bool {
-        return try kerx_mod.hasStateMachine(
-            self.font.data,
-            self.kerx.offset,
-            self.kerx.length,
-        );
-    }
-
-    pub fn hasSimpleCrossStream(self: KerxLookupForShaping, vertical: bool) FontError!bool {
-        return try kerx_mod.hasSimpleCrossStream(
+    pub fn hasOutputSideAdjustments(
+        self: KerxLookupForShaping,
+        vertical: bool,
+        requested_kerning: bool,
+    ) FontError!bool {
+        return try kerx_mod.hasOutputSideAdjustments(
             self.font.data,
             self.kerx.offset,
             self.kerx.length,
             vertical,
+            requested_kerning,
         );
     }
 

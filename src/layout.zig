@@ -4577,6 +4577,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 const previous_adjustment = findAdjustmentSorted(gpos_adjustments.items, index - 1, &adjustment_cursor);
                 if (kerx_lookup != null or !previous_adjustment.pair_positioned) {
                     if (active_kern != 0) if (previous_kern_output_index) |previous_output_index| {
+                        // Format 6 can carry 32-bit values. Split in that
+                        // wider domain before scaling so large but valid AAT
+                        // adjustments are not truncated to legacy i16 range.
                         const kern_1 = active_kern >> 1;
                         const kern_2 = active_kern - kern_1;
                         buffer.glyphs.items[previous_output_index].x_advance += @as(f32, @floatFromInt(kern_1)) * scale;

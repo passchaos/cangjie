@@ -906,7 +906,7 @@ pub const KerxLookupForShaping = struct {
     font: *const Font,
     kerx: TableRecord,
 
-    pub fn kerning(self: KerxLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, vertical: bool) FontError!i16 {
+    pub fn kerning(self: KerxLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, vertical: bool) FontError!i32 {
         if (left >= self.font.glyph_count or right >= self.font.glyph_count) return error.InvalidGlyph;
         return try kerx_mod.pairKerning(
             self.font.data,

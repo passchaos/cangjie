@@ -76,6 +76,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .script_feature => try cangjie.testing.test_font.buildScriptFeatureGsubTtf(allocator),
         .kerx => try cangjie.testing.test_font.buildKerxTtf(allocator),
         .kerx_format_2 => try cangjie.testing.test_font.buildKerxFormat2Ttf(allocator),
+        .kerx_format_6 => try cangjie.testing.test_font.buildKerxFormat6Ttf(allocator),
     };
 }
 

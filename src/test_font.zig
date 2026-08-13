@@ -53,6 +53,10 @@ pub fn buildKerxFormat2Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat2TtfTables(allocator));
 }
 
+pub fn buildKerxFormat6Ttf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxFormat6TtfTables(allocator));
+}
+
 pub fn buildKerxGsubGposTtf(allocator: std.mem.Allocator, gpos_feature_tag: *const [4:0]u8) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxGsubGposTtfTables(allocator, gpos_feature_tag));
 }
@@ -936,6 +940,21 @@ fn kerxFormat2TtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[5] = .{ .tag = "kerx", .data = try kerxFormat2Table(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxFormat6TtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kerx", .data = try kerxFormat6Table(allocator) };
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
@@ -3418,6 +3437,32 @@ fn kerxFormat2Table(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 44, 0);
     writeU16(bytes, 46, 0);
     writeI16(bytes, 48, -30);
+    return bytes;
+}
+
+fn kerxFormat6Table(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 70);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 62);
+    writeU32(bytes, 12, 6); // horizontal format 6.
+    writeU16(bytes, 24, 1); // rowCount.
+    writeU16(bytes, 26, 1); // columnCount.
+    writeU32(bytes, 28, 36);
+    writeU32(bytes, 32, 44);
+    writeU32(bytes, 36, 52);
+
+    // Dense row/column lookups select scalar matrix index zero for glyph 1.
+    writeU16(bytes, 44, 0);
+    writeU16(bytes, 46, 0);
+    writeU16(bytes, 48, 0);
+    writeU16(bytes, 50, 0);
+    writeU16(bytes, 52, 0);
+    writeU16(bytes, 54, 0);
+    writeU16(bytes, 56, 0);
+    writeU16(bytes, 58, 0);
+    writeI16(bytes, 60, -30);
     return bytes;
 }
 

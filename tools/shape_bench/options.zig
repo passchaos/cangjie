@@ -44,6 +44,7 @@ pub const BuiltinFont = enum {
     script_feature,
     kerx,
     kerx_format_2,
+    kerx_format_6,
 
     pub fn fromName(name: []const u8) ?BuiltinFont {
         if (std.mem.eql(u8, name, "minimal")) return .minimal;
@@ -51,6 +52,7 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "script-feature")) return .script_feature;
         if (std.mem.eql(u8, name, "kerx")) return .kerx;
         if (std.mem.eql(u8, name, "kerx-format-2")) return .kerx_format_2;
+        if (std.mem.eql(u8, name, "kerx-format-6")) return .kerx_format_6;
         return null;
     }
 
@@ -61,6 +63,7 @@ pub const BuiltinFont = enum {
             .script_feature => "builtin:script-feature",
             .kerx => "builtin:kerx",
             .kerx_format_2 => "builtin:kerx-format-2",
+            .kerx_format_6 => "builtin:kerx-format-6",
         };
     }
 };
@@ -546,7 +549,7 @@ fn parseScriptTag(text: []const u8) ?cangjie.OpenTypeScriptTag {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "shape-bench";
     std.debug.print(
-        \\usage: {s} [--font font.ttf|font.ttc|font.dfont] [--face-index n] [--builtin minimal|minimal-gsub|script-feature|kerx|kerx-format-2] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
+        \\usage: {s} [--font font.ttf|font.ttc|font.dfont] [--face-index n] [--builtin minimal|minimal-gsub|script-feature|kerx|kerx-format-2|kerx-format-6] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
         \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-coretext|compare-harfrust|compare-harfbuzz

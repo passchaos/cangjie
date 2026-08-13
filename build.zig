@@ -2338,6 +2338,24 @@ pub fn build(b: *std.Build) void {
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_2_cmd.step);
 
+        const kerx_format_6_cmd = b.addRunArtifact(shape_bench_exe);
+        kerx_format_6_cmd.addArgs(&.{
+            "--builtin",            "kerx-format-6",
+            "--text",               "AA",
+            "--size",               "1000",
+            "--glyph-summary",      "--iterations",
+            "1",                    "--warmup",
+            "0",                    "--samples",
+            "1",                    "--expect-glyph-ids",
+            "1,1",                  "--expect-clusters",
+            "0,1",                  "--expect-x-advances",
+            "785,785",              "--expect-y-advances",
+            "0,0",                  "--expect-x-offsets",
+            "0,-15",                "--expect-y-offsets",
+            "0,0",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&kerx_format_6_cmd.step);
+
         const global_vert_harfbuzz_cmd = b.addRunArtifact(shape_bench_exe);
         global_vert_harfbuzz_cmd.addArgs(&.{
             "--engine",    "compare-harfbuzz",

@@ -1817,7 +1817,7 @@ pub fn build(b: *std.Build) void {
     const harfbuzz_prefix = b.option([]const u8, "harfbuzz-prefix", "Prefix containing HarfBuzz include/ and lib/");
     const harfbuzz_include_dir = b.option([]const u8, "harfbuzz-include-dir", "Directory containing hb.h and hb-ot.h");
     const harfbuzz_lib_dir = b.option([]const u8, "harfbuzz-lib-dir", "Directory containing libharfbuzz");
-    const parity_work_root = b.option([]const u8, "parity-work-root", "Root containing local harfbuzz/ and harfrust/ reference checkouts for shaping parity gates") orelse if (b.graph.environ_map.get("HOME")) |home|
+    const parity_work_root = b.option([]const u8, "parity-work-root", "Root containing local harfbuzz/, harfrust/, and KaTeX/ checkouts for shaping parity gates") orelse if (b.graph.environ_map.get("HOME")) |home|
         b.fmt("{s}/Work", .{home})
     else
         null;
@@ -2008,6 +2008,7 @@ pub fn build(b: *std.Build) void {
         const harfrust_benches = b.fmt("{s}/harfrust/harfrust/benches", .{work_root});
         const harfbuzz_in_house_fonts = b.fmt("{s}/harfbuzz/test/shape/data/in-house/fonts", .{work_root});
         const harfbuzz_text_rendering_fonts = b.fmt("{s}/harfbuzz/test/shape/data/text-rendering-tests/fonts", .{work_root});
+        const honokamin_font = b.fmt("{s}/KaTeX/test/screenshotter/fonts/mincho/font_1_honokamin.ttf", .{work_root});
 
         const dev_parity_cmd = b.addRunArtifact(shape_bench_exe);
         dev_parity_cmd.addArgs(&.{
@@ -2300,6 +2301,24 @@ pub fn build(b: *std.Build) void {
             morx_rejection_cmd.expectStdErrMatch("error: BadSfnt");
             shaping_aat_parity_smoke_step.dependOn(&morx_rejection_cmd.step);
         }
+
+        const global_vert_harfbuzz_cmd = b.addRunArtifact(shape_bench_exe);
+        global_vert_harfbuzz_cmd.addArgs(&.{
+            "--engine",    "compare-harfbuzz",
+            "--font",      honokamin_font,
+            "--text-file", "tests/data/vertical/honokamin-mort-mapped.txt",
+            "--direction", "ttb",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&global_vert_harfbuzz_cmd.step);
+
+        const global_vert_harfrust_cmd = b.addRunArtifact(shape_bench_exe);
+        global_vert_harfrust_cmd.addArgs(&.{
+            "--engine",    "compare-harfrust",
+            "--font",      honokamin_font,
+            "--text-file", "tests/data/vertical/honokamin-mort-mapped.txt",
+            "--direction", "ttb",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&global_vert_harfrust_cmd.step);
         shaping_parity_smoke_step.dependOn(shaping_aat_parity_smoke_step);
     }
 

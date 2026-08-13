@@ -1777,8 +1777,26 @@ shaping-performance superiority.
   unmarked end-of-text transition suppresses actions. The two `MORX-19` rows
   retain that distinction. The matrix exercises every supported AAT subtable
   kind (types 0, 1, 2, 4, and 5); broader production-font and malformed-table
-  fuzzing remains open. The `shape-bench` now has a `--show-extents` summary
-  surface, and the
+  fuzzing remains open.
+
+  A scan of 6,866 local fonts found one deployed legacy `mort` face,
+  KaTeX's tracked Honoka Mincho
+  `test/screenshotter/fonts/mincho/font_1_honokamin.ttf`
+  (SHA-256 `42b090e87f111c48af3d47c167d8b7f1d1d876dda97790d784ba5824bc56739a`).
+  Its vertical noncontextual `mort` table and GSUB `vert` feature encode the
+  same 599 vertical glyph mappings. HarfBuzz prefers GSUB when the vertical
+  font has both tables; Cangjie was missing HarfBuzz's `F_GLOBAL_SEARCH`
+  behavior and therefore failed to find `vert` because Common characters have
+  no active `kana` LangSys. GSUB now selects the first global `vert`
+  FeatureRecord only when the active LangSys lacks one, while `vert=0` remains
+  authoritative. All 598 mappings with Unicode cmap sources pass both
+  references in `tests/data/vertical/honokamin-mort-mapped.txt`
+  (`checksum=3b1a3ef90515923d`). Removing GSUB from a temporary copy proves the
+  legacy `mort` path produces the same vertical glyphs; a standalone `mort`
+  executor remains open because this font does not provide an output that can
+  distinguish the two engines.
+
+  The `shape-bench` now has a `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process
   HarfBuzz extents (`0,2179,2963,-2789` and `0,1898,2555,-2405`). The HarfRust
   CLI still reports zero color-glyph extents for these rows, so the retained

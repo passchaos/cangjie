@@ -2824,34 +2824,92 @@ fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: Lo
     const feature_count = try readU16(table, feature_list_offset);
     if (!table.assume_validated) try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
     const feature_variation_index = try featureVariationIndexForCoords(table, options.normalized_variation_coords);
+    var active_langsys_has_vert = false;
     for (feature_indices.items) |selection| {
         const feature_index = selection.index;
         if (feature_index >= feature_count) continue;
         const feature_record = feature_list_offset + 2 + @as(usize, feature_index) * 6;
         const feature_tag = try readU32(table, feature_record);
+        active_langsys_has_vert = active_langsys_has_vert or feature_tag == unicode.tag("vert");
         // LangSys.ReqFeatureIndex is an OpenType contract: the feature is
         // necessary for that script/language system and must be applied even
         // when its tag is normally optional or an override disables that tag.
         if (!selection.required and !featureEnabled(feature_tag, options)) continue;
-        const default_feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
-        const feature_offset = if (feature_variation_index) |variation_index|
-            try substitutedFeatureOffset(table, variation_index, selection.index) orelse default_feature_offset
-        else
-            default_feature_offset;
-        const lookup_index_count = try readU16(table, feature_offset + 2);
         const feature_value = if (selection.required)
             @as(u32, 1)
         else
             featureValue(feature_tag, options);
         const random = !selection.required and feature_tag == unicode.tag("rand") and feature_value == random_feature_value;
-        for (0..lookup_index_count) |i| {
-            const lookup_index = try readU16(table, feature_offset + 4 + i * 2);
-            try lookups.append(allocator, .{ .index = lookup_index, .value = feature_value, .random = random });
+        try appendFeatureRecordLookups(
+            table,
+            feature_list_offset,
+            feature_index,
+            feature_record,
+            feature_variation_index,
+            feature_value,
+            random,
+            &lookups,
+            allocator,
+        );
+    }
+
+    // HarfBuzz marks vertical `vert` as F_GLOBAL_SEARCH: if the active
+    // Script/LangSys does not advertise it, select the first table-wide
+    // FeatureRecord with that tag. Old CJK fonts commonly put vertical forms
+    // only under `kana`, while Common punctuation resolves to no ScriptList
+    // entry. This is a feature fallback, not permission to borrow the other
+    // script's required/default features.
+    if (options.vertical and
+        !active_langsys_has_vert and
+        featureEnabled(unicode.tag("vert"), options))
+    {
+        for (0..feature_count) |feature_index| {
+            const feature_record = feature_list_offset + 2 + feature_index * 6;
+            if (try readU32(table, feature_record) != unicode.tag("vert")) continue;
+            try appendFeatureRecordLookups(
+                table,
+                feature_list_offset,
+                @intCast(feature_index),
+                feature_record,
+                feature_variation_index,
+                featureValue(unicode.tag("vert"), options),
+                false,
+                &lookups,
+                allocator,
+            );
+            break;
         }
     }
 
     sortUniqueSelectedLookups(&lookups);
     return lookups;
+}
+
+fn appendFeatureRecordLookups(
+    table: Table,
+    feature_list_offset: usize,
+    feature_index: u16,
+    feature_record: usize,
+    feature_variation_index: ?usize,
+    feature_value: u32,
+    random: bool,
+    lookups: *std.ArrayList(SelectedLookup),
+    allocator: std.mem.Allocator,
+) (GsubError || std.mem.Allocator.Error)!void {
+    const default_feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
+    const feature_offset = if (feature_variation_index) |variation_index|
+        try substitutedFeatureOffset(table, variation_index, feature_index) orelse default_feature_offset
+    else
+        default_feature_offset;
+    const lookup_index_count = try readU16(table, feature_offset + 2);
+    for (0..lookup_index_count) |i| {
+        const lookup_index = try readU16(table, feature_offset + 4 + i * 2);
+        try lookups.append(allocator, .{
+            .index = lookup_index,
+            .value = feature_value,
+            .random = random,
+        });
+    }
 }
 
 fn featureEnabled(feature_tag: u32, options: LookupOptions) bool {
@@ -10353,6 +10411,32 @@ test "GSUB lookup selection honors script and language tags" {
     try std.testing.expectEqualSlices(u16, &.{3}, fallback.items);
 }
 
+test "vertical GSUB globally searches vert outside the active LangSys" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 84;
+    writeGlobalVerticalFeatureSelectionTable(&bytes);
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    var horizontal = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
+    defer horizontal.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), horizontal.items.len);
+
+    var vertical = try selectedLookupIndices(table, allocator, .{
+        .script_tag = .dflt,
+        .vertical = true,
+    });
+    defer vertical.deinit(allocator);
+    try std.testing.expectEqualSlices(u16, &.{0}, vertical.items);
+
+    var disabled = try selectedLookupIndices(table, allocator, .{
+        .script_tag = .dflt,
+        .vertical = true,
+        .features = &.{.{ .tag = unicode.tag("vert"), .enabled = false }},
+    });
+    defer disabled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), disabled.items.len);
+}
+
 test "GSUB validates layout tag record ordering" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 92;
@@ -14005,6 +14089,52 @@ fn writeScriptLanguageSelectionTable(bytes: []u8) void {
     writeU16Test(bytes, 146, 8);
     writeU16Test(bytes, 148, 8);
     writeU16Test(bytes, 150, 8);
+}
+
+fn writeGlobalVerticalFeatureSelectionTable(bytes: []u8) void {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10); // ScriptList.
+    writeU16Test(bytes, 6, 46); // FeatureList.
+    writeU16Test(bytes, 8, 60); // LookupList.
+
+    writeU16Test(bytes, 10, 2);
+    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(bytes, 16, 14);
+    writeU32Test(bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.kana));
+    writeU16Test(bytes, 22, 24);
+
+    // DFLT has a default LangSys but no features.
+    writeU16Test(bytes, 24, 4);
+    writeU16Test(bytes, 26, 0);
+    writeU16Test(bytes, 28, 0);
+    writeU16Test(bytes, 30, 0xffff);
+    writeU16Test(bytes, 32, 0);
+
+    // kana references the sole `vert` feature.
+    writeU16Test(bytes, 34, 4);
+    writeU16Test(bytes, 36, 0);
+    writeU16Test(bytes, 38, 0);
+    writeU16Test(bytes, 40, 0xffff);
+    writeU16Test(bytes, 42, 1);
+    writeU16Test(bytes, 44, 0);
+
+    writeU16Test(bytes, 46, 1);
+    writeU32Test(bytes, 48, unicode.tag("vert"));
+    writeU16Test(bytes, 52, 8);
+    writeU16Test(bytes, 54, 0);
+    writeU16Test(bytes, 56, 1);
+    writeU16Test(bytes, 58, 0);
+
+    writeU16Test(bytes, 60, 1);
+    writeU16Test(bytes, 62, 4);
+    writeU16Test(bytes, 64, 1); // SingleSubst lookup.
+    writeU16Test(bytes, 66, 0);
+    writeU16Test(bytes, 68, 1);
+    writeU16Test(bytes, 70, 8);
+    writeU16Test(bytes, 72, 1);
+    writeU16Test(bytes, 74, 6);
+    writeI16Test(bytes, 76, 1);
+    writeCoverage1(bytes, 78, 1);
 }
 
 fn writeScriptTable(bytes: []u8, offset: usize, default_lang_offset: u16, lang_count: u16) void {

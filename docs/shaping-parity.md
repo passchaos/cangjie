@@ -2277,3 +2277,14 @@ shaping-performance superiority.
   did not offset the wall-time gain. The SourceSerifVariable control remained
   exactly neutral in retired instructions and branches and stayed within
   `0.24%` in cycles. Checksums were identical.
+- The scanner now seeds the first accepted scalar separately, since that scalar
+  always starts a syllable. The main loop consequently handles only subsequent
+  scalars and no longer carries an `index != start` counter through every
+  classification; the isolated function shrank from 434 to 378 bytes. Against
+  `be40cc9`, fixed-CPU-30 A/B/B/A plus B/A/A/B 31-sample medians improved
+  NotoSansDevanagari `hi-words` from `1412.536` to `1409.773 ns/glyph`, about
+  `0.20%`, with both orders improving. Interleaved counters reduced Hindi
+  instructions/cycles by `0.25%`, branches by `0.13%`, and branch misses by
+  `0.26%`. The SourceSerifVariable control remained exactly neutral in retired
+  instructions/branches and improved about `0.10%` in cycles. Checksums were
+  identical.

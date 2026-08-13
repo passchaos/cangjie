@@ -1430,9 +1430,24 @@ noinline fn genericIndicSyllableEnd(codepoints: []const u21, start: usize, scrip
 }
 
 noinline fn devanagariSyllableEnd(codepoints: []const u21, start: usize) linksection(scanner_text_section) usize {
-    var index = start;
+    if (start >= codepoints.len) return start;
+
+    // The first accepted scalar always starts a syllable; only later bases
+    // need the virama/stacker continuation test. Seed the two state bits once
+    // here so the main loop does not carry `index != start` as a counter.
+    const first: u32 = codepoints[start];
     var saw_virama = false;
     var previous_was_stacker = false;
+    if (first -% 0x0900 <= 0x61) {
+        if (first == 0x0950) return start;
+        saw_virama = first == 0x094d;
+    } else if (first == 0x1cf5) {
+        previous_was_stacker = true;
+    } else if (first != 0x25cc and first -% 0x200c > 1) {
+        return start;
+    }
+
+    var index = start + 1;
     while (index < codepoints.len) : (index += 1) {
         const codepoint: u32 = codepoints[index];
         if (codepoint -% 0x0900 <= 0x61) {
@@ -1443,7 +1458,7 @@ noinline fn devanagariSyllableEnd(codepoints: []const u21, start: usize) linksec
             if (codepoint == 0x0950) break;
             const is_base = codepoint -% 0x0904 <= 0x35 or
                 codepoint -% 0x0958 <= 0x09;
-            if (index != start and is_base and !saw_virama and !previous_was_stacker) break;
+            if (is_base and !saw_virama and !previous_was_stacker) break;
             if (codepoint == 0x094d) {
                 saw_virama = true;
             } else if (is_base) {
@@ -1453,13 +1468,13 @@ noinline fn devanagariSyllableEnd(codepoints: []const u21, start: usize) linksec
             continue;
         }
         if (codepoint == 0x1cf5) {
-            if (index != start and !saw_virama and !previous_was_stacker) break;
+            if (!saw_virama and !previous_was_stacker) break;
             saw_virama = false;
             previous_was_stacker = true;
             continue;
         }
         if (codepoint == 0x25cc) {
-            if (index != start and !saw_virama and !previous_was_stacker) break;
+            if (!saw_virama and !previous_was_stacker) break;
             saw_virama = false;
             previous_was_stacker = false;
             continue;

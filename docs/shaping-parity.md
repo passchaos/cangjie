@@ -1242,8 +1242,10 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   in the same stage ordering as HarfBuzz/HarfRust.
 - HarfBuzz in-house `collections.tests` TTC rows are retained for
   `TTC.ttc` face indices 0 and 1. `shape-bench` now accepts `--face-index`
-  and forwards it to Cangjie, HarfRust, and HarfBuzz reference engines; DFONT
-  remains outside the current SFNT/TTC/WOFF container support.
+  and forwards it to Cangjie, HarfRust, and HarfBuzz reference engines. The
+  `DFONT.dfont` face-0 row is retained too; the bounded resource-fork decoder
+  exposes its `sfnt` resources in QuickDraw order and rebuilds a TTC when more
+  than one resource is present.
 - HarfBuzz in-house `harfbust.tests` rows for `HarfBust.ttf` are retained in
   `tests/data/harfbust-tests.txt`. Cangjie accepts the font even though name ID
   6 contains an invalid space, while explicit `postscript_name` reads and font

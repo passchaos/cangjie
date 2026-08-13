@@ -755,6 +755,7 @@ fn isSupportedFontPath(path: []const u8) bool {
         std.ascii.endsWithIgnoreCase(path, ".otf") or
         std.ascii.endsWithIgnoreCase(path, ".ttc") or
         std.ascii.endsWithIgnoreCase(path, ".otc") or
+        std.ascii.endsWithIgnoreCase(path, ".dfont") or
         std.ascii.endsWithIgnoreCase(path, ".woff") or
         std.ascii.endsWithIgnoreCase(path, ".woff2");
 }
@@ -762,6 +763,7 @@ fn isSupportedFontPath(path: []const u8) bool {
 fn isCollectionPath(path: []const u8) bool {
     return std.ascii.endsWithIgnoreCase(path, ".ttc") or
         std.ascii.endsWithIgnoreCase(path, ".otc") or
+        std.ascii.endsWithIgnoreCase(path, ".dfont") or
         // WOFF2 may wrap a font collection. The collection API also accepts a
         // one-face WOFF2, so scanners can discover every face without parsing
         // the compressed header twice or special-casing its flavor here.

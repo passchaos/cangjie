@@ -540,13 +540,13 @@ fn parseScriptTag(text: []const u8) ?cangjie.OpenTypeScriptTag {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "shape-bench";
     std.debug.print(
-        \\usage: {s} [--font font.ttf|font.ttc] [--face-index n] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
+        \\usage: {s} [--font font.ttf|font.ttc|font.dfont] [--face-index n] [--builtin minimal|minimal-gsub|script-feature] [--text text|--text-file path] [--size px] [--iterations n] [--warmup n]
         \\
         \\options:
         \\  --engine cangjie|coretext|harfrust|harfbuzz|compare-coretext|compare-harfrust|compare-harfbuzz
         \\                               shaping engine, default cangjie
         \\  --format text|tsv            output format, default text
-        \\  --font PATH                  use a real TTF/OTF/TTC font
+        \\  --font PATH                  use a real SFNT/TTC/WOFF/DFONT font
         \\  --face-index N              select face N from a font collection
         \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup
         \\  --builtin NAME               use an in-repo smoke fixture, default script-feature

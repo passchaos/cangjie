@@ -49,7 +49,25 @@ pub const BenchResult = struct {
 
 pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options) ![]u8 {
     if (options.font_path) |path| {
-        return try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(256 * 1024 * 1024));
+        const container = try std.Io.Dir.cwd().readFileAlloc(
+            io,
+            path,
+            allocator,
+            .limited(256 * 1024 * 1024),
+        );
+        errdefer allocator.free(container);
+        const format = cangjie.detectFontContainerFormat(container) catch {
+            return container;
+        };
+        if (format != .dfont) return container;
+
+        const decoded = try cangjie.decodeFontContainerAlloc(
+            allocator,
+            container,
+            256 * 1024 * 1024,
+        );
+        allocator.free(container);
+        return decoded;
     }
 
     return switch (options.builtin_font) {

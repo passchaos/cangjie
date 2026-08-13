@@ -11,6 +11,7 @@ pub const Error = error{
 
 pub const Format = enum {
     sfnt,
+    dfont,
     woff1,
     woff2,
 };
@@ -62,15 +63,43 @@ pub const LoadedFont = struct {
 
 pub fn detectFormat(data: []const u8) Error!Format {
     if (data.len < 4) return error.InvalidContainer;
-    return switch (readU32Be(data, 0)) {
+    const signature = readU32Be(data, 0);
+    return switch (signature) {
         0x00010000, // TrueType outlines.
         0x74727565, // "true", accepted by the SFNT parser.
         0x4f54544f, // "OTTO", CFF/CFF2 outlines.
         0x74746366, // "ttcf", TrueType/OpenType collection.
         => .sfnt,
+        0x00000100 => .dfont, // Apple data-fork resource container.
         0x774f4646 => .woff1, // "wOFF"
         0x774f4632 => .woff2, // "wOF2"
-        else => error.UnsupportedContainer,
+        else => {
+            // Flattened resource forks need not use dfont's conventional
+            // 256-byte data offset. Classify only structurally plausible
+            // disjoint data/map headers here; the decoder performs the full
+            // map and `sfnt` resource validation.
+            if (data.len >= 16) {
+                const data_start: usize = signature;
+                const map_start: usize = readU32Be(data, 4);
+                const data_len: usize = readU32Be(data, 8);
+                const map_len: usize = readU32Be(data, 12);
+                if (data_start <= data.len and
+                    data_len <= data.len - data_start and
+                    map_start <= data.len and
+                    map_len <= data.len - map_start and
+                    data_len != 0 and map_len >= 28 and
+                    !rangesOverlapContainer(
+                        data_start,
+                        data_start + data_len,
+                        map_start,
+                        map_start + map_len,
+                    ))
+                {
+                    return .dfont;
+                }
+            }
+            return error.UnsupportedContainer;
+        },
     };
 }
 
@@ -99,9 +128,290 @@ pub fn decodeFontContainerAlloc(
             if (data.len > max_decoded_size) return error.OutputTooLarge;
             return try allocator.dupe(u8, data);
         },
+        .dfont => try decodeDfontToSfntAlloc(allocator, data, max_decoded_size),
         .woff1 => try decodeWoff1ToSfntAlloc(allocator, data, max_decoded_size),
         .woff2 => try decodeWoff2ToSfntAlloc(allocator, data, max_decoded_size),
     };
+}
+
+const DfontResource = struct {
+    payload_offset: usize,
+    payload_len: usize,
+};
+
+/// Reconstruct the `sfnt` resources in an Apple data-fork resource container.
+///
+/// A one-face dfont returns that standalone SFNT unchanged. Multiple resources
+/// become a TTC in resource-map order, which is the face order used by
+/// QuickDraw, FreeType, and HarfBuzz. Resource SFNT table offsets are local to
+/// each resource; TTC records require absolute offsets from the collection
+/// start, so reconstruction rebases every table record after copying.
+fn decodeDfontToSfntAlloc(
+    allocator: std.mem.Allocator,
+    dfont: []const u8,
+    max_decoded_size: usize,
+) ![]u8 {
+    const resources = try dfontSfntResources(allocator, dfont);
+    defer allocator.free(resources);
+
+    if (resources.len == 1) {
+        const resource = resources[0];
+        if (resource.payload_len > max_decoded_size) return error.OutputTooLarge;
+        return try allocator.dupe(
+            u8,
+            dfont[resource.payload_offset..][0..resource.payload_len],
+        );
+    }
+
+    const header_unaligned = std.math.add(
+        usize,
+        12,
+        std.math.mul(usize, resources.len, 4) catch
+            return error.InvalidContainer,
+    ) catch return error.InvalidContainer;
+    const header_len = try align4(header_unaligned);
+    var total_len = header_len;
+    for (resources) |resource| {
+        total_len = std.math.add(
+            usize,
+            total_len,
+            try align4(resource.payload_len),
+        ) catch return error.InvalidContainer;
+        if (total_len > max_decoded_size) return error.OutputTooLarge;
+    }
+
+    const out = try allocator.alloc(u8, total_len);
+    errdefer allocator.free(out);
+    @memset(out, 0);
+    @memcpy(out[0..4], "ttcf");
+    writeU32Be(out, 4, 0x00010000);
+    if (resources.len > std.math.maxInt(u32)) return error.InvalidContainer;
+    writeU32Be(out, 8, @intCast(resources.len));
+
+    var face_offset = header_len;
+    for (resources, 0..) |resource, face_index| {
+        if (face_offset > std.math.maxInt(u32)) return error.InvalidContainer;
+        writeU32Be(out, 12 + face_index * 4, @intCast(face_offset));
+        const face = dfont[resource.payload_offset..][0..resource.payload_len];
+        @memcpy(out[face_offset..][0..face.len], face);
+        try rebaseDfontSfntTableOffsets(
+            out[face_offset..][0..face.len],
+            face_offset,
+        );
+        face_offset += try align4(face.len);
+    }
+    return out;
+}
+
+fn dfontSfntResources(
+    allocator: std.mem.Allocator,
+    dfont: []const u8,
+) ![]DfontResource {
+    if (dfont.len < 16) {
+        return error.InvalidContainer;
+    }
+    const data_start: usize = readU32Be(dfont, 0);
+    const map_start: usize = readU32Be(dfont, 4);
+    const data_len: usize = readU32Be(dfont, 8);
+    const map_len: usize = readU32Be(dfont, 12);
+    const data_end = try checkedContainerEnd(data_start, data_len, dfont.len);
+    const map_end = try checkedContainerEnd(map_start, map_len, dfont.len);
+    if (data_len == 0 or map_len < 28 or
+        rangesOverlapContainer(data_start, data_end, map_start, map_end))
+    {
+        return error.InvalidContainer;
+    }
+
+    // Classic resource forks repeat their header in the map. A dfont uses 16
+    // zero bytes instead; accepting either also permits a flattened resource
+    // fork with the same safe grammar.
+    const map_header = dfont[map_start..][0..16];
+    if (!allZero(map_header) and !std.mem.eql(u8, map_header, dfont[0..16])) {
+        return error.InvalidContainer;
+    }
+
+    const type_list_rel: usize = readU16Be(dfont, map_start + 24);
+    const name_list_rel: usize = readU16Be(dfont, map_start + 26);
+    if (type_list_rel < 28 or type_list_rel >= map_len or
+        name_list_rel < 28 or name_list_rel > map_len)
+    {
+        return error.InvalidContainer;
+    }
+    const type_list = map_start + type_list_rel;
+    const name_list = map_start + name_list_rel;
+    if (type_list > map_end - 2 or type_list >= name_list) {
+        return error.InvalidContainer;
+    }
+
+    const type_count = @as(usize, readU16Be(dfont, type_list)) + 1;
+    if (type_count > 4079) return error.InvalidContainer;
+    const type_bytes = std.math.mul(usize, type_count, 8) catch
+        return error.InvalidContainer;
+    const type_records_end = std.math.add(
+        usize,
+        type_list + 2,
+        type_bytes,
+    ) catch return error.InvalidContainer;
+    if (type_records_end > name_list) return error.InvalidContainer;
+
+    var sfnt_resources = std.ArrayList(DfontResource).empty;
+    defer sfnt_resources.deinit(allocator);
+    var found_sfnt_type = false;
+    for (0..type_count) |type_index| {
+        const type_record = type_list + 2 + type_index * 8;
+        const tag = dfont[type_record..][0..4];
+        const resource_count = @as(usize, readU16Be(dfont, type_record + 4)) + 1;
+        if (resource_count > 2727) return error.InvalidContainer;
+        const references_rel: usize = readU16Be(dfont, type_record + 6);
+        const references = std.math.add(
+            usize,
+            type_list,
+            references_rel,
+        ) catch return error.InvalidContainer;
+        const reference_bytes = std.math.mul(
+            usize,
+            resource_count,
+            12,
+        ) catch return error.InvalidContainer;
+        const references_end = std.math.add(
+            usize,
+            references,
+            reference_bytes,
+        ) catch return error.InvalidContainer;
+        if (references < type_records_end or references_end > name_list) {
+            return error.InvalidContainer;
+        }
+
+        const is_sfnt = std.mem.eql(u8, tag, "sfnt");
+        if (is_sfnt and found_sfnt_type) return error.InvalidContainer;
+        found_sfnt_type = found_sfnt_type or is_sfnt;
+        for (0..resource_count) |resource_index| {
+            const reference = references + resource_index * 12;
+            if (readU32Be(dfont, reference + 8) != 0) {
+                return error.InvalidContainer;
+            }
+            try validateDfontResourceName(
+                dfont,
+                map_end,
+                name_list,
+                readU16Be(dfont, reference + 2),
+            );
+            const attributes_and_offset = readU32Be(dfont, reference + 4);
+            const data_relative = @as(usize, attributes_and_offset & 0x00ffffff);
+            const resource_start = std.math.add(
+                usize,
+                data_start,
+                data_relative,
+            ) catch return error.InvalidContainer;
+            if (resource_start < data_start or resource_start > data_end - 4) {
+                return error.InvalidContainer;
+            }
+            const payload_len: usize = readU32Be(dfont, resource_start);
+            const payload_offset = resource_start + 4;
+            if (payload_len > data_end - payload_offset) {
+                return error.InvalidContainer;
+            }
+            if (is_sfnt) {
+                for (sfnt_resources.items) |existing| {
+                    if (rangesOverlapContainer(
+                        payload_offset,
+                        payload_offset + payload_len,
+                        existing.payload_offset,
+                        existing.payload_offset + existing.payload_len,
+                    )) {
+                        return error.InvalidContainer;
+                    }
+                }
+                try validateDfontSfnt(
+                    dfont[payload_offset..][0..payload_len],
+                );
+                try sfnt_resources.append(allocator, .{
+                    .payload_offset = payload_offset,
+                    .payload_len = payload_len,
+                });
+            }
+        }
+    }
+    if (sfnt_resources.items.len == 0) return error.InvalidContainer;
+    return try sfnt_resources.toOwnedSlice(allocator);
+}
+
+fn validateDfontResourceName(
+    dfont: []const u8,
+    map_end: usize,
+    name_list: usize,
+    name_offset_raw: u16,
+) !void {
+    if (name_offset_raw == 0xffff) return;
+    const name_offset = std.math.add(
+        usize,
+        name_list,
+        name_offset_raw,
+    ) catch return error.InvalidContainer;
+    if (name_offset >= map_end) return error.InvalidContainer;
+    const name_len: usize = dfont[name_offset];
+    if (name_len > map_end - name_offset - 1) return error.InvalidContainer;
+}
+
+fn validateDfontSfnt(sfnt: []const u8) !void {
+    if (sfnt.len < 12 or !isSupportedSfntFlavor(readU32Be(sfnt, 0))) {
+        return error.InvalidContainer;
+    }
+    const table_count = readU16Be(sfnt, 4);
+    if (table_count == 0) return error.InvalidContainer;
+    const directory_len = std.math.mul(
+        usize,
+        table_count,
+        16,
+    ) catch return error.InvalidContainer;
+    if (directory_len > sfnt.len - 12) return error.InvalidContainer;
+    for (0..table_count) |table_index| {
+        const record = 12 + table_index * 16;
+        const offset: usize = readU32Be(sfnt, record + 8);
+        const len: usize = readU32Be(sfnt, record + 12);
+        if ((offset & 3) != 0 or offset > sfnt.len or len > sfnt.len - offset) {
+            return error.InvalidContainer;
+        }
+    }
+}
+
+fn rebaseDfontSfntTableOffsets(face: []u8, face_offset: usize) !void {
+    try validateDfontSfnt(face);
+    const table_count = readU16Be(face, 4);
+    for (0..table_count) |table_index| {
+        const record = 12 + table_index * 16;
+        const old_offset: usize = readU32Be(face, record + 8);
+        const new_offset = std.math.add(
+            usize,
+            face_offset,
+            old_offset,
+        ) catch return error.InvalidContainer;
+        if (new_offset > std.math.maxInt(u32)) return error.InvalidContainer;
+        writeU32Be(face, record + 8, @intCast(new_offset));
+    }
+}
+
+fn checkedContainerEnd(start: usize, len: usize, file_len: usize) !usize {
+    if (start > file_len or len > file_len - start) {
+        return error.InvalidContainer;
+    }
+    return start + len;
+}
+
+fn rangesOverlapContainer(
+    first_start: usize,
+    first_end: usize,
+    second_start: usize,
+    second_end: usize,
+) bool {
+    return first_start < second_end and second_start < first_end;
+}
+
+fn allZero(bytes: []const u8) bool {
+    for (bytes) |byte| {
+        if (byte != 0) return false;
+    }
+    return true;
 }
 
 const WoffTableEntry = struct {
@@ -666,8 +976,57 @@ fn sfntChecksumForTest(sfnt: []const u8) !u32 {
     return checksum;
 }
 
+fn buildDfontForTest(
+    allocator: std.mem.Allocator,
+    faces: []const []const u8,
+) ![]u8 {
+    if (faces.len == 0 or faces.len > std.math.maxInt(u16) + 1) {
+        return error.TestUnexpectedResult;
+    }
+    const data_start: usize = 256;
+    var data_len: usize = 0;
+    for (faces) |face| {
+        data_len = std.math.add(usize, data_len, 4 + face.len) catch
+            return error.OutOfMemory;
+    }
+    const map_start = data_start + data_len;
+    const type_list_rel: usize = 28;
+    const references_rel: usize = 10;
+    const map_len = 28 + 2 + 8 + faces.len * 12;
+    const bytes = try allocator.alloc(u8, map_start + map_len);
+    @memset(bytes, 0);
+
+    writeU32Be(bytes, 0, @intCast(data_start));
+    writeU32Be(bytes, 4, @intCast(map_start));
+    writeU32Be(bytes, 8, @intCast(data_len));
+    writeU32Be(bytes, 12, @intCast(map_len));
+    writeU16Be(bytes, map_start + 24, @intCast(type_list_rel));
+    writeU16Be(bytes, map_start + 26, @intCast(map_len));
+
+    const type_list = map_start + type_list_rel;
+    writeU16Be(bytes, type_list, 0); // One resource type, encoded count - 1.
+    @memcpy(bytes[type_list + 2 ..][0..4], "sfnt");
+    writeU16Be(bytes, type_list + 6, @intCast(faces.len - 1));
+    writeU16Be(bytes, type_list + 8, @intCast(references_rel));
+
+    var resource_offset: usize = 0;
+    for (faces, 0..) |face, face_index| {
+        const resource = data_start + resource_offset;
+        writeU32Be(bytes, resource, @intCast(face.len));
+        @memcpy(bytes[resource + 4 ..][0..face.len], face);
+
+        const reference = type_list + references_rel + face_index * 12;
+        writeU16Be(bytes, reference, @intCast(face_index + 128));
+        writeU16Be(bytes, reference + 2, 0xffff);
+        writeU32Be(bytes, reference + 4, @intCast(resource_offset));
+        resource_offset += 4 + face.len;
+    }
+    return bytes;
+}
+
 pub const testing = struct {
     pub const buildWoff1 = buildWoffForTest;
+    pub const buildDfont = buildDfontForTest;
 };
 
 // `buildMinimalTtf` encoded by the reference woff2 encoder. Keeping the fixture
@@ -718,6 +1077,101 @@ test "font container decodes compressed WOFF1 and owns parsed bytes" {
     try std.testing.expectError(
         error.OutputTooLarge,
         decodeFontContainerAlloc(allocator, woff, sfnt.len - 1),
+    );
+}
+
+test "font container decodes dfont resources and collections" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const first = try test_font.buildNamedTtfWithNames(
+        allocator,
+        "DFont One",
+        "Regular",
+        "DFont One Regular",
+    );
+    defer allocator.free(first);
+    const second = try test_font.buildNamedTtfWithNames(
+        allocator,
+        "DFont Two",
+        "Regular",
+        "DFont Two Regular",
+    );
+    defer allocator.free(second);
+
+    const single = try buildDfontForTest(allocator, &.{first});
+    defer allocator.free(single);
+    try std.testing.expectEqual(Format.dfont, try detectFormat(single));
+    const decoded_single = try decodeFontContainerAlloc(
+        allocator,
+        single,
+        first.len,
+    );
+    defer allocator.free(decoded_single);
+    try std.testing.expectEqualSlices(u8, first, decoded_single);
+
+    const collection = try buildDfontForTest(allocator, &.{ first, second });
+    defer allocator.free(collection);
+    const decoded = try decodeFontContainerAlloc(
+        allocator,
+        collection,
+        std.math.maxInt(usize),
+    );
+    defer allocator.free(decoded);
+    try std.testing.expectEqual(@as(usize, 2), try Font.faceCount(decoded));
+    var second_face = try Font.parseFace(allocator, decoded, 1);
+    defer second_face.deinit();
+    var name_buffer: [128]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "DFont Two",
+        (try second_face.familyName(&name_buffer)) orelse
+            return error.TestUnexpectedResult,
+    );
+    try std.testing.expectError(
+        error.OutputTooLarge,
+        decodeFontContainerAlloc(allocator, collection, decoded.len - 1),
+    );
+}
+
+test "font container rejects malformed dfont resource maps" {
+    const allocator = std.testing.allocator;
+    const sfnt = try @import("test_font.zig").buildMinimalTtf(allocator);
+    defer allocator.free(sfnt);
+    const dfont = try buildDfontForTest(allocator, &.{sfnt});
+    defer allocator.free(dfont);
+
+    const bad_map = try allocator.dupe(u8, dfont);
+    defer allocator.free(bad_map);
+    writeU32Be(bad_map, 4, @intCast(bad_map.len - 8));
+    try std.testing.expectError(
+        error.InvalidContainer,
+        decodeFontContainerAlloc(allocator, bad_map, std.math.maxInt(usize)),
+    );
+
+    const bad_resource = try allocator.dupe(u8, dfont);
+    defer allocator.free(bad_resource);
+    writeU32Be(bad_resource, 256, std.math.maxInt(u32));
+    try std.testing.expectError(
+        error.InvalidContainer,
+        decodeFontContainerAlloc(
+            allocator,
+            bad_resource,
+            std.math.maxInt(usize),
+        ),
+    );
+
+    const nonzero_handle = try allocator.dupe(u8, dfont);
+    defer allocator.free(nonzero_handle);
+    const map_start: usize = readU32Be(nonzero_handle, 4);
+    const type_list = map_start + readU16Be(nonzero_handle, map_start + 24);
+    const reference = type_list + readU16Be(nonzero_handle, type_list + 8);
+    writeU32Be(nonzero_handle, reference + 8, 1);
+    try std.testing.expectError(
+        error.InvalidContainer,
+        decodeFontContainerAlloc(
+            allocator,
+            nonzero_handle,
+            std.math.maxInt(usize),
+        ),
     );
 }
 

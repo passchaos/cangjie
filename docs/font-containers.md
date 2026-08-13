@@ -8,6 +8,8 @@ and web fonts rather than FreeType's complete historical format matrix.
 - Standalone TrueType and OpenType SFNT (`.ttf`, `.otf`), including TrueType,
   CFF1, and CFF2 outlines.
 - TrueType/OpenType collections (`.ttc`, `.otc`).
+- Apple data-fork resource containers (`.dfont`) carrying one or more `sfnt`
+  resources. Multiple resources are exposed in resource-map/QuickDraw order.
 - WOFF 1.0 (`.woff`) through the built-in bounded zlib decoder.
 - WOFF 2.0 (`.woff2`) through a runtime `libwoff2dec` backend. Platforms
   without a compatible backend return `error.Woff2RuntimeUnavailable` rather
@@ -21,25 +23,33 @@ TTC/OTC, web fonts, or current color-font formats.
 ## Ownership And Limits
 
 `Font.parse` and `Font.parseFace` remain zero-copy APIs: a `Font` borrows the
-caller's SFNT bytes. Compressed containers require newly reconstructed bytes,
-so `LoadedFont` owns both the decoded allocation and the `Font` borrowing it.
-Destroying `LoadedFont` deinitializes the parser before releasing those bytes.
+caller's SFNT bytes. Compressed containers and DFONT resources require newly
+reconstructed bytes, so `LoadedFont` owns both the decoded allocation and the
+`Font` borrowing it. Destroying `LoadedFont` deinitializes the parser before
+releasing those bytes.
 
 `decodeFontContainerAlloc` always returns owned bytes, including a copy for
 plain SFNT/TTC input. Its size limit applies to the decoded output and therefore
-bounds WOFF expansion. Convenience database loaders use a conservative 64 MiB
-default; callers loading a trusted larger collection can use the explicit
-`*WithLimit` APIs.
+bounds WOFF expansion and DFONT-to-SFNT/TTC reconstruction. Convenience
+database loaders use a conservative 64 MiB default; callers loading a trusted
+larger collection can use the explicit `*WithLimit` APIs.
 
 `FontDatabase` decodes containers before parsing and fallback discovery. It:
 
-- scans `.woff` and `.woff2` beside `.ttf`, `.otf`, `.ttc`, and `.otc`;
-- discovers every face in WOFF2 collections;
+- scans `.woff`, `.woff2`, and `.dfont` beside `.ttf`, `.otf`, `.ttc`, and
+  `.otc`;
+- discovers every face in WOFF2 and DFONT collections;
 - deduplicates decoded SFNT bytes with hash prefiltering plus exact comparison;
 - retains the original container hash and byte length in manifests, so a cache
   detects replacement of a WOFF source rather than only its decoded form.
 
 ## Validation
+
+The DFONT decoder validates disjoint resource data/map ranges, map-header
+identity, bounded type/reference/name lists, 24-bit data offsets, resource
+length prefixes, and every embedded SFNT table range. One resource is copied as
+a standalone SFNT; multiple resources are rebuilt as a TTC with absolute table
+offsets.
 
 The WOFF1 decoder enforces the format's structural `MUST` conditions: a
 strictly tag-sorted directory, printable tags, bounded and aligned payloads,
@@ -49,11 +59,12 @@ preserves physical table order so the SFNT-wide `head.checkSumAdjustment`
 remains meaningful. The normal `Font` parser then validates reconstructed table
 maps, checksums, and supported OpenType table grammars.
 
-Tests cover compressed and uncompressed WOFF1 tables, malformed ranges,
-physical-order reconstruction, decoded-size limits, ownership, database
-scanning/manifests, a fixed transformed-glyf WOFF2 fixture, and optional
-installed real fonts. Current real-font probes include MathJax WOFF1,
-Annapurna SIL WOFF1/WOFF2, and a variable General Sans WOFF2.
+Tests cover single/multi-face DFONT reconstruction, malformed resource maps,
+compressed and uncompressed WOFF1 tables, malformed ranges, physical-order
+reconstruction, decoded-size limits, ownership, database scanning/manifests, a
+fixed transformed-glyf WOFF2 fixture, and optional installed real fonts.
+Current real-font probes include HarfBuzz's retained `DFONT.dfont`, MathJax
+WOFF1, Annapurna SIL WOFF1/WOFF2, and a variable General Sans WOFF2.
 
 ## Performance Scope
 

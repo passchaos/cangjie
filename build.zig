@@ -1114,6 +1114,13 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
         .face_index = "1",
     },
+    .{
+        .font_hash = "DFONT",
+        .font_ext = "dfont",
+        .text = "\u{2026} \u{002e}",
+        .direction = "ltr",
+        .face_index = "0",
+    },
 };
 
 const retained_harfbuzz_text_parity_gates = [_]struct {

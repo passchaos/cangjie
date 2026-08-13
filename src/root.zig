@@ -7998,6 +7998,84 @@ test "FontDatabase loads and scans WOFF1 font sources" {
     );
 }
 
+test "FontDatabase scans every face from DFONT sources" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const first = try test_font.buildNamedTtfWithNames(
+        allocator,
+        "Database DFont One",
+        "Regular",
+        "Database DFont One Regular",
+    );
+    defer allocator.free(first);
+    const second = try test_font.buildNamedTtfWithNames(
+        allocator,
+        "Database DFont Two",
+        "Regular",
+        "Database DFont Two Regular",
+    );
+    defer allocator.free(second);
+    const dfont = try testing.font_container.buildDfont(
+        allocator,
+        &.{ first, second },
+    );
+    defer allocator.free(dfont);
+
+    var database = FontDatabase.init(allocator);
+    defer database.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        try database.addFontCollectionBytes(dfont),
+    );
+    try std.testing.expect(database.match(.{
+        .family = "Database DFont One",
+    }) != null);
+    try std.testing.expect(database.match(.{
+        .family = "Database DFont Two",
+    }) != null);
+
+    var tmp_dir = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "collection.dfont",
+        .data = dfont,
+    });
+    var scanned = FontDatabase.init(allocator);
+    defer scanned.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        try scanned.scanFontDir(
+            std.testing.io,
+            tmp_dir.dir,
+            .limited(dfont.len + 1),
+        ),
+    );
+}
+
+test "loads retained HarfBuzz DFONT fixture when installed" {
+    const path = "/home/passchaos/Work/harfbuzz/test/shape/data/in-house/fonts/DFONT.dfont";
+    const bytes = std.Io.Dir.readFileAlloc(
+        std.Io.Dir.cwd(),
+        std.testing.io,
+        path,
+        std.testing.allocator,
+        .limited(16 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied, error.PermissionDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer std.testing.allocator.free(bytes);
+
+    var loaded = try LoadedFont.loadFace(
+        std.testing.allocator,
+        bytes,
+        0,
+        16 * 1024 * 1024,
+    );
+    defer loaded.deinit();
+    try std.testing.expectEqual(@as(GlyphId, 6), try loaded.font.glyphIndex(0x2026));
+}
+
 test "loads real WOFF1 and WOFF2 fonts when fixtures are installed" {
     const Case = struct {
         path: []const u8,

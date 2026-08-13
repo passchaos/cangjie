@@ -902,6 +902,24 @@ pub const KernLookupForShaping = struct {
     }
 };
 
+pub const KerxLookupForShaping = struct {
+    font: *const Font,
+    kerx: TableRecord,
+
+    pub fn kerning(self: KerxLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, vertical: bool) FontError!i16 {
+        if (left >= self.font.glyph_count or right >= self.font.glyph_count) return error.InvalidGlyph;
+        return try kerx_mod.pairKerning(
+            self.font.data,
+            self.kerx.offset,
+            self.kerx.length,
+            self.font.glyph_count,
+            left,
+            right,
+            vertical,
+        );
+    }
+};
+
 pub const Font = struct {
     /// The font is a borrowed byte slice. Table records and cmap subtable
     /// descriptors below only point back into this slice, so the caller must
@@ -2448,6 +2466,12 @@ pub const Font = struct {
         return .{ .font = self, .kern = kern };
     }
 
+    pub fn kerxLookupForShaping(self: *const Font) FontError!?KerxLookupForShaping {
+        const kerx = self.kerx orelse return null;
+        try validateSfntTableChecksum(self.data, kerx);
+        return .{ .font = self, .kerx = kerx };
+    }
+
     /// Read validated metadata from the optional SFNT `kern` table.
     pub fn kernInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?KernInfo {
         const kern = self.kern orelse return null;
@@ -2847,6 +2871,10 @@ pub const Font = struct {
 
     pub fn hasGsubTableForShaping(self: *const Font) bool {
         return self.gsub != null;
+    }
+
+    pub fn hasKerxTableForShaping(self: *const Font) bool {
+        return self.kerx != null;
     }
 
     pub fn hasMorxTableForShaping(self: *const Font) bool {

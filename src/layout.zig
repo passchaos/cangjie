@@ -4442,15 +4442,25 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .profile_io = profile_io,
         .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
     };
-    if (buffer.lookup_selection_cache) |selection_cache| {
-        gpos_options.lookup_accelerators = try selection_cache.gposLookupAccelerators(font);
-        gpos_options.selected_lookups = try selection_cache.gposLookups(font, gpos_options, gdef_metadata.*);
-    }
-    if (buffer.gpos_table_proof_cache) |proof_cache| {
-        try proof_cache.prove(font);
-        try font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
-    } else {
-        try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
+    const apply_morx_substitution = font.hasMorxTableForShaping() and
+        (!lookup_options.writing_mode.isVertical() or !font.hasGsubTableForShaping());
+    // HarfBuzz prefers GPOS whenever GSUB and GPOS are both the active
+    // OpenType engines. If horizontal morx was selected, GSUB is deliberately
+    // excluded from that pair and kerx owns positioning instead.
+    const use_kerx_positioning = font.hasKerxTableForShaping() and
+        (apply_morx_substitution or
+            !(font.hasGsubTableForShaping() and font.hasGposTableForShaping()));
+    if (!use_kerx_positioning) {
+        if (buffer.lookup_selection_cache) |selection_cache| {
+            gpos_options.lookup_accelerators = try selection_cache.gposLookupAccelerators(font);
+            gpos_options.selected_lookups = try selection_cache.gposLookups(font, gpos_options, gdef_metadata.*);
+        }
+        if (buffer.gpos_table_proof_cache) |proof_cache| {
+            try proof_cache.prove(font);
+            try font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
+        } else {
+            try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
+        }
     }
     if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 
@@ -4462,20 +4472,36 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // GPOS adjustments and legacy kern are accumulated in font units, then
     // scaled into user-space coordinates for the final GlyphPosition stream.
     const has_gdef_glyph_classes = gdef_metadata.glyph_classes != null;
-    const has_gpos_positioning = font.hasGposTableForShaping();
+    const has_gpos_positioning = font.hasGposTableForShaping() and !use_kerx_positioning;
     const fallback_mark_enabled = fallback_mark.enabled(
         early_zero_mark_shape,
         has_gpos_positioning,
         has_gpos_attachments,
-        false,
+        use_kerx_positioning,
         lookup_options.writing_mode.isVertical(),
     );
-    var previous_glyph: ?GlyphId = null;
+    var previous_kern_glyph: ?GlyphId = null;
+    var previous_kern_output_index: ?usize = null;
     var fallback_mark_base: ?fallback_mark.Base = null;
     var adjustment_cursor: usize = 0;
-    const kern_lookup = if (!lookup_options.writing_mode.isVertical() and
+    const kerning_enabled = shapingFeatureEnabled(
+        unicode.tag("kern"),
+        lookup_options.features,
+        !lookup_options.writing_mode.isVertical(),
+    );
+    // HarfBuzz chooses kerx ahead of both GPOS and legacy kern unless GSUB and
+    // GPOS are the active OpenType engines. This format-0 path intentionally
+    // preserves that table-level decision, so a present kerx table suppresses
+    // duplicate legacy `kern` application even when no pair matches this run.
+    const kerx_lookup = if (kerning_enabled and use_kerx_positioning)
+        try font.kerxLookupForShaping()
+    else
+        null;
+    const kern_lookup = if (kerx_lookup == null and
+        !font.hasKerxTableForShaping() and
+        !lookup_options.writing_mode.isVertical() and
         shouldApplyLegacyKernFallback(lookup_options.script_tag) and
-        shapingFeatureEnabled(unicode.tag("kern"), lookup_options.features, true))
+        kerning_enabled)
         try font.kernLookupForShaping()
     else
         null;
@@ -4525,18 +4551,38 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
         var kern_x_advance: f32 = 0;
         var kern_x_offset: f32 = 0;
-        if (kern_lookup) |lookup| {
-            if (previous_glyph) |previous| {
+        const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
+        const kerx_skips_glyph = kerx_lookup != null and kerxMachineSkipsGlyph(
+            glyph_class,
+            has_gdef_glyph_classes,
+            source_codepoint,
+            was_substituted,
+        );
+        const active_kern = if (kerx_lookup) |lookup|
+            if (!kerx_skips_glyph) if (previous_kern_glyph) |previous|
+                try lookup.kerning(previous, glyph_id, lookup_options.writing_mode.isVertical())
+            else
+                0
+            else
+                0
+        else if (kern_lookup) |lookup|
+            if (previous_kern_glyph) |previous|
+                try lookup.kerning(previous, glyph_id)
+            else
+                0
+        else
+            0;
+        if (!lookup_options.writing_mode.isVertical()) {
+            if (previous_kern_glyph != null) {
                 const previous_adjustment = findAdjustmentSorted(gpos_adjustments.items, index - 1, &adjustment_cursor);
-                if (!previous_adjustment.pair_positioned) {
-                    const kern = try lookup.kerning(previous, glyph_id);
-                    if (kern != 0 and buffer.glyphs.items.len > 0) {
-                        const kern_1 = kern >> 1;
-                        const kern_2 = kern - kern_1;
-                        buffer.glyphs.items[buffer.glyphs.items.len - 1].x_advance += @as(f32, @floatFromInt(kern_1)) * scale;
+                if (kerx_lookup != null or !previous_adjustment.pair_positioned) {
+                    if (active_kern != 0) if (previous_kern_output_index) |previous_output_index| {
+                        const kern_1 = active_kern >> 1;
+                        const kern_2 = active_kern - kern_1;
+                        buffer.glyphs.items[previous_output_index].x_advance += @as(f32, @floatFromInt(kern_1)) * scale;
                         kern_x_advance = @as(f32, @floatFromInt(kern_2)) * scale;
                         kern_x_offset = kern_x_advance;
-                    }
+                    };
                 }
             }
         }
@@ -4549,7 +4595,6 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
         else
             @as(f32, @floatFromInt(adjustment.x_advance));
-        const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
         const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
         const mark_attachment = adjustment.attachment_type == .mark;
         const synthetic_base = index < ligature_components.infos.items.len and
@@ -4571,7 +4616,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         // still available to every contextual lookup, then remap attachment
         // links below for the compacted output stream.
         if (skip_default_ignorable) {
-            previous_glyph = glyph_id;
+            if (kerx_lookup == null) previous_kern_glyph = glyph_id;
             continue;
         }
         const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
@@ -4693,6 +4738,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .y_offset = output_y_offset,
             .vertical = lookup_options.writing_mode.isVertical(),
         });
+        if (lookup_options.writing_mode.isVertical() and active_kern != 0) if (previous_kern_output_index) |previous_output_index| {
+            const kern_1 = active_kern >> 1;
+            const kern_2 = active_kern - kern_1;
+            buffer.glyphs.items[previous_output_index].y_advance += @as(f32, @floatFromInt(kern_1)) * scale;
+            buffer.glyphs.items[buffer.glyphs.items.len - 1].y_advance += @as(f32, @floatFromInt(kern_2)) * scale;
+            buffer.glyphs.items[buffer.glyphs.items.len - 1].y_offset += @as(f32, @floatFromInt(kern_2)) * scale;
+        };
         try appendStchActionForOutput(
             buffer.allocator,
             stch_actions,
@@ -4705,7 +4757,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         if (fallback_mark_enabled and !hide_default_ignorable and !visible_not_found_variation_selector and !unicode.isNonspacingMarkCodepoint(source_codepoint)) {
             fallback_mark_base = fallback_mark.baseForGlyph(font, glyph_id, source_span.start, output_y_offset, horizontal_advance, scale, shapingDirectionForGpos(lookup_options) == .ltr) catch null;
         }
-        previous_glyph = glyph_id;
+        if (!kerx_skips_glyph) {
+            previous_kern_glyph = glyph_id;
+            previous_kern_output_index = buffer.glyphs.items.len - 1;
+        }
     }
     if (shape_profile) |p| {
         p.position_loop_ns += shapeProfileElapsed(position_loop_start, profile_io);
@@ -6120,6 +6175,30 @@ fn shapingDirectionForGpos(options: LookupOptions) TextDirection {
         return textDirectionFromBidiClass(native);
     }
     return options.direction;
+}
+
+fn kerxMachineSkipsGlyph(glyph_class: GlyphClass, has_gdef_glyph_classes: bool, source_codepoint: u21, was_substituted: bool) bool {
+    if (glyph_class == .mark) return true;
+    // HarfBuzz synthesizes a mark class from Unicode Mn only when the font has
+    // no GDEF GlyphClassDef. Default-ignorables stay base-like during that
+    // synthesis but remain transparent to positioning unless GSUB consumed
+    // and replaced them.
+    if (!has_gdef_glyph_classes and
+        unicode.isNonspacingMarkCodepoint(source_codepoint) and
+        !unicode.isDefaultIgnorableForShaping(source_codepoint))
+    {
+        return true;
+    }
+    return unicode.isDefaultIgnorableForShaping(source_codepoint) and !was_substituted;
+}
+
+test "kerx machine skips GDEF marks and untouched Unicode controls" {
+    try std.testing.expect(kerxMachineSkipsGlyph(.mark, true, 'A', false));
+    try std.testing.expect(kerxMachineSkipsGlyph(.unclassified, false, 0x0301, false));
+    try std.testing.expect(!kerxMachineSkipsGlyph(.unclassified, true, 0x0301, false));
+    try std.testing.expect(kerxMachineSkipsGlyph(.unclassified, false, 0x200d, false));
+    try std.testing.expect(!kerxMachineSkipsGlyph(.unclassified, false, 0x200d, true));
+    try std.testing.expect(!kerxMachineSkipsGlyph(.base, true, 'A', false));
 }
 
 const MarkAdvanceZeroing = struct {

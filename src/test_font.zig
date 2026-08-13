@@ -49,6 +49,10 @@ pub fn buildKerxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxTtfTables(allocator));
 }
 
+pub fn buildKerxGsubGposTtf(allocator: std.mem.Allocator, gpos_feature_tag: *const [4:0]u8) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxGsubGposTtfTables(allocator, gpos_feature_tag));
+}
+
 pub fn buildMorxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try morxTtfTables(allocator));
 }
@@ -916,6 +920,23 @@ fn kerxTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxGsubGposTtfTables(allocator: std.mem.Allocator, gpos_feature_tag: *const [4:0]u8) ![]Table {
+    const tables = try allocator.alloc(Table, 11);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "GPOS", .data = try gposPairFeatureTable(allocator, gpos_feature_tag) };
+    tables[1] = .{ .tag = "GSUB", .data = try inertLayoutTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "kerx", .data = try kerxTable(allocator) };
+    tables[8] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[10] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -3351,7 +3372,7 @@ fn kerxTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 36, 0);
     writeU16(bytes, 38, 0);
     writeI16(bytes, 40, -10);
-    writeU16(bytes, 42, 0);
+    writeU16(bytes, 42, 1);
     writeU16(bytes, 44, 1);
     writeI16(bytes, 46, -30);
     return bytes;
@@ -5469,6 +5490,60 @@ fn gsubTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 46, 2);
     writeU16(bytes, 48, 2);
     writeU16(bytes, 50, 1);
+    return bytes;
+}
+
+fn inertLayoutTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 16);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 12);
+    writeU16(bytes, 8, 14);
+    // Non-null empty top-level lists make this a valid OpenType Layout table
+    // while guaranteeing that it cannot mutate the test glyph stream.
+    return bytes;
+}
+
+fn gposPairFeatureTable(allocator: std.mem.Allocator, feature_tag: *const [4:0]u8) ![]u8 {
+    const bytes = try allocator.alloc(u8, 80);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 30);
+    writeU16(bytes, 8, 44);
+
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 1);
+    writeU16(bytes, 28, 0);
+
+    writeU16(bytes, 30, 1);
+    @memcpy(bytes[32..36], feature_tag);
+    writeU16(bytes, 36, 8);
+    writeU16(bytes, 40, 1);
+    writeU16(bytes, 42, 0);
+
+    writeU16(bytes, 44, 1);
+    writeU16(bytes, 46, 4);
+    writeU16(bytes, 48, 2);
+    writeU16(bytes, 52, 1);
+    writeU16(bytes, 54, 8);
+
+    writeU16(bytes, 56, 1);
+    writeU16(bytes, 58, 18);
+    writeU16(bytes, 60, 0x0004);
+    writeU16(bytes, 64, 1);
+    writeU16(bytes, 66, 12);
+    writeU16(bytes, 68, 1);
+    writeU16(bytes, 70, 1);
+    writeI16(bytes, 72, -50);
+    writeU16(bytes, 74, 1);
+    writeU16(bytes, 76, 1);
+    writeU16(bytes, 78, 1);
     return bytes;
 }
 

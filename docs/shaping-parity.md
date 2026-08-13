@@ -1796,6 +1796,18 @@ shaping-performance superiority.
   executor remains open because this font does not provide an output that can
   distinguish the two engines.
 
+  AAT `kerx` format 0 now participates in actual shaping rather than metadata
+  inspection only. The retained synthetic font carries `(glyph 1, glyph 1) =
+  -30` in `kerx` and `-100` for the same pair in legacy `kern`; at 1000 units
+  `"AA"` produces advances `785,785` and second-glyph offset `-15`, matching
+  both HarfBuzz and HarfRust while proving that `kerx` suppresses legacy
+  double-kerning. `kern=0` restores `800,800`. Selection also follows
+  HarfBuzz's table plan: when GSUB and GPOS are both active, GPOS owns
+  positioning even if the selected LangSys's applicable feature is not named
+  `kern`; otherwise `kerx` takes precedence over legacy `kern`.
+  Formats 1, 2, 4, and 6, cross-stream positioning, variation tuples, and
+  `ankr`-backed attachment remain open.
+
   The `shape-bench` now has a `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process
   HarfBuzz extents (`0,2179,2963,-2789` and `0,1898,2555,-2405`). The HarfRust

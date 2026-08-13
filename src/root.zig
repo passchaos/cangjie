@@ -1419,7 +1419,7 @@ test "AAT kerx format 0 pairs are exposed when present" {
     try std.testing.expectEqual(@as(u32, 0), info.subtables[0].tuple_count);
     try std.testing.expectEqual(@as(usize, 2), info.subtables[0].pairs.len);
     try std.testing.expectEqual(KerxPairInfo{ .left = 0, .right = 0, .value = -10 }, info.subtables[0].pairs[0]);
-    try std.testing.expectEqual(KerxPairInfo{ .left = 0, .right = 1, .value = -30 }, info.subtables[0].pairs[1]);
+    try std.testing.expectEqual(KerxPairInfo{ .left = 1, .right = 1, .value = -30 }, info.subtables[0].pairs[1]);
 
     const missing_bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(missing_bytes);
@@ -9083,6 +9083,71 @@ test "prefers GPOS pair positioning over legacy kern for same pair" {
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 30.0), run.width(), 0.001);
+}
+
+test "AAT kerx format 0 positioning takes precedence over legacy kern" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildKerxTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 1000);
+
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    // kerx contributes -30 for (glyph 1, glyph 1). The coexisting legacy kern
+    // contributes -100 for the same pair and must not run after kerx.
+    try std.testing.expectApproxEqAbs(@as(f32, 1570), run.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 785), run.glyphs[0].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 785), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -15), run.glyphs[1].x_offset, 0.001);
+
+    layout_buffer.clear();
+    const disabled = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "AA", 1000, .{
+        .features = &.{.{ .tag = @import("unicode.zig").tag("kern"), .enabled = false }},
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 1600), disabled.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), disabled.glyphs[1].x_offset, 0.001);
+}
+
+test "AAT kerx selection yields to GPOS only with GSUB" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const with_kern_bytes = try test_font.buildKerxGsubGposTtf(allocator, "kern");
+    defer allocator.free(with_kern_bytes);
+    var with_kern = try Font.parse(allocator, with_kern_bytes);
+    defer with_kern.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const gpos_run = try TextShaper.shapeUtf8(&with_kern, &layout_buffer, "AA", 1000);
+    // The active GSUB+GPOS-kern plan owns positioning, so its -50 PairPos
+    // applies and both AAT kerx (-30) and legacy kern (-100) stay suppressed.
+    try std.testing.expectApproxEqAbs(@as(f32, 1550), gpos_run.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 750), gpos_run.glyphs[0].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 800), gpos_run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), gpos_run.glyphs[1].x_offset, 0.001);
+
+    const without_kern_bytes = try test_font.buildKerxGsubGposTtf(allocator, "mark");
+    defer allocator.free(without_kern_bytes);
+    var without_kern = try Font.parse(allocator, without_kern_bytes);
+    defer without_kern.deinit();
+
+    layout_buffer.clear();
+    const gpos_without_kern_run = try TextShaper.shapeUtf8(&without_kern, &layout_buffer, "AA", 1000);
+    // HarfBuzz chooses the GPOS engine at table-plan level whenever GSUB and
+    // GPOS are both active. The selected feature tag controls which lookups
+    // GPOS runs, but does not switch the engine back to kerx.
+    try std.testing.expectApproxEqAbs(@as(f32, 1550), gpos_without_kern_run.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 750), gpos_without_kern_run.glyphs[0].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 800), gpos_without_kern_run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), gpos_without_kern_run.glyphs[1].x_offset, 0.001);
 }
 
 test "applies GPOS single positioning offsets during shaping" {

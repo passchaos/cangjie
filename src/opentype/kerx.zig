@@ -1,6 +1,8 @@
 const std = @import("std");
 const bin = @import("../binary.zig");
 
+const GlyphId = u16;
+
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error || error{EndOfStream};
 
 pub const Pair = struct {
@@ -92,6 +94,119 @@ pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, lengt
 pub fn free(allocator: std.mem.Allocator, value: Info) void {
     freeSubtables(allocator, value.subtables);
     allocator.free(value.subtables);
+}
+
+/// Sum applicable format-0 `kerx` values for one adjacent glyph pair.
+///
+/// This is the hot-path counterpart to `info`: it walks table headers without
+/// allocating pair arrays, skips variation/cross-stream or wrong-axis
+/// subtables, and binary-searches the validated sorted pair records.
+pub fn pairKerning(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyph_count: usize,
+    left: GlyphId,
+    right: GlyphId,
+    vertical: bool,
+) Error!i16 {
+    if (left >= glyph_count or right >= glyph_count) return error.BadSfnt;
+    const h = try header(data, offset, length);
+    var subtable_offset: usize = 8;
+    var total: i32 = 0;
+    for (0..h.table_count) |_| {
+        const subtable = try subtableHeader(data, offset, length, subtable_offset);
+        try validateSubtable(data, offset, length, subtable, glyph_count);
+        const coverage = subtable.coverage;
+        const subtable_vertical = (coverage & 0x80000000) != 0;
+        const cross_stream = (coverage & 0x40000000) != 0;
+        const variation = (coverage & 0x20000000) != 0;
+        if (subtable.format == 0 and
+            subtable_vertical == vertical and
+            !cross_stream and
+            !variation)
+        {
+            total += try format0PairKerning(data, offset, subtable, left, right);
+        }
+        subtable_offset += subtable.length;
+    }
+    if (subtable_offset != length) return error.BadSfnt;
+    return @intCast(std.math.clamp(total, std.math.minInt(i16), std.math.maxInt(i16)));
+}
+
+test "format 0 pair lookup sums applicable subtables and clamps totals" {
+    var bytes = [_]u8{0} ** 88;
+    writeU16Test(&bytes, 0, 2);
+    writeU32Test(&bytes, 4, 2);
+    writeFormat0SubtableTest(&bytes, 8, 0, 1, 2, 20000);
+    writeFormat0SubtableTest(&bytes, 48, 0, 1, 2, 20000);
+
+    try validate(&bytes, 0, bytes.len, 3);
+    try std.testing.expectEqual(
+        std.math.maxInt(i16),
+        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, false),
+    );
+    try std.testing.expectEqual(
+        @as(i16, 0),
+        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, true),
+    );
+    try std.testing.expectEqual(
+        @as(i16, 0),
+        try pairKerning(&bytes, 0, bytes.len, 3, 2, 1, false),
+    );
+
+    // Cross-stream and variation subtables are valid metadata but do not
+    // contribute to this scalar same-stream format-0 implementation.
+    writeU32Test(&bytes, 12, 0x40000000);
+    writeU32Test(&bytes, 52, 0x20000000);
+    try std.testing.expectEqual(
+        @as(i16, 0),
+        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, false),
+    );
+}
+
+fn writeFormat0SubtableTest(bytes: []u8, offset: usize, coverage: u32, left: GlyphId, right: GlyphId, value: i16) void {
+    writeU32Test(bytes, offset, 40);
+    writeU32Test(bytes, offset + 4, coverage);
+    writeU32Test(bytes, offset + 12, 1);
+    writeU32Test(bytes, offset + 16, 6);
+    writeU32Test(bytes, offset + 24, 0);
+    writeU16Test(bytes, offset + 28, left);
+    writeU16Test(bytes, offset + 30, right);
+    std.mem.writeInt(i16, bytes[offset + 32 ..][0..2], value, .big);
+}
+
+fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
+    std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
+    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
+}
+
+fn format0PairKerning(data: []const u8, table_offset: usize, subtable: SubtableHeader, left: GlyphId, right: GlyphId) Error!i16 {
+    const start = table_offset + subtable.offset;
+    const pair_count: usize = @intCast(try bin.readU32At(data, start + 12));
+    const target = (@as(u32, left) << 16) | right;
+    var lo: usize = 0;
+    var hi: usize = pair_count;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const pair_offset = start + 28 + mid * 6;
+        const pair_left = try bin.readU16At(data, pair_offset);
+        const pair_right = try bin.readU16At(data, pair_offset + 2);
+        const pair_key = (@as(u32, pair_left) << 16) | pair_right;
+        if (target < pair_key) {
+            hi = mid;
+        } else if (target > pair_key) {
+            lo = mid + 1;
+        } else {
+            // tupleCount zero is the non-variable scalar used directly by the
+            // format-0 machine. Variation subtables were filtered above.
+            return try bin.readI16At(data, pair_offset + 4);
+        }
+    }
+    return 0;
 }
 
 fn freeSubtables(allocator: std.mem.Allocator, subtables: []Subtable) void {

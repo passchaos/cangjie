@@ -61,6 +61,10 @@ pub fn buildKerxFormat4Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat4TtfTables(allocator));
 }
 
+pub fn buildKerxFormat4AnkrTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxFormat4AnkrTtfTables(allocator));
+}
+
 pub fn buildKerxFormat6Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat6TtfTables(allocator));
 }
@@ -981,6 +985,22 @@ fn kerxFormat4TtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxFormat4AnkrTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "ankr", .data = try ankrTable(allocator) };
+    tables[1] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "kerx", .data = try kerxFormat4AnkrTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -3537,6 +3557,17 @@ fn kerxFormat4Table(allocator: std.mem.Allocator) ![]u8 {
     writeI16(bytes, 8 + 12 + 90, 20);
     writeI16(bytes, 8 + 12 + 92, 40);
     writeI16(bytes, 8 + 12 + 94, -5);
+    return bytes;
+}
+
+fn kerxFormat4AnkrTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try kerxFormat4Table(allocator);
+    // Switch action type from explicit coordinates to `ankr` anchor indices;
+    // glyph 1 has anchors 0=(100,-50), so selecting 0 for both points yields a
+    // zero local delta while still exercising attachment propagation.
+    writeU32(bytes, 36, 0x4000_0000 | 88);
+    writeU16(bytes, 8 + 12 + 88, 0);
+    writeU16(bytes, 8 + 12 + 90, 0);
     return bytes;
 }
 

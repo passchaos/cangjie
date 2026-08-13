@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const GlyphId = @import("glyph.zig").GlyphId;
+const ankr = @import("opentype/ankr.zig");
 const state_table = @import("aat_morx/state_table.zig");
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error || error{EndOfStream};
@@ -11,6 +12,11 @@ pub const Adjustment = struct {
     y_advance: i32 = 0,
     y_offset: i32 = 0,
     attachment_parent_index: ?usize = null,
+};
+
+pub const AnkrTable = struct {
+    offset: usize,
+    length: usize,
 };
 
 const Direction = enum { forward, backward };
@@ -37,6 +43,7 @@ pub fn collectAdjustments(
     allocator: std.mem.Allocator,
     vertical: bool,
     direction_backward: bool,
+    ankr_table: ?AnkrTable,
 ) Error!void {
     if (table_offset > data.len or table_length > data.len - table_offset or table_length < 8) return error.BadSfnt;
     if (try readU16(data, table_offset) < 2 or try readU16(data, table_offset) > 4) return error.BadSfnt;
@@ -88,6 +95,7 @@ pub fn collectAdjustments(
                 glyphs,
                 out.items,
                 if (((coverage & 0x10000000) != 0) != direction_backward) .backward else .forward,
+                ankr_table,
                 &operations_left,
             );
         }
@@ -104,6 +112,7 @@ fn applyFormat4(
     glyphs: []const GlyphId,
     adjustments: []Adjustment,
     direction: Direction,
+    ankr_table: ?AnkrTable,
     operations_left: *usize,
 ) Error!void {
     if (subtable_length < 32 or glyphs.len != adjustments.len) return error.BadSfnt;
@@ -187,9 +196,22 @@ fn applyFormat4(
                         glyph_index,
                         adjustments,
                     ),
-                    // Control-point and `ankr`-index actions need font outline
-                    // or anchor callbacks and remain deliberately unsupported.
-                    0, 1 => {},
+                    1 => try applyAnkrAttachment(
+                        data,
+                        machine_start,
+                        machine_length,
+                        action_offset,
+                        current_entry.payload,
+                        mark,
+                        glyph_index,
+                        glyphs,
+                        glyph_count,
+                        adjustments,
+                        ankr_table orelse return error.BadSfnt,
+                    ),
+                    // Control-point actions need outline callbacks and remain
+                    // deliberately unsupported.
+                    0 => {},
                     else => return error.BadSfnt,
                 }
             }
@@ -209,6 +231,45 @@ fn applyFormat4(
             cursor += 1;
         }
     }
+}
+
+fn applyAnkrAttachment(
+    data: []const u8,
+    machine_start: usize,
+    machine_length: usize,
+    action_offset: usize,
+    action_index: u16,
+    mark_index: usize,
+    current_index: usize,
+    glyphs: []const GlyphId,
+    glyph_count: usize,
+    adjustments: []Adjustment,
+    ankr_table: AnkrTable,
+) Error!void {
+    const anchor_index = std.math.mul(usize, action_index, 4) catch return error.BadSfnt;
+    const relative = std.math.add(usize, action_offset, anchor_index) catch return error.BadSfnt;
+    if (relative > machine_length or machine_length - relative < 4) return error.BadSfnt;
+    const mark_anchor_index: usize = try readU16(data, machine_start + relative);
+    const current_anchor_index: usize = try readU16(data, machine_start + relative + 2);
+    const mark_anchor = try ankr.anchor(
+        data,
+        ankr_table.offset,
+        ankr_table.length,
+        glyph_count,
+        glyphs[mark_index],
+        mark_anchor_index,
+    );
+    const current_anchor = try ankr.anchor(
+        data,
+        ankr_table.offset,
+        ankr_table.length,
+        glyph_count,
+        glyphs[current_index],
+        current_anchor_index,
+    );
+    adjustments[current_index].x_offset = @as(i32, mark_anchor.x) - current_anchor.x;
+    adjustments[current_index].y_offset = @as(i32, mark_anchor.y) - current_anchor.y;
+    adjustments[current_index].attachment_parent_index = mark_index;
 }
 
 fn applyCoordinateAttachment(
@@ -399,6 +460,7 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
         std.testing.allocator,
         false,
         false,
+        null,
     );
 
     try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
@@ -418,6 +480,7 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
         std.testing.allocator,
         false,
         false,
+        null,
     );
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);
@@ -441,6 +504,7 @@ test "format 4 coordinate action attaches current glyph to marked glyph" {
         std.testing.allocator,
         false,
         false,
+        null,
     );
 
     try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);

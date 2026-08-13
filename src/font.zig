@@ -939,6 +939,7 @@ pub const KerxLookupForShaping = struct {
             allocator,
             vertical,
             direction_backward,
+            if (self.font.ankr) |table| .{ .offset = table.offset, .length = table.length } else null,
         );
     }
 
@@ -947,6 +948,20 @@ pub const KerxLookupForShaping = struct {
             self.font.data,
             self.kerx.offset,
             self.kerx.length,
+        );
+    }
+
+    pub fn anchorForShaping(self: KerxLookupForShaping, glyph_id: glyph_mod.GlyphId, anchor_index: usize) FontError!ankr_mod.Anchor {
+        if (glyph_id >= self.font.glyph_count) return error.InvalidGlyph;
+        const ankr = self.font.ankr orelse return error.BadSfnt;
+        try validateSfntTableChecksum(self.font.data, ankr);
+        return try ankr_mod.anchor(
+            self.font.data,
+            ankr.offset,
+            ankr.length,
+            self.font.glyph_count,
+            glyph_id,
+            anchor_index,
         );
     }
 };

@@ -64,6 +64,90 @@ pub fn free(allocator: std.mem.Allocator, value: Info) void {
     allocator.free(value.glyphs);
 }
 
+/// Return one validated anchor without materializing the table's metadata.
+pub fn anchor(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyph_count: usize,
+    glyph_id: u16,
+    anchor_index: usize,
+) Error!Anchor {
+    if (glyph_id >= glyph_count) return error.BadSfnt;
+    const h = try header(data, offset, length);
+    const lookup = try lookupInfo(data, offset, length, h.lookup_offset, glyph_count);
+    if (h.glyph_data_offset < lookup.end_offset or h.glyph_data_offset > length) return error.BadSfnt;
+    const value_offset = try lookupValue(data, offset, length, lookup, glyph_id, glyph_count);
+    try validateGlyphAnchors(data, offset, length, h.glyph_data_offset, value_offset);
+    const entry = offset + h.glyph_data_offset + value_offset;
+    const count: usize = @intCast(try bin.readU32At(data, entry));
+    if (anchor_index >= count) return error.BadSfnt;
+    const point = entry + 4 + anchor_index * 4;
+    return .{
+        .x = try bin.readI16At(data, point),
+        .y = try bin.readI16At(data, point + 2),
+    };
+}
+
+fn lookupValue(data: []const u8, table_offset: usize, table_length: usize, lookup: LookupInfo, glyph: u16, glyph_count: usize) Error!usize {
+    _ = glyph_count;
+    const start = table_offset + lookup.offset;
+    const value: usize = switch (lookup.format) {
+        0 => @intCast(try bin.readU16At(data, start + 2 + @as(usize, glyph) * 2)),
+        2 => try segmentLookupValue(data, table_offset, table_length, lookup.offset, glyph),
+        4 => try segmentArrayLookupValue(data, table_offset, table_length, lookup.offset, glyph),
+        6 => try singleLookupValue(data, table_offset, table_length, lookup.offset, glyph),
+        8 => trimmed: {
+            const first = try bin.readU16At(data, start + 2);
+            const count = try bin.readU16At(data, start + 4);
+            if (glyph < first or glyph >= first + count) return error.BadSfnt;
+            break :trimmed @intCast(try bin.readU16At(data, start + 6 + @as(usize, glyph - first) * 2));
+        },
+        else => return error.BadSfnt,
+    };
+    return value;
+}
+
+fn segmentLookupValue(data: []const u8, table_offset: usize, table_length: usize, lookup_offset: usize, glyph: u16) Error!usize {
+    const h = try searchHeader(data, table_offset, table_length, lookup_offset, 6);
+    const count = try activeUnitCount(data, table_offset, h, 2);
+    for (0..count) |index| {
+        const entry = table_offset + h.entries_offset + index * h.unit_size;
+        const last = try bin.readU16At(data, entry);
+        const first = try bin.readU16At(data, entry + 2);
+        if (glyph >= first and glyph <= last) return @intCast(try bin.readU16At(data, entry + 4));
+    }
+    return error.BadSfnt;
+}
+
+fn segmentArrayLookupValue(data: []const u8, table_offset: usize, table_length: usize, lookup_offset: usize, glyph: u16) Error!usize {
+    const h = try searchHeader(data, table_offset, table_length, lookup_offset, 6);
+    const count = try activeUnitCount(data, table_offset, h, 2);
+    for (0..count) |index| {
+        const entry = table_offset + h.entries_offset + index * h.unit_size;
+        const last = try bin.readU16At(data, entry);
+        const first = try bin.readU16At(data, entry + 2);
+        if (glyph < first or glyph > last) continue;
+        const values_offset: usize = @intCast(try bin.readU16At(data, entry + 4));
+        return @intCast(try bin.readU16At(data, table_offset + lookup_offset + values_offset + @as(usize, glyph - first) * 2));
+    }
+    return error.BadSfnt;
+}
+
+fn singleLookupValue(data: []const u8, table_offset: usize, table_length: usize, lookup_offset: usize, glyph: u16) Error!usize {
+    const h = try searchHeader(data, table_offset, table_length, lookup_offset, 4);
+    const count = try activeUnitCount(data, table_offset, h, 1);
+    var lo: usize = 0;
+    var hi = count;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const entry = table_offset + h.entries_offset + mid * h.unit_size;
+        const entry_glyph = try bin.readU16At(data, entry);
+        if (glyph < entry_glyph) hi = mid else if (glyph > entry_glyph) lo = mid + 1 else return @intCast(try bin.readU16At(data, entry + 2));
+    }
+    return error.BadSfnt;
+}
+
 fn header(data: []const u8, offset: usize, length: usize) Error!Header {
     if (offset > data.len or length > data.len - offset or length < 12) return error.BadSfnt;
     const version = try bin.readU16At(data, offset);
@@ -311,9 +395,9 @@ fn appendGlyphAnchors(allocator: std.mem.Allocator, out: *std.ArrayList(GlyphAnc
     const count: usize = @intCast(try bin.readU32At(data, entry));
     const anchors = try allocator.alloc(Anchor, count);
     errdefer allocator.free(anchors);
-    for (anchors, 0..) |*anchor, index| {
+    for (anchors, 0..) |*out_anchor, index| {
         const anchor_offset = entry + 4 + index * 4;
-        anchor.* = .{ .x = try bin.readI16At(data, anchor_offset), .y = try bin.readI16At(data, anchor_offset + 2) };
+        out_anchor.* = .{ .x = try bin.readI16At(data, anchor_offset), .y = try bin.readI16At(data, anchor_offset + 2) };
     }
     try out.append(allocator, .{ .glyph_id = glyph_id, .data_offset = value_offset, .anchors = anchors });
 }
@@ -347,6 +431,9 @@ test "ankr format 6 lookup exposes glyph anchors" {
     try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, parsed.glyphs[0].anchors[0]);
     try std.testing.expectEqual(@as(u16, 2), parsed.glyphs[1].glyph_id);
     try std.testing.expectEqual(Anchor{ .x = 100, .y = -50 }, parsed.glyphs[1].anchors[0]);
+    try std.testing.expectEqual(Anchor{ .x = -5, .y = 7 }, try anchor(&bytes, 0, bytes.len, 3, 1, 1));
+    try std.testing.expectEqual(Anchor{ .x = 100, .y = -50 }, try anchor(&bytes, 0, bytes.len, 3, 2, 0));
+    try std.testing.expectError(error.BadSfnt, anchor(&bytes, 0, bytes.len, 3, 2, 1));
 }
 
 test "ankr rejects out-of-range glyph data offsets" {

@@ -1805,7 +1805,10 @@ shaping-performance superiority.
   sentinel-terminated action list, producing advances `770,800` and first
   offset `-30`. Format 4's explicit-coordinate fixture marks the first glyph,
   attaches the second, and produces offsets `-830,25` after attachment
-  propagation. All five match HarfBuzz and HarfRust and carry a conflicting
+  propagation. A second format-4 fixture resolves both attachment points
+  through `ankr` without allocating its public metadata representation and
+  produces offset `-800,0`. All retained paths match HarfBuzz and HarfRust and
+  carry a conflicting
   legacy `kern` pair to prove that `kerx` suppresses double-kerning. `kern=0`
   restores `800,800` for kerning-requested formats; format 4 remains active
   because attachment positioning is not controlled by the `kern` feature.
@@ -1816,8 +1819,8 @@ shaping-performance superiority.
   HarfBuzz's table plan: when GSUB and GPOS are both active, GPOS owns
   positioning even if the selected LangSys's applicable feature is not named
   `kern`; otherwise `kerx` takes precedence over legacy `kern`.
-  Format 4 control-point and `ankr`-indexed actions, cross-stream positioning,
-  and variation tuples remain open.
+  Format 4 outline-control-point actions, cross-stream positioning, and
+  variation tuples remain open.
 
   The `shape-bench` now has a `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process

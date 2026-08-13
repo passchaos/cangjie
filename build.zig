@@ -2374,6 +2374,24 @@ pub fn build(b: *std.Build) void {
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_4_cmd.step);
 
+        const kerx_format_4_ankr_cmd = b.addRunArtifact(shape_bench_exe);
+        kerx_format_4_ankr_cmd.addArgs(&.{
+            "--builtin",            "kerx-format-4-ankr",
+            "--text",               "AA",
+            "--size",               "1000",
+            "--glyph-summary",      "--iterations",
+            "1",                    "--warmup",
+            "0",                    "--samples",
+            "1",                    "--expect-glyph-ids",
+            "1,1",                  "--expect-clusters",
+            "0,1",                  "--expect-x-advances",
+            "800,800",              "--expect-y-advances",
+            "0,0",                  "--expect-x-offsets",
+            "0,-800",               "--expect-y-offsets",
+            "0,0",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&kerx_format_4_ankr_cmd.step);
+
         const kerx_format_6_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_6_cmd.addArgs(&.{
             "--builtin",            "kerx-format-6",

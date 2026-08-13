@@ -9178,6 +9178,27 @@ test "AAT kerx format 4 coordinate attachment offsets the current glyph" {
     try std.testing.expectApproxEqAbs(@as(f32, 25), run.glyphs[1].y_offset, 0.001);
 }
 
+test "AAT kerx format 4 resolves ankr-indexed attachment points" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildKerxFormat4AnkrTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 1000);
+
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 1600), run.width(), 0.001);
+    // Both glyphs select anchor 0=(100,-50), so the local anchor delta is zero;
+    // propagation still pulls the attached glyph back by its parent advance.
+    try std.testing.expectApproxEqAbs(@as(f32, -800), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[1].y_offset, 0.001);
+}
+
 test "AAT kerx format 6 sparse positioning takes precedence over legacy kern" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

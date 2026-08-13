@@ -1432,35 +1432,44 @@ noinline fn genericIndicSyllableEnd(codepoints: []const u21, start: usize, scrip
 noinline fn devanagariSyllableEnd(codepoints: []const u21, start: usize) linksection(scanner_text_section) usize {
     var index = start;
     var saw_virama = false;
+    var previous_was_stacker = false;
     while (index < codepoints.len) : (index += 1) {
         const codepoint: u32 = codepoints[index];
-        // Devanagari's vowel and consonant ranges are adjacent, so the
-        // scanner can classify a base with two compact ranges instead of
-        // dispatching through the generic consonant, vowel, and placeholder
-        // predicates independently for every source scalar.
-        const is_base = codepoint -% 0x0904 <= 0x35 or
-            codepoint -% 0x0958 <= 0x09 or
-            codepoint == 0x1cf5 or
-            codepoint == 0x25cc;
-        // U+0900..U+0961 is contiguous shaping input except U+0950; bases
-        // occupy the ranges above and U+094D is handled as virama. Everything
-        // else in the block is therefore a dependent mark.
-        const in_devanagari_block = codepoint -% 0x0900 <= 0x61 and codepoint != 0x0950;
-        const is_virama = codepoint == 0x094d;
-        const is_dependent_mark = in_devanagari_block and !is_base and !is_virama;
-        const is_joiner = codepoint -% 0x200c <= 1;
-        if (!(in_devanagari_block or codepoint == 0x1cf5 or codepoint == 0x25cc or is_joiner)) break;
-        if (index != start and is_base and !saw_virama and @as(u32, codepoints[index - 1]) != 0x1cf5) break;
-        if (saw_virama and codepoint == 0x200c) return index + 1;
-
-        saw_virama = if (is_virama)
-            true
-        else if (saw_virama and is_joiner)
-            true
-        else if (is_dependent_mark)
-            saw_virama
-        else
-            false;
+        if (codepoint -% 0x0900 <= 0x61) {
+            // U+0900..U+0961 is contiguous shaping input except U+0950.
+            // Bases form two compact ranges, U+094D is virama, and every
+            // other accepted scalar is a dependent mark that leaves the
+            // virama state untouched.
+            if (codepoint == 0x0950) break;
+            const is_base = codepoint -% 0x0904 <= 0x35 or
+                codepoint -% 0x0958 <= 0x09;
+            if (index != start and is_base and !saw_virama and !previous_was_stacker) break;
+            if (codepoint == 0x094d) {
+                saw_virama = true;
+            } else if (is_base) {
+                saw_virama = false;
+            }
+            previous_was_stacker = false;
+            continue;
+        }
+        if (codepoint == 0x1cf5) {
+            if (index != start and !saw_virama and !previous_was_stacker) break;
+            saw_virama = false;
+            previous_was_stacker = true;
+            continue;
+        }
+        if (codepoint == 0x25cc) {
+            if (index != start and !saw_virama and !previous_was_stacker) break;
+            saw_virama = false;
+            previous_was_stacker = false;
+            continue;
+        }
+        if (codepoint -% 0x200c <= 1) {
+            if (saw_virama and codepoint == 0x200c) return index + 1;
+            previous_was_stacker = false;
+            continue;
+        }
+        break;
     }
     return index;
 }

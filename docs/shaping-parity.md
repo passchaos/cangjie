@@ -2265,3 +2265,15 @@ shaping-performance superiority.
   neutral in retired instructions/branches and stayed within `0.13%` in
   cycles; its `.text` section and every shared hot-function address remained
   identical. Corpus checksums were unchanged.
+- The same isolated scanner now follows category-major state transitions:
+  dependent marks preserve the virama state without materializing all
+  predicates, bases and virama update it directly, and a one-bit previous
+  Vedic-stacker state replaces reloading the preceding source scalar for every
+  base. Against `d0e2838`, fixed-CPU-30 A/B/B/A plus B/A/A/B 31-sample medians
+  improved NotoSansDevanagari `hi-words` from `1420.796` to
+  `1409.371 ns/glyph`, about `0.80%`, with both orders improving. Interleaved
+  counters reduced Hindi retired instructions by `1.44%`, branches by `0.86%`,
+  and cycles/ref-cycles by about `0.79%`; branch misses increased `0.21%` but
+  did not offset the wall-time gain. The SourceSerifVariable control remained
+  exactly neutral in retired instructions and branches and stayed within
+  `0.24%` in cycles. Checksums were identical.

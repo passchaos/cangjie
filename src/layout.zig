@@ -4470,21 +4470,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, adjustmentIndexLessThan);
     if (shape_profile) |p| p.position_sort_ns += shapeProfileElapsed(position_sort_start, profile_io);
     const has_gpos_attachments = adjustmentsHaveAttachments(gpos_adjustments.items);
-    // GPOS adjustments and legacy kern are accumulated in font units, then
-    // scaled into user-space coordinates for the final GlyphPosition stream.
     const has_gdef_glyph_classes = gdef_metadata.glyph_classes != null;
     const has_gpos_positioning = font.hasGposTableForShaping() and !use_kerx_positioning;
-    const fallback_mark_enabled = fallback_mark.enabled(
-        early_zero_mark_shape,
-        has_gpos_positioning,
-        has_gpos_attachments,
-        use_kerx_positioning,
-        lookup_options.writing_mode.isVertical(),
-    );
-    var previous_kern_glyph: ?GlyphId = null;
-    var previous_kern_output_index: ?usize = null;
-    var fallback_mark_base: ?fallback_mark.Base = null;
-    var adjustment_cursor: usize = 0;
     const kerning_enabled = shapingFeatureEnabled(
         unicode.tag("kern"),
         lookup_options.features,
@@ -4511,6 +4498,20 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
         }
     }
+    const has_kerx_attachments = adjustmentsHaveKerxAttachments(kerx_adjustments.items);
+    // GPOS and kerx adjustments are accumulated in font units, then scaled
+    // into user-space coordinates for the final GlyphPosition stream.
+    const fallback_mark_enabled = fallback_mark.enabled(
+        early_zero_mark_shape,
+        has_gpos_positioning,
+        has_gpos_attachments or has_kerx_attachments,
+        use_kerx_positioning,
+        lookup_options.writing_mode.isVertical(),
+    );
+    var previous_kern_glyph: ?GlyphId = null;
+    var previous_kern_output_index: ?usize = null;
+    var fallback_mark_base: ?fallback_mark.Base = null;
+    var adjustment_cursor: usize = 0;
     const kern_lookup = if (kerx_lookup == null and
         !font.hasKerxTableForShaping() and
         !lookup_options.writing_mode.isVertical() and
@@ -4533,7 +4534,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // the output loop does not repeat a large GlyphPosition capacity check.
     try buffer.glyphs.ensureUnusedCapacity(buffer.allocator, glyph_ids.items.len);
     const attachment_links = &scratch.attachment_links;
-    if (has_gpos_attachments) {
+    if (has_gpos_attachments or has_kerx_attachments) {
         // Parent indexes refer to the post-GSUB input stream. Allocate the
         // remapping arrays only when GPOS actually emitted a mark/cursive
         // attachment; ordinary PairPos-only Latin runs need neither array.
@@ -4735,7 +4736,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 ) catch .{};
             }
         }
-        if (has_gpos_attachments) {
+        if (has_gpos_attachments or has_kerx_attachments) {
             glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
         }
         const output_x_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
@@ -4778,8 +4779,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             stch_action,
             buffer.glyphs.items.len - segment_glyph_start,
         );
-        if (has_gpos_attachments and !hide_default_ignorable) {
-            attachment_links.items[index] = attachmentLinkForAdjustment(adjustment);
+        if ((has_gpos_attachments or has_kerx_attachments) and !hide_default_ignorable) {
+            attachment_links.items[index] = if (kerx_adjustment.attachment_parent_index) |parent_index|
+                .{ .kind = .mark, .parent_index = parent_index }
+            else
+                attachmentLinkForAdjustment(adjustment);
         }
         if (fallback_mark_enabled and !hide_default_ignorable and !visible_not_found_variation_selector and !unicode.isNonspacingMarkCodepoint(source_codepoint)) {
             fallback_mark_base = fallback_mark.baseForGlyph(font, glyph_id, source_span.start, output_y_offset, horizontal_advance, scale, shapingDirectionForGpos(lookup_options) == .ltr) catch null;
@@ -4793,7 +4797,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         p.position_loop_ns += shapeProfileElapsed(position_loop_start, profile_io);
         p.position_output_glyphs += buffer.glyphs.items.len - segment_glyph_start;
     }
-    if (has_gpos_attachments) {
+    if (has_gpos_attachments or has_kerx_attachments) {
         const attachment_start = shapeProfileNow(shape_profile, profile_io);
         compactAttachmentLinks(
             attachment_links.items,
@@ -5782,6 +5786,13 @@ fn attachmentLinkForAdjustment(adjustment: gpos.Adjustment) attachment.Link {
 fn adjustmentsHaveAttachments(adjustments: []const gpos.Adjustment) bool {
     for (adjustments) |adjustment| {
         if (adjustment.attachment_type != .none) return true;
+    }
+    return false;
+}
+
+fn adjustmentsHaveKerxAttachments(adjustments: []const aat_kerx.Adjustment) bool {
+    for (adjustments) |adjustment| {
+        if (adjustment.attachment_parent_index != null) return true;
     }
     return false;
 }

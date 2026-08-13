@@ -57,6 +57,10 @@ pub fn buildKerxFormat2Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat2TtfTables(allocator));
 }
 
+pub fn buildKerxFormat4Ttf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxFormat4TtfTables(allocator));
+}
+
 pub fn buildKerxFormat6Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat6TtfTables(allocator));
 }
@@ -959,6 +963,21 @@ fn kerxFormat2TtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[5] = .{ .tag = "kerx", .data = try kerxFormat2Table(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxFormat4TtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kerx", .data = try kerxFormat4Table(allocator) };
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
@@ -3488,6 +3507,36 @@ fn kerxFormat2Table(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 44, 0);
     writeU16(bytes, 46, 0);
     writeI16(bytes, 48, -30);
+    return bytes;
+}
+
+fn kerxFormat4Table(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 116);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 108);
+    writeU32(bytes, 12, 4); // horizontal format 4.
+    writeU32(bytes, 20, 4);
+    writeU32(bytes, 24, 20);
+    writeU32(bytes, 28, 28);
+    writeU32(bytes, 32, 52);
+    writeU32(bytes, 36, 0x8000_0000 | 88); // explicit coordinate actions.
+
+    writeU16(bytes, 8 + 12 + 20, 0);
+    writeU16(bytes, 8 + 12 + 22, 1);
+    writeU16(bytes, 8 + 12 + 24, 3);
+    writeU16(bytes, 8 + 12 + 28 + 3 * 2, 1);
+    writeU16(bytes, 8 + 12 + 28 + (4 + 3) * 2, 2);
+    writeU16(bytes, 8 + 12 + 52 + 4, 0xffff);
+    writeU16(bytes, 8 + 12 + 52 + 6, 1);
+    writeU16(bytes, 8 + 12 + 52 + 8, 0x8000);
+    writeU16(bytes, 8 + 12 + 52 + 10, 0xffff);
+
+    writeI16(bytes, 8 + 12 + 88, 10);
+    writeI16(bytes, 8 + 12 + 90, 20);
+    writeI16(bytes, 8 + 12 + 92, 40);
+    writeI16(bytes, 8 + 12 + 94, -5);
     return bytes;
 }
 

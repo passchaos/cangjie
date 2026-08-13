@@ -151,7 +151,7 @@ pub fn hasStateMachine(
     var found = false;
     for (0..h.table_count) |_| {
         const subtable = try subtableHeader(data, offset, length, subtable_offset);
-        found = found or subtable.format == 1;
+        found = found or subtable.format == 1 or subtable.format == 4;
         subtable_offset += subtable.length;
     }
     if (subtable_offset != length) return error.BadSfnt;
@@ -447,7 +447,7 @@ fn validateSubtable(data: []const u8, table_offset: usize, table_length: usize, 
         1 => try validateFormat1(data, table_offset, subtable, glyph_count),
         2 => try validateFormat2(data, table_offset, subtable, glyph_count),
         6 => try validateFormat6(data, table_offset, subtable, glyph_count),
-        4 => {},
+        4 => try validateFormat4(data, table_offset, subtable, glyph_count),
         else => return error.BadSfnt,
     }
 }
@@ -477,6 +477,34 @@ fn validateFormat1(data: []const u8, table_offset: usize, subtable: SubtableHead
     try aat_lookup.validateLookupU16(data, machine_start + class_table_offset, machine_length - class_table_offset, glyph_count);
     // The complete state/action graph is preflighted by the dedicated format-1
     // executor before it mutates any output-side adjustment.
+}
+
+fn validateFormat4(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize) Error!void {
+    if (subtable.length < 32) return error.BadSfnt;
+    const start = table_offset + subtable.offset;
+    const machine_start = start + 12;
+    const machine_length = subtable.length - 12;
+    const class_count: usize = @intCast(try bin.readU32At(data, machine_start));
+    const class_table_offset: usize = @intCast(try bin.readU32At(data, machine_start + 4));
+    const state_array_offset: usize = @intCast(try bin.readU32At(data, machine_start + 8));
+    const entry_table_offset: usize = @intCast(try bin.readU32At(data, machine_start + 12));
+    const flags = try bin.readU32At(data, machine_start + 16);
+    const action_type = flags >> 30;
+    const action_offset: usize = @intCast(flags & 0x00ff_ffff);
+    if ((flags & 0x3f00_0000) != 0 or
+        action_type > 2 or
+        class_count < 4 or
+        class_table_offset < 20 or
+        state_array_offset < 20 or
+        entry_table_offset < 20 or
+        class_table_offset >= machine_length or
+        state_array_offset >= machine_length or
+        entry_table_offset >= machine_length or
+        action_offset > machine_length)
+    {
+        return error.BadSfnt;
+    }
+    try aat_lookup.validateLookupU16(data, machine_start + class_table_offset, machine_length - class_table_offset, glyph_count);
 }
 
 fn validateFormat2(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize) Error!void {

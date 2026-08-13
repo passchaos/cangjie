@@ -1796,24 +1796,28 @@ shaping-performance superiority.
   executor remains open because this font does not provide an output that can
   distinguish the two engines.
 
-  AAT `kerx` formats 0, 1, 2, and 6 now participate in actual shaping rather
+  AAT `kerx` formats 0, 1, 2, 4, and 6 now participate in actual shaping rather
   than metadata inspection only. The retained format-0/2/6 synthetic fonts
   encode `(glyph 1, glyph 1) = -30` through sorted pairs, a class matrix, and a
   sparse row/column matrix respectively; at 1000 units, `"AA"` produces
   advances `785,785` and second-glyph offset `-15`. The format-1 fixture uses
   an extended AAT state machine to push the first glyph and consume a
   sentinel-terminated action list, producing advances `770,800` and first
-  offset `-30`. All four match HarfBuzz and HarfRust and carry a conflicting
+  offset `-30`. Format 4's explicit-coordinate fixture marks the first glyph,
+  attaches the second, and produces offsets `-830,25` after attachment
+  propagation. All five match HarfBuzz and HarfRust and carry a conflicting
   legacy `kern` pair to prove that `kerx` suppresses double-kerning. `kern=0`
-  restores `800,800`. Format 6 supports both 16-bit and 32-bit scalar matrices,
-  while the shared AAT lookup reader handles typed `u16`/`u32` values and
-  format 10. Matrix indexes and state-machine bounds are validated against
-  maxp before shaping. Selection follows
+  restores `800,800` for kerning-requested formats; format 4 remains active
+  because attachment positioning is not controlled by the `kern` feature.
+  Format 6 supports both 16-bit and 32-bit scalar matrices, while the shared
+  AAT lookup reader handles typed `u16`/`u32` values and format 10. Matrix
+  indexes and state-machine bounds are validated against maxp before shaping.
+  Selection follows
   HarfBuzz's table plan: when GSUB and GPOS are both active, GPOS owns
   positioning even if the selected LangSys's applicable feature is not named
   `kern`; otherwise `kerx` takes precedence over legacy `kern`.
-  Format 4, cross-stream positioning, variation tuples, and
-  `ankr`-backed attachment remain open.
+  Format 4 control-point and `ankr`-indexed actions, cross-stream positioning,
+  and variation tuples remain open.
 
   The `shape-bench` now has a `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process

@@ -10,6 +10,7 @@ pub const Adjustment = struct {
     x_offset: i32 = 0,
     y_advance: i32 = 0,
     y_offset: i32 = 0,
+    attachment_parent_index: ?usize = null,
 };
 
 const Direction = enum { forward, backward };
@@ -58,10 +59,13 @@ pub fn collectAdjustments(
         const coverage = try readU32(data, subtable_start + 4);
         const tuple_count = try readU32(data, subtable_start + 8);
         if (subtable_length < 12 or subtable_length > table_length - subtable_relative) return error.BadSfnt;
-        if ((coverage & 0xff) == 1 and
-            ((coverage & 0x80000000) != 0) == vertical and
+        const format = coverage & 0xff;
+        const axis_matches = ((coverage & 0x80000000) != 0) == vertical;
+        const not_variable = (coverage & 0x20000000) == 0;
+        if (format == 1 and
+            axis_matches and
             (coverage & 0x40000000) == 0 and
-            (coverage & 0x20000000) == 0)
+            not_variable)
         {
             try applyFormat1(
                 data,
@@ -75,10 +79,158 @@ pub fn collectAdjustments(
                 vertical,
                 &operations_left,
             );
+        } else if (format == 4 and axis_matches and not_variable) {
+            try applyFormat4(
+                data,
+                subtable_start,
+                subtable_length,
+                glyph_count,
+                glyphs,
+                out.items,
+                if (((coverage & 0x10000000) != 0) != direction_backward) .backward else .forward,
+                &operations_left,
+            );
         }
         subtable_relative += subtable_length;
     }
     if (subtable_relative != table_length) return error.BadSfnt;
+}
+
+fn applyFormat4(
+    data: []const u8,
+    subtable_start: usize,
+    subtable_length: usize,
+    glyph_count: usize,
+    glyphs: []const GlyphId,
+    adjustments: []Adjustment,
+    direction: Direction,
+    operations_left: *usize,
+) Error!void {
+    if (subtable_length < 32 or glyphs.len != adjustments.len) return error.BadSfnt;
+    const machine_start = subtable_start + 12;
+    const machine_length = subtable_length - 12;
+    const class_count: usize = @intCast(try readU32(data, machine_start));
+    const class_table_offset: usize = @intCast(try readU32(data, machine_start + 4));
+    const state_array_offset: usize = @intCast(try readU32(data, machine_start + 8));
+    const entry_table_offset: usize = @intCast(try readU32(data, machine_start + 12));
+    const flags = try readU32(data, machine_start + 16);
+    const action_type = flags >> 30;
+    const action_offset: usize = @intCast(flags & 0x00ff_ffff);
+    if ((flags & 0x3f00_0000) != 0 or
+        class_count < 4 or
+        class_table_offset < 20 or
+        state_array_offset < 20 or
+        entry_table_offset < 20 or
+        class_table_offset >= machine_length or
+        state_array_offset >= machine_length or
+        entry_table_offset >= machine_length or
+        action_offset > machine_length)
+    {
+        return error.BadSfnt;
+    }
+    try state_table.validateLookupU16(
+        data,
+        machine_start + class_table_offset,
+        machine_length - class_table_offset,
+        glyph_count,
+    );
+
+    var state: usize = 0;
+    var cursor: usize = 0;
+    var mark: usize = 0;
+    var mark_set = false;
+    var sent_end_of_text = false;
+    while (true) {
+        if (operations_left.* == 0) return error.BadSfnt;
+        operations_left.* -= 1;
+        const at_end = cursor >= glyphs.len;
+        const logical_index = if (at_end)
+            null
+        else if (direction == .backward)
+            glyphs.len - 1 - cursor
+        else
+            cursor;
+        const class = if (logical_index) |glyph_index|
+            (try state_table.lookupGlyphValueBounded(
+                data,
+                machine_start + class_table_offset,
+                machine_length - class_table_offset,
+                glyphs[glyph_index],
+                glyph_count,
+            )) orelse state_table.class_out_of_bounds
+        else
+            state_table.class_end_of_text;
+        const current_entry = try state_table.entry(
+            data,
+            machine_start,
+            machine_length,
+            state_array_offset,
+            entry_table_offset,
+            class_count,
+            state,
+            class,
+            6,
+        );
+        if ((current_entry.flags & ~(push | dont_advance)) != 0) return error.BadSfnt;
+        if (current_entry.new_state >= maxStateCount(state_array_offset, entry_table_offset, class_count)) return error.BadSfnt;
+
+        if (mark_set and current_entry.payload != no_action) {
+            if (logical_index) |glyph_index| {
+                switch (action_type) {
+                    2 => try applyCoordinateAttachment(
+                        data,
+                        machine_start,
+                        machine_length,
+                        action_offset,
+                        current_entry.payload,
+                        mark,
+                        glyph_index,
+                        adjustments,
+                    ),
+                    // Control-point and `ankr`-index actions need font outline
+                    // or anchor callbacks and remain deliberately unsupported.
+                    0, 1 => {},
+                    else => return error.BadSfnt,
+                }
+            }
+        }
+        if ((current_entry.flags & push) != 0) {
+            if (logical_index) |glyph_index| {
+                mark_set = true;
+                mark = glyph_index;
+            }
+        }
+        state = current_entry.new_state;
+
+        if (at_end) {
+            if (sent_end_of_text or (current_entry.flags & dont_advance) == 0) break;
+            sent_end_of_text = true;
+        } else if ((current_entry.flags & dont_advance) == 0) {
+            cursor += 1;
+        }
+    }
+}
+
+fn applyCoordinateAttachment(
+    data: []const u8,
+    machine_start: usize,
+    machine_length: usize,
+    action_offset: usize,
+    action_index: u16,
+    mark_index: usize,
+    current_index: usize,
+    adjustments: []Adjustment,
+) Error!void {
+    const coordinate_index = std.math.mul(usize, action_index, 8) catch return error.BadSfnt;
+    const relative = std.math.add(usize, action_offset, coordinate_index) catch return error.BadSfnt;
+    if (relative > machine_length or machine_length - relative < 8) return error.BadSfnt;
+    const mark_x: i32 = try readI16(data, machine_start + relative);
+    const mark_y: i32 = try readI16(data, machine_start + relative + 2);
+    const current_x: i32 = try readI16(data, machine_start + relative + 4);
+    const current_y: i32 = try readI16(data, machine_start + relative + 6);
+    adjustments[current_index].x_offset = mark_x - current_x;
+    adjustments[current_index].y_offset = mark_y - current_y;
+    adjustments[current_index].attachment_parent_index = mark_index;
 }
 
 fn applyFormat1(
@@ -271,6 +423,32 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
     try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);
 }
 
+test "format 4 coordinate action attaches current glyph to marked glyph" {
+    var bytes = [_]u8{0} ** 116;
+    writeU16Test(&bytes, 0, 2);
+    writeU32Test(&bytes, 4, 1);
+    writeFormat4SubtableTest(&bytes, 8);
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+    try collectAdjustments(
+        &bytes,
+        0,
+        bytes.len,
+        2,
+        &.{ 1, 1 },
+        &adjustments,
+        std.testing.allocator,
+        false,
+        false,
+    );
+
+    try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);
+    try std.testing.expectEqual(@as(i32, -30), adjustments.items[1].x_offset);
+    try std.testing.expectEqual(@as(i32, 25), adjustments.items[1].y_offset);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[1].attachment_parent_index);
+}
+
 fn writeFormat1SubtableTest(bytes: []u8, offset: usize) void {
     const subtable_length: usize = 112;
     const class_table_offset: usize = 20;
@@ -303,6 +481,38 @@ fn writeFormat1SubtableTest(bytes: []u8, offset: usize) void {
 
     writeI16Test(bytes, offset + 12 + action_from_machine, -30);
     writeI16Test(bytes, offset + 12 + action_from_machine + 2, -1);
+}
+
+fn writeFormat4SubtableTest(bytes: []u8, offset: usize) void {
+    const subtable_length: usize = 108;
+    const class_table_offset: usize = 20;
+    const state_array_offset: usize = 28;
+    const entry_table_offset: usize = 52;
+    const action_offset: usize = 88;
+    writeU32Test(bytes, offset, subtable_length);
+    writeU32Test(bytes, offset + 4, 4);
+    writeU32Test(bytes, offset + 12, 4);
+    writeU32Test(bytes, offset + 16, class_table_offset);
+    writeU32Test(bytes, offset + 20, state_array_offset);
+    writeU32Test(bytes, offset + 24, entry_table_offset);
+    writeU32Test(bytes, offset + 28, 0x8000_0000 | action_offset);
+
+    writeU16Test(bytes, offset + 12 + class_table_offset, 0);
+    writeU16Test(bytes, offset + 12 + class_table_offset + 2, 1);
+    writeU16Test(bytes, offset + 12 + class_table_offset + 4, 3);
+
+    for (0..12) |cell| writeU16Test(bytes, offset + 12 + state_array_offset + cell * 2, 0);
+    writeU16Test(bytes, offset + 12 + state_array_offset + 3 * 2, 1);
+    writeU16Test(bytes, offset + 12 + state_array_offset + (4 + 3) * 2, 2);
+
+    writeEntryTest(bytes, offset + 12 + entry_table_offset, 0, 0, no_action);
+    writeEntryTest(bytes, offset + 12 + entry_table_offset + 6, 1, push, no_action);
+    writeEntryTest(bytes, offset + 12 + entry_table_offset + 12, 0, 0, 0);
+
+    writeI16Test(bytes, offset + 12 + action_offset, 10);
+    writeI16Test(bytes, offset + 12 + action_offset + 2, 20);
+    writeI16Test(bytes, offset + 12 + action_offset + 4, 40);
+    writeI16Test(bytes, offset + 12 + action_offset + 6, -5);
 }
 
 fn writeEntryTest(bytes: []u8, offset: usize, new_state: u16, flags: u16, action: u16) void {

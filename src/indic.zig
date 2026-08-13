@@ -1433,25 +1433,27 @@ noinline fn devanagariSyllableEnd(codepoints: []const u21, start: usize) linksec
     var index = start;
     var saw_virama = false;
     while (index < codepoints.len) : (index += 1) {
-        const codepoint = codepoints[index];
+        const codepoint: u32 = codepoints[index];
         // Devanagari's vowel and consonant ranges are adjacent, so the
         // scanner can classify a base with two compact ranges instead of
         // dispatching through the generic consonant, vowel, and placeholder
         // predicates independently for every source scalar.
-        const is_base = (codepoint >= 0x0904 and codepoint <= 0x0939) or
-            (codepoint >= 0x0958 and codepoint <= 0x0961) or
+        const is_base = codepoint -% 0x0904 <= 0x35 or
+            codepoint -% 0x0958 <= 0x09 or
             codepoint == 0x1cf5 or
             codepoint == 0x25cc;
-        const is_dependent_mark = (codepoint >= 0x0900 and codepoint <= 0x0903) or
-            (codepoint >= 0x093a and codepoint <= 0x094c) or
-            (codepoint >= 0x094e and codepoint <= 0x094f) or
-            (codepoint >= 0x0951 and codepoint <= 0x0957);
-        const is_joiner = codepoint == 0x200c or codepoint == 0x200d;
-        if (!(is_base or is_dependent_mark or codepoint == 0x094d or is_joiner)) break;
-        if (index != start and is_base and !saw_virama and codepoints[index - 1] != 0x1cf5) break;
+        // U+0900..U+0961 is contiguous shaping input except U+0950; bases
+        // occupy the ranges above and U+094D is handled as virama. Everything
+        // else in the block is therefore a dependent mark.
+        const in_devanagari_block = codepoint -% 0x0900 <= 0x61 and codepoint != 0x0950;
+        const is_virama = codepoint == 0x094d;
+        const is_dependent_mark = in_devanagari_block and !is_base and !is_virama;
+        const is_joiner = codepoint -% 0x200c <= 1;
+        if (!(in_devanagari_block or codepoint == 0x1cf5 or codepoint == 0x25cc or is_joiner)) break;
+        if (index != start and is_base and !saw_virama and @as(u32, codepoints[index - 1]) != 0x1cf5) break;
         if (saw_virama and codepoint == 0x200c) return index + 1;
 
-        saw_virama = if (codepoint == 0x094d)
+        saw_virama = if (is_virama)
             true
         else if (saw_virama and is_joiner)
             true
@@ -1463,20 +1465,31 @@ noinline fn devanagariSyllableEnd(codepoints: []const u21, start: usize) linksec
     return index;
 }
 
-test "specialized Devanagari syllable scanner classifies every Unicode scalar like the generic scanner" {
-    // A one-scalar run isolates membership in the base, dependent-mark,
-    // virama, and joiner sets. The multi-scalar differential below separately
-    // exercises state transitions such as virama+joiner and stacker handling.
+test "specialized Devanagari scanner properties match generic predicates for every Unicode scalar" {
+    // Compare the compact arithmetic itself, not only a one-scalar scan:
+    // several accepted categories have the same end position in isolation.
+    // The multi-scalar differential below separately exercises state
+    // transitions such as virama+joiner and stacker handling.
     for (0..0x110000) |value| {
-        const codepoints = [_]u21{@intCast(value)};
-        try std.testing.expectEqual(
-            genericIndicSyllableEnd(&codepoints, 0, .dev2),
-            devanagariSyllableEnd(&codepoints, 0),
-        );
-        try std.testing.expectEqual(
-            genericIndicSyllableEnd(&codepoints, 0, .deva),
-            devanagariSyllableEnd(&codepoints, 0),
-        );
+        const codepoint: u21 = @intCast(value);
+        const widened: u32 = codepoint;
+        const specialized_base = widened -% 0x0904 <= 0x35 or
+            widened -% 0x0958 <= 0x09 or
+            widened == 0x1cf5 or
+            widened == 0x25cc;
+        const specialized_virama = widened == 0x094d;
+        const specialized_mark = widened -% 0x0900 <= 0x61 and
+            widened != 0x0950 and
+            !specialized_base and
+            !specialized_virama;
+        const specialized_joiner = widened -% 0x200c <= 1;
+
+        try std.testing.expectEqual(isIndicBase(codepoint, .dev2), specialized_base);
+        try std.testing.expectEqual(isIndicBase(codepoint, .deva), specialized_base);
+        try std.testing.expectEqual(isIndicDependentMark(codepoint, .dev2), specialized_mark);
+        try std.testing.expectEqual(isIndicDependentMark(codepoint, .deva), specialized_mark);
+        try std.testing.expectEqual(codepoint == viramaCodepoint(.dev2), specialized_virama);
+        try std.testing.expectEqual(isJoiner(codepoint), specialized_joiner);
     }
 }
 

@@ -2251,3 +2251,17 @@ shaping-performance superiority.
   within `0.002%`, and nontarget cycles stayed within `0.12%`. All checksums
   were identical. The full ReleaseFast test suite and complete retained parity
   umbrella pass against both HarfBuzz and HarfRust.
+- The isolated Devanagari scanner now also classifies its primary block as one
+  contiguous U+0900..U+0961 shaping range with the exact U+0950 hole, then
+  distinguishes the compact base ranges and U+094D virama. Widening once to
+  `u32` removes repeated 21-bit masks and overlapping range tests from every
+  scanned scalar. The exhaustive differential compares base, dependent-mark,
+  virama, and joiner membership directly for all Unicode scalars. Against
+  `0467a6e`, fixed-CPU-30 A/B/B/A plus B/A/A/B 31-sample medians improved
+  NotoSansDevanagari `hi-words` from `1428.302` to `1425.175 ns/glyph`, about
+  `0.22%`, with both orders improving. Interleaved counters reduced Hindi
+  retired instructions by `0.81%`, branches by `0.72%`, cycles by `0.44%`,
+  and branch misses by `1.13%`. The SourceSerifVariable control was exactly
+  neutral in retired instructions/branches and stayed within `0.13%` in
+  cycles; its `.text` section and every shared hot-function address remained
+  identical. Corpus checksums were unchanged.

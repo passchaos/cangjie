@@ -1452,18 +1452,30 @@ noinline fn devanagariSyllableEnd(codepoints: []const u21, start: usize) linksec
         const codepoint: u32 = codepoints[index];
         if (codepoint -% 0x0900 <= 0x61) {
             // U+0900..U+0961 is contiguous shaping input except U+0950.
-            // Bases form two compact ranges, U+094D is virama, and every
-            // other accepted scalar is a dependent mark that leaves the
-            // virama state untouched.
+            // The primary base range carries virtually every consonant and
+            // independent vowel. Exit through it before testing the virama or
+            // rare U+0958..U+0961 bases, so ordinary syllable boundaries and
+            // conjunct continuations do not materialize all three predicates.
             if (codepoint == 0x0950) break;
-            const is_base = codepoint -% 0x0904 <= 0x35 or
-                codepoint -% 0x0958 <= 0x09;
-            if (is_base and !saw_virama and !previous_was_stacker) break;
+            if (codepoint -% 0x0904 <= 0x35) {
+                if (!saw_virama and !previous_was_stacker) break;
+                saw_virama = false;
+                previous_was_stacker = false;
+                continue;
+            }
             if (codepoint == 0x094d) {
                 saw_virama = true;
-            } else if (is_base) {
-                saw_virama = false;
+                previous_was_stacker = false;
+                continue;
             }
+            if (codepoint -% 0x0958 <= 0x09) {
+                if (!saw_virama and !previous_was_stacker) break;
+                saw_virama = false;
+                previous_was_stacker = false;
+                continue;
+            }
+            // Dependent marks preserve virama continuation but are no longer
+            // immediately after a consonant-with-stacker source.
             previous_was_stacker = false;
             continue;
         }

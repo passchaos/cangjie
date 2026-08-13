@@ -2288,3 +2288,21 @@ shaping-performance superiority.
   `0.26%`. The SourceSerifVariable control remained exactly neutral in retired
   instructions/branches and improved about `0.10%` in cycles. Checksums were
   identical.
+- The isolated scanner now dispatches the common U+0904..U+0939 base range
+  before testing U+094D virama and the rare U+0958..U+0961 bases. Ordinary
+  syllable boundaries and conjunct continuations therefore stop or consume
+  through one base-range path instead of materializing every category
+  predicate; dependent marks retain the existing virama/stacker state
+  semantics. The scanner shrank from 378 to 335 bytes, while the shared
+  `.text` section and `layout.shapeSegmentInto` address/size stayed exactly
+  unchanged. Against `133e9d8`, fixed-CPU-30 A/B/B/A plus B/A/A/B 31-sample
+  medians improved NotoSansDevanagari `hi-words` from `1414.743` to
+  `1405.313 ns/glyph`, about `0.67%`, with both orders improving (`0.69%` and
+  `0.65%`). Interleaved counters reduced Hindi retired instructions by
+  `0.43%` and cycles/ref-cycles by about `0.11%`; branches rose `0.39%` and
+  branch misses `0.20%`, but the stable wall-time result confirms the tradeoff.
+  The SourceSerifVariable control remained exactly neutral in retired
+  instructions/branches and improved about `0.23%` in cycles. Checksums were
+  identical. All 293 focused Indic tests, the full ReleaseFast suite, and the
+  retained parity umbrella pass, including the 10,000-line Hindi HarfBuzz
+  comparison (`b01a5388ce792b49`).

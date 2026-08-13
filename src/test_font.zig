@@ -49,6 +49,10 @@ pub fn buildKerxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxTtfTables(allocator));
 }
 
+pub fn buildKerxFormat2Ttf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxFormat2TtfTables(allocator));
+}
+
 pub fn buildKerxGsubGposTtf(allocator: std.mem.Allocator, gpos_feature_tag: *const [4:0]u8) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxGsubGposTtfTables(allocator, gpos_feature_tag));
 }
@@ -917,6 +921,21 @@ fn kerxTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[5] = .{ .tag = "kerx", .data = try kerxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxFormat2TtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kerx", .data = try kerxFormat2Table(allocator) };
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
@@ -3375,6 +3394,30 @@ fn kerxTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 42, 1);
     writeU16(bytes, 44, 1);
     writeI16(bytes, 46, -30);
+    return bytes;
+}
+
+fn kerxFormat2Table(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 50);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 42);
+    writeU32(bytes, 12, 2); // horizontal format 2.
+    writeU32(bytes, 20, 2); // rowWidth: one i16 column per row.
+    writeU32(bytes, 24, 28);
+    writeU32(bytes, 28, 34);
+    writeU32(bytes, 32, 40);
+
+    // A maps to glyph 1. One left row and one right column select matrix index
+    // zero, whose value differs from the coexisting legacy kern table.
+    writeU16(bytes, 36, 0); // dense left lookup.
+    writeU16(bytes, 38, 0);
+    writeU16(bytes, 40, 0);
+    writeU16(bytes, 42, 0); // dense right lookup.
+    writeU16(bytes, 44, 0);
+    writeU16(bytes, 46, 0);
+    writeI16(bytes, 48, -30);
     return bytes;
 }
 

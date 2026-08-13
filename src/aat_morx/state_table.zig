@@ -154,12 +154,112 @@ pub fn lookupGlyphValueBounded(data: []const u8, offset: usize, length: usize, g
             const first_glyph: usize = @intCast(try readU16(data, offset + 2));
             const count: usize = @intCast(try readU16(data, offset + 4));
             const glyph_index: usize = glyph;
-            if (glyph_index < first_glyph or glyph_index >= first_glyph + count) return null;
+            const glyph_end = std.math.add(usize, first_glyph, count) catch return error.BadSfnt;
+            if (glyph_index < first_glyph or glyph_index >= glyph_end) return null;
             const value_offset = offset + 6 + (glyph_index - first_glyph) * 2;
             if (value_offset > offset + length or offset + length - value_offset < 2) return error.BadSfnt;
             return try readU16(data, value_offset);
         },
+        10 => {
+            if (length < 8) return error.BadSfnt;
+            const unit_size: usize = try readU16(data, offset + 2);
+            if (unit_size != 1 and unit_size != 2 and unit_size != 4) return error.BadSfnt;
+            const first_glyph: usize = @intCast(try readU16(data, offset + 4));
+            const count: usize = @intCast(try readU16(data, offset + 6));
+            const values_len = std.math.mul(usize, count, unit_size) catch return error.BadSfnt;
+            if (values_len > length - 8) return error.BadSfnt;
+            const glyph_end = std.math.add(usize, first_glyph, count) catch return error.BadSfnt;
+            const glyph_index: usize = glyph;
+            if (glyph_index < first_glyph or glyph_index >= glyph_end) return null;
+            const value_index = glyph_index - first_glyph;
+            const value_offset = offset + 8 + value_index * unit_size;
+            return switch (unit_size) {
+                1 => data[value_offset],
+                2 => try readU16(data, value_offset),
+                // AAT Lookup<u16> deliberately truncates format-10's optional
+                // 32-bit storage, matching both HarfBuzz and read-fonts.
+                4 => @truncate(try readU32(data, value_offset)),
+                else => unreachable,
+            };
+        },
         else => return null,
+    }
+}
+
+/// Exhaustively validate one AAT lookup whose public value type is `u16`.
+///
+/// The lookup formats do not carry a common byte length. Callers therefore
+/// provide the enclosing subtable suffix and its maxp glyph bound; reading
+/// every reachable glyph proves both dense payloads and sparse record offsets
+/// before a shaping hot path starts trusting individual lookup results.
+pub fn validateLookupU16(data: []const u8, offset: usize, length: usize, glyph_count: usize) Error!void {
+    if (glyph_count > @as(usize, std.math.maxInt(GlyphId)) + 1) return error.BadSfnt;
+    const format = try readU16(data, offset);
+    switch (format) {
+        0 => {
+            if (glyph_count > (length -| 2) / 2) return error.BadSfnt;
+        },
+        2, 4 => {
+            if (length < 12) return error.BadSfnt;
+            const unit_size: usize = try readU16(data, offset + 2);
+            const unit_count: usize = @intCast(try readU16(data, offset + 4));
+            if (unit_size < 6 or unit_count > (length - 12) / unit_size) return error.BadSfnt;
+            var previous_last: ?u16 = null;
+            for (0..unit_count) |index| {
+                const record = offset + 12 + index * unit_size;
+                const last = try readU16(data, record);
+                const first = try readU16(data, record + 2);
+                if (first == 0xffff and last == 0xffff) {
+                    if (index + 1 != unit_count) return error.BadSfnt;
+                    continue;
+                }
+                if (first > last or last >= glyph_count) return error.BadSfnt;
+                if (previous_last) |previous| if (first <= previous) return error.BadSfnt;
+                previous_last = last;
+                if (format == 4) {
+                    const values_offset: usize = @intCast(try readU16(data, record + 4));
+                    const value_count = @as(usize, last) - first + 1;
+                    const value_bytes = std.math.mul(usize, value_count, 2) catch return error.BadSfnt;
+                    if (values_offset > length or value_bytes > length - values_offset) return error.BadSfnt;
+                }
+            }
+        },
+        6 => {
+            if (length < 12) return error.BadSfnt;
+            const unit_size: usize = try readU16(data, offset + 2);
+            const unit_count: usize = @intCast(try readU16(data, offset + 4));
+            if (unit_size < 4 or unit_count > (length - 12) / unit_size) return error.BadSfnt;
+            var previous_glyph: ?u16 = null;
+            for (0..unit_count) |index| {
+                const record = offset + 12 + index * unit_size;
+                const glyph = try readU16(data, record);
+                if (glyph == 0xffff) {
+                    if (index + 1 != unit_count) return error.BadSfnt;
+                    continue;
+                }
+                if (glyph >= glyph_count) return error.BadSfnt;
+                if (previous_glyph) |previous| if (glyph <= previous) return error.BadSfnt;
+                previous_glyph = glyph;
+            }
+        },
+        8 => {
+            if (length < 6) return error.BadSfnt;
+            const first_glyph: usize = @intCast(try readU16(data, offset + 2));
+            const count: usize = @intCast(try readU16(data, offset + 4));
+            const glyph_end = std.math.add(usize, first_glyph, count) catch return error.BadSfnt;
+            if (glyph_end > glyph_count or count > (length - 6) / 2) return error.BadSfnt;
+        },
+        10 => {
+            if (length < 8) return error.BadSfnt;
+            const unit_size: usize = try readU16(data, offset + 2);
+            if (unit_size != 1 and unit_size != 2 and unit_size != 4) return error.BadSfnt;
+            const first_glyph: usize = @intCast(try readU16(data, offset + 4));
+            const count: usize = @intCast(try readU16(data, offset + 6));
+            const glyph_end = std.math.add(usize, first_glyph, count) catch return error.BadSfnt;
+            const value_bytes = std.math.mul(usize, count, unit_size) catch return error.BadSfnt;
+            if (glyph_end > glyph_count or value_bytes > length - 8) return error.BadSfnt;
+        },
+        else => return error.BadSfnt,
     }
 }
 
@@ -240,4 +340,32 @@ test "AAT lookup formats 0, 2, and 4 return bounded glyph values" {
         @as(?u16, null),
         try lookupGlyphValueBounded(&segment_arrays, 0, segment_arrays.len, 5, null),
     );
+}
+
+test "AAT lookup format 10 supports byte word and truncated long values" {
+    const byte_values = [_]u8{
+        0x00, 0x0a, // format 10
+        0x00, 0x01, // unit size
+        0x00, 0x02, // first glyph
+        0x00, 0x03, // glyph count
+        0x07, 0x08, 0x09,
+    };
+    try std.testing.expectEqual(@as(?u16, 8), try lookupGlyphValue(&byte_values, 0, byte_values.len, 3));
+    try std.testing.expectEqual(@as(?u16, null), try lookupGlyphValue(&byte_values, 0, byte_values.len, 5));
+
+    const word_values = [_]u8{
+        0x00, 0x0a, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02,
+        0x12, 0x34, 0xab, 0xcd,
+    };
+    try std.testing.expectEqual(@as(?u16, 0xabcd), try lookupGlyphValue(&word_values, 0, word_values.len, 2));
+
+    const long_values = [_]u8{
+        0x00, 0x0a, 0x00, 0x04, 0x00, 0x04, 0x00, 0x01,
+        0x12, 0x34, 0xab, 0xcd,
+    };
+    try std.testing.expectEqual(@as(?u16, 0xabcd), try lookupGlyphValue(&long_values, 0, long_values.len, 4));
+
+    var malformed = byte_values;
+    malformed[3] = 3;
+    try std.testing.expectError(error.BadSfnt, lookupGlyphValue(&malformed, 0, malformed.len, 3));
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const bin = @import("../binary.zig");
+const aat_lookup = @import("../aat_morx/state_table.zig");
 
 const GlyphId = u16;
 
@@ -96,11 +97,12 @@ pub fn free(allocator: std.mem.Allocator, value: Info) void {
     allocator.free(value.subtables);
 }
 
-/// Sum applicable format-0 `kerx` values for one adjacent glyph pair.
+/// Sum applicable simple `kerx` values for one adjacent glyph pair.
 ///
 /// This is the hot-path counterpart to `info`: it walks table headers without
-/// allocating pair arrays, skips variation/cross-stream or wrong-axis
-/// subtables, and binary-searches the validated sorted pair records.
+/// allocating metadata arrays, skips variation/cross-stream or wrong-axis
+/// subtables, and supports both sorted format-0 pairs and format-2 class
+/// matrices. Stateful and sparse formats remain separate executors.
 pub fn pairKerning(
     data: []const u8,
     offset: usize,
@@ -121,12 +123,15 @@ pub fn pairKerning(
         const subtable_vertical = (coverage & 0x80000000) != 0;
         const cross_stream = (coverage & 0x40000000) != 0;
         const variation = (coverage & 0x20000000) != 0;
-        if (subtable.format == 0 and
-            subtable_vertical == vertical and
+        if (subtable_vertical == vertical and
             !cross_stream and
             !variation)
         {
-            total += try format0PairKerning(data, offset, subtable, left, right);
+            total += switch (subtable.format) {
+                0 => try format0PairKerning(data, offset, subtable, left, right),
+                2 => try format2PairKerning(data, offset, subtable, glyph_count, left, right),
+                else => 0,
+            };
         }
         subtable_offset += subtable.length;
     }
@@ -165,6 +170,35 @@ test "format 0 pair lookup sums applicable subtables and clamps totals" {
     );
 }
 
+test "format 2 class matrix uses AAT lookup offsets without allocation" {
+    var bytes = [_]u8{0} ** 76;
+    writeU16Test(&bytes, 0, 2);
+    writeU32Test(&bytes, 4, 1);
+    writeFormat2SubtableTest(&bytes, 8);
+
+    try validate(&bytes, 0, bytes.len, 4);
+    const expected = [_]i16{
+        0, 10, 20, 0,
+        8, 4, -2, 8,
+        30, -10, -20, 30,
+        8, 4, -2, 8,
+    };
+    for (0..4) |left| {
+        for (0..4) |right| {
+            try std.testing.expectEqual(
+                expected[left * 4 + right],
+                try pairKerning(&bytes, 0, bytes.len, 4, @intCast(left), @intCast(right), false),
+            );
+        }
+    }
+    try std.testing.expectEqual(@as(i16, 0), try pairKerning(&bytes, 0, bytes.len, 4, 1, 2, true));
+
+    // Class lookups are bounded by maxp, and every reachable row/column index
+    // must remain inside the declared matrix.
+    writeU16Test(&bytes, 38, 9);
+    try std.testing.expectError(error.BadSfnt, validate(&bytes, 0, bytes.len, 4));
+}
+
 fn writeFormat0SubtableTest(bytes: []u8, offset: usize, coverage: u32, left: GlyphId, right: GlyphId, value: i16) void {
     writeU32Test(bytes, offset, 40);
     writeU32Test(bytes, offset + 4, coverage);
@@ -174,6 +208,29 @@ fn writeFormat0SubtableTest(bytes: []u8, offset: usize, coverage: u32, left: Gly
     writeU16Test(bytes, offset + 28, left);
     writeU16Test(bytes, offset + 30, right);
     std.mem.writeInt(i16, bytes[offset + 32 ..][0..2], value, .big);
+}
+
+fn writeFormat2SubtableTest(bytes: []u8, offset: usize) void {
+    writeU32Test(bytes, offset, 68);
+    writeU32Test(bytes, offset + 4, 2);
+    writeU32Test(bytes, offset + 12, 3);
+    writeU32Test(bytes, offset + 16, 28);
+    writeU32Test(bytes, offset + 20, 38);
+    writeU32Test(bytes, offset + 24, 48);
+
+    // Dense lookup format 0 values are matrix indexes: left values are rows
+    // pre-multiplied by rowWidth, while right values are columns.
+    writeU16Test(bytes, offset + 28, 0);
+    for ([_]u16{ 0, 6, 3, 6 }, 0..) |value, index| {
+        writeU16Test(bytes, offset + 30 + index * 2, value);
+    }
+    writeU16Test(bytes, offset + 38, 0);
+    for ([_]u16{ 0, 1, 2, 0 }, 0..) |value, index| {
+        writeU16Test(bytes, offset + 40 + index * 2, value);
+    }
+    for ([_]i16{ 0, 10, 20, 30, -10, -20, 8, 4, -2 }, 0..) |value, index| {
+        std.mem.writeInt(i16, bytes[offset + 48 + index * 2 ..][0..2], value, .big);
+    }
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
@@ -209,6 +266,31 @@ fn format0PairKerning(data: []const u8, table_offset: usize, subtable: SubtableH
     return 0;
 }
 
+fn format2PairKerning(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize, left: GlyphId, right: GlyphId) Error!i16 {
+    const start = table_offset + subtable.offset;
+    const left_class_offset: usize = @intCast(try bin.readU32At(data, start + 16));
+    const right_class_offset: usize = @intCast(try bin.readU32At(data, start + 20));
+    const array_offset: usize = @intCast(try bin.readU32At(data, start + 24));
+    const left_offset = try aatLookupValueWithinSubtable(data, start, subtable.length, left_class_offset, glyph_count, left);
+    const right_offset = try aatLookupValueWithinSubtable(data, start, subtable.length, right_class_offset, glyph_count, right);
+    const value_index = std.math.add(usize, left_offset, right_offset) catch return error.BadSfnt;
+    const value_delta = std.math.mul(usize, value_index, 2) catch return error.BadSfnt;
+    const value_relative = std.math.add(usize, array_offset, value_delta) catch return error.BadSfnt;
+    if (value_relative > subtable.length or subtable.length - value_relative < 2) return error.BadSfnt;
+    return try bin.readI16At(data, start + value_relative);
+}
+
+fn aatLookupValueWithinSubtable(data: []const u8, subtable_start: usize, subtable_length: usize, lookup_offset: usize, glyph_count: usize, glyph: GlyphId) Error!u16 {
+    if (lookup_offset < 28 or lookup_offset > subtable_length or subtable_length - lookup_offset < 2) return error.BadSfnt;
+    return (try aat_lookup.lookupGlyphValueBounded(
+        data,
+        subtable_start + lookup_offset,
+        subtable_length - lookup_offset,
+        glyph,
+        glyph_count,
+    )) orelse 0;
+}
+
 fn freeSubtables(allocator: std.mem.Allocator, subtables: []Subtable) void {
     for (subtables) |subtable| allocator.free(subtable.pairs);
 }
@@ -242,9 +324,53 @@ fn validateSubtable(data: []const u8, table_offset: usize, table_length: usize, 
     _ = table_length;
     switch (subtable.format) {
         0 => _ = try format0Pairs(data, table_offset, subtable, glyph_count, null, .validate_only),
-        1, 2, 4, 6 => {},
+        2 => try validateFormat2(data, table_offset, subtable, glyph_count),
+        1, 4, 6 => {},
         else => return error.BadSfnt,
     }
+}
+
+fn validateFormat2(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize) Error!void {
+    if (subtable.length < 28) return error.BadSfnt;
+    const start = table_offset + subtable.offset;
+    const row_width: usize = @intCast(try bin.readU32At(data, start + 12));
+    const left_class_offset: usize = @intCast(try bin.readU32At(data, start + 16));
+    const right_class_offset: usize = @intCast(try bin.readU32At(data, start + 20));
+    const array_offset: usize = @intCast(try bin.readU32At(data, start + 24));
+    if (row_width == 0) return error.BadSfnt;
+    if (array_offset < 28 or array_offset > subtable.length or subtable.length - array_offset < 2) return error.BadSfnt;
+    if (left_class_offset == right_class_offset or
+        left_class_offset == array_offset or
+        right_class_offset == array_offset)
+    {
+        return error.BadSfnt;
+    }
+
+    try aat_lookup.validateLookupU16(data, start + left_class_offset, subtable.length - left_class_offset, glyph_count);
+    try aat_lookup.validateLookupU16(data, start + right_class_offset, subtable.length - right_class_offset, glyph_count);
+    var max_left_index: usize = 0;
+    var max_right_index: usize = 0;
+    var left_stride_gcd: usize = 0;
+    for (0..glyph_count) |glyph_index| {
+        const glyph: GlyphId = @intCast(glyph_index);
+        const left_offset = try aatLookupValueWithinSubtable(data, start, subtable.length, left_class_offset, glyph_count, glyph);
+        const right_offset = try aatLookupValueWithinSubtable(data, start, subtable.length, right_class_offset, glyph_count, glyph);
+        if (left_offset != 0) left_stride_gcd = std.math.gcd(left_stride_gcd, left_offset);
+        max_left_index = @max(max_left_index, left_offset);
+        max_right_index = @max(max_right_index, right_offset);
+    }
+    // rowWidth is expressed in bytes, while the lookup values are indexes into
+    // the i16 matrix. Some producers store rowWidth in the logical index space
+    // and others use bytes; accepting either relation mirrors the reference
+    // engines without rejecting a bounded matrix solely for that convention.
+    if (left_stride_gcd != 0 and left_stride_gcd != row_width) {
+        const byte_stride = std.math.mul(usize, left_stride_gcd, 2) catch return error.BadSfnt;
+        if (byte_stride != row_width) return error.BadSfnt;
+    }
+    const max_index = std.math.add(usize, max_left_index, max_right_index) catch return error.BadSfnt;
+    const max_delta = std.math.mul(usize, max_index, 2) catch return error.BadSfnt;
+    const max_relative = std.math.add(usize, array_offset, max_delta) catch return error.BadSfnt;
+    if (max_relative > subtable.length or subtable.length - max_relative < 2) return error.BadSfnt;
 }
 
 fn readFormat0Pairs(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize) Error![]Pair {

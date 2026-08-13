@@ -5,6 +5,7 @@ const gsub = @import("gsub.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const contextual = @import("aat_morx/contextual.zig");
+const insertion = @import("aat_morx/insertion.zig");
 const rearrangement = @import("aat_morx/rearrangement.zig");
 const run_metadata = @import("aat_morx/run_metadata.zig");
 const state_table = @import("aat_morx/state_table.zig");
@@ -36,6 +37,7 @@ pub fn apply(
     if (version != 2 and version != 3) return error.BadSfnt;
     if (try readU16(data, table_offset + 2) != 0) return error.BadSfnt;
     const chain_count = try readU32(data, table_offset + 4);
+    var operations_left = try state_table.operationBudget(glyphs.items.len);
     var buffer_is_reversed = options.aat_buffer_reversed;
     defer if (buffer_is_reversed != options.aat_buffer_reversed) {
         run_metadata.reverse(glyphs, options);
@@ -49,7 +51,7 @@ pub fn apply(
         const chain_length: usize = @intCast(try readU32(data, absolute_chain + 4));
         const feature_count: usize = @intCast(try readU32(data, absolute_chain + 8));
         const subtable_count: usize = @intCast(try readU32(data, absolute_chain + 12));
-        if (chain_length < 16 or chain_length > table_length - chain_offset or (chain_length & 3) != 0) return error.BadSfnt;
+        if (chain_length < 16 or chain_length > table_length - chain_offset) return error.BadSfnt;
 
         const flags = default_flags;
 
@@ -63,6 +65,12 @@ pub fn apply(
             const sub_feature_flags = try readU32(data, absolute_subtable + 8);
             if (subtable_length < 12 or subtable_length > chain_offset + chain_length - subtable_offset) return error.BadSfnt;
             if ((flags & sub_feature_flags) != 0) {
+                const vertical = (coverage & 0x80000000) != 0;
+                const all_directions = (coverage & 0x20000000) != 0;
+                if (!all_directions and vertical != options.vertical) {
+                    subtable_offset += subtable_length;
+                    continue;
+                }
                 const reverse = if ((coverage & 0x10000000) != 0)
                     (coverage & 0x40000000) != 0
                 else
@@ -78,6 +86,7 @@ pub fn apply(
                         subtable_length - 12,
                         glyphs,
                         options,
+                        &operations_left,
                     ),
                     1 => try contextual.apply(
                         data,
@@ -86,6 +95,7 @@ pub fn apply(
                         glyph_count,
                         glyphs,
                         options,
+                        &operations_left,
                     ),
                     2 => try applyLigatureSubtable(
                         allocator,
@@ -94,6 +104,7 @@ pub fn apply(
                         subtable_length - 12,
                         glyphs,
                         options,
+                        &operations_left,
                     ),
                     4 => try applyNoncontextualSubtable(
                         data,
@@ -101,6 +112,16 @@ pub fn apply(
                         subtable_length - 12,
                         glyphs,
                         options,
+                    ),
+                    5 => try insertion.apply(
+                        allocator,
+                        data,
+                        absolute_subtable + 12,
+                        subtable_length - 12,
+                        glyph_count,
+                        glyphs,
+                        options,
+                        &operations_left,
                     ),
                     else => {},
                 }
@@ -157,6 +178,7 @@ fn applyLigatureSubtable(
     length: usize,
     glyphs: *std.ArrayList(GlyphId),
     options: gsub.LookupOptions,
+    operations_left: *usize,
 ) Error!void {
     if (length < 28) return error.BadSfnt;
     const class_count: usize = @intCast(try readU32(data, offset));
@@ -190,6 +212,8 @@ fn applyLigatureSubtable(
     var match_positions: [max_ligature_matches]usize = undefined;
 
     while (true) {
+        if (operations_left.* == 0) return error.BadSfnt;
+        operations_left.* -= 1;
         const class = if (index < glyphs.items.len)
             try ligatureClassForGlyph(data, offset, length, class_table_offset, glyphs.items[index])
         else

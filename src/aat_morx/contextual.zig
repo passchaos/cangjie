@@ -16,6 +16,7 @@ pub fn apply(
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
     options: gsub.LookupOptions,
+    operations_left: *usize,
 ) Error!void {
     if (length < 20) return error.BadSfnt;
     const class_count: usize = @intCast(try state_table.readU32(data, offset));
@@ -36,11 +37,9 @@ pub fn apply(
     var index: usize = 0;
     var mark: usize = 0;
     var mark_set = false;
-    var operations_left = try state_table.operationBudget(glyphs.items.len);
-
     while (true) {
-        if (operations_left == 0) return error.BadSfnt;
-        operations_left -= 1;
+        if (operations_left.* == 0) return error.BadSfnt;
+        operations_left.* -= 1;
 
         const class = if (index < glyphs.items.len)
             try state_table.classForGlyph(data, offset, length, class_table_offset, glyphs.items[index])
@@ -157,5 +156,6 @@ test "rejects a non-advancing contextual state cycle" {
     defer glyphs.deinit(std.testing.allocator);
     try glyphs.append(std.testing.allocator, 2);
 
-    try std.testing.expectError(error.BadSfnt, apply(&data, 0, data.len, 3, &glyphs, .{}));
+    var operations_left = try state_table.operationBudget(glyphs.items.len);
+    try std.testing.expectError(error.BadSfnt, apply(&data, 0, data.len, 3, &glyphs, .{}, &operations_left));
 }

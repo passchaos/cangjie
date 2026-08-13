@@ -1725,6 +1725,30 @@ shaping-performance superiority.
   policy used for rearrangement, and retains the topology as a unit regression
   instead of exposing a hang or pretending it has deterministic parity.
 
+  AAT contextual insertion (`morx` type 5) passes all 21 deterministic rows
+  from upstream `MORX-{29,31,32,33,35}` against both references. The retained
+  `tests/data/aat/morx-insertion/` corpora cover marked/current insertion,
+  insertion before and after the template glyph, multi-glyph insertion lists,
+  and `DontAdvance` transitions that feed newly inserted glyphs back through
+  the machine:
+
+  | Font | Rows | Checksum |
+  | --- | ---: | ---: |
+  | `TestMORXTwentynine` | 4 | `ad27f263e2f75e18` |
+  | `TestMORXThirtyone` | 8 | `1e13a86e0e9ed11d` |
+  | `TestMORXThirtytwo` | 4 | `e6860ff3b023a55d` |
+  | `TestMORXThirtythree` | 3 | `378c9e777b2158df` |
+  | `TestMORXThirtyfive` | 2 | `24643782f5f0287a` |
+
+  The `MORX-34` and `MORX-36` stress rows also use `*`: they intentionally
+  expand indefinitely, including across eleven consecutive insertion
+  subtables. Cangjie shares one HarfBuzz-compatible operation budget across the
+  complete `morx` application, so both fail deterministically instead of
+  hanging or allocating without bound. The same fixtures exposed valid
+  non-four-byte chain lengths; validation now follows the declared packed
+  chain size instead of imposing an alignment rule absent from AAT and the
+  reference parsers.
+
   The implementation keeps glyph ids, source ownership, cluster ownership,
   substitution flags, and ligature provenance in lockstep for all 15 AAT
   rearrangement verbs, bounds rearranged spans to HarfBuzz's 64-glyph context
@@ -1732,9 +1756,10 @@ shaping-performance superiority.
   HarfBuzz-compatible operation budget. All eight
   `aat-trak.tests` rows are retained for `TRAK.ttf`; Cangjie applies AAT
   noncontextual `morx` alternates and interpolates horizontal `trak` advances
-  for the requested point size. Contextual insertion (`morx` type 5) remains
-  open and is represented by additional upstream MORX fixtures not yet in the
-  gate. The `shape-bench` now has a
+  for the requested point size. The retained upstream MORX matrix now covers
+  every supported AAT subtable kind (types 0, 1, 2, 4, and 5); broader
+  production-font and malformed-table fuzzing remains open. The `shape-bench`
+  now has a
   `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process
   HarfBuzz extents (`0,2179,2963,-2789` and `0,1898,2555,-2405`). The HarfRust

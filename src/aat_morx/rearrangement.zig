@@ -19,6 +19,7 @@ pub fn apply(
     length: usize,
     glyphs: *std.ArrayList(GlyphId),
     options: gsub.LookupOptions,
+    operations_left: *usize,
 ) Error!void {
     if (length < 16) return error.BadSfnt;
     const class_count: usize = @intCast(try state_table.readU32(data, offset));
@@ -38,11 +39,9 @@ pub fn apply(
     // transitions forever. Mirror HarfBuzz's buffer-wide operation allowance:
     // legitimate epsilon-heavy machines retain ample room, while an untrusted
     // cycle still terminates independently of the font's state topology.
-    var operations_left = try state_table.operationBudget(glyphs.items.len);
-
     while (true) {
-        if (operations_left == 0) return error.BadSfnt;
-        operations_left -= 1;
+        if (operations_left.* == 0) return error.BadSfnt;
+        operations_left.* -= 1;
 
         const class = if (index < glyphs.items.len)
             try state_table.classForGlyph(data, offset, length, class_table_offset, glyphs.items[index])
@@ -207,13 +206,14 @@ test "moves the final marked pair with parallel metadata" {
     @memset(ligatures.infos.items, .{});
     ligatures.infos.items[4].flags.synthetic_base = true;
 
+    var operations_left = try state_table.operationBudget(glyphs.items.len);
     try apply(&data, 0, data.len, &glyphs, .{
         .glyph_source_indices = &sources,
         .glyph_cluster_indices = &clusters,
         .glyph_substituted = &substituted,
         .glyph_stage_substituted = &stage_substituted,
         .ligature_components = &ligatures,
-    });
+    }, &operations_left);
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 3, 2, 3, 3, 2 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3, 5, 4 }, sources.items);
@@ -241,5 +241,6 @@ test "rejects a non-advancing state cycle" {
     defer glyphs.deinit(std.testing.allocator);
     try glyphs.append(std.testing.allocator, 2);
 
-    try std.testing.expectError(error.BadSfnt, apply(&data, 0, data.len, &glyphs, .{}));
+    var operations_left = try state_table.operationBudget(glyphs.items.len);
+    try std.testing.expectError(error.BadSfnt, apply(&data, 0, data.len, &glyphs, .{}, &operations_left));
 }

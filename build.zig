@@ -71,6 +71,26 @@ const retained_morx_contextual_gates = [_]struct {
     .{ .font_file = "TestMORXForty.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXForty-rtl.txt", .direction = "rtl" },
 };
 
+const retained_morx_insertion_gates = [_]struct {
+    font_file: []const u8,
+    text_file: []const u8,
+}{
+    .{ .font_file = "TestMORXTwentynine.ttf", .text_file = "tests/data/aat/morx-insertion/TestMORXTwentynine.txt" },
+    .{ .font_file = "TestMORXThirtyone.ttf", .text_file = "tests/data/aat/morx-insertion/TestMORXThirtyone.txt" },
+    .{ .font_file = "TestMORXThirtytwo.ttf", .text_file = "tests/data/aat/morx-insertion/TestMORXThirtytwo.txt" },
+    .{ .font_file = "TestMORXThirtythree.ttf", .text_file = "tests/data/aat/morx-insertion/TestMORXThirtythree.txt" },
+    .{ .font_file = "TestMORXThirtyfive.ttf", .text_file = "tests/data/aat/morx-insertion/TestMORXThirtyfive.txt" },
+};
+
+const retained_morx_rejection_gates = [_]struct {
+    font_file: []const u8,
+    text: []const u8,
+}{
+    .{ .font_file = "TestMORXTwentyfour.ttf", .text = "ABCDE" },
+    .{ .font_file = "TestMORXThirtyfour.ttf", .text = "ha" },
+    .{ .font_file = "TestMORXThirtysix.ttf", .text = "A" },
+};
+
 const retained_corpus_parity_gates = [_]struct {
     font_file: []const u8,
     text_file: []const u8,
@@ -2213,6 +2233,39 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_aat_parity_smoke_step.dependOn(&morx_harfrust_parity_cmd.step);
+        }
+        for (retained_morx_insertion_gates) |gate| {
+            const morx_harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_harfbuzz_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", "ltr",
+            });
+            shaping_aat_parity_smoke_step.dependOn(&morx_harfbuzz_parity_cmd.step);
+
+            const morx_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", "ltr",
+            });
+            shaping_aat_parity_smoke_step.dependOn(&morx_harfrust_parity_cmd.step);
+        }
+        for (retained_morx_rejection_gates) |gate| {
+            const morx_rejection_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_rejection_cmd.addArgs(&.{
+                "--font",       b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text",       gate.text,
+                "--direction",  "ltr",
+                "--iterations", "1",
+                "--warmup",     "0",
+                "--samples",    "1",
+            });
+            morx_rejection_cmd.expectExitCode(1);
+            morx_rejection_cmd.expectStdErrMatch("error: BadSfnt");
+            shaping_aat_parity_smoke_step.dependOn(&morx_rejection_cmd.step);
         }
         shaping_parity_smoke_step.dependOn(shaping_aat_parity_smoke_step);
     }

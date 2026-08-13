@@ -107,7 +107,11 @@ fn chainHeader(data: []const u8, table_offset: usize, table_length: usize, offse
     const length: usize = @intCast(try bin.readU32At(data, start + 4));
     const feature_count: usize = @intCast(try bin.readU32At(data, start + 8));
     const subtable_count: usize = @intCast(try bin.readU32At(data, start + 12));
-    if (length < 16 or (length & 3) != 0 or length > table_length - offset) return error.BadSfnt;
+    // Chains are packed by their declared byte length. Real AAT fonts,
+    // including Apple's insertion-state fixtures, use valid even-but-
+    // non-four-byte lengths; neither the `morx` format nor HarfBuzz requires
+    // padding each chain to a 32-bit boundary.
+    if (length < 16 or length > table_length - offset) return error.BadSfnt;
     if (feature_count > (length - 16) / 12) return error.BadSfnt;
     return .{
         .offset = offset,
@@ -269,5 +273,19 @@ test "morx accepts duplicate and unsorted feature records from system fonts" {
     writeU16(&bytes, 26, 0);
     writeU16(&bytes, 36, 1);
     writeU16(&bytes, 38, 0);
+    try validate(&bytes, 0, bytes.len, 2);
+}
+
+test "morx accepts packed chains without four-byte padding" {
+    var bytes: [50]u8 = .{0} ** 50;
+    writeU16(&bytes, 0, 2);
+    writeU32(&bytes, 4, 1);
+    writeU32(&bytes, 8, 1); // Default flags activate the subtable.
+    writeU32(&bytes, 12, 42); // Header plus a 26-byte insertion subtable.
+    writeU32(&bytes, 20, 1);
+    writeU32(&bytes, 24, 26);
+    writeU32(&bytes, 28, 0x20000005);
+    writeU32(&bytes, 32, 1);
+
     try validate(&bytes, 0, bytes.len, 2);
 }

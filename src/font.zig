@@ -1,5 +1,6 @@
 const std = @import("std");
 const aat_morx = @import("aat_morx.zig");
+const aat_kerx = @import("aat_kerx.zig");
 const vort = @import("vort");
 const ankr_mod = @import("opentype/ankr.zig");
 const base_mod = @import("opentype/base.zig");
@@ -916,6 +917,36 @@ pub const KerxLookupForShaping = struct {
             left,
             right,
             vertical,
+        );
+    }
+
+    pub fn collectStateMachineAdjustments(
+        self: KerxLookupForShaping,
+        glyphs: []const glyph_mod.GlyphId,
+        adjustments: *std.ArrayList(aat_kerx.Adjustment),
+        allocator: std.mem.Allocator,
+        vertical: bool,
+        direction_backward: bool,
+    ) FontError!void {
+        try self.font.validateGlyphRun(glyphs);
+        try aat_kerx.collectAdjustments(
+            self.font.data,
+            self.kerx.offset,
+            self.kerx.length,
+            self.font.glyph_count,
+            glyphs,
+            adjustments,
+            allocator,
+            vertical,
+            direction_backward,
+        );
+    }
+
+    pub fn hasStateMachine(self: KerxLookupForShaping) FontError!bool {
+        return try kerx_mod.hasStateMachine(
+            self.font.data,
+            self.kerx.offset,
+            self.kerx.length,
         );
     }
 };

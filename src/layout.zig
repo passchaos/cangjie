@@ -1,4 +1,5 @@
 const std = @import("std");
+const aat_kerx = @import("aat_kerx.zig");
 const arabic_normalization = @import("arabic_normalization.zig");
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
@@ -4490,13 +4491,26 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         !lookup_options.writing_mode.isVertical(),
     );
     // HarfBuzz chooses kerx ahead of both GPOS and legacy kern unless GSUB and
-    // GPOS are the active OpenType engines. This format-0 path intentionally
+    // GPOS are the active OpenType engines. This AAT path intentionally
     // preserves that table-level decision, so a present kerx table suppresses
-    // duplicate legacy `kern` application even when no pair matches this run.
+    // duplicate legacy `kern` application even when no subtable changes this
+    // particular run.
     const kerx_lookup = if (kerning_enabled and use_kerx_positioning)
         try font.kerxLookupForShaping()
     else
         null;
+    const kerx_adjustments = &scratch.kerx_adjustments;
+    if (kerx_lookup) |lookup| {
+        if (try lookup.hasStateMachine()) {
+            try lookup.collectStateMachineAdjustments(
+                glyph_ids.items,
+                kerx_adjustments,
+                buffer.allocator,
+                lookup_options.writing_mode.isVertical(),
+                shapingDirectionForGpos(lookup_options) == .rtl,
+            );
+        }
+    }
     const kern_lookup = if (kerx_lookup == null and
         !font.hasKerxTableForShaping() and
         !lookup_options.writing_mode.isVertical() and
@@ -4549,7 +4563,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id, lookup_options.normalized_variation_coords);
         const glyph_class = gdef_metadata.glyphClass(glyph_id);
+        const kerx_adjustment = if (index < kerx_adjustments.items.len)
+            kerx_adjustments.items[index]
+        else
+            aat_kerx.Adjustment{};
         var kern_x_advance: f32 = 0;
+        const kerx_state_x_offset = @as(f32, @floatFromInt(kerx_adjustment.x_offset)) * scale;
         var kern_x_offset: f32 = 0;
         const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
         const kerx_skips_glyph = kerx_lookup != null and kerxMachineSkipsGlyph(
@@ -4655,7 +4674,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const horizontal_advance = if (hide_default_ignorable)
             0
         else
-            (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance) * scale + kern_x_advance;
+            (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance +
+                @as(f32, @floatFromInt(kerx_adjustment.x_advance))) * scale + kern_x_advance;
         const use_sideways_vertical_advance = lookup_options.writing_mode.isVertical() and
             glyphUsesSidewaysAdvance(source_codepoint, lookup_options.text_orientation);
         const vertical_metrics = if (lookup_options.writing_mode.isVertical())
@@ -4663,7 +4683,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         else
             null;
         const unzeroed_vertical_advance = if (use_sideways_vertical_advance)
-            (@as(f32, @floatFromInt(metrics.advance_width)) + adjustment_x_advance) * scale
+            (@as(f32, @floatFromInt(metrics.advance_width)) + adjustment_x_advance +
+                @as(f32, @floatFromInt(kerx_adjustment.y_advance))) * scale
         else if (vertical_metrics) |value|
             @as(f32, @floatFromInt(value.advance_height)) * scale
         else
@@ -4671,13 +4692,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const vertical_advance = if (mark_zeroing.zero_advance)
             0
         else if (fallback_space_vertical_advance) |value|
-            @as(f32, @floatFromInt(value)) * scale
+            (@as(f32, @floatFromInt(value)) + @as(f32, @floatFromInt(kerx_adjustment.y_advance))) * scale
         else if (use_sideways_vertical_advance)
-            horizontal_advance
+            unzeroed_vertical_advance
         else if (vertical_metrics) |value|
-            @as(f32, @floatFromInt(value.advance_height)) * scale
+            (@as(f32, @floatFromInt(value.advance_height)) + @as(f32, @floatFromInt(kerx_adjustment.y_advance))) * scale
         else
-            font_size;
+            font_size + @as(f32, @floatFromInt(kerx_adjustment.y_advance)) * scale;
         const vertical_x_offset = if (vertical_metrics) |_|
             // OpenType's synthesized vertical origin is centered in the
             // horizontal advance box. This keeps upright ideographs centered
@@ -4720,15 +4741,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const output_x_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
             0
         else if (lookup_options.writing_mode.isVertical())
-            vertical_x_offset + gpos_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x
+            vertical_x_offset + gpos_x_offset + kerx_state_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x
         else
-            gpos_x_offset + kern_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x;
+            gpos_x_offset + kerx_state_x_offset + kern_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x;
         const output_y_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
             0
         else if (lookup_options.writing_mode.isVertical())
-            vertical_y_offset + @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset + fallback_mark_offset.y
+            vertical_y_offset +
+                @as(f32, @floatFromInt(adjustment.y_placement + kerx_adjustment.y_offset)) * scale +
+                zeroed_mark_y_offset + fallback_mark_offset.y
         else
-            @as(f32, @floatFromInt(adjustment.y_placement)) * scale + zeroed_mark_y_offset + fallback_mark_offset.y;
+            @as(f32, @floatFromInt(adjustment.y_placement + kerx_adjustment.y_offset)) * scale +
+                zeroed_mark_y_offset + fallback_mark_offset.y;
         buffer.glyphs.appendAssumeCapacity(.{
             .glyph_id = output_glyph_id,
             .synthetic_glyph_id = synthetic_glyph_id,

@@ -49,6 +49,10 @@ pub fn buildKerxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxTtfTables(allocator));
 }
 
+pub fn buildKerxFormat1Ttf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxFormat1TtfTables(allocator));
+}
+
 pub fn buildKerxFormat2Ttf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxFormat2TtfTables(allocator));
 }
@@ -925,6 +929,21 @@ fn kerxTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[5] = .{ .tag = "kerx", .data = try kerxTable(allocator) };
+    tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxFormat1TtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "kerx", .data = try kerxFormat1Table(allocator) };
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
@@ -3413,6 +3432,38 @@ fn kerxTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 42, 1);
     writeU16(bytes, 44, 1);
     writeI16(bytes, 46, -30);
+    return bytes;
+}
+
+fn kerxFormat1Table(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 120);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 112);
+    writeU32(bytes, 12, 1); // horizontal format 1.
+    writeU32(bytes, 20, 4); // class count.
+    writeU32(bytes, 24, 20);
+    writeU32(bytes, 28, 28);
+    writeU32(bytes, 32, 52);
+    writeU32(bytes, 36, 96); // action list relative to embedded machine.
+
+    writeU16(bytes, 8 + 12 + 20, 0); // dense lookup: glyph 1 -> class 3.
+    writeU16(bytes, 8 + 12 + 22, 1);
+    writeU16(bytes, 8 + 12 + 24, 3);
+
+    // State array and 6-byte entries mirror the focused executor test.
+    writeU16(bytes, 8 + 12 + 28 + 3 * 2, 1);
+    writeU16(bytes, 8 + 12 + 28 + (4 + 3) * 2, 2);
+    writeU16(bytes, 8 + 12 + 52 + 4, 0xffff);
+    writeU16(bytes, 8 + 12 + 52 + 6, 1);
+    writeU16(bytes, 8 + 12 + 52 + 8, 0x8000);
+    writeU16(bytes, 8 + 12 + 52 + 10, 0xffff);
+    writeU16(bytes, 8 + 12 + 52 + 12, 0);
+    writeU16(bytes, 8 + 12 + 52 + 14, 0);
+    writeU16(bytes, 8 + 12 + 52 + 16, 0);
+    writeI16(bytes, 8 + 12 + 96, -30);
+    writeI16(bytes, 8 + 12 + 98, -1);
     return bytes;
 }
 

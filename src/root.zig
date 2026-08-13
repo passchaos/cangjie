@@ -9115,6 +9115,27 @@ test "AAT kerx format 0 positioning takes precedence over legacy kern" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), disabled.glyphs[1].x_offset, 0.001);
 }
 
+test "AAT kerx format 1 state positioning takes precedence over legacy kern" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildKerxFormat1Ttf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 1000);
+
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 1570), run.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 770), run.glyphs[0].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 800), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -30), run.glyphs[0].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[1].x_offset, 0.001);
+}
+
 test "AAT kerx format 2 class positioning takes precedence over legacy kern" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

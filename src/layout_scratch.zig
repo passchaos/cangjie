@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const GlyphId = @import("glyph.zig").GlyphId;
+const aat_kerx = @import("aat_kerx.zig");
 const gpos = @import("gpos.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const unicode = @import("unicode.zig");
@@ -23,12 +24,14 @@ pub const ShapeScratch = struct {
     glyph_script_positions: std.ArrayList(u8) = .empty,
     glyph_output_indices: std.ArrayList(usize) = .empty,
     stch_actions: std.ArrayList(u8) = .empty,
+    kerx_adjustments: std.ArrayList(aat_kerx.Adjustment) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
     attachment_links: std.ArrayList(@import("attachment.zig").Link) = .empty,
 
     pub fn deinit(self: *ShapeScratch, allocator: std.mem.Allocator) void {
         self.attachment_links.deinit(allocator);
         self.gpos_adjustments.deinit(allocator);
+        self.kerx_adjustments.deinit(allocator);
         self.stch_actions.deinit(allocator);
         self.glyph_output_indices.deinit(allocator);
         self.glyph_script_positions.deinit(allocator);
@@ -67,6 +70,7 @@ pub const ShapeScratch = struct {
         self.glyph_script_positions.clearRetainingCapacity();
         self.glyph_output_indices.clearRetainingCapacity();
         self.stch_actions.clearRetainingCapacity();
+        self.kerx_adjustments.clearRetainingCapacity();
         self.gpos_adjustments.clearRetainingCapacity();
         self.attachment_links.clearRetainingCapacity();
     }

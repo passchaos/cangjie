@@ -141,6 +141,23 @@ pub fn pairKerning(
     return @intCast(std.math.clamp(total, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
+pub fn hasStateMachine(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+) Error!bool {
+    const h = try header(data, offset, length);
+    var subtable_offset: usize = 8;
+    var found = false;
+    for (0..h.table_count) |_| {
+        const subtable = try subtableHeader(data, offset, length, subtable_offset);
+        found = found or subtable.format == 1;
+        subtable_offset += subtable.length;
+    }
+    if (subtable_offset != length) return error.BadSfnt;
+    return found;
+}
+
 test "format 0 pair lookup sums applicable subtables and clamps totals" {
     var bytes = [_]u8{0} ** 88;
     writeU16Test(&bytes, 0, 2);
@@ -427,11 +444,39 @@ fn validateSubtable(data: []const u8, table_offset: usize, table_length: usize, 
     _ = table_length;
     switch (subtable.format) {
         0 => _ = try format0Pairs(data, table_offset, subtable, glyph_count, null, .validate_only),
+        1 => try validateFormat1(data, table_offset, subtable, glyph_count),
         2 => try validateFormat2(data, table_offset, subtable, glyph_count),
         6 => try validateFormat6(data, table_offset, subtable, glyph_count),
-        1, 4 => {},
+        4 => {},
         else => return error.BadSfnt,
     }
+}
+
+fn validateFormat1(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize) Error!void {
+    if (subtable.length < 32) return error.BadSfnt;
+    const start = table_offset + subtable.offset;
+    const machine_start = start + 12;
+    const machine_length = subtable.length - 12;
+    const class_count: usize = @intCast(try bin.readU32At(data, start + 12));
+    const class_table_offset: usize = @intCast(try bin.readU32At(data, start + 16));
+    const state_array_offset: usize = @intCast(try bin.readU32At(data, start + 20));
+    const entry_table_offset: usize = @intCast(try bin.readU32At(data, start + 24));
+    const action_offset: usize = @intCast(try bin.readU32At(data, start + 28));
+    if (class_count < 4 or
+        class_table_offset < 20 or
+        state_array_offset < 20 or
+        entry_table_offset < 20 or
+        action_offset < 16 or
+        class_table_offset >= machine_length or
+        state_array_offset >= machine_length or
+        entry_table_offset >= machine_length or
+        action_offset >= machine_length)
+    {
+        return error.BadSfnt;
+    }
+    try aat_lookup.validateLookupU16(data, machine_start + class_table_offset, machine_length - class_table_offset, glyph_count);
+    // The complete state/action graph is preflighted by the dedicated format-1
+    // executor before it mutates any output-side adjustment.
 }
 
 fn validateFormat2(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize) Error!void {

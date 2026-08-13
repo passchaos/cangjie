@@ -1463,6 +1463,12 @@ const ContextCoverageLookupData = struct {
     group_slots: []u16,
 };
 
+// A direct slot is a u16 `group_index + 1`; zero remains the miss sentinel.
+// Cap each lookup at 8 KiB so sparse, high-glyph fonts retain the compact
+// binary-search representation rather than trading unbounded memory for O(1)
+// dispatch.
+const max_context_direct_group_slots = 4096;
+
 fn buildContextCoverageLookupAccelerator(
     table: Table,
     lookup_offset: usize,
@@ -1519,7 +1525,22 @@ fn buildContextCoverageLookupAccelerator(
         for (groups) |group| allocator.free(group.subtable_indices);
         allocator.free(groups);
     }
-    const group_slots = try buildChainingGroupSlots(groups, allocator);
+    const group_slots = slots: {
+        if (groups.len == 0 or
+            groups[groups.len - 1].glyph >= max_context_direct_group_slots or
+            groups.len > std.math.maxInt(u16))
+        {
+            break :slots try allocator.alloc(u16, 0);
+        }
+        // Context format 3 probes one first glyph at every position. Compact
+        // glyph spaces can dispatch directly, avoiding hash/collision walks.
+        const slots = try allocator.alloc(u16, @as(usize, groups[groups.len - 1].glyph) + 1);
+        @memset(slots, 0);
+        for (groups, 0..) |group, group_index| {
+            slots[group.glyph] = @intCast(group_index + 1);
+        }
+        break :slots slots;
+    };
     errdefer allocator.free(group_slots);
     return .{
         .subtables = subtables,
@@ -5403,11 +5424,23 @@ fn applyContextCoverageLookupAccelerated(
         if (!sourceFeatureAllowsGlyph(options, pos)) continue;
         const first = glyphs.items[pos];
         if (lookupIgnoresGlyph(lookup_flag, options, first)) continue;
-        const candidates = chainingSubtableGroupForGlyph(
-            accelerator.context_groups,
-            accelerator.context_group_slots,
-            first,
-        ) orelse continue;
+        const candidates = candidates: {
+            if (accelerator.context_group_slots.len != 0) {
+                if (first >= accelerator.context_group_slots.len) continue;
+                const group_slot = accelerator.context_group_slots[first];
+                if (group_slot == 0) continue;
+                const group_index = @as(usize, group_slot) - 1;
+                if (group_index >= accelerator.context_groups.len) return error.BadGsub;
+                const group = accelerator.context_groups[group_index];
+                if (group.glyph != first) return error.BadGsub;
+                break :candidates group.subtable_indices;
+            }
+            break :candidates chainingSubtableGroupForGlyph(
+                accelerator.context_groups,
+                &.{},
+                first,
+            ) orelse continue;
+        };
         for (candidates) |subtable_i| {
             if (subtable_i >= accelerator.context_coverage_subtables.len) return error.BadGsub;
             const subtable = accelerator.context_coverage_subtables[subtable_i];
@@ -11879,11 +11912,10 @@ test "GSUB context coverage accelerator preserves order skips and cardinality ch
         var accelerators = [_]LookupAccelerator{accelerator};
         deinitLookupAcceleratorContents(allocator, &accelerators);
     }
-    const candidates = chainingSubtableGroupForGlyph(
-        accelerator.context_groups,
-        accelerator.context_group_slots,
-        1,
-    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(accelerator.context_group_slots.len > 1);
+    const group_slot = accelerator.context_group_slots[1];
+    try std.testing.expect(group_slot != 0);
+    const candidates = accelerator.context_groups[group_slot - 1].subtable_indices;
     try std.testing.expectEqualSlices(u16, &.{ 0, 1 }, candidates);
 
     var accelerated = std.ArrayList(GlyphId).empty;
@@ -11904,6 +11936,81 @@ test "GSUB context coverage accelerator preserves order skips and cardinality ch
     const expected = [_]GlyphId{ 1, 9, 20, 21, 1, 9, 20, 21 };
     try std.testing.expectEqualSlices(GlyphId, &expected, generic.items);
     try std.testing.expectEqualSlices(GlyphId, &expected, accelerated.items);
+
+    // Accelerators are externally supplied through LookupOptions. Even after
+    // lookup-offset validation, reject corrupt direct slots rather than using
+    // them as unchecked indexes or silently dispatching another glyph's group.
+    var invalid_index_slots = [_]u16{ 0, 2 };
+    var invalid_accelerator = accelerator;
+    invalid_accelerator.context_group_slots = &invalid_index_slots;
+    var invalid_glyphs = std.ArrayList(GlyphId).empty;
+    defer invalid_glyphs.deinit(allocator);
+    try invalid_glyphs.appendSlice(allocator, &.{ 1, 2 });
+    try std.testing.expectError(
+        error.BadGsub,
+        applyContextCoverageLookupAccelerated(
+            table,
+            &invalid_glyphs,
+            allocator,
+            0x0008,
+            .{
+                .glyph_classes = &glyph_classes,
+                .assume_validated = true,
+            },
+            &invalid_accelerator,
+        ),
+    );
+
+    var wrong_key_slots = [_]u16{ 0, 0, 1 };
+    invalid_accelerator.context_group_slots = &wrong_key_slots;
+    invalid_glyphs.clearRetainingCapacity();
+    try invalid_glyphs.appendSlice(allocator, &.{ 2, 2 });
+    try std.testing.expectError(
+        error.BadGsub,
+        applyContextCoverageLookupAccelerated(
+            table,
+            &invalid_glyphs,
+            allocator,
+            0x0008,
+            .{
+                .glyph_classes = &glyph_classes,
+                .assume_validated = true,
+            },
+            &invalid_accelerator,
+        ),
+    );
+
+    // A high first glyph would make a dense array wasteful. Rebuild the same
+    // lookup with glyph 4096 and verify that the empty-slot representation
+    // falls back to ordered group search without changing substitution order.
+    writeCoverage1(&bytes, first_context + 16, max_context_direct_group_slots);
+    writeCoverage1(&bytes, second_context + 16, max_context_direct_group_slots);
+    const sparse_accelerator = try buildLookupAccelerator(table, context_lookup, allocator);
+    defer {
+        var accelerators = [_]LookupAccelerator{sparse_accelerator};
+        deinitLookupAcceleratorContents(allocator, &accelerators);
+    }
+    try std.testing.expectEqual(@as(usize, 0), sparse_accelerator.context_group_slots.len);
+
+    var sparse_glyphs = std.ArrayList(GlyphId).empty;
+    defer sparse_glyphs.deinit(allocator);
+    try sparse_glyphs.appendSlice(allocator, &.{ max_context_direct_group_slots, 9, 2 });
+    try applyContextCoverageLookupAccelerated(
+        table,
+        &sparse_glyphs,
+        allocator,
+        0x0008,
+        .{
+            .glyph_classes = &glyph_classes,
+            .assume_validated = true,
+        },
+        &sparse_accelerator,
+    );
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &.{ max_context_direct_group_slots, 9, 20, 21 },
+        sparse_glyphs.items,
+    );
 }
 
 test "GSUB multiple substitution makes a later sequence index valid" {

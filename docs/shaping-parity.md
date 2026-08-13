@@ -2197,3 +2197,19 @@ shaping-performance superiority.
   Profiled Roboto GSUB lookup 6 fell from about `8.77 ms` to `3.13 ms`.
   All corpus checksums remained identical, and both retained parity gates pass
   against HarfBuzz and HarfRust.
+- Accelerated ContextSubst format 3 lookups now use a bounded direct
+  first-glyph index when the covered glyph space is below 4096. Each u16 slot
+  stores `group_index + 1`, retaining zero as the miss sentinel; sparse or
+  high-glyph lookups keep the ordered binary-search fallback rather than
+  allocating more than 8 KiB. The runtime bounds-checks the decoded index and
+  verifies its group key before trusting an externally supplied accelerator.
+  Fixed-CPU-30 A/B/B/A plus B/A/A/B matrices with four 31-sample medians per
+  binary improved NotoSansDevanagari `hi-words` from `1513.646` to
+  `1483.829 ns/glyph`, about `1.97%`. Roboto `en-words`, Amiri `fa-words`,
+  and Amiri `fa-thelittleprince` changed by `-0.04%`, `-0.12%`, and `-0.22%`,
+  respectively. Interleaved counters reduced Devanagari retired instructions
+  by `0.53%`, branches by `0.55%`, cycles by `1.92%`, and branch misses by
+  `6.66%`; nontarget instructions and branches stayed within `0.01%`. Focused
+  tests cover direct hits, corrupt index/key rejection, and the high-glyph
+  fallback. All corpus checksums remained identical, and the complete retained
+  parity suite passes against HarfBuzz and HarfRust.

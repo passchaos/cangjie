@@ -112,9 +112,26 @@ const constraints = [_]Constraint{
     .{ .first = 0x11686, .second = 0x116b2 },
 };
 
+fn canStartConstraint(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x905, 0x906, 0x909, 0x90f, 0x930, 0x985, 0x98b, 0x98c => true,
+        0xa05, 0xa72, 0xa73, 0xa85, 0xac5, 0xb05, 0xb0f, 0xb13 => true,
+        0xb85, 0xc12, 0xc3f, 0xc46, 0xc4a, 0xc89, 0xc8b, 0xc92 => true,
+        0xd07, 0xd09, 0xd0e, 0xd12, 0xd85, 0xd8b, 0xd8d, 0xd8f => true,
+        0xd91, 0xd94, 0x11005, 0x1100b, 0x1100f, 0x11200, 0x11206, 0x1122c => true,
+        0x11240, 0x112b0, 0x11481, 0x1148b, 0x1148d, 0x114aa, 0x11600, 0x11601 => true,
+        0x11680, 0x11686 => true,
+        else => false,
+    };
+}
+
 pub fn matchLength(codepoints: []const u21, start: usize) u2 {
     if (start >= codepoints.len or codepoints.len - start < 2) return 0;
     const first = codepoints[start];
+    // Most shaping scalars cannot begin one of the 103 invalid
+    // sequences. Reject them through the exact 50-scalar set
+    // before entering the lower-bound search over duplicate keys.
+    if (!canStartConstraint(first)) return 0;
     var low: usize = 0;
     var high: usize = constraints.len;
     while (low < high) {
@@ -136,4 +153,6 @@ test "vowel constraints match two and three scalar sequences" {
     try testing.expectEqual(@as(u2, 2), matchLength(&.{ 0x0905, 0x093a }, 0));
     try testing.expectEqual(@as(u2, 3), matchLength(&.{ 0x0930, 0x094d, 0x0907 }, 0));
     try testing.expectEqual(@as(u2, 0), matchLength(&.{ 0x0905, 0x093f }, 0));
+    try testing.expect(canStartConstraint(0x0905));
+    try testing.expect(!canStartConstraint(0x0915));
 }

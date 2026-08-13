@@ -2306,3 +2306,17 @@ shaping-performance superiority.
   identical. All 293 focused Indic tests, the full ReleaseFast suite, and the
   retained parity umbrella pass, including the 10,000-line Hindi HarfBuzz
   comparison (`b01a5388ce792b49`).
+- USE invalid-vowel matching now rejects scalars outside the exact generated
+  set of 50 possible sequence starts before entering the lower-bound search
+  over all 103 constraints. The set and its explanatory counts are generated
+  from `IndicShapingInvalidCluster.txt`, and regenerating to a temporary file
+  reproduces the checked-in Zig source byte for byte. Against `53f8eda`,
+  fixed-CPU-30 reverse-order counters reduced NotoSansDevanagari `hi-words`
+  retired instructions by `0.64%`, branches by `0.57%`, cycles by `0.61%`,
+  and ref-cycles by `1.31%`; branch misses rose `0.35%`. The 31-sample
+  dual-order medians improved Hindi by `0.32%` overall, with both orders
+  improving. Roboto and SourceSerifVariable retired work stayed within
+  `0.001%`, and both improved in counter cycles; Amiri `fa-words` and
+  `fa-thelittleprince` remained neutral or improved. All five A/B checksums
+  were identical. The focused test, full ReleaseFast suite, USE parity gate,
+  general shaping parity gate, and corpus parity gate all pass.

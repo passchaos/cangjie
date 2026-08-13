@@ -49,6 +49,28 @@ const retained_morx_rearrangement_gates = [_]struct {
     .{ .font_file = "TestMORXSeventeen.ttf", .text_file = "tests/data/aat/morx-rearrangement/TestMORXSeventeen.txt" },
 };
 
+const retained_morx_contextual_gates = [_]struct {
+    font_file: []const u8,
+    text_file: []const u8,
+    direction: []const u8 = "ltr",
+}{
+    .{ .font_file = "TestMORXEighteen.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXEighteen.txt" },
+    .{ .font_file = "TestMORXTwenty.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXTwenty.txt" },
+    .{ .font_file = "TestMORXTwentyone.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXTwentyone.txt" },
+    .{ .font_file = "TestMORXTwentytwo.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXTwentytwo.txt" },
+    .{ .font_file = "TestMORXTwentythree.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXTwentythree.txt" },
+    .{ .font_file = "TestMORXTwentyfive.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXTwentyfive.txt" },
+    .{ .font_file = "TestMORXTwentysix.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXTwentysix.txt" },
+    .{ .font_file = "TestMORXThirtyseven.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXThirtyseven-ltr.txt" },
+    .{ .font_file = "TestMORXThirtyseven.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXThirtyseven-rtl.txt", .direction = "rtl" },
+    .{ .font_file = "TestMORXThirtyeight.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXThirtyeight-ltr.txt" },
+    .{ .font_file = "TestMORXThirtyeight.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXThirtyeight-rtl.txt", .direction = "rtl" },
+    .{ .font_file = "TestMORXThirtynine.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXThirtynine-ltr.txt" },
+    .{ .font_file = "TestMORXThirtynine.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXThirtynine-rtl.txt", .direction = "rtl" },
+    .{ .font_file = "TestMORXForty.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXForty-ltr.txt" },
+    .{ .font_file = "TestMORXForty.ttf", .text_file = "tests/data/aat/morx-contextual/TestMORXForty-rtl.txt", .direction = "rtl" },
+};
+
 const retained_corpus_parity_gates = [_]struct {
     font_file: []const u8,
     text_file: []const u8,
@@ -2170,6 +2192,25 @@ pub fn build(b: *std.Build) void {
                 "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
                 "--text-file", gate.text_file,
                 "--direction", "ltr",
+            });
+            shaping_aat_parity_smoke_step.dependOn(&morx_harfrust_parity_cmd.step);
+        }
+        for (retained_morx_contextual_gates) |gate| {
+            const morx_harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_harfbuzz_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", gate.direction,
+            });
+            shaping_aat_parity_smoke_step.dependOn(&morx_harfbuzz_parity_cmd.step);
+
+            const morx_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            morx_harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", gate.direction,
             });
             shaping_aat_parity_smoke_step.dependOn(&morx_harfrust_parity_cmd.step);
         }

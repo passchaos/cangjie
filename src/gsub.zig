@@ -94,6 +94,11 @@ pub const LookupOptions = struct {
     /// mapped to a synthetic not-found glyph is no longer skipped as a
     /// default-ignorable during contextual matching.
     visible_variation_selectors: bool = false,
+    /// Whether the current glyph stream is physically reversed from logical
+    /// source order before entering AAT `morx`. Individual subtables can request
+    /// logical or layout-order traversal, so the AAT driver needs this baseline
+    /// to reverse all parallel glyph metadata temporarily and restore it.
+    aat_buffer_reversed: bool = false,
     active_auto_zwnj: bool = true,
     active_auto_zwj: bool = true,
     /// Preselected lookup indices for the active script/language/features.

@@ -2858,7 +2858,7 @@ pub const Font = struct {
         const morx = self.morx orelse return;
         try validateSfntTableChecksum(self.data, morx);
         try validateMorxTable(self.data, morx, self.glyph_count);
-        try aat_morx.apply(allocator, self.data, morx.offset, morx.length, glyphs, options);
+        try aat_morx.apply(allocator, self.data, morx.offset, morx.length, self.glyph_count, glyphs, options);
     }
 
     pub fn collectGposAdjustmentsWithOptionsUsingGdefAfterProof(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {

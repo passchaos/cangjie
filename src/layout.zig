@@ -3768,6 +3768,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .profile_io = profile_io,
         .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
         .random_state = &gsub_random_state,
+        .aat_buffer_reversed = shape_in_native_direction,
     };
     const gsub_start = shapeProfileNow(shape_profile, profile_io);
     const gsub_after_proof = if (buffer.gsub_table_proof_cache) |proof_cache| proof: {

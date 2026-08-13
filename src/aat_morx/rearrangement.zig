@@ -12,8 +12,6 @@ const mark_first: u16 = 0x8000;
 const mark_last: u16 = 0x2000;
 const verb_mask: u16 = 0x000f;
 const max_context = 64;
-const max_operations_factor = 4096;
-const min_operations = 65536;
 
 pub fn apply(
     data: []const u8,
@@ -40,9 +38,7 @@ pub fn apply(
     // transitions forever. Mirror HarfBuzz's buffer-wide operation allowance:
     // legitimate epsilon-heavy machines retain ample room, while an untrusted
     // cycle still terminates independently of the font's state topology.
-    const position_count = std.math.add(usize, glyphs.items.len, 1) catch return error.BadSfnt;
-    var operations_left = std.math.mul(usize, position_count, max_operations_factor) catch return error.BadSfnt;
-    operations_left = @max(operations_left, min_operations);
+    var operations_left = try state_table.operationBudget(glyphs.items.len);
 
     while (true) {
         if (operations_left == 0) return error.BadSfnt;

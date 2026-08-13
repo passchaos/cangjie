@@ -4,7 +4,9 @@ const GlyphId = @import("glyph.zig").GlyphId;
 const gsub = @import("gsub.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
+const contextual = @import("aat_morx/contextual.zig");
 const rearrangement = @import("aat_morx/rearrangement.zig");
+const run_metadata = @import("aat_morx/run_metadata.zig");
 const state_table = @import("aat_morx/state_table.zig");
 
 const Error = error{ BadSfnt, InvalidShapingInput } || std.mem.Allocator.Error || error{EndOfStream};
@@ -24,6 +26,7 @@ pub fn apply(
     data: []const u8,
     table_offset: usize,
     table_length: usize,
+    glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
     options: gsub.LookupOptions,
 ) Error!void {
@@ -33,6 +36,10 @@ pub fn apply(
     if (version != 2 and version != 3) return error.BadSfnt;
     if (try readU16(data, table_offset + 2) != 0) return error.BadSfnt;
     const chain_count = try readU32(data, table_offset + 4);
+    var buffer_is_reversed = options.aat_buffer_reversed;
+    defer if (buffer_is_reversed != options.aat_buffer_reversed) {
+        run_metadata.reverse(glyphs, options);
+    };
     var chain_offset: usize = 8;
     var chain_index: u32 = 0;
     while (chain_index < chain_count) : (chain_index += 1) {
@@ -56,11 +63,27 @@ pub fn apply(
             const sub_feature_flags = try readU32(data, absolute_subtable + 8);
             if (subtable_length < 12 or subtable_length > chain_offset + chain_length - subtable_offset) return error.BadSfnt;
             if ((flags & sub_feature_flags) != 0) {
+                const reverse = if ((coverage & 0x10000000) != 0)
+                    (coverage & 0x40000000) != 0
+                else
+                    ((coverage & 0x40000000) != 0) != (options.text_direction == .rtl);
+                if (reverse != buffer_is_reversed) {
+                    run_metadata.reverse(glyphs, options);
+                    buffer_is_reversed = reverse;
+                }
                 switch (coverage & 0xff) {
                     0 => try rearrangement.apply(
                         data,
                         absolute_subtable + 12,
                         subtable_length - 12,
+                        glyphs,
+                        options,
+                    ),
+                    1 => try contextual.apply(
+                        data,
+                        absolute_subtable + 12,
+                        subtable_length - 12,
+                        glyph_count,
                         glyphs,
                         options,
                     ),

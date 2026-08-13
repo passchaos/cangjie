@@ -1696,6 +1696,35 @@ shaping-performance superiority.
   | `TestMORXSixteen` | 1 | `c002b2bbca134649` |
   | `TestMORXSeventeen` | 1 | `7fa25edf22ddbdc5` |
 
+  AAT contextual substitution (`morx` type 1) is also retained for all 41
+  deterministic upstream `MORX-{18,20,21,22,23,25,26,37,38,39,40}` rows across
+  11 fonts. The `tests/data/aat/morx-contextual/` gate covers substitutions of
+  marked and current glyphs, end-of-text actions, format 6/8 class lookups,
+  format 6/8 action lookups, and all four logical/layout × forward/backward
+  coverage combinations. Format 0/2/4 action lookups are implemented and
+  covered by focused parser tests rather than these upstream fonts. The per-corpus
+  checksums are:
+
+  | Corpus | Rows | Direction | Checksum |
+  | --- | ---: | --- | ---: |
+  | `TestMORXEighteen` | 4 | LTR | `6b13eeaa2f26a86a` |
+  | `TestMORXTwenty` | 7 | LTR | `b5138b59a375ec43` |
+  | `TestMORXTwentyone` | 1 | LTR | `367a89a8504c67a6` |
+  | `TestMORXTwentytwo` | 1 | LTR | `a20889bbdccb1687` |
+  | `TestMORXTwentythree` | 1 | LTR | `da8555bc3bd8f32c` |
+  | `TestMORXTwentyfive` | 9 | LTR | `88e69563ca600d19` |
+  | `TestMORXTwentysix` | 2 | LTR | `d24186dc270eab53` |
+  | `TestMORXThirtyseven` | 2 / 2 | LTR / RTL | `eaf47d933f9227b2` / `9a0528269af6a35a` |
+  | `TestMORXThirtyeight` | 2 / 2 | LTR / RTL | `eaf47d933f9227b2` / `44a216133a7658b3` |
+  | `TestMORXThirtynine` | 2 / 2 | LTR / RTL | `3d87acc2b7fb875` / `44a216133a7658b3` |
+  | `TestMORXForty` | 2 / 2 | LTR / RTL | `3d87acc2b7fb875` / `9a0528269af6a35a` |
+
+  The remaining upstream `MORX-24` row uses `*` rather than an expected
+  output: its state table deliberately takes an infinite `DontAdvance` cycle.
+  Cangjie rejects that malformed machine under the same bounded operation
+  policy used for rearrangement, and retains the topology as a unit regression
+  instead of exposing a hang or pretending it has deterministic parity.
+
   The implementation keeps glyph ids, source ownership, cluster ownership,
   substitution flags, and ligature provenance in lockstep for all 15 AAT
   rearrangement verbs, bounds rearranged spans to HarfBuzz's 64-glyph context
@@ -1703,9 +1732,9 @@ shaping-performance superiority.
   HarfBuzz-compatible operation budget. All eight
   `aat-trak.tests` rows are retained for `TRAK.ttf`; Cangjie applies AAT
   noncontextual `morx` alternates and interpolates horizontal `trak` advances
-  for the requested point size. Contextual `morx` substitution (type 1) and
-  insertion (type 5) remain open and are represented by additional upstream
-  MORX fixtures not yet in the gate. The `shape-bench` now has a
+  for the requested point size. Contextual insertion (`morx` type 5) remains
+  open and is represented by additional upstream MORX fixtures not yet in the
+  gate. The `shape-bench` now has a
   `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process
   HarfBuzz extents (`0,2179,2963,-2789` and `0,1898,2555,-2405`). The HarfRust

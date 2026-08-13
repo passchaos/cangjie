@@ -2213,3 +2213,22 @@ shaping-performance superiority.
   tests cover direct hits, corrupt index/key rejection, and the high-glyph
   fallback. All corpus checksums remained identical, and the complete retained
   parity suite passes against HarfBuzz and HarfRust.
+- Indic shaping now proves its maximal glyph/source metadata contract before
+  the first explicit `nukt`/`akhn` stage and immediately enters the trusted
+  cached-plan path. Source features, syllables, clusters, substitution state,
+  and ligature provenance are all complete at that point, while every
+  supported GSUB mutation preserves their parallel cardinalities. Previously
+  the pre-reorder stage defensively scanned the same run and provenance store,
+  then the maximal proof repeated that validation before the remaining stages.
+  Fixed-CPU-30 A/B/B/A plus B/A/A/B matrices with four 31-sample medians per
+  binary improved NotoSansDevanagari `hi-words` from `1483.831` to
+  `1470.815 ns/glyph`, about `0.88%`. Roboto `en-words`,
+  SourceSerifVariable `en-words`, Amiri `fa-words`, and Amiri
+  `fa-thelittleprince` changed by `-0.05%`, `-0.39%`, `+0.05%`, and `-0.11%`,
+  respectively. Interleaved hardware counters reduced Devanagari retired
+  instructions by `0.62%`, branches by `0.75%`, cycles/ref-cycles by `1.03%`,
+  and branch misses by `1.11%`; nontarget instructions and branches stayed
+  within `0.01%`, and nontarget cycles stayed within `0.14%`. All checksums
+  were identical. The full ReleaseFast test suite and complete retained parity
+  umbrella pass against both HarfBuzz and HarfRust, including the 10,000-line
+  Hindi corpus and all retained USE/Indic fixtures.

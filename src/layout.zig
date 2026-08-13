@@ -4302,8 +4302,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             gsub_options.source_features = source_features.items;
             gsub_options.source_syllables = source_syllables.items;
 
-            try applyGsubFeatureApplicationsForShaping(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             try gsub.validateScriptShaperRunMetadata(gsub_options, glyph_ids.items.len);
+            // The maximal proof covers the pre-reorder stage too: source
+            // features/syllables and every glyph-parallel sidecar are already
+            // complete here, and all supported GSUB mutations preserve those
+            // contracts. Start the trusted cached-plan sequence immediately
+            // instead of defensively validating this same run twice.
+            try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
             try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
             @memset(glyph_stage_substituted.items, false);

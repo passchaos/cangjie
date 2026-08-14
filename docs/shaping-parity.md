@@ -1605,6 +1605,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `TestGVAREight.ttf` fixture also has a stale optional fvar named-instance
   label; shaping and axis APIs now remain usable while `variationInstances()`
   continues to reject unresolved instance metadata.
+- All 17 Unicode text-rendering `AVAR-1.tests` design locations from
+  `TEST=100` through `TEST=900` are retained with HarfBuzz glyph-extents and
+  HarfRust shaping parity for `TestAVAR.ttf`. The complete sampling protects
+  the font's piecewise avar plateau (`-0.5→0`, `0.5→0`) rather than checking
+  only the minimum/default/maximum instances.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

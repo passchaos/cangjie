@@ -1552,6 +1552,15 @@ const retained_variable_text_rendering_parity_gates = [_]struct {
         .remove_default_ignorables = true,
         .harfbuzz_extents = true,
     },
+    .{
+        .font_file = "TestAVAR.ttf",
+        .text = "⨁",
+        .direction = "ltr",
+        .size = "1000",
+        .variations = &.{ "TEST=100", "TEST=150", "TEST=200", "TEST=250", "TEST=300", "TEST=350", "TEST=400", "TEST=450", "TEST=500", "TEST=550", "TEST=600", "TEST=650", "TEST=700", "TEST=750", "TEST=800", "TEST=850", "TEST=900" },
+        .remove_default_ignorables = true,
+        .harfbuzz_extents = true,
+    },
 };
 
 const retained_text_rendering_rejection_gates = [_]struct {

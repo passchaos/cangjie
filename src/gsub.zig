@@ -2852,7 +2852,7 @@ pub fn validateGlyphBoundsForShaping(data: []const u8, offset: usize, length: us
         if (lookup_type == 4) {
             try ensureLigatureLookupSubtablesWithinForShaping(table, lookup_offset, subtable_count);
         } else {
-            try ensureSubstitutionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
+            try ensureSubstitutionLookupSubtablesWithinForShaping(table, lookup_offset, lookup_type, subtable_count);
         }
     }
 }
@@ -7322,6 +7322,18 @@ fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, l
     }
 }
 
+fn ensureSubstitutionLookupSubtablesWithinForShaping(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GsubError!void {
+    switch (lookup_type) {
+        1, 2, 3, 4, 5, 6, 8 => {},
+        else => return,
+    }
+    for (0..subtable_count) |subtable_i| {
+        const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
+        try ensureSubstitutionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
+        try ensureSubstitutionSubtableVariableDataWithinForShaping(table, subtable_offset, lookup_type);
+    }
+}
+
 fn ensureLigatureLookupSubtablesWithinForShaping(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!void {
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
@@ -7469,6 +7481,18 @@ fn ensureSubstitutionSubtableVariableDataWithin(table: Table, subtable_offset: u
         6 => try ensureChainingContextSubstitutionSubtableWithin(table, subtable_offset),
         8 => try ensureReverseChainingSingleSubstitutionSubtableWithin(table, subtable_offset),
         else => {},
+    }
+}
+
+fn ensureSubstitutionSubtableVariableDataWithinForShaping(table: Table, subtable_offset: usize, lookup_type: u16) GsubError!void {
+    switch (lookup_type) {
+        // Chaining input/backtrack/lookahead Coverage tables are boolean
+        // membership sets; unlike a top-level coverage, their numeric index is
+        // never used to address a parallel array. HarfBuzz accepts duplicate
+        // format-1 glyph IDs in these sets (TestGPOSOne.ttf contains one), so
+        // validate bounds and glyph IDs without imposing strict order.
+        6 => try ensureChainingContextSubstitutionSubtableWithinForShaping(table, subtable_offset),
+        else => try ensureSubstitutionSubtableVariableDataWithin(table, subtable_offset, lookup_type),
     }
 }
 
@@ -7729,6 +7753,34 @@ fn ensureChainingContextSubstitutionSubtableWithin(table: Table, subtable_offset
     }
 }
 
+fn ensureChainingContextSubstitutionSubtableWithinForShaping(table: Table, subtable_offset: usize) GsubError!void {
+    const subst_format = try readU16BadGsub(table, subtable_offset);
+    if (subst_format != 3) {
+        return ensureChainingContextSubstitutionSubtableWithin(table, subtable_offset);
+    }
+
+    var cursor = subtable_offset + 2;
+    const backtrack_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithinForShaping(table, subtable_offset, cursor, backtrack_count);
+    cursor += @as(usize, backtrack_count) * 2;
+
+    const input_count = try readU16BadGsub(table, cursor);
+    if (input_count == 0) return error.BadGsub;
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithinForShaping(table, subtable_offset, cursor, input_count);
+    cursor += @as(usize, input_count) * 2;
+
+    const lookahead_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureCoverageOffsetArrayWithinForShaping(table, subtable_offset, cursor, lookahead_count);
+    cursor += @as(usize, lookahead_count) * 2;
+
+    const subst_count = try readU16BadGsub(table, cursor);
+    cursor += 2;
+    try ensureSubstitutionRecordsWithin(table, cursor, subst_count, input_count);
+}
+
 fn ensureChainingRuleSetWithin(table: Table, rule_set_offset: usize) GsubError!void {
     const rule_count = try readU16BadGsub(table, rule_set_offset);
     const rule_offsets_pos = rule_set_offset + 2;
@@ -7831,6 +7883,14 @@ fn ensureCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos
     for (0..count) |i| {
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16BadGsub(table, offsets_pos + i * 2));
         try ensureCoverageTableWithin(table, coverage_offset);
+    }
+}
+
+fn ensureCoverageOffsetArrayWithinForShaping(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GsubError!void {
+    try ensureBytesWithin(table, offsets_pos, @as(usize, count) * 2);
+    for (0..count) |i| {
+        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16BadGsub(table, offsets_pos + i * 2));
+        try ensureCoverageTableWithinForMembership(table, coverage_offset);
     }
 }
 
@@ -7948,6 +8008,21 @@ fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GsubError!voi
                 );
             }
         },
+        else => return error.UnsupportedGsub,
+    }
+}
+
+fn ensureCoverageTableWithinForMembership(table: Table, coverage_offset: usize) GsubError!void {
+    const format = try readU16BadGsub(table, coverage_offset);
+    switch (format) {
+        1 => {
+            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
+            try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
+            for (0..glyph_count) |glyph_i| {
+                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, coverage_offset + 4 + glyph_i * 2));
+            }
+        },
+        2 => try ensureCoverageTableWithin(table, coverage_offset),
         else => return error.UnsupportedGsub,
     }
 }
@@ -9182,6 +9257,39 @@ test "GSUB rejects malformed coverage ordering before substitution" {
 
     try std.testing.expectError(error.BadGsub, applySingleSubstitution(table, 0, &glyphs, 0, .{}));
     try std.testing.expectEqual(@as(GlyphId, 10), glyphs.items[0]);
+}
+
+test "GSUB shaping accepts duplicate chaining membership glyphs" {
+    var bytes = [_]u8{0} ** 36;
+    const chain = 0;
+    writeU16Test(&bytes, chain + 0, 3);
+    writeU16Test(&bytes, chain + 2, 1);
+    writeU16Test(&bytes, chain + 4, 18);
+    writeU16Test(&bytes, chain + 6, 1);
+    writeU16Test(&bytes, chain + 8, 26);
+    writeU16Test(&bytes, chain + 10, 0);
+    writeU16Test(&bytes, chain + 12, 0);
+    writeU16Test(&bytes, chain + 14, 0);
+    writeU16Test(&bytes, chain + 16, 0);
+
+    // Duplicate glyph 7 is harmless in a backtrack membership set.
+    writeU16Test(&bytes, chain + 18, 1);
+    writeU16Test(&bytes, chain + 20, 2);
+    writeU16Test(&bytes, chain + 22, 7);
+    writeU16Test(&bytes, chain + 24, 7);
+    writeCoverage1(&bytes, chain + 26, 8);
+
+    const table = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .glyph_count = 16,
+    };
+    try std.testing.expectError(
+        error.BadGsub,
+        ensureChainingContextSubstitutionSubtableWithin(table, chain),
+    );
+    try ensureChainingContextSubstitutionSubtableWithinForShaping(table, chain);
 }
 
 test "GSUB class format 1 handles upper glyph boundary" {

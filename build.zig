@@ -1303,6 +1303,11 @@ const retained_text_rendering_parity_gates = [_]struct {
         .direction = "rtl",
     },
     .{
+        .font_file = "TestGPOSOne.ttf",
+        .text_file = "tests/data/gpos-1-rendering-tests.txt",
+        .direction = "ltr",
+    },
+    .{
         .font_file = "NotoSerifKannada-Regular.ttf",
         .text_file = "tests/data/kannada-shknda-1-tests.txt",
         .direction = "ltr",

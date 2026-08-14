@@ -1515,6 +1515,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   it reports `ShapingLimitExceeded` in about 20 ms instead of growing an
   in-place ArrayList without bound for minutes. The 503,948-glyph retained
   Duployan corpus remains accepted with checksum `cfff51d05e65e33f`.
+- All 19 Unicode text-rendering `GPOS-1.tests` rows are retained in
+  `tests/data/gpos-1-rendering-tests.txt` with `TestGPOSOne.ttf`. Both
+  references produce 38 glyphs with checksum `153f5283ab978745`. The font's
+  GSUB contains a duplicate glyph in a format-3 chaining backtrack Coverage;
+  because this Coverage is used only as a membership set, the shaping
+  validator now accepts and bounds-checks it like HarfBuzz/fontations while
+  continuing to require strict ordering for index-bearing top-level Coverage
+  tables and for the detached defensive API.
 - Newa passes all five script-specific cases retained from upstream
   `in-house/use-syllable.tests` across three fixture fonts. The slice covers
   virama+ZWNJ termination, CGJ transparency in contextual and nested ligature

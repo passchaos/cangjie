@@ -2078,7 +2078,12 @@ shaping-performance superiority.
   too; Cangjie enables HarfBuzz-style random
   AlternateSubst by default, uses the same 32-bit wrapping minstd LCG state, and
   bypasses index-only GSUB selection caching when a lookup needs feature-value
-  or random metadata.
+  or random metadata. Explicit script shapers now retain that same random bit
+  in direct, cached, and lookup-order-merged feature plans. In particular, the
+  upstream LTR Arabic `ligature-id.tests` row for
+  `8339c821814d9bad7c77169332327ad8b0f33c81.ttf` is retained against both
+  HarfBuzz and HarfRust: the common `rand` feature runs in the early Arabic
+  stage and advances one shared PRNG state before joining forms and ligatures.
 - Arabic-like joining now includes Adlam in the Arabic-style positional shaper:
   the HarfBuzz in-house `arabic-like-joining.tests` Adlam long joining row for
   `5dfad7735c6a67085f1b90d4d497e32907db4c78.ttf` is retained as an inline
@@ -2188,7 +2193,8 @@ shaping-performance superiority.
   `b31e6c52a31edadc16f1bec9efe6019e2d59824a.ttf` is retained too, covering a
   `lam + fatha + lam + damma + heh` ligature with mark positioning; the long
   repeated `fa + alef` Arabic row for `8339c821814d9bad7c77169332327ad8b0f33c81.ttf`
-  is retained as an inline HarfRust gate as well. The Bengali `indic-syllable.tests`
+  is retained in its upstream LTR direction as a dual-reference gate as well.
+  The Bengali `indic-syllable.tests`
   placeholder row for `87f85d17d26f1fe9ad28d7365101958edaefb967.ttf` is
   retained too; U+0980 now acts as a placeholder base so the following
   candrabindu merges into the same shaping cluster.

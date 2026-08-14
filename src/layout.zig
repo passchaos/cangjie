@@ -3913,16 +3913,36 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         joining_options.source_features = source_features.items;
         arabic_joining_features = source_features.items;
 
-        if (shapingFeatureEnabled(unicode.tag("stch"), lookup_options.features, true)) {
-            try applyGsubFeatureApplicationsForShaping(
+        const stch_enabled = shapingFeatureEnabled(unicode.tag("stch"), lookup_options.features, true);
+        var common_features_buf: [2]gsub.FeatureApplication = undefined;
+        var common_feature_count: usize = 0;
+        if (randomFeatureApplication(lookup_options.features)) |application| {
+            common_features_buf[common_feature_count] = application;
+            common_feature_count += 1;
+        }
+        if (stch_enabled) {
+            common_features_buf[common_feature_count] = .{
+                .tag = unicode.tag("stch"),
+                .auto_zwj = false,
+            };
+            common_feature_count += 1;
+        }
+        if (common_feature_count != 0) {
+            // `rand` is a common HarfBuzz feature collected before the Arabic
+            // shaper adds `stch`; both therefore occupy the same GSUB stage.
+            // Merge by lookup-list order rather than applying tag order, while
+            // retaining the random semantic bit in the resulting plan.
+            try applyMergedGsubFeatureApplicationsForShaping(
                 font,
                 buffer,
                 gsub_after_proof,
-                &.{.{ .tag = unicode.tag("stch"), .auto_zwj = false }},
+                common_features_buf[0..common_feature_count],
                 glyph_ids,
                 joining_options,
                 gdef_metadata.*,
             );
+        }
+        if (stch_enabled) {
             recordStchActions(ligature_components);
         }
 
@@ -5034,12 +5054,24 @@ fn applyMergedGsubFeatureApplicationsForShaping(
     gdef_metadata: GdefLookupMetadata,
 ) !void {
     if (applications.len == 0) return;
-    _ = gsub_after_proof;
-    const plan = try font.gsubMergedFeatureLookupPlanForShaping(buffer.allocator, applications, options, gdef_metadata);
-    defer {
+    const plan = if (gsub_after_proof and buffer.lookup_selection_cache != null)
+        try buffer.lookup_selection_cache.?.gsubMergedFeatureLookupPlan(
+            font,
+            applications,
+            options,
+            gdef_metadata,
+        )
+    else
+        try font.gsubMergedFeatureLookupPlanForShaping(
+            buffer.allocator,
+            applications,
+            options,
+            gdef_metadata,
+        );
+    defer if (!gsub_after_proof or buffer.lookup_selection_cache == null) {
         var mutable_plan = plan;
         mutable_plan.deinit(buffer.allocator);
-    }
+    };
     try font.applyGsubMergedFeatureLookupPlanUsingGdefAfterProof(plan, glyph_ids, buffer.allocator, options, gdef_metadata);
 }
 
@@ -5590,6 +5622,21 @@ fn shapingFeatureEnabled(feature: u32, overrides: []const unicode.FeatureOverrid
     return default_enabled;
 }
 
+fn randomFeatureApplication(overrides: []const unicode.FeatureOverride) ?gsub.FeatureApplication {
+    for (overrides) |override| {
+        if (override.tag != unicode.tag("rand")) continue;
+        if (!override.enabled) return null;
+        return .{
+            .tag = override.tag,
+            .value = override.effectiveValue(),
+        };
+    }
+    return .{
+        .tag = unicode.tag("rand"),
+        .value = gsub.random_feature_value,
+    };
+}
+
 fn featureOverridesWithDefaultDisabledCalt(out: []unicode.FeatureOverride, overrides: []const unicode.FeatureOverride) ?[]const unicode.FeatureOverride {
     if (out.len < overrides.len + 1) return null;
     var count: usize = 0;
@@ -5614,7 +5661,8 @@ fn explicitOptionalFeatureApplications(out: []gsub.FeatureApplication, overrides
 }
 
 fn explicitOptionalFeatureShouldRun(feature: u32) bool {
-    return feature != unicode.tag("stch") and
+    return feature != unicode.tag("rand") and
+        feature != unicode.tag("stch") and
         feature != unicode.tag("ccmp") and
         feature != unicode.tag("locl") and
         feature != unicode.tag("isol") and

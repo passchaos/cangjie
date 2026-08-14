@@ -993,6 +993,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "8339c821814d9bad7c77169332327ad8b0f33c81",
+        .text = "\u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "5bb74492f5e0ffa1fbb72e4c881be035120b6513",
         .text = "TUV",
         .direction = "ltr",
@@ -1986,7 +1991,7 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     .{
         .font_hash = "8339c821814d9bad7c77169332327ad8b0f33c81",
         .text = "\u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627} \u{0641}\u{0627}",
-        .direction = "rtl",
+        .direction = "ltr",
     },
     .{
         .font_hash = "a59fd13f1525a91cbe529c882e93d9d1fbb80463",

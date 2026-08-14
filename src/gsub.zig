@@ -570,6 +570,11 @@ pub const MergedFeatureLookup = struct {
     auto_zwj: bool = true,
     match_source_syllable: bool = false,
     value: u32 = 1,
+    /// `rand` uses the maximum feature value as a sentinel, but the numeric
+    /// value alone is not enough once several feature maps are merged by
+    /// lookup index. Retain the semantic bit so cached merged plans still
+    /// advance the shared HarfBuzz-compatible PRNG at each AlternateSubst.
+    random: bool = false,
 };
 
 pub const MergedFeatureLookupPlan = struct {
@@ -602,7 +607,10 @@ const SelectedLookup = struct {
     random: bool = false,
 };
 
-const random_feature_value: u32 = 255;
+/// HarfBuzz enables `rand` globally with HB_OT_MAP_MAX_VALUE. Keep the sentinel
+/// public so explicit script shapers can place the common feature in the same
+/// staged lookup plan as their script-specific features.
+pub const random_feature_value: u32 = 255;
 
 /// Apply default or explicitly enabled substitution features to the glyph
 /// stream in place. The input and output are glyph ids; source text metadata is
@@ -866,6 +874,7 @@ pub fn applyFeatureSequenceWithOptions(
         selected_options.active_auto_zwnj = application.auto_zwnj;
         selected_options.active_auto_zwj = application.auto_zwj;
         selected_options.active_feature_value = application.value;
+        selected_options.active_feature_random = featureApplicationIsRandom(application);
         try applySelectedFeatureFromPlan(table, application.tag, feature_indices, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -1065,6 +1074,7 @@ pub fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
         selected_options.active_auto_zwnj = entry.application.auto_zwnj;
         selected_options.active_auto_zwj = entry.application.auto_zwj;
         selected_options.active_feature_value = entry.application.value;
+        selected_options.active_feature_random = featureApplicationIsRandom(entry.application);
         try applyLookupPlanEntry(table, lookup_count, entry, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -1132,6 +1142,7 @@ pub fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
         selected_options.active_auto_zwj = lookup.auto_zwj;
         selected_options.match_source_syllable = lookup.match_source_syllable;
         selected_options.active_feature_value = lookup.value;
+        selected_options.active_feature_random = lookup.random;
         try applyLookupWithIndex(table, lookup_offset, lookup.lookup, glyphs, allocator, selected_options, &run_digest_cache);
     }
 }
@@ -1141,6 +1152,11 @@ fn featurePlanContains(applications: []const FeatureApplication, feature_tag: u3
         if (application.tag == feature_tag) return true;
     }
     return false;
+}
+
+fn featureApplicationIsRandom(application: FeatureApplication) bool {
+    return application.tag == unicode.tag("rand") and
+        application.value == random_feature_value;
 }
 
 fn applySelectedFeature(
@@ -3247,6 +3263,7 @@ fn appendMergedFeatureLookups(
             .auto_zwj = application.auto_zwj,
             .match_source_syllable = application.match_source_syllable,
             .value = application.value,
+            .random = featureApplicationIsRandom(application),
         });
     }
 }
@@ -3264,6 +3281,7 @@ fn sortMergeFeatureLookups(lookups: *std.ArrayList(MergedFeatureLookup)) void {
             lookups.items[write - 1].auto_zwj = lookups.items[write - 1].auto_zwj and lookup.auto_zwj;
             lookups.items[write - 1].match_source_syllable = lookups.items[write - 1].match_source_syllable or lookup.match_source_syllable;
             if (lookups.items[write - 1].value == 1) lookups.items[write - 1].value = lookup.value;
+            lookups.items[write - 1].random = lookups.items[write - 1].random or lookup.random;
         } else {
             lookups.items[write] = lookup;
             write += 1;
@@ -5023,6 +5041,85 @@ test "GSUB random AlternateSubst uses HarfBuzz wrapping minstd sequence" {
     for (expected) |alternate| {
         try std.testing.expectEqual(alternate, randomAlternateIndex(&state, 3));
     }
+}
+
+test "GSUB staged plans retain random AlternateSubst semantics" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 80;
+    writeRandomFeatureGsubTest(&bytes);
+    const application = [_]FeatureApplication{.{
+        .tag = unicode.tag("rand"),
+        .value = random_feature_value,
+    }};
+    const expected = [_]GlyphId{ 30, 20, 20, 30 };
+
+    // Exercise the uncached staged executor as well as both immutable plan
+    // representations used by script shapers. A numeric value of 255 without
+    // the semantic random bit would make every AlternateSubst a no-op here.
+    var direct = std.ArrayList(GlyphId).empty;
+    defer direct.deinit(allocator);
+    try direct.appendSlice(allocator, &.{ 10, 10, 10, 10 });
+    var direct_state: u32 = 1;
+    try applyFeatureSequenceWithOptions(
+        &bytes,
+        0,
+        bytes.len,
+        &application,
+        &direct,
+        allocator,
+        .{ .script_tag = .dflt, .random_state = &direct_state },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &expected, direct.items);
+
+    var feature_plan = try buildFeatureLookupPlan(
+        &bytes,
+        0,
+        bytes.len,
+        &application,
+        allocator,
+        .{ .script_tag = .dflt },
+    );
+    defer feature_plan.deinit(allocator);
+    var planned = std.ArrayList(GlyphId).empty;
+    defer planned.deinit(allocator);
+    try planned.appendSlice(allocator, &.{ 10, 10, 10, 10 });
+    var planned_state: u32 = 1;
+    try applyFeatureLookupPlanWithOptions(
+        &bytes,
+        0,
+        bytes.len,
+        feature_plan,
+        &planned,
+        allocator,
+        .{ .script_tag = .dflt, .random_state = &planned_state },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &expected, planned.items);
+
+    var merged_plan = try buildMergedFeatureLookupPlan(
+        &bytes,
+        0,
+        bytes.len,
+        &application,
+        allocator,
+        .{ .script_tag = .dflt },
+    );
+    defer merged_plan.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), merged_plan.lookups.len);
+    try std.testing.expect(merged_plan.lookups[0].random);
+    var merged = std.ArrayList(GlyphId).empty;
+    defer merged.deinit(allocator);
+    try merged.appendSlice(allocator, &.{ 10, 10, 10, 10 });
+    var merged_state: u32 = 1;
+    try applyMergedFeatureLookupPlanWithOptions(
+        &bytes,
+        0,
+        bytes.len,
+        merged_plan,
+        &merged,
+        allocator,
+        .{ .script_tag = .dflt, .random_state = &merged_state },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &expected, merged.items);
 }
 
 fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -14443,6 +14540,44 @@ fn writeSingleLookupGsubTest(bytes: []u8, lookup_type: u16) usize {
     writeU16Test(bytes, 22, 1);
     writeU16Test(bytes, 24, 8);
     return 26;
+}
+
+fn writeRandomFeatureGsubTest(bytes: []u8) void {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10); // ScriptList.
+    writeU16Test(bytes, 6, 30); // FeatureList.
+    writeU16Test(bytes, 8, 44); // LookupList.
+
+    writeU16Test(bytes, 10, 1);
+    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(bytes, 16, 8);
+    writeU16Test(bytes, 18, 4);
+    writeU16Test(bytes, 20, 0);
+    writeU16Test(bytes, 22, 0);
+    writeU16Test(bytes, 24, 0xffff);
+    writeU16Test(bytes, 26, 1);
+    writeU16Test(bytes, 28, 0);
+
+    writeU16Test(bytes, 30, 1);
+    writeFeatureRecord(bytes, 32, unicode.tag("rand"), 8);
+    writeFeature(bytes, 38, 0);
+
+    writeU16Test(bytes, 44, 1);
+    writeU16Test(bytes, 46, 4);
+    writeU16Test(bytes, 48, 3); // AlternateSubst.
+    writeU16Test(bytes, 50, 0);
+    writeU16Test(bytes, 52, 1);
+    writeU16Test(bytes, 54, 8);
+
+    const alternate = 56;
+    writeU16Test(bytes, alternate + 0, 1);
+    writeU16Test(bytes, alternate + 2, 12);
+    writeU16Test(bytes, alternate + 4, 1);
+    writeU16Test(bytes, alternate + 6, 18);
+    writeCoverage1(bytes, alternate + 12, 10);
+    writeU16Test(bytes, alternate + 18, 2);
+    writeU16Test(bytes, alternate + 20, 20);
+    writeU16Test(bytes, alternate + 22, 30);
 }
 
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {

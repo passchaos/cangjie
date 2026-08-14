@@ -1288,6 +1288,21 @@ const retained_text_rendering_parity_gates = [_]struct {
     direction: []const u8,
 }{
     .{
+        .font_file = "NotoSansBalinese-Regular.ttf",
+        .text_file = "tests/data/balinese-rendering-tests.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_file = "TestShapeLana.ttf",
+        .text_file = "tests/data/tai-tham-rendering-tests.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_file = "TestShapeAran.ttf",
+        .text_file = "tests/data/sharan-rendering-tests.txt",
+        .direction = "rtl",
+    },
+    .{
         .font_file = "NotoSerifKannada-Regular.ttf",
         .text_file = "tests/data/kannada-shknda-1-tests.txt",
         .direction = "ltr",

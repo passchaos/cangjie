@@ -229,6 +229,7 @@ pub fn decomposeCanonicalSources(
     glyph_cluster_indices: *std.ArrayList(usize),
     glyph_substituted: *std.ArrayList(bool),
     ligature_components: *ligature_provenance.Store,
+    cluster_level: shaping_metadata.ClusterLevel,
 ) !void {
     var source_index: usize = 0;
     while (source_index < codepoints.items.len) {
@@ -295,6 +296,7 @@ pub fn decomposeCanonicalSources(
             source_index += components.len;
             continue;
         }
+        const component_cluster_owner = glyph_cluster_indices.items[glyph_index];
         try glyph_ids.replaceRange(allocator, glyph_index, 1, component_glyphs[0..components.len]);
         var sources: [4]usize = undefined;
         var owners: [4]usize = undefined;
@@ -302,7 +304,18 @@ pub fn decomposeCanonicalSources(
         var infos: [4]ligature_provenance.Info = undefined;
         for (0..components.len) |component_index| {
             sources[component_index] = source_index + component_index;
-            owners[component_index] = source_index + component_index;
+            // Canonical decomposition creates internal shaping sources, not
+            // new text clusters. HarfBuzz copies the original scalar's cluster
+            // to every component. Grapheme levels retain the already-resolved
+            // grapheme owner; character levels must instead recover the
+            // original scalar because mark initialization may have inherited
+            // the preceding cluster before decomposition.
+            owners[component_index] = canonicalDecompositionClusterOwner(
+                cluster_level,
+                component_cluster_owner,
+                source_index,
+                component_index,
+            );
             infos[component_index] = .{};
         }
         try glyph_source_indices.replaceRange(allocator, glyph_index, 1, sources[0..components.len]);
@@ -311,6 +324,22 @@ pub fn decomposeCanonicalSources(
         try ligature_components.infos.replaceRange(allocator, glyph_index, 1, infos[0..components.len]);
         source_index += components.len;
     }
+}
+
+fn canonicalDecompositionClusterOwner(
+    cluster_level: shaping_metadata.ClusterLevel,
+    grapheme_owner: usize,
+    source_index: usize,
+    component_index: usize,
+) usize {
+    // Character levels retain one internal owner per component. The source
+    // byte starts still remain identical, but the distinct metadata identity
+    // allows Indic final reordering to merge only the leading split-matra
+    // component while leaving a post-base component at the original byte.
+    return if (cluster_level.groupsGraphemes())
+        grapheme_owner
+    else
+        source_index + component_index;
 }
 
 pub fn recordPrefSubstitutions(
@@ -802,6 +831,69 @@ test "Indic vowel constraints can merge the final scalar with dotted-circle owne
     try std.testing.expectEqualSlices(u21, &.{ 0x0930, 0x094d, 0x25cc, 0x0907 }, codepoints.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, owners.items);
+}
+
+test "canonical decomposition preserves the original cluster owner" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildCodepointSetTtf(allocator, &.{ 0x1b13, 0x1b35, 0x1b3c, 0x1b3d });
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var glyph_ids = std.ArrayList(GlyphId).empty;
+    defer glyph_ids.deinit(allocator);
+    try glyph_ids.appendSlice(allocator, &.{ 1, 2 });
+    var codepoints = std.ArrayList(u21).empty;
+    defer codepoints.deinit(allocator);
+    try codepoints.appendSlice(allocator, &.{ 0x1b13, 0x1b3d });
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(allocator);
+    try clusters.appendSlice(allocator, &.{ 0, 3 });
+    var source_ends = std.ArrayList(usize).empty;
+    defer source_ends.deinit(allocator);
+    try source_ends.appendSlice(allocator, &.{ 3, 6 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1 });
+    var owners = std.ArrayList(usize).empty;
+    defer owners.deinit(allocator);
+    try owners.appendSlice(allocator, &.{ 0, 0 });
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(allocator);
+    try substituted.appendSlice(allocator, &.{ false, false });
+    var components = ligature_provenance.Store{};
+    defer components.deinit(allocator);
+    try components.infos.appendSlice(allocator, &.{ .{}, .{} });
+
+    // The synthetic cmap includes both decomposition components so this
+    // exercises the successful, cardinality-changing branch without relying
+    // on a system or upstream test font.
+    try decomposeCanonicalSources(
+        allocator,
+        &font,
+        &glyph_ids,
+        &codepoints,
+        &clusters,
+        &source_ends,
+        &sources,
+        &owners,
+        &substituted,
+        &components,
+        .monotone_graphemes,
+    );
+    try std.testing.expectEqualSlices(u21, &.{ 0x1b13, 0x1b3c, 0x1b35 }, codepoints.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0 }, owners.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 3, 3 }, clusters.items);
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        canonicalDecompositionClusterOwner(.monotone_characters, 0, 1, 0),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        canonicalDecompositionClusterOwner(.monotone_characters, 0, 1, 1),
+    );
 }
 
 test "USE shaping includes Balinese" {

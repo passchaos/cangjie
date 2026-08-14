@@ -1434,17 +1434,16 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   Myanmar position, the `rphf/pref/blwf` `/pstf` stage order, and final
   `pres/abvs/blws/psts` plus typographic ligature features; full Myanmar
   syllable-machine coverage is described in the later retained-evidence entry.
-- NotoSansBalinese passes `compare-harfbuzz` for all 43 SHBALI rendering-test
-  cases retained in `tests/data/balinese-rendering-tests.txt`, covering USE
+- NotoSansBalinese passes both HarfBuzz and HarfRust for all 43 SHBALI
+  rendering-test cases retained in `tests/data/balinese-rendering-tests.txt`,
+  covering USE
   category assignment, syllable cluster ownership, split pre-base vowels,
   broken-syllable dotted circles, ligature decomposition, and GPOS output
-  (`checksum=21249c939189778c`). The gate is:
-  ```sh
-  zig build shape-bench -Doptimize=ReleaseFast -- \
-    --engine compare-harfbuzz \
-    --font ~/Work/harfbuzz/test/shape/data/text-rendering-tests/fonts/NotoSansBalinese-Regular.ttf \
-    --text-file tests/data/balinese-rendering-tests.txt --direction ltr
-  ```
+  (`checksum=c88e4564e3c0bb73`). Canonical decomposition now retains the
+  original scalar's cluster owner on every internal component; these are
+  shaping sources, not new text clusters. This lets a later ligature merge the
+  split U+1B3D components through the preceding Balinese conjunct, matching
+  both references on `U+1B13,U+1B44,U+1B13,U+1B3D`.
 - Javanese passes `compare-harfbuzz` for all 54 upstream
   `in-house/use-javanese.tests` inputs retained in
   `tests/data/javanese-use-tests.txt`, covering pre-base vowels, pref-produced
@@ -1494,19 +1493,18 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `tests/data/chakma-use-tests.txt` gate distinguishes ZWJ, which stays
   transparent to USE syllable matching, from WORD JOINER, which starts a
   broken dependent-vowel cluster and therefore requires a dotted circle.
-- Tai Tham passes `compare-harfbuzz` for all 209 `SHLANA-1..10` rendering-test
+- Tai Tham passes both HarfBuzz and HarfRust for all 209 `SHLANA-1..10` rendering-test
   cases retained in `tests/data/tai-tham-rendering-tests.txt`
-  (`checksum=33ad224cfc0de28f`). This gate covers Unicode 17 USE categories,
+  (`checksum=8c8341778b2acfea`). This gate covers Unicode 17 USE categories,
   modified canonical-combining-class reordering (including SAKOT), dynamic
   contextual `SequenceIndex` growth after MultipleSubst, position-major
   chaining-subtable priority, `pref`-classified dotted-circle reordering, and
-  ZWNJ-owned Tai Tham stacks. The gate is:
-  ```sh
-  zig build shape-bench -Doptimize=ReleaseFast -- \
-    --engine compare-harfbuzz \
-    --font ~/Work/harfbuzz/test/shape/data/text-rendering-tests/fonts/TestShapeLana.ttf \
-    --text-file tests/data/tai-tham-rendering-tests.txt --direction ltr
-  ```
+  ZWNJ-owned Tai Tham stacks.
+- The six Unicode text-rendering `SHARAN-1.tests` Urdu/Nastaliq lines are
+  retained in `tests/data/sharan-rendering-tests.txt` with `TestShapeAran.ttf`.
+  Both references produce 70 glyphs with checksum `2b8749a819fda434`,
+  covering joining-form selection and mixed Urdu presentation sequences in an
+  RTL run.
 - Newa passes all five script-specific cases retained from upstream
   `in-house/use-syllable.tests` across three fixture fonts. The slice covers
   virama+ZWNJ termination, CGJ transparency in contextual and nested ligature

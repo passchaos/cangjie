@@ -3842,6 +3842,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 glyph_cluster_indices,
                 glyph_substituted,
                 ligature_components,
+                lookup_options.cluster_level orelse .monotone_graphemes,
             );
         }
         gsub_options.source_codepoints = codepoints.items;
@@ -4275,6 +4276,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 glyph_cluster_indices,
                 glyph_substituted,
                 ligature_components,
+                lookup_options.cluster_level orelse .monotone_graphemes,
             );
             gsub_options.source_codepoints = codepoints.items;
         }

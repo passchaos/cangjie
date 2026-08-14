@@ -1573,6 +1573,15 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   checksums are `c9e49495a6e43c93`, `6e5b88b1079710a0`,
   `c354056763582773`, `a8fac55de53e66bf`, `73f5831a42821915`, and
   `53efa1cbd254571d`.
+- All six Unicode text-rendering `CVAR-{1,2}.tests` shaping rows pass both
+  references with `wdth=100,opsz=72` at `wght=28,94,194`.
+  `TestCVARGVARTwo.ttf` and `TestCVARGVAROne.ttf` each produce nine total
+  glyphs with per-instance checksums `5958eeac8791dab8`,
+  `bf8e3d31743b442b`, and `f19e521d929b2871`. This gate proves that fonts
+  carrying these cvar topologies load under the three-axis design-coordinate
+  contract and that their gvar-derived advances match. It does not claim
+  pixel-grid hinting parity: CVT deltas become observable only when a TrueType
+  interpreter executes instructions at a specific PPEM.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

@@ -1454,6 +1454,22 @@ const retained_variable_text_rendering_parity_gates = [_]struct {
         .variations = &.{ "wght=0", "wght=200", "wght=400", "wght=600", "wght=800", "wght=1000" },
         .remove_default_ignorables = true,
     },
+    .{
+        .font_file = "TestCVARGVARTwo.ttf",
+        .text = "hon",
+        .direction = "ltr",
+        .size = "1000",
+        .variations = &.{ "wght=28,wdth=100,opsz=72", "wght=94,wdth=100,opsz=72", "wght=194,wdth=100,opsz=72" },
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestCVARGVAROne.ttf",
+        .text = "hon",
+        .direction = "ltr",
+        .size = "1000",
+        .variations = &.{ "wght=28,wdth=100,opsz=72", "wght=94,wdth=100,opsz=72", "wght=194,wdth=100,opsz=72" },
+        .remove_default_ignorables = true,
+    },
 };
 
 const retained_text_rendering_rejection_gates = [_]struct {

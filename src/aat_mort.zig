@@ -3,6 +3,7 @@ const std = @import("std");
 const GlyphId = @import("glyph.zig").GlyphId;
 const gsub = @import("gsub.zig");
 const insertion = @import("aat_morx/insertion.zig");
+const ligature = @import("aat_morx/ligature.zig");
 const rearrangement = @import("aat_morx/rearrangement.zig");
 const state_table = @import("aat_morx/state_table.zig");
 
@@ -67,7 +68,11 @@ pub fn validate(
                     subtable_length - 8,
                     glyph_count,
                 ),
-                2 => {},
+                2 => try ligature.validateObsolete(
+                    data,
+                    subtable_start + 8,
+                    subtable_length - 8,
+                ),
                 else => return error.BadSfnt,
             }
             subtable_relative += subtable_length;
@@ -227,11 +232,11 @@ fn validateContextualOffset(
 /// Apply the supported subset of the legacy AAT `mort` table.
 ///
 /// `mort` predates `morx`: chain and subtable lengths/counts are 16-bit and
-/// coverage is an 8-bit flag byte packed above the subtable type. The deployed
-/// Types 0, 1, 4, and 5 have dedicated obsolete-layout executors. Type 2
-/// remains intentionally inert: its offsets differ from modern `morx`, so
-/// accepting its structure without executing it is preferable to accidentally
-/// applying the incompatible modern ligature machine.
+/// coverage is an 8-bit flag byte packed above the subtable type.
+/// Every defined subtable kind (0, 1, 2, 4, and 5) has a dedicated
+/// obsolete-layout parser. The shared ligature algorithm receives an explicit
+/// addressing mode because `mort` action/component/ligature offsets cannot be
+/// interpreted as the indexes used by modern `morx`.
 pub fn apply(
     allocator: std.mem.Allocator,
     data: []const u8,
@@ -310,10 +315,15 @@ pub fn apply(
                             glyphs,
                             options,
                         ),
-                        // The obsolete ligature format has different offset
-                        // bases from its morx successor. Keep it inert until
-                        // its executor has dedicated reference fixtures.
-                        2 => {},
+                        2 => try ligature.applyObsolete(
+                            allocator,
+                            data,
+                            subtable_start + 8,
+                            subtable_length - 8,
+                            glyph_count,
+                            glyphs,
+                            options,
+                        ),
                         else => return error.BadSfnt,
                     }
                 }

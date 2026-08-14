@@ -2466,6 +2466,26 @@ pub fn build(b: *std.Build) void {
         });
         shaping_aat_parity_smoke_step.dependOn(&mort_contextual_harfbuzz.step);
 
+        const mort_ligature_font = exportedBuiltinFont(
+            b,
+            shape_bench_exe,
+            "mort-ligature",
+            "mort-ligature.ttf",
+        );
+        const mort_ligature_harfbuzz = b.addRunArtifact(shape_bench_exe);
+        mort_ligature_harfbuzz.addArgs(&.{ "--engine", "compare-harfbuzz", "--font" });
+        mort_ligature_harfbuzz.addFileArg(mort_ligature_font);
+        mort_ligature_harfbuzz.addArgs(&.{
+            "--text",             "AB",
+            "--direction",        "ltr",
+            "--expect-glyph-ids", "3",
+            "--expect-clusters",  "0",
+            "--iterations",       "1",
+            "--warmup",           "0",
+            "--samples",          "1",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&mort_ligature_harfbuzz.step);
+
         const mort_insertion_font = exportedBuiltinFont(
             b,
             shape_bench_exe,

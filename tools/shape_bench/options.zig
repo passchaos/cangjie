@@ -60,6 +60,7 @@ pub const BuiltinFont = enum {
     mort,
     mort_rearrangement,
     mort_contextual,
+    mort_ligature,
     mort_insertion,
 
     pub fn fromName(name: []const u8) ?BuiltinFont {
@@ -84,6 +85,7 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "mort")) return .mort;
         if (std.mem.eql(u8, name, "mort-rearrangement")) return .mort_rearrangement;
         if (std.mem.eql(u8, name, "mort-contextual")) return .mort_contextual;
+        if (std.mem.eql(u8, name, "mort-ligature")) return .mort_ligature;
         if (std.mem.eql(u8, name, "mort-insertion")) return .mort_insertion;
         return null;
     }
@@ -111,6 +113,7 @@ pub const BuiltinFont = enum {
             .mort => "builtin:mort",
             .mort_rearrangement => "builtin:mort-rearrangement",
             .mort_contextual => "builtin:mort-contextual",
+            .mort_ligature => "builtin:mort-ligature",
             .mort_insertion => "builtin:mort-insertion",
         };
     }

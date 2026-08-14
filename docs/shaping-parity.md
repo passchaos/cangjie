@@ -1808,7 +1808,13 @@ shaping-performance superiority.
   state-subtable-relative byte offset, but each action is a zero-based glyph
   index and `0xFFFF` is the no-action sentinel. A synthetic `A` fixture inserts
   glyph 2 after glyph 1, clones source/substitution metadata, and matches
-  HarfBuzz. Stateful legacy `mort` type 2 ligatures remain open.
+  HarfBuzz. Type-2 ligatures now share the proven `morx` out-buffer and
+  metadata executor while retaining the obsolete format's three distinct
+  address conversions: entry action byte offsets, component word offsets, and
+  ligature byte offsets. A synthetic `AB` fixture forms glyph 3, merges its
+  cluster and ligature provenance, and matches HarfBuzz. Legacy `mort` now
+  executes every defined subtable type (0, 1, 2, 4, and 5); production-font
+  expansion and malformed-table fuzzing remain broader AAT work.
 
   AAT `kerx` formats 0, 1, 2, 4, and 6 now participate in actual shaping rather
   than metadata inspection only. The retained format-0/2/6 synthetic fonts

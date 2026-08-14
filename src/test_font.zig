@@ -97,6 +97,10 @@ pub fn buildMortContextualTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mortContextualTtfTables(allocator));
 }
 
+pub fn buildMortLigatureTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try mortLigatureTtfTables(allocator));
+}
+
 pub fn buildMortInsertionTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mortInsertionTtfTables(allocator));
 }
@@ -1161,6 +1165,21 @@ fn mortContextualTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, 3) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
     tables[7] = .{ .tag = "mort", .data = try mortContextualTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn mortLigatureTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat12RangeTable(allocator, 65, 66, 1) };
+    tables[1] = .{ .tag = "glyf", .data = try emptyGlyfTable(allocator, 4) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, 4) };
+    tables[5] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, 4) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    tables[7] = .{ .tag = "mort", .data = try mortLigatureTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
@@ -3664,6 +3683,50 @@ fn mortContextualTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, machine + 42, 18);
     writeI16(bytes, machine + 48, 26);
     writeU16(bytes, machine + 50 + 3 * 2, 1);
+    return bytes;
+}
+
+fn mortLigatureTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 90);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x0001_0000);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 1);
+    writeU32(bytes, 12, 82);
+    writeU16(bytes, 16, 0);
+    writeU16(bytes, 18, 1);
+    writeU16(bytes, 20, 70);
+    writeU16(bytes, 22, 0x2002);
+    writeU32(bytes, 24, 1);
+
+    const machine = 28;
+    writeU16(bytes, machine, 6);
+    writeU16(bytes, machine + 2, 14);
+    writeU16(bytes, machine + 4, 20);
+    writeU16(bytes, machine + 6, 32);
+    writeU16(bytes, machine + 8, 44);
+    writeU16(bytes, machine + 10, 52);
+    writeU16(bytes, machine + 12, 60);
+    writeU16(bytes, machine + 14, 1);
+    writeU16(bytes, machine + 16, 2);
+    bytes[machine + 18] = 4;
+    bytes[machine + 19] = 5;
+    bytes[machine + 20 + 4] = 1;
+    bytes[machine + 26 + 5] = 2;
+    writeU16(bytes, machine + 32, 20);
+    writeU16(bytes, machine + 36, 26);
+    writeU16(bytes, machine + 38, 0x8000);
+    writeU16(bytes, machine + 40, 20);
+    writeU16(bytes, machine + 42, 0x8000 | 44);
+
+    // These values deliberately encode all three obsolete address modes:
+    // action bytes at 44, component word offsets 26/27, and ligature byte
+    // offset 60. Treating any one of them as a modern morx index mis-shapes AB.
+    writeU32(bytes, machine + 44, 24);
+    writeU32(bytes, machine + 48, 0x8000_0000 | 26);
+    writeU16(bytes, machine + 52, 0);
+    writeU16(bytes, machine + 54, 60);
+    writeU16(bytes, machine + 60, 3);
     return bytes;
 }
 

@@ -1178,7 +1178,7 @@ pub const Font = struct {
         var r = bin.Reader.init(data);
         try r.seek(start);
         const scaler = try r.readU32();
-        const format: FontFormat = switch (scaler) {
+        const declared_format: FontFormat = switch (scaler) {
             0x00010000, 0x74727565 => .truetype,
             0x4f54544f => .opentype_cff,
             else => return error.BadSfnt,
@@ -1278,6 +1278,13 @@ pub const Font = struct {
         const has_glyf_outlines = glyf != null and loca != null;
         const has_embedded_bitmaps = sbix != null or (cblc != null and cbdt != null);
         const has_layout_tables = gsub != null or gpos != null;
+        const format = try selectOutlineFormat(
+            data,
+            maxp,
+            declared_format,
+            has_glyf_outlines,
+            cff != null or cff2 != null,
+        );
         if (format == .truetype) {
             // TrueType outlines are a glyf/loca pair; accepting only one table
             // leaves every glyph boundary ambiguous for outline reads. HarfBuzz
@@ -6460,6 +6467,31 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
             if (maxp.length != 6) return error.BadSfnt;
         },
     }
+}
+
+fn selectOutlineFormat(data: []const u8, maxp: TableRecord, declared_format: FontFormat, has_glyf_outlines: bool, has_cff_outlines: bool) FontError!FontFormat {
+    try requireTableLength(maxp, 6);
+    const version = try bin.readU32At(data, maxp.offset);
+    // Some text-rendering fixtures deliberately carry both glyf and CFF under
+    // conflicting sfnt flavors. HarfBuzz selects the internally complete
+    // outline stack: maxp 1.0 describes glyf limits, while maxp 0.5 is the CFF
+    // glyph-count form. Preserve the scaler as a fallback so malformed
+    // topologies still reach the strict format-specific validator below.
+    if (has_glyf_outlines and version == 0x00010000 and maxp.length == 32) return .truetype;
+    if (has_cff_outlines and version == 0x00005000 and maxp.length == 6) return .opentype_cff;
+    return declared_format;
+}
+
+test "outline format follows complete maxp-backed table stack" {
+    var maxp_10: [32]u8 = .{0} ** 32;
+    writeU32Test(&maxp_10, 0, 0x00010000);
+    const record_10 = TableRecord{ .tag = .{ 'm', 'a', 'x', 'p' }, .checksum = 0, .offset = 0, .length = maxp_10.len };
+    try std.testing.expectEqual(FontFormat.truetype, try selectOutlineFormat(&maxp_10, record_10, .opentype_cff, true, true));
+
+    var maxp_05: [6]u8 = .{0} ** 6;
+    writeU32Test(&maxp_05, 0, 0x00005000);
+    const record_05 = TableRecord{ .tag = .{ 'm', 'a', 'x', 'p' }, .checksum = 0, .offset = 0, .length = maxp_05.len };
+    try std.testing.expectEqual(FontFormat.opentype_cff, try selectOutlineFormat(&maxp_05, record_05, .truetype, true, true));
 }
 
 fn validateCff2Table(data: []const u8, cff2: TableRecord) FontError!void {

@@ -1607,6 +1607,20 @@ const retained_extents_text_rendering_parity_gates = [_]struct {
         .size = "1000",
         .remove_default_ignorables = true,
     },
+    .{
+        .font_file = "TestSFNTOne.otf",
+        .text_file = "tests/data/sfnt-1-2-outline-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestSFNTTwo.ttf",
+        .text_file = "tests/data/sfnt-1-2-outline-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
 };
 
 const retained_text_rendering_rejection_gates = [_]struct {

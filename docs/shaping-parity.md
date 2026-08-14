@@ -1631,6 +1631,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
 - The Unicode text-rendering `GLYF-1.tests` `gcommaabove` row is retained with
   HarfBuzz glyph-extents and HarfRust shaping parity for `TestGLYFOne.ttf`,
   covering compound-glyph point-matched accent placement.
+- All four Unicode text-rendering `SFNT-{1,2}.tests` rows are retained with
+  HarfBuzz glyph-extents and HarfRust shaping parity. The two fixtures carry
+  both CFF and glyf/loca under opposite sfnt flavors; Cangjie now follows the
+  internally complete maxp-backed outline stack (`maxp` 1.0 for glyf, 0.5 for
+  CFF) rather than treating the scaler flavor as the sole authority.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

@@ -4295,10 +4295,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 }
             }
         }
-        const apply_morx = font.hasMorxTableForShaping() and
+        const apply_aat_substitution = font.hasAatSubstitutionForShaping() and
             (!lookup_options.writing_mode.isVertical() or !font.hasGsubTableForShaping());
-        if (apply_morx) {
-            try font.applyMorxForShaping(glyph_ids, buffer.allocator, gsub_options);
+        if (apply_aat_substitution) {
+            try font.applyAatSubstitutionForShaping(glyph_ids, buffer.allocator, gsub_options);
         } else {
             const gsub_needs_value_selection = needsValueAwareGsubSelection(
                 font,
@@ -4443,13 +4443,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .profile_io = profile_io,
         .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
     };
-    const apply_morx_substitution = font.hasMorxTableForShaping() and
+    const apply_aat_substitution = font.hasAatSubstitutionForShaping() and
         (!lookup_options.writing_mode.isVertical() or !font.hasGsubTableForShaping());
     // HarfBuzz prefers GPOS whenever GSUB and GPOS are both the active
     // OpenType engines. If horizontal morx was selected, GSUB is deliberately
     // excluded from that pair and kerx owns positioning instead.
     const use_kerx_positioning = font.hasKerxTableForShaping() and
-        (apply_morx_substitution or
+        (apply_aat_substitution or
             !(font.hasGsubTableForShaping() and font.hasGposTableForShaping()));
     if (!use_kerx_positioning) {
         if (buffer.lookup_selection_cache) |selection_cache| {

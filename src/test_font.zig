@@ -85,6 +85,10 @@ pub fn buildMorxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try morxTtfTables(allocator));
 }
 
+pub fn buildMortTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try mortTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -1101,6 +1105,21 @@ fn morxTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "morx", .data = try morxTable(allocator) };
+    return tables;
+}
+
+fn mortTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "mort", .data = try mortTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -3501,6 +3520,27 @@ fn morxTable(allocator: std.mem.Allocator) ![]u8 {
     writeU32(bytes, 40, 0x20000004); // all-directions non-contextual.
     writeU32(bytes, 44, 4); // subFeatureFlags.
     writeU32(bytes, 48, 0x12345678); // opaque non-contextual payload for metadata exposure.
+    return bytes;
+}
+
+fn mortTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 42);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x0001_0000);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 1);
+    writeU32(bytes, 12, 34);
+    writeU16(bytes, 16, 0);
+    writeU16(bytes, 18, 1);
+    writeU16(bytes, 20, 22);
+    writeU16(bytes, 22, 0x2004); // all-directions noncontextual.
+    writeU32(bytes, 24, 1);
+    // Lookup format 8 maps glyph 1 to glyph 0. The fixture intentionally uses
+    // an existing glyph so no extra maxp/hmtx/loca records are required.
+    writeU16(bytes, 28, 8);
+    writeU16(bytes, 30, 1);
+    writeU16(bytes, 32, 1);
+    writeU16(bytes, 34, 0);
     return bytes;
 }
 

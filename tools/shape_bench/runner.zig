@@ -57,9 +57,13 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         );
         errdefer allocator.free(container);
         const format = cangjie.detectFontContainerFormat(container) catch {
+            if (options.hide_gsub_table) try hideSfntTable(container, "GSUB");
             return container;
         };
-        if (format != .dfont) return container;
+        if (format != .dfont) {
+            if (options.hide_gsub_table) try hideSfntTable(container, "GSUB");
+            return container;
+        }
 
         const decoded = try cangjie.decodeFontContainerAlloc(
             allocator,
@@ -67,6 +71,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
             256 * 1024 * 1024,
         );
         allocator.free(container);
+        if (options.hide_gsub_table) try hideSfntTable(decoded, "GSUB");
         return decoded;
     }
 
@@ -89,7 +94,47 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .kerx_cross_format_1 => try cangjie.testing.test_font.buildKerxFormat1CrossStreamTtf(allocator, false, false),
         .kerx_cross_vertical_format_1 => try cangjie.testing.test_font.buildKerxFormat1CrossStreamTtf(allocator, true, false),
         .kerx_cross_format_1_reset => try cangjie.testing.test_font.buildKerxFormat1CrossStreamTtf(allocator, false, true),
+        .mort => try cangjie.testing.test_font.buildMortTtf(allocator),
     };
+}
+
+fn hideSfntTable(data: []u8, tag: *const [4]u8) !void {
+    if (data.len < 12) return error.BadSfnt;
+    const table_count: usize = std.mem.readInt(u16, data[4..6], .big);
+    if (table_count > (data.len - 12) / 16) return error.BadSfnt;
+    var found: ?usize = null;
+    for (0..table_count) |index| {
+        const record = 12 + index * 16;
+        if (std.mem.eql(u8, data[record .. record + 4], tag)) {
+            found = index;
+            break;
+        }
+    }
+    const remove_index = found orelse return;
+    const directory_end = 12 + table_count * 16;
+    const removed_record = 12 + remove_index * 16;
+    std.mem.copyForwards(
+        u8,
+        data[removed_record .. directory_end - 16],
+        data[removed_record + 16 .. directory_end],
+    );
+    @memset(data[directory_end - 16 .. directory_end], 0);
+    const new_count: u16 = @intCast(table_count - 1);
+    std.mem.writeInt(u16, data[4..6], new_count, .big);
+    writeSfntSearchParameters(data, new_count);
+}
+
+fn writeSfntSearchParameters(data: []u8, table_count: u16) void {
+    var power: u16 = 1;
+    var selector: u16 = 0;
+    while (power * 2 <= table_count) {
+        power *= 2;
+        selector += 1;
+    }
+    const search_range = power * 16;
+    std.mem.writeInt(u16, data[6..8], search_range, .big);
+    std.mem.writeInt(u16, data[8..10], selector, .big);
+    std.mem.writeInt(u16, data[10..12], table_count * 16 - search_range, .big);
 }
 
 pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !cangjie.Font {

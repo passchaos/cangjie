@@ -1,4 +1,5 @@
 const std = @import("std");
+const aat_mort = @import("aat_mort.zig");
 const aat_morx = @import("aat_morx.zig");
 const aat_kerx = @import("aat_kerx.zig");
 const vort = @import("vort");
@@ -1000,6 +1001,7 @@ pub const Font = struct {
     cmap: TableRecord,
     kern: ?TableRecord,
     kerx: ?TableRecord,
+    mort: ?TableRecord,
     morx: ?TableRecord,
     os2: ?TableRecord,
     gasp: ?TableRecord,
@@ -1131,6 +1133,7 @@ pub const Font = struct {
         const cmap = findTable(records, "cmap") orelse return error.MissingTable;
         const kern = findTable(records, "kern");
         const kerx = findTable(records, "kerx");
+        const mort = findTable(records, "mort");
         const morx = findTable(records, "morx");
         const os2 = findTable(records, "OS/2");
         const gasp = findTable(records, "gasp");
@@ -1176,7 +1179,7 @@ pub const Font = struct {
         const ift = findTable(records, "IFT ");
         const iftx = findTable(records, "IFTX");
 
-        if (morx == null and range_shift != try expectedSfntRangeShift(num_tables)) return error.BadSfnt;
+        if (morx == null and mort == null and range_shift != try expectedSfntRangeShift(num_tables)) return error.BadSfnt;
 
         const has_horizontal_metrics = hhea != null and hmtx != null;
         if ((hhea == null) != (hmtx == null)) return error.MissingTable;
@@ -1220,6 +1223,7 @@ pub const Font = struct {
         if (os2) |os2_table| try validateOs2Table(data, os2_table);
         if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
         if (ankr) |ankr_table| try validateAnkrTable(data, ankr_table, glyph_count);
+        if (mort) |mort_table| try aat_mort.validate(data, mort_table.offset, mort_table.length, glyph_count);
         if (morx) |morx_table| try validateMorxTable(data, morx_table, glyph_count);
         if (math) |math_table| try validateMathTable(data, math_table);
         if (feat) |feat_table| try validateFeatTable(data, feat_table);
@@ -1337,6 +1341,7 @@ pub const Font = struct {
             .cmap = cmap,
             .kern = kern,
             .kerx = kerx,
+            .mort = mort,
             .morx = morx,
             .os2 = os2,
             .gasp = gasp,
@@ -2935,6 +2940,18 @@ pub const Font = struct {
 
     pub fn hasMorxTableForShaping(self: *const Font) bool {
         return self.morx != null;
+    }
+
+    pub fn hasAatSubstitutionForShaping(self: *const Font) bool {
+        return self.morx != null or self.mort != null;
+    }
+
+    pub fn applyAatSubstitutionForShaping(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
+        if (self.morx != null) return try self.applyMorxForShaping(glyphs, allocator, options);
+        try self.validateGlyphRun(glyphs.items);
+        const mort = self.mort orelse return;
+        try validateSfntTableChecksum(self.data, mort);
+        try aat_mort.apply(self.data, mort.offset, mort.length, self.glyph_count, glyphs, options);
     }
 
     pub fn applyMorxForShaping(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
@@ -5994,7 +6011,11 @@ fn validateSfntTablesDoNotOverlapTtcDsig(records: []const TableRecord, header: T
 }
 
 fn validateSfntTableChecksums(data: []const u8, records: []const TableRecord) FontError!void {
-    const tolerate_stale_head_checksum = findTable(records, "morx") != null;
+    // AAT tooling commonly rewrites mort/morx payloads without refreshing the
+    // font-wide head adjustment. Keep table-local checks strict while matching
+    // HarfBuzz's compatibility behavior for the aggregate head checksum.
+    const tolerate_stale_head_checksum = findTable(records, "morx") != null or
+        findTable(records, "mort") != null;
     for (records) |record| {
         if (tolerate_stale_head_checksum and bin.tagEq(record.tag, "head")) continue;
         try validateSfntTableChecksum(data, record);
@@ -21526,6 +21547,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .mort = null,
         .morx = null,
         .os2 = null,
         .gasp = null,
@@ -21602,6 +21624,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .mort = null,
         .morx = null,
         .os2 = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = os2_checksum, .offset = 0, .length = declared_length },
         .gasp = null,
@@ -21678,6 +21701,7 @@ fn colrOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .mort = null,
         .morx = null,
         .os2 = null,
         .gasp = null,
@@ -21765,6 +21789,7 @@ fn cpalOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .mort = null,
         .morx = null,
         .os2 = null,
         .gasp = null,
@@ -21841,6 +21866,7 @@ fn svgOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .mort = null,
         .morx = null,
         .os2 = null,
         .gasp = null,
@@ -21917,6 +21943,7 @@ fn sbixOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .mort = null,
         .morx = null,
         .os2 = null,
         .gasp = null,
@@ -21993,6 +22020,7 @@ fn fvarOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = null,
         .kerx = null,
+        .mort = null,
         .morx = null,
         .os2 = null,
         .gasp = null,
@@ -22089,6 +22117,7 @@ fn kernOnlyFont(data: []const u8) Font {
         .cmap = dummy_table,
         .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = kern_checksum, .offset = 0, .length = data.len },
         .kerx = null,
+        .mort = null,
         .morx = null,
         .os2 = null,
         .gasp = null,

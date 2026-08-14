@@ -57,6 +57,7 @@ pub const BuiltinFont = enum {
     kerx_cross_format_1,
     kerx_cross_vertical_format_1,
     kerx_cross_format_1_reset,
+    mort,
 
     pub fn fromName(name: []const u8) ?BuiltinFont {
         if (std.mem.eql(u8, name, "minimal")) return .minimal;
@@ -77,6 +78,7 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "kerx-cross-format-1")) return .kerx_cross_format_1;
         if (std.mem.eql(u8, name, "kerx-cross-vertical-format-1")) return .kerx_cross_vertical_format_1;
         if (std.mem.eql(u8, name, "kerx-cross-format-1-reset")) return .kerx_cross_format_1_reset;
+        if (std.mem.eql(u8, name, "mort")) return .mort;
         return null;
     }
 
@@ -100,6 +102,7 @@ pub const BuiltinFont = enum {
             .kerx_cross_format_1 => "builtin:kerx-cross-format-1",
             .kerx_cross_vertical_format_1 => "builtin:kerx-cross-vertical-format-1",
             .kerx_cross_format_1_reset => "builtin:kerx-cross-format-1-reset",
+            .mort => "builtin:mort",
         };
     }
 };
@@ -157,6 +160,7 @@ pub const Options = struct {
     engine: Engine = .cangjie,
     output_format: OutputFormat = .text,
     font_path: ?[]const u8 = null,
+    hide_gsub_table: bool = false,
     export_font_path: ?[]const u8 = null,
     face_index: usize = 0,
     harfrust_bin: []const u8 = default_harfrust_bin,
@@ -264,6 +268,8 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.font_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--hide-gsub-table")) {
+            options.hide_gsub_table = true;
         } else if (std.mem.eql(u8, arg, "--export-font")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -597,6 +603,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\                               shaping engine, default cangjie
         \\  --format text|tsv            output format, default text
         \\  --font PATH                  use a real SFNT/TTC/WOFF/DFONT font
+        \\  --hide-gsub-table            hide GSUB from both compared engines
         \\  --export-font PATH           write the selected built-in font and exit
         \\  --face-index N              select face N from a font collection
         \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup

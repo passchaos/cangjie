@@ -1791,10 +1791,13 @@ shaping-performance superiority.
   FeatureRecord only when the active LangSys lacks one, while `vert=0` remains
   authoritative. All 598 mappings with Unicode cmap sources pass both
   references in `tests/data/vertical/honokamin-mort-mapped.txt`
-  (`checksum=3b1a3ef90515923d`). Removing GSUB from a temporary copy proves the
-  legacy `mort` path produces the same vertical glyphs; a standalone `mort`
-  executor remains open because this font does not provide an output that can
-  distinguish the two engines.
+  (`checksum=3b1a3ef90515923d`). The parity runner can now hide GSUB from both
+  engines without rewriting table payloads; all 598 rows still pass HarfBuzz
+  through Cangjie's standalone legacy `mort` type-4 noncontextual executor.
+  A synthetic format-8 lookup fixture separately proves glyph/substitution
+  metadata updates. HarfRust currently has no `mort` table parser, so retained
+  automated reference coverage for this path is HarfBuzz. Stateful legacy
+  `mort` types 0/1/2/5 remain open.
 
   AAT `kerx` formats 0, 1, 2, 4, and 6 now participate in actual shaping rather
   than metadata inspection only. The retained format-0/2/6 synthetic fonts

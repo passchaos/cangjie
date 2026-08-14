@@ -2412,6 +2412,37 @@ pub fn build(b: *std.Build) void {
 
         addKerxCrossStreamParityGates(b, shape_bench_exe, shaping_aat_parity_smoke_step);
 
+        const mort_font = exportedBuiltinFont(
+            b,
+            shape_bench_exe,
+            "mort",
+            "mort-noncontextual.ttf",
+        );
+        const mort_harfbuzz = b.addRunArtifact(shape_bench_exe);
+        mort_harfbuzz.addArgs(&.{ "--engine", "compare-harfbuzz", "--font" });
+        mort_harfbuzz.addFileArg(mort_font);
+        mort_harfbuzz.addArgs(&.{
+            "--text",       "A",
+            "--direction",  "ltr",
+            "--iterations", "1",
+            "--warmup",     "0",
+            "--samples",    "1",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&mort_harfbuzz.step);
+
+        // Hide Honoka's redundant GSUB directory record for both engines. The
+        // unchanged mort payload and complete corpus then prove standalone
+        // legacy substitution instead of letting OpenType `vert` hide it.
+        const mort_only_harfbuzz = b.addRunArtifact(shape_bench_exe);
+        mort_only_harfbuzz.addArgs(&.{
+            "--engine",                                      "compare-harfbuzz",
+            "--font",                                        honokamin_font,
+            "--hide-gsub-table",                             "--text-file",
+            "tests/data/vertical/honokamin-mort-mapped.txt", "--direction",
+            "ttb",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&mort_only_harfbuzz.step);
+
         const global_vert_harfbuzz_cmd = b.addRunArtifact(shape_bench_exe);
         global_vert_harfbuzz_cmd.addArgs(&.{
             "--engine",    "compare-harfbuzz",

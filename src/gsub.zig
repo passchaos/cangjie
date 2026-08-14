@@ -15,8 +15,42 @@ const shape_profile_mod = @import("shape_profile.zig");
 pub const GsubError = error{
     BadGsub,
     InvalidShapingInput,
+    ShapingLimitExceeded,
     UnsupportedGsub,
     EndOfStream,
+};
+
+// Mirror HarfBuzz's per-buffer safety envelope. The operation budget bounds
+// recursive lookup work, while the independent glyph ceiling prevents
+// cardinality-changing substitutions from growing a run without limit.
+const max_glyph_count_factor = 256;
+const min_max_glyph_count = 65536;
+const max_operations_factor = 4096;
+const min_max_operations = 65536;
+
+pub const RunLimits = struct {
+    operations_left: usize,
+    max_glyph_count: usize,
+
+    pub fn init(initial_glyph_count: usize) GsubError!RunLimits {
+        return .{
+            .operations_left = try scaledGsubLimit(
+                initial_glyph_count,
+                max_operations_factor,
+                min_max_operations,
+            ),
+            .max_glyph_count = try scaledGsubLimit(
+                initial_glyph_count,
+                max_glyph_count_factor,
+                min_max_glyph_count,
+            ),
+        };
+    }
+
+    pub fn applyTo(self: *RunLimits, options: *LookupOptions) void {
+        options.operations_left = &self.operations_left;
+        options.max_glyph_count = self.max_glyph_count;
+    }
 };
 
 const Table = struct {
@@ -113,6 +147,14 @@ pub const LookupOptions = struct {
     /// Every glyph-stream edit advances it so lookup-level run summaries can
     /// be reused across no-op lookups without becoming stale after a match.
     glyph_mutation_generation: ?*usize = null,
+    /// Shared HarfBuzz-compatible resource guards for one top-level GSUB run.
+    ///
+    /// Contextual lookups can recursively invoke cardinality-changing
+    /// substitutions. The guards are optional on low-level detached lookup
+    /// tests, but every public top-level application installs both pointers and
+    /// all copies of LookupOptions retain them through nested calls.
+    operations_left: ?*usize = null,
+    max_glyph_count: ?usize = null,
     assume_validated: bool = false,
     shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
     profile_fast_path: bool = false,
@@ -567,7 +609,13 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     try validateShapingMetadata(options, glyphs.items.len);
     var mutation_generation: usize = 0;
-    const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
+    var operations_left: usize = 0;
+    const shaping_options = try optionsWithTopLevelState(
+        options,
+        glyphs.items.len,
+        &mutation_generation,
+        &operations_left,
+    );
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
@@ -738,7 +786,13 @@ pub fn applyFeatureSequenceWithOptions(
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     try validateShapingMetadataForApplications(options, glyphs.items.len, applications);
     var mutation_generation: usize = 0;
-    const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
+    var operations_left: usize = 0;
+    const shaping_options = try optionsWithTopLevelState(
+        options,
+        glyphs.items.len,
+        &mutation_generation,
+        &operations_left,
+    );
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
@@ -954,7 +1008,13 @@ pub fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     var mutation_generation: usize = 0;
-    const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
+    var operations_left: usize = 0;
+    const shaping_options = try optionsWithTopLevelState(
+        options,
+        glyphs.items.len,
+        &mutation_generation,
+        &operations_left,
+    );
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
@@ -1008,7 +1068,13 @@ pub fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     var mutation_generation: usize = 0;
-    const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
+    var operations_left: usize = 0;
+    const shaping_options = try optionsWithTopLevelState(
+        options,
+        glyphs.items.len,
+        &mutation_generation,
+        &operations_left,
+    );
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
@@ -3749,6 +3815,58 @@ fn optionsWithRunDigestGeneration(options: LookupOptions, generation: *usize) Lo
     return result;
 }
 
+fn optionsWithTopLevelState(
+    options: LookupOptions,
+    initial_glyph_count: usize,
+    mutation_generation: *usize,
+    operations_left: *usize,
+) GsubError!LookupOptions {
+    var result = optionsWithRunDigestGeneration(options, mutation_generation);
+    if (result.operations_left == null) {
+        const limits = try RunLimits.init(initial_glyph_count);
+        operations_left.* = limits.operations_left;
+        result.operations_left = operations_left;
+        if (result.max_glyph_count == null) result.max_glyph_count = limits.max_glyph_count;
+    } else if (result.max_glyph_count == null) {
+        result.max_glyph_count = (try RunLimits.init(initial_glyph_count)).max_glyph_count;
+    }
+    return result;
+}
+
+fn scaledGsubLimit(initial_glyph_count: usize, factor: usize, minimum: usize) GsubError!usize {
+    const scaled = std.math.mul(usize, initial_glyph_count, factor) catch return error.ShapingLimitExceeded;
+    return @max(scaled, minimum);
+}
+
+fn consumeGsubMutationBudget(
+    options: LookupOptions,
+    current_glyph_count: usize,
+    removed_len: usize,
+    inserted_len: usize,
+) GsubError!void {
+    if (removed_len > current_glyph_count) return error.InvalidShapingInput;
+    const retained = current_glyph_count - removed_len;
+    const new_glyph_count = std.math.add(usize, retained, inserted_len) catch return error.ShapingLimitExceeded;
+    if (options.max_glyph_count) |limit| {
+        if (new_glyph_count > limit) return error.ShapingLimitExceeded;
+    }
+    if (options.operations_left) |operations_left| {
+        // HarfBuzz charges one recursive lookup operation here; its separate
+        // glyph-count ceiling bounds expansion. Keep the same semantic budget
+        // so legitimate long MultipleSubst-heavy corpora are not rejected
+        // merely because ArrayList uses a different physical representation.
+        const charge: usize = 1;
+        if (charge > operations_left.*) return error.ShapingLimitExceeded;
+        operations_left.* -= charge;
+    }
+}
+
+fn consumeNestedGsubOperation(options: LookupOptions) GsubError!void {
+    const operations_left = options.operations_left orelse return;
+    if (operations_left.* == 0) return error.ShapingLimitExceeded;
+    operations_left.* -= 1;
+}
+
 fn extensionLookupType(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!?u16 {
     var common_type: ?u16 = null;
     for (0..subtable_count) |i| {
@@ -4731,6 +4849,7 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         const glyph_count = try readU16(table, sequence_offset);
         if (glyph_count == 0) {
             // A zero-length sequence deletes the covered glyph.
+            try consumeGsubMutationBudget(options, glyphs.items.len, 1, 0);
             try glyphs.replaceRange(allocator, i, 1, &.{});
             noteGlyphMutation(options);
             try replaceSourceMetadata(allocator, options, i, 1, 0, 0);
@@ -4738,6 +4857,7 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
             continue;
         }
         if (glyph_count == 1) {
+            try consumeGsubMutationBudget(options, glyphs.items.len, 1, 1);
             glyphs.items[i] = try readU16(table, sequence_offset + 2);
             markGlyphSubstituted(options, i);
             continue;
@@ -4747,6 +4867,7 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         for (replacement, 0..) |*glyph, replacement_index| {
             glyph.* = try readU16(table, sequence_offset + 2 + replacement_index * 2);
         }
+        try consumeGsubMutationBudget(options, glyphs.items.len, 1, replacement.len);
         try glyphs.replaceRange(allocator, i, 1, replacement);
         noteGlyphMutation(options);
         if (replacement.len == 1) {
@@ -4765,6 +4886,7 @@ fn applyMultipleSubstitutionAccelerated(table: Table, accelerator: MultipleSubst
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[i])) continue;
         const entry = multipleSubstEntryForGlyph(accelerator.entries, glyphs.items[i]) orelse continue;
         if (entry.glyph_count == 0) {
+            try consumeGsubMutationBudget(options, glyphs.items.len, 1, 0);
             try glyphs.replaceRange(allocator, i, 1, &.{});
             noteGlyphMutation(options);
             try replaceSourceMetadata(allocator, options, i, 1, 0, 0);
@@ -4772,6 +4894,7 @@ fn applyMultipleSubstitutionAccelerated(table: Table, accelerator: MultipleSubst
             continue;
         }
         if (entry.glyph_count == 1) {
+            try consumeGsubMutationBudget(options, glyphs.items.len, 1, 1);
             glyphs.items[i] = entry.single_to;
             markGlyphSubstituted(options, i);
             continue;
@@ -4781,6 +4904,7 @@ fn applyMultipleSubstitutionAccelerated(table: Table, accelerator: MultipleSubst
         for (replacement, 0..) |*glyph, replacement_index| {
             glyph.* = try readU16(table, entry.sequence_offset + 2 + replacement_index * 2);
         }
+        try consumeGsubMutationBudget(options, glyphs.items.len, 1, replacement.len);
         try glyphs.replaceRange(allocator, i, 1, replacement);
         noteGlyphMutation(options);
         try replaceSourceMetadata(allocator, options, i, 1, replacement.len, sourceForGlyph(options, i));
@@ -5127,6 +5251,7 @@ fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
     const glyph_count = try readU16(table, sequence_offset);
     if (glyph_count == 1) {
+        try consumeGsubMutationBudget(options, glyphs.items.len, 1, 1);
         glyphs.items[glyph_index] = try readU16(table, sequence_offset + 2);
         markGlyphSubstituted(options, glyph_index);
         return .{};
@@ -5138,6 +5263,7 @@ fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
         glyph.* = try readU16(table, sequence_offset + 2 + replacement_index * 2);
     }
 
+    try consumeGsubMutationBudget(options, glyphs.items.len, 1, replacement.len);
     try glyphs.replaceRange(allocator, glyph_index, 1, replacement);
     noteGlyphMutation(options);
     if (replacement.len == 1) {
@@ -5733,6 +5859,39 @@ test "GSUB run digest cache reuses no-op runs and invalidates on substitution" {
     try std.testing.expect(after_substitution.mayHave(2));
     try std.testing.expect(!after_substitution.mayHave(1));
     try std.testing.expectEqual(generation, cache.generation);
+}
+
+test "GSUB operation budget bounds repeated contextual expansion" {
+    var operations_left: usize = 64;
+    const options = LookupOptions{
+        .operations_left = &operations_left,
+        .max_glyph_count = 128,
+    };
+
+    var glyph_count: usize = 3;
+    var expansions: usize = 0;
+    while (true) {
+        consumeNestedGsubOperation(options) catch |err| {
+            try std.testing.expectEqual(error.ShapingLimitExceeded, err);
+            break;
+        };
+        consumeGsubMutationBudget(options, glyph_count, 1, 19) catch |err| {
+            try std.testing.expectEqual(error.ShapingLimitExceeded, err);
+            break;
+        };
+        glyph_count += 18;
+        expansions += 1;
+    }
+
+    try std.testing.expect(expansions > 0);
+    try std.testing.expect(glyph_count <= options.max_glyph_count.?);
+    // A failed preflight must not consume or mutate the hypothetical run.
+    const before = glyph_count;
+    try std.testing.expectError(
+        error.ShapingLimitExceeded,
+        consumeGsubMutationBudget(options, glyph_count, 1, options.max_glyph_count.?),
+    );
+    try std.testing.expectEqual(before, glyph_count);
 }
 
 test "GSUB ligature run digest activates only when reusable" {
@@ -7942,6 +8101,7 @@ fn readU32BadGsub(table: Table, relative: usize) GsubError!u32 {
 }
 
 fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, lookup_index: u16, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!NestedGlyphChange {
+    try consumeNestedGsubOperation(options);
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (lookup_index >= lookup_count) return error.BadGsub;

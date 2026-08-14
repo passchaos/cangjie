@@ -1333,6 +1333,21 @@ const retained_inline_text_rendering_parity_gates = [_]struct {
     },
 };
 
+const retained_text_rendering_rejection_gates = [_]struct {
+    font_file: []const u8,
+    text: []const u8,
+    direction: []const u8,
+}{
+    // GSUB-3 deliberately expands `o` through nine contextual MultipleSubst
+    // lookups. Upstream marks the expected output as `*`: only bounded
+    // termination is required.
+    .{
+        .font_file = "TestGSUBThree.ttf",
+        .text = "lol",
+        .direction = "ltr",
+    },
+};
+
 const retained_inline_harfrust_parity_gates = [_]struct {
     font_hash: []const u8,
     text: []const u8,
@@ -2245,6 +2260,20 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_corpus_parity_smoke_step.dependOn(&harfrust_parity_cmd.step);
+        }
+        for (retained_text_rendering_rejection_gates) |gate| {
+            const rejection_cmd = b.addRunArtifact(shape_bench_exe);
+            rejection_cmd.addArgs(&.{
+                "--font",       b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text",       gate.text,
+                "--direction",  gate.direction,
+                "--iterations", "1",
+                "--warmup",     "0",
+                "--samples",    "1",
+            });
+            rejection_cmd.expectExitCode(1);
+            rejection_cmd.expectStdErrMatch("error: ShapingLimitExceeded");
+            shaping_corpus_parity_smoke_step.dependOn(&rejection_cmd.step);
         }
         for (retained_inline_harfrust_parity_gates) |gate| {
             const inline_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);

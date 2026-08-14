@@ -3739,6 +3739,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         lookup_options.features;
 
     var gsub_random_state: u32 = 1;
+    var gsub_run_limits = try gsub.RunLimits.init(glyph_ids.items.len);
     // Keep source metadata parallel to glyph ids through GSUB. GPOS MarkLigPos
     // needs the original component sources for a ligature glyph; otherwise a
     // mark after a ligature can only guess a component from post-substitution
@@ -3771,6 +3772,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .random_state = &gsub_random_state,
         .aat_buffer_reversed = shape_in_native_direction,
     };
+    // Script shapers split one logical GSUB pass into several feature stages.
+    // Keep HarfBuzz-style operation and growth limits shared across every
+    // stage, including nested contextual lookups, rather than resetting the
+    // safety envelope for each feature.
+    gsub_run_limits.applyTo(&gsub_options);
     const gsub_start = shapeProfileNow(shape_profile, profile_io);
     const gsub_after_proof = if (buffer.gsub_table_proof_cache) |proof_cache| proof: {
         try proof_cache.prove(font);

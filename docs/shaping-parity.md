@@ -1505,6 +1505,16 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   Both references produce 70 glyphs with checksum `2b8749a819fda434`,
   covering joining-form selection and mixed Urdu presentation sequences in an
   RTL run.
+- Unicode text-rendering `GSUB-3.tests` is retained as a bounded-rejection
+  gate for `TestGSUBThree.ttf`. Its expected output is deliberately `*`: nine
+  chaining-context lookups recursively expand the middle `o` with a 19-glyph
+  MultipleSubst. HarfBuzz terminates with an unsuccessful 20,001-glyph buffer
+  after exhausting its shared operation budget, and HarfRust likewise returns
+  a bounded 20,001-glyph result. Cangjie now shares operation and glyph-growth
+  guards across the entire top-level GSUB application and all nested lookups;
+  it reports `ShapingLimitExceeded` in about 20 ms instead of growing an
+  in-place ArrayList without bound for minutes. The 503,948-glyph retained
+  Duployan corpus remains accepted with checksum `cfff51d05e65e33f`.
 - Newa passes all five script-specific cases retained from upstream
   `in-house/use-syllable.tests` across three fixture fonts. The slice covers
   virama+ZWNJ termination, CGJ transparency in contextual and nested ligature

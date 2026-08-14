@@ -1085,7 +1085,7 @@ pub fn diagnoseFontFallbackUtf8(allocator: std.mem.Allocator, cascade: FontCasca
         while (it.i < cluster_text.len) {
             const local_start = it.i;
             const codepoint = it.nextCodepoint() orelse break;
-            if (isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) {
+            if (unicode.isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) {
                 // Detached selectors and join controls participate in cluster
                 // selection but do not produce visible fallback decisions.
                 continue;
@@ -2157,7 +2157,7 @@ fn nextVariationSelector(text: []const u8, byte_index: usize) ?u21 {
     if (byte_index >= text.len) return null;
     var lookahead = std.unicode.Utf8Iterator{ .bytes = text, .i = byte_index };
     const selector = lookahead.nextCodepoint() orelse return null;
-    return if (isVariationSelector(selector)) selector else null;
+    return if (unicode.isVariationSelector(selector)) selector else null;
 }
 
 const ArabicCompositionMatch = struct {
@@ -2233,7 +2233,7 @@ fn selectFontForClusterWithGlyphCache(
     // detached into another font run.
     var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
     while (it.nextCodepoint()) |codepoint| {
-        if (isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) continue;
+        if (unicode.isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) continue;
         if (glyph_index_cache) |cache| return try selectFontUsingGlyphCache(cascade, cache, codepoint);
         return try cascade.selectFont(codepoint);
     }
@@ -2243,7 +2243,7 @@ fn selectFontForClusterWithGlyphCache(
 fn clusterHasVariationSelector(cluster: []const u8) bool {
     var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
     while (it.nextCodepoint()) |codepoint| {
-        if (isVariationSelector(codepoint)) return true;
+        if (unicode.isVariationSelector(codepoint)) return true;
     }
     return false;
 }
@@ -2252,7 +2252,7 @@ fn fontCoversCluster(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, cl
     var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
     var previous_visible: ?u21 = null;
     while (it.nextCodepoint()) |codepoint| {
-        if (isVariationSelector(codepoint)) {
+        if (unicode.isVariationSelector(codepoint)) {
             if (!require_variation_mapping) continue;
             const base = previous_visible orelse return false;
             const glyph_id = (try font.variationGlyphIndex(base, codepoint)) orelse return false;
@@ -2275,7 +2275,7 @@ fn isClusterCoverageIgnorable(codepoint: u21) bool {
     // Join controls and other default-ignorables participate in shaping but do
     // not need nominal cmap glyphs. Variation selectors are handled separately
     // because they refine the preceding scalar through cmap format 14.
-    return !isVariationSelector(codepoint) and unicode.isDefaultIgnorableForShaping(codepoint);
+    return !unicode.isVariationSelector(codepoint) and unicode.isDefaultIgnorableForShaping(codepoint);
 }
 
 fn selectFontUsingGlyphCache(cascade: FontCascade, glyph_index_cache: *GlyphIndexCache, codepoint: u21) !usize {
@@ -3558,7 +3558,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             const codepoint = it.nextCodepoint() orelse break;
             run_has_decimal_number = run_has_decimal_number or isShapeNativeDirectionDecimalNumber(codepoint);
             run_has_letter = run_has_letter or isShapeNativeDirectionLetter(codepoint);
-            if (isVariationSelector(codepoint)) {
+            if (unicode.isVariationSelector(codepoint)) {
                 if (glyph_ids.items.len != 0) {
                     if (selected_lookup_options.script_tag != .mym2) {
                         if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
@@ -4724,7 +4724,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const synthetic_base = index < ligature_components.infos.items.len and
             ligature_components.infos.items[index].flags.synthetic_base;
         const visible_not_found_variation_selector = lookup_options.not_found_variation_selector_glyph != null and
-            isVariationSelector(source_codepoint) and
+            unicode.isVariationSelector(source_codepoint) and
             !was_substituted and
             !synthetic_base;
         const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint) and
@@ -4734,7 +4734,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         const skip_default_ignorable = hide_default_ignorable and
             (lookup_options.remove_default_ignorables or
                 invisible_glyph_id == 0 or
-                (glyph_id == 0 and isVariationSelector(source_codepoint) and
+                (glyph_id == 0 and unicode.isVariationSelector(source_codepoint) and
                     !variationSelectorFallbackShouldRender(index, source_index, ligature_components)));
         // HarfBuzz removes an untouched default-ignorable when the font has no
         // usable invisible/space glyph. Do this after GPOS so the character was
@@ -5502,13 +5502,9 @@ fn isThaiLaoClusterExtender(codepoint: u21) bool {
 
 fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {
     for (codepoints, 0..) |codepoint, index| {
-        if (!isMongolianFreeVariationSelector(codepoint) or index == 0) continue;
+        if (!unicode.isMongolianFreeVariationSelector(codepoint) or index == 0) continue;
         source_features[index] = source_features[index - 1];
     }
-}
-
-fn isMongolianFreeVariationSelector(codepoint: u21) bool {
-    return (codepoint >= 0x180b and codepoint <= 0x180d) or codepoint == 0x180f;
 }
 
 fn hasHangulJamo(codepoints: []const u21) bool {
@@ -6565,11 +6561,6 @@ fn glyphUsesSidewaysAdvance(_: u21, orientation: TextOrientation) bool {
         // text benefits from horizontal advances.
         .mixed => false,
     };
-}
-
-fn isVariationSelector(codepoint: u21) bool {
-    return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
-        (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
 }
 
 fn variationSelectorFallbackShouldRender(glyph_index: usize, source_index: usize, ligature_components: *const ligature_provenance.Store) bool {

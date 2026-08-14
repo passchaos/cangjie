@@ -2359,13 +2359,8 @@ fn glyphWasSubstituted(options: LookupOptions, glyph_index: usize) bool {
 fn markAttachmentSearchSkipsGlyph(options: LookupOptions, glyph_index: usize) bool {
     if (options.run_has_default_ignorables == false) return false;
     const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
-    if (options.visible_variation_selectors and isVariationSelector(codepoint)) return false;
+    if (options.visible_variation_selectors and unicode.isVariationSelector(codepoint)) return false;
     return unicode.isDefaultIgnorableForShaping(codepoint) and !glyphWasSubstituted(options, glyph_index);
-}
-
-fn isVariationSelector(codepoint: u21) bool {
-    return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
-        (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
 }
 
 fn matchSkipsGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []const GlyphId, glyph_index: usize) bool {

@@ -1304,7 +1304,14 @@ pub const Font = struct {
         try validateMaxpTable(data, maxp, format);
 
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
-        if (post) |post_table| try validatePostTable(data, post_table, glyph_count, .{ .compat_ttc_face = is_ttc_face });
+        if (post) |post_table| try validatePostTable(data, post_table, glyph_count, .{
+            .compat_ttc_face = is_ttc_face,
+            // Glyph names are optional metadata and do not affect cmap,
+            // shaping, metrics, or outlines. Keep parse-time validation
+            // structural; the public glyphName API performs strict text
+            // validation before exposing a borrowed custom name.
+            .custom_name_validation = .structural_only,
+        });
         const number_of_h_metrics = if (has_horizontal_metrics)
             try validateHorizontalMetricsTables(data, hhea.?, hmtx.?, glyph_count)
         else
@@ -3298,7 +3305,9 @@ pub const Font = struct {
     pub fn postInfo(self: *const Font) FontError!?PostInfo {
         const post = self.post orelse return null;
         try validateSfntTableChecksum(self.data, post);
-        try validatePostTable(self.data, post, self.glyph_count, .{});
+        try validatePostTable(self.data, post, self.glyph_count, .{
+            .custom_name_validation = .structural_only,
+        });
         return try readPostInfo(self.data, post);
     }
 
@@ -3321,14 +3330,18 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const post = self.post orelse return null;
         try validateSfntTableChecksum(self.data, post);
-        try validatePostTable(self.data, post, self.glyph_count, .{});
+        try validatePostTable(self.data, post, self.glyph_count, .{
+            .custom_name_validation = .allow_empty,
+        });
         return try readPostGlyphName(self.data, post, glyph_id);
     }
 
     pub fn decorationMetrics(self: *const Font) FontError!FontDecorationMetrics {
         if (self.post) |post| {
             try validateSfntTableChecksum(self.data, post);
-            try validatePostTable(self.data, post, self.glyph_count, .{});
+            try validatePostTable(self.data, post, self.glyph_count, .{
+                .custom_name_validation = .structural_only,
+            });
         }
         if (self.os2) |os2| {
             try validateSfntTableChecksum(self.data, os2);
@@ -7205,6 +7218,11 @@ fn readPostInfo(data: []const u8, post: TableRecord) FontError!PostInfo {
 
 const PostValidationOptions = struct {
     compat_ttc_face: bool = false,
+    custom_name_validation: enum {
+        strict,
+        allow_empty,
+        structural_only,
+    } = .strict,
 };
 
 fn validatePostTable(data: []const u8, post: TableRecord, glyph_count: u16, options: PostValidationOptions) FontError!void {
@@ -7248,9 +7266,17 @@ fn validatePostFormat2(data: []const u8, post: TableRecord, glyph_count: u16, op
         if (cursor >= post.length) return error.BadSfnt;
         const name_len = table[cursor];
         cursor += 1;
-        if (name_len == 0 or name_len > 63) return error.BadSfnt;
+        if (name_len > 63) return error.BadSfnt;
         if (@as(usize, name_len) > post.length - cursor) return error.BadSfnt;
-        if (!options.compat_ttc_face and !isPostGlyphName(table[cursor .. cursor + name_len])) return error.BadSfnt;
+        if (!options.compat_ttc_face) switch (options.custom_name_validation) {
+            .strict => {
+                if (name_len == 0 or !isPostGlyphName(table[cursor .. cursor + name_len])) return error.BadSfnt;
+            },
+            .allow_empty => {
+                if (name_len != 0 and !isPostGlyphName(table[cursor .. cursor + name_len])) return error.BadSfnt;
+            },
+            .structural_only => {},
+        };
         cursor += name_len;
     }
     if (!options.compat_ttc_face and cursor != post.length) return error.BadSfnt;
@@ -7310,7 +7336,8 @@ fn readPostFormat2GlyphName(table: []const u8, glyph_id: glyph_mod.GlyphId) Font
     // the glyphNameIndex array. The index value 258 names the first custom
     // string, 259 the second, and so on; validation has already guaranteed that
     // all ordinals up to the largest referenced index are structurally present.
-    return try readPostCustomGlyphName(table, name_index - post_standard_glyph_names.len);
+    const name = try readPostCustomGlyphName(table, name_index - post_standard_glyph_names.len);
+    return if (name.len == 0) null else name;
 }
 
 fn readPostCustomGlyphName(table: []const u8, ordinal: usize) FontError![]const u8 {
@@ -17880,7 +17907,36 @@ test "post table structural contracts are validated at parse time" {
         const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
         defer allocator.free(bytes);
 
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        // Custom glyph-name text is optional metadata, so malformed text must
+        // not prevent otherwise valid outlines, cmap, metrics, or shaping from
+        // being used. The dedicated accessor remains strict because it exposes
+        // that borrowed text to callers.
+        _ = try font.postInfo();
+        _ = try font.decorationMetrics();
+        try std.testing.expectError(error.BadSfnt, font.glyphName(1));
+    }
+
+    {
+        var post: [39]u8 = .{0} ** 39;
+        writePostHeaderTest(&post, 0x00020000);
+        writeU16Test(&post, 32, 2);
+        writeU16Test(&post, 34, 0);
+        writeU16Test(&post, 36, 258);
+        post[38] = 0; // A production Mongolian font encodes “no name” this way.
+        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
+        defer allocator.free(bytes);
+
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        // The OpenType recommendation is to use standard index 0 (.notdef)
+        // when no custom name exists. FreeType, FontTools, and HarfBuzz also
+        // accept this deployed zero-length Pascal-string representation, so
+        // expose it as absence rather than inventing or returning an empty name.
+        try std.testing.expectEqual(@as(?[]const u8, null), try font.glyphName(1));
     }
 
     {

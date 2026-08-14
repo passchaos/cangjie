@@ -349,12 +349,21 @@ const joining_type_ranges = [_]JoiningTypeRange{
     .{ .first = 0x08BA, .last = 0x08C8, .kind = .dual },
     .{ .first = 0x08CA, .last = 0x08E1, .kind = .transparent },
     .{ .first = 0x08E3, .last = 0x0902, .kind = .transparent },
+    // Mongolian shaping uses the same Unicode joining state machine as Arabic.
+    // Keep this complete block fragment in sync with DerivedJoiningType.txt:
+    // punctuation such as NIRUGU and the Sibe boundary marker participate in
+    // joining even though they are not letters, while FVS/BALUDA/DAGALGA are
+    // transparent. Omitting those exceptional scalars silently changes the
+    // positional form selected for neighboring Mongolian letters.
+    .{ .first = 0x1807, .last = 0x1807, .kind = .dual },
+    .{ .first = 0x180A, .last = 0x180A, .kind = .join_causing },
     .{ .first = 0x180B, .last = 0x180D, .kind = .transparent },
     .{ .first = 0x180F, .last = 0x180F, .kind = .transparent },
-    .{ .first = 0x1820, .last = 0x1842, .kind = .dual },
-    .{ .first = 0x1843, .last = 0x1843, .kind = .right },
-    .{ .first = 0x1844, .last = 0x1878, .kind = .dual },
+    .{ .first = 0x1820, .last = 0x1878, .kind = .dual },
+    .{ .first = 0x1885, .last = 0x1886, .kind = .transparent },
     .{ .first = 0x1887, .last = 0x18A8, .kind = .dual },
+    .{ .first = 0x18A9, .last = 0x18A9, .kind = .transparent },
+    .{ .first = 0x18AA, .last = 0x18AA, .kind = .dual },
     .{ .first = 0x200D, .last = 0x200D, .kind = .join_causing },
     .{ .first = 0xA840, .last = 0xA872, .kind = .dual },
     .{ .first = 0x10EFD, .last = 0x10EFF, .kind = .transparent },
@@ -3589,6 +3598,21 @@ test "Arabic joining forms skip transparent marks and honor join controls" {
     try std.testing.expectEqualSlices(JoiningForm, &.{ .initial, .none, .none, .none, .final }, &cgj_forms);
 }
 
+test "Mongolian joining data includes punctuation and transparent selectors" {
+    try std.testing.expectEqual(JoiningType.dual, joiningTypeForCodepoint(0x1807)); // Sibe boundary marker
+    try std.testing.expectEqual(JoiningType.join_causing, joiningTypeForCodepoint(0x180A)); // NIRUGU
+    try std.testing.expectEqual(JoiningType.transparent, joiningTypeForCodepoint(0x180B)); // FVS1
+    try std.testing.expectEqual(JoiningType.dual, joiningTypeForCodepoint(0x1843)); // TODO long vowel sign
+    try std.testing.expectEqual(JoiningType.transparent, joiningTypeForCodepoint(0x1885)); // BALUDA
+    try std.testing.expectEqual(JoiningType.transparent, joiningTypeForCodepoint(0x18A9)); // DAGALGA
+    try std.testing.expectEqual(JoiningType.dual, joiningTypeForCodepoint(0x18AA)); // Manchu Ali Gali LHA
+
+    const text = [_]u21{ 0x180A, 0x1868, 0x180B, 0x180A };
+    var forms: [text.len]JoiningForm = undefined;
+    try resolveJoiningForms(&text, &forms);
+    try std.testing.expectEqualSlices(JoiningForm, &.{ .initial, .medial, .none, .final }, &forms);
+}
+
 test "streaming Arabic joining forms match bidirectional reference" {
     const alphabet = [_]u21{
         0x0628, // Arabic dual joining.
@@ -6380,9 +6404,13 @@ fn isCombiningMark(codepoint: u21) bool {
         codepoint == 0xff9f;
 }
 
-fn isVariationSelector(codepoint: u21) bool {
+pub fn isVariationSelector(codepoint: u21) bool {
     return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
         (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
+}
+
+pub fn isMongolianFreeVariationSelector(codepoint: u21) bool {
+    return (codepoint >= 0x180b and codepoint <= 0x180d) or codepoint == 0x180f;
 }
 
 fn isEmojiModifier(codepoint: u21) bool {

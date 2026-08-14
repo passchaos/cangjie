@@ -1810,12 +1810,19 @@ shaping-performance superiority.
   joining shaper under the `mong` ScriptList. The focused
   `arabic-feature-order.tests` FVS rows for
   `813c2f8e5512187fd982417a7fb4286728e6f4a8.ttf` and
-  `8a9fea2a7384f2116e5b84a9b31f83be7850ce21.ttf` are retained, and the simple
-  `mongolian-variation-selector.tests` rows for
-  `ef86fe710cfea877bbe0dbb6946a1f88d0661031.ttf` plus
-  `37033cc5cf37bb223d7355153016b6ccece93b28.ttf` pass. Broader Mongolian
-  fixture coverage now reaches
-  `4d4206e30b2dbf1c1ef492a8eae1c9e7829ebad8.ttf` after `gasp` parsing was
+  `8a9fea2a7384f2116e5b84a9b31f83be7850ce21.ttf` are retained. All 19 upstream
+  `mongolian-variation-selector.tests` rows are now retained against HarfBuzz,
+  covering four production fixtures, positional FVS forms, NIRUGU,
+  ZWJ/ZWNJ, and MVS. The
+  `a34a7b00f22ffb5fd7eef6933b81c7e71bc2cdfb.ttf` fixture is accepted despite
+  a zero-length custom `post` format-2 glyph name: parsing and metrics require
+  structural safety, while the public glyph-name accessor continues to reject
+  invalid non-empty text and reports an empty custom name as absent. Its
+  NIRUGU row now matches because the compact Unicode joining table includes
+  the complete Mongolian exceptions from `DerivedJoiningType.txt`, and because
+  Mongolian FVS remains non-skippable during GSUB—even with glyph zero—before
+  an untouched selector is hidden from final output. Broader coverage also
+  reaches `4d4206e30b2dbf1c1ef492a8eae1c9e7829ebad8.ttf` after `gasp` parsing was
   relaxed to match FreeType/HarfBuzz-style structural validation: version-0
   tables that carry version-1 behavior bits are accepted, while behavior
   queries mask those bits to the version-0 low-bit contract. The MVS word case

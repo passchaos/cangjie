@@ -1427,6 +1427,29 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
         .text_file = "tests/data/khmer-mark-cross-offset-tests.txt",
         .direction = "ltr",
     },
+    // These four corpus files retain all 19 rows from HarfBuzz's in-house
+    // `mongolian-variation-selector.tests`, grouped by font so the parity gate
+    // parses each production fixture only once.
+    .{
+        .font_hash = "37033cc5cf37bb223d7355153016b6ccece93b28",
+        .text_file = "tests/data/mongolian-variation-selector/37033cc5cf37bb223d7355153016b6ccece93b28.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "ef86fe710cfea877bbe0dbb6946a1f88d0661031",
+        .text_file = "tests/data/mongolian-variation-selector/ef86fe710cfea877bbe0dbb6946a1f88d0661031.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "a34a7b00f22ffb5fd7eef6933b81c7e71bc2cdfb",
+        .text_file = "tests/data/mongolian-variation-selector/a34a7b00f22ffb5fd7eef6933b81c7e71bc2cdfb.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "4d4206e30b2dbf1c1ef492a8eae1c9e7829ebad8",
+        .text_file = "tests/data/mongolian-variation-selector/4d4206e30b2dbf1c1ef492a8eae1c9e7829ebad8.txt",
+        .direction = "ltr",
+    },
 };
 
 const retained_text_rendering_parity_gates = [_]struct {

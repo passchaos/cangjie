@@ -4643,7 +4643,13 @@ fn noteGlyphMutation(options: LookupOptions) void {
 fn contextualMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []const GlyphId, glyph_index: usize, context_match: bool) bool {
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_index])) return true;
     const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
-    if (options.visible_variation_selectors and isVariationSelector(codepoint)) return false;
+    if (options.visible_variation_selectors and unicode.isVariationSelector(codepoint)) return false;
+    // Mongolian FVS characters are hidden only after shaping. HarfBuzz marks
+    // them as non-skippable “hidden” default-ignorables during GSUB so fonts
+    // can consume them in a ligature or let an unconsumed selector block a
+    // contextual match. This is independent of whether cmap supplied a real
+    // selector glyph; final output handling still hides an untouched FVS.
+    if (unicode.isMongolianFreeVariationSelector(codepoint)) return false;
     // CGJ is always transparent to OpenType matching: unlike ZWNJ/ZWJ, it has
     // no feature-specific auto-joiner mode and must never become an input or
     // ligature component merely because the lookup is matching its input run.
@@ -4665,7 +4671,8 @@ fn ligatureMaySkipGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []cons
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs[relative_index])) return true;
     const codepoint = sourceCodepointForGlyph(options, glyph_base + relative_index) orelse return false;
     if (codepoint == 0x034f) return !cgjPreventedMarkReorder(options, glyph_base + relative_index);
-    return !options.visible_variation_selectors and glyphs[relative_index] == 0 and isVariationSelector(codepoint);
+    if (unicode.isMongolianFreeVariationSelector(codepoint)) return false;
+    return !options.visible_variation_selectors and glyphs[relative_index] == 0 and unicode.isVariationSelector(codepoint);
 }
 
 fn ligatureAnchorSyllable(options: LookupOptions, glyph_base: usize) ?u8 {
@@ -4686,11 +4693,6 @@ fn cgjPreventedMarkReorder(options: LookupOptions, glyph_index: usize) bool {
     const prev_class = unicode.modifiedCombiningClassForShaping(codepoints[prev_source]);
     const next_class = unicode.modifiedCombiningClassForShaping(codepoints[next_source]);
     return next_class != 0 and prev_class > next_class;
-}
-
-fn isVariationSelector(codepoint: u21) bool {
-    return (codepoint >= 0xfe00 and codepoint <= 0xfe0f) or
-        (codepoint >= 0xe0100 and codepoint <= 0xe01ef);
 }
 
 fn replaceSourceMetadata(allocator: std.mem.Allocator, options: LookupOptions, glyph_index: usize, removed_len: usize, inserted_len: usize, source: usize) std.mem.Allocator.Error!void {
@@ -14042,6 +14044,40 @@ test "GSUB ligature matching skips variation selector fallback glyphs" {
     try std.testing.expectEqual(@as(usize, 2), match.component_offsets[1]);
 }
 
+test "GSUB ligature matching keeps Mongolian FVS fallback glyphs visible" {
+    var bytes = [_]u8{0} ** 12;
+    writeU16Test(&bytes, 0, 1); // LigatureCount.
+    writeU16Test(&bytes, 2, 4);
+    writeU16Test(&bytes, 4, 40); // Ligature glyph.
+    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
+    writeU16Test(&bytes, 8, 2);
+
+    const glyphs = [_]GlyphId{ 1, 0, 2 };
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+    const codepoints = [_]u21{ 0x1868, 0x180d, 0x180a };
+
+    var component_offsets: [max_ligature_components]usize = undefined;
+    const match = try ligatureAt(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
+        0,
+        &glyphs,
+        0,
+        0,
+        .{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &codepoints,
+        },
+        &component_offsets,
+    );
+
+    // Unlike an ordinary unresolved VS, Mongolian FVS is non-skippable during
+    // shaping. It therefore blocks this base-plus-NIRUGU ligature even when its
+    // own nominal cmap lookup produced glyph zero.
+    try std.testing.expect(match == null);
+}
+
 test "GSUB ligature matching keeps variation selectors with real glyphs" {
     var bytes = [_]u8{0} ** 12;
     writeU16Test(&bytes, 0, 1); // LigatureCount.
@@ -14173,6 +14209,15 @@ test "GSUB substituted default ignorables stay visible to contextual matching" {
     // matching treats it as transparent just like context matching does.
     try std.testing.expect(contextualMaySkipGlyph(0, cgj_options, &glyphs, 1, true));
     try std.testing.expect(contextualMaySkipGlyph(0, cgj_options, &glyphs, 1, false));
+
+    const mongolian_fvs_codepoints = [_]u21{ 0x1868, 0x180d, 0x180a };
+    const mongolian_fvs_options = LookupOptions{
+        .glyph_source_indices = &sources,
+        .glyph_substituted = &substituted,
+        .source_codepoints = &mongolian_fvs_codepoints,
+    };
+    try std.testing.expect(!contextualMaySkipGlyph(0, mongolian_fvs_options, &glyphs, 1, true));
+    try std.testing.expect(!contextualMaySkipGlyph(0, mongolian_fvs_options, &glyphs, 1, false));
 }
 
 test "GSUB reverse chaining subtables do not cascade within lookup" {

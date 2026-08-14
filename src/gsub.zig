@@ -4798,27 +4798,175 @@ fn ligatureComponentInfoForMatch(
     match: LigatureMatch,
 ) std.mem.Allocator.Error!ligature_provenance.Info {
     const store = options.ligature_components orelse return .{};
-    const component_count = @min(match.component_count, ligature_provenance.max_components);
-    if (component_count <= 1) return .{};
-    const base_mark_ligature = ligatureIsBaseWithMarks(options, glyph_index, match, component_count);
-
-    var component_sources: [ligature_provenance.max_components]usize = undefined;
-    component_sources[0] = sourceForGlyph(options, glyph_index);
+    const matched_component_count = @min(match.component_count, ligature_provenance.max_components);
+    if (matched_component_count <= 1) return .{};
+    var all_sources: [ligature_provenance.max_components]usize = undefined;
+    var all_source_count: usize = 0;
+    var logical_sources: [ligature_provenance.max_components]usize = undefined;
+    var logical_component_count: usize = 0;
+    appendLigatureSourcesForMatch(
+        all_sources[0..],
+        &all_source_count,
+        logical_sources[0..],
+        &logical_component_count,
+        options,
+        glyph_index,
+    );
     var synthetic_base = false;
     if (glyph_index < store.infos.items.len) {
         synthetic_base = store.infos.items[glyph_index].flags.synthetic_base;
     }
-    for (1..component_count) |component_index| {
+    for (1..matched_component_count) |component_index| {
         const matched_index = glyph_index + match.component_offsets[component_index];
-        insertLigatureComponentSource(component_sources[0..], component_index, sourceForGlyph(options, matched_index));
+        appendLigatureSourcesForMatch(
+            all_sources[0..],
+            &all_source_count,
+            logical_sources[0..],
+            &logical_component_count,
+            options,
+            matched_index,
+        );
         if (matched_index < store.infos.items.len) {
             synthetic_base = synthetic_base or store.infos.items[matched_index].flags.synthetic_base;
         }
     }
-    var info = try store.addLigature(allocator, component_sources[0..component_count]);
+    std.debug.assert(logical_component_count != 0);
+    const base_mark_ligature = ligatureIsBaseWithMarks(
+        options,
+        glyph_index,
+        match,
+        matched_component_count,
+    );
+    var info = if (all_source_count > 1)
+        try store.addLigatureWithSources(
+            allocator,
+            all_sources[0..all_source_count],
+            logical_sources[0..logical_component_count],
+        )
+    else
+        ligature_provenance.Info{
+            .component_count = @intCast(logical_component_count),
+            .flags = .{ .ligated = true },
+        };
     info.flags.synthetic_base = synthetic_base;
     info.flags.base_mark_ligature = base_mark_ligature;
     return info;
+}
+
+fn appendLigatureSourcesForMatch(
+    sources: []usize,
+    source_count: *usize,
+    logical_sources: []usize,
+    logical_component_count: *usize,
+    options: LookupOptions,
+    glyph_index: usize,
+) void {
+    if (source_count.* >= sources.len) return;
+    var contributes_component = true;
+    if (options.ligature_components) |store| {
+        if (glyph_index < store.infos.items.len) {
+            const info = store.infos.items[glyph_index];
+            // HarfBuzz's `_hb_glyph_info_get_lig_num_comps_in_ligation`
+            // assigns every non-first MultipleSubst output zero component
+            // weight. All pieces therefore remain one logical component when
+            // a later LigatureSubst consumes them, and intervening marks keep
+            // the component identity of the first piece.
+            if (info.flags.multiplied and info.flags.multiple_component != 0) {
+                contributes_component = false;
+            }
+        }
+    }
+    insertLigatureComponentSource(
+        sources,
+        source_count.*,
+        sourceForGlyph(options, glyph_index),
+    );
+    source_count.* += 1;
+    if (contributes_component and logical_component_count.* < logical_sources.len) {
+        insertLigatureComponentSource(
+            logical_sources,
+            logical_component_count.*,
+            sourceForGlyph(options, glyph_index),
+        );
+        logical_component_count.* += 1;
+    }
+}
+
+test "GSUB ligation counts a MultipleSubst sequence as one component" {
+    var glyph_sources = std.ArrayList(usize).empty;
+    defer glyph_sources.deinit(std.testing.allocator);
+    try glyph_sources.appendSlice(std.testing.allocator, &.{ 0, 2, 2, 4 });
+
+    var components = ligature_provenance.Store{};
+    defer components.deinit(std.testing.allocator);
+    try components.infos.appendSlice(std.testing.allocator, &.{
+        .{},
+        .{ .flags = .{ .multiplied = true, .multiple_component = 0 } },
+        .{ .flags = .{ .multiplied = true, .multiple_component = 1 } },
+        .{},
+    });
+
+    var component_offsets = [_]usize{0} ** max_ligature_components;
+    component_offsets[1] = 1;
+    component_offsets[2] = 2;
+    component_offsets[3] = 3;
+    const info = try ligatureComponentInfoForMatch(
+        std.testing.allocator,
+        .{
+            .glyph_source_indices = &glyph_sources,
+            .ligature_components = &components,
+        },
+        0,
+        .{
+            .ligature = 50,
+            .component_count = 4,
+            .component_offsets = &component_offsets,
+            .match_end = 4,
+        },
+    );
+
+    try std.testing.expectEqual(@as(u8, 3), info.component_count);
+    try std.testing.expectEqual(@as(u8, 4), info.source_count);
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 0, 2, 2, 4 },
+        components.componentSources(info).?,
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 0, 2, 4 },
+        components.logicalComponentSources(info).?,
+    );
+
+    var single_component_offsets = [_]usize{0} ** max_ligature_components;
+    single_component_offsets[1] = 1;
+    const single_logical_component = try ligatureComponentInfoForMatch(
+        std.testing.allocator,
+        .{
+            .glyph_source_indices = &glyph_sources,
+            .ligature_components = &components,
+        },
+        1,
+        .{
+            .ligature = 51,
+            .component_count = 2,
+            .component_offsets = &single_component_offsets,
+            .match_end = 2,
+        },
+    );
+    try std.testing.expect(single_logical_component.isLigature());
+    try std.testing.expectEqual(@as(u8, 1), single_logical_component.component_count);
+    try std.testing.expectEqual(@as(u8, 2), single_logical_component.source_count);
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 2, 2 },
+        components.componentSources(single_logical_component).?,
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{2},
+        components.logicalComponentSources(single_logical_component).?,
+    );
 }
 
 fn insertLigatureComponentSource(sources: []usize, end: usize, source: usize) void {

@@ -1428,6 +1428,15 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   implements the old behavior, so these three rows are intentionally excluded
   from its otherwise retained Khmer corpus rather than treated as false
   dual-reference failures.
+  The remaining Arabic rows from `mark-attachment.tests` are retained against
+  current HarfBuzz as well. MarkLig base search now uses exact
+  MultipleSubst provenance, so non-first output components remain transparent
+  even when an intervening mark breaks source adjacency. If those pieces later
+  participate in LigatureSubst, only the first contributes a component, matching
+  HarfBuzz's `_hb_glyph_info_get_lig_num_comps_in_ligation` contract. This
+  preserves the logical `{0,2,4}` component map for nested Arabic ligatures
+  instead of the erroneous `{0,2,2,4}`, and positions surviving marks on the
+  correct MarkLig component.
 - Myanmar now has a dedicated modern `mym2` shaping slice instead of falling
   through generic GSUB. Focused HarfBuzz in-house rows pass for
   `mark-attachment.tests` (`98b7887cff91f722b92a8ff800120954606354f9.ttf`,

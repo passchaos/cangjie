@@ -5293,17 +5293,11 @@ fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyp
                 if (ligature_position < store.infos.items.len) {
                     const info = store.infos.items[ligature_position];
                     if (baseMarkLigatureActsAsSingleBase(options.script_tag, info)) return 0;
-                    const component_sources = store.componentSources(info) orelse return error.InvalidShapingInput;
-                    const available_count = @min(component_sources.len, component_count);
-                    if (available_count > 0) {
+                    const component_sources = store.logicalComponentSources(info) orelse return error.InvalidShapingInput;
+                    if (component_sources.len > 0) {
                         const mark_source = sources[mark_position];
                         var chosen: usize = 0;
-                        // Component source positions are monotonically ordered
-                        // by the GSUB ligature trace. A mark belongs to the
-                        // latest component whose source position is not after
-                        // that mark, which handles marks originally typed
-                        // between ligature components as well as marks after
-                        // the full ligature sequence.
+                        const available_count = @min(component_sources.len, component_count);
                         for (component_sources[0..available_count], 0..) |component_source, component_i| {
                             if (component_source > mark_source) break;
                             chosen = component_i;
@@ -5366,11 +5360,53 @@ fn markAttachmentSearchSkipsNonCoveredGlyph(table: Table, mark_coverage_offset: 
 
 fn isMultipleSubstContinuationForMarkSearch(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, index: usize, options: LookupOptions) GposError!bool {
     if (index == 0) return false;
+    if (options.ligature_components) |store| {
+        if (index < store.infos.items.len) {
+            const info = store.infos.items[index];
+            if (info.flags.multiplied) {
+                // HarfBuzz permits only component zero to act as a MarkLig
+                // base candidate. Later MultipleSubst outputs are transparent
+                // even when intervening marks mean their source index no
+                // longer matches the immediately preceding glyph.
+                return info.flags.multiple_component != 0;
+            }
+        }
+    }
+
+    // Detached GPOS callers may not retain GSUB provenance. Preserve the
+    // conservative source-adjacency fallback for those callers.
     const sources = options.glyph_source_indices orelse return false;
     if (index >= sources.len) return false;
     if (sources[index] != sources[index - 1]) return false;
     if (try markGlyphForAttachmentSearch(table, mark_coverage_offset, glyphs[index - 1], options)) return false;
     return true;
+}
+
+test "GPOS MarkLig search skips non-first MultipleSubst components across marks" {
+    var components = ligature_provenance.Store{};
+    defer components.deinit(std.testing.allocator);
+    try components.infos.appendSlice(std.testing.allocator, &.{
+        .{},
+        .{ .flags = .{ .multiplied = true, .multiple_component = 0 } },
+        .{},
+        .{ .flags = .{ .multiplied = true, .multiple_component = 1 } },
+    });
+
+    // The second MultipleSubst component is no longer source-adjacent to the
+    // first because a mark survived between them. Exact provenance must still
+    // make it transparent to the backwards MarkLig base search.
+    const sources = [_]usize{ 0, 2, 3, 2 };
+    const glyphs = [_]GlyphId{ 10, 11, 12, 13 };
+    try std.testing.expect(try isMultipleSubstContinuationForMarkSearch(
+        .{ .data = &.{}, .offset = 0, .length = 0 },
+        0,
+        &glyphs,
+        3,
+        .{
+            .glyph_source_indices = &sources,
+            .ligature_components = &components,
+        },
+    ));
 }
 
 fn collectMarkToMarkAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {

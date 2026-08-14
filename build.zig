@@ -238,6 +238,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     language: ?[]const u8 = null,
     enable_feature: ?[]const u8 = null,
     enable_feature_2: ?[]const u8 = null,
+    disable_feature: ?[]const u8 = null,
     variation: ?[]const u8 = null,
     not_found_variation_selector_glyph: ?[]const u8 = null,
     font_ext: []const u8 = "ttf",
@@ -1065,6 +1066,27 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "98b7887cff91f722b92a8ff800120954606354f9",
         .text = "\u{100f}\u{103c}\u{102f}\u{1036}",
         .direction = "ltr",
+    },
+    .{
+        .font_hash = "55db4d5539b0f7f0b5e6cdb3ce6dd1eab6b3392a",
+        .text = "\u{066e}\u{064e}\u{0644}\u{064e}",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "55db4d5539b0f7f0b5e6cdb3ce6dd1eab6b3392a",
+        .text = "\u{066e}\u{064e}\u{0644}\u{064e}",
+        .direction = "rtl",
+        .disable_feature = "liga",
+    },
+    .{
+        .font_hash = "73c3222a2992bac9067663888d2a1503774976bb",
+        .text = "\u{0628}\u{064e}\u{0645}\u{064e}\u{0644}\u{064e}",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "1af868501dfcfd16184116b966f7fb2bd310623c",
+        .text = "\u{0628}\u{064e}\u{0644}\u{064e}\u{0647}\u{064e}",
+        .direction = "rtl",
     },
     .{
         .font_hash = "5479969a7d35aabd6a39dcfacb88e36a8f42a7ac",
@@ -2605,6 +2627,9 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.enable_feature_2) |feature| {
                 inline_parity_cmd.addArgs(&.{ "--enable-feature", feature });
+            }
+            if (gate.disable_feature) |feature| {
+                inline_parity_cmd.addArgs(&.{ "--disable-feature", feature });
             }
             if (gate.variation) |variation| {
                 inline_parity_cmd.addArgs(&.{ "--variation", variation });

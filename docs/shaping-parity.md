@@ -2797,3 +2797,21 @@ shaping-performance superiority.
   control stayed within `+0.012%` instructions, `+0.006%` branches, and
   `+0.30%` cycles. All A/B checksums were identical; the full ReleaseFast,
   corpus, shaping, and USE gates pass unchanged.
+- Direct PairPos lookups now activate an already-built native class-matrix
+  accelerator even when the lookup contains no format-1 pair records. The
+  former gate used the global format-1 record count as a proxy for every
+  PairPos accelerator kind, so Amiri lookup 74 paid to build a bounded
+  native-endian `80 x 67` format-2 matrix and then always reparsed the borrowed
+  table instead. Activation now asks whether any subtable has non-generic
+  native data; ExtensionPos keeps its existing independent path. A focused
+  pure-format-2 fixture proves that an empty format-1 record slice still selects
+  the matrix and returns the expected class-pair advance. Against `245b9c2`,
+  fixed-CPU-30 A/B/B/A 31-sample means improved Amiri `fa-words` by `0.53%`,
+  Amiri `fa-thelittleprince` by `0.20%`, and Devanagari `hi-words` by `0.31%`;
+  Roboto `en-words` changed by `+1.04%`. Native E-core counters reduced Amiri
+  long-text instructions by `7.22%`, branches by `6.02%`, cycles/ref-cycles by
+  `8.18%`, and branch misses by `1.31%`; Amiri words also improved. Roboto
+  instructions/branches stayed within `+0.05%`, with cycles down `0.48%`;
+  Devanagari instructions rose `0.13%`, branches fell `0.20%`, and its
+  single-order cycles rose about `1.05%`. All A/B checksums were identical, and
+  the full ReleaseFast, corpus, shaping, and USE gates pass unchanged.

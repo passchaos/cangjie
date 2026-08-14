@@ -1502,7 +1502,9 @@ noinline fn collectLookupWithIndexPrepared(
     }
     if (lookup_type == 2) {
         if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
-            if (accelerator.pair_pos_subtables.len == subtable_count and accelerator.pair_pos_records.len != 0) {
+            if (accelerator.pair_pos_subtables.len == subtable_count and
+                pairPosSubtablesHaveNativeData(accelerator.pair_pos_subtables))
+            {
                 try collectPairAdjustmentLookupAccelerated(
                     table,
                     lookup_offset,
@@ -1884,6 +1886,13 @@ fn collectPairAdjustmentLookup(table: Table, lookup_offset: usize, subtable_coun
         }
         first_index = advanceAfterPairPosition(glyphs, first_index, lookup_flag, options, matched_value_2);
     }
+}
+
+fn pairPosSubtablesHaveNativeData(subtables: []const PairPosSubtableAccelerator) bool {
+    for (subtables) |subtable| {
+        if (subtable.kind != .generic) return true;
+    }
+    return false;
 }
 
 fn collectPairAdjustmentLookupAccelerated(
@@ -7314,6 +7323,67 @@ test "GPOS class PairPos accelerator honors coverage and implicit class zero" {
         .pair_pos_class_entries = classes.items,
         .pair_pos_class_matrix = matrix.items,
     }, accelerator, 6, 7));
+}
+
+test "GPOS pure class PairPos lookup activates native matrix without format 1 records" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+
+    writeU16Test(&bytes, 0, 2); // PairPos lookup.
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 8);
+    const pair = 8;
+    writeU16Test(&bytes, pair + 0, 2);
+    writeU16Test(&bytes, pair + 2, 32);
+    writeU16Test(&bytes, pair + 4, 0x0004);
+    writeU16Test(&bytes, pair + 6, 0);
+    writeU16Test(&bytes, pair + 8, 38);
+    writeU16Test(&bytes, pair + 10, 46);
+    writeU16Test(&bytes, pair + 12, 2);
+    writeU16Test(&bytes, pair + 14, 2);
+    writeI16Test(&bytes, pair + 16, 0);
+    writeI16Test(&bytes, pair + 18, 0);
+    writeI16Test(&bytes, pair + 20, 0);
+    writeI16Test(&bytes, pair + 22, -31);
+    writeCoverage1Test(&bytes, pair + 32, 5);
+    writeClassDef1Test(&bytes, pair + 38, 5, 1);
+    writeClassDef1Test(&bytes, pair + 46, 7, 1);
+
+    const table = Table{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const accelerator = try buildLookupAccelerator(table, 0, allocator);
+    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
+    try std.testing.expectEqual(@as(usize, 0), accelerator.pair_pos_records.len);
+    try std.testing.expect(pairPosSubtablesHaveNativeData(accelerator.pair_pos_subtables));
+    // Distinguish actual native-matrix dispatch from a generic parser that
+    // happens to produce the same result. Public Font shaping would reject
+    // this post-proof mutation by checksum; this detached test deliberately
+    // mutates only the borrowed matrix after the accelerator copied `-31`.
+    writeI16Test(&bytes, pair + 22, 99);
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    const accelerators = [_]LookupAccelerator{accelerator};
+    try collectLookupWithIndex(
+        table,
+        0,
+        0,
+        &.{ 5, 7 },
+        &adjustments,
+        allocator,
+        .{
+            .lookup_accelerators = &accelerators,
+            .run_has_default_ignorables = false,
+        },
+        null,
+    );
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(i16, -31), adjustments.items[0].x_advance);
 }
 
 test "GPOS dense class PairPos distinguishes coverage holes from class zero" {

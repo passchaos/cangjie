@@ -24,6 +24,13 @@ pub const Adjustment = struct {
     x_placement: i16 = 0,
     y_placement: i16 = 0,
     y_advance: i16 = 0,
+    /// Parent cross-axis placement captured when a mark lookup applies.
+    ///
+    /// HarfBuzz resolves this part immediately so lookup order affects stacked
+    /// marks, while the main-axis parent placement remains deferred until
+    /// final attachment propagation. Keep it wider than the OpenType value
+    /// fields so a valid cursive chain cannot truncate the accumulated offset.
+    attachment_cross_offset: i32 = 0,
     pair_positioned: bool = false,
     attachment_type: AttachmentType = .none,
     attachment_parent_index: ?usize = null,
@@ -81,6 +88,10 @@ pub const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     direction: Direction = .ltr,
+    /// OpenType attachment propagation treats the axis orthogonal to the text
+    /// flow differently from the advance axis. Horizontal shaping snapshots y
+    /// placement when a mark lookup applies; vertical shaping snapshots x.
+    vertical: bool = false,
     features: []const unicode.FeatureOverride = &.{},
     /// Normalized fvar-axis coordinates after avar mapping. AnchorFormat3
     /// VariationIndex children resolve through the GDEF ItemVariationStore in
@@ -2568,6 +2579,9 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         } else {
             existing.y_placement += value.y_placement;
         }
+        if (flags.attachment_type == .mark) {
+            existing.attachment_cross_offset = value.attachment_cross_offset;
+        }
         if (flags.y_advance_absolute) {
             existing.y_advance = value.y_advance;
         } else {
@@ -2586,6 +2600,7 @@ fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.me
         .x_placement = value.x_placement,
         .y_placement = value.y_placement,
         .y_advance = value.y_advance,
+        .attachment_cross_offset = value.attachment_cross_offset,
         .pair_positioned = flags.pair_positioned,
         .attachment_type = flags.attachment_type,
         .attachment_parent_index = flags.attachment_parent_index,
@@ -2893,6 +2908,15 @@ fn findAdjustmentMutable(adjustments: []Adjustment, index: usize) ?*Adjustment {
     return null;
 }
 
+fn findAdjustment(adjustments: []const Adjustment, index: usize) ?Adjustment {
+    var i = adjustments.len;
+    while (i > 0) {
+        i -= 1;
+        if (adjustments[i].index == index) return adjustments[i];
+    }
+    return null;
+}
+
 fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, target_index: usize, entry_exit_count: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {
     var i = target_index;
     while (i > 0) {
@@ -3175,11 +3199,15 @@ fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtabl
     const base_anchor_offset = subtable.base_array_offset + base_anchor_relative;
     const mark_anchor = try readAnchor(table, mark_anchor_offset, options);
     const base_anchor = try readAnchor(table, base_anchor_offset, options);
-    try appendAdjustmentEx(adjustments, allocator, mark_position, .{
-        .index = mark_position,
-        .x_placement = base_anchor.x - mark_anchor.x,
-        .y_placement = base_anchor.y - mark_anchor.y,
-    }, .{ .attachment_type = .mark, .attachment_parent_index = base_position });
+    try appendMarkAttachmentAdjustment(
+        adjustments,
+        allocator,
+        mark_position,
+        base_position,
+        base_anchor.x - mark_anchor.x,
+        base_anchor.y - mark_anchor.y,
+        options.vertical,
+    );
     return true;
 }
 
@@ -5225,11 +5253,15 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
     const ligature_anchor_offset = ligature_attach_offset + ligature_anchor_relative;
     const mark_anchor = try readAnchor(table, mark_anchor_offset, options);
     const ligature_anchor = try readAnchor(table, ligature_anchor_offset, options);
-    try appendAdjustmentEx(adjustments, allocator, mark_position, .{
-        .index = mark_position,
-        .x_placement = ligature_anchor.x - mark_anchor.x,
-        .y_placement = ligature_anchor.y - mark_anchor.y,
-    }, .{ .attachment_type = .mark, .attachment_parent_index = ligature_position });
+    try appendMarkAttachmentAdjustment(
+        adjustments,
+        allocator,
+        mark_position,
+        ligature_position,
+        ligature_anchor.x - mark_anchor.x,
+        ligature_anchor.y - mark_anchor.y,
+        options.vertical,
+    );
     return true;
 }
 
@@ -5384,12 +5416,138 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     const mark_2_anchor_offset = mark_2_array_offset + mark_2_anchor_relative;
     const mark_1_anchor = try readAnchor(table, mark_1_anchor_offset, options);
     const mark_2_anchor = try readAnchor(table, mark_2_anchor_offset, options);
-    try appendAdjustmentEx(adjustments, allocator, mark_1_position, .{
-        .index = mark_1_position,
-        .x_placement = mark_2_anchor.x - mark_1_anchor.x,
-        .y_placement = mark_2_anchor.y - mark_1_anchor.y,
-    }, .{ .attachment_type = .mark, .attachment_parent_index = mark_2_position });
+    try appendMarkAttachmentAdjustment(
+        adjustments,
+        allocator,
+        mark_1_position,
+        mark_2_position,
+        mark_2_anchor.x - mark_1_anchor.x,
+        mark_2_anchor.y - mark_1_anchor.y,
+        options.vertical,
+    );
     return true;
+}
+
+fn appendMarkAttachmentAdjustment(
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    mark_index: usize,
+    parent_index: usize,
+    x_placement: i16,
+    y_placement: i16,
+    vertical: bool,
+) std.mem.Allocator.Error!void {
+    const placement = Adjustment{
+        .index = mark_index,
+        .x_placement = x_placement,
+        .y_placement = y_placement,
+        .attachment_cross_offset = resolveCursiveCrossOffset(
+            adjustments.items,
+            parent_index,
+            vertical,
+        ),
+    };
+    try appendAdjustmentEx(adjustments, allocator, mark_index, placement, .{
+        .attachment_type = .mark,
+        .attachment_parent_index = parent_index,
+    });
+}
+
+const max_attachment_nesting = 64;
+
+fn resolveCursiveCrossOffset(adjustments: []const Adjustment, start_index: usize, vertical: bool) i32 {
+    var index = start_index;
+    var offset: i32 = 0;
+    var depth: usize = 0;
+    while (depth < max_attachment_nesting) : (depth += 1) {
+        const adjustment = findAdjustment(adjustments, index) orelse break;
+        offset += @as(i32, if (vertical) adjustment.x_placement else adjustment.y_placement) +
+            adjustment.attachment_cross_offset;
+        if (adjustment.attachment_type != .cursive) break;
+        index = adjustment.attachment_parent_index orelse break;
+    }
+    return offset;
+}
+
+test "GPOS mark attachment snapshots only the parent's cross-axis offset" {
+    const allocator = std.testing.allocator;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try appendAdjustmentEx(&adjustments, allocator, 0, .{
+        .index = 0,
+        .x_placement = 40,
+        .y_placement = -22,
+    }, .{});
+    try appendMarkAttachmentAdjustment(
+        &adjustments,
+        allocator,
+        1,
+        0,
+        -160,
+        -274,
+        false,
+    );
+
+    const mark = findAdjustment(adjustments.items, 1).?;
+    try std.testing.expectEqual(@as(i16, -160), mark.x_placement);
+    try std.testing.expectEqual(@as(i16, -274), mark.y_placement);
+    try std.testing.expectEqual(@as(i32, -22), mark.attachment_cross_offset);
+    try std.testing.expectEqual(@as(?usize, 0), mark.attachment_parent_index);
+}
+
+test "GPOS mark attachment resolves a cursive cross-axis chain" {
+    const allocator = std.testing.allocator;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try appendAdjustmentEx(&adjustments, allocator, 0, .{
+        .index = 0,
+        .y_placement = 30,
+    }, .{});
+    try appendAdjustmentEx(&adjustments, allocator, 1, .{
+        .index = 1,
+        .y_placement = -12,
+    }, .{
+        .attachment_type = .cursive,
+        .attachment_parent_index = 0,
+    });
+    try appendMarkAttachmentAdjustment(
+        &adjustments,
+        allocator,
+        2,
+        1,
+        5,
+        7,
+        false,
+    );
+
+    const mark = findAdjustment(adjustments.items, 2).?;
+    try std.testing.expectEqual(@as(i32, 18), mark.attachment_cross_offset);
+}
+
+test "GPOS vertical mark attachment snapshots parent x placement" {
+    const allocator = std.testing.allocator;
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try appendAdjustmentEx(&adjustments, allocator, 0, .{
+        .index = 0,
+        .x_placement = 27,
+        .y_placement = -40,
+    }, .{});
+    try appendMarkAttachmentAdjustment(
+        &adjustments,
+        allocator,
+        1,
+        0,
+        8,
+        9,
+        true,
+    );
+
+    const mark = findAdjustment(adjustments.items, 1).?;
+    try std.testing.expectEqual(@as(i32, 27), mark.attachment_cross_offset);
 }
 
 fn marksShareLigatureComponent(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, mark_1_position: usize, mark_2_position: usize, lookup_flag: u16, options: LookupOptions) GposError!bool {

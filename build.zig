@@ -1067,6 +1067,21 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_hash = "5479969a7d35aabd6a39dcfacb88e36a8f42a7ac",
+        .text = "\u{0628}\u{064e}\u{062a}\u{062d}",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "d92da3f226c722c1c67353b2391b3472639f03f5",
+        .text = "\u{0628}\u{064e}\u{062a}\u{062d}",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "152825a19abd4a3094a41c9e4b4de5e2577dd1df",
+        .text = "\u{0633}\u{064e}\u{06cc}\u{064e}\u{0642}\u{064f}\u{0648}\u{0652}\u{0644}\u{064f}  \u{0633}\u{064e}\u{0642}\u{064e}\u{0645}\u{064f}\u{0646}\u{064e}",
+        .direction = "rtl",
+    },
+    .{
         .font_hash = "065b01e54f35f0d849fd43bd5b936212739a50cb",
         .text = "\u{101a}\u{1035}",
         .direction = "ltr",
@@ -1312,6 +1327,11 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
     .{
         .font_hash = "8116e5d8fedfbec74e45dc350d2416d810bed8c4",
         .text_file = "tests/data/devanagari-indic-joiners-tests.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "3998336402905b8be8301ef7f47cf7e050cbb1bd",
+        .text_file = "tests/data/khmer-mark-cross-offset-tests.txt",
         .direction = "ltr",
     },
 };

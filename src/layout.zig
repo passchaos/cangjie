@@ -4488,6 +4488,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .script_tag = gpos_script_tag,
         .language_tag = lookup_options.language_tag,
         .direction = if (shapingDirectionForGpos(lookup_options) == .rtl) .rtl else .ltr,
+        .vertical = lookup_options.writing_mode.isVertical(),
         .features = lookup_options.features,
         .normalized_variation_coords = lookup_options.normalized_variation_coords,
         .apply_all_if_unselected = false,
@@ -4709,7 +4710,16 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
         else
             @as(f32, @floatFromInt(adjustment.x_advance));
-        const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale;
+        const attachment_cross_x = if (lookup_options.writing_mode.isVertical())
+            @as(f32, @floatFromInt(adjustment.attachment_cross_offset)) * scale
+        else
+            0.0;
+        const attachment_cross_y = if (lookup_options.writing_mode.isVertical())
+            0.0
+        else
+            @as(f32, @floatFromInt(adjustment.attachment_cross_offset)) * scale;
+        const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale +
+            attachment_cross_x;
         const mark_attachment = adjustment.attachment_type == .mark;
         const synthetic_base = index < ligature_components.infos.items.len and
             ligature_components.infos.items[index].flags.synthetic_base;
@@ -4871,10 +4881,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         else if (lookup_options.writing_mode.isVertical())
             vertical_y_offset +
                 @as(f32, @floatFromInt(adjustment.y_placement + kerx_adjustment.y_offset)) * scale +
-                zeroed_mark_y_offset + fallback_mark_offset.y
+                attachment_cross_y + zeroed_mark_y_offset + fallback_mark_offset.y
         else
             @as(f32, @floatFromInt(adjustment.y_placement + kerx_adjustment.y_offset)) * scale +
-                zeroed_mark_y_offset + fallback_mark_offset.y;
+                attachment_cross_y + zeroed_mark_y_offset + fallback_mark_offset.y;
         buffer.glyphs.appendAssumeCapacity(.{
             .glyph_id = output_glyph_id,
             .synthetic_glyph_id = synthetic_glyph_id,
@@ -5930,7 +5940,11 @@ test "ligature source spans honor a merged cluster owner" {
 fn attachmentLinkForAdjustment(adjustment: gpos.Adjustment) attachment.Link {
     return switch (adjustment.attachment_type) {
         .none => .{},
-        .mark => .{ .kind = .mark, .parent_index = adjustment.attachment_parent_index },
+        .mark => .{
+            .kind = .mark,
+            .parent_index = adjustment.attachment_parent_index,
+            .cross_axis_resolved = true,
+        },
         .cursive => .{ .kind = .cursive, .parent_index = adjustment.attachment_parent_index },
     };
 }
@@ -6007,7 +6021,11 @@ fn remapAttachmentLinkForOutput(link: attachment.Link, output_indices: []const u
     if (parent >= output_indices.len) return .{};
     const output_parent = output_indices[parent];
     if (output_parent == std.math.maxInt(usize)) return .{};
-    return .{ .kind = link.kind, .parent_index = output_parent };
+    return .{
+        .kind = link.kind,
+        .parent_index = output_parent,
+        .cross_axis_resolved = link.cross_axis_resolved,
+    };
 }
 
 fn compactAttachmentLinks(links: []attachment.Link, output_indices: []const usize, output_len: usize) void {

@@ -19,6 +19,11 @@ pub const Axis = enum {
 pub const Link = struct {
     kind: Type = .none,
     parent_index: ?usize = null,
+    /// GPOS snapshots a mark parent's cross-axis placement when the lookup
+    /// applies. AAT kerx does not, so its mark links retain final propagation
+    /// on both axes. Keeping this on the link prevents one engine's timing
+    /// semantics from leaking into the other.
+    cross_axis_resolved: bool = false,
 };
 
 const max_nesting_level = 64;
@@ -59,14 +64,34 @@ fn propagateOne(comptime Position: type, positions: []Position, links: []Link, i
 
     switch (link.kind) {
         .none => {},
-        .mark => propagateMarkOffset(Position, positions, index, parent_index, direction),
+        .mark => propagateMarkOffset(
+            Position,
+            positions,
+            index,
+            parent_index,
+            direction,
+            axis,
+            link.cross_axis_resolved,
+        ),
         .cursive => propagateCursiveOffset(Position, positions, index, parent_index, axis),
     }
 }
 
-fn propagateMarkOffset(comptime Position: type, positions: []Position, index: usize, parent_index: usize, direction: Direction) void {
-    positions[index].x_offset += positions[parent_index].x_offset;
-    positions[index].y_offset += positions[parent_index].y_offset;
+fn propagateMarkOffset(comptime Position: type, positions: []Position, index: usize, parent_index: usize, direction: Direction, axis: Axis, cross_axis_resolved: bool) void {
+    // Mark attachment already captured the parent's cross-axis placement when
+    // its GPOS lookup ran. Only the main-axis placement remains deferred until
+    // advances and the complete attachment graph are known. Kerx links leave
+    // `cross_axis_resolved` false and continue to propagate both axes here.
+    switch (axis) {
+        .horizontal => {
+            positions[index].x_offset += positions[parent_index].x_offset;
+            if (!cross_axis_resolved) positions[index].y_offset += positions[parent_index].y_offset;
+        },
+        .vertical => {
+            positions[index].y_offset += positions[parent_index].y_offset;
+            if (!cross_axis_resolved) positions[index].x_offset += positions[parent_index].x_offset;
+        },
+    }
 
     if (parent_index < index) {
         switch (direction) {
@@ -133,6 +158,31 @@ test "mark attachment offsets accumulate parent offsets and advances" {
 
     try std.testing.expectApproxEqAbs(@as(f32, -12), positions[2].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 8), positions[2].y_offset, 0.001);
+}
+
+test "resolved GPOS mark links leave cross-axis snapshots unchanged" {
+    const Position = struct {
+        x_advance: f32 = 0,
+        y_advance: f32 = 0,
+        x_offset: f32 = 0,
+        y_offset: f32 = 0,
+    };
+
+    var positions = [_]Position{
+        .{ .x_advance = 10, .y_offset = 3 },
+        .{ .x_advance = 4 },
+        .{ .x_offset = 2, .y_offset = 5 },
+    };
+    var links = [_]Link{
+        .{},
+        .{},
+        .{ .kind = .mark, .parent_index = 0, .cross_axis_resolved = true },
+    };
+
+    propagateOffsets(Position, &positions, &links, .forward, .horizontal);
+
+    try std.testing.expectApproxEqAbs(@as(f32, -12), positions[2].x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), positions[2].y_offset, 0.001);
 }
 
 test "attachment offsets propagate through nested chains" {

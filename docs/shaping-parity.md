@@ -1411,6 +1411,23 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `rtl1,ltr2` row is retained too; later cursive lookups now clear reciprocal
   attachment links from earlier lookups before installing the replacement chain,
   matching HarfBuzz's final y-offset propagation.
+- GPOS mark attachment now snapshots the parent's cross-axis placement when
+  each MarkBase/MarkLig/MarkMark lookup applies, while final attachment
+  propagation adds only the deferred main-axis placement and intervening
+  advances. Cursive parents resolve their complete cross-axis chain at that
+  lookup boundary. This matches HarfBuzz 14.3's post-`6b6f0d977` behavior and
+  the shared DirectWrite/CoreText result for the affected axis. The three new
+  upstream fixtures that specifically exercise this behavior
+  `5479969a7d35aabd6a39dcfacb88e36a8f42a7ac.ttf`,
+  `d92da3f226c722c1c67353b2391b3472639f03f5.ttf`, and
+  `152825a19abd4a3094a41c9e4b4de5e2577dd1df.ttf` are retained against
+  HarfBuzz. The Khmer stacked-mark rows `U+1789,U+17D2,U+1789` followed by
+  U+17BB/U+17BC/U+17BD are retained in
+  `tests/data/khmer-mark-cross-offset-tests.txt`; their final y placement is
+  `-274`, not the old deferred-propagation result `-296`. HarfRust 0.12 still
+  implements the old behavior, so these three rows are intentionally excluded
+  from its otherwise retained Khmer corpus rather than treated as false
+  dual-reference failures.
 - Myanmar now has a dedicated modern `mym2` shaping slice instead of falling
   through generic GSUB. Focused HarfBuzz in-house rows pass for
   `mark-attachment.tests` (`98b7887cff91f722b92a8ff800120954606354f9.ttf`,
@@ -2370,7 +2387,7 @@ shaping-performance superiority.
   `58fc74916d67eaf8`. The 30-line SHKNDA-3 corpus produces 119 glyphs with
   checksum `51492f0ab2f4e4aa`, and its trailing-space row produces 5 glyphs
   with checksum `5ab0baf139783438`.
-- Add a focused Khmer shaper for the `khmr` script tag. The 89
+- Add a focused Khmer shaper for the `khmr` script tag. The 86
   `khmer-misc.tests` rows for
   `3998336402905b8be8301ef7f47cf7e050cbb1bd.ttf` are retained as
   `tests/data/khmer-misc-tests.txt`; Cangjie now applies Khmer split-matra
@@ -2378,6 +2395,9 @@ shaping-performance superiority.
   syllable-scoped `pref/blwf/abvf/pstf/cfar` sources, reorders pre-base vowels
   and `COENG+RO` sequences before the base in HarfBuzz stage order, and runs
   the Khmer `pres/abvs/blws/psts/clig` final stage against HarfRust parity.
+  The remaining three rows for the same font use the newer cross-axis mark
+  attachment contract described above and are retained separately against
+  current HarfBuzz.
   The remaining `khmer-misc.tests` broken-mark rows are retained separately for
   `ad01ab2ea1cb1a4d3a2783e2675112ef11ae6404.ttf` and
   `086d83239e8f958391ff6cdd8fda9376a4bd3673.ttf`; standalone COENG and

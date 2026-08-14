@@ -21,6 +21,8 @@ pub const AttributedRun = @import("core.zig").AttributedRun;
 pub const AttributedRunLayout = @import("core.zig").AttributedRunLayout;
 pub const AttributedGlyphRun = @import("core.zig").AttributedGlyphRun;
 pub const AttributedGlyphRunLayout = @import("core.zig").AttributedGlyphRunLayout;
+pub const AttributedParagraphLayout = @import("core.zig").AttributedParagraphLayout;
+pub const AttributedStyleRun = @import("core.zig").AttributedStyleRun;
 pub const ByteRange = @import("core.zig").ByteRange;
 pub const CharRange = @import("core.zig").CharRange;
 pub const ClusterRange = @import("core.zig").ClusterRange;
@@ -253,6 +255,9 @@ pub const ParagraphLine = @import("layout.zig").ParagraphLine;
 pub const ParagraphOptions = @import("layout.zig").ParagraphOptions;
 pub const ReflowBuffer = @import("layout.zig").ReflowBuffer;
 pub const ShapedParagraph = @import("layout.zig").ShapedParagraph;
+pub const StyledGlyphMetadata = @import("layout.zig").StyledGlyphMetadata;
+pub const StyledParagraphBuffer = @import("layout.zig").StyledParagraphBuffer;
+pub const StyledParagraphSpan = @import("layout.zig").StyledParagraphSpan;
 pub const PositionedGlyph = @import("render_bridge.zig").PositionedGlyph;
 pub const PositionedAttributedRun = @import("core.zig").PositionedAttributedRun;
 pub const ClusterLevel = @import("layout.zig").ClusterLevel;
@@ -322,6 +327,7 @@ pub const itemizeScriptRuns = @import("unicode.zig").itemizeScriptRuns;
 pub const itemizeWordSegments = @import("unicode.zig").itemizeWordSegments;
 pub const layoutAttributedRunsUtf8 = @import("core.zig").layoutAttributedRunsUtf8;
 pub const layoutAttributedGlyphRunsUtf8 = @import("core.zig").layoutAttributedGlyphRunsUtf8;
+pub const layoutAttributedParagraphUtf8 = @import("core.zig").layoutAttributedParagraphUtf8;
 pub const openTypeTag = @import("unicode.zig").tag;
 pub const openTypeScriptTag = @import("unicode.zig").openTypeScriptTag;
 pub const openTypeScriptHorizontalDirection = @import("unicode.zig").openTypeScriptHorizontalDirection;
@@ -10124,6 +10130,7 @@ fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
 }
 
 test {
+    _ = @import("text/attributed/tests.zig");
     std.testing.refAllDecls(@This());
 }
 

@@ -2,6 +2,7 @@ const std = @import("std");
 const layout = @import("layout.zig");
 const raster = @import("raster.zig");
 const unicode = @import("unicode.zig");
+const attributed_paragraph = @import("text/attributed/paragraph.zig");
 
 pub const ByteRange = struct {
     start: usize,
@@ -367,9 +368,12 @@ pub const AttributedText = struct {
 };
 
 pub fn measureAttributedTextUtf8(cascade: layout.FontCascade, buffer: *layout.LayoutBuffer, attributed: AttributedText, max_width: f32) !TextMetrics {
-    try attributed.validate();
-    const style = attributed.primaryTextStyle();
-    return try layout.TextShaper.measureParagraphUtf8(cascade, buffer, attributed.text, style.font_size, attributed.paragraphOptions(max_width));
+    return try attributed_paragraph.measureAttributed(
+        cascade,
+        buffer,
+        attributed,
+        max_width,
+    );
 }
 
 pub fn measureAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.FontCascade, attributed: AttributedText) !TextMetrics {
@@ -413,6 +417,23 @@ pub const AttributedGlyphRunLayout = struct {
         self.* = undefined;
     }
 };
+
+pub const AttributedStyleRun = attributed_paragraph.StyleRun(TextStyle);
+pub const AttributedParagraphLayout = attributed_paragraph.Result(TextStyle);
+
+pub fn layoutAttributedParagraphUtf8(
+    allocator: std.mem.Allocator,
+    cascade: layout.FontCascade,
+    attributed: AttributedText,
+    max_width: f32,
+) !AttributedParagraphLayout {
+    return try attributed_paragraph.layoutAttributed(
+        allocator,
+        cascade,
+        attributed,
+        max_width,
+    );
+}
 
 pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.FontCascade, attributed: AttributedText) !AttributedRunLayout {
     const runs = try attributed.runs(allocator);

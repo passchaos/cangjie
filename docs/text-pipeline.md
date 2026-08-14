@@ -128,6 +128,18 @@ glyphs cannot overlap the next line or be clipped by primary-font-only
 geometry. An explicit `line_height` remains a minimum line box rather than a
 request to crop larger font metrics.
 
+Attributed text now has a unified paragraph entry point instead of requiring
+each style run to be laid out as an independent horizontal fragment. Normalized
+style spans are intersected with script items, shaped through one font cascade,
+and then share line breaking, per-line bidi ordering, alignment,
+justification, hit testing, and selection geometry. Font size, language/script
+tags, OpenType features, normalized variation coordinates, letter/word
+spacing, and minimum line height are applied per span; visual style fragments
+retain color, background, and decoration metadata for renderers. Font-family
+name resolution remains a separate `FontDatabase` responsibility: the unified
+entry consumes an already selected `FontCascade` and does not guess how a
+family name maps to loaded font bytes.
+
 `ShapedParagraph` now implements the first width-independent paragraph
 boundary. It owns source text plus pristine shaped glyph/run snapshots.
 `ReflowBuffer` restores those snapshots before each layout, so different

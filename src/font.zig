@@ -930,8 +930,15 @@ pub const KerxLookupForShaping = struct {
         direction_backward: bool,
         requested_kerning: bool,
         simple_pair_eligible: []const bool,
+        normalized_coords: []const f32,
     ) FontError!aat_kerx.Summary {
         try self.font.validateGlyphRun(glyphs);
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        var resolver_context = KerxOutlineResolverContext{
+            .font = self.font,
+            .allocator = allocator,
+            .normalized_coords = normalized_coords,
+        };
         return try aat_kerx.collectAdjustments(
             self.font.data,
             self.kerx.offset,
@@ -945,6 +952,10 @@ pub const KerxLookupForShaping = struct {
             requested_kerning,
             simple_pair_eligible,
             if (self.font.ankr) |table| .{ .offset = table.offset, .length = table.length } else null,
+            .{
+                .context = &resolver_context,
+                .resolve_fn = resolveKerxOutlinePoint,
+            },
         );
     }
 
@@ -976,6 +987,33 @@ pub const KerxLookupForShaping = struct {
         );
     }
 };
+
+const KerxOutlineResolverContext = struct {
+    font: *const Font,
+    allocator: std.mem.Allocator,
+    normalized_coords: []const f32,
+};
+
+fn resolveKerxOutlinePoint(
+    opaque_context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+    point_index: u16,
+) aat_kerx.Error!?aat_kerx.OutlinePoint {
+    const context: *const KerxOutlineResolverContext = @ptrCast(@alignCast(opaque_context));
+    const point = context.font.glyphContourPointForShaping(
+        context.allocator,
+        glyph_id,
+        point_index,
+        context.normalized_coords,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.BadSfnt,
+    };
+    return if (point) |value| .{
+        .x = roundedGlyphPosition(value.x),
+        .y = roundedGlyphPosition(value.y),
+    } else null;
+}
 
 pub const Font = struct {
     /// The font is a borrowed byte slice. Table records and cmap subtable
@@ -4418,6 +4456,52 @@ pub const Font = struct {
             .revalidate => try self.glyphOutline(allocator, glyph_id),
             .parsed => try self.glyphOutlineFromParsedTables(allocator, glyph_id, .parsed),
         };
+    }
+
+    fn glyphContourPointForShaping(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        point_index: usize,
+        normalized_coords: []const f32,
+    ) FontError!?glyph_mod.Point {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        if (self.format != .truetype) return null;
+        const data = try self.glyphData(glyph_id);
+        if (data.len == 0) return null;
+
+        const metrics = try self.horizontalMetricsForReadMode(glyph_id, .parsed);
+        const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
+        var outline = glyph_mod.GlyphOutline.init(
+            allocator,
+            glyph_id,
+            bounds,
+            metrics.advance_width,
+            metrics.left_side_bearing,
+        );
+        defer outline.deinit();
+        var points = std.ArrayList(glyph_mod.Point).empty;
+        defer points.deinit(allocator);
+        if (normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            try self.appendGlyphOutline(
+                &outline,
+                &points,
+                glyph_id,
+                Transform.identity(),
+                0,
+            );
+        } else {
+            try self.appendGlyphOutlineAtCoords(
+                &outline,
+                &points,
+                glyph_id,
+                Transform.identity(),
+                0,
+                normalized_coords,
+                .parsed,
+            );
+        }
+        return if (point_index < points.items.len) points.items[point_index] else null;
     }
 
     fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
@@ -9986,6 +10070,12 @@ fn clampGlyphPointF32ToI16(value: f32) i16 {
     if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
     if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
     return @intFromFloat(value);
+}
+
+fn roundedGlyphPosition(value: f32) i32 {
+    if (value <= @as(f32, @floatFromInt(std.math.minInt(i32)))) return std.math.minInt(i32);
+    if (value >= @as(f32, @floatFromInt(std.math.maxInt(i32)))) return std.math.maxInt(i32);
+    return @intFromFloat(@round(value));
 }
 
 const FlaggedPoint = struct {

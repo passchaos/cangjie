@@ -1847,11 +1847,19 @@ shaping-performance superiority.
   they add to the preinstalled cursive chain, honor the undocumented
   `-0x8000` attachment/reset action, and remain ordered relative to simple
   format-0/2/6 assignments rather than being applied in a separate pass.
+  Format-4 outline-control-point actions now resolve raw TrueType point indexes
+  through the same simple/compound/gvar-aware loader used for outline point
+  matching. A synthetic `"AA"` fixture attaches marked point 1 `(350,700)` to
+  current point 0 `(0,0)` and reports final x offsets `0,-450` after
+  mark-attachment propagation. Its HarfBuzz gate explicitly enables FreeType
+  font funcs because HarfBuzz's native OT backend deliberately omits the
+  contour-point callback; an independent expected-output gate prevents a
+  missing callback in both engines from producing false parity.
   Selection follows
   HarfBuzz's table plan: when GSUB and GPOS are both active, GPOS owns
   positioning even if the selected LangSys's applicable feature is not named
   `kern`; otherwise `kerx` takes precedence over legacy `kern`.
-  Format 4 outline-control-point actions and variation tuples remain open.
+  Variation tuples remain open.
 
   The `shape-bench` now has a `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process

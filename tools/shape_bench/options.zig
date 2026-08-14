@@ -46,6 +46,7 @@ pub const BuiltinFont = enum {
     kerx_format_1,
     kerx_format_2,
     kerx_format_4,
+    kerx_format_4_outline,
     kerx_format_4_ankr,
     kerx_format_6,
     kerx_cross_format_0,
@@ -71,6 +72,7 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "kerx-format-1")) return .kerx_format_1;
         if (std.mem.eql(u8, name, "kerx-format-2")) return .kerx_format_2;
         if (std.mem.eql(u8, name, "kerx-format-4")) return .kerx_format_4;
+        if (std.mem.eql(u8, name, "kerx-format-4-outline")) return .kerx_format_4_outline;
         if (std.mem.eql(u8, name, "kerx-format-4-ankr")) return .kerx_format_4_ankr;
         if (std.mem.eql(u8, name, "kerx-format-6")) return .kerx_format_6;
         if (std.mem.eql(u8, name, "kerx-cross-format-0")) return .kerx_cross_format_0;
@@ -99,6 +101,7 @@ pub const BuiltinFont = enum {
             .kerx_format_1 => "builtin:kerx-format-1",
             .kerx_format_2 => "builtin:kerx-format-2",
             .kerx_format_4 => "builtin:kerx-format-4",
+            .kerx_format_4_outline => "builtin:kerx-format-4-outline",
             .kerx_format_4_ankr => "builtin:kerx-format-4-ankr",
             .kerx_format_6 => "builtin:kerx-format-6",
             .kerx_cross_format_0 => "builtin:kerx-cross-format-0",
@@ -173,6 +176,7 @@ pub const Options = struct {
     output_format: OutputFormat = .text,
     font_path: ?[]const u8 = null,
     hide_gsub_table: bool = false,
+    harfbuzz_freetype_funcs: bool = false,
     export_font_path: ?[]const u8 = null,
     face_index: usize = 0,
     harfrust_bin: []const u8 = default_harfrust_bin,
@@ -282,6 +286,8 @@ pub fn parse(args: []const []const u8) !Options {
             options.font_path = args[i];
         } else if (std.mem.eql(u8, arg, "--hide-gsub-table")) {
             options.hide_gsub_table = true;
+        } else if (std.mem.eql(u8, arg, "--harfbuzz-freetype-funcs")) {
+            options.harfbuzz_freetype_funcs = true;
         } else if (std.mem.eql(u8, arg, "--export-font")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -616,6 +622,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --format text|tsv            output format, default text
         \\  --font PATH                  use a real SFNT/TTC/WOFF/DFONT font
         \\  --hide-gsub-table            hide GSUB from both compared engines
+        \\  --harfbuzz-freetype-funcs    use FreeType outline callbacks in the HarfBuzz reference
         \\  --export-font PATH           write the selected built-in font and exit
         \\  --face-index N              select face N from a font collection
         \\  --harfrust-bin PATH          hr-shape binary for --engine harfrust; defaults to $HOME/Work/harfrust/target/release/hr-shape when present, else PATH lookup

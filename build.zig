@@ -1966,9 +1966,11 @@ pub fn build(b: *std.Build) void {
         if (harfbuzz_prefix == null and harfbuzz_include_dir == null) {
             harfbuzz_c.linkSystemLibrary("harfbuzz", .{ .use_pkg_config = .force });
         }
+        harfbuzz_c.linkSystemLibrary("freetype2", .{ .use_pkg_config = .force });
         shape_bench_mod.linkSystemLibrary("harfbuzz", .{
             .use_pkg_config = if (harfbuzz_prefix == null and harfbuzz_lib_dir == null) .force else .no,
         });
+        shape_bench_mod.linkSystemLibrary("freetype2", .{ .use_pkg_config = .force });
         shape_bench_mod.addImport("harfbuzz", harfbuzz_c.createModule());
     }
     if (target.result.os.tag == .macos) {
@@ -2373,6 +2375,46 @@ pub fn build(b: *std.Build) void {
             "0,25",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_4_cmd.step);
+
+        const kerx_format_4_outline_font = exportedBuiltinFont(
+            b,
+            shape_bench_exe,
+            "kerx-format-4-outline",
+            "kerx-format-4-outline.ttf",
+        );
+        const kerx_format_4_outline_harfbuzz = b.addRunArtifact(shape_bench_exe);
+        kerx_format_4_outline_harfbuzz.addArgs(&.{
+            "--engine",                  "compare-harfbuzz",
+            "--harfbuzz-freetype-funcs", "--font",
+        });
+        kerx_format_4_outline_harfbuzz.addFileArg(kerx_format_4_outline_font);
+        kerx_format_4_outline_harfbuzz.addArgs(&.{
+            "--text",       "AA",
+            "--direction",  "ltr",
+            "--iterations", "1",
+            "--warmup",     "0",
+            "--samples",    "1",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&kerx_format_4_outline_harfbuzz.step);
+
+        const kerx_format_4_outline_expected = b.addRunArtifact(shape_bench_exe);
+        kerx_format_4_outline_expected.addArg("--font");
+        kerx_format_4_outline_expected.addFileArg(kerx_format_4_outline_font);
+        kerx_format_4_outline_expected.addArgs(&.{
+            "--text",               "AA",
+            "--size",               "1000",
+            "--glyph-summary",      "--iterations",
+            "1",                    "--warmup",
+            "0",                    "--samples",
+            "1",                    "--expect-glyph-ids",
+            "1,1",                  "--expect-clusters",
+            "0,1",                  "--expect-x-advances",
+            "800,800",              "--expect-y-advances",
+            "0,0",                  "--expect-x-offsets",
+            "0,-450",               "--expect-y-offsets",
+            "0,0",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&kerx_format_4_outline_expected.step);
 
         const kerx_format_4_ankr_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_4_ankr_cmd.addArgs(&.{

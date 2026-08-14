@@ -29,6 +29,29 @@ pub const Adjustment = struct {
     attachment_parent_index: ?usize = null,
 };
 
+pub const OutlinePoint = struct {
+    x: i32,
+    y: i32,
+};
+
+/// Font-owned callback for format-4 action type 0.
+///
+/// Keeping this narrow interface in the table executor avoids importing Font
+/// (and creating a module cycle), while still resolving points at the exact
+/// position of the action in the ordered kerx subtable walk.
+pub const OutlinePointResolver = struct {
+    context: *const anyopaque,
+    resolve_fn: *const fn (
+        context: *const anyopaque,
+        glyph_id: GlyphId,
+        point_index: u16,
+    ) Error!?OutlinePoint,
+
+    fn resolve(self: OutlinePointResolver, glyph_id: GlyphId, point_index: u16) Error!?OutlinePoint {
+        return self.resolve_fn(self.context, glyph_id, point_index);
+    }
+};
+
 pub const Summary = struct {
     has_cross_stream_adjustment: bool = false,
 };
@@ -66,6 +89,7 @@ pub fn collectAdjustments(
     requested_kerning: bool,
     simple_pair_eligible: []const bool,
     ankr_table: ?AnkrTable,
+    outline_resolver: ?OutlinePointResolver,
 ) Error!Summary {
     if (table_offset > data.len or table_length > data.len - table_offset or table_length < 8) return error.BadSfnt;
     if (try readU16(data, table_offset) < 2 or try readU16(data, table_offset) > 4) return error.BadSfnt;
@@ -157,6 +181,7 @@ pub fn collectAdjustments(
                 out.items,
                 if (((coverage & 0x10000000) != 0) != direction_backward) .backward else .forward,
                 ankr_table,
+                outline_resolver,
                 &operations_left,
             );
         }
@@ -234,6 +259,7 @@ fn applyFormat4(
     adjustments: []Adjustment,
     direction: Direction,
     ankr_table: ?AnkrTable,
+    outline_resolver: ?OutlinePointResolver,
     operations_left: *usize,
 ) Error!void {
     if (subtable_length < 32 or glyphs.len != adjustments.len) return error.BadSfnt;
@@ -307,6 +333,18 @@ fn applyFormat4(
         if (mark_set and current_entry.payload != no_action) {
             if (logical_index) |glyph_index| {
                 switch (action_type) {
+                    0 => try applyOutlineAttachment(
+                        data,
+                        machine_start,
+                        machine_length,
+                        action_offset,
+                        current_entry.payload,
+                        mark,
+                        glyph_index,
+                        glyphs,
+                        adjustments,
+                        outline_resolver,
+                    ),
                     2 => try applyCoordinateAttachment(
                         data,
                         machine_start,
@@ -330,9 +368,6 @@ fn applyFormat4(
                         adjustments,
                         ankr_table orelse return error.BadSfnt,
                     ),
-                    // Control-point actions need outline callbacks and remain
-                    // deliberately unsupported.
-                    0 => {},
                     else => return error.BadSfnt,
                 }
             }
@@ -352,6 +387,34 @@ fn applyFormat4(
             cursor += 1;
         }
     }
+}
+
+fn applyOutlineAttachment(
+    data: []const u8,
+    machine_start: usize,
+    machine_length: usize,
+    action_offset: usize,
+    action_index: u16,
+    mark_index: usize,
+    current_index: usize,
+    glyphs: []const GlyphId,
+    adjustments: []Adjustment,
+    resolver: ?OutlinePointResolver,
+) Error!void {
+    const action_delta = std.math.mul(usize, action_index, 4) catch return error.BadSfnt;
+    const relative = std.math.add(usize, action_offset, action_delta) catch return error.BadSfnt;
+    if (relative > machine_length or machine_length - relative < 4) return error.BadSfnt;
+    const point_resolver = resolver orelse return;
+    const mark_point_index = try readU16(data, machine_start + relative);
+    const current_point_index = try readU16(data, machine_start + relative + 2);
+    const mark_point = (try point_resolver.resolve(glyphs[mark_index], mark_point_index)) orelse return;
+    const current_point = (try point_resolver.resolve(glyphs[current_index], current_point_index)) orelse return;
+    adjustments[current_index].x_offset = std.math.sub(i32, mark_point.x, current_point.x) catch return error.BadSfnt;
+    adjustments[current_index].y_offset = std.math.sub(i32, mark_point.y, current_point.y) catch return error.BadSfnt;
+    adjustments[current_index].cross_stream_assigned = false;
+    adjustments[current_index].cross_stream_reset = false;
+    adjustments[current_index].attachment_type = .mark;
+    adjustments[current_index].attachment_parent_index = mark_index;
 }
 
 fn applyAnkrAttachment(
@@ -611,6 +674,7 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
         true,
         &.{ true, true },
         null,
+        null,
     );
 
     try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
@@ -632,6 +696,7 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
         false,
         true,
         &.{true},
+        null,
         null,
     );
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
@@ -673,6 +738,7 @@ test "ordered cross-stream subtables preserve assignment and action order" {
         true,
         &.{ true, true },
         null,
+        null,
     );
 
     try std.testing.expect(summary.has_cross_stream_adjustment);
@@ -708,6 +774,7 @@ test "ordered cross-stream subtables preserve assignment and action order" {
         true,
         &.{ true, true },
         null,
+        null,
     );
     try std.testing.expectEqual(@as(i32, 0), adjustments.items[0].y_offset);
     try std.testing.expectEqual(@as(i32, -20), adjustments.items[1].y_offset);
@@ -734,12 +801,62 @@ test "format 4 coordinate action attaches current glyph to marked glyph" {
         true,
         &.{ true, true },
         null,
+        null,
     );
 
     try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);
     try std.testing.expectEqual(@as(i32, -30), adjustments.items[1].x_offset);
     try std.testing.expectEqual(@as(i32, 25), adjustments.items[1].y_offset);
     try std.testing.expectEqual(@as(?usize, 0), adjustments.items[1].attachment_parent_index);
+}
+
+test "format 4 outline action resolves both raw point indexes" {
+    var bytes = [_]u8{0} ** 116;
+    writeU16Test(&bytes, 0, 2);
+    writeU32Test(&bytes, 4, 1);
+    writeFormat4SubtableTest(&bytes, 8);
+    // Action type zero uses two u16 raw-outline point indexes.
+    writeU32Test(&bytes, 8 + 28, 88);
+    writeU16Test(&bytes, 8 + 12 + 88, 2);
+    writeU16Test(&bytes, 8 + 12 + 90, 3);
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+    _ = try collectAdjustments(
+        &bytes,
+        0,
+        bytes.len,
+        2,
+        &.{ 1, 1 },
+        &adjustments,
+        std.testing.allocator,
+        false,
+        false,
+        true,
+        &.{ true, true },
+        null,
+        .{
+            .context = &bytes,
+            .resolve_fn = testOutlinePoint,
+        },
+    );
+
+    try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);
+    try std.testing.expectEqual(@as(i32, 80), adjustments.items[1].x_offset);
+    try std.testing.expectEqual(@as(i32, 90), adjustments.items[1].y_offset);
+    try std.testing.expectEqual(@as(?usize, 0), adjustments.items[1].attachment_parent_index);
+}
+
+fn testOutlinePoint(
+    _: *const anyopaque,
+    _: GlyphId,
+    point_index: u16,
+) Error!?OutlinePoint {
+    return switch (point_index) {
+        2 => .{ .x = 100, .y = 80 },
+        3 => .{ .x = 20, .y = -10 },
+        else => null,
+    };
 }
 
 fn writeFormat1SubtableTest(bytes: []u8, offset: usize) void {

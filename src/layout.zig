@@ -4520,6 +4520,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 shapingDirectionForGpos(lookup_options) == .rtl,
                 kerning_enabled,
                 kerx_simple_pair_eligible.items,
+                lookup_options.normalized_variation_coords,
             );
         }
     }

@@ -10,7 +10,12 @@ const HarfBuzzFont = struct {
     face: *hb.hb_face_t,
     font: *hb.hb_font_t,
 
-    fn init(font_bytes: []const u8, size: f32, face_index: usize) !HarfBuzzFont {
+    fn init(
+        font_bytes: []const u8,
+        size: f32,
+        face_index: usize,
+        use_freetype_funcs: bool,
+    ) !HarfBuzzFont {
         if (font_bytes.len > std.math.maxInt(c_uint)) return error.InvalidArguments;
         if (face_index > std.math.maxInt(c_uint)) return error.InvalidArguments;
         const blob = hb.hb_blob_create(
@@ -27,6 +32,11 @@ const HarfBuzzFont = struct {
 
         const font = hb.hb_font_create(face) orelse return error.HarfBuzzFailed;
         errdefer hb.hb_font_destroy(font);
+        // Native hb-ot funcs intentionally omit contour-point callbacks.
+        // kerx format-4 action type 0 needs those points, so focused reference
+        // gates opt into HarfBuzz's FreeType font funcs on the same hb_face.
+        // This keeps ordinary timing/parity runs on their existing backend.
+        if (use_freetype_funcs) hb.hb_ft_font_set_funcs(font);
         _ = size;
         const upem: c_int = @intCast(hb.hb_face_get_upem(face));
         hb.hb_font_set_scale(font, upem, upem);
@@ -43,7 +53,12 @@ const HarfBuzzFont = struct {
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !runner.BenchResult {
     if (options.font_path == null) return error.InvalidArguments;
-    const hb_font = try HarfBuzzFont.init(font_bytes, options.size, options.face_index);
+    const hb_font = try HarfBuzzFont.init(
+        font_bytes,
+        options.size,
+        options.face_index,
+        options.harfbuzz_freetype_funcs,
+    );
     defer hb_font.deinit();
     if (options.designVariationCoords().len != 0) {
         const variations = try harfBuzzDesignVariations(allocator, options.designVariationCoords());

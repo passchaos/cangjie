@@ -253,7 +253,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                         .clusters = if (options.glyph_summary) try glyphClusters(allocator, line, glyphs, options.normalize_clusters_to_graphemes) else &.{},
                         .x_advances = if (options.glyph_summary) try glyphXAdvances(allocator, font, options.size, options, glyphs) else &.{},
                         .y_advances = if (options.glyph_summary) try glyphYAdvances(allocator, font, options.size, options, glyphs) else &.{},
-                        .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, options, glyphs) else &.{},
+                        .x_offsets = if (options.glyph_summary) try glyphXOffsets(allocator, font, options.size, options, normalized_variation_coords, glyphs) else &.{},
                         .y_offsets = if (options.glyph_summary) try glyphYOffsets(allocator, font, options.size, options, normalized_variation_coords, glyphs) else &.{},
                         .glyph_flags = if (options.show_flags) try glyphFlags(allocator, line, options, glyphs) else &.{},
                         .glyph_extents = if (options.show_extents) try glyphExtents(allocator, font, options.size, normalized_variation_coords, glyphs) else &.{},
@@ -658,14 +658,21 @@ fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_
     return values;
 }
 
-fn glyphXOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphXOffsets(
+    allocator: std.mem.Allocator,
+    font: *const cangjie.Font,
+    font_size: f32,
+    options: options_mod.Options,
+    normalized_variation_coords: []const f32,
+    glyphs: []const cangjie.GlyphPosition,
+) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     const preserve_vertical_position_delta = verticalKerningFeatureRequested(options);
     for (glyphs, values) |glyph, *value| {
         if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) {
-            const origin = try syntheticVerticalOriginX(font, glyph.glyph_id, options);
+            const origin = try syntheticVerticalOriginX(font, glyph.glyph_id, options, normalized_variation_coords);
             if (preserve_vertical_position_delta) {
-                const default_runtime_origin = @as(f32, @floatFromInt((try font.horizontalMetrics(glyph.glyph_id)).advance_width)) *
+                const default_runtime_origin = @as(f32, @floatFromInt((try font.horizontalMetricsAtCoords(glyph.glyph_id, normalized_variation_coords)).advance_width)) *
                     0.5 * font_size / @as(f32, @floatFromInt(font.units_per_em));
                 const runtime_delta = fontUnitPosition(
                     font,
@@ -708,9 +715,7 @@ fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_s
             if (options.font_slant != 0 or options.font_bold_x != 0 or options.font_bold_y != 0) {
                 break :vertical -try syntheticVerticalOriginY(font, glyph.glyph_id, options, normalized_variation_coords);
             }
-            if (try font.verticalOriginYAtCoords(glyph.glyph_id, normalized_variation_coords)) |origin| break :vertical -@as(i32, origin);
-            if (try glyfVerticalOrigin(font, glyph.glyph_id, normalized_variation_coords)) |origin| break :vertical -origin;
-            break :vertical -@divTrunc(defaultVerticalAdvance(font), 2);
+            break :vertical -try font.shapingVerticalOriginYAtCoords(glyph.glyph_id, normalized_variation_coords);
         } else fontUnitPosition(font, font_size, glyph.y_offset);
     }
     return values;
@@ -779,14 +784,8 @@ fn textContainsCodepoint(text: []const u8, target: u21) bool {
     return false;
 }
 
-fn glyfVerticalOrigin(font: *const cangjie.Font, glyph_id: cangjie.GlyphId, normalized_coords: []const f32) !?i32 {
-    const metrics = (try font.verticalMetricsAtCoords(glyph_id, normalized_coords)) orelse return null;
-    const bounds = font.glyphBoundsAtCoords(glyph_id, normalized_coords) catch return null;
-    return @as(i32, bounds.y_max) + @as(i32, metrics.top_side_bearing);
-}
-
-fn syntheticVerticalOriginX(font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options) !i32 {
-    var advance = @as(i32, (try font.horizontalMetrics(glyph_id)).advance_width);
+fn syntheticVerticalOriginX(font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, normalized_variation_coords: []const f32) !i32 {
+    var advance = @as(i32, (try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords)).advance_width);
     if (options.font_bold_x != 0 and advance != 0) advance += syntheticStrength(font, options.font_bold_x);
     return @divTrunc(advance, 2) + syntheticStrength(font, options.font_bold_x);
 }

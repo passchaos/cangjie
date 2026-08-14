@@ -1994,12 +1994,39 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         var metrics = (try self.verticalMetrics(glyph_id)) orelse return null;
-        const vvar = (try self.metricVariationTableForRead(.vvar)) orelse return metrics;
+        if (try self.metricVariationTableForRead(.vvar)) |vvar| {
+            const advance_delta = try metric_variation_mod.vvarAdvanceHeightDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords);
+            metrics.advance_height = clampI32ToU16(@as(i32, metrics.advance_height) + advance_delta);
+            if (try metric_variation_mod.vvarTopSideBearingDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords)) |tsb_delta| {
+                metrics.top_side_bearing = clampI32ToI16(@as(i32, metrics.top_side_bearing) + tsb_delta);
+            }
+            return metrics;
+        }
 
-        const advance_delta = try metric_variation_mod.vvarAdvanceHeightDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords);
-        metrics.advance_height = clampI32ToU16(@as(i32, metrics.advance_height) + advance_delta);
-        if (try metric_variation_mod.vvarTopSideBearingDelta(self.data, vvar.offset, vvar.length, glyph_id, normalized_coords)) |tsb_delta| {
-            metrics.top_side_bearing = clampI32ToI16(@as(i32, metrics.top_side_bearing) + tsb_delta);
+        if (self.gvar != null) {
+            if (try self.gvarPhantomPointDeltasAtCoordsPrepared(std.heap.page_allocator, glyph_id, normalized_coords, .revalidate)) |phantom| {
+                // Without VVAR, TrueType derives vertical metrics from gvar's
+                // pp3/pp4 phantom points. pp3 moves the absolute vertical
+                // origin; TSB therefore also has to account for the varied
+                // outline yMax rather than merely adding pp3.y to the static
+                // bearing.
+                const default_bounds = try self.glyphBounds(glyph_id);
+                const varied_bounds = try self.glyphBoundsAtCoords(glyph_id, normalized_coords);
+                const varied_origin = roundOpenTypeF32(
+                    @as(f32, @floatFromInt(default_bounds.y_max)) +
+                        @as(f32, @floatFromInt(metrics.top_side_bearing)) +
+                        phantom.top.y,
+                );
+                metrics.top_side_bearing = clampF32ToI16(
+                    varied_origin - @as(f32, @floatFromInt(varied_bounds.y_max)),
+                );
+                metrics.advance_height = clampF32ToU16(
+                    roundOpenTypeF32(
+                        @as(f32, @floatFromInt(metrics.advance_height)) +
+                            phantom.verticalAdvanceDelta(),
+                    ),
+                );
+            }
         }
         return metrics;
     }
@@ -3956,6 +3983,60 @@ pub const Font = struct {
         return origin;
     }
 
+    /// Return the OpenType vertical origin used by shaping, synthesizing it
+    /// when neither VORG nor glyf/vmtx phantom-point metrics provide one.
+    ///
+    /// HarfBuzz centers glyph extents inside the horizontal font-extents box
+    /// for this final fallback. This differs from simply using half the line
+    /// advance: asymmetric glyphs and vertical punctuation need the glyph's
+    /// `yMax` and height to keep the vertical baseline stable.
+    pub fn shapingVerticalOriginYAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!i32 {
+        return try self.shapingVerticalOriginYAtCoordsForReadMode(glyph_id, normalized_coords, .revalidate);
+    }
+
+    /// Parsed-font counterpart used by shaping after its table-proof cache has
+    /// established immutability for the current run.
+    pub fn shapingVerticalOriginYForShaping(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!i32 {
+        return try self.shapingVerticalOriginYAtCoordsForReadMode(glyph_id, normalized_coords, .parsed);
+    }
+
+    fn shapingVerticalOriginYAtCoordsForReadMode(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!i32 {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        if (try self.verticalOriginYAtCoords(glyph_id, normalized_coords)) |origin| return origin;
+
+        const bounds = switch (read_mode) {
+            .revalidate => self.glyphBoundsAtCoords(glyph_id, normalized_coords),
+            .parsed => self.glyphBoundsAtCoordsForShaping(glyph_id, normalized_coords),
+        } catch |err| switch (err) {
+            // HarfBuzz falls back to the font ascender when the active font
+            // backend cannot provide glyph extents.
+            error.MissingTable, error.UnsupportedGlyph, error.UnsupportedCff => return self.ascender,
+            else => return err,
+        };
+        if (self.format == .truetype) {
+            if (try self.verticalMetricsAtCoords(glyph_id, normalized_coords)) |metrics| {
+                var origin = @as(i32, bounds.y_max) + @as(i32, metrics.top_side_bearing);
+                if (try self.metricVariationTableForRead(.vvar)) |vvar| {
+                    if (try metric_variation_mod.vvarVerticalOriginDelta(
+                        self.data,
+                        vvar.offset,
+                        vvar.length,
+                        glyph_id,
+                        normalized_coords,
+                    )) |delta| {
+                        origin += delta;
+                    }
+                }
+                return origin;
+            }
+        }
+
+        const font_height = @as(i32, self.ascender) - @as(i32, self.descender);
+        const glyph_height = @as(i32, bounds.y_max) - @as(i32, bounds.y_min);
+        return @as(i32, bounds.y_max) + @divFloor(font_height - glyph_height, 2);
+    }
+
     /// Expand the TrueType `loca` table into one glyf byte range per glyph.
     pub fn glyphLocations(self: *const Font, allocator: std.mem.Allocator) FontError![]GlyphLocationInfo {
         const loca = self.loca orelse return error.MissingTable;
@@ -4489,6 +4570,20 @@ pub const Font = struct {
             return outline.bounds;
         }
         return try self.glyphBounds(glyph_id);
+    }
+
+    fn glyphBoundsAtCoordsForShaping(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.Bounds {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        if (normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            return try self.glyphBoundsFromParsedTables(glyph_id);
+        }
+        if (self.varc != null or self.cff2 != null or (self.format == .truetype and self.gvar != null)) {
+            var outline = try self.glyphOutlineForRasterAtCoords(std.heap.page_allocator, glyph_id, normalized_coords);
+            defer outline.deinit();
+            return outline.bounds;
+        }
+        return try self.glyphBoundsFromParsedTables(glyph_id);
     }
 
     pub fn glyphOutline(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.GlyphOutline {

@@ -4785,10 +4785,17 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             (@as(f32, @floatFromInt(metrics.advance_width)) * 0.5) * scale
         else
             0.0;
-        const vertical_y_offset = if (vertical_metrics) |value|
-            @as(f32, @floatFromInt(value.top_side_bearing)) * scale
-        else
-            0.0;
+        const vertical_y_offset = if (lookup_options.writing_mode.isVertical()) origin: {
+            // Store the complete vertical-origin translation in the public
+            // positioned glyph, not only vmtx's top-side bearing. This lets
+            // raster/render bridges place upright glyphs correctly for VORG,
+            // glyf+vmtx, and the no-vmtx extent-centering fallback alike.
+            const origin_y = try font.shapingVerticalOriginYForShaping(
+                glyph_id,
+                lookup_options.normalized_variation_coords,
+            );
+            break :origin @as(f32, @floatFromInt(origin_y)) * scale;
+        } else 0.0;
         // USE zeroes marks before GPOS. Without a positioning table, HarfBuzz
         // preserves the visual origin of a forward-direction mark by moving it
         // back by its original advance before clearing that advance.
@@ -7295,6 +7302,40 @@ test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {
         try std.testing.expectApproxEqAbs(@as(f32, 20), glyph.y_advance, 0.001);
         try std.testing.expectApproxEqAbs(@as(f32, 8), glyph.x_offset, 0.001);
     }
+}
+
+test "vertical shaping centers glyph extents when vmtx is absent" {
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const bounds = try font.glyphBounds(1);
+    const font_height = @as(i32, font.ascender) - @as(i32, font.descender);
+    const glyph_height = @as(i32, bounds.y_max) - @as(i32, bounds.y_min);
+    const expected_origin = @as(i32, bounds.y_max) + @divFloor(font_height - glyph_height, 2);
+    try std.testing.expectEqual(
+        expected_origin,
+        try font.shapingVerticalOriginYAtCoords(1, &.{}),
+    );
+
+    const font_size: f32 = @floatFromInt(font.units_per_em);
+    const vertical = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "A",
+        font_size,
+        .{ .writing_mode = .vertical_rl, .text_orientation = .upright },
+    );
+    try std.testing.expectEqual(@as(usize, 1), vertical.glyphs.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, @floatFromInt(expected_origin)),
+        vertical.glyphs[0].y_offset,
+        0.001,
+    );
 }
 
 test "vertical sideways text uses horizontal advance for rotated glyphs" {

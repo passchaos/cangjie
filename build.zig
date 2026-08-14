@@ -1211,7 +1211,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_ext = "otf",
         .text = "AB",
         .direction = "ttb",
-        .variation = "0,0.7,0",
+        .variation = "wght=700",
     },
     .{
         .font_hash = "NotoSansCJK-VF.abc",
@@ -1224,7 +1224,7 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_ext = "ttf",
         .text = "AB",
         .direction = "ttb",
-        .variation = "0,0.7,0",
+        .variation = "wght=700",
     },
     .{
         .font_hash = "2681c1c72d6484ed3410417f521b1b819b4e2392",
@@ -1240,6 +1240,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "2681c1c72d6484ed3410417f521b1b819b4e2392",
         .text = "\u{3008}",
         .direction = "rtl",
+    },
+    .{
+        .font_hash = "191826b9643e3f124d865d617ae609db6a2ce203",
+        .text = "\u{300c}",
+        .direction = "ttb",
     },
     .{
         .font_hash = "5af5361ed4d1e8305780b100e1730cb09132f8d1",
@@ -1677,6 +1682,35 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     bot: bool = false,
     font_ext: []const u8 = "ttf",
 }{
+    .{
+        .font_hash = "NotoSansCJK-VF.abc",
+        .font_ext = "otf",
+        .text = "AB",
+        .direction = "ttb",
+    },
+    .{
+        .font_hash = "NotoSansCJK-VF.abc",
+        .font_ext = "otf",
+        .text = "AB",
+        .direction = "ttb",
+        .variation = "wght=700",
+    },
+    .{
+        .font_hash = "NotoSansCJK-VF.abc",
+        .text = "AB",
+        .direction = "ttb",
+    },
+    .{
+        .font_hash = "NotoSansCJK-VF.abc",
+        .text = "AB",
+        .direction = "ttb",
+        .variation = "wght=700",
+    },
+    .{
+        .font_hash = "191826b9643e3f124d865d617ae609db6a2ce203",
+        .text = "\u{300c}",
+        .direction = "ttb",
+    },
     .{
         .font_hash = "HBTest-VF",
         .text = "A",

@@ -2134,11 +2134,21 @@ shaping-performance superiority.
   cmap glyph, and bottom-to-top vertical shaping no longer lets the horizontal
   bidi mirroring pass replace `U+FE40` with the ordinary mirrored bracket.
   The CFF2+VORG `NotoSansCJK-VF.abc.otf` rows for `AB` in `ttb` are retained at
-  default and `wght=700`; exact duplicate HVAR/VVAR DeltaSetIndexMap payloads
-  are accepted, and the parity tool reports HarfBuzz-style VORG y origins. The
+  default and the upstream design coordinate `wght=700`; exact duplicate
+  HVAR/VVAR DeltaSetIndexMap payloads are accepted, and the parity tool reports
+  variation-aware horizontal origins plus HarfBuzz-style VORG y origins. The
   glyf+vmtx `NotoSansCJK-VF.abc.ttf` rows for the same text and variation
-  settings are retained too; when VORG is absent, `shape-bench` derives the
-  HarfBuzz vertical origin from glyf bounds plus vmtx top side bearing.
+  settings are retained too; when VORG is absent, Cangjie derives the HarfBuzz
+  vertical origin from glyf bounds plus vmtx top side bearing. With no VVAR,
+  gvar pp3/pp4 phantom deltas now update vertical origin/advance metrics just as
+  pp1/pp2 already update horizontal metrics.
+  The no-vmtx `vertical.tests` U+300C row for
+  `191826b9643e3f124d865d617ae609db6a2ce203.ttf` is retained against both
+  references as well. After `vert` selects `uni300C.vert`, Cangjie now centers
+  its glyph extents inside the horizontal ascender/descender box, producing
+  origin `(-512,578)` and advance `-1024` instead of using half the line height
+  as the y origin. The Font-level origin API is shared by layout output and the
+  parity runner so renderers receive the same complete vertical translation.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

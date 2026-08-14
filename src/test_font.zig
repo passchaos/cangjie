@@ -193,6 +193,10 @@ pub fn buildGvarDeltaTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try gvarDeltaTtfTables(allocator));
 }
 
+pub fn buildGvarVerticalMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try gvarVerticalMetricsTtfTables(allocator));
+}
+
 pub fn buildGvarCompoundTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try gvarCompoundTtfTables(allocator));
 }
@@ -855,6 +859,25 @@ fn gvarDeltaTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[8] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    return tables;
+}
+
+fn gvarVerticalMetricsTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 13);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "gvar", .data = try gvarDeltaTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[8] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[9] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[10] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
+    tables[11] = .{ .tag = "vhea", .data = try vheaTableWithMetrics(allocator, 1) };
+    tables[12] = .{ .tag = "vmtx", .data = try vmtxTable(allocator) };
     return tables;
 }
 

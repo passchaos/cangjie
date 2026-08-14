@@ -1693,6 +1693,38 @@ test "HVAR and VVAR metric variation maps are exposed when present" {
     try std.testing.expect((try missing.verticalOriginYAtCoords(1, &.{0.5})) == null);
 }
 
+test "gvar phantom points supply vertical metrics when VVAR is absent" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildGvarVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const default_bounds = try font.glyphBounds(1);
+    const varied_bounds = try font.glyphBoundsAtCoords(1, &.{0.5});
+    const default_metrics = (try font.verticalMetrics(1)) orelse return error.TestUnexpectedResult;
+    const phantom = (try font.gvarPhantomPointDeltasAtCoords(allocator, 1, &.{0.5})) orelse return error.TestUnexpectedResult;
+    const varied_metrics = (try font.verticalMetricsAtCoords(1, &.{0.5})) orelse return error.TestUnexpectedResult;
+
+    const expected_origin: i32 = @intFromFloat(@floor(
+        @as(f32, @floatFromInt(default_bounds.y_max)) +
+            @as(f32, @floatFromInt(default_metrics.top_side_bearing)) +
+            phantom.top.y +
+            0.5,
+    ));
+    try std.testing.expectEqual(
+        expected_origin - @as(i32, varied_bounds.y_max),
+        @as(i32, varied_metrics.top_side_bearing),
+    );
+    try std.testing.expectEqual(
+        @as(i32, default_metrics.advance_height) +
+            @as(i32, @intFromFloat(@floor(phantom.verticalAdvanceDelta() + 0.5))),
+        @as(i32, varied_metrics.advance_height),
+    );
+}
+
 test "shaping applies normalized variation metric coordinates" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

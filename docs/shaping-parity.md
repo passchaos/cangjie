@@ -1610,6 +1610,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   HarfRust shaping parity for `TestAVAR.ttf`. The complete sampling protects
   the font's piecewise avar plateau (`-0.5→0`, `0.5→0`) rather than checking
   only the minimum/default/maximum instances.
+- All nine Unicode text-rendering `CFF2-1.tests` weights pass HarfBuzz
+  glyph-extents and HarfRust shaping parity for
+  `AdobeVFPrototype-Subset.otf`; `wght=800/900` also cover the
+  `dollar.nostroke` FeatureVariation result. The real font's variable hint
+  arrays require CFF2's 513-entry DICT operand limit rather than the previous
+  48-entry scratch, and fractional CFF2 glyph bounds now use OpenType nearest
+  rounding instead of an outward floor/ceil box.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

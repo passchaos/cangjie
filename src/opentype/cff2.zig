@@ -172,6 +172,12 @@ const CharStringExecutionContext = struct {
     context: CharStringScanContext,
 };
 
+// CFF2 permits a maximum operand stack of 513 entries. Private DICT blend
+// arrays use the same DICT operand stream and real variable fonts can exceed
+// the much smaller CFF1-era scratch sizes even when most entries are hinting
+// metadata that the outline executor itself does not consume.
+const max_dict_operands = 513;
+
 fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize, normalized_coords: []const f32) Error!?CharStringExecutionContext {
     if (glyph_id >= glyph_count) return error.BadSfnt;
     if (offset > data.len or length > data.len - offset) return error.BadSfnt;
@@ -299,7 +305,7 @@ const DictOperand = struct {
 const DictParser = struct {
     data: []const u8,
     offset: usize = 0,
-    operands: [48]DictOperand = undefined,
+    operands: [max_dict_operands]DictOperand = undefined,
     operand_count: usize = 0,
 
     fn next(self: *DictParser) Error!?struct { op: u16, operands: []const DictOperand } {
@@ -640,6 +646,18 @@ test "CFF2 DICT parser accepts real operands for non-address metadata" {
 test "CFF2 DICT offset operands remain integer-only" {
     try std.testing.expectError(error.BadSfnt, readOffsetOperand(&.{DictOperand.numberValue(1.25)}));
     try std.testing.expectEqual(@as(usize, 42), try readOffsetOperand(&.{DictOperand.int(42)}));
+}
+
+test "CFF2 DICT parser accepts the maximum operand stack" {
+    var bytes: [max_dict_operands + 1]u8 = undefined;
+    @memset(bytes[0..max_dict_operands], 139); // integer zero
+    bytes[max_dict_operands] = 23; // a non-address DICT operator
+
+    var parser = DictParser{ .data = &bytes };
+    const entry = (try parser.next()).?;
+    try std.testing.expectEqual(@as(usize, max_dict_operands), entry.operands.len);
+    try std.testing.expectEqual(@as(u16, 23), entry.op);
+    try std.testing.expect((try parser.next()) == null);
 }
 
 test "CFF2 header exposes top dict, global subrs, and trailing data" {

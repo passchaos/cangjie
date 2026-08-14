@@ -4938,11 +4938,15 @@ pub const Font = struct {
 
     fn cff2BoundsInfoToGlyphBounds(bounds: Cff2CharStringBoundsInfo) glyph_mod.Bounds {
         if (!bounds.has_bounds) return .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
+        // HarfBuzz/FreeType report CFF2 glyph extents by rounding each design
+        // coordinate to the nearest FUnit with OpenType's +infinity tie rule.
+        // Expanding minima with floor and maxima with ceil makes every
+        // fractional outline one unit too wide or tall.
         return .{
-            .x_min = clampF32ToI16(@floor(bounds.x_min)),
-            .y_min = clampF32ToI16(@floor(bounds.y_min)),
-            .x_max = clampF32ToI16(@ceil(bounds.x_max)),
-            .y_max = clampF32ToI16(@ceil(bounds.y_max)),
+            .x_min = clampF32ToI16(roundOpenTypeF32(bounds.x_min)),
+            .y_min = clampF32ToI16(roundOpenTypeF32(bounds.y_min)),
+            .x_max = clampF32ToI16(roundOpenTypeF32(bounds.x_max)),
+            .y_max = clampF32ToI16(roundOpenTypeF32(bounds.y_max)),
         };
     }
 
@@ -4950,6 +4954,21 @@ pub const Font = struct {
         if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
         if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
         return @intFromFloat(value);
+    }
+
+    test "CFF2 fractional bounds use OpenType nearest rounding" {
+        try std.testing.expectEqual(glyph_mod.Bounds{
+            .x_min = 52,
+            .y_min = -115,
+            .x_max = 437,
+            .y_max = 759,
+        }, cff2BoundsInfoToGlyphBounds(.{
+            .has_bounds = true,
+            .x_min = 52.456,
+            .y_min = -115.0,
+            .x_max = 437.174,
+            .y_max = 758.739,
+        }));
     }
 
     fn glyphData(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError![]const u8 {

@@ -1561,6 +1561,15 @@ const retained_variable_text_rendering_parity_gates = [_]struct {
         .remove_default_ignorables = true,
         .harfbuzz_extents = true,
     },
+    .{
+        .font_file = "AdobeVFPrototype-Subset.otf",
+        .text = "$",
+        .direction = "ltr",
+        .size = "1000",
+        .variations = &.{ "wght=100", "wght=200", "wght=300", "wght=400", "wght=500", "wght=600", "wght=700", "wght=800", "wght=900" },
+        .remove_default_ignorables = true,
+        .harfbuzz_extents = true,
+    },
 };
 
 const retained_text_rendering_rejection_gates = [_]struct {

@@ -1398,6 +1398,9 @@ const retained_inline_text_rendering_parity_gates = [_]struct {
     font_file: []const u8,
     text: []const u8,
     direction: []const u8,
+    size: ?[]const u8 = null,
+    variation: ?[]const u8 = null,
+    remove_default_ignorables: bool = false,
 }{
     // The upstream row ends in U+0020. Keep it explicit rather than relying
     // on invisible trailing whitespace in the line-oriented corpus.
@@ -1406,6 +1409,11 @@ const retained_inline_text_rendering_parity_gates = [_]struct {
         .text = "ಧೋಂ ",
         .direction = "ltr",
     },
+    .{ .font_file = "TestGPOSFour.ttf", .text = "\u{0634}\u{0652}", .direction = "rtl", .size = "1000", .variation = "wght=100", .remove_default_ignorables = true },
+    .{ .font_file = "TestGPOSFour.ttf", .text = "\u{0634}\u{0652}", .direction = "rtl", .size = "1000", .variation = "wght=300", .remove_default_ignorables = true },
+    .{ .font_file = "TestGPOSFour.ttf", .text = "\u{0634}\u{0652}", .direction = "rtl", .size = "1000", .variation = "wght=600", .remove_default_ignorables = true },
+    .{ .font_file = "TestGPOSFour.ttf", .text = "\u{0634}\u{0652}", .direction = "rtl", .size = "1000", .variation = "wght=700", .remove_default_ignorables = true },
+    .{ .font_file = "TestGPOSFour.ttf", .text = "\u{0634}\u{0652}", .direction = "rtl", .size = "1000", .variation = "wght=900", .remove_default_ignorables = true },
 };
 
 const retained_text_rendering_rejection_gates = [_]struct {
@@ -2344,6 +2352,9 @@ pub fn build(b: *std.Build) void {
                 "--text",      gate.text,
                 "--direction", gate.direction,
             });
+            if (gate.size) |size| harfbuzz_parity_cmd.addArgs(&.{ "--size", size });
+            if (gate.variation) |variation| harfbuzz_parity_cmd.addArgs(&.{ "--variation", variation });
+            if (gate.remove_default_ignorables) harfbuzz_parity_cmd.addArg("--remove-default-ignorables");
             shaping_corpus_parity_smoke_step.dependOn(&harfbuzz_parity_cmd.step);
 
             const harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
@@ -2353,6 +2364,9 @@ pub fn build(b: *std.Build) void {
                 "--text",      gate.text,
                 "--direction", gate.direction,
             });
+            if (gate.size) |size| harfrust_parity_cmd.addArgs(&.{ "--size", size });
+            if (gate.variation) |variation| harfrust_parity_cmd.addArgs(&.{ "--variation", variation });
+            if (gate.remove_default_ignorables) harfrust_parity_cmd.addArg("--remove-default-ignorables");
             shaping_corpus_parity_smoke_step.dependOn(&harfrust_parity_cmd.step);
         }
         for (retained_text_rendering_rejection_gates) |gate| {

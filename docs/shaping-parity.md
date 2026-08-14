@@ -1547,6 +1547,16 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   selection and lookup-plan construction, so it can continue to the mark
   positioning table. Partial-null topologies remain malformed because their
   activation and lookup graphs cannot be navigated consistently.
+- All five variable-anchor rows from Unicode text-rendering `GPOS-5.tests`
+  pass both HarfBuzz and HarfRust with `TestGPOSFour.ttf` at
+  `wght=100,300,600,700,900`. The font carries adjacent duplicate `DFLT`
+  ScriptRecords; Cangjie now accepts nondecreasing duplicate Script tags while
+  preserving first-record selection, validating every child graph, and still
+  rejecting decreasing ScriptLists and duplicate LangSys tags. AnchorFormat3
+  VariationIndex children now resolve against GDEF 1.3's ItemVariationStore at
+  the final F2Dot14-normalized fvar/avar location. The five retained checksums
+  are `56299d01d22a7578`, `cf20e51869c39c0a`, `ba96f0ea76f18d3b`,
+  `1128dc6c96d5b0a2`, and `cd0b59b81bd63b62`.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

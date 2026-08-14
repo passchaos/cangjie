@@ -7443,7 +7443,10 @@ fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, fe
 }
 
 fn validateScriptRecordOrder(table: Table, script_list_offset: usize, script_count: u16) GsubError!void {
-    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6, false);
+    // Match GPOS and HarfBuzz's deterministic first-record behavior for
+    // adjacent duplicate Script tags, while still validating every child graph
+    // and rejecting a genuinely decreasing ScriptList.
+    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6, true);
 }
 
 fn validateFeatureRecordOrder(table: Table, feature_list_offset: usize, feature_count: u16) GsubError!void {
@@ -7456,9 +7459,10 @@ fn validateLangSysRecordOrder(table: Table, script_offset: usize, lang_sys_count
 
 fn validateTagRecordOrder(table: Table, records_offset: usize, record_count: u16, record_stride: usize, allow_equal_tags: bool) GsubError!void {
     // OpenType Layout tag records are sorted by tag. FeatureList records in
-    // widely deployed fonts may repeat a feature tag with different parameter
-    // payloads, so feature ordering is nondecreasing while Script/LangSys
-    // records remain strict to avoid ambiguous script/language selection.
+    // widely deployed fonts may repeat a feature or Script tag with different
+    // payloads, so those lists are nondecreasing with stable first-match
+    // selection. LangSys records stay strict because a duplicate language
+    // branch under one selected Script would otherwise be unreachable.
     var previous_tag: ?u32 = null;
     for (0..record_count) |record_i| {
         const tag_value = try readU32BadGsub(table, records_offset + record_i * record_stride);
@@ -10820,6 +10824,12 @@ test "GSUB validates layout tag record ordering" {
     try std.testing.expectEqual(@as(usize, 0), selected.items.len);
 
     writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    var duplicate = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
+    defer duplicate.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), duplicate.items.len);
+
+    writeU32Test(&bytes, 18, unicode.tag("AAAA"));
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
     try std.testing.expectError(error.BadGsub, selectedLookupIndices(table, allocator, .{ .script_tag = .dflt }));
     writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));

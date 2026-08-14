@@ -248,7 +248,7 @@ fn deltaSetIndexForMappedItem(data: []const u8, table_offset: usize, table_lengt
     };
 }
 
-fn itemVariationDelta(data: []const u8, table_offset: usize, table_length: usize, store_offset: usize, index: DeltaSetIndex, normalized_coords: []const f32) Error!i32 {
+pub fn itemVariationDelta(data: []const u8, table_offset: usize, table_length: usize, store_offset: usize, index: DeltaSetIndex, normalized_coords: []const f32) Error!i32 {
     return roundF64ToI32(try itemVariationDeltaF64(data, table_offset, table_length, store_offset, index, normalized_coords));
 }
 

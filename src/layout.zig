@@ -4464,6 +4464,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .language_tag = lookup_options.language_tag,
         .direction = if (shapingDirectionForGpos(lookup_options) == .rtl) .rtl else .ltr,
         .features = lookup_options.features,
+        .normalized_variation_coords = lookup_options.normalized_variation_coords,
         .apply_all_if_unselected = false,
         .run_may_have_mark_attachments = runMayHaveMarkAttachments(glyph_ids.items, codepoints.items, glyph_source_indices.items, gdef_metadata.*),
         .run_has_default_ignorables = has_default_ignorable,

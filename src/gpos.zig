@@ -4,6 +4,7 @@ const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ot_layout = @import("opentype/layout.zig");
 const class_context = @import("opentype/class_context.zig");
+const metric_variation = @import("opentype/metric_variation.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
@@ -81,6 +82,11 @@ pub const LookupOptions = struct {
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
     direction: Direction = .ltr,
     features: []const unicode.FeatureOverride = &.{},
+    /// Normalized fvar-axis coordinates after avar mapping. AnchorFormat3
+    /// VariationIndex children resolve through the GDEF ItemVariationStore in
+    /// this same axis order.
+    normalized_variation_coords: []const f32 = &.{},
+    gdef_variation_store: ?VariationStore = null,
     apply_all_if_unselected: bool = true,
     glyph_classes: ?[]const u16 = null,
     mark_attach_classes: ?[]const u16 = null,
@@ -129,6 +135,13 @@ pub const LookupOptions = struct {
     /// leave this at zero; nested contextual dispatch increments it so cyclic
     /// lookup graphs are rejected instead of recursing indefinitely.
     context_depth: usize = 0,
+};
+
+pub const VariationStore = struct {
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    store_offset: usize,
 };
 
 pub const LookupAccelerator = struct {
@@ -2256,6 +2269,9 @@ fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
 }
 
 fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GposError!void {
+    for (options.normalized_variation_coords) |coord| {
+        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.InvalidShapingInput;
+    }
     if (options.glyph_source_indices) |sources| {
         if (sources.len != glyph_count) return error.InvalidShapingInput;
     }
@@ -2688,8 +2704,8 @@ fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable,
             const entry_relative = try readU16(table, current_record);
             const exit_relative = try readU16(table, previous_record + 2);
             if (entry_relative != 0 and exit_relative != 0) {
-                const entry = try readAnchor(table, parsed.subtable_offset + entry_relative);
-                const exit = try readAnchor(table, parsed.subtable_offset + exit_relative);
+                const entry = try readAnchor(table, parsed.subtable_offset + entry_relative, options);
+                const exit = try readAnchor(table, parsed.subtable_offset + exit_relative, options);
                 try appendCursiveAdjustments(adjustments, allocator, previous_position, i, exit, entry, lookup_flag, options.direction);
             }
         }
@@ -2722,8 +2738,8 @@ fn collectCursiveAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []co
     const exit_relative = try readU16(table, previous_record + 2);
     if (entry_relative == 0 or exit_relative == 0) return false;
 
-    const entry = try readAnchor(table, subtable_offset + entry_relative);
-    const exit = try readAnchor(table, subtable_offset + exit_relative);
+    const entry = try readAnchor(table, subtable_offset + entry_relative, options);
+    const exit = try readAnchor(table, subtable_offset + exit_relative, options);
     try appendCursiveAdjustments(adjustments, allocator, previous_position, target_index, exit, entry, lookup_flag, options.direction);
     return true;
 }
@@ -3113,8 +3129,8 @@ fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtabl
     const base_anchor_relative = try readU16(table, base_anchor_record);
     if (base_anchor_relative == 0) return false;
     const base_anchor_offset = subtable.base_array_offset + base_anchor_relative;
-    const mark_anchor = try readAnchor(table, mark_anchor_offset);
-    const base_anchor = try readAnchor(table, base_anchor_offset);
+    const mark_anchor = try readAnchor(table, mark_anchor_offset, options);
+    const base_anchor = try readAnchor(table, base_anchor_offset, options);
     try appendAdjustmentEx(adjustments, allocator, mark_position, .{
         .index = mark_position,
         .x_placement = base_anchor.x - mark_anchor.x,
@@ -4158,7 +4174,11 @@ fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, fe
 }
 
 fn validateScriptRecordOrder(table: Table, script_list_offset: usize, script_count: u16) GposError!void {
-    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6, false);
+    // Real text-rendering fixtures can carry adjacent duplicate ScriptRecords.
+    // Selection remains deterministic because findScriptOffset returns the
+    // first record, while the validation walk below still proves every child
+    // Script/LangSys graph before shaping.
+    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6, true);
 }
 
 fn validateFeatureRecordOrder(table: Table, feature_list_offset: usize, feature_count: u16) GposError!void {
@@ -4173,9 +4193,10 @@ fn validateLangSysRecordOrder(table: Table, script_offset: usize, lang_sys_count
 
 fn validateTagRecordOrder(table: Table, records_offset: usize, record_count: u16, record_stride: usize, allow_equal_tags: bool) GposError!void {
     // OpenType Layout tag records are sorted by tag. FeatureList records in
-    // widely deployed fonts may repeat a feature tag with different parameter
-    // payloads, so feature ordering is nondecreasing while Script/LangSys
-    // records remain strict to avoid ambiguous script/language selection.
+    // widely deployed fonts may repeat a feature or Script tag with different
+    // payloads. Those lists are nondecreasing and use their caller's stable
+    // first-match semantics; LangSys records remain strict because a duplicate
+    // language would make one branch of the selected Script unreachable.
     var previous_tag: ?u32 = null;
     for (0..record_count) |record_i| {
         const tag_value = try readU32BadGpos(table, records_offset + record_i * record_stride);
@@ -5172,8 +5193,8 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
     const ligature_anchor_relative = try readU16(table, anchor_record);
     if (ligature_anchor_relative == 0) return false;
     const ligature_anchor_offset = ligature_attach_offset + ligature_anchor_relative;
-    const mark_anchor = try readAnchor(table, mark_anchor_offset);
-    const ligature_anchor = try readAnchor(table, ligature_anchor_offset);
+    const mark_anchor = try readAnchor(table, mark_anchor_offset, options);
+    const ligature_anchor = try readAnchor(table, ligature_anchor_offset, options);
     try appendAdjustmentEx(adjustments, allocator, mark_position, .{
         .index = mark_position,
         .x_placement = ligature_anchor.x - mark_anchor.x,
@@ -5331,8 +5352,8 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     const mark_2_anchor_relative = try readU16(table, mark_2_anchor_record);
     if (mark_2_anchor_relative == 0) return false;
     const mark_2_anchor_offset = mark_2_array_offset + mark_2_anchor_relative;
-    const mark_1_anchor = try readAnchor(table, mark_1_anchor_offset);
-    const mark_2_anchor = try readAnchor(table, mark_2_anchor_offset);
+    const mark_1_anchor = try readAnchor(table, mark_1_anchor_offset, options);
+    const mark_2_anchor = try readAnchor(table, mark_2_anchor_offset, options);
     try appendAdjustmentEx(adjustments, allocator, mark_1_position, .{
         .index = mark_1_position,
         .x_placement = mark_2_anchor.x - mark_1_anchor.x,
@@ -5381,7 +5402,7 @@ const Anchor = struct {
     y: i16,
 };
 
-fn readAnchor(table: Table, anchor_offset: usize) GposError!Anchor {
+fn readAnchor(table: Table, anchor_offset: usize, options: LookupOptions) GposError!Anchor {
     const format = try readU16(table, anchor_offset);
     return switch (format) {
         1 => blk: {
@@ -5400,12 +5421,41 @@ fn readAnchor(table: Table, anchor_offset: usize) GposError!Anchor {
         },
         3 => blk: {
             if (anchor_offset + 10 > table.length) return error.EndOfStream;
+            var x: i32 = try readI16(table, anchor_offset + 2);
+            var y: i32 = try readI16(table, anchor_offset + 4);
+            x += try anchorVariationDelta(table, anchor_offset, try readU16(table, anchor_offset + 6), options);
+            y += try anchorVariationDelta(table, anchor_offset, try readU16(table, anchor_offset + 8), options);
             break :blk .{
-                .x = try readI16(table, anchor_offset + 2),
-                .y = try readI16(table, anchor_offset + 4),
+                .x = std.math.cast(i16, x) orelse return error.BadGpos,
+                .y = std.math.cast(i16, y) orelse return error.BadGpos,
             };
         },
         else => error.UnsupportedGpos,
+    };
+}
+
+fn anchorVariationDelta(table: Table, anchor_offset: usize, relative_offset: u16, options: LookupOptions) GposError!i32 {
+    if (relative_offset == 0 or options.normalized_variation_coords.len == 0) return 0;
+    const device_offset = try checkedPositionOffset(table, anchor_offset, relative_offset);
+    const delta_format = try readU16(table, device_offset + 4);
+    // Device tables are PPEM-dependent and remain outside this font-unit
+    // shaping API. DeltaFormat 0x8000 is the variation-common VariationIndex
+    // encoding: StartSize/EndSize are its outer/inner ItemVariationStore keys.
+    if (delta_format != 0x8000) return 0;
+    const store = options.gdef_variation_store orelse return 0;
+    return metric_variation.itemVariationDelta(
+        store.data,
+        store.table_offset,
+        store.table_length,
+        store.store_offset,
+        .{
+            .outer = try readU16(table, device_offset),
+            .inner = try readU16(table, device_offset + 2),
+        },
+        options.normalized_variation_coords,
+    ) catch |err| switch (err) {
+        error.BadSfnt, error.EndOfStream => error.BadGpos,
+        error.OutOfMemory => unreachable,
     };
 }
 
@@ -5873,6 +5923,57 @@ test "GPOS validates AnchorFormat3 device offsets" {
 
     writeU16Test(&bytes, 14, 0x8000); // VariationIndex table: three uint16 fields only.
     try ensureAnchorTableWithin(table, 0);
+}
+
+test "GPOS AnchorFormat3 resolves GDEF VariationIndex deltas" {
+    var bytes: [64]u8 = .{0} ** 64;
+    writeU16Test(&bytes, 0, 3);
+    writeI16Test(&bytes, 2, 20);
+    writeI16Test(&bytes, 4, -10);
+    writeU16Test(&bytes, 6, 10);
+    writeU16Test(&bytes, 8, 16);
+    // Two VariationIndex records select ItemVariationData rows 0 and 1.
+    writeU16Test(&bytes, 10, 0);
+    writeU16Test(&bytes, 12, 0);
+    writeU16Test(&bytes, 14, 0x8000);
+    writeU16Test(&bytes, 16, 0);
+    writeU16Test(&bytes, 18, 1);
+    writeU16Test(&bytes, 20, 0x8000);
+
+    const store = 24;
+    writeU16Test(&bytes, store + 0, 1);
+    writeU32Test(&bytes, store + 2, 12);
+    writeU16Test(&bytes, store + 6, 1);
+    writeU32Test(&bytes, store + 8, 24);
+    writeU16Test(&bytes, store + 12, 1);
+    writeU16Test(&bytes, store + 14, 1);
+    writeI16Test(&bytes, store + 16, 0);
+    writeI16Test(&bytes, store + 18, 0x4000);
+    writeI16Test(&bytes, store + 20, 0x4000);
+    writeU16Test(&bytes, store + 24, 2);
+    writeU16Test(&bytes, store + 26, 1);
+    writeU16Test(&bytes, store + 28, 1);
+    writeU16Test(&bytes, store + 30, 0);
+    writeI16Test(&bytes, store + 32, 8);
+    writeI16Test(&bytes, store + 34, -6);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expectEqual(Anchor{ .x = 20, .y = -10 }, try readAnchor(table, 0, .{}));
+    const options = LookupOptions{
+        .normalized_variation_coords = &.{0.5},
+        .gdef_variation_store = .{
+            .data = &bytes,
+            .table_offset = 0,
+            .table_length = bytes.len,
+            .store_offset = store,
+        },
+    };
+    try std.testing.expectEqual(Anchor{ .x = 24, .y = -13 }, try readAnchor(table, 0, options));
+
+    // A legal Device table is PPEM-dependent, not a VariationIndex. It remains
+    // a zero delta in this font-unit shaping API even when coordinates exist.
+    writeU16Test(&bytes, 14, 1);
+    try std.testing.expectEqual(Anchor{ .x = 20, .y = -13 }, try readAnchor(table, 0, options));
 }
 
 test "GPOS coverage format 2 handles full glyph-space index boundary" {
@@ -6451,17 +6552,17 @@ test "GPOS anchors validate format-specific record sizes" {
     writeU16Test(&bytes, 0, 1);
     writeI16Test(&bytes, 2, 10);
     writeI16Test(&bytes, 4, 20);
-    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 6 }, 0));
+    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 6 }, 0, .{}));
 
     writeU16Test(&bytes, 0, 2);
     writeU16Test(&bytes, 6, 3);
-    try std.testing.expectError(error.EndOfStream, readAnchor(.{ .data = &bytes, .offset = 0, .length = 6 }, 0));
-    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 8 }, 0));
+    try std.testing.expectError(error.EndOfStream, readAnchor(.{ .data = &bytes, .offset = 0, .length = 6 }, 0, .{}));
+    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 8 }, 0, .{}));
 
     writeU16Test(&bytes, 0, 3);
     writeU16Test(&bytes, 8, 0);
-    try std.testing.expectError(error.EndOfStream, readAnchor(.{ .data = &bytes, .offset = 0, .length = 8 }, 0));
-    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 10 }, 0));
+    try std.testing.expectError(error.EndOfStream, readAnchor(.{ .data = &bytes, .offset = 0, .length = 8 }, 0, .{}));
+    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 10 }, 0, .{}));
 }
 
 test "GPOS scalar reads reject overflowing relative offsets" {
@@ -7604,7 +7705,16 @@ test "GPOS validates layout tag record ordering" {
     defer selected.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), selected.items.len);
 
+    // Adjacent duplicate ScriptRecords are tolerated and every child remains
+    // validated. Runtime selection keeps the first authored record.
     writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    var duplicate = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
+    defer duplicate.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), duplicate.items.len);
+
+    // A decreasing tag still violates the searchable ScriptList topology.
+    writeU32Test(&bytes, 18, unicode.tag("AAAA"));
     try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
     try std.testing.expectError(error.BadGpos, selectedLookupIndices(table, allocator, .{ .script_tag = .dflt }));
     writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
@@ -10098,6 +10208,21 @@ test "GPOS public adjustment collection validates source metadata cardinality" {
 
     try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &glyphs, &adjustments, allocator, .{
         .glyph_source_indices = &sources,
+    }));
+}
+
+test "GPOS public adjustment collection validates variation coordinates" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 10;
+    writeU32Test(&bytes, 0, 0x00010000);
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{
+        .normalized_variation_coords = &.{std.math.nan(f32)},
+    }));
+    try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{
+        .normalized_variation_coords = &.{1.01},
     }));
 }
 

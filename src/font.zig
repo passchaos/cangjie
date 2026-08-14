@@ -860,11 +860,14 @@ pub const GdefLookupMetadata = struct {
     glyph_classes: ?[]u16 = null,
     mark_attach_classes: ?[]u16 = null,
     mark_filtering_sets: ?[][]glyph_mod.GlyphId = null,
+    variation_store_data: ?[]u8 = null,
+    variation_store: ?gpos_mod.VariationStore = null,
 
     pub fn deinit(self: *GdefLookupMetadata, allocator: std.mem.Allocator) void {
         if (self.glyph_classes) |classes| allocator.free(classes);
         if (self.mark_attach_classes) |classes| allocator.free(classes);
         if (self.mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
+        if (self.variation_store_data) |data| allocator.free(data);
         self.* = .{};
     }
 
@@ -885,6 +888,7 @@ pub const GdefLookupMetadata = struct {
         if (self.glyph_classes) |classes| options.glyph_classes = classes;
         if (self.mark_attach_classes) |classes| options.mark_attach_classes = classes;
         if (self.mark_filtering_sets) |sets| options.mark_filtering_sets = sets;
+        if (self.variation_store) |store| options.gdef_variation_store = store;
     }
 };
 
@@ -3164,6 +3168,24 @@ pub const Font = struct {
         if (try self.markFilteringSets(allocator)) |sets| {
             metadata.mark_filtering_sets = sets;
         }
+        if (header_len >= 18) {
+            const store_offset: usize = @intCast(try bin.readU32At(self.data, gdef.offset + 14));
+            if (store_offset != 0) {
+                // The metadata cache can outlive caller mutations to Font's
+                // borrowed SFNT bytes. Dense classes and mark sets are already
+                // owned; copy the relatively rare GDEF 1.3 table as well so
+                // AnchorFormat3 variation evaluation has the same lifetime and
+                // proof boundary rather than rereading mutable source bytes.
+                const owned = try allocator.dupe(u8, table);
+                metadata.variation_store_data = owned;
+                metadata.variation_store = .{
+                    .data = owned,
+                    .table_offset = 0,
+                    .table_length = owned.len,
+                    .store_offset = store_offset,
+                };
+            }
+        }
         return metadata;
     }
 
@@ -3449,7 +3471,13 @@ pub const Font = struct {
         errdefer allocator.free(normalized);
         for (axes, 0..) |axis, index| {
             const user_value = variationValueForAxis(axis, coordinates) orelse axis.default_value;
-            normalized[index] = try self.mapVariationCoordinate(index, axis.normalize(user_value));
+            const mapped = try self.mapVariationCoordinate(index, axis.normalize(user_value));
+            // OpenType variation consumers operate at F2Dot14 locations.
+            // HarfBuzz first rounds fvar/avar design coordinates into this
+            // domain; retaining an unquantized f32 here can move a gvar phantom
+            // metric across a half-unit boundary even though GDEF/HVAR later
+            // quantize the same location independently.
+            normalized[index] = quantizeNormalizedF2Dot14(mapped);
         }
         return normalized;
     }
@@ -10241,6 +10269,11 @@ fn appendContour(builder: *glyph_mod.OutlineBuilder, contour: []const FlaggedPoi
 
 fn f2dot14(value: i16) f32 {
     return @as(f32, @floatFromInt(value)) / 16384.0;
+}
+
+fn quantizeNormalizedF2Dot14(value: f32) f32 {
+    const fixed: i16 = @intFromFloat(@round(value * 16384.0));
+    return f2dot14(fixed);
 }
 
 fn fixed16_16ToF32(value: i32) f32 {
@@ -20583,6 +20616,16 @@ test "normalized variation coordinates reject duplicate and unknown public tags"
     try std.testing.expectError(error.BadSfnt, font.normalizedVariationCoordinates(allocator, &.{
         .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = std.math.nan(f32) },
     }));
+}
+
+test "normalized variation coordinates quantize final locations to F2Dot14" {
+    // A one-third negative location is not exactly representable in f32 or
+    // F2Dot14. Quantization belongs at the public design-to-location boundary
+    // so all downstream gvar and ItemVariationStore consumers see one value.
+    try std.testing.expectEqual(@as(f32, -0.33331298828125), quantizeNormalizedF2Dot14(-1.0 / 3.0));
+    try std.testing.expectEqual(@as(f32, 0.4000244140625), quantizeNormalizedF2Dot14(0.4));
+    try std.testing.expectEqual(@as(f32, -1.0), quantizeNormalizedF2Dot14(-1.0));
+    try std.testing.expectEqual(@as(f32, 1.0), quantizeNormalizedF2Dot14(1.0));
 }
 
 test "fvar axis metadata is validated at parse time" {

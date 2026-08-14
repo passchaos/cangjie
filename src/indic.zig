@@ -1,9 +1,9 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 const gsub = @import("gsub.zig");
+const shaping_sections = @import("shaping_sections.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const unicode = @import("unicode.zig");
 
@@ -18,12 +18,7 @@ const pref_source_mask = gsub.sourceFeatureMaskForTag(pref_feature).?;
 const blwf_source_mask = gsub.sourceFeatureMaskForTag(blwf_feature).?;
 const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
 const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
-const scanner_text_section = switch (builtin.object_format) {
-    .elf => ".cangjie_indic_scanner",
-    .macho => "__TEXT,__cangjie_indic",
-    .coff => ".text$cangjie_indic",
-    else => ".text",
-};
+const scanner_text_section = shaping_sections.isolated_hotpaths;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {

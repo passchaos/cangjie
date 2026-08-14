@@ -6,6 +6,7 @@ const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
 const ot_layout = @import("opentype/layout.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
+const shaping_sections = @import("shaping_sections.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
 
@@ -698,6 +699,67 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     }
 }
 
+/// Apply a non-empty cached lookup selection after the layout shaper proved the
+/// borrowed table and constructed a valid glyph/source-parallel run.
+///
+/// This intentionally has a narrow, fallible fast-path contract. `false` means
+/// no glyph was touched and the caller must use `applyWithOptions`; in
+/// particular, empty selections retain its FeatureList/topology semantics, and
+/// absent or foreign accelerators retain all defensive validation. An exact
+/// accelerator was built by walking every LookupList entry in this same table,
+/// so its length and offsets are an immutable lookup plan for the cache
+/// lifetime. Validate the complete selected index set before applying its first
+/// lookup so a stale/corrupt selection can never produce a partially mutated
+/// run before falling back.
+pub noinline fn applyCachedLookupSelectionWithOptionsAfterMetadataProof(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) linksection(shaping_sections.isolated_hotpaths) (GsubError || std.mem.Allocator.Error)!bool {
+    if (!options.assume_validated) return false;
+    // The layout shaper installs one shared HarfBuzz-compatible budget across
+    // all of its GSUB stages. Do not let another caller accidentally turn this
+    // trusted shortcut into an unbounded substitution executor.
+    if (options.operations_left == null or options.max_glyph_count == null) return false;
+    if (length < 10 or offset > data.len or length > data.len - offset) return false;
+    const selected_lookups = options.selected_lookups orelse return false;
+    if (selected_lookups.len == 0) return false;
+    const accelerators = options.lookup_accelerators orelse return false;
+    _ = exactFeatureLookupIndex(data, offset, length, accelerators) orelse return false;
+
+    for (selected_lookups) |lookup_index| {
+        if (lookup_index >= accelerators.len) return false;
+        const accelerator = accelerators[lookup_index];
+        if (accelerator.lookup_offset == 0 or accelerator.lookup_type == 0) return false;
+    }
+
+    var mutation_generation: usize = 0;
+    const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = true,
+    };
+    var run_digest_cache = RunDigestCache.init();
+    for (selected_lookups) |lookup_index| {
+        const accelerator = accelerators[lookup_index];
+        try applyLookupWithIndex(
+            table,
+            accelerator.lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            shaping_options,
+            &run_digest_cache,
+        );
+    }
+    return true;
+}
+
 pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)![]u16 {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
@@ -750,6 +812,16 @@ pub fn hasRandomFeatureWithAccelerators(
     length: usize,
     accelerators: []const LookupAccelerator,
 ) ?bool {
+    const feature_index = exactFeatureLookupIndex(data, offset, length, accelerators) orelse return null;
+    return feature_index.has_random_feature;
+}
+
+fn exactFeatureLookupIndex(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    accelerators: []const LookupAccelerator,
+) ?*const FeatureLookupIndex {
     if (accelerators.len == 0) return null;
     const feature_index = accelerators[0].feature_index orelse return null;
     if (feature_index.data_ptr != data.ptr or
@@ -759,7 +831,7 @@ pub fn hasRandomFeatureWithAccelerators(
     {
         return null;
     }
-    return feature_index.has_random_feature;
+    return feature_index;
 }
 
 /// Apply one Script/LangSys feature to the source positions carrying its tag.
@@ -11625,6 +11697,91 @@ test "GSUB random capability requires an exact feature accelerator" {
     ) == null);
 }
 
+test "GSUB cached lookup executor requires an exact nonempty plan" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 80;
+    writeCachedSingleFeatureGsubTest(&bytes);
+
+    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    defer deinitLookupAccelerators(allocator, accelerators);
+    var operations_left: usize = 64;
+    const options = LookupOptions{
+        .selected_lookups = &.{0},
+        .lookup_accelerators = accelerators,
+        .operations_left = &operations_left,
+        .max_glyph_count = 64,
+        .assume_validated = true,
+    };
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 10);
+    try std.testing.expect(try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
+        &bytes,
+        0,
+        bytes.len,
+        &glyphs,
+        allocator,
+        options,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{11}, glyphs.items);
+
+    // Empty selections retain the generic executor's FeatureList/topology
+    // semantics. A copied table, a selection outside the exact accelerator,
+    // or a caller without the shared shaping budget must also decline before
+    // changing the run.
+    glyphs.items[0] = 10;
+    var empty_options = options;
+    empty_options.selected_lookups = &.{};
+    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
+        &bytes,
+        0,
+        bytes.len,
+        &glyphs,
+        allocator,
+        empty_options,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
+
+    var foreign_bytes = bytes;
+    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
+        &foreign_bytes,
+        0,
+        foreign_bytes.len,
+        &glyphs,
+        allocator,
+        options,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
+
+    var invalid_selection_options = options;
+    // The valid first index must not run before the invalid second index is
+    // rejected; fallback is safe only while the complete cached selection is
+    // known to be non-mutating on failure.
+    invalid_selection_options.selected_lookups = &.{ 0, 1 };
+    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
+        &bytes,
+        0,
+        bytes.len,
+        &glyphs,
+        allocator,
+        invalid_selection_options,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
+
+    var unbounded_options = options;
+    unbounded_options.operations_left = null;
+    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
+        &bytes,
+        0,
+        bytes.len,
+        &glyphs,
+        allocator,
+        unbounded_options,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
+}
+
 test "GSUB chaining class substitution applies nested lookup" {
     const allocator = std.testing.allocator;
     const bytes = try allocator.alloc(u8, 112);
@@ -14733,6 +14890,40 @@ fn writeSingleLookupGsubTest(bytes: []u8, lookup_type: u16) usize {
     writeU16Test(bytes, 22, 1);
     writeU16Test(bytes, 24, 8);
     return 26;
+}
+
+fn writeCachedSingleFeatureGsubTest(bytes: []u8) void {
+    writeU32Test(bytes, 0, 0x00010000);
+    writeU16Test(bytes, 4, 10); // ScriptList.
+    writeU16Test(bytes, 6, 30); // FeatureList.
+    writeU16Test(bytes, 8, 44); // LookupList.
+
+    writeU16Test(bytes, 10, 1);
+    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16Test(bytes, 16, 8);
+    writeU16Test(bytes, 18, 4);
+    writeU16Test(bytes, 20, 0);
+    writeU16Test(bytes, 22, 0);
+    writeU16Test(bytes, 24, 0xffff);
+    writeU16Test(bytes, 26, 1);
+    writeU16Test(bytes, 28, 0);
+
+    writeU16Test(bytes, 30, 1);
+    writeFeatureRecord(bytes, 32, unicode.tag("liga"), 8);
+    writeFeature(bytes, 38, 0);
+
+    writeU16Test(bytes, 44, 1);
+    writeU16Test(bytes, 46, 4);
+    writeU16Test(bytes, 48, 1); // SingleSubst lookup.
+    writeU16Test(bytes, 50, 0);
+    writeU16Test(bytes, 52, 1);
+    writeU16Test(bytes, 54, 8);
+
+    const single = 56;
+    writeU16Test(bytes, single + 0, 1);
+    writeU16Test(bytes, single + 2, 6);
+    writeI16Test(bytes, single + 4, 1);
+    writeCoverage1(bytes, single + 6, 10);
 }
 
 fn writeRandomFeatureGsubTest(bytes: []u8) void {

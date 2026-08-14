@@ -16,6 +16,7 @@ const layout_cache = @import("layout_cache.zig");
 const layout_scratch = @import("layout_scratch.zig");
 const myanmar = @import("myanmar.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
+const shaping_sections = @import("shaping_sections.zig");
 const bidi = @import("text/bidi.zig");
 const space_fallback = @import("space_fallback.zig");
 const unicode = @import("unicode.zig");
@@ -4350,7 +4351,21 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
             };
             if (gsub_after_proof) {
-                try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+                const has_cached_selection = if (gsub_options.selected_lookups) |lookups|
+                    lookups.len != 0
+                else
+                    false;
+                if (has_cached_selection and buffer.lookup_selection_cache != null) {
+                    try applyGenericGsubAfterTableProof(
+                        font,
+                        buffer,
+                        glyph_ids,
+                        gsub_options,
+                        gdef_metadata.*,
+                    );
+                } else {
+                    try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
+                }
             } else {
                 try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
             }
@@ -5016,6 +5031,33 @@ fn applyGsubFeatureApplicationsForShaping(
     } else {
         try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyph_ids, buffer.allocator, options, gdef_metadata);
     }
+}
+
+// Keep the cache-contract branch out of the already-large shapeSegmentInto
+// body. Besides reducing its frame/code growth, the dedicated section prevents
+// this generic-script optimization from shifting Arabic and GPOS hot functions
+// whose instruction-cache layout is performance-sensitive.
+noinline fn applyGenericGsubAfterTableProof(
+    font: *const Font,
+    buffer: *LayoutBuffer,
+    glyph_ids: *std.ArrayList(GlyphId),
+    options: gsub.LookupOptions,
+    gdef_metadata: GdefLookupMetadata,
+) linksection(shaping_sections.isolated_hotpaths) !void {
+    if (try font.applyGsubCachedLookupSelectionUsingGdefAfterRunProof(
+        glyph_ids,
+        buffer.allocator,
+        options,
+        gdef_metadata,
+    )) {
+        return;
+    }
+    try font.applyGsubWithOptionsUsingGdefAfterProof(
+        glyph_ids,
+        buffer.allocator,
+        options,
+        gdef_metadata,
+    );
 }
 
 fn applyGsubFeatureApplicationsAfterRunProof(

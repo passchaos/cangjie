@@ -2778,3 +2778,22 @@ shaping-performance superiority.
   The retained 19-line corpus passes HarfBuzz and HarfRust with checksum
   `6ea4513597b3e062`, while the pre-change binary fails its first standalone
   U+1031 row by omitting the dotted circle.
+- Generic GSUB runs with a non-empty cached lookup selection now execute that
+  immutable plan directly after the layout shaper has proved the borrowed table
+  and constructed valid glyph/source-parallel metadata. The trusted executor
+  requires an exact table-identity feature accelerator and the shared
+  HarfBuzz-compatible operation/growth budget, validates every selected index
+  before the first mutation, and declines without changing glyphs for empty,
+  foreign, out-of-range, or unbounded inputs. Those cases and every public API
+  retain the defensive topology and metadata validators. The executor and its
+  orchestration share the isolated Indic-scanner text section so their code
+  growth does not shift unrelated Latin/Arabic hot functions in the main
+  section. Fixed-CPU-30 A/B/B/A 31-sample medians improved Roboto `en-words`
+  by about `4.95%`, NotoSansDevanagari `hi-words` by `0.99%`, and Amiri
+  `fa-words` by `0.86%`; Amiri `fa-thelittleprince` changed by `+0.42%`.
+  Interleaved native E-core counters reduced retired instructions/branches/
+  cycles by `4.11%`/`4.72%`/`8.02%` for Roboto, `1.18%`/`1.43%`/`1.19%`
+  for Devanagari, and `0.24%`/`0.15%`/`1.17%` for Amiri words. The Amiri long
+  control stayed within `+0.012%` instructions, `+0.006%` branches, and
+  `+0.30%` cycles. All A/B checksums were identical; the full ReleaseFast,
+  corpus, shaping, and USE gates pass unchanged.

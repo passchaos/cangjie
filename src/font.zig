@@ -30,6 +30,7 @@ const name_mod = @import("opentype/name.zig");
 const ot_layout = @import("opentype/layout.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
+const shaping_sections = @import("shaping_sections.zig");
 const unicode_mod = @import("unicode.zig");
 const varc_mod = @import("opentype/varc.zig");
 
@@ -2920,6 +2921,32 @@ pub const Font = struct {
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
         try gsub_mod.applyWithOptions(self.data, gsub.offset, gsub.length, glyphs, allocator, gsub_options);
+    }
+
+    /// Internal layout fast path for an exact cached GSUB lookup selection.
+    ///
+    /// The caller owns the table proof and glyph/source metadata proof; the
+    /// callee returns false without mutation when those cache artifacts cannot
+    /// establish the narrower trusted-executor contract.
+    pub noinline fn applyGsubCachedLookupSelectionUsingGdefAfterRunProof(
+        self: *const Font,
+        glyphs: *std.ArrayList(glyph_mod.GlyphId),
+        allocator: std.mem.Allocator,
+        options: gsub_mod.LookupOptions,
+        gdef_metadata: GdefLookupMetadata,
+    ) linksection(shaping_sections.isolated_hotpaths) FontError!bool {
+        const gsub = self.gsub orelse return true;
+        var gsub_options = options;
+        gsub_options.assume_validated = true;
+        gdef_metadata.applyToGsubOptions(&gsub_options);
+        return try gsub_mod.applyCachedLookupSelectionWithOptionsAfterMetadataProof(
+            self.data,
+            gsub.offset,
+            gsub.length,
+            glyphs,
+            allocator,
+            gsub_options,
+        );
     }
 
     pub fn selectGsubLookupsForShaping(self: *const Font, allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError![]u16 {

@@ -18,6 +18,9 @@ pub const Info = struct {
     charstrings_offset: usize,
     charstrings_count: u16,
     global_subrs_offset: usize,
+    charset_offset: usize = 0,
+    fd_array_offset: usize = 0,
+    fd_select_offset: usize = 0,
     private_offset: usize = 0,
     private_size: usize = 0,
     local_subrs_offset: usize = 0,
@@ -30,6 +33,13 @@ pub const Parsed = struct {
     charstrings: Index,
     global_subrs: Index,
     local_subrs: ?Index,
+    fd_array: ?Index,
+    fd_select: ?FdSelect,
+};
+
+pub const FdSelect = struct {
+    offset: usize,
+    format: u8,
 };
 
 /// Parse the CFF header and the small amount of top/private DICT state needed
@@ -78,11 +88,25 @@ pub fn parse(data: []const u8) CffError!Parsed {
 }
 
 pub fn prepare(data: []const u8, info: Info) CffError!Parsed {
+    const fd_array = if (info.fd_array_offset != 0) try readIndex(data, info.fd_array_offset) else null;
+    const fd_select = if (info.fd_select_offset != 0) try readFdSelect(data, info.fd_select_offset) else null;
+    if ((fd_array == null) != (fd_select == null)) return error.BadCff;
+    if (fd_array) |array| {
+        if (array.count == 0 or array.count > 256) return error.BadCff;
+        try validateFdSelect(data, fd_select.?, info.charstrings_count, array.count);
+        // Prove every Font DICT and its Private/Subrs graph once. Runtime
+        // outline lookup then selects one already-bounded record by glyph id.
+        for (0..array.count) |font_dict_index| {
+            _ = try parseCidFontDict(data, array, font_dict_index);
+        }
+    }
     return .{
         .info = info,
         .charstrings = try readIndex(data, info.charstrings_offset),
         .global_subrs = try readIndex(data, info.global_subrs_offset),
         .local_subrs = if (info.local_subrs_offset != 0) try readIndex(data, info.local_subrs_offset) else null,
+        .fd_array = fd_array,
+        .fd_select = fd_select,
     };
 }
 
@@ -92,18 +116,38 @@ pub fn appendGlyphOutline(allocator: std.mem.Allocator, data: []const u8, info: 
 }
 
 pub fn appendGlyphOutlinePrepared(allocator: std.mem.Allocator, data: []const u8, parsed: Parsed, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId) CffError!void {
+    return try appendGlyphOutlinePreparedAt(allocator, data, parsed, outline, glyph_id, .{ .x = 0, .y = 0 }, 0);
+}
+
+fn appendGlyphOutlinePreparedAt(allocator: std.mem.Allocator, data: []const u8, parsed: Parsed, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId, origin: glyph_mod.Point, seac_depth: u8) CffError!void {
+    if (seac_depth > 2) return error.BadCff;
     if (glyph_id >= parsed.charstrings.count) return error.InvalidGlyph;
     const bytes = try parsed.charstrings.object(data, glyph_id);
+    const private = if (parsed.fd_array) |fd_array| blk: {
+        const fd_index = try fdSelectValue(data, parsed.fd_select.?, glyph_id, parsed.charstrings.count, fd_array.count);
+        break :blk try parseCidFontDict(data, fd_array, fd_index);
+    } else parsed.info;
     var interpreter = Type2Interpreter{
         .allocator = allocator,
         .outline = outline,
-        .nominal_width_x = parsed.info.nominal_width_x,
-        .default_width_x = parsed.info.default_width_x,
+        .nominal_width_x = private.nominal_width_x,
+        .default_width_x = private.default_width_x,
         .cff_data = data,
         .global_subrs = parsed.global_subrs,
-        .local_subrs = parsed.local_subrs,
+        .local_subrs = if (private.local_subrs_offset != 0) try readIndex(data, private.local_subrs_offset) else null,
+        .x = origin.x,
+        .y = origin.y,
     };
     try interpreter.run(bytes);
+    if (interpreter.seac) |seac| {
+        const base = try standardCodeToGlyph(data, parsed.info, seac.base_code);
+        const accent = try standardCodeToGlyph(data, parsed.info, seac.accent_code);
+        try appendGlyphOutlinePreparedAt(allocator, data, parsed, outline, base, origin, seac_depth + 1);
+        try appendGlyphOutlinePreparedAt(allocator, data, parsed, outline, accent, .{
+            .x = origin.x + seac.adx,
+            .y = origin.y + seac.ady,
+        }, seac_depth + 1);
+    }
 }
 
 pub const Index = struct {
@@ -194,7 +238,29 @@ fn parseTopDict(dict: []const u8) CffError!Info {
     var parser = DictParser.init(dict);
     while (try parser.next()) |entry| {
         switch (entry.operator) {
+            15 => info.charset_offset = try dictOffsetOperand(entry.operands, 0),
             17 => info.charstrings_offset = try dictOffsetOperand(entry.operands, 0),
+            18 => {
+                if (entry.operands.len < 2) return error.BadCff;
+                info.private_size = try dictOffsetOperand(entry.operands, 0);
+                info.private_offset = try dictOffsetOperand(entry.operands, 1);
+            },
+            1236 => info.fd_array_offset = try dictOffsetOperand(entry.operands, 0),
+            1237 => info.fd_select_offset = try dictOffsetOperand(entry.operands, 0),
+            else => {},
+        }
+    }
+    if (info.charstrings_offset == 0) return error.BadCff;
+    if ((info.fd_array_offset == 0) != (info.fd_select_offset == 0)) return error.BadCff;
+    return info;
+}
+
+fn parseCidFontDict(data: []const u8, fd_array: Index, font_dict_index: usize) CffError!Info {
+    const dict = try fd_array.object(data, font_dict_index);
+    var parser = DictParser.init(dict);
+    var info = Info{ .charstrings_offset = 0, .charstrings_count = 0, .global_subrs_offset = 0 };
+    while (try parser.next()) |entry| {
+        switch (entry.operator) {
             18 => {
                 if (entry.operands.len < 2) return error.BadCff;
                 info.private_size = try dictOffsetOperand(entry.operands, 0);
@@ -203,8 +269,188 @@ fn parseTopDict(dict: []const u8) CffError!Info {
             else => {},
         }
     }
-    if (info.charstrings_offset == 0) return error.BadCff;
+    if (info.private_size == 0) return error.BadCff;
+    if (info.private_offset > data.len or info.private_size > data.len - info.private_offset) return error.BadCff;
+    try parsePrivateDict(data[info.private_offset .. info.private_offset + info.private_size], &info);
+    if (info.local_subrs_offset != 0) {
+        const private_end = info.private_offset + info.private_size;
+        if (info.local_subrs_offset < private_end or info.local_subrs_offset >= data.len) return error.BadCff;
+        _ = try readIndex(data, info.local_subrs_offset);
+    }
     return info;
+}
+
+fn readFdSelect(data: []const u8, offset: usize) CffError!FdSelect {
+    if (offset >= data.len) return error.BadCff;
+    const format = data[offset];
+    if (format != 0 and format != 3) return error.UnsupportedCff;
+    return .{ .offset = offset, .format = format };
+}
+
+fn validateFdSelect(data: []const u8, fd_select: FdSelect, glyph_count: usize, fd_count: usize) CffError!void {
+    if (glyph_count == 0 or fd_count == 0) return error.BadCff;
+    for (0..glyph_count) |glyph_id| {
+        _ = try fdSelectValue(data, fd_select, glyph_id, glyph_count, fd_count);
+    }
+}
+
+fn fdSelectValue(data: []const u8, fd_select: FdSelect, glyph_id: usize, glyph_count: usize, fd_count: usize) CffError!usize {
+    if (glyph_id >= glyph_count) return error.InvalidGlyph;
+    return switch (fd_select.format) {
+        0 => blk: {
+            if (glyph_count > data.len - fd_select.offset - 1) return error.EndOfStream;
+            const value: usize = data[fd_select.offset + 1 + glyph_id];
+            if (value >= fd_count) return error.BadCff;
+            break :blk value;
+        },
+        3 => try fdSelectFormat3Value(data, fd_select.offset + 1, glyph_id, glyph_count, fd_count),
+        else => error.UnsupportedCff,
+    };
+}
+
+fn fdSelectFormat3Value(data: []const u8, offset: usize, glyph_id: usize, glyph_count: usize, fd_count: usize) CffError!usize {
+    if (offset > data.len or data.len - offset < 2) return error.EndOfStream;
+    const range_count: usize = std.mem.readInt(u16, data[offset..][0..2], .big);
+    const records_start = offset + 2;
+    if (range_count == 0 or range_count > (data.len - records_start) / 3) return error.BadCff;
+    const sentinel_offset = records_start + range_count * 3;
+    if (sentinel_offset > data.len or data.len - sentinel_offset < 2) return error.EndOfStream;
+    if (std.mem.readInt(u16, data[sentinel_offset..][0..2], .big) != glyph_count) return error.BadCff;
+
+    var previous_first: ?usize = null;
+    var selected: ?usize = null;
+    for (0..range_count) |index| {
+        const record = records_start + index * 3;
+        const first: usize = std.mem.readInt(u16, data[record..][0..2], .big);
+        const fd: usize = data[record + 2];
+        if (first >= glyph_count or fd >= fd_count) return error.BadCff;
+        if (previous_first) |previous| {
+            if (first <= previous) return error.BadCff;
+        } else if (first != 0) return error.BadCff;
+        previous_first = first;
+        if (glyph_id >= first) selected = fd;
+    }
+    return selected orelse error.BadCff;
+}
+
+fn standardCodeToGlyph(data: []const u8, info: Info, code: u8) CffError!glyph_mod.GlyphId {
+    const sid = standardEncodingSid(code);
+    if (sid == 0) return error.InvalidGlyph;
+    return try charsetGlyphForSid(data, info, sid);
+}
+
+fn charsetGlyphForSid(data: []const u8, info: Info, sid: u16) CffError!glyph_mod.GlyphId {
+    if (info.charset_offset <= 2) {
+        // ISOAdobe's predefined charset maps glyph id directly to SID for the
+        // 0...228 standard-string range. Expert charsets are not valid seac
+        // sources because StandardEncoding cannot name their private SIDs.
+        if (info.charset_offset != 0 or sid >= info.charstrings_count) return error.InvalidGlyph;
+        return sid;
+    }
+    var cursor = info.charset_offset;
+    if (cursor >= data.len) return error.EndOfStream;
+    const format = data[cursor];
+    cursor += 1;
+    var glyph: usize = 1;
+    switch (format) {
+        0 => while (glyph < info.charstrings_count) : (glyph += 1) {
+            if (cursor > data.len or data.len - cursor < 2) return error.EndOfStream;
+            const current = std.mem.readInt(u16, data[cursor..][0..2], .big);
+            cursor += 2;
+            if (current == sid) return @intCast(glyph);
+        },
+        1, 2 => while (glyph < info.charstrings_count) {
+            if (cursor > data.len or data.len - cursor < 2) return error.EndOfStream;
+            const first = std.mem.readInt(u16, data[cursor..][0..2], .big);
+            cursor += 2;
+            const left: usize = if (format == 1) blk: {
+                if (cursor >= data.len) return error.EndOfStream;
+                const value = data[cursor];
+                cursor += 1;
+                break :blk value;
+            } else blk: {
+                if (cursor > data.len or data.len - cursor < 2) return error.EndOfStream;
+                const value = std.mem.readInt(u16, data[cursor..][0..2], .big);
+                cursor += 2;
+                break :blk value;
+            };
+            const run_len = left + 1;
+            if (run_len > info.charstrings_count - glyph) return error.BadCff;
+            if (sid >= first and @as(usize, sid - first) < run_len) return @intCast(glyph + sid - first);
+            glyph += run_len;
+        },
+        else => return error.UnsupportedCff,
+    }
+    return error.InvalidGlyph;
+}
+
+fn standardEncodingSid(code: u8) u16 {
+    // seac uses Adobe StandardEncoding character codes. The CFF standard SID
+    // sequence is contiguous for ASCII 32...126; the only high-byte entries
+    // needed by ordinary composites are spacing accents and punctuation.
+    if (code >= 32 and code <= 126) return code - 31;
+    return switch (code) {
+        161 => 96,
+        162 => 97,
+        163 => 98,
+        164 => 99,
+        165 => 100,
+        166 => 101,
+        167 => 102,
+        168 => 103,
+        169 => 104,
+        170 => 105,
+        171 => 106,
+        172 => 107,
+        173 => 108,
+        174 => 109,
+        175 => 110,
+        177 => 111,
+        178 => 112,
+        179 => 113,
+        180 => 114,
+        182 => 115,
+        183 => 116,
+        184 => 117,
+        185 => 118,
+        186 => 119,
+        187 => 120,
+        188 => 121,
+        189 => 122,
+        191 => 123,
+        193 => 124,
+        194 => 125,
+        195 => 126,
+        196 => 127,
+        197 => 128,
+        198 => 129,
+        199 => 130,
+        200 => 131,
+        202 => 132,
+        203 => 133,
+        205 => 134,
+        206 => 135,
+        207 => 136,
+        208 => 137,
+        225 => 138,
+        227 => 139,
+        232 => 140,
+        233 => 141,
+        234 => 142,
+        235 => 143,
+        241 => 144,
+        245 => 145,
+        248 => 146,
+        249 => 147,
+        250 => 148,
+        251 => 149,
+        else => 0,
+    };
+}
+
+fn seacCode(value: f32) CffError!u8 {
+    if (!std.math.isFinite(value) or value != @trunc(value) or value < 0 or value > 255) return error.BadCff;
+    return @intFromFloat(value);
 }
 
 fn parsePrivateDict(dict: []const u8, info: *Info) CffError!void {
@@ -612,6 +858,87 @@ test "CFF Type2 charstrings require explicit endchar" {
     try std.testing.expectError(error.BadCff, interpreter.run(&.{139})); // Operand stack without an endchar.
 }
 
+test "CFF Type2 endchar records validated seac operands" {
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+
+    var interpreter = testInterpreter(&outline);
+    // adx=-14, ady=15, bchar='A', achar=grave.
+    try interpreter.run(&.{ 125, 154, 204, 247, 85, 14 });
+    try std.testing.expectEqual(@as(?Type2Interpreter.Seac, .{
+        .adx = -14,
+        .ady = 15,
+        .base_code = 65,
+        .accent_code = 193,
+    }), interpreter.seac);
+
+    interpreter = testInterpreter(&outline);
+    try std.testing.expectError(error.BadCff, interpreter.run(&.{ 139, 139, 255, 0, 65, 128, 0, 247, 85, 14 }));
+}
+
+test "CFF StandardEncoding and custom charsets resolve seac components" {
+    try std.testing.expectEqual(@as(u16, 34), standardEncodingSid('A'));
+    try std.testing.expectEqual(@as(u16, 124), standardEncodingSid(193));
+    try std.testing.expectEqual(@as(u16, 127), standardEncodingSid(196));
+    try std.testing.expectEqual(@as(u16, 0), standardEncodingSid(0));
+
+    // Format 0 lists one SID per glyph after .notdef.
+    const format_0 = [_]u8{ 0, 0, 34, 0, 54, 0, 174, 0, 195, 0, 124, 0, 127 };
+    const info_0 = Info{
+        .charstrings_offset = 1,
+        .charstrings_count = 229,
+        .global_subrs_offset = 1,
+        .charset_offset = 0,
+    };
+    var custom_0 = info_0;
+    custom_0.charset_offset = 0; // Predefined ISOAdobe: gid == SID.
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 34), try charsetGlyphForSid(&.{}, custom_0, 34));
+
+    var wrapped_0: [20]u8 = .{0} ** 20;
+    @memcpy(wrapped_0[5 .. 5 + format_0.len], &format_0);
+    custom_0.charset_offset = 5;
+    custom_0.charstrings_count = 7;
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 5), try charsetGlyphForSid(&wrapped_0, custom_0, 124));
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 6), try charsetGlyphForSid(&wrapped_0, custom_0, 127));
+
+    // Formats 1 and 2 encode SID ranges with u8/u16 left counts.
+    const format_1 = [_]u8{ 1, 0, 34, 2, 0, 124, 1 };
+    var wrapped_1: [16]u8 = .{0} ** 16;
+    @memcpy(wrapped_1[4 .. 4 + format_1.len], &format_1);
+    var range_info = info_0;
+    range_info.charstrings_count = 6;
+    range_info.charset_offset = 4;
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 4), try charsetGlyphForSid(&wrapped_1, range_info, 124));
+
+    const format_2 = [_]u8{ 2, 0, 34, 0, 2, 0, 124, 0, 1 };
+    var wrapped_2: [16]u8 = .{0} ** 16;
+    @memcpy(wrapped_2[4 .. 4 + format_2.len], &format_2);
+    try std.testing.expectEqual(@as(glyph_mod.GlyphId, 5), try charsetGlyphForSid(&wrapped_2, range_info, 125));
+}
+
+test "CFF FDSelect formats 0 and 3 select bounded Font DICTs" {
+    const format_0 = [_]u8{ 0, 0, 1, 2, 2 };
+    try std.testing.expectEqual(@as(usize, 0), try fdSelectValue(&format_0, .{ .offset = 0, .format = 0 }, 0, 4, 3));
+    try std.testing.expectEqual(@as(usize, 2), try fdSelectValue(&format_0, .{ .offset = 0, .format = 0 }, 3, 4, 3));
+
+    const format_3 = [_]u8{
+        3,
+        0, 2, // nRanges
+        0, 0, 0, // glyph 0 -> FD 0
+        0, 2, 1, // glyph 2 -> FD 1
+        0, 5, // sentinel glyph count
+    };
+    const select = FdSelect{ .offset = 0, .format = 3 };
+    try validateFdSelect(&format_3, select, 5, 2);
+    try std.testing.expectEqual(@as(usize, 0), try fdSelectValue(&format_3, select, 1, 5, 2));
+    try std.testing.expectEqual(@as(usize, 1), try fdSelectValue(&format_3, select, 4, 5, 2));
+}
+
 test "CFF Type2 drawing operators reject empty operand stacks" {
     var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
         .x_min = 0,
@@ -715,6 +1042,14 @@ const Type2Interpreter = struct {
     cff_data: []const u8,
     global_subrs: Index,
     local_subrs: ?Index,
+    seac: ?Seac = null,
+
+    const Seac = struct {
+        adx: f32,
+        ady: f32,
+        base_code: u8,
+        accent_code: u8,
+    };
 
     fn run(self: *Type2Interpreter, bytes: []const u8) CffError!void {
         self.width = self.default_width_x;
@@ -762,6 +1097,7 @@ const Type2Interpreter = struct {
                 26 => try self.vvcurveto(),
                 27 => try self.hhcurveto(),
                 14 => {
+                    try self.readEndcharSeac();
                     if (self.contour_open) try self.close();
                     self.stack_len = 0;
                     return .endchar;
@@ -775,6 +1111,26 @@ const Type2Interpreter = struct {
             }
         }
         return error.BadCff;
+    }
+
+    fn readEndcharSeac(self: *Type2Interpreter) CffError!void {
+        if (self.stack_len == 0) return;
+        var start: usize = 0;
+        // Type2 permits an optional width before the four seac operands.
+        if (!self.width_seen and self.stack_len == 5) {
+            self.width = self.nominal_width_x + self.stack[0];
+            self.width_seen = true;
+            start = 1;
+        }
+        if (self.stack_len - start != 4) return error.BadCff;
+        const base = try seacCode(self.stack[start + 2]);
+        const accent = try seacCode(self.stack[start + 3]);
+        self.seac = .{
+            .adx = self.stack[start],
+            .ady = self.stack[start + 1],
+            .base_code = base,
+            .accent_code = accent,
+        };
     }
 
     fn escapedOperator(self: *Type2Interpreter, op: u8) CffError!void {

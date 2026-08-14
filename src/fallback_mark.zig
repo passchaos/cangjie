@@ -1,3 +1,4 @@
+const std = @import("std");
 const Font = @import("font.zig").Font;
 const GlyphId = @import("glyph.zig").GlyphId;
 const unicode = @import("unicode.zig");
@@ -39,10 +40,21 @@ const MarkClass = enum(u8) {
     double_above,
 };
 
-pub fn enabled(use_shape: bool, has_gpos_positioning: bool, has_gpos_attachments: bool, mark_attachment: bool, vertical: bool) bool {
+pub fn enabled(script_tag: unicode.OpenTypeScriptTag, use_shape: bool, has_gpos_positioning: bool, has_gpos_attachments: bool, mark_attachment: bool, vertical: bool) bool {
+    // HarfBuzz's Thai shaper deliberately disables fallback mark positioning;
+    // Lao uses the same SARA AM/mark preprocessing policy. Geometry becoming
+    // available must not silently turn that script-level plan back on.
+    if (script_tag == .thai or script_tag == .lao) return false;
     if (use_shape or mark_attachment or has_gpos_attachments) return false;
     if (has_gpos_positioning) return false;
     return !vertical;
+}
+
+test "fallback mark positioning follows Thai and Lao shaper policy" {
+    try std.testing.expect(!enabled(.thai, false, false, false, false, false));
+    try std.testing.expect(!enabled(.lao, false, false, false, false, false));
+    try std.testing.expect(enabled(.arab, false, false, false, false, false));
+    try std.testing.expect(enabled(.hebr, false, false, false, false, false));
 }
 
 pub fn baseForGlyph(font: *const Font, glyph_id: GlyphId, cluster: usize, y_offset: f32, advance: f32, scale: f32, forward: bool) !?Base {

@@ -4561,6 +4561,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // GPOS and kerx adjustments are accumulated in font units, then scaled
     // into user-space coordinates for the final GlyphPosition stream.
     const fallback_mark_enabled = fallback_mark.enabled(
+        lookup_options.script_tag,
         early_zero_mark_shape,
         has_gpos_positioning,
         has_gpos_attachments or has_kerx_state_attachments,

@@ -1617,6 +1617,17 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   arrays require CFF2's 513-entry DICT operand limit rather than the previous
   48-entry scratch, and fractional CFF2 glyph bounds now use OpenType nearest
   rounding instead of an outward floor/ceil box.
+- All 28 Unicode text-rendering `CFF-{1,2,3}.tests` rows are retained with
+  HarfBuzz glyph-extents and HarfRust shaping parity.
+  `FDArrayTest257.otf` and `FDArrayTest65535.otf` exercise CID-keyed CFF
+  FDArray selection through FDSelect formats 0 and 3, including per-FD Private
+  DICT widths and Local Subrs. `TestCFFThree.otf` covers Type2 `endchar` seac
+  composites: StandardEncoding base/accent codes are resolved through custom
+  charset format 0 before the component outlines are positioned.
+  Making traditional CFF bounds observable also exposed an accidental coupling
+  in fallback mark positioning: Thai and Lao now honor HarfBuzz's
+  script-level `fallback_position=false` policy instead of enabling geometric
+  fallback merely because a CFF outline has valid extents.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

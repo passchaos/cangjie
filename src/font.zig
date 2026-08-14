@@ -4434,6 +4434,13 @@ pub const Font = struct {
             const bounds = (try cff2_mod.charStringBoundsInfo(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count)) orelse return error.InvalidGlyph;
             return cff2BoundsInfoToGlyphBounds(bounds);
         }
+        if (self.cff) |cff| {
+            try validateSfntTableChecksum(self.data, cff);
+            try validateCffGlyphCount(self.data, cff, self.glyph_count);
+            var outline = try self.glyphOutline(std.heap.page_allocator, glyph_id);
+            defer outline.deinit();
+            return outline.bounds;
+        }
         return error.UnsupportedGlyph;
     }
 
@@ -4699,6 +4706,10 @@ pub const Font = struct {
             } else {
                 try cff_mod.appendGlyphOutlinePrepared(allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(cff_data), &outline, glyph_id);
             }
+            // Unlike glyf, CFF has no per-glyph header bounds. Materialize them
+            // from the executed Type2 path so public extents and raster callers
+            // do not inherit the zero-initialized placeholder.
+            outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
         }
         return outline;
     }

@@ -1572,6 +1572,36 @@ const retained_variable_text_rendering_parity_gates = [_]struct {
     },
 };
 
+const retained_extents_text_rendering_parity_gates = [_]struct {
+    font_file: []const u8,
+    text_file: []const u8,
+    direction: []const u8,
+    size: []const u8,
+    remove_default_ignorables: bool = false,
+}{
+    .{
+        .font_file = "FDArrayTest257.otf",
+        .text_file = "tests/data/cff-1-2-rendering-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "FDArrayTest65535.otf",
+        .text_file = "tests/data/cff-1-2-rendering-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestCFFThree.otf",
+        .text_file = "tests/data/cff-3-seac-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+};
+
 const retained_text_rendering_rejection_gates = [_]struct {
     font_file: []const u8,
     text: []const u8,
@@ -2550,6 +2580,30 @@ pub fn build(b: *std.Build) void {
                 if (gate.remove_default_ignorables) harfrust_parity_cmd.addArg("--remove-default-ignorables");
                 shaping_corpus_parity_smoke_step.dependOn(&harfrust_parity_cmd.step);
             }
+        }
+        for (retained_extents_text_rendering_parity_gates) |gate| {
+            const harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            harfbuzz_parity_cmd.addArgs(&.{
+                "--engine",       "compare-harfbuzz",
+                "--font",         b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file",    gate.text_file,
+                "--direction",    gate.direction,
+                "--size",         gate.size,
+                "--show-extents",
+            });
+            if (gate.remove_default_ignorables) harfbuzz_parity_cmd.addArg("--remove-default-ignorables");
+            shaping_corpus_parity_smoke_step.dependOn(&harfbuzz_parity_cmd.step);
+
+            const harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", gate.direction,
+                "--size",      gate.size,
+            });
+            if (gate.remove_default_ignorables) harfrust_parity_cmd.addArg("--remove-default-ignorables");
+            shaping_corpus_parity_smoke_step.dependOn(&harfrust_parity_cmd.step);
         }
         for (retained_text_rendering_rejection_gates) |gate| {
             const rejection_cmd = b.addRunArtifact(shape_bench_exe);

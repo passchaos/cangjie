@@ -1628,6 +1628,9 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   in fallback mark positioning: Thai and Lao now honor HarfBuzz's
   script-level `fallback_position=false` policy instead of enabling geometric
   fallback merely because a CFF outline has valid extents.
+- The Unicode text-rendering `GLYF-1.tests` `gcommaabove` row is retained with
+  HarfBuzz glyph-extents and HarfRust shaping parity for `TestGLYFOne.ttf`,
+  covering compound-glyph point-matched accent placement.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

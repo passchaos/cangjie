@@ -4246,7 +4246,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         // Cluster ownership for source text must be established before vowel
         // constraints inject synthetic U+25CC sources that do not exist in the
         // original UTF-8 byte stream.
-        try use_shaper.assignGraphemeClusterOwners(
+        try use_shaper.assignShapingClusterOwners(
             buffer.allocator,
             text,
             cluster_base,

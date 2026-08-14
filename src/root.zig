@@ -33,6 +33,7 @@ pub const GraphemeRange = @import("core.zig").GraphemeRange;
 pub const GraphemeCluster = @import("unicode.zig").GraphemeCluster;
 pub const GraphemeClusterIterator = @import("unicode.zig").GraphemeClusterIterator;
 pub const graphemeClusters = @import("unicode.zig").graphemeClusters;
+pub const grapheme_unicode_version = @import("unicode.zig").grapheme_unicode_version;
 pub const GlyphCluster = @import("core.zig").GlyphCluster;
 pub const GlyphRange = @import("core.zig").GlyphRange;
 pub const Language = @import("core.zig").Language;
@@ -349,6 +350,9 @@ pub const bidiClassForCodepoint = @import("unicode.zig").bidiClassForCodepoint;
 pub const testing = struct {
     pub const test_font = @import("test_font.zig");
     pub const font_container = @import("font_container.zig").testing;
+    /// Internal shaping boundaries shared with repository-owned parity tools.
+    /// They are intentionally not part of the supported font-stack API.
+    pub const shaping_cluster = @import("unicode/grapheme/shaping_cluster.zig");
 };
 
 test "loads a minimal TTF, maps Unicode, reads outline, lays out, and rasterizes" {

@@ -92,10 +92,28 @@ breaking never performs OpenType substitution or positioning.
   internal consumers should prefer the iterator.
 
 Paragraph wrapping consumes this iterator through a one-item lookahead. It no
-longer allocates a full line-break array. Grapheme clusters are still
-materialized for emergency overflow fallback; replacing the project's
-approximate grapheme implementation with a fully generated UAX #29 boundary
-layer is a separate migration.
+longer allocates a full line-break array.
+
+`src/unicode/grapheme/iterator.zig` now owns Unicode 17.0 extended grapheme
+boundaries:
+
+- `graphemeClusters(text)` validates UTF-8 and returns a zero-allocation
+  iterator; already-validated internal paths use the matching assume-valid
+  entry point.
+- A generated, page-deduplicated property blob supplies
+  `Grapheme_Cluster_Break`, `Indic_Conjunct_Break`, and
+  `Extended_Pictographic` for all Unicode scalars.
+- The state machine implements GB3 through GB13, including Hangul, GB9c Indic
+  conjuncts, emoji ZWJ sequences, and regional-indicator pairing.
+- The complete Unicode 17 `GraphemeBreakTest.txt` suite is embedded as a compact
+  fixture and runs as part of `zig build test`.
+
+OpenType source ownership is deliberately separate in
+`src/unicode/grapheme/shaping_cluster.zig`. HarfBuzz's
+`monotone_graphemes` behavior includes shaper-specific tailoring and is not a
+caret-boundary API. USE shaping and parity normalization share this internal
+layer, so upgrading public UAX #29 data does not silently change GSUB cluster
+provenance.
 
 `WrapMode.no_wrap` is also enforced by reflow now: width does not introduce
 soft lines, but mandatory Unicode line separators still do.
@@ -210,6 +228,47 @@ The compact fixture SHA-256 is
 It contains 6,424 default-algorithm cases. Like unicode-linebreak's upstream
 runner, explicitly tailorable `[30.22]` and `[999.0]` cases are excluded.
 
+The grapheme property blob is generated from Unicode 17.0.0:
+
+```sh
+tools/unicode/grapheme/generate_data.py \
+  path/to/GraphemeBreakProperty.txt \
+  path/to/emoji-data.txt \
+  path/to/DerivedCoreProperties.txt \
+  src/unicode/grapheme/data.bin
+```
+
+Reference input SHA-256:
+
+- `GraphemeBreakProperty.txt`:
+  `d6b51d1d2ae5c33b451b7ed994b48f1f4dc62b2272a5831e7fd418514a6bae89`
+- `emoji-data.txt`:
+  `2cb2bb9455cda83e8481541ecf5b6dfda66a3bb89efa3fa7c5297eccf607b72b`
+- `DerivedCoreProperties.txt`:
+  `24c7fed1195c482faaefd5c1e7eb821c5ee1fb6de07ecdbaa64b56a99da22c08`
+
+The generated `data.bin` SHA-256 is
+`a1530b138635e021e10089c713716b4c8135b9b9a159e8b8433381c70c744449`.
+Each scalar uses one property byte before 256-byte pages are deduplicated.
+
+The conformance fixture is generated separately:
+
+```sh
+tools/unicode/grapheme/generate_conformance.py \
+  path/to/GraphemeBreakTest.txt \
+  src/unicode/grapheme/conformance.bin
+```
+
+`GraphemeBreakTest.txt` SHA-256 is
+`e2d134d2c52919bace503ebb6a551c1855fe1a1faec18478c78fff254a1793ec`.
+The resulting 766-case fixture SHA-256 is
+`07053949345b67792108362e7b5146ae2d5467fef9de7fa5e7aa1dd3ddffbd56`.
+
+The public state machine has one explicit Cangjie tailoring: U+0A4D, U+0CCD,
+U+11046, U+110B9, and U+11442 remain InCB linkers to preserve established
+cross-script caret atoms. This is intentionally documented and tested as a
+tailoring rather than presented as Unicode 17's default property assignment.
+
 ## Invariants
 
 Future changes must preserve these rules:
@@ -230,20 +289,17 @@ Future changes must preserve these rules:
 
 ## Next Structural Steps
 
-1. Replace the current compact UAX #29 approximation with generated property
-   data while preserving the streaming `graphemeClusters` API now shared by
-   fallback and the allocating compatibility collector.
-2. Add explicit shaping-cluster safety flags modeled after HarfBuzz and merge
+1. Add explicit shaping-cluster safety flags modeled after HarfBuzz and merge
    them with UAX #14 opportunities.
-3. Consolidate plan caches and transient arrays into reusable shaping/layout
+2. Consolidate plan caches and transient arrays into reusable shaping/layout
    contexts, following HarfBuzz and Swash lifetime boundaries.
-4. Add optional dictionary segmentation and hyphenation as tailoring layers;
+3. Add optional dictionary segmentation and hyphenation as tailoring layers;
    do not bake language-specific guesses into the default UAX #14 state
    machine.
-5. Add script-specific justification tailoring where portable references exist,
+4. Add script-specific justification tailoring where portable references exist,
    including Arabic kashida and CJK inter-character expansion, without changing
    the generic inter-word contract.
-6. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
+5. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
    does not by itself establish end-to-end superiority over reference engines.
 
 The standalone iterator benchmark is:

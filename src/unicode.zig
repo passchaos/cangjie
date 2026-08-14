@@ -1,5 +1,6 @@
 const std = @import("std");
 const line_break = @import("text/line_break.zig");
+const grapheme_boundary = @import("unicode/grapheme/iterator.zig");
 const canonical_combining_class = @import("unicode/canonical_combining_class.zig");
 const canonical_decomposition = @import("unicode/canonical_decomposition.zig");
 const nonspacing_mark = @import("unicode/nonspacing_mark.zig");
@@ -661,107 +662,18 @@ pub fn inheritsPreviousClusterInRtlShaping(codepoint: u21) bool {
     return isArabicNonspacingMark(codepoint) or isHebrewNonspacingMark(codepoint);
 }
 
-pub const GraphemeCluster = struct {
-    byte_start: usize,
-    byte_len: usize,
-};
+pub const GraphemeCluster = grapheme_boundary.Cluster;
 
-/// Zero-allocation forward iterator over Cangjie's extended grapheme clusters.
-///
-/// The iterator borrows an already-valid UTF-8 slice. Public callers should use
-/// `graphemeClusters`, while shaping paths that have already validated their
-/// input can use `graphemeClustersAssumeValid` and avoid a duplicate scan.
-pub const GraphemeClusterIterator = struct {
-    text: []const u8,
-    cursor: usize = 0,
-    pending: ?DecodedCodepoint = null,
-
-    pub fn next(self: *GraphemeClusterIterator) ?GraphemeCluster {
-        if (self.cursor >= self.text.len) return null;
-
-        const cluster_start = self.cursor;
-        const first = self.pending orelse decodeCodepointAt(self.text, self.cursor) orelse unreachable;
-        self.pending = null;
-        self.cursor = first.next;
-
-        var previous_codepoint = first.codepoint;
-        var last_non_extend_codepoint: ?u21 = if (isGraphemeExtendCodepoint(first.codepoint) or first.codepoint == 0x200d)
-            null
-        else
-            first.codepoint;
-        var zwj_after_extended_pictographic = false;
-        var zwj_after_indic_virama = false;
-        var regional_indicator_count: usize = if (isRegionalIndicator(first.codepoint)) 1 else 0;
-
-        // Every ASCII scalar except CR followed by LF is an entire grapheme
-        // whenever the next scalar is also ASCII. Keep ordinary Latin fallback
-        // itemization to one predictable byte check instead of entering the
-        // full Unicode property cascade for every pair.
-        if (first.codepoint < 0x80 and self.cursor < self.text.len and self.text[self.cursor] < 0x80 and
-            !(first.codepoint == '\r' and self.text[self.cursor] == '\n'))
-        {
-            return .{ .byte_start = cluster_start, .byte_len = self.cursor - cluster_start };
-        }
-
-        while (self.cursor < self.text.len) {
-            const decoded = decodeCodepointAt(self.text, self.cursor) orelse unreachable;
-            const codepoint = decoded.codepoint;
-            if (!extendsGrapheme(
-                previous_codepoint,
-                codepoint,
-                regional_indicator_count,
-                zwj_after_extended_pictographic,
-                zwj_after_indic_virama,
-            )) {
-                // Retain the already-decoded boundary scalar so single-codepoint
-                // CJK and mixed-script runs decode every scalar exactly once.
-                self.pending = decoded;
-                break;
-            }
-
-            self.cursor = decoded.next;
-            if (codepoint == 0x200d) {
-                // GB11 only suppresses the break after ZWJ for emoji ZWJ
-                // sequences. A generic "letter + ZWJ + letter" should keep the
-                // ZWJ with the previous cluster (GB9) but still break before
-                // the following non-emoji letter.
-                zwj_after_extended_pictographic = if (last_non_extend_codepoint) |last|
-                    isExtendedPictographic(last)
-                else
-                    false;
-                // UAX #29's InCB rule keeps virama+ZWJ Indic conjuncts at a
-                // single caret stop.
-                zwj_after_indic_virama = isIndicViramaForZwjConjunct(previous_codepoint);
-            } else {
-                zwj_after_extended_pictographic = false;
-                zwj_after_indic_virama = false;
-                if (!isGraphemeExtendCodepoint(codepoint)) {
-                    last_non_extend_codepoint = codepoint;
-                }
-            }
-            previous_codepoint = codepoint;
-            if (isRegionalIndicator(codepoint)) {
-                regional_indicator_count += 1;
-            } else if (codepoint != 0x200d) {
-                regional_indicator_count = 0;
-            }
-        }
-
-        return .{
-            .byte_start = cluster_start,
-            .byte_len = self.cursor - cluster_start,
-        };
-    }
-};
+/// Zero-allocation Unicode 17.0 extended grapheme cluster iterator.
+pub const GraphemeClusterIterator = grapheme_boundary.Iterator;
+pub const grapheme_unicode_version = grapheme_boundary.unicode_version;
 
 pub fn graphemeClusters(text: []const u8) error{InvalidUtf8}!GraphemeClusterIterator {
-    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
-    return graphemeClustersAssumeValid(text);
+    return grapheme_boundary.clusters(text);
 }
 
 pub fn graphemeClustersAssumeValid(text: []const u8) GraphemeClusterIterator {
-    std.debug.assert(std.unicode.utf8ValidateSlice(text));
-    return .{ .text = text };
+    return grapheme_boundary.assumeValid(text);
 }
 
 test "streaming grapheme iterator matches allocating collector" {
@@ -4067,11 +3979,10 @@ test "grapheme clusters keep Devanagari virama ZWJ conjuncts atomic" {
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 4), clusters.len);
+    try std.testing.expectEqual(@as(usize, 3), clusters.len);
     try std.testing.expectEqualStrings("क्‍ष", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
-    try std.testing.expectEqualStrings("क्", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
-    try std.testing.expectEqualStrings("ष", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("क्ष", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
 }
 
 test "grapheme clusters keep Gujarati virama ZWJ conjuncts atomic" {
@@ -4081,11 +3992,10 @@ test "grapheme clusters keep Gujarati virama ZWJ conjuncts atomic" {
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 4), clusters.len);
+    try std.testing.expectEqual(@as(usize, 3), clusters.len);
     try std.testing.expectEqualStrings("ક્‍ષ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
-    try std.testing.expectEqualStrings("ક્", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
-    try std.testing.expectEqualStrings("ષ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ક્ષ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
 }
 
 test "grapheme clusters keep Thai and Lao marks with their base letters" {
@@ -4108,10 +4018,11 @@ test "grapheme clusters keep Myanmar dependent signs with their base letters" {
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 3), clusters.len);
+    try std.testing.expectEqual(@as(usize, 4), clusters.len);
     try std.testing.expectEqualStrings("ကေ့", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
-    try std.testing.expectEqualStrings("ကွာ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("ကွ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
+    try std.testing.expectEqualStrings("ာ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
 }
 
 test "grapheme clusters keep Miao vowel and tone signs with their base letters" {
@@ -4208,7 +4119,7 @@ test "Telugu and Kannada syllables select Indic v2 script tags" {
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 11), clusters.len);
+    try std.testing.expectEqual(@as(usize, 12), clusters.len);
     try std.testing.expectEqualStrings("కి", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
     try std.testing.expectEqualStrings("కా", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
@@ -4219,7 +4130,8 @@ test "Telugu and Kannada syllables select Indic v2 script tags" {
     try std.testing.expectEqualStrings(" ", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
     try std.testing.expectEqualStrings("ಕಾ", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[9].byte_start..][0..clusters[9].byte_len]);
-    try std.testing.expectEqualStrings("ಕ್‍ಷ", text[clusters[10].byte_start..][0..clusters[10].byte_len]);
+    try std.testing.expectEqualStrings("ಕ್‍", text[clusters[10].byte_start..][0..clusters[10].byte_len]);
+    try std.testing.expectEqualStrings("ಷ", text[clusters[11].byte_start..][0..clusters[11].byte_len]);
 
     const runs = try itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
@@ -4323,12 +4235,13 @@ test "Gurmukhi syllables keep marks and select Gurmukhi OpenType script" {
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 5), clusters.len);
+    try std.testing.expectEqual(@as(usize, 6), clusters.len);
     try std.testing.expectEqualStrings("ਗੁ", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings("ਰੂ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
-    try std.testing.expectEqualStrings("ਗ੍‍ਰੰ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
-    try std.testing.expectEqualStrings("ਥ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("ਗ੍‍", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ਰੰ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("ਥ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
 
     const runs = try itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
@@ -4746,8 +4659,8 @@ test "Tai Tham stacks select the lana OpenType script" {
     try std.testing.expectEqualSlices(
         GraphemeCluster,
         &.{
-            .{ .byte_start = 0, .byte_len = "ᨲ᩠".len },
-            .{ .byte_start = "ᨲ᩠".len, .byte_len = "ᩅᩫᩡ".len },
+            .{ .byte_start = 0, .byte_len = "ᨲ᩠ᩅᩫ".len },
+            .{ .byte_start = "ᨲ᩠ᩅᩫ".len, .byte_len = "ᩡ".len },
         },
         clusters,
     );
@@ -4771,7 +4684,7 @@ test "Newa conjuncts select the newa OpenType script" {
 
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
-    try std.testing.expectEqual(@as(usize, 5), clusters.len);
+    try std.testing.expectEqual(@as(usize, 6), clusters.len);
 
     const runs = try itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
@@ -5376,14 +5289,15 @@ test "Brahmi syllables keep marks and select Brahmi OpenType script" {
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 7), clusters.len);
+    try std.testing.expectEqual(@as(usize, 8), clusters.len);
     try std.testing.expectEqualStrings("\u{11013}\u{11038}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
     try std.testing.expectEqualStrings("\u{11013}\u{11002}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
-    try std.testing.expectEqualStrings("\u{11013}\u{11046}\u{200d}\u{11022}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
-    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
-    try std.testing.expectEqualStrings("\u{11066}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("\u{11013}\u{11046}\u{200d}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("\u{11022}", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("\u{11066}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
 
     const runs = try itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
@@ -5415,16 +5329,17 @@ test "Kaithi syllables keep signs and select Kaithi OpenType script" {
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 9), clusters.len);
+    try std.testing.expectEqual(@as(usize, 10), clusters.len);
     try std.testing.expectEqualStrings("\u{1108d}\u{110b3}", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
     try std.testing.expectEqualStrings("\u{1108d}\u{110b0}", text[clusters[2].byte_start..][0..clusters[2].byte_len]);
     try std.testing.expectEqualStrings(" ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
-    try std.testing.expectEqualStrings("\u{1108d}\u{110b9}\u{200d}\u{1109e}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
-    try std.testing.expectEqualStrings(" ", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
-    try std.testing.expectEqualStrings("\u{110bb}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
-    try std.testing.expectEqualStrings(" ", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
-    try std.testing.expectEqualStrings("\u{110bd}\u{11083}", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
+    try std.testing.expectEqualStrings("\u{1108d}\u{110b9}\u{200d}", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("\u{1109e}", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("\u{110bb}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings(" ", text[clusters[8].byte_start..][0..clusters[8].byte_len]);
+    try std.testing.expectEqualStrings("\u{110bd}\u{11083}", text[clusters[9].byte_start..][0..clusters[9].byte_len]);
 
     const runs = try itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
@@ -5727,12 +5642,14 @@ test "Myanmar text selects Myanmar v2 script primitives across extensions" {
     const clusters = try itemizeGraphemeClusters(allocator, text);
     defer allocator.free(clusters);
 
-    try std.testing.expectEqual(@as(usize, 8), clusters.len);
+    try std.testing.expectEqual(@as(usize, 10), clusters.len);
     try std.testing.expectEqualStrings("ကေ့", text[clusters[0].byte_start..][0..clusters[0].byte_len]);
     try std.testing.expectEqualStrings("\u{104a}", text[clusters[1].byte_start..][0..clusters[1].byte_len]);
-    try std.testing.expectEqualStrings("ကွာ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
-    try std.testing.expectEqualStrings("\u{a9e0}\u{aa7b}", text[clusters[5].byte_start..][0..clusters[5].byte_len]);
-    try std.testing.expectEqualStrings("\u{aa60}\u{aa7c}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings("ကွ", text[clusters[3].byte_start..][0..clusters[3].byte_len]);
+    try std.testing.expectEqualStrings("ာ", text[clusters[4].byte_start..][0..clusters[4].byte_len]);
+    try std.testing.expectEqualStrings("\u{a9e0}", text[clusters[6].byte_start..][0..clusters[6].byte_len]);
+    try std.testing.expectEqualStrings("\u{aa7b}", text[clusters[7].byte_start..][0..clusters[7].byte_len]);
+    try std.testing.expectEqualStrings("\u{aa60}\u{aa7c}", text[clusters[9].byte_start..][0..clusters[9].byte_len]);
 
     const runs = try itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
@@ -5980,61 +5897,6 @@ fn isWordFormat(codepoint: u21) bool {
         (codepoint >= 0x2060 and codepoint <= 0x2064) or
         (codepoint >= 0x2066 and codepoint <= 0x206f) or
         codepoint == 0xfeff;
-}
-
-fn extendsGrapheme(previous: u21, current: u21, regional_indicator_count: usize, zwj_after_extended_pictographic: bool, zwj_after_indic_virama: bool) bool {
-    // Keep this predicate conservative: it only returns true for continuation
-    // codepoints that should share a caret stop with the previous codepoint.
-    if (previous == '\r' and current == '\n') return true;
-    // UAX #29 GB4/GB5 make controls atomic grapheme clusters. Check this
-    // before Prepend/Extend/ZWJ rules so stray format or paragraph controls do
-    // not absorb adjacent marks and hide caret stops around them.
-    if (isGraphemeControl(previous) or isGraphemeControl(current)) return false;
-    if (isGraphemePrependCodepoint(previous)) return true;
-    if (current == 0x200d) return true;
-    if (extendsHangulGrapheme(previous, current)) return true;
-    if (isRegionalIndicator(previous) and isRegionalIndicator(current) and regional_indicator_count % 2 == 1) return true;
-    if (isGraphemeExtendCodepoint(current)) return true;
-    if (previous == 0x17d2 and isKhmerConsonant(current)) return true;
-    if (previous == 0x11442 and isNewaConsonant(current)) return true;
-    if (previous == 0xa8c4 and isSaurashtraConsonant(current)) return true;
-    if (previous == 0x1134d and isGranthaConsonant(current)) return true;
-    if (previous == 0x111c0 and isSharadaConsonant(current)) return true;
-    if (previous == 0x200d) {
-        return (zwj_after_extended_pictographic and isExtendedPictographic(current)) or
-            (zwj_after_indic_virama and isIndicConsonant(current));
-    }
-    return false;
-}
-
-const HangulGraphemeClass = enum {
-    other,
-    l,
-    v,
-    t,
-    lv,
-    lvt,
-};
-
-fn extendsHangulGrapheme(previous: u21, current: u21) bool {
-    const previous_class = hangulGraphemeClass(previous);
-    const current_class = hangulGraphemeClass(current);
-    return switch (previous_class) {
-        .l => current_class == .l or current_class == .v or current_class == .lv or current_class == .lvt,
-        .v, .lv => current_class == .v or current_class == .t,
-        .t, .lvt => current_class == .t,
-        .other => false,
-    };
-}
-
-fn hangulGraphemeClass(codepoint: u21) HangulGraphemeClass {
-    if ((codepoint >= 0x1100 and codepoint <= 0x115f) or (codepoint >= 0xa960 and codepoint <= 0xa97c)) return .l;
-    if ((codepoint >= 0x1160 and codepoint <= 0x11a7) or (codepoint >= 0xd7b0 and codepoint <= 0xd7c6)) return .v;
-    if ((codepoint >= 0x11a8 and codepoint <= 0x11ff) or (codepoint >= 0xd7cb and codepoint <= 0xd7fb)) return .t;
-    if (codepoint >= 0xac00 and codepoint <= 0xd7a3) {
-        return if ((codepoint - 0xac00) % 28 == 0) .lv else .lvt;
-    }
-    return .other;
 }
 
 fn isCombiningMark(codepoint: u21) bool {
@@ -6421,15 +6283,6 @@ fn isRegionalIndicator(codepoint: u21) bool {
     return codepoint >= 0x1f1e6 and codepoint <= 0x1f1ff;
 }
 
-fn isGraphemeExtendCodepoint(codepoint: u21) bool {
-    return codepoint == 0x200c or
-        isCombiningMark(codepoint) or
-        isVariationSelector(codepoint) or
-        isEmojiModifier(codepoint) or
-        isEmojiTagCodepoint(codepoint) or
-        isSpacingMark(codepoint);
-}
-
 pub fn isSpacingMarkCodepoint(codepoint: u21) bool {
     return isSpacingMark(codepoint);
 }
@@ -6526,160 +6379,6 @@ fn isEmojiTagCodepoint(codepoint: u21) bool {
     // Grapheme_Cluster_Break=Extend, so they must stay attached to the
     // preceding pictograph instead of creating one caret stop per tag byte.
     return codepoint >= 0xe0020 and codepoint <= 0xe007f;
-}
-
-fn isIndicViramaForZwjConjunct(codepoint: u21) bool {
-    return codepoint == 0x094d or // Devanagari sign virama.
-        codepoint == 0x0acd or // Gujarati sign virama.
-        codepoint == 0x0b4d or // Odia sign virama.
-        codepoint == 0x0a4d or // Gurmukhi sign virama.
-        codepoint == 0x0c4d or // Telugu sign virama.
-        codepoint == 0x0ccd or // Kannada sign virama.
-        codepoint == 0x0d4d or // Malayalam sign virama.
-        codepoint == 0x11046 or // Brahmi virama.
-        codepoint == 0x110b9 or // Kaithi sign virama.
-        codepoint == 0x11133 or // Chakma sign virama.
-        codepoint == 0x11442 or // Newa sign virama.
-        codepoint == 0xa8c4 or // Saurashtra sign virama.
-        codepoint == 0x1134d or // Grantha sign virama.
-        codepoint == 0x111c0 or // Sharada sign virama.
-        codepoint == 0x11070; // Brahmi old Tamil virama.
-}
-
-fn isKhmerConsonant(codepoint: u21) bool {
-    // U+17D2 COENG turns the following Khmer consonant into a subscript form.
-    // Treating that following consonant as a grapheme continuation keeps the
-    // orthographic syllable atomic for caret movement and for any future Khmer
-    // shaping pass that consumes one cluster at a time.
-    return codepoint >= 0x1780 and codepoint <= 0x17a2;
-}
-
-fn isNewaConsonant(codepoint: u21) bool {
-    return codepoint >= 0x1140e and codepoint <= 0x11434;
-}
-
-fn isSaurashtraConsonant(codepoint: u21) bool {
-    return codepoint >= 0xa892 and codepoint <= 0xa8b3;
-}
-
-fn isGranthaConsonant(codepoint: u21) bool {
-    return (codepoint >= 0x11315 and codepoint <= 0x11328) or
-        (codepoint >= 0x1132a and codepoint <= 0x11330) or
-        (codepoint >= 0x11332 and codepoint <= 0x11333) or
-        (codepoint >= 0x11335 and codepoint <= 0x11339);
-}
-
-fn isSharadaConsonant(codepoint: u21) bool {
-    return codepoint >= 0x11191 and codepoint <= 0x111b2;
-}
-
-fn isIndicConsonant(codepoint: u21) bool {
-    // Compact InCB=Consonant coverage for Indic blocks Cangjie clusters today.
-    // The ranges are deliberately narrow so ZWJ after a virama only glues to
-    // real consonants, not punctuation, digits, or vowel letters.
-    return (codepoint >= 0x0915 and codepoint <= 0x0939) or
-        codepoint == 0x0958 or
-        codepoint == 0x0959 or
-        codepoint == 0x095a or
-        codepoint == 0x095b or
-        codepoint == 0x095c or
-        codepoint == 0x095d or
-        codepoint == 0x095e or
-        codepoint == 0x095f or
-        (codepoint >= 0x0a95 and codepoint <= 0x0ab9) or
-        (codepoint >= 0x0b15 and codepoint <= 0x0b39) or
-        codepoint == 0x0b5c or
-        codepoint == 0x0b5d or
-        codepoint == 0x0b5f or
-        (codepoint >= 0x0a15 and codepoint <= 0x0a39) or
-        (codepoint >= 0x0a59 and codepoint <= 0x0a5e) or
-        (codepoint >= 0x0a72 and codepoint <= 0x0a74) or
-        (codepoint >= 0x0c15 and codepoint <= 0x0c39) or
-        codepoint == 0x0c58 or
-        codepoint == 0x0c59 or
-        (codepoint >= 0x0c95 and codepoint <= 0x0cb9) or
-        (codepoint >= 0x0d15 and codepoint <= 0x0d39) or
-        codepoint == 0x0d3a or
-        (codepoint >= 0x11013 and codepoint <= 0x11037) or
-        (codepoint >= 0x1108d and codepoint <= 0x110af) or
-        (codepoint >= 0x11107 and codepoint <= 0x11126) or
-        codepoint == 0x11144 or
-        codepoint == 0x11147 or
-        isNewaConsonant(codepoint) or
-        isSaurashtraConsonant(codepoint) or
-        isGranthaConsonant(codepoint) or
-        isSharadaConsonant(codepoint);
-}
-
-fn isGraphemePrependCodepoint(codepoint: u21) bool {
-    // Grapheme_Cluster_Break=Prepend signs render with the following base and
-    // therefore must not expose a caret/shaping boundary after themselves. Keep
-    // this compact table current for the non-Arabic prepend scalars as well;
-    // otherwise scripts such as Malayalam and Kaithi split a single user-
-    // perceived cluster before the base character.
-    return (codepoint >= 0x0600 and codepoint <= 0x0605) or
-        codepoint == 0x06dd or
-        codepoint == 0x070f or
-        (codepoint >= 0x0890 and codepoint <= 0x0891) or
-        codepoint == 0x08e2 or
-        codepoint == 0x0d4e or
-        codepoint == 0x110bd or
-        codepoint == 0x110cd;
-}
-
-fn isGraphemeControl(codepoint: u21) bool {
-    return (codepoint >= 0x0000 and codepoint <= 0x001f) or
-        (codepoint >= 0x007f and codepoint <= 0x009f) or
-        // Grapheme_Cluster_Break=Control also includes several format and
-        // separator scalars. They are invisible text controls, but UAX #29
-        // still gives them their own caret stop; otherwise a following Extend
-        // mark can be incorrectly absorbed into the control's cluster.
-        codepoint == 0x00ad or
-        codepoint == 0x061c or
-        codepoint == 0x180e or
-        codepoint == 0x200b or
-        (codepoint >= 0x200e and codepoint <= 0x200f) or
-        codepoint == 0x2028 or
-        codepoint == 0x2029 or
-        (codepoint >= 0x202a and codepoint <= 0x202e) or
-        (codepoint >= 0x2060 and codepoint <= 0x206f) or
-        codepoint == 0xfeff or
-        (codepoint >= 0xfff0 and codepoint <= 0xfff8);
-}
-
-fn isExtendedPictographic(codepoint: u21) bool {
-    // Compact Extended_Pictographic coverage for emoji families/professions and
-    // symbol ZWJ sequences commonly encountered by text editors. This is not
-    // the full emoji-data.txt table, but it makes GB11 conditional instead of
-    // treating every ZWJ as a universal grapheme glue.
-    return codepoint == 0x00a9 or
-        codepoint == 0x00ae or
-        codepoint == 0x203c or
-        codepoint == 0x2049 or
-        codepoint == 0x2122 or
-        codepoint == 0x2139 or
-        (codepoint >= 0x2194 and codepoint <= 0x21aa) or
-        codepoint == 0x231a or
-        codepoint == 0x231b or
-        codepoint == 0x2328 or
-        codepoint == 0x23cf or
-        (codepoint >= 0x23e9 and codepoint <= 0x23f3) or
-        (codepoint >= 0x23f8 and codepoint <= 0x23fa) or
-        codepoint == 0x24c2 or
-        codepoint == 0x25aa or
-        codepoint == 0x25ab or
-        codepoint == 0x25b6 or
-        codepoint == 0x25c0 or
-        (codepoint >= 0x25fb and codepoint <= 0x25fe) or
-        (codepoint >= 0x2600 and codepoint <= 0x27bf) or
-        codepoint == 0x2934 or
-        codepoint == 0x2935 or
-        (codepoint >= 0x2b05 and codepoint <= 0x2b55) or
-        codepoint == 0x3030 or
-        codepoint == 0x303d or
-        codepoint == 0x3297 or
-        codepoint == 0x3299 or
-        (codepoint >= 0x1f000 and codepoint <= 0x1faff);
 }
 
 fn isSpacingMark(codepoint: u21) bool {

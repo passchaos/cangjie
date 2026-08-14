@@ -6,6 +6,7 @@ const Font = @import("font.zig").Font;
 const GlyphId = @import("glyph.zig").GlyphId;
 const shaping_metadata = @import("shaping_metadata.zig");
 const unicode = @import("unicode.zig");
+const shaping_cluster = @import("unicode/grapheme/shaping_cluster.zig");
 const categories = @import("use/categories.zig");
 const syllables = @import("use/syllables.zig");
 const vowel_constraints = @import("use/vowel_constraints.zig");
@@ -59,7 +60,7 @@ pub fn markSourceFeatures(
     try syllables.markSourceFeatures(allocator, source_features, source_syllables, codepoints, source_order);
 }
 
-pub fn assignGraphemeClusterOwners(
+pub fn assignShapingClusterOwners(
     allocator: std.mem.Allocator,
     text: []const u8,
     cluster_base: usize,
@@ -70,7 +71,10 @@ pub fn assignGraphemeClusterOwners(
     if (source_byte_starts.len == 0 or glyph_cluster_indices.len == 0) return;
     if (source_byte_starts.len != codepoints.len) return error.InvalidUseInput;
 
-    const graphemes = try unicode.itemizeGraphemeClusters(allocator, text);
+    // Source ownership follows the OpenType shaping contract, not public caret
+    // boundaries. Unicode-version changes to UAX #29 must not silently merge
+    // or split USE provenance before GSUB.
+    const graphemes = try shaping_cluster.itemize(allocator, text);
     defer allocator.free(graphemes);
     const owner_by_source = try allocator.alloc(usize, source_byte_starts.len);
     defer allocator.free(owner_by_source);
@@ -914,15 +918,18 @@ test "USE shaping includes Balinese" {
     try @import("std").testing.expect(!shouldShape(.latn));
 }
 
-test "USE cluster owners start at Unicode grapheme boundaries" {
+test "USE source owners remain independent from public grapheme boundaries" {
     const allocator = std.testing.allocator;
     const text = "ꦟ꧀ꦢꦿ";
     const byte_starts = [_]usize{ 0, 3, 6, 9 };
     const codepoints = [_]u21{ 0xa99f, 0xa9c0, 0xa9a2, 0xa9bf };
     var cluster_owners = [_]usize{ 0, 1, 2, 3 };
 
-    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+    const public_graphemes = try unicode.itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(public_graphemes);
+    try std.testing.expectEqual(@as(usize, 1), public_graphemes.len);
 
+    try assignShapingClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2 }, &cluster_owners);
 }
 
@@ -933,7 +940,7 @@ test "USE cluster owners preserve ZWNJ identity" {
     const codepoints = [_]u21{ 0xa9a2, 0xa9c0, 0x200c, 0xa994 };
     var cluster_owners = [_]usize{ 0, 1, 2, 3 };
 
-    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+    try assignShapingClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 3 }, &cluster_owners);
 }
@@ -945,7 +952,7 @@ test "USE cluster owners propagate ZWNJ through a Tai Tham stack" {
     const codepoints = [_]u21{ 0x1a36, 0x1a60, 0x1a45, 0x200c, 0x1a63, 0x1a60, 0x1a3f };
     var cluster_owners = [_]usize{ 0, 1, 2, 3, 4, 5, 6 };
 
-    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+    try assignShapingClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 3, 3, 3, 3 }, &cluster_owners);
 }
@@ -957,7 +964,7 @@ test "USE cluster owners keep ordinary Tai Tham SAKOT stacks separate" {
     const codepoints = [_]u21{ 0x1a3d, 0x1a60, 0x1a3d, 0x1a63, 0x1a60, 0x1a3d, 0x1a59 };
     var cluster_owners = [_]usize{ 0, 1, 2, 3, 4, 5, 6 };
 
-    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+    try assignShapingClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 0, 2, 2, 2, 5, 5 }, &cluster_owners);
 }
@@ -969,7 +976,7 @@ test "USE cluster owners attach marks after WORD JOINER" {
     const codepoints = [_]u21{ 0x11124, 0x2060, 0x11127 };
     var cluster_owners = [_]usize{ 0, 1, 2 };
 
-    try assignGraphemeClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
+    try assignShapingClusterOwners(allocator, text, 0, &byte_starts, &codepoints, &cluster_owners);
 
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 1 }, &cluster_owners);
 }

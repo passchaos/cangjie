@@ -2174,16 +2174,22 @@ shaping-performance superiority.
   `U+0C9A,U+0CCD,U+0C9A,U+0CCD`; Cangjie now marks the trailing old-spec
   Kannada `consonant+virama` source for `blwf` and merges it into the syllable
   cluster, while the first pair remains the visible `haln` form.
-  The 16 enabled rows from Unicode text-rendering `SHKNDA-2.tests` are retained
-  as `tests/data/kannada-shknda-2-tests.txt` with
-  `NotoSansKannada-Regular.ttf`. Kannada's initial Indic reorder now moves
+  All 81 Unicode text-rendering Kannada rows are retained: the 34
+  `SHKNDA-1.tests` rows use `tests/data/kannada-shknda-1-tests.txt` with
+  `NotoSerifKannada-Regular.ttf`, while the 16 `SHKNDA-2.tests` and 31
+  `SHKNDA-3.tests` rows use the corresponding `tests/data/kannada-shknda-*.txt`
+  corpora with `NotoSansKannada-Regular.ttf`; its one trailing-U+0020 row is an
+  explicit inline gate rather than invisible corpus whitespace. Kannada's initial Indic reorder now moves
   `BEFORE_SUB` vowels, including U+0CBE and U+0CBF, ahead of the complete run
   of post-base `virama+consonant` pairs before `blwf`; it marks those virama
   sources for post-base below forms and merges dependent marks into their
   syllable clusters. U+0CBF is no longer misclassified as a `PRE_M` matra, so
-  standalone base+I remains in font-authored `abvs` order. The retained corpus
-  passes both HarfBuzz and HarfRust with 65 output glyphs and checksum
-  `58fc74916d67eaf8`.
+  standalone base+I remains in font-authored `abvs` order. All three corpora
+  pass both HarfBuzz and HarfRust: SHKNDA-1 produces 49 glyphs with checksum
+  `d5ebe4b7cb61f5ce`, SHKNDA-2 produces 65 glyphs with checksum
+  `58fc74916d67eaf8`. The 30-line SHKNDA-3 corpus produces 119 glyphs with
+  checksum `51492f0ab2f4e4aa`, and its trailing-space row produces 5 glyphs
+  with checksum `5ab0baf139783438`.
 - Add a focused Khmer shaper for the `khmr` script tag. The 89
   `khmer-misc.tests` rows for
   `3998336402905b8be8301ef7f47cf7e050cbb1bd.ttf` are retained as

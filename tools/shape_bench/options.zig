@@ -220,10 +220,12 @@ pub const Options = struct {
     expected_y_advances: ?[]const u8 = null,
     expected_x_offsets: ?[]const u8 = null,
     expected_y_offsets: ?[]const u8 = null,
+    expected_checksum: ?u64 = null,
     show_flags: bool = false,
     show_extents: bool = false,
     unsafe_to_concat: bool = false,
     not_found_variation_selector_glyph: ?u32 = null,
+    remove_default_ignorables: bool = false,
     feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
     feature_override_count: usize = 0,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
@@ -419,6 +421,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.expected_y_offsets = args[i];
+        } else if (std.mem.eql(u8, arg, "--expect-checksum")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.expected_checksum = try std.fmt.parseInt(u64, args[i], 16);
         } else if (std.mem.eql(u8, arg, "--show-flags")) {
             options.line_summary = true;
             options.glyph_summary = true;
@@ -445,6 +451,8 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.not_found_variation_selector_glyph = try parseGlyphCodepoint(args[i]);
+        } else if (std.mem.eql(u8, arg, "--remove-default-ignorables")) {
+            options.remove_default_ignorables = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.InvalidArguments;
         } else {
@@ -663,6 +671,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --expect-y-advances CSV      require first line y advances to match
         \\  --expect-x-offsets CSV       require first line x offsets to match
         \\  --expect-y-offsets CSV       require first line y offsets to match
+        \\  --expect-checksum HEX        require the complete measured corpus checksum to match
         \\  --show-flags                 include per-glyph shaping flags with --glyph-summary
         \\  --show-extents               include per-glyph extents with --glyph-summary
         \\  --unsafe-to-concat           produce unsafe-to-concat glyph flags
@@ -671,6 +680,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --variation CSV              comma-separated normalized coordinates or tag=value design coordinates
         \\  --not-found-variation-selector-glyph GLYPH
         \\                               make unsupported variation selectors visible as a zero-advance synthetic glyph
+        \\  --remove-default-ignorables delete untouched default-ignorable glyphs instead of replacing them with space
         \\
         \\examples:
         \\  zig build shape-bench -Doptimize=ReleaseFast -- --iterations 50000

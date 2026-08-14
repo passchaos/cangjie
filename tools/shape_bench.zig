@@ -90,6 +90,9 @@ pub fn main(init: std.process.Init) !void {
         allocator.free(result.line_summaries);
         allocator.free(result.samples);
     }
+    if (options.expected_checksum) |expected| {
+        if (result.checksum != expected) return error.ExpectedChecksumMismatch;
+    }
     try verifyExpectedSummary(allocator, options, result.line_summaries);
     report.print(options, result);
 }

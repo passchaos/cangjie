@@ -23,6 +23,7 @@ const ltag_mod = @import("opentype/ltag.zig");
 const math_mod = @import("opentype/math.zig");
 const meta_mod = @import("opentype/meta.zig");
 const metric_variation_mod = @import("opentype/metric_variation.zig");
+const macintosh_encoding = @import("opentype/macintosh_encoding.zig");
 const mvar_mod = @import("opentype/mvar.zig");
 const morx_mod = @import("opentype/morx.zig");
 const name_mod = @import("opentype/name.zig");
@@ -2317,11 +2318,25 @@ pub const Font = struct {
         const subtable = try self.subtableForCharmap(charmap);
         if (!cmapSubtableSupportsGlyphLookup(subtable.format)) return error.UnsupportedCmap;
         try self.validateCmapLookupSubtable(subtable);
+        if (isMacintoshRomanSubtable(subtable)) {
+            return try self.nextMacintoshRomanMappingAfter(subtable, after);
+        }
         return try cmap_iter.next(self.data, subtable.offset, subtable.length, subtable.format, after);
     }
 
     fn glyphIndexInSubtable(self: *const Font, subtable: CmapSubtable, codepoint: u21) FontError!glyph_mod.GlyphId {
         try self.validateCmapLookupSubtable(subtable);
+        const mapped_codepoint: u21 = if (isMacintoshRomanSubtable(subtable))
+            macintosh_encoding.unicodeToRomanByte(
+                codepoint,
+                (try readCmapLanguage(self.data, subtable.offset, subtable.length, subtable.format)) orelse 0,
+            ) orelse return 0
+        else
+            codepoint;
+        return try self.glyphIndexInValidatedSubtable(subtable, mapped_codepoint);
+    }
+
+    fn glyphIndexInValidatedSubtable(self: *const Font, subtable: CmapSubtable, codepoint: u21) FontError!glyph_mod.GlyphId {
         return switch (subtable.format) {
             0 => try glyphIndexFormat0(self.data, subtable.offset, codepoint),
             2 => try glyphIndexFormat2(self.data, subtable.offset, subtable.length, codepoint),
@@ -2333,6 +2348,23 @@ pub const Font = struct {
             13 => try glyphIndexFormat13(self.data, subtable.offset, subtable.length, codepoint),
             else => error.UnsupportedCmap,
         };
+    }
+
+    fn nextMacintoshRomanMappingAfter(self: *const Font, subtable: CmapSubtable, after: ?u21) FontError!?CharmapMapping {
+        const language = (try readCmapLanguage(self.data, subtable.offset, subtable.length, subtable.format)) orelse 0;
+        var best: ?CharmapMapping = null;
+        for (0..0x100) |raw_code| {
+            const codepoint = macintosh_encoding.romanByteToUnicode(@intCast(raw_code), language);
+            if (after) |previous| {
+                if (codepoint <= previous) continue;
+            }
+            const glyph_id = try self.glyphIndexInValidatedSubtable(subtable, @intCast(raw_code));
+            if (glyph_id == 0) continue;
+            if (best == null or codepoint < best.?.codepoint) {
+                best = .{ .codepoint = codepoint, .glyph_id = glyph_id };
+            }
+        }
+        return best;
     }
 
     fn subtableForCharmap(self: *const Font, charmap: CharmapInfo) FontError!CmapSubtable {
@@ -9566,6 +9598,10 @@ fn readCmapLanguage(data: []const u8, offset: usize, length: usize, format: u16)
         },
         else => null,
     };
+}
+
+fn isMacintoshRomanSubtable(subtable: CmapSubtable) bool {
+    return subtable.platform_id == 1 and subtable.encoding_id == 0;
 }
 
 fn scoreCmap(subtable: CmapSubtable) u8 {

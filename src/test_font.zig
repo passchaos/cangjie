@@ -470,6 +470,10 @@ pub fn buildByteEncodingCmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try byteEncodingCmapTtfTables(allocator));
 }
 
+pub fn buildMacintoshTurkishCmapTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try macintoshTurkishCmapTtfTables(allocator));
+}
+
 pub fn buildMixedEncodingCmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mixedEncodingCmapTtfTables(allocator));
 }
@@ -480,6 +484,10 @@ pub fn buildTrimmed32CmapTtf(allocator: std.mem.Allocator) ![]u8 {
 
 pub fn buildVariationSelectorCmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try variationSelectorCmapTtfTables(allocator));
+}
+
+pub fn buildDefaultIgnorableSpaceTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try defaultIgnorableSpaceTtfTables(allocator));
 }
 
 pub fn buildNamedCjkLanguageGsubTtf(allocator: std.mem.Allocator) ![]u8 {
@@ -2367,6 +2375,26 @@ fn byteEncodingCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn macintoshTurkishCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    const cmap = try cmapFormat0Table(allocator, &.{
+        .{ .code = 0xd2, .glyph = 1 }, // U+201C in Roman and Turkish.
+        .{ .code = 0xda, .glyph = 2 }, // U+011E in Turkish; U+2044 in Roman.
+        .{ .code = 0xdd, .glyph = 3 }, // U+0131 in Turkish; U+203A in Roman.
+    });
+    writeU16(cmap, 16, 18); // Script Manager Turkish language ID 17 plus one.
+    tables[0] = .{ .tag = "cmap", .data = cmap };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
 fn mixedEncodingCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 8);
     errdefer allocator.free(tables);
@@ -2405,6 +2433,20 @@ fn variationSelectorCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithTwoExtraGlyphs(allocator) };
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn defaultIgnorableSpaceTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat12GlyphArrayTable(allocator, &.{ ' ', 'A', 0x200b }, 1) };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }

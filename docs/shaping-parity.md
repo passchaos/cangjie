@@ -1547,6 +1547,30 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   selection and lookup-plan construction, so it can continue to the mark
   positioning table. Partial-null topologies remain malformed because their
   activation and lookup graphs cannot be navigated consistently.
+- Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
+  `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
+  HarfBuzz, and HarfRust produce 17 glyphs with checksum
+  `8442fd65909b069d`, covering the fixture's contextual legacy kerning
+  sequence rather than only one isolated pair.
+- Unicode text-rendering `CMAP-{1,2,4}.tests` are retained verbatim in
+  `tests/data/cmap-{1,2,4}-*.txt` against both references. CMAP-1 and CMAP-2
+  cover cmap format-14 default, non-default, and unsupported variation
+  sequences (`9d1accb7e5354dae` and `c5c191aec5b5eb3b`); CMAP-4 covers
+  format-13 last-resort mappings across the BMP and supplementary planes
+  (`af8ccf90ffd477d1`). These gates use the upstream
+  `--remove-default-ignorables` mode, now propagated consistently through the
+  Cangjie, HarfBuzz, and HarfRust runners and included in shaped-run cache
+  identity.
+- The upstream `CMAP-3.tests` file remains disabled in HarfBuzz itself because
+  it is a non-Unicode Macintosh Turkish cmap. Cangjie now interprets
+  platform-1/encoding-0 cmap codes through an extracted Macintosh Roman
+  encoding layer and honors the format-0 language value 18 as the Turkish
+  variant. The 14 rows shared with HarfBuzz/HarfRust's MacRoman fallback are
+  retained in `tests/data/cmap-3-mac-roman-reference-tests.txt` with checksum
+  `3183e375afe92bf6`; the complete 20-row upstream input is independently
+  protected by `tests/data/cmap-3-mac-turkish-tests.txt` at checksum
+  `e2632fdbc21b0765`, including the six Turkish-specific byte slots that both
+  references currently return as `.notdef`.
 - Newa passes all five script-specific cases retained from upstream
   `in-house/use-syllable.tests` across three fixture fonts. The slice covers
   virama+ZWNJ termination, CGJ transparency in contextual and nested ligature

@@ -196,6 +196,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .features = options.featureOverrides(),
         .normalized_variation_coords = normalized_variation_coords,
         .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
+        .remove_default_ignorables = options.remove_default_ignorables,
         .context_before = options.text_before,
         .context_after = options.text_after,
         .beginning_of_text = options.beginning_of_text,

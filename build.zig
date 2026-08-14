@@ -1286,6 +1286,8 @@ const retained_text_rendering_parity_gates = [_]struct {
     font_file: []const u8,
     text_file: []const u8,
     direction: []const u8,
+    size: ?[]const u8 = null,
+    remove_default_ignorables: bool = false,
 }{
     .{
         .font_file = "NotoSansBalinese-Regular.ttf",
@@ -1323,6 +1325,41 @@ const retained_text_rendering_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_file = "TestKERNOne.otf",
+        .text_file = "tests/data/kern-rendering-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestCMAP14.otf",
+        .text_file = "tests/data/cmap-1-variation-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestCMAP14.otf",
+        .text_file = "tests/data/cmap-2-variation-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestCMAPMacTurkish.ttf",
+        .text_file = "tests/data/cmap-3-mac-roman-reference-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestCMAP13.ttf",
+        .text_file = "tests/data/cmap-4-last-resort-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
         .font_file = "NotoSerifKannada-Regular.ttf",
         .text_file = "tests/data/kannada-shknda-1-tests.txt",
         .direction = "ltr",
@@ -1336,6 +1373,24 @@ const retained_text_rendering_parity_gates = [_]struct {
         .font_file = "NotoSansKannada-Regular.ttf",
         .text_file = "tests/data/kannada-shknda-3-tests.txt",
         .direction = "ltr",
+    },
+};
+
+const retained_text_rendering_expected_gates = [_]struct {
+    font_file: []const u8,
+    text_file: []const u8,
+    direction: []const u8,
+    size: []const u8,
+    expected_checksum: []const u8,
+    remove_default_ignorables: bool = false,
+}{
+    .{
+        .font_file = "TestCMAPMacTurkish.ttf",
+        .text_file = "tests/data/cmap-3-mac-turkish-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .expected_checksum = "e2632fdbc21b0765",
+        .remove_default_ignorables = true,
     },
 };
 
@@ -2251,6 +2306,8 @@ pub fn build(b: *std.Build) void {
                 "--text-file", gate.text_file,
                 "--direction", gate.direction,
             });
+            if (gate.size) |size| harfbuzz_parity_cmd.addArgs(&.{ "--size", size });
+            if (gate.remove_default_ignorables) harfbuzz_parity_cmd.addArg("--remove-default-ignorables");
             shaping_corpus_parity_smoke_step.dependOn(&harfbuzz_parity_cmd.step);
 
             const harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
@@ -2260,7 +2317,24 @@ pub fn build(b: *std.Build) void {
                 "--text-file", gate.text_file,
                 "--direction", gate.direction,
             });
+            if (gate.size) |size| harfrust_parity_cmd.addArgs(&.{ "--size", size });
+            if (gate.remove_default_ignorables) harfrust_parity_cmd.addArg("--remove-default-ignorables");
             shaping_corpus_parity_smoke_step.dependOn(&harfrust_parity_cmd.step);
+        }
+        for (retained_text_rendering_expected_gates) |gate| {
+            const expected_cmd = b.addRunArtifact(shape_bench_exe);
+            expected_cmd.addArgs(&.{
+                "--font",            b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file",       gate.text_file,
+                "--direction",       gate.direction,
+                "--size",            gate.size,
+                "--iterations",      "1",
+                "--warmup",          "0",
+                "--samples",         "1",
+                "--expect-checksum", gate.expected_checksum,
+            });
+            if (gate.remove_default_ignorables) expected_cmd.addArg("--remove-default-ignorables");
+            shaping_corpus_parity_smoke_step.dependOn(&expected_cmd.step);
         }
         for (retained_inline_text_rendering_parity_gates) |gate| {
             const harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);

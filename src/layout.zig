@@ -193,6 +193,13 @@ pub const ShapeOptions = struct {
     /// unsupported selector visible to GSUB/GPOS matching and reports this glyph
     /// id with zero advance, without changing the real font glyph id.
     not_found_variation_selector_glyph: ?u32 = null,
+    /// Delete untouched default-ignorables after substitution and positioning.
+    ///
+    /// The default behavior mirrors HarfBuzz by replacing them with the font's
+    /// space glyph at zero advance when one exists. This explicit mode forces
+    /// deletion even in that case, while substituted controls and a requested
+    /// not-found variation-selector glyph remain visible.
+    remove_default_ignorables: bool = false,
     /// Optional item context used for HarfBuzz-style shaping of a substring.
     ///
     /// The context is not emitted. It only influences joining decisions at the
@@ -222,6 +229,7 @@ pub const ShapePlanKey = struct {
     beginning_of_text: bool = false,
     end_of_text: bool = false,
     not_found_variation_selector_glyph: ?u32 = null,
+    remove_default_ignorables: bool = false,
     cluster_level: ?ClusterLevel = null,
 
     pub fn fromText(text: []const u8, options: ShapeOptions) ShapePlanKey {
@@ -245,6 +253,7 @@ pub const ShapePlanKey = struct {
             .beginning_of_text = options.beginning_of_text,
             .end_of_text = options.end_of_text,
             .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
+            .remove_default_ignorables = options.remove_default_ignorables,
             .cluster_level = options.cluster_level,
         };
     }
@@ -3328,6 +3337,7 @@ const LookupOptions = struct {
     text_orientation: TextOrientation = .mixed,
     normalized_variation_coords: []const f32 = &.{},
     not_found_variation_selector_glyph: ?u32 = null,
+    remove_default_ignorables: bool = false,
     context_before: []const u8 = &.{},
     context_after: []const u8 = &.{},
     beginning_of_text: bool = false,
@@ -3363,6 +3373,7 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupO
         .text_orientation = options.text_orientation,
         .normalized_variation_coords = options.normalized_variation_coords,
         .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
+        .remove_default_ignorables = options.remove_default_ignorables,
         .context_before = options.context_before,
         .context_after = options.context_after,
         .beginning_of_text = options.beginning_of_text,
@@ -3441,6 +3452,7 @@ fn shapePlanKeysEqual(a: ShapePlanKey, b: ShapePlanKey) bool {
         a.beginning_of_text == b.beginning_of_text and
         a.end_of_text == b.end_of_text and
         a.not_found_variation_selector_glyph == b.not_found_variation_selector_glyph and
+        a.remove_default_ignorables == b.remove_default_ignorables and
         a.cluster_level == b.cluster_level;
 }
 
@@ -4683,7 +4695,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             !synthetic_base and
             !visible_not_found_variation_selector;
         const skip_default_ignorable = hide_default_ignorable and
-            (invisible_glyph_id == 0 or
+            (lookup_options.remove_default_ignorables or
+                invisible_glyph_id == 0 or
                 (glyph_id == 0 and isVariationSelector(source_codepoint) and
                     !variationSelectorFallbackShouldRender(index, source_index, ligature_components)));
         // HarfBuzz removes an untouched default-ignorable when the font has no
@@ -7178,6 +7191,37 @@ test "unsupported variation selectors can report a synthetic not-found glyph" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), synthetic_run.glyphs[1].y_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), synthetic_run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), synthetic_run.glyphs[1].y_offset, 0.001);
+}
+
+test "remove-default-ignorables deletes the font's fallback space glyph" {
+    const test_font = @import("test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const bytes = try test_font.buildDefaultIgnorableSpaceTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const text = "A\u{200b}";
+    const default_run = try TextShaper.shapeUtf8WithOptions(&font, &buffer, text, 20, .{});
+    try std.testing.expectEqual(@as(usize, 2), default_run.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), default_run.glyphs[1].glyph_id);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), default_run.glyphs[1].x_advance, 0.001);
+
+    const removed_run = try TextShaper.shapeUtf8WithOptions(&font, &buffer, text, 20, .{
+        .remove_default_ignorables = true,
+    });
+    try std.testing.expectEqual(@as(usize, 1), removed_run.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), removed_run.glyphs[0].glyph_id);
+
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+    const default_key = ShapedRunCache.key(cascade, text, 20, .{});
+    const removed_key = ShapedRunCache.key(cascade, text, 20, .{ .remove_default_ignorables = true });
+    try std.testing.expect(!shapePlanKeysEqual(default_key.plan, removed_key.plan));
 }
 
 test "cluster caret diagnostics catch invalid UTF-8 source spans" {

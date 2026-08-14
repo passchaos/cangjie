@@ -206,6 +206,7 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
     if (options.beginning_of_text) flags |= hb.HB_BUFFER_FLAG_BOT;
     if (options.end_of_text) flags |= hb.HB_BUFFER_FLAG_EOT;
     if (options.unsafe_to_concat) flags |= hb.HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT;
+    if (options.remove_default_ignorables) flags |= hb.HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES;
     if (flags != hb.HB_BUFFER_FLAG_DEFAULT) hb.hb_buffer_set_flags(buffer, flags);
     var context_text: []u8 = &.{};
     defer if (context_text.len != 0) allocator.free(context_text);

@@ -3143,9 +3143,41 @@ test "maps byte-encoding cmap format 0 glyph arrays" {
 
     try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex('A'));
     try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex('B'));
-    try std.testing.expectEqual(@as(GlyphId, 3), try font.glyphIndex(0xff));
+    // Macintosh platform-1, encoding-0 format 0 is a MacRoman charmap, not a
+    // direct Latin-1 byte map. Byte 0xFF represents U+02C7.
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0xff));
+    try std.testing.expectEqual(@as(GlyphId, 3), try font.glyphIndex(0x02c7));
     try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0x100));
     try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0x1f600));
+}
+
+test "maps and enumerates Macintosh Turkish Roman cmap variants" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const bytes = try test_font.buildMacintoshTurkishCmapTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const charmap = (try font.defaultCharmap()).?;
+    try std.testing.expectEqual(@as(u16, 1), charmap.platform_id);
+    try std.testing.expectEqual(@as(u16, 0), charmap.encoding_id);
+    try std.testing.expectEqual(@as(?u32, 18), charmap.language);
+
+    try std.testing.expectEqual(@as(GlyphId, 1), try font.glyphIndex(0x201c));
+    try std.testing.expectEqual(@as(GlyphId, 2), try font.glyphIndex(0x011e));
+    try std.testing.expectEqual(@as(GlyphId, 3), try font.glyphIndex(0x0131));
+    try std.testing.expectEqual(@as(GlyphId, 0), try font.glyphIndex(0x2044));
+    try std.testing.expectEqual(@as(GlyphId, 2), try font.glyphIndexWithCharmap(charmap, 0x011e));
+
+    const first = (try font.firstCharmapMapping(charmap)).?;
+    try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 0x011e, .glyph_id = 2 }), first);
+    const second = (try font.nextCharmapMapping(charmap, first.codepoint)).?;
+    try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 0x0131, .glyph_id = 3 }), second);
+    const third = (try font.nextCharmapMapping(charmap, second.codepoint)).?;
+    try std.testing.expectEqual(@as(CharmapMapping, .{ .codepoint = 0x201c, .glyph_id = 1 }), third);
+    try std.testing.expect((try font.nextCharmapMapping(charmap, third.codepoint)) == null);
 }
 
 test "maps mixed byte cmap format 2 subheaders" {

@@ -18,12 +18,76 @@ const retained_compact_use_gates = [_]struct {
     text_file: []const u8,
 }{
     .{
+        .font_hash = "96490dd2ff81233b335a650e7eb660e0e7b2eeea",
+        .text_file = "tests/data/cham-use-font1.txt",
+    },
+    .{
+        .font_hash = "e68a88939e0f06e34d2bc911f09b70890289c8fd",
+        .text_file = "tests/data/cham-use-font2.txt",
+    },
+    .{
+        .font_hash = "074a5ae6b19de8f29772fdd5df2d3d833f81f5e6",
+        .text_file = "tests/data/grantha-use-font1.txt",
+    },
+    .{
+        .font_hash = "23406a60ab081c4fb15e1596ea1cd4f27ae8443e",
+        .text_file = "tests/data/saurashtra-use-font1.txt",
+    },
+    .{
+        .font_hash = "373e67bf41ca264e260a9716162b71a23549e885",
+        .text_file = "tests/data/saurashtra-use-font2.txt",
+    },
+    .{
+        .font_hash = "59a585a63b3df608fbeef00956c8c108deec7de6",
+        .text_file = "tests/data/batak-use-tests.txt",
+    },
+    .{
+        .font_hash = "1ed7e9064f008f62de6ff0207bb4dd29409597a5",
+        .text_file = "tests/data/brahmi-use-font1.txt",
+    },
+    .{
+        .font_hash = "28f497629c04ceb15546c9a70e0730125ed6698d",
+        .text_file = "tests/data/brahmi-use-font2.txt",
+    },
+    .{
+        .font_hash = "86cdd983c4e4c4d7f27dd405d6ceb7d4b9ed3d35",
+        .text_file = "tests/data/sharada-use-tests.txt",
+    },
+    .{
         .font_hash = "3c96e7a303c58475a8c750bf4289bbe73784f37d",
         .text_file = "tests/data/use-indic3-tests.txt",
     },
     .{
         .font_hash = "3cc01fede4debd4b7794ccb1b16cdb9987ea7571",
         .text_file = "tests/data/tai-tham-use-syllable-tests.txt",
+    },
+    .{
+        .font_hash = "573d3a3177c9a8646e94c8a0d7b224334340946a",
+        .text_file = "tests/data/newa-use-font1.txt",
+    },
+    .{
+        .font_hash = "2a670df15b73a5dc75a5cc491bde5ac93c5077dc",
+        .text_file = "tests/data/chakma-use-tests.txt",
+    },
+    .{
+        .font_hash = "a56745bac8449d0ad94918b2bb5930716ba02fe3",
+        .text_file = "tests/data/newa-use-font2.txt",
+    },
+    .{
+        .font_hash = "d0430ea499348c420946f6abc2efc84fdf8f00e3",
+        .text_file = "tests/data/newa-use-font3.txt",
+    },
+    .{
+        .font_hash = "65d1b9099cfb3191931d8d6112d7a03d979d579f",
+        .text_file = "tests/data/grantha-use-font2.txt",
+    },
+    .{
+        .font_hash = "f70f345188472b93f565d1d7fae8c668dd6a3244",
+        .text_file = "tests/data/javanese-use-tests.txt",
+    },
+    .{
+        .font_hash = "85414f2552b654585b7a8d13dcc3e8fd9f7970a3",
+        .text_file = "tests/data/marchen-use-tests.txt",
     },
     .{
         .font_hash = "46669c8860cbfea13562a6ca0d83130ee571137b",
@@ -494,16 +558,6 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     .{
         .font_hash = "3cae6bfe5b57c07ba81ddbd54c02fe4f3a1e3bf6",
         .text = "\u{0cb0}\u{0ccd}\u{200d}\u{0c95}",
-        .direction = "ltr",
-    },
-    .{
-        .font_hash = "8116e5d8fedfbec74e45dc350d2416d810bed8c4",
-        .text = "\u{091f}\u{094d}\u{200c}\u{092f}\u{093f}",
-        .direction = "ltr",
-    },
-    .{
-        .font_hash = "8116e5d8fedfbec74e45dc350d2416d810bed8c4",
-        .text = "\u{091f}\u{094d}\u{200d}\u{091f}\u{094d}\u{200c}\u{091f}\u{094d}\u{200d}\u{092f}\u{093f}",
         .direction = "ltr",
     },
     .{
@@ -1221,6 +1275,11 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
         .text_file = "tests/data/myanmar-syllable-machine-tests.txt",
         .direction = "ltr",
     },
+    .{
+        .font_hash = "8116e5d8fedfbec74e45dc350d2416d810bed8c4",
+        .text_file = "tests/data/devanagari-indic-joiners-tests.txt",
+        .direction = "ltr",
+    },
 };
 
 const retained_inline_harfrust_parity_gates = [_]struct {
@@ -1619,6 +1678,11 @@ const retained_harfrust_text_parity_gates = [_]struct {
     .{
         .font_hash = "b722a7d09e60421f3efbc706ad348ab47b88567b",
         .text_file = "tests/data/devanagari-old-spec-tests.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_hash = "8116e5d8fedfbec74e45dc350d2416d810bed8c4",
+        .text_file = "tests/data/devanagari-indic-joiners-tests.txt",
         .direction = "ltr",
     },
     .{

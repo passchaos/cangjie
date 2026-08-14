@@ -142,7 +142,12 @@ HarfRust, are:
 | `f518eb6f6b5eec2946c9fbbbde44e45d46f5e2ac` | 1 | `4caf38b3f8bfed32` |
 | `fbb6c84c9e1fe0c39e152fbe845e51fd81f6748e` | 1 | `4e3bc2e9eb662fd1` |
 
-Two additional upstream gates close the remaining compact USE test sets:
+The 27 upstream `in-house/tests/use-syllable.tests` rows are retained in 15
+script/font-grouped corpora for Cham, Grantha, Saurashtra, Batak, Brahmi,
+Sharada, Tai Tham, Newa, and Chakma. Every corpus now participates directly in
+`shaping-use-parity-smoke` against both HarfBuzz and HarfRust, rather than
+being documented test data without a build dependency. Two additional compact
+USE gates are:
 
 - `tests/data/use-indic3-tests.txt` retains the one
   `in-house/tests/use-indic3.tests` Kannada fixture. It verifies that a `knd3`
@@ -157,8 +162,9 @@ Two additional upstream gates close the remaining compact USE test sets:
   all 27 inputs from that upstream test now have a local corpus gate.
 
 `zig build shaping-use-parity-smoke -Doptimize=ReleaseFast -Denable-harfbuzz=true`
-runs the full `tests/data/use/*.txt` gate plus these two compact extra gates
-against both HarfBuzz and HarfRust. The Tai Tham slice specifically covers
+runs the full `tests/data/use/*.txt` gate, all 15 grouped `use-syllable`
+corpora, and the other compact gates against both HarfBuzz and HarfRust. The
+Tai Tham slice specifically covers
 independent SAKOT grapheme boundaries, three adjacent USE syllables,
 broken-syllable dotted circle insertion without GDEF classes, and a synthetic
 base retaining its advance instead of inheriting the broken mark's fallback
@@ -2106,9 +2112,12 @@ shaping-performance superiority.
   `b3075ca42b27dde7341c2d0ae16703c5b6640df0.ttf` are retained for both
   `U+0B2C,U+0B55,U+0B3E` and `U+0B2C,U+0B3E,U+0B55`, covering mark order without
   reclassifying either mark as a broken cluster. The Devanagari
-  `indic-joiners.tests` row for `8116e5d8fedfbec74e45dc350d2416d810bed8c4.ttf`
-  is retained for `U+091F,U+094D,U+200C,U+092F,U+093F` and the mixed
-  `ZWJ/ZWNJ/ZWJ` row `U+091F,U+094D,U+200D,U+091F,U+094D,U+200C,U+091F,U+094D,U+200D,U+092F,U+093F`;
+  `indic-joiners.tests` rows for
+  `8116e5d8fedfbec74e45dc350d2416d810bed8c4.ttf` are retained as one
+  four-row dual-reference corpus in
+  `tests/data/devanagari-indic-joiners-tests.txt`, covering both single
+  `virama+ZWJ/ZWNJ` cases and the corresponding three-stack pure/mixed joiner
+  sequences;
   Cangjie now treats `virama+ZWNJ` as a syllable terminator, so the following
   pre-base matra targets the following `ya` syllable instead of jumping before
   the previous `tta`. The first 17 Devanagari rows of

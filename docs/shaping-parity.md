@@ -1859,7 +1859,16 @@ shaping-performance superiority.
   HarfBuzz's table plan: when GSUB and GPOS are both active, GPOS owns
   positioning even if the selected LangSys's applicable feature is not named
   `kern`; otherwise `kerx` takes precedence over legacy `kern`.
-  Variation tuples remain open.
+  Version-4 variation vectors now use their first FUnit as the default and
+  accumulate subsequent deltas with scalars derived from `gvar` global tuple
+  peaks, reusing the same normalized-coordinate support math as glyph
+  variation tuples. Formats 0, 1, 2, and 6 share this resolver; focused tests
+  cover each format, the standalone `0xFFFF` format-1 sentinel, unsigned
+  16/32-bit vector offsets, and version-3/4 glyph-coverage footers. A synthetic
+  format-0 vector `[-30,-20]` retains HarfBuzz parity at the default coordinate
+  and produces `-40` at normalized coordinate `0.5`, with an independent
+  expected-output gate because current HarfBuzz returns only the vector's first
+  member for non-default coordinates.
 
   The `shape-bench` now has a `--show-extents` summary surface, and the
   `color-fonts.tests` CBDT and sbix rows are retained against in-process

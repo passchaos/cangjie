@@ -908,8 +908,19 @@ pub const KerxLookupForShaping = struct {
     font: *const Font,
     kerx: TableRecord,
 
-    pub fn kerning(self: KerxLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, vertical: bool) FontError!i32 {
+    pub fn kerning(
+        self: KerxLookupForShaping,
+        left: glyph_mod.GlyphId,
+        right: glyph_mod.GlyphId,
+        vertical: bool,
+        normalized_coords: []const f32,
+    ) FontError!i32 {
         if (left >= self.font.glyph_count or right >= self.font.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        var tuple_context = KerxTupleResolverContext{
+            .font = self.font,
+            .normalized_coords = normalized_coords,
+        };
         return try kerx_mod.pairKerning(
             self.font.data,
             self.kerx.offset,
@@ -918,6 +929,10 @@ pub const KerxLookupForShaping = struct {
             left,
             right,
             vertical,
+            .{
+                .context = &tuple_context,
+                .resolve_fn = resolveKerxTupleVector,
+            },
         );
     }
 
@@ -939,6 +954,10 @@ pub const KerxLookupForShaping = struct {
             .allocator = allocator,
             .normalized_coords = normalized_coords,
         };
+        var tuple_context = KerxTupleResolverContext{
+            .font = self.font,
+            .normalized_coords = normalized_coords,
+        };
         return try aat_kerx.collectAdjustments(
             self.font.data,
             self.kerx.offset,
@@ -955,6 +974,10 @@ pub const KerxLookupForShaping = struct {
             .{
                 .context = &resolver_context,
                 .resolve_fn = resolveKerxOutlinePoint,
+            },
+            .{
+                .context = &tuple_context,
+                .resolve_fn = resolveKerxTupleVector,
             },
         );
     }
@@ -993,6 +1016,32 @@ const KerxOutlineResolverContext = struct {
     allocator: std.mem.Allocator,
     normalized_coords: []const f32,
 };
+
+const KerxTupleResolverContext = struct {
+    font: *const Font,
+    normalized_coords: []const f32,
+};
+
+fn resolveKerxTupleVector(
+    opaque_context: *const anyopaque,
+    vector: []const u8,
+) kerx_mod.Error!i32 {
+    const context: *const KerxTupleResolverContext = @ptrCast(@alignCast(opaque_context));
+    if (vector.len == 2) return std.mem.readInt(i16, vector[0..2], .big);
+    const gvar = context.font.gvar orelse return error.BadSfnt;
+    const axis_count = context.font.fvar_axis_count orelse return error.BadSfnt;
+    return gvar_mod.sharedTupleVectorValue(
+        context.font.data,
+        gvar.offset,
+        gvar.length,
+        context.font.glyph_count,
+        axis_count,
+        vector,
+        context.normalized_coords,
+    ) catch |err| switch (err) {
+        else => return error.BadSfnt,
+    };
+}
 
 fn resolveKerxOutlinePoint(
     opaque_context: *const anyopaque,

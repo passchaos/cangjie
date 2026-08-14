@@ -80,6 +80,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .minimal_gsub => try cangjie.testing.test_font.buildMinimalGsubTtf(allocator),
         .script_feature => try cangjie.testing.test_font.buildScriptFeatureGsubTtf(allocator),
         .kerx => try cangjie.testing.test_font.buildKerxTtf(allocator),
+        .kerx_variation => try cangjie.testing.test_font.buildKerxVariationTtf(allocator),
         .kerx_format_1 => try cangjie.testing.test_font.buildKerxFormat1Ttf(allocator),
         .kerx_format_2 => try cangjie.testing.test_font.buildKerxFormat2Ttf(allocator),
         .kerx_format_4 => try cangjie.testing.test_font.buildKerxFormat4Ttf(allocator),

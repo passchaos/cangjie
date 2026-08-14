@@ -2322,6 +2322,47 @@ pub fn build(b: *std.Build) void {
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_0_cmd.step);
 
+        const kerx_variation_font = exportedBuiltinFont(
+            b,
+            shape_bench_exe,
+            "kerx-variation",
+            "kerx-variation.ttf",
+        );
+        const kerx_variation_default_harfbuzz = b.addRunArtifact(shape_bench_exe);
+        kerx_variation_default_harfbuzz.addArgs(&.{ "--engine", "compare-harfbuzz", "--font" });
+        kerx_variation_default_harfbuzz.addFileArg(kerx_variation_font);
+        kerx_variation_default_harfbuzz.addArgs(&.{
+            "--text",       "AA",
+            "--direction",  "ltr",
+            "--iterations", "1",
+            "--warmup",     "0",
+            "--samples",    "1",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&kerx_variation_default_harfbuzz.step);
+
+        // HarfBuzz currently returns only the first vector member, so
+        // non-default tuple interpolation is guarded by the Apple-specified
+        // expected result rather than a knowingly incomplete reference.
+        const kerx_variation_half_expected = b.addRunArtifact(shape_bench_exe);
+        kerx_variation_half_expected.addArg("--font");
+        kerx_variation_half_expected.addFileArg(kerx_variation_font);
+        kerx_variation_half_expected.addArgs(&.{
+            "--text",               "AA",
+            "--size",               "1000",
+            "--variation",          "0.5",
+            "--glyph-summary",      "--iterations",
+            "1",                    "--warmup",
+            "0",                    "--samples",
+            "1",                    "--expect-glyph-ids",
+            "1,1",                  "--expect-clusters",
+            "0,1",                  "--expect-x-advances",
+            "780,780",              "--expect-y-advances",
+            "0,0",                  "--expect-x-offsets",
+            "0,-20",                "--expect-y-offsets",
+            "0,0",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&kerx_variation_half_expected.step);
+
         const kerx_format_1_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_1_cmd.addArgs(&.{
             "--builtin",            "kerx-format-1",

@@ -90,9 +90,11 @@ pub fn collectAdjustments(
     simple_pair_eligible: []const bool,
     ankr_table: ?AnkrTable,
     outline_resolver: ?OutlinePointResolver,
+    tuple_resolver: ?kerx.TupleResolver,
 ) Error!Summary {
     if (table_offset > data.len or table_length > data.len - table_offset or table_length < 8) return error.BadSfnt;
-    if (try readU16(data, table_offset) < 2 or try readU16(data, table_offset) > 4) return error.BadSfnt;
+    const table_version = try readU16(data, table_offset);
+    if (table_version < 2 or table_version > 4) return error.BadSfnt;
     if (try readU16(data, table_offset + 2) != 0) return error.BadSfnt;
     if (simple_pair_eligible.len != glyphs.len) return error.BadSfnt;
     const subtable_count: usize = @intCast(try readU32(data, table_offset + 4));
@@ -114,20 +116,23 @@ pub fn collectAdjustments(
         const subtable_start = table_offset + subtable_relative;
         const subtable_length: usize = @intCast(try readU32(data, subtable_start));
         const coverage = try readU32(data, subtable_start + 4);
-        const tuple_count = try readU32(data, subtable_start + 8);
+        // Apple activates tuple vectors only for kerx version 4+. Older tables
+        // retain the field in the common header but readers must ignore it.
+        const tuple_count = if (table_version >= 4)
+            try readU32(data, subtable_start + 8)
+        else
+            0;
         if (subtable_length < 12 or subtable_length > table_length - subtable_relative) return error.BadSfnt;
         const format = coverage & 0xff;
         const axis_matches = ((coverage & 0x80000000) != 0) == vertical;
         const cross_stream = (coverage & 0x40000000) != 0;
-        const not_variable = (coverage & 0x20000000) == 0;
         const simple_cross_stream = requested_kerning and
             (format == 0 or format == 2 or format == 6) and
             cross_stream and
-            (coverage & 0x10000000) == 0 and
-            tuple_count == 0;
+            (coverage & 0x10000000) == 0;
         const format1_enabled = format == 1 and (requested_kerning or cross_stream);
         const format4_enabled = format == 4;
-        const applies = axis_matches and not_variable and
+        const applies = axis_matches and
             (simple_cross_stream or format1_enabled or format4_enabled);
 
         if (applies and cross_stream and !cross_stream_initialized) {
@@ -138,7 +143,7 @@ pub fn collectAdjustments(
             cross_stream_initialized = true;
         }
 
-        if (simple_cross_stream and axis_matches and not_variable) {
+        if (simple_cross_stream and axis_matches) {
             const changed = try applySimpleCrossStream(
                 data,
                 table_offset,
@@ -149,10 +154,11 @@ pub fn collectAdjustments(
                 simple_pair_eligible,
                 out.items,
                 vertical,
+                tuple_resolver,
             );
             previous_cross_stream_adjustment = changed or previous_cross_stream_adjustment;
             summary.has_cross_stream_adjustment = previous_cross_stream_adjustment;
-        } else if (format1_enabled and axis_matches and not_variable) {
+        } else if (format1_enabled and axis_matches) {
             var format1_summary = Summary{};
             try applyFormat1(
                 data,
@@ -165,13 +171,14 @@ pub fn collectAdjustments(
                 if (((coverage & 0x10000000) != 0) != direction_backward) .backward else .forward,
                 vertical,
                 cross_stream,
+                tuple_resolver,
                 &format1_summary,
                 &operations_left,
             );
             previous_cross_stream_adjustment = format1_summary.has_cross_stream_adjustment or
                 previous_cross_stream_adjustment;
             summary.has_cross_stream_adjustment = previous_cross_stream_adjustment;
-        } else if (format4_enabled and axis_matches and not_variable) {
+        } else if (format4_enabled and axis_matches) {
             try applyFormat4(
                 data,
                 subtable_start,
@@ -187,8 +194,45 @@ pub fn collectAdjustments(
         }
         subtable_relative += subtable_length;
     }
-    if (subtable_relative != table_length) return error.BadSfnt;
+    try validateCoverageFooter(
+        data,
+        table_offset,
+        table_length,
+        table_version,
+        subtable_count,
+        subtable_relative,
+        glyph_count,
+    );
     return summary;
+}
+
+fn validateCoverageFooter(
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    table_version: u16,
+    subtable_count: usize,
+    footer_relative: usize,
+    glyph_count: usize,
+) Error!void {
+    if (table_version < 3) {
+        if (footer_relative != table_length) return error.BadSfnt;
+        return;
+    }
+    const offsets_bytes = std.math.mul(usize, subtable_count, 4) catch return error.BadSfnt;
+    if (footer_relative > table_length or offsets_bytes > table_length - footer_relative) return error.BadSfnt;
+    const footer_start = table_offset + footer_relative;
+    const bitfield_bytes = (glyph_count + 7) / 8;
+    for (0..subtable_count) |index| {
+        const coverage_offset: usize = @intCast(try readU32(data, footer_start + index * 4));
+        if (coverage_offset == 0 or coverage_offset == std.math.maxInt(u32)) continue;
+        if (coverage_offset < offsets_bytes or
+            coverage_offset > table_length - footer_relative or
+            bitfield_bytes > table_length - footer_relative - coverage_offset)
+        {
+            return error.BadSfnt;
+        }
+    }
 }
 
 fn initializeCrossStreamAttachments(adjustments: []Adjustment, backward: bool) void {
@@ -218,6 +262,7 @@ fn applySimpleCrossStream(
     eligible: []const bool,
     adjustments: []Adjustment,
     vertical: bool,
+    tuple_resolver: ?kerx.TupleResolver,
 ) Error!bool {
     if (glyphs.len != eligible.len or glyphs.len != adjustments.len) return error.BadSfnt;
     var changed = false;
@@ -233,6 +278,7 @@ fn applySimpleCrossStream(
                 subtable_relative,
                 glyphs[left_index],
                 glyph,
+                tuple_resolver,
             )) orelse return error.BadSfnt;
             if (value != 0) {
                 if (vertical) {
@@ -495,6 +541,7 @@ fn applyFormat1(
     direction: Direction,
     vertical: bool,
     cross_stream: bool,
+    tuple_resolver: ?kerx.TupleResolver,
     summary: *Summary,
     operations_left: *usize,
 ) Error!void {
@@ -528,6 +575,16 @@ fn applyFormat1(
     );
 
     const tuple_count: usize = @max(@as(usize, tuple_count_raw), 1);
+    if (tuple_count_raw != 0) try validateFormat1TupleActions(
+        data,
+        machine_start,
+        machine_length,
+        class_count,
+        state_array_offset,
+        entry_table_offset,
+        action_offset,
+        tuple_count,
+    );
     var stack: [stack_capacity]usize = undefined;
     var depth: usize = 0;
     var state: usize = 0;
@@ -585,13 +642,23 @@ fn applyFormat1(
                 const action_stride = std.math.mul(usize, action_index, 2) catch return error.BadSfnt;
                 const action_relative = std.math.add(usize, action_offset, action_stride) catch return error.BadSfnt;
                 if (action_relative > machine_length or machine_length - action_relative < 2) return error.BadSfnt;
-                const value: i32 = try readI16(data, machine_start + action_relative);
-                action_index = std.math.add(usize, action_index, tuple_count) catch return error.BadSfnt;
-                // The extended `kerx` value table uses a literal 0xFFFF
-                // sentinel. Unlike obsolete `kern` format 1, the low bit of a
-                // real kerning value is not a terminator marker.
-                last = value == -1;
+                const first_value = try readI16(data, machine_start + action_relative);
+                // A single literal 0xFFFF terminates both scalar and vector
+                // action lists; it is not the first member of a tuple vector.
+                last = first_value == -1;
                 if (last) break;
+                const value: i32 = if (tuple_count_raw == 0)
+                    first_value
+                else value: {
+                    const vector_bytes = std.math.mul(usize, tuple_count, 2) catch return error.BadSfnt;
+                    if (action_relative > machine_length or vector_bytes > machine_length - action_relative) return error.BadSfnt;
+                    const vector = data[machine_start + action_relative ..][0..vector_bytes];
+                    break :value if (tuple_resolver) |resolver|
+                        try resolver.resolve(vector)
+                    else
+                        try readI16(vector, 0);
+                };
+                action_index = std.math.add(usize, action_index, tuple_count) catch return error.BadSfnt;
                 depth -= 1;
                 const glyph_index = stack[depth];
                 if (cross_stream) {
@@ -629,6 +696,58 @@ fn applyFormat1(
             sent_end_of_text = true;
         } else if ((current_entry.flags & dont_advance) == 0) {
             cursor += 1;
+        }
+    }
+}
+
+fn validateFormat1TupleActions(
+    data: []const u8,
+    machine_start: usize,
+    machine_length: usize,
+    class_count: usize,
+    state_array_offset: usize,
+    entry_table_offset: usize,
+    action_offset: usize,
+    tuple_count: usize,
+) Error!void {
+    if (tuple_count == 0 or
+        class_count == 0 or
+        state_array_offset >= entry_table_offset or
+        entry_table_offset > action_offset)
+    {
+        return error.BadSfnt;
+    }
+    const state_bytes = entry_table_offset - state_array_offset;
+    if (state_bytes % 2 != 0) return error.BadSfnt;
+    var max_entry_index: usize = 0;
+    for (0..state_bytes / 2) |cell| {
+        const entry_index: usize = try readU16(
+            data,
+            machine_start + state_array_offset + cell * 2,
+        );
+        max_entry_index = @max(max_entry_index, entry_index);
+    }
+    const vector_bytes = std.math.mul(usize, tuple_count, 2) catch return error.BadSfnt;
+    for (0..max_entry_index + 1) |entry_index| {
+        const entry_relative = std.math.add(
+            usize,
+            entry_table_offset,
+            std.math.mul(usize, entry_index, 6) catch return error.BadSfnt,
+        ) catch return error.BadSfnt;
+        if (entry_relative > action_offset or action_offset - entry_relative < 6) return error.BadSfnt;
+        const payload_offset = machine_start + entry_table_offset + entry_index * 6 + 4;
+        const first_action: usize = try readU16(data, payload_offset);
+        if (first_action == no_action) continue;
+        var action_relative = std.math.add(
+            usize,
+            action_offset,
+            std.math.mul(usize, first_action, 2) catch return error.BadSfnt,
+        ) catch return error.BadSfnt;
+        while (true) {
+            if (action_relative > machine_length or machine_length - action_relative < 2) return error.BadSfnt;
+            if (try readI16(data, machine_start + action_relative) == -1) break;
+            if (vector_bytes > machine_length - action_relative) return error.BadSfnt;
+            action_relative = std.math.add(usize, action_relative, vector_bytes) catch return error.BadSfnt;
         }
     }
 }
@@ -675,6 +794,7 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
         &.{ true, true },
         null,
         null,
+        null,
     );
 
     try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
@@ -698,9 +818,59 @@ test "format 1 pushes glyphs and consumes a sentinel-terminated action list" {
         &.{true},
         null,
         null,
+        null,
     );
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);
+}
+
+test "format 1 applies tuple vectors and keeps scalar sentinel semantics" {
+    var bytes = [_]u8{0} ** 126;
+    writeU16Test(&bytes, 0, 4);
+    writeU32Test(&bytes, 4, 1);
+    writeFormat1SubtableTest(&bytes, 8);
+    writeU32Test(&bytes, 8, 114); // Extend the action list through sentinel.
+    writeU32Test(&bytes, 16, 2); // default plus one tuple delta.
+    // Push the second glyph as well. The first vector pops it, leaving the
+    // earlier stack member live so the next standalone 0xFFFF is observed.
+    writeU16Test(&bytes, 8 + 12 + 52 + 12 + 2, push);
+    // One two-member vector followed by the standalone 0xFFFF sentinel.
+    writeI16Test(&bytes, 8 + 12 + 96, -30);
+    writeI16Test(&bytes, 8 + 12 + 98, -20);
+    writeI16Test(&bytes, 8 + 12 + 100, -1);
+    writeU32Test(&bytes, 122, std.math.maxInt(u32));
+
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+    _ = try collectAdjustments(
+        &bytes,
+        0,
+        bytes.len,
+        2,
+        &.{ 1, 1 },
+        &adjustments,
+        std.testing.allocator,
+        false,
+        false,
+        true,
+        &.{ true, true },
+        null,
+        null,
+        .{
+            .context = &bytes,
+            .resolve_fn = testTupleVector,
+        },
+    );
+
+    try std.testing.expectEqual(@as(i32, 0), adjustments.items[0].x_advance);
+    try std.testing.expectEqual(@as(i32, -40), adjustments.items[1].x_advance);
+    try std.testing.expectEqual(@as(i32, -40), adjustments.items[1].x_offset);
+}
+
+fn testTupleVector(_: *const anyopaque, vector: []const u8) kerx.Error!i32 {
+    if (vector.len != 4) return error.BadSfnt;
+    return @as(i32, std.mem.readInt(i16, vector[0..2], .big)) +
+        @divTrunc(@as(i32, std.mem.readInt(i16, vector[2..4], .big)), 2);
 }
 
 test "ordered cross-stream subtables preserve assignment and action order" {
@@ -739,6 +909,7 @@ test "ordered cross-stream subtables preserve assignment and action order" {
         &.{ true, true },
         null,
         null,
+        null,
     );
 
     try std.testing.expect(summary.has_cross_stream_adjustment);
@@ -775,6 +946,7 @@ test "ordered cross-stream subtables preserve assignment and action order" {
         &.{ true, true },
         null,
         null,
+        null,
     );
     try std.testing.expectEqual(@as(i32, 0), adjustments.items[0].y_offset);
     try std.testing.expectEqual(@as(i32, -20), adjustments.items[1].y_offset);
@@ -800,6 +972,7 @@ test "format 4 coordinate action attaches current glyph to marked glyph" {
         false,
         true,
         &.{ true, true },
+        null,
         null,
         null,
     );
@@ -839,6 +1012,7 @@ test "format 4 outline action resolves both raw point indexes" {
             .context = &bytes,
             .resolve_fn = testOutlinePoint,
         },
+        null,
     );
 
     try std.testing.expectEqual(Adjustment{}, adjustments.items[0]);

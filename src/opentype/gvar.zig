@@ -113,6 +113,122 @@ pub const GlyfMetricTarget = union(enum) {
     component: u16,
 };
 
+/// Return the scalar for one shared/global `gvar` tuple.
+///
+/// AAT variation tables such as `kerx` store a default value followed by
+/// deltas associated with these global tuple coordinates. Global tuples have
+/// no intermediate region, so each non-zero peak axis contributes the same
+/// origin-to-peak support scalar used by ordinary gvar tuple headers.
+pub fn sharedTupleScalar(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    expected_glyph_count: usize,
+    expected_axis_count: usize,
+    shared_tuple_index: usize,
+    normalized_coords: []const f32,
+) Error!f32 {
+    const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    const table = data[offset .. offset + length];
+    return try sharedTupleScalarFromParsed(table, parsed, shared_tuple_index, normalized_coords);
+}
+
+/// Resolve a big-endian AAT variation vector against gvar's global tuples.
+///
+/// The first i16 is the default value. Every following i16 is a delta for the
+/// same-numbered global tuple; producers may omit trailing zero deltas.
+pub fn sharedTupleVectorValue(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    expected_glyph_count: usize,
+    expected_axis_count: usize,
+    vector: []const u8,
+    normalized_coords: []const f32,
+) Error!i32 {
+    if (vector.len < 2 or vector.len % 2 != 0) return error.BadSfnt;
+    const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    const delta_count = vector.len / 2 - 1;
+    if (delta_count > parsed.shared_tuple_count) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    var result: f32 = @floatFromInt(readI16(vector, 0));
+    for (0..delta_count) |tuple_index| {
+        const delta: f32 = @floatFromInt(readI16(vector, 2 + tuple_index * 2));
+        if (delta == 0) continue;
+        result += delta * try sharedTupleScalarFromParsed(
+            table,
+            parsed,
+            tuple_index,
+            normalized_coords,
+        );
+    }
+    if (!std.math.isFinite(result) or
+        result < @as(f32, @floatFromInt(std.math.minInt(i32))) or
+        result > @as(f32, @floatFromInt(std.math.maxInt(i32))))
+    {
+        return error.BadSfnt;
+    }
+    return @intFromFloat(@round(result));
+}
+
+fn sharedTupleScalarFromParsed(
+    table: []const u8,
+    parsed: Info,
+    shared_tuple_index: usize,
+    normalized_coords: []const f32,
+) Error!f32 {
+    if (shared_tuple_index >= parsed.shared_tuple_count) return error.BadSfnt;
+    var result: f32 = 1;
+    for (0..parsed.axis_count) |axis| {
+        const coord_offset = parsed.shared_tuple_offset +
+            shared_tuple_index * @as(usize, parsed.axis_count) * 2 +
+            axis * 2;
+        if (coord_offset > table.len or table.len - coord_offset < 2) return error.BadSfnt;
+        const peak = @as(f32, @floatFromInt(readI16(table, coord_offset))) / 16384.0;
+        if (peak == 0) continue;
+        const coord = if (axis < normalized_coords.len) normalized_coords[axis] else 0;
+        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
+        if (coord < @min(peak, 0) or coord > @max(peak, 0)) return 0;
+        result *= coord / peak;
+    }
+    return result;
+}
+
+test "gvar shared tuple scalar uses global peak coordinates" {
+    var bytes = [_]u8{0} ** 28;
+    std.mem.writeInt(u16, bytes[0..2], 1, .big);
+    std.mem.writeInt(u16, bytes[4..6], 2, .big);
+    std.mem.writeInt(u16, bytes[6..8], 1, .big);
+    std.mem.writeInt(u32, bytes[8..12], 24, .big);
+    std.mem.writeInt(u16, bytes[12..14], 1, .big);
+    std.mem.writeInt(u32, bytes[16..20], 28, .big);
+    // Empty glyph variation ranges followed by shared tuple (1, -1).
+    std.mem.writeInt(i16, bytes[24..26], 0x4000, .big);
+    std.mem.writeInt(i16, bytes[26..28], -0x4000, .big);
+
+    try std.testing.expectEqual(
+        @as(f32, 0),
+        try sharedTupleScalar(&bytes, 0, bytes.len, 1, 2, 0, &.{ 0, 0 }),
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0.1),
+        try sharedTupleScalar(&bytes, 0, bytes.len, 1, 2, 0, &.{ 0.4, -0.25 }),
+        0.0001,
+    );
+    try std.testing.expectEqual(
+        @as(f32, 0),
+        try sharedTupleScalar(&bytes, 0, bytes.len, 1, 2, 0, &.{ -0.4, -0.25 }),
+    );
+    const vector = [_]u8{
+        0, 100, // default.
+        0, 20, // delta for global tuple (1, -1).
+    };
+    try std.testing.expectEqual(
+        @as(i32, 102),
+        try sharedTupleVectorValue(&bytes, 0, bytes.len, 1, 2, &vector, &.{ 0.4, -0.25 }),
+    );
+}
+
 pub fn glyfVariationPointCount(glyph_data: []const u8) Error!usize {
     if (glyph_data.len == 0) return 0;
     if (glyph_data.len < 10) return error.BadSfnt;

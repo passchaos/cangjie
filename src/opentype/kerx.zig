@@ -6,6 +6,18 @@ const GlyphId = u16;
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error || error{EndOfStream};
 
+pub const TupleResolver = struct {
+    context: *const anyopaque,
+    resolve_fn: *const fn (
+        context: *const anyopaque,
+        vector: []const u8,
+    ) Error!i32,
+
+    pub fn resolve(self: TupleResolver, vector: []const u8) Error!i32 {
+        return self.resolve_fn(self.context, vector);
+    }
+};
+
 pub const Pair = struct {
     left: u16,
     right: u16,
@@ -49,11 +61,12 @@ pub fn validate(data: []const u8, offset: usize, length: usize, glyph_count: usi
     const h = try header(data, offset, length);
     var subtable_offset: usize = 8;
     for (0..h.table_count) |_| {
-        const subtable = try subtableHeader(data, offset, length, subtable_offset);
+        var subtable = try subtableHeader(data, offset, length, subtable_offset);
+        if (h.version < 4) subtable.tuple_count = 0;
         try validateSubtable(data, offset, length, subtable, glyph_count);
         subtable_offset += subtable.length;
     }
-    if (subtable_offset != length) return error.BadSfnt;
+    try validateCoverageFooter(data, offset, length, h, subtable_offset, glyph_count);
 }
 
 pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, glyph_count: usize) Error!Info {
@@ -67,7 +80,8 @@ pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, lengt
 
     var subtable_offset: usize = 8;
     for (subtables) |*out| {
-        const st = try subtableHeader(data, offset, length, subtable_offset);
+        var st = try subtableHeader(data, offset, length, subtable_offset);
+        if (h.version < 4) st.tuple_count = 0;
         try validateSubtable(data, offset, length, st, glyph_count);
         const pairs = if (st.format == 0)
             try readFormat0Pairs(allocator, data, offset, st, glyph_count)
@@ -89,6 +103,7 @@ pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, lengt
         initialized += 1;
         subtable_offset += st.length;
     }
+    try validateCoverageFooter(data, offset, length, h, subtable_offset, glyph_count);
     return .{ .version = h.version, .subtables = subtables };
 }
 
@@ -111,35 +126,34 @@ pub fn pairKerning(
     left: GlyphId,
     right: GlyphId,
     vertical: bool,
+    tuple_resolver: ?TupleResolver,
 ) Error!i32 {
     if (left >= glyph_count or right >= glyph_count) return error.BadSfnt;
     const h = try header(data, offset, length);
     var subtable_offset: usize = 8;
     var total: i64 = 0;
     for (0..h.table_count) |_| {
-        const subtable = try subtableHeader(data, offset, length, subtable_offset);
+        var subtable = try subtableHeader(data, offset, length, subtable_offset);
+        if (h.version < 4) subtable.tuple_count = 0;
         try validateSubtable(data, offset, length, subtable, glyph_count);
         const coverage = subtable.coverage;
         const subtable_vertical = (coverage & 0x80000000) != 0;
         const is_cross_stream = (coverage & 0x40000000) != 0;
-        const variation = (coverage & 0x20000000) != 0;
         const backwards = (coverage & 0x10000000) != 0;
         if (subtable_vertical == vertical and
             !is_cross_stream and
-            !variation and
-            !backwards and
-            subtable.tuple_count == 0)
+            !backwards)
         {
             total += switch (subtable.format) {
-                0 => try format0PairKerning(data, offset, subtable, left, right),
-                2 => try format2PairKerning(data, offset, subtable, glyph_count, left, right),
-                6 => try format6PairKerning(data, offset, subtable, glyph_count, left, right),
+                0 => try format0PairKerning(data, offset, subtable, left, right, tuple_resolver),
+                2 => try format2PairKerning(data, offset, subtable, glyph_count, left, right, tuple_resolver),
+                6 => try format6PairKerning(data, offset, subtable, glyph_count, left, right, tuple_resolver),
                 else => 0,
             };
         }
         subtable_offset += subtable.length;
     }
-    if (subtable_offset != length) return error.BadSfnt;
+    try validateCoverageFooter(data, offset, length, h, subtable_offset, glyph_count);
     return @intCast(std.math.clamp(total, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
@@ -157,14 +171,17 @@ pub fn simpleSubtableKerning(
     subtable_relative: usize,
     left: GlyphId,
     right: GlyphId,
+    tuple_resolver: ?TupleResolver,
 ) Error!?i32 {
     if (left >= glyph_count or right >= glyph_count) return error.BadSfnt;
-    const subtable = try subtableHeader(data, offset, length, subtable_relative);
+    const h = try header(data, offset, length);
+    var subtable = try subtableHeader(data, offset, length, subtable_relative);
+    if (h.version < 4) subtable.tuple_count = 0;
     try validateSubtable(data, offset, length, subtable, glyph_count);
     return switch (subtable.format) {
-        0 => try format0PairKerning(data, offset, subtable, left, right),
-        2 => try format2PairKerning(data, offset, subtable, glyph_count, left, right),
-        6 => try format6PairKerning(data, offset, subtable, glyph_count, left, right),
+        0 => try format0PairKerning(data, offset, subtable, left, right, tuple_resolver),
+        2 => try format2PairKerning(data, offset, subtable, glyph_count, left, right, tuple_resolver),
+        6 => try format6PairKerning(data, offset, subtable, glyph_count, left, right, tuple_resolver),
         else => null,
     };
 }
@@ -184,23 +201,47 @@ pub fn hasOutputSideAdjustments(
     var subtable_offset: usize = 8;
     var found = false;
     for (0..h.table_count) |_| {
-        const subtable = try subtableHeader(data, offset, length, subtable_offset);
+        var subtable = try subtableHeader(data, offset, length, subtable_offset);
+        if (h.version < 4) subtable.tuple_count = 0;
         const coverage = subtable.coverage;
         const axis_matches = ((coverage & 0x80000000) != 0) == vertical;
         const cross_stream = (coverage & 0x40000000) != 0;
-        const not_variable = (coverage & 0x20000000) == 0;
         const backwards = (coverage & 0x10000000) != 0;
         const applies = switch (subtable.format) {
-            0, 2, 6 => requested_kerning and cross_stream and !backwards and subtable.tuple_count == 0,
+            0, 2, 6 => requested_kerning and cross_stream and !backwards,
             1 => requested_kerning or cross_stream,
             4 => true,
             else => false,
         };
-        found = found or (axis_matches and not_variable and applies);
+        found = found or (axis_matches and applies);
         subtable_offset += subtable.length;
     }
-    if (subtable_offset != length) return error.BadSfnt;
+    try validateCoverageFooter(data, offset, length, h, subtable_offset, null);
     return found;
+}
+
+fn validateCoverageFooter(
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    h: Header,
+    footer_relative: usize,
+    glyph_count: ?usize,
+) Error!void {
+    if (h.version < 3) {
+        if (footer_relative != table_length) return error.BadSfnt;
+        return;
+    }
+    const offsets_bytes = std.math.mul(usize, h.table_count, 4) catch return error.BadSfnt;
+    if (footer_relative > table_length or offsets_bytes > table_length - footer_relative) return error.BadSfnt;
+    const footer_start = table_offset + footer_relative;
+    const bitfield_bytes = if (glyph_count) |count| (count + 7) / 8 else 0;
+    for (0..h.table_count) |index| {
+        const coverage_offset: usize = @intCast(try bin.readU32At(data, footer_start + index * 4));
+        if (coverage_offset == 0 or coverage_offset == std.math.maxInt(u32)) continue;
+        if (coverage_offset < offsets_bytes or coverage_offset > table_length - footer_relative) return error.BadSfnt;
+        if (glyph_count != null and bitfield_bytes > table_length - footer_relative - coverage_offset) return error.BadSfnt;
+    }
 }
 
 test "format 0 pair lookup sums applicable subtables and clamps totals" {
@@ -213,24 +254,22 @@ test "format 0 pair lookup sums applicable subtables and clamps totals" {
     try validate(&bytes, 0, bytes.len, 3);
     try std.testing.expectEqual(
         @as(i32, 40000),
-        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, false),
+        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, false, null),
     );
     try std.testing.expectEqual(
         @as(i32, 0),
-        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, true),
+        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, true, null),
     );
     try std.testing.expectEqual(
         @as(i32, 0),
-        try pairKerning(&bytes, 0, bytes.len, 3, 2, 1, false),
+        try pairKerning(&bytes, 0, bytes.len, 3, 2, 1, false, null),
     );
 
-    // Cross-stream and variation subtables are valid metadata but do not
-    // contribute to the same-stream pair result.
+    // Cross-stream subtables do not contribute to same-stream pair results.
     writeU32Test(&bytes, 12, 0x40000000);
-    writeU32Test(&bytes, 52, 0x20000000);
     try std.testing.expectEqual(
-        @as(i32, 0),
-        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, false),
+        @as(i32, 20000),
+        try pairKerning(&bytes, 0, bytes.len, 3, 1, 2, false, null),
     );
 }
 
@@ -251,11 +290,11 @@ test "format 2 class matrix uses AAT lookup offsets without allocation" {
         for (0..4) |right| {
             try std.testing.expectEqual(
                 expected[left * 4 + right],
-                try pairKerning(&bytes, 0, bytes.len, 4, @intCast(left), @intCast(right), false),
+                try pairKerning(&bytes, 0, bytes.len, 4, @intCast(left), @intCast(right), false, null),
             );
         }
     }
-    try std.testing.expectEqual(@as(i32, 0), try pairKerning(&bytes, 0, bytes.len, 4, 1, 2, true));
+    try std.testing.expectEqual(@as(i32, 0), try pairKerning(&bytes, 0, bytes.len, 4, 1, 2, true, null));
 
     // Class lookups are bounded by maxp, and every reachable row/column index
     // must remain inside the declared matrix.
@@ -269,18 +308,82 @@ test "format 6 sparse matrix supports short and long scalar values" {
     writeU32Test(&short_bytes, 4, 1);
     writeFormat6SubtableTest(&short_bytes, 8, false);
     try validate(&short_bytes, 0, short_bytes.len, 2);
-    try std.testing.expectEqual(@as(i32, -30), try pairKerning(&short_bytes, 0, short_bytes.len, 2, 1, 1, false));
-    try std.testing.expectEqual(@as(i32, -30), try pairKerning(&short_bytes, 0, short_bytes.len, 2, 0, 1, false));
+    try std.testing.expectEqual(@as(i32, -30), try pairKerning(&short_bytes, 0, short_bytes.len, 2, 1, 1, false, null));
+    try std.testing.expectEqual(@as(i32, -30), try pairKerning(&short_bytes, 0, short_bytes.len, 2, 0, 1, false, null));
 
     var long_bytes = [_]u8{0} ** 76;
     writeU16Test(&long_bytes, 0, 2);
     writeU32Test(&long_bytes, 4, 1);
     writeFormat6SubtableTest(&long_bytes, 8, true);
     try validate(&long_bytes, 0, long_bytes.len, 2);
-    try std.testing.expectEqual(@as(i32, -40000), try pairKerning(&long_bytes, 0, long_bytes.len, 2, 1, 1, false));
+    try std.testing.expectEqual(@as(i32, -40000), try pairKerning(&long_bytes, 0, long_bytes.len, 2, 1, 1, false, null));
 
     writeU16Test(&short_bytes, 46, 2); // row index is outside rowCount=1.
     try std.testing.expectError(error.BadSfnt, validate(&short_bytes, 0, short_bytes.len, 2));
+}
+
+test "formats 0, 2, and 6 resolve tuple vectors" {
+    const resolver = TupleResolver{
+        .context = @ptrCast(&[_]u8{}),
+        .resolve_fn = testTupleResolver,
+    };
+
+    var format0 = [_]u8{0} ** 58;
+    writeU16Test(&format0, 0, 4);
+    writeU32Test(&format0, 4, 1);
+    writeFormat0SubtableTest(&format0, 8, 0x2000_0000, 1, 1, 40);
+    writeU32Test(&format0, 8, 46);
+    writeU32Test(&format0, 16, 2);
+    writeI16Test(&format0, 48, -30);
+    writeI16Test(&format0, 50, -20);
+    writeU32Test(&format0, 54, std.math.maxInt(u32));
+    try validate(&format0, 0, format0.len, 2);
+    try std.testing.expectEqual(
+        @as(i32, -40),
+        try pairKerning(&format0, 0, format0.len, 2, 1, 1, false, resolver),
+    );
+
+    var format2 = [_]u8{0} ** 84;
+    writeU16Test(&format2, 0, 4);
+    writeU32Test(&format2, 4, 1);
+    writeFormat2SubtableTest(&format2, 8);
+    writeU32Test(&format2, 8, 72);
+    writeU32Test(&format2, 12, 0x2000_0002);
+    writeU32Test(&format2, 16, 2);
+    // Every matrix member is an offset in a variable subtable, including
+    // entries that this focused lookup does not query.
+    for (0..9) |index| writeI16Test(&format2, 8 + 48 + index * 2, 68);
+    writeI16Test(&format2, 8 + 68, -30);
+    writeI16Test(&format2, 8 + 70, -20);
+    writeU32Test(&format2, 80, std.math.maxInt(u32));
+    try validate(&format2, 0, format2.len, 4);
+    try std.testing.expectEqual(
+        @as(i32, -40),
+        try pairKerning(&format2, 0, format2.len, 4, 1, 1, false, resolver),
+    );
+
+    var format6 = [_]u8{0} ** 74;
+    writeU16Test(&format6, 0, 4);
+    writeU32Test(&format6, 4, 1);
+    writeFormat6SubtableTest(&format6, 8, false);
+    writeU32Test(&format6, 8, 62);
+    writeU32Test(&format6, 16, 2);
+    writeU32Test(&format6, 8 + 32, 54);
+    writeI16Test(&format6, 8 + 52, 0);
+    writeI16Test(&format6, 8 + 54, -30);
+    writeI16Test(&format6, 8 + 56, -20);
+    writeU32Test(&format6, 70, std.math.maxInt(u32));
+    try validate(&format6, 0, format6.len, 2);
+    try std.testing.expectEqual(
+        @as(i32, -40),
+        try pairKerning(&format6, 0, format6.len, 2, 1, 1, false, resolver),
+    );
+}
+
+fn testTupleResolver(_: *const anyopaque, vector: []const u8) Error!i32 {
+    if (vector.len != 4) return error.BadSfnt;
+    return @as(i32, std.mem.readInt(i16, vector[0..2], .big)) +
+        @divTrunc(@as(i32, std.mem.readInt(i16, vector[2..4], .big)), 2);
 }
 
 fn writeFormat0SubtableTest(bytes: []u8, offset: usize, coverage: u32, left: GlyphId, right: GlyphId, value: i16) void {
@@ -366,11 +469,22 @@ fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
     std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
 }
 
+fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {
+    std.mem.writeInt(i16, bytes[offset..][0..2], value, .big);
+}
+
 fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
     std.mem.writeInt(i32, bytes[offset..][0..4], value, .big);
 }
 
-fn format0PairKerning(data: []const u8, table_offset: usize, subtable: SubtableHeader, left: GlyphId, right: GlyphId) Error!i16 {
+fn format0PairKerning(
+    data: []const u8,
+    table_offset: usize,
+    subtable: SubtableHeader,
+    left: GlyphId,
+    right: GlyphId,
+    tuple_resolver: ?TupleResolver,
+) Error!i32 {
     const start = table_offset + subtable.offset;
     const pair_count: usize = @intCast(try bin.readU32At(data, start + 12));
     const target = (@as(u32, left) << 16) | right;
@@ -387,15 +501,31 @@ fn format0PairKerning(data: []const u8, table_offset: usize, subtable: SubtableH
         } else if (target > pair_key) {
             lo = mid + 1;
         } else {
-            // tupleCount zero is the non-variable scalar used directly by the
-            // format-0 machine. Variation subtables were filtered above.
-            return try bin.readI16At(data, pair_offset + 4);
+            const raw_bits = try bin.readU16At(data, pair_offset + 4);
+            return try resolveTupleValue(
+                data,
+                start,
+                subtable.length,
+                subtable.tuple_count,
+                @as(i16, @bitCast(raw_bits)),
+                raw_bits,
+                0,
+                tuple_resolver,
+            );
         }
     }
     return 0;
 }
 
-fn format2PairKerning(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize, left: GlyphId, right: GlyphId) Error!i16 {
+fn format2PairKerning(
+    data: []const u8,
+    table_offset: usize,
+    subtable: SubtableHeader,
+    glyph_count: usize,
+    left: GlyphId,
+    right: GlyphId,
+    tuple_resolver: ?TupleResolver,
+) Error!i32 {
     const start = table_offset + subtable.offset;
     const left_class_offset: usize = @intCast(try bin.readU32At(data, start + 16));
     const right_class_offset: usize = @intCast(try bin.readU32At(data, start + 20));
@@ -406,15 +536,34 @@ fn format2PairKerning(data: []const u8, table_offset: usize, subtable: SubtableH
     const value_delta = std.math.mul(usize, value_index, 2) catch return error.BadSfnt;
     const value_relative = std.math.add(usize, array_offset, value_delta) catch return error.BadSfnt;
     if (value_relative > subtable.length or subtable.length - value_relative < 2) return error.BadSfnt;
-    return try bin.readI16At(data, start + value_relative);
+    const raw_bits = try bin.readU16At(data, start + value_relative);
+    return try resolveTupleValue(
+        data,
+        start,
+        subtable.length,
+        subtable.tuple_count,
+        @as(i16, @bitCast(raw_bits)),
+        raw_bits,
+        0,
+        tuple_resolver,
+    );
 }
 
-fn format6PairKerning(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize, left: GlyphId, right: GlyphId) Error!i32 {
+fn format6PairKerning(
+    data: []const u8,
+    table_offset: usize,
+    subtable: SubtableHeader,
+    glyph_count: usize,
+    left: GlyphId,
+    right: GlyphId,
+    tuple_resolver: ?TupleResolver,
+) Error!i32 {
     const start = table_offset + subtable.offset;
     const long_values = (try bin.readU32At(data, start + 12) & 1) != 0;
     const row_lookup_offset: usize = @intCast(try bin.readU32At(data, start + 20));
     const column_lookup_offset: usize = @intCast(try bin.readU32At(data, start + 24));
     const array_offset: usize = @intCast(try bin.readU32At(data, start + 28));
+    const vector_offset: usize = @intCast(try bin.readU32At(data, start + 32));
     const row_index = if (long_values)
         try aatLookupU32ValueWithinSubtable(data, start, subtable.length, row_lookup_offset, glyph_count, left)
     else
@@ -428,10 +577,70 @@ fn format6PairKerning(data: []const u8, table_offset: usize, subtable: SubtableH
     const value_delta = std.math.mul(usize, value_index, value_size) catch return error.BadSfnt;
     const value_relative = std.math.add(usize, array_offset, value_delta) catch return error.BadSfnt;
     if (value_relative > subtable.length or subtable.length - value_relative < value_size) return error.BadSfnt;
-    return if (long_values)
-        try bin.readI32At(data, start + value_relative)
+    const raw_bits: u32 = if (long_values)
+        try bin.readU32At(data, start + value_relative)
     else
-        try bin.readI16At(data, start + value_relative);
+        try bin.readU16At(data, start + value_relative);
+    const raw_scalar: i32 = if (long_values)
+        @bitCast(raw_bits)
+    else
+        @as(i32, @as(i16, @bitCast(@as(u16, @intCast(raw_bits)))));
+    return try resolveTupleValue(
+        data,
+        start,
+        subtable.length,
+        subtable.tuple_count,
+        raw_scalar,
+        raw_bits,
+        vector_offset,
+        tuple_resolver,
+    );
+}
+
+fn resolveTupleValue(
+    data: []const u8,
+    subtable_start: usize,
+    subtable_length: usize,
+    tuple_count: u32,
+    raw_scalar: i32,
+    raw_vector_offset: u32,
+    vector_base: usize,
+    resolver: ?TupleResolver,
+) Error!i32 {
+    if (tuple_count == 0) return raw_scalar;
+    const vector = try tupleVector(
+        data,
+        subtable_start,
+        subtable_length,
+        tuple_count,
+        raw_vector_offset,
+        vector_base,
+    );
+    // HarfBuzz's current implementation and the AAT default-coordinate rule
+    // both select the first vector member when no variation resolver exists.
+    return if (resolver) |tuple_resolver|
+        try tuple_resolver.resolve(vector)
+    else
+        try bin.readI16At(vector, 0);
+}
+
+fn tupleVector(
+    data: []const u8,
+    subtable_start: usize,
+    subtable_length: usize,
+    tuple_count: u32,
+    raw_vector_offset: u32,
+    vector_base: usize,
+) Error![]const u8 {
+    if (tuple_count == 0 or tuple_count > std.math.maxInt(usize) / 2) return error.BadSfnt;
+    const resolved_base = if (vector_base == 0) @as(usize, raw_vector_offset) else vector_base;
+    const vector_offset = if (vector_base == 0)
+        resolved_base
+    else
+        std.math.add(usize, resolved_base, @as(usize, raw_vector_offset)) catch return error.BadSfnt;
+    const vector_bytes = std.math.mul(usize, @as(usize, @intCast(tuple_count)), 2) catch return error.BadSfnt;
+    if (vector_offset > subtable_length or vector_bytes > subtable_length - vector_offset) return error.BadSfnt;
+    return data[subtable_start + vector_offset ..][0..vector_bytes];
 }
 
 fn aatLookupValueWithinSubtable(data: []const u8, subtable_start: usize, subtable_length: usize, lookup_offset: usize, glyph_count: usize, glyph: GlyphId) Error!u16 {
@@ -593,6 +802,19 @@ fn validateFormat2(data: []const u8, table_offset: usize, subtable: SubtableHead
     const max_delta = std.math.mul(usize, max_index, 2) catch return error.BadSfnt;
     const max_relative = std.math.add(usize, array_offset, max_delta) catch return error.BadSfnt;
     if (max_relative > subtable.length or subtable.length - max_relative < 2) return error.BadSfnt;
+    if (subtable.tuple_count != 0) {
+        for (0..max_index + 1) |index| {
+            const raw_offset = try bin.readU16At(data, start + array_offset + index * 2);
+            _ = try tupleVector(
+                data,
+                start,
+                subtable.length,
+                subtable.tuple_count,
+                raw_offset,
+                0,
+            );
+        }
+    }
 }
 
 fn validateFormat6(data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize) Error!void {
@@ -652,6 +874,22 @@ fn validateFormat6(data: []const u8, table_offset: usize, subtable: SubtableHead
     const max_delta = std.math.mul(usize, max_index, value_size) catch return error.BadSfnt;
     const max_relative = std.math.add(usize, array_offset, max_delta) catch return error.BadSfnt;
     if (max_relative > subtable.length or subtable.length - max_relative < value_size) return error.BadSfnt;
+    if (subtable.tuple_count != 0) {
+        for (0..max_index + 1) |index| {
+            const raw_offset: u32 = if (long_values)
+                try bin.readU32At(data, start + array_offset + index * value_size)
+            else
+                try bin.readU16At(data, start + array_offset + index * value_size);
+            _ = try tupleVector(
+                data,
+                start,
+                subtable.length,
+                subtable.tuple_count,
+                raw_offset,
+                vector_offset,
+            );
+        }
+    }
 }
 
 fn readFormat0Pairs(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, subtable: SubtableHeader, glyph_count: usize) Error![]Pair {
@@ -680,12 +918,28 @@ fn format0Pairs(data: []const u8, table_offset: usize, subtable: SubtableHeader,
         const pair_offset = start + 28 + index * 6;
         const left = try bin.readU16At(data, pair_offset);
         const right = try bin.readU16At(data, pair_offset + 2);
-        const value = try bin.readI16At(data, pair_offset + 4);
+        const raw_value = try bin.readU16At(data, pair_offset + 4);
         if (left >= glyph_count or right >= glyph_count) return error.BadSfnt;
         const pair_key = (@as(u32, left) << 16) | right;
         if (previous) |last| if (pair_key <= last) return error.BadSfnt;
         previous = pair_key;
-        if (out) |pairs| pairs[index] = .{ .left = left, .right = right, .value = value };
+        if (subtable.tuple_count != 0) {
+            _ = try tupleVector(
+                data,
+                start,
+                subtable.length,
+                subtable.tuple_count,
+                raw_value,
+                0,
+            );
+        }
+        if (out) |pairs| pairs[index] = .{
+            .left = left,
+            .right = right,
+            // Preserve the on-disk bits for metadata callers. In a variable
+            // subtable this field is an unsigned byte offset, not a scalar.
+            .value = @bitCast(raw_value),
+        };
     }
     return pair_count;
 }
@@ -725,7 +979,7 @@ fn writeU32(bytes: []u8, offset: usize, value: u32) void {
 
 test "kerx format 0 exposes sorted kerning pairs" {
     var bytes: [48]u8 = .{0} ** 48;
-    writeU16(&bytes, 0, 4);
+    writeU16(&bytes, 0, 2);
     writeU32(&bytes, 4, 1);
     writeU32(&bytes, 8, 40);
     writeU32(&bytes, 12, 0);
@@ -744,7 +998,7 @@ test "kerx format 0 exposes sorted kerning pairs" {
     try validate(&bytes, 0, bytes.len, 3);
     const parsed = try info(std.testing.allocator, &bytes, 0, bytes.len, 3);
     defer free(std.testing.allocator, parsed);
-    try std.testing.expectEqual(@as(u16, 4), parsed.version);
+    try std.testing.expectEqual(@as(u16, 2), parsed.version);
     try std.testing.expectEqual(@as(usize, 1), parsed.subtables.len);
     try std.testing.expect(parsed.subtables[0].horizontal);
     try std.testing.expectEqual(@as(u8, 0), parsed.subtables[0].format);
@@ -755,7 +1009,7 @@ test "kerx format 0 exposes sorted kerning pairs" {
 
 test "kerx format 0 rejects unsorted pairs" {
     var bytes: [48]u8 = .{0} ** 48;
-    writeU16(&bytes, 0, 4);
+    writeU16(&bytes, 0, 2);
     writeU32(&bytes, 4, 1);
     writeU32(&bytes, 8, 40);
     writeU32(&bytes, 20, 2);

@@ -4609,7 +4609,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         );
         const active_kern = if (kerx_lookup) |lookup|
             if (kerning_enabled and !kerx_skips_glyph) if (previous_kern_glyph) |previous|
-                try lookup.kerning(previous, glyph_id, lookup_options.writing_mode.isVertical())
+                try lookup.kerning(
+                    previous,
+                    glyph_id,
+                    lookup_options.writing_mode.isVertical(),
+                    lookup_options.normalized_variation_coords,
+                )
             else
                 0 else 0
         else if (kern_lookup) |lookup|

@@ -43,6 +43,7 @@ pub const BuiltinFont = enum {
     minimal_gsub,
     script_feature,
     kerx,
+    kerx_variation,
     kerx_format_1,
     kerx_format_2,
     kerx_format_4,
@@ -69,6 +70,7 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "minimal-gsub")) return .minimal_gsub;
         if (std.mem.eql(u8, name, "script-feature")) return .script_feature;
         if (std.mem.eql(u8, name, "kerx")) return .kerx;
+        if (std.mem.eql(u8, name, "kerx-variation")) return .kerx_variation;
         if (std.mem.eql(u8, name, "kerx-format-1")) return .kerx_format_1;
         if (std.mem.eql(u8, name, "kerx-format-2")) return .kerx_format_2;
         if (std.mem.eql(u8, name, "kerx-format-4")) return .kerx_format_4;
@@ -98,6 +100,7 @@ pub const BuiltinFont = enum {
             .minimal_gsub => "builtin:minimal-gsub",
             .script_feature => "builtin:script-feature",
             .kerx => "builtin:kerx",
+            .kerx_variation => "builtin:kerx-variation",
             .kerx_format_1 => "builtin:kerx-format-1",
             .kerx_format_2 => "builtin:kerx-format-2",
             .kerx_format_4 => "builtin:kerx-format-4",

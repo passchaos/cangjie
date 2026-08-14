@@ -49,6 +49,10 @@ pub fn buildKerxTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxTtfTables(allocator));
 }
 
+pub fn buildKerxVariationTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try kerxVariationTtfTables(allocator));
+}
+
 pub fn buildKerxCrossStreamTtf(allocator: std.mem.Allocator, format: u8, vertical: bool) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try kerxCrossStreamTtfTables(allocator, format, vertical));
 }
@@ -972,6 +976,24 @@ fn kerxTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn kerxVariationTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 12);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "fvar", .data = try singleAxisFvarTable(allocator) };
+    tables[2] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[3] = .{ .tag = "gvar", .data = try kerxVariationGvarTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "kerx", .data = try kerxVariationTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[9] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[10] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[11] = .{ .tag = "name", .data = try singleAxisNameTable(allocator) };
     return tables;
 }
 
@@ -3802,6 +3824,41 @@ fn kerxTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 42, 1);
     writeU16(bytes, 44, 1);
     writeI16(bytes, 46, -30);
+    return bytes;
+}
+
+fn kerxVariationTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 58);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 4); // tupleCount is active only in kerx version 4+.
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 46);
+    writeU32(bytes, 12, 0x2000_0000); // horizontal variation format 0.
+    writeU32(bytes, 16, 2); // default plus one global-tuple delta.
+    writeU32(bytes, 20, 1);
+    writeU32(bytes, 24, 6);
+    writeU32(bytes, 28, 0);
+    writeU32(bytes, 32, 0);
+    writeU16(bytes, 36, 1);
+    writeU16(bytes, 38, 1);
+    writeI16(bytes, 40, 40); // subtable-relative byte offset of the vector.
+    writeI16(bytes, 48, -30); // default.
+    writeI16(bytes, 50, -20); // delta at global tuple peak +1.
+    writeU32(bytes, 54, 0xffff_ffff); // no glyph-coverage bitfield.
+    return bytes;
+}
+
+fn kerxVariationGvarTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 30);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 4, 1); // one fvar axis.
+    writeU16(bytes, 6, 1); // one global tuple.
+    writeU32(bytes, 8, 26);
+    writeU16(bytes, 12, 2); // maxp glyph count.
+    writeU32(bytes, 16, 28); // empty glyph variation array after shared tuple.
+    // Three short offsets for two empty glyphs occupy bytes 20..26.
+    writeI16(bytes, 26, 0x4000); // global tuple peak +1.
     return bytes;
 }
 

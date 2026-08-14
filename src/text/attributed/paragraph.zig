@@ -1,4 +1,5 @@
 const std = @import("std");
+const Font = @import("../../font.zig").Font;
 const layout = @import("../../layout.zig");
 const unicode = @import("../../unicode.zig");
 
@@ -41,14 +42,32 @@ pub fn layoutAttributed(
 ) !Result(@TypeOf(attributed.primaryTextStyle())) {
     const runs = try attributed.runs(allocator);
     defer allocator.free(runs);
+    const spans = try layoutSpansForRuns(allocator, runs);
+    defer allocator.free(spans);
+    return try layoutResolved(
+        allocator,
+        cascade,
+        attributed,
+        runs,
+        spans,
+        max_width,
+    );
+}
+
+pub fn layoutResolved(
+    allocator: std.mem.Allocator,
+    cascade: layout.FontCascade,
+    attributed: anytype,
+    runs: anytype,
+    spans: []const layout.StyledParagraphSpan,
+    max_width: f32,
+) !Result(@TypeOf(attributed.primaryTextStyle())) {
     const primary_style = attributed.primaryTextStyle();
     var options = attributed.paragraph_style.paragraphOptions(max_width);
     // Paragraph-wide line height is a minimum shared by every style. A style's
     // line height is carried separately and affects only intersecting lines.
     options.line_height = attributed.paragraph_style.line_height;
 
-    const spans = try layoutSpansForRuns(allocator, runs);
-    defer allocator.free(spans);
     var buffer = layout.LayoutBuffer.init(allocator);
     defer buffer.deinit();
     var styled = layout.StyledParagraphBuffer.init(allocator);
@@ -105,6 +124,16 @@ pub fn measureAttributed(
     defer buffer.allocator.free(runs);
     const spans = try layoutSpansForRuns(buffer.allocator, runs);
     defer buffer.allocator.free(spans);
+    return try measureResolved(cascade, buffer, attributed, spans, max_width);
+}
+
+pub fn measureResolved(
+    cascade: layout.FontCascade,
+    buffer: *layout.LayoutBuffer,
+    attributed: anytype,
+    spans: []const layout.StyledParagraphSpan,
+    max_width: f32,
+) !layout.TextMetrics {
     const primary_style = attributed.primaryTextStyle();
     var styled = layout.StyledParagraphBuffer.init(buffer.allocator);
     defer styled.deinit();
@@ -148,6 +177,21 @@ fn layoutSpansForRuns(
             .word_spacing = run.style.word_spacing,
             .minimum_line_height = run.style.line_height,
         };
+    }
+    return spans;
+}
+
+pub fn layoutSpansForResolvedRuns(
+    allocator: std.mem.Allocator,
+    runs: anytype,
+    fonts: []const []const *const Font,
+) ![]layout.StyledParagraphSpan {
+    if (fonts.len != runs.len) return error.InvalidStyleSpans;
+    const spans = try layoutSpansForRuns(allocator, runs);
+    errdefer allocator.free(spans);
+    for (spans, fonts) |*span, run_fonts| {
+        if (run_fonts.len == 0) return error.EmptyFontCascade;
+        span.fonts = run_fonts;
     }
     return spans;
 }

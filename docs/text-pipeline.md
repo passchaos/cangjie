@@ -140,6 +140,16 @@ name resolution remains a separate `FontDatabase` responsibility: the unified
 entry consumes an already selected `FontCascade` and does not guess how a
 family name maps to loaded font bytes.
 
+`FontDatabase.layoutAttributedParagraphUtf8` is the integrated entry point for
+callers that do want that resolution. It maps each normalized style run's
+family, weight, stretch, and normal/italic/oblique request to a database face,
+builds a coverage-aware fallback cascade for that run, and passes those
+borrowed fonts into the same unified paragraph. Runs without an explicit
+family inherit the caller's default query family. An explicit unknown family
+is reported as `FontFamilyNotFound` rather than silently rendering through an
+unrelated fallback family. The database and all fonts must outlive the returned
+layout because font runs retain borrowed face pointers.
+
 `ShapedParagraph` now implements the first width-independent paragraph
 boundary. It owns source text plus pristine shaped glyph/run snapshots.
 `ReflowBuffer` restores those snapshots before each layout, so different

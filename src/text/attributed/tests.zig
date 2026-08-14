@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("../../core.zig");
+const database = @import("../../database.zig");
 const font_mod = @import("../../font.zig");
 const glyph_mod = @import("../../glyph.zig");
 const layout = @import("../../layout.zig");
@@ -327,6 +328,143 @@ test "styled paragraph rejects incomplete source partitions" {
             16,
             &.{.{ .byte_start = 1, .byte_len = 1, .style_index = 0, .font_size = 16 }},
             .{ .max_width = 100 },
+        ),
+    );
+}
+
+test "font database resolves attributed families weights and fallback" {
+    const allocator = std.testing.allocator;
+    const primary_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(
+        allocator,
+        'A',
+        "Primary Sans",
+        "Regular",
+        "Primary Sans Regular",
+    );
+    defer allocator.free(primary_bytes);
+    const alternate_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(
+        allocator,
+        'B',
+        "Alternate Sans",
+        "Regular",
+        "Alternate Sans Regular",
+    );
+    defer allocator.free(alternate_bytes);
+    const fallback_bytes = try test_font.buildNamedSingleCodepointTtfWithNames(
+        allocator,
+        'C',
+        "Fallback Sans",
+        "Regular",
+        "Fallback Sans Regular",
+    );
+    defer allocator.free(fallback_bytes);
+    const regular_bytes = try test_font.buildNamedTtfWithStyle(
+        allocator,
+        "Weighted Sans",
+        "Regular",
+        "Weighted Sans Regular",
+        400,
+        5,
+        false,
+        false,
+    );
+    defer allocator.free(regular_bytes);
+    const bold_italic_bytes = try test_font.buildNamedTtfWithStyle(
+        allocator,
+        "Weighted Sans",
+        "Bold Italic",
+        "Weighted Sans Bold Italic",
+        700,
+        5,
+        true,
+        true,
+    );
+    defer allocator.free(bold_italic_bytes);
+
+    var font_database = database.FontDatabase.init(allocator);
+    defer font_database.deinit();
+    _ = try font_database.addFontBytes(primary_bytes);
+    _ = try font_database.addFontBytes(alternate_bytes);
+    _ = try font_database.addFontBytes(fallback_bytes);
+    _ = try font_database.addFontBytes(regular_bytes);
+    _ = try font_database.addFontBytes(bold_italic_bytes);
+
+    const text = "ABCA";
+    const spans = [_]core.StyleSpan{
+        .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{} },
+        .{ .byte_range = .{ .start = 1, .len = 2 }, .style = .{
+            .font_family = "Alternate Sans",
+            .color = .{ .r = 20, .g = 40, .b = 60, .a = 255 },
+        } },
+        .{ .byte_range = .{ .start = 3, .len = 1 }, .style = .{
+            .font_family = "Weighted Sans",
+            .font_weight = .bold,
+            .font_style = .italic,
+        } },
+    };
+    const attributed = core.AttributedText{ .text = text, .spans = &spans };
+    var result = try font_database.layoutAttributedParagraphUtf8(
+        allocator,
+        attributed,
+        .{ .family = "Primary Sans" },
+        300,
+    );
+    defer result.deinit();
+
+    const primary = font_database.match(.{ .family = "Primary Sans" }).?.font;
+    const alternate = font_database.match(.{ .family = "Alternate Sans" }).?.font;
+    const fallback = font_database.match(.{ .family = "Fallback Sans" }).?.font;
+    const bold_italic = font_database.match(.{
+        .family = "Weighted Sans",
+        .weight = 700,
+        .style = .italic,
+    }).?.font;
+    try std.testing.expectEqual(@as(usize, 4), result.font_runs.len);
+    try std.testing.expectEqual(primary, result.font_runs[0].font);
+    try std.testing.expectEqual(alternate, result.font_runs[1].font);
+    try std.testing.expectEqual(fallback, result.font_runs[2].font);
+    try std.testing.expectEqual(bold_italic, result.font_runs[3].font);
+    try std.testing.expectEqual(@as(usize, 0), result.font_runs[0].font_index);
+    try std.testing.expectEqual(@as(usize, 1), result.font_runs[1].font_index);
+    try std.testing.expectEqual(@as(usize, 2), result.font_runs[2].font_index);
+    try std.testing.expectEqual(@as(usize, 3), result.font_runs[3].font_index);
+    try std.testing.expectEqual(@as(u8, 40), result.style_runs[1].style.color.g);
+
+    const measured = try font_database.measureAttributedTextUtf8(
+        allocator,
+        attributed,
+        .{ .family = "Primary Sans" },
+        300,
+    );
+    try std.testing.expectApproxEqAbs(result.paragraph.width, measured.width, 0.001);
+    try std.testing.expectApproxEqAbs(result.paragraph.height, measured.height, 0.001);
+}
+
+test "font database attributed layout reports unresolved families" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildNamedSingleCodepointTtfWithNames(
+        allocator,
+        'A',
+        "Present Sans",
+        "Regular",
+        "Present Sans Regular",
+    );
+    defer allocator.free(bytes);
+    var font_database = database.FontDatabase.init(allocator);
+    defer font_database.deinit();
+    _ = try font_database.addFontBytes(bytes);
+
+    const spans = [_]core.StyleSpan{.{
+        .byte_range = .{ .start = 0, .len = 1 },
+        .style = .{ .font_family = "Missing Sans" },
+    }};
+    try std.testing.expectError(
+        error.FontFamilyNotFound,
+        font_database.layoutAttributedParagraphUtf8(
+            allocator,
+            core.AttributedText{ .text = "A", .spans = &spans },
+            .{ .family = "Present Sans" },
+            100,
         ),
     );
 }

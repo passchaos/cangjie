@@ -2075,6 +2075,9 @@ const StyledParagraphDriver = struct {
 
     pub fn validateSpan(_: *@This(), span: StyledParagraphSpan) !void {
         try validateShapingFontSize(span.font_size);
+        if (span.fonts) |fonts| {
+            if (fonts.len == 0) return error.EmptyFontCascade;
+        }
         try validateFeatureOverrides(span.features);
         try validateNormalizedVariationCoords(span.normalized_variation_coords);
         if (!std.math.isFinite(span.letter_spacing) or
@@ -2089,6 +2092,22 @@ const StyledParagraphDriver = struct {
         }
     }
 
+    fn normalizeNewRunFontIndices(
+        self: *@This(),
+        run_start: usize,
+    ) void {
+        // `shapeCascadeSegmentInto` records indexes relative to the style-local
+        // cascade. Public paragraph runs use the driver's union cascade so
+        // diagnostics and render integrations see one stable index space.
+        for (self.buffer.runs.items[run_start..]) |*run| {
+            for (self.cascade.fonts, 0..) |font, font_index| {
+                if (font != run.font) continue;
+                run.font_index = font_index;
+                break;
+            }
+        }
+    }
+
     pub fn shapeItem(
         self: *@This(),
         byte_start: usize,
@@ -2097,8 +2116,10 @@ const StyledParagraphDriver = struct {
         span: StyledParagraphSpan,
     ) !void {
         const item_text = self.text[byte_start..byte_end];
+        const item_cascade = FontCascade.init(span.fonts orelse self.cascade.fonts);
+        const run_start = self.buffer.runs.items.len;
         self.pen = try shapeCascadeSegmentInto(
-            self.cascade,
+            item_cascade,
             self.buffer,
             item_text,
             span.font_size,
@@ -2125,6 +2146,9 @@ const StyledParagraphDriver = struct {
                 .all_ascii = textIsAscii(item_text),
             },
         );
+        if (span.fonts != null) {
+            self.normalizeNewRunFontIndices(run_start);
+        }
     }
 
     pub fn finish(self: *@This(), spans: []const StyledParagraphSpan) !void {

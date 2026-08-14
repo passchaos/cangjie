@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const Font = @import("font.zig").Font;
 const font_container = @import("font_container.zig");
 const layout = @import("layout.zig");
+const attributed_font_resolution = @import("text/attributed/font_resolution.zig");
 
 pub const FontStyle = enum {
     normal,
@@ -549,6 +550,44 @@ pub const FontDatabase = struct {
 
     pub fn cascadeForText(self: *const FontDatabase, allocator: std.mem.Allocator, query: FontQuery, text: []const u8) !layout.FontCascade {
         return .{ .fonts = try self.buildCascadeForText(allocator, query, text) };
+    }
+
+    /// Resolve per-style font queries and lay out one unified attributed
+    /// paragraph. The result type is inferred from the attributed value, so
+    /// this database layer stays independent of `core.zig` while the public
+    /// root can expose a concrete convenience wrapper. Returned font runs
+    /// borrow faces from this database; keep it alive until the result is
+    /// deinitialized.
+    pub fn layoutAttributedParagraphUtf8(
+        self: *const FontDatabase,
+        allocator: std.mem.Allocator,
+        attributed: anytype,
+        default_query: FontQuery,
+        max_width: f32,
+    ) !attributed_font_resolution.ResultType(@TypeOf(attributed)) {
+        return try attributed_font_resolution.layoutAttributed(
+            self,
+            allocator,
+            attributed,
+            default_query,
+            max_width,
+        );
+    }
+
+    pub fn measureAttributedTextUtf8(
+        self: *const FontDatabase,
+        allocator: std.mem.Allocator,
+        attributed: anytype,
+        default_query: FontQuery,
+        max_width: f32,
+    ) !layout.TextMetrics {
+        return try attributed_font_resolution.measureAttributed(
+            self,
+            allocator,
+            attributed,
+            default_query,
+            max_width,
+        );
     }
 
     pub fn familyCount(self: *const FontDatabase) usize {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const Font = @import("../font.zig").Font;
 const unicode = @import("../unicode.zig");
 
 /// One contiguous style item for unified paragraph shaping.
@@ -11,6 +12,9 @@ pub const Span = struct {
     byte_len: usize,
     style_index: u32,
     font_size: f32,
+    /// Optional style-resolved cascade. A null slice inherits the paragraph
+    /// cascade; a non-null slice is owned by the caller for the layout call.
+    fonts: ?[]const *const Font = null,
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
     features: []const unicode.FeatureOverride = &.{},
@@ -120,6 +124,7 @@ pub fn spanForCluster(spans: []const Span, cluster: usize) ?Span {
 pub fn shapeEquivalent(a: Span, b: Span) bool {
     if (a.byteEnd() != b.byte_start or
         a.font_size != b.font_size or
+        !optionalFontSlicesEqual(a.fonts, b.fonts) or
         a.script_tag != b.script_tag or
         a.language_tag != b.language_tag or
         !featureSlicesEqual(a.features, b.features) or
@@ -129,6 +134,20 @@ pub fn shapeEquivalent(a: Span, b: Span) bool {
     }
     for (a.normalized_variation_coords, b.normalized_variation_coords) |lhs, rhs| {
         if (@as(u32, @bitCast(lhs)) != @as(u32, @bitCast(rhs))) return false;
+    }
+    return true;
+}
+
+fn optionalFontSlicesEqual(
+    a: ?[]const *const Font,
+    b: ?[]const *const Font,
+) bool {
+    if ((a == null) != (b == null)) return false;
+    const lhs = a orelse return true;
+    const rhs = b.?;
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_font, rhs_font| {
+        if (lhs_font != rhs_font) return false;
     }
     return true;
 }

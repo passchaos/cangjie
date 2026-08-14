@@ -2174,6 +2174,16 @@ shaping-performance superiority.
   `U+0C9A,U+0CCD,U+0C9A,U+0CCD`; Cangjie now marks the trailing old-spec
   Kannada `consonant+virama` source for `blwf` and merges it into the syllable
   cluster, while the first pair remains the visible `haln` form.
+  The 16 enabled rows from Unicode text-rendering `SHKNDA-2.tests` are retained
+  as `tests/data/kannada-shknda-2-tests.txt` with
+  `NotoSansKannada-Regular.ttf`. Kannada's initial Indic reorder now moves
+  `BEFORE_SUB` vowels, including U+0CBE and U+0CBF, ahead of the complete run
+  of post-base `virama+consonant` pairs before `blwf`; it marks those virama
+  sources for post-base below forms and merges dependent marks into their
+  syllable clusters. U+0CBF is no longer misclassified as a `PRE_M` matra, so
+  standalone base+I remains in font-authored `abvs` order. The retained corpus
+  passes both HarfBuzz and HarfRust with 65 output glyphs and checksum
+  `58fc74916d67eaf8`.
 - Add a focused Khmer shaper for the `khmr` script tag. The 89
   `khmer-misc.tests` rows for
   `3998336402905b8be8301ef7f47cf7e050cbb1bd.ttf` are retained as

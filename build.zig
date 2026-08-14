@@ -1282,6 +1282,18 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
     },
 };
 
+const retained_text_rendering_parity_gates = [_]struct {
+    font_file: []const u8,
+    text_file: []const u8,
+    direction: []const u8,
+}{
+    .{
+        .font_file = "NotoSansKannada-Regular.ttf",
+        .text_file = "tests/data/kannada-shknda-2-tests.txt",
+        .direction = "ltr",
+    },
+};
+
 const retained_inline_harfrust_parity_gates = [_]struct {
     font_hash: []const u8,
     text: []const u8,
@@ -2156,6 +2168,25 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_corpus_parity_smoke_step.dependOn(&text_parity_cmd.step);
+        }
+        for (retained_text_rendering_parity_gates) |gate| {
+            const harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            harfbuzz_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfbuzz",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", gate.direction,
+            });
+            shaping_corpus_parity_smoke_step.dependOn(&harfbuzz_parity_cmd.step);
+
+            const harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            harfrust_parity_cmd.addArgs(&.{
+                "--engine",    "compare-harfrust",
+                "--font",      b.fmt("{s}/{s}", .{ harfbuzz_text_rendering_fonts, gate.font_file }),
+                "--text-file", gate.text_file,
+                "--direction", gate.direction,
+            });
+            shaping_corpus_parity_smoke_step.dependOn(&harfrust_parity_cmd.step);
         }
         for (retained_inline_harfrust_parity_gates) |gate| {
             const inline_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);

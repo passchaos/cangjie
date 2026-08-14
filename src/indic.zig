@@ -315,6 +315,7 @@ test "Malayalam dot reph broken cluster merges inserted dotted circle" {
 pub fn mergeTrailingDependentMarks(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
     if (script_tag != .ory2 and script_tag != .orya and
         script_tag != .gur2 and script_tag != .guru and
+        script_tag != .knd2 and script_tag != .knda and
         script_tag != .mlm2 and script_tag != .mlym) return;
     var glyph_index: usize = 0;
     while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
@@ -615,6 +616,35 @@ fn logicalRephaTargetGlyph(sources: []const usize, codepoints: []const u21, syll
     return target;
 }
 
+/// Performs the Kannada part of Indic's initial positional sort.
+///
+/// Kannada assigns several dependent vowels, including U+0CBE, the
+/// `BEFORE_SUB` position. They therefore have to move in front of a below-base
+/// `virama + consonant` pair before `blwf` runs. Moving the same glyph after
+/// basic GSUB is too late: the intervening vowel can participate in contextual
+/// lookup filtering, and the unformed consonant will subsequently fall through
+/// to `haln`.
+pub fn reorderInitialKannadaVowels(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
+    if (script_tag != .knd2 and script_tag != .knda) return;
+    reorderBeforeSubscriptVowelsImpl(
+        glyph_ids,
+        glyph_source_indices,
+        glyph_cluster_indices,
+        glyph_substituted,
+        ligature_components,
+        codepoints,
+        script_tag,
+    );
+}
+
 pub fn reorderBeforeSubscriptVowels(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
@@ -625,7 +655,26 @@ pub fn reorderBeforeSubscriptVowels(
     script_tag: unicode.OpenTypeScriptTag,
 ) void {
     if (script_tag != .tel2 and script_tag != .telu) return;
+    reorderBeforeSubscriptVowelsImpl(
+        glyph_ids,
+        glyph_source_indices,
+        glyph_cluster_indices,
+        glyph_substituted,
+        ligature_components,
+        codepoints,
+        script_tag,
+    );
+}
 
+fn reorderBeforeSubscriptVowelsImpl(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
     var glyph_index: usize = 0;
     while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
         const source = glyph_source_indices.items[glyph_index];
@@ -650,16 +699,18 @@ pub fn reorderBeforeSubscriptVowels(
 }
 
 fn beforeSubscriptVowelTargetGlyph(sources: []const usize, codepoints: []const u21, syllable_start: usize, vowel_source: usize, fallback_index: usize, script_tag: unicode.OpenTypeScriptTag) ?usize {
-    var target: ?usize = null;
     for (sources, 0..) |source, glyph_index| {
         if (glyph_index >= fallback_index) break;
         if (source < syllable_start or source >= vowel_source) continue;
         if (source + 1 >= codepoints.len) continue;
         if (codepoints[source] != viramaCodepoint(script_tag)) continue;
         if (!isIndicConsonant(codepoints[source + 1], script_tag)) continue;
-        target = glyph_index;
+        // BEFORE_SUB precedes the whole run of below-base consonants, not
+        // merely the final pair. Returning the first pair also mirrors the
+        // stable positional sort when a syllable has several conjunct links.
+        return glyph_index;
     }
-    return target;
+    return null;
 }
 
 fn firstGlyphInSourceRange(sources: []const usize, start_source: usize, end_source: usize) ?usize {
@@ -1047,7 +1098,10 @@ fn isPreBaseMatra(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
         .gur2, .guru => codepoint == 0x0a3f,
         .gjr3, .gjr2, .gujr => codepoint == 0x0abf,
         .tel2, .telu => codepoint == 0x0c46 or codepoint == 0x0c47 or codepoint == 0x0c48,
-        .knd2, .knda => codepoint == 0x0cbf,
+        // Kannada U+0CBF is BEFORE_SUB, not PRE_M. It remains after a
+        // standalone base so `abvs` can consume base+matra, but the initial
+        // Kannada reorder moves it ahead of a following below-base pair.
+        .knd2, .knda => false,
         .tml2, .taml => codepoint == 0x0bc6 or codepoint == 0x0bc7 or codepoint == 0x0bc8,
         .mlm2, .mlym => codepoint == 0x0d46 or codepoint == 0x0d47 or codepoint == 0x0d48,
         else => codepoint == 0x093f,
@@ -1194,6 +1248,12 @@ fn markHalfSources(source_features: []u32, codepoints: []const u21, syllable_sta
     }
     if (script_tag == .knd2 or script_tag == .knda) {
         if (markKannadaRaHalfSources(source_features, codepoints, syllable_start, syllable_end, script_tag)) {
+            marked = true;
+        }
+        // Kannada exposes below-base forms only to post-base sources. The
+        // virama is still the logical lookup start after initial reordering,
+        // even when a BEFORE_SUB vowel moves between the base and this pair.
+        if (markPostBaseViramaConsonantSources(source_features, codepoints, syllable_start, syllable_end, script_tag, blwf_source_mask)) {
             marked = true;
         }
         if (script_tag == .knda and markPreBaseConsonantViramaSources(source_features, codepoints, syllable_start + 1, syllable_end, script_tag, blwf_source_mask)) {
@@ -1934,6 +1994,18 @@ fn isIndicDependentMark(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) b
 fn isBeforeSubscriptVowel(codepoint: u21, script_tag: unicode.OpenTypeScriptTag) bool {
     return switch (script_tag) {
         .tel2, .telu => codepoint >= 0x0c3e and codepoint <= 0x0c42,
+        // These are exactly the Kannada dependent vowels classified
+        // BEFORE_SUB by the generated Indic positional table. Adjacent signs
+        // such as U+0CC3 and U+0CC7 are AFTER_SUB and must retain their order.
+        .knd2, .knda => codepoint == 0x0cbe or
+            codepoint == 0x0cbf or
+            codepoint == 0x0cc0 or
+            codepoint == 0x0cc1 or
+            codepoint == 0x0cc2 or
+            codepoint == 0x0cc6 or
+            codepoint == 0x0ccc or
+            codepoint == 0x0ce2 or
+            codepoint == 0x0ce3,
         else => false,
     };
 }
@@ -2585,6 +2657,130 @@ test "Kannada old-spec trailing consonant virama uses blwf cluster" {
 
     mergeKannadaOldSpecTrailingBlwf(&clusters, &sources, &codepoints, .knda);
     try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
+}
+
+test "Kannada initial reorder moves before-sub vowel ahead of blwf pair" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 39, 70, 39, 57 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3, 6, 9 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, true, false, true });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{
+        .{},
+        .{ .flags = .{ .synthetic_base = true } },
+        .{},
+        .{ .flags = .{ .base_mark_ligature = true } },
+    });
+
+    const codepoints = [_]u21{ 0x0ca8, 0x0ccd, 0x0ca8, 0x0cbe };
+    reorderInitialKannadaVowels(
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        .knd2,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 39, 57, 70, 39 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 3, 1, 2 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, clusters.items);
+    try std.testing.expectEqualSlices(bool, &.{ false, true, true, false }, substituted.items);
+    try std.testing.expect(ligatures.infos.items[1].flags.base_mark_ligature);
+    try std.testing.expect(ligatures.infos.items[2].flags.synthetic_base);
+
+    var features = [_]u32{0} ** 4;
+    try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .knd2));
+    try std.testing.expectEqual(blwf_source_mask, features[1]);
+    try std.testing.expectEqual(@as(u32, 0), features[2]);
+}
+
+test "Kannada initial reorder leaves after-sub vowel after blwf pair" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 39, 70, 39, 59 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3, 6, 9 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0ca8, 0x0ccd, 0x0ca8, 0x0cc3 };
+    reorderInitialKannadaVowels(
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        .knd2,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 39, 70, 39, 59 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 3, 6, 9 }, clusters.items);
+}
+
+test "Kannada before-sub vowel precedes every below-base pair" {
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 39, 70, 41, 70, 48, 64 });
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3, 4, 5 });
+
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(std.testing.allocator);
+    try clusters.appendSlice(std.testing.allocator, &.{ 0, 3, 6, 9, 12, 15 });
+
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false, false, false, false, false });
+
+    var ligatures = ligature_provenance.Store{};
+    defer ligatures.deinit(std.testing.allocator);
+    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{}, .{}, .{}, .{}, .{} });
+
+    const codepoints = [_]u21{ 0x0ca8, 0x0ccd, 0x0cab, 0x0ccd, 0x0cb2, 0x0cc6 };
+    reorderInitialKannadaVowels(
+        &glyphs,
+        &sources,
+        &clusters,
+        &substituted,
+        &ligatures,
+        &codepoints,
+        .knd2,
+    );
+
+    try std.testing.expectEqualSlices(GlyphId, &.{ 39, 64, 70, 41, 70, 48 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 5, 1, 2, 3, 4 }, sources.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0, 0, 0 }, clusters.items);
 }
 
 test "Odia joiner candrabindu uses Indic shaping cluster" {

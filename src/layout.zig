@@ -4383,6 +4383,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             // contracts. Start the trusted cached-plan sequence immediately
             // instead of defensively validating this same run twice.
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+            // Kannada BEFORE_SUB vowels must already be between the main and
+            // below-base consonants when `blwf` evaluates its context. Telugu
+            // performs its related move during final reordering instead.
+            indic.reorderInitialKannadaVowels(
+                glyph_ids,
+                glyph_source_indices,
+                glyph_cluster_indices,
+                glyph_substituted,
+                ligature_components,
+                codepoints.items,
+                lookup_options.script_tag,
+            );
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
             try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
             @memset(glyph_stage_substituted.items, false);

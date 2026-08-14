@@ -4572,6 +4572,22 @@ test "Ethiopic text selects Ethiopic script runs and direction" {
     try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1230));
 }
 
+test "Ethiopic combining marks inherit one grapheme cluster" {
+    const allocator = std.testing.allocator;
+    const samples = [_][]const u8{ "ለ፝", "ለ፞", "ለ፟" };
+
+    inline for (samples, 0x135d..) |text, mark| {
+        const clusters = try itemizeGraphemeClusters(allocator, text);
+        defer allocator.free(clusters);
+
+        try std.testing.expectEqual(@as(usize, 1), clusters.len);
+        try std.testing.expectEqual(@as(usize, 0), clusters[0].byte_start);
+        try std.testing.expectEqual(text.len, clusters[0].byte_len);
+        try std.testing.expect(isNonspacingMarkCodepoint(@intCast(mark)));
+        try std.testing.expect(isUnicodeMarkCodepoint(@intCast(mark)));
+    }
+}
+
 test "Mongolian text keeps free variation selectors and selects Mongolian script" {
     const allocator = std.testing.allocator;
 
@@ -6060,6 +6076,10 @@ fn isCombiningMark(codepoint: u21) bool {
         // manuscript-style abbreviations stay one grapheme, word, and shaping
         // unit under the `glag` OpenType script selection.
         (codepoint >= 0x1e000 and codepoint <= 0x1e02a) or
+        // Ethiopic gemination/vowel-length marks are the script's only
+        // nonspacing combining marks. They have GCB=Extend and must inherit
+        // the preceding Ethiopic syllable's caret and shaping cluster.
+        (codepoint >= 0x135d and codepoint <= 0x135f) or
         // Tibetan vowel signs, halanta, subjoined-letter marks, and other
         // signs are typed after the base but form one stack/syllable for
         // grapheme and shaping boundaries.

@@ -1531,6 +1531,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   end of Coverage like HarfBuzz instead of rejecting the font, while the
   validator continues to reject the unsafe inverse case where Coverage exposes
   an index without a PairSet.
+- All four `GPOS-3.tests` rows are retained in
+  `tests/data/gpos-3-ethiopic-tests.txt` with `TestShapeEthi.ttf`; both
+  references produce seven glyphs with checksum `e72c69483a94e826`.
+  U+135D..U+135F are Ethiopic's combining gemination/vowel-length marks
+  (General_Category=Mn, GCB=Extend); Cangjie now keeps the complete range in
+  the preceding base's grapheme and shaping cluster instead of exposing a
+  separate caret/cluster before the positioned mark.
 - Newa passes all five script-specific cases retained from upstream
   `in-house/use-syllable.tests` across three fixture fonts. The slice covers
   virama+ZWNJ termination, CGJ transparency in contextual and nested ligature

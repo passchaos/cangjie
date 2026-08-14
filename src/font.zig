@@ -1906,10 +1906,10 @@ pub const Font = struct {
                 // by Fontations and FreeType; VARC's internal GlyphHMetrics
                 // deliberately remains hmtx+HVAR only.
                 metrics.left_side_bearing = clampF32ToI16(
-                    @round(@as(f32, @floatFromInt(metrics.left_side_bearing)) + phantom.left.x),
+                    roundOpenTypeF32(@as(f32, @floatFromInt(metrics.left_side_bearing)) + phantom.left.x),
                 );
                 metrics.advance_width = clampF32ToU16(
-                    @round(@as(f32, @floatFromInt(metrics.advance_width)) + phantom.horizontalAdvanceDelta()),
+                    roundOpenTypeF32(@as(f32, @floatFromInt(metrics.advance_width)) + phantom.horizontalAdvanceDelta()),
                 );
             }
         }
@@ -4452,6 +4452,16 @@ pub const Font = struct {
         if (self.cff2 != null) {
             return (try self.cff2GlyphBoundsAtCoords(glyph_id, normalized_coords)) orelse error.UnsupportedGlyph;
         }
+        if (self.format == .truetype and self.gvar != null and !normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            // Unlike static glyf bounds, a gvar instance has no authoritative
+            // xMin/yMin/xMax/yMax record. Derive it from the varied outline so
+            // public bounds, extents, and raster callers observe the same IUP
+            // interpolation and compound-component movement. The default
+            // location retains the allocation-free glyf header path below.
+            var outline = try self.glyphOutlineAtCoords(std.heap.page_allocator, glyph_id, normalized_coords);
+            defer outline.deinit();
+            return outline.bounds;
+        }
         return try self.glyphBounds(glyph_id);
     }
 
@@ -5060,8 +5070,8 @@ pub const Font = struct {
                 .offset => |offset| {
                     const component_delta = if (maybe_deltas) |deltas| gvarDeltaForPoint(deltas, component_index) else gvar_mod.Point{ .x = 0, .y = 0 };
                     var child = component.linear_transform;
-                    child.dx = @as(f32, @floatFromInt(offset.x)) + @round(component_delta.x);
-                    child.dy = @as(f32, @floatFromInt(offset.y)) + @round(component_delta.y);
+                    child.dx = @as(f32, @floatFromInt(offset.x)) + roundOpenTypeF32(component_delta.x);
+                    child.dy = @as(f32, @floatFromInt(offset.y)) + roundOpenTypeF32(component_delta.y);
                     try self.appendGlyphOutlineAtCoords(outline, points, component.glyph_id, parent_transform.mul(child), depth, normalized_coords, read_mode);
                 },
                 .points => |point_match| {
@@ -10089,16 +10099,16 @@ fn appendSimpleGlyph(
                     contour_start = contour_end + 1;
                 }
                 for (points, real_deltas) |*point, delta| {
-                    point.x = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.x)) + delta.x));
-                    point.y = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.y)) + delta.y));
+                    point.x = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.x)) + delta.x));
+                    point.y = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.y)) + delta.y));
                 }
             }
         } else {
             for (deltas) |delta| {
                 if (delta.point >= points.len) continue;
                 const point = &points[delta.point];
-                point.x = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.x)) + delta.x));
-                point.y = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(point.y)) + delta.y));
+                point.x = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.x)) + delta.x));
+                point.y = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.y)) + delta.y));
             }
         }
         outline.bounds = boundsForFlaggedPoints(points);
@@ -10168,8 +10178,8 @@ fn gvarDeltaForPoint(deltas: []const GvarScaledPointDelta, point: usize) gvar_mo
 fn applyGvarGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: glyph_mod.Bounds, default_metrics: HorizontalMetricInfo, phantom: GvarPhantomPointDeltas) void {
     const default_left_phantom = @as(f32, @floatFromInt(@as(i32, default_bounds.x_min) - @as(i32, default_metrics.left_side_bearing)));
     const varied_left_phantom = default_left_phantom + phantom.left.x;
-    outline.left_side_bearing = clampGlyphPointF32ToI16(@round(@as(f32, @floatFromInt(outline.bounds.x_min)) - varied_left_phantom));
-    outline.advance_width = clampF32ToU16(@round(@as(f32, @floatFromInt(default_metrics.advance_width)) + phantom.horizontalAdvanceDelta()));
+    outline.left_side_bearing = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(outline.bounds.x_min)) - varied_left_phantom));
+    outline.advance_width = clampF32ToU16(roundOpenTypeF32(@as(f32, @floatFromInt(default_metrics.advance_width)) + phantom.horizontalAdvanceDelta()));
 }
 
 fn applyGvarSimpleGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: glyph_mod.Bounds, default_metrics: HorizontalMetricInfo, deltas: []const GvarScaledPointDelta, point_count: usize) FontError!void {
@@ -10204,6 +10214,21 @@ fn clampGlyphPointF32ToI16(value: f32) i16 {
     if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
     if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
     return @intFromFloat(value);
+}
+
+fn roundOpenTypeF32(value: f32) f32 {
+    // OpenType variation arithmetic rounds a .5 tie toward +infinity, not
+    // away from zero like Zig's @round. This distinction is observable for a
+    // negative half-unit gvar delta: -101.5 becomes -101, matching FreeType's
+    // FT_fixedToInt and fontTools' otRound.
+    return @floor(value + 0.5);
+}
+
+test "OpenType variation rounding sends half-unit ties toward positive infinity" {
+    try std.testing.expectEqual(@as(f32, -103), roundOpenTypeF32(-102.5001));
+    try std.testing.expectEqual(@as(f32, -101), roundOpenTypeF32(-101.5));
+    try std.testing.expectEqual(@as(f32, 101), roundOpenTypeF32(100.5));
+    try std.testing.expectEqual(@as(f32, 101), roundOpenTypeF32(100.5001));
 }
 
 fn roundedGlyphPosition(value: f32) i32 {

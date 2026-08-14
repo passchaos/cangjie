@@ -1582,6 +1582,16 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   contract and that their gvar-derived advances match. It does not claim
   pixel-grid hinting parity: CVT deltas become observable only when a TrueType
   interpreter executes instructions at a specific PPEM.
+- All 27 Unicode text-rendering `GVAR-{1,2,3}.tests` instances now retain
+  HarfBuzz glyph-extents parity, in addition to HarfBuzz/HarfRust shaping
+  parity, for `TestGVAR{One,Two,Three}.ttf` at
+  `wght=300,350,400,450,500,550,600,650,700`. This stronger gate exposed that
+  the generic `glyphBoundsAtCoords` API returned static glyf-header bounds even
+  though the outline and advance paths applied gvar. Non-default TrueType
+  bounds now derive from the varied outline, and point/component/phantom
+  half-unit ties use OpenType's round-toward-positive-infinity rule. HarfRust's
+  current CLI reports zero outline extents for these rows, so it remains the
+  second shaping reference while HarfBuzz is the geometry reference.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

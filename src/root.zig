@@ -798,6 +798,10 @@ test "gvar point deltas are exposed for non-empty glyph data" {
     const varied_bounds = (try font.gvarGlyphBoundsAtCoords(allocator, 1, &.{0.5})).?;
     const default_bounds = try font.glyphBounds(1);
     try std.testing.expectEqual(default_bounds.x_min + 5, varied_bounds.x_min);
+    // The generic public API must not silently fall back to the static glyf
+    // header at non-default coordinates. Shape-bench extents and downstream
+    // layout callers use this surface rather than the gvar-specific helper.
+    try std.testing.expectEqual(varied_bounds, try font.glyphBoundsAtCoords(1, &.{0.5}));
 
     var default_outline = try font.glyphOutline(allocator, 1);
     defer default_outline.deinit();

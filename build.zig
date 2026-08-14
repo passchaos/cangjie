@@ -1429,6 +1429,7 @@ const retained_variable_text_rendering_parity_gates = [_]struct {
     size: []const u8,
     variations: []const []const u8,
     remove_default_ignorables: bool = false,
+    harfbuzz_extents: bool = false,
 }{
     .{
         .font_file = "TestGPOSFour.ttf",
@@ -1469,6 +1470,33 @@ const retained_variable_text_rendering_parity_gates = [_]struct {
         .size = "1000",
         .variations = &.{ "wght=28,wdth=100,opsz=72", "wght=94,wdth=100,opsz=72", "wght=194,wdth=100,opsz=72" },
         .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestGVAROne.ttf",
+        .text = "彌",
+        .direction = "ltr",
+        .size = "1000",
+        .variations = &.{ "wght=300", "wght=350", "wght=400", "wght=450", "wght=500", "wght=550", "wght=600", "wght=650", "wght=700" },
+        .remove_default_ignorables = true,
+        .harfbuzz_extents = true,
+    },
+    .{
+        .font_file = "TestGVARTwo.ttf",
+        .text = "彌",
+        .direction = "ltr",
+        .size = "1000",
+        .variations = &.{ "wght=300", "wght=350", "wght=400", "wght=450", "wght=500", "wght=550", "wght=600", "wght=650", "wght=700" },
+        .remove_default_ignorables = true,
+        .harfbuzz_extents = true,
+    },
+    .{
+        .font_file = "TestGVARThree.ttf",
+        .text = "彌",
+        .direction = "ltr",
+        .size = "1000",
+        .variations = &.{ "wght=300", "wght=350", "wght=400", "wght=450", "wght=500", "wght=550", "wght=600", "wght=650", "wght=700" },
+        .remove_default_ignorables = true,
+        .harfbuzz_extents = true,
     },
 };
 
@@ -2435,6 +2463,7 @@ pub fn build(b: *std.Build) void {
                     "--variation", variation,
                 });
                 if (gate.remove_default_ignorables) harfbuzz_parity_cmd.addArg("--remove-default-ignorables");
+                if (gate.harfbuzz_extents) harfbuzz_parity_cmd.addArg("--show-extents");
                 shaping_corpus_parity_smoke_step.dependOn(&harfbuzz_parity_cmd.step);
 
                 const harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);

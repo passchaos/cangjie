@@ -1523,6 +1523,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   validator now accepts and bounds-checks it like HarfBuzz/fontations while
   continuing to require strict ordering for index-bearing top-level Coverage
   tables and for the detached defensive API.
+- All three `GPOS-2.tests` rows are retained in
+  `tests/data/gpos-2-rendering-tests.txt` with `TestGPOSTwo.otf`; both
+  references produce four glyphs with checksum `5878e11ef99e95de`. Its middle
+  PairPos subtable has two PairSets but only one first-glyph Coverage entry.
+  PairSet index one is therefore unreachable: the accelerator now stops at the
+  end of Coverage like HarfBuzz instead of rejecting the font, while the
+  validator continues to reject the unsafe inverse case where Coverage exposes
+  an index without a PairSet.
 - Newa passes all five script-specific cases retained from upstream
   `in-house/use-syllable.tests` across three fixture fonts. The slice covers
   virama+ZWNJ termination, CGJ transparency in contextual and nested ligature

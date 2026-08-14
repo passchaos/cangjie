@@ -696,7 +696,12 @@ fn appendSimplePairPosFormat1Records(
     const pair_set_count = try readU16(table, subtable_offset + 8);
     const record_start = records.items.len;
     for (0..pair_set_count) |set_index| {
-        const first = (try coverageGlyphAt(table, coverage_offset, set_index)) orelse return error.BadGpos;
+        // PairSetCount may exceed the first-glyph Coverage count. OpenType
+        // indexes PairSet only through Coverage, so those trailing sets are
+        // unreachable; HarfBuzz ignores them and TestGPOSTwo.otf relies on
+        // that behavior. The defensive validator still rejects the opposite
+        // shape (a Coverage index with no PairSet).
+        const first = (try coverageGlyphAt(table, coverage_offset, set_index)) orelse break;
         const pair_set_offset = try checkedRequiredPositionOffset(
             table,
             subtable_offset,
@@ -6567,6 +6572,42 @@ test "GPOS PairPos format 1 rejects dangling coverage indexes" {
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
     try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+}
+
+test "GPOS PairPos accelerator ignores unreachable trailing pair sets" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 42;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 30); // Coverage.
+    writeU16Test(&bytes, 4, 0x0004); // ValueFormat1: xAdvance.
+    writeU16Test(&bytes, 6, 0);
+    writeU16Test(&bytes, 8, 2); // Two PairSets, but only index zero is covered.
+    writeU16Test(&bytes, 10, 14);
+    writeU16Test(&bytes, 12, 22);
+
+    writeU16Test(&bytes, 14, 1);
+    writeU16Test(&bytes, 16, 7);
+    writeI16Test(&bytes, 18, -30);
+    writeU16Test(&bytes, 22, 1);
+    writeU16Test(&bytes, 24, 7);
+    writeI16Test(&bytes, 26, 200);
+    writeCoverage1Test(&bytes, 30, 5);
+
+    var records = std.ArrayList(PairPosRecord).empty;
+    defer records.deinit(allocator);
+    const accelerator = try appendSimplePairPosFormat1Records(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len },
+        0,
+        2,
+        &records,
+        allocator,
+    );
+    try std.testing.expectEqual(@as(usize, 1), accelerator.record_len);
+    try std.testing.expectEqual(PairPosRecord{
+        .first = 5,
+        .second = 7,
+        .x_advance = -30,
+    }, records.items[0]);
 }
 
 test "GPOS PairPos format 1 rejects null PairSet offsets" {

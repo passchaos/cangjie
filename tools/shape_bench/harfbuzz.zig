@@ -208,14 +208,37 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
     if (options.unsafe_to_concat) flags |= hb.HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT;
     if (options.remove_default_ignorables) flags |= hb.HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES;
     if (flags != hb.HB_BUFFER_FLAG_DEFAULT) hb.hb_buffer_set_flags(buffer, flags);
-    var context_text: []u8 = &.{};
-    defer if (context_text.len != 0) allocator.free(context_text);
-    const item_text = if (options.text_before.len != 0 or options.text_after.len != 0) item: {
-        context_text = try std.mem.concat(allocator, u8, &.{ options.text_before, line, options.text_after });
-        break :item context_text;
-    } else line;
-    const item_offset = if (context_text.len != 0) options.text_before.len else 0;
-    hb.hb_buffer_add_utf8(buffer, @ptrCast(item_text.ptr), @intCast(item_text.len), @intCast(item_offset), @intCast(line.len));
+    // Match hb-shape's context API usage rather than adding one slice from a
+    // concatenated paragraph. A zero-length add installs pre/post context
+    // without emitting glyphs; the item's own add then starts clusters at
+    // zero. Passing one concatenated buffer with a non-zero item offset gives
+    // equivalent joining context but incorrectly exposes paragraph-relative
+    // cluster byte offsets to the comparison surface.
+    if (options.text_before.len != 0) {
+        hb.hb_buffer_add_utf8(
+            buffer,
+            @ptrCast(options.text_before.ptr),
+            @intCast(options.text_before.len),
+            @intCast(options.text_before.len),
+            0,
+        );
+    }
+    hb.hb_buffer_add_utf8(
+        buffer,
+        @ptrCast(line.ptr),
+        @intCast(line.len),
+        0,
+        @intCast(line.len),
+    );
+    if (options.text_after.len != 0) {
+        hb.hb_buffer_add_utf8(
+            buffer,
+            @ptrCast(options.text_after.ptr),
+            @intCast(options.text_after.len),
+            0,
+            0,
+        );
+    }
     hb.hb_shape(font, buffer, if (features.len == 0) null else features.ptr, @intCast(features.len));
 
     var length: c_uint = 0;

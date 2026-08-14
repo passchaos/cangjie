@@ -244,6 +244,9 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     font_ext: []const u8 = "ttf",
     face_index: ?[]const u8 = null,
     show_extents: bool = false,
+    text_before: ?[]const u8 = null,
+    text_after: ?[]const u8 = null,
+    bot: bool = false,
 }{
     .{
         .font_hash = "932ad5132c2761297c74e9976fe25b08e5ffa10b",
@@ -1102,6 +1105,74 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
         .font_hash = "152825a19abd4a3094a41c9e4b4de5e2577dd1df",
         .text = "\u{0633}\u{064e}\u{06cc}\u{064e}\u{0642}\u{064f}\u{0648}\u{0652}\u{0644}\u{064f}  \u{0633}\u{064e}\u{0642}\u{064e}\u{0645}\u{064f}\u{0646}\u{064e}",
         .direction = "rtl",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{0650}\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}\u{0646}\u{064e}\u{0627}",
+        .direction = "rtl",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}\u{0646}\u{064e}\u{0627}",
+        .direction = "rtl",
+        .text_before = "\u{0643}\u{0650}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}\u{0646}\u{064e}\u{0627}",
+        .direction = "rtl",
+        .text_before = "\u{0643}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{0650}\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}",
+        .direction = "rtl",
+        .text_after = "\u{0646}\u{064e}\u{0627}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{0650}\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}",
+        .direction = "rtl",
+        .text_after = "\u{0646}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}",
+        .direction = "rtl",
+        .text_before = "\u{0643}\u{0650}",
+        .text_after = "\u{0646}\u{064e}\u{0627}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{062a}\u{064e}\u{0627}\u{0628}\u{064f}",
+        .direction = "rtl",
+        .text_before = "\u{0643}",
+        .text_after = "\u{0646}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{062a}\u{0628}",
+        .direction = "rtl",
+        .text_before = "\u{0627}",
+    },
+    .{
+        .font_hash = "65984dfce552a785f564422aadf4715fa07795ad",
+        .text = "\u{0643}\u{062a}\u{0628}\u{0627}",
+        .direction = "rtl",
+        .text_after = "\u{0627}",
+    },
+    .{
+        .font_hash = "3105b51976b879032c66aa93a634b3b3672cd344",
+        .text = "\u{064e}",
+        .direction = "rtl",
+        .bot = true,
+    },
+    .{
+        .font_hash = "3105b51976b879032c66aa93a634b3b3672cd344",
+        .text = "\u{064e}",
+        .direction = "rtl",
+        .text_before = "\u{0627}",
+        .bot = true,
     },
     .{
         .font_hash = "065b01e54f35f0d849fd43bd5b936212739a50cb",
@@ -2636,6 +2707,15 @@ pub fn build(b: *std.Build) void {
             }
             if (gate.show_extents) {
                 inline_parity_cmd.addArg("--show-extents");
+            }
+            if (gate.text_before) |text_before| {
+                inline_parity_cmd.addArgs(&.{ "--text-before", text_before });
+            }
+            if (gate.text_after) |text_after| {
+                inline_parity_cmd.addArgs(&.{ "--text-after", text_after });
+            }
+            if (gate.bot) {
+                inline_parity_cmd.addArg("--bot");
             }
             shaping_corpus_parity_smoke_step.dependOn(&inline_parity_cmd.step);
         }

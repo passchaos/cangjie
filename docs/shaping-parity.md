@@ -1796,10 +1796,14 @@ shaping-performance superiority.
   alef` Arabic row for `7bbd3175734d5d291e1c15271ec0cbb97b626ebf.ttf`. The
   disabled-`liga` `ffif` row is retained as an inline HarfRust gate.
 - HarfBuzz in-house `item-context.tests` rows that only require before/after
-  Arabic joining context are retained as inline HarfRust gates. `shape-bench`
+  Arabic joining context are retained against both references. `shape-bench`
   now accepts `--text-before`/`--text-after`; Cangjie uses those contexts only
   to resolve item-boundary Arabic joining forms while keeping GSUB/GPOS matching
-  scoped to the shaped item. The `--bot` dotted-circle rows are retained too;
+  scoped to the shaped item. Its in-process HarfBuzz runner now follows
+  `hb-shape` and installs pre-context, item text, and post-context with three
+  buffer-add calls. Context affects joining without shifting the shaped item's
+  public UTF-8 clusters to paragraph-relative offsets. The `--bot`
+  dotted-circle rows are retained too;
   beginning-of-text Arabic marks insert a synthetic dotted-circle base unless a
   pre-context is supplied.
 - Mongolian Free Variation Selectors now participate in the Arabic-style

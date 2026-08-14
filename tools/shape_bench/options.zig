@@ -59,6 +59,7 @@ pub const BuiltinFont = enum {
     kerx_cross_format_1_reset,
     mort,
     mort_rearrangement,
+    mort_contextual,
 
     pub fn fromName(name: []const u8) ?BuiltinFont {
         if (std.mem.eql(u8, name, "minimal")) return .minimal;
@@ -81,6 +82,7 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "kerx-cross-format-1-reset")) return .kerx_cross_format_1_reset;
         if (std.mem.eql(u8, name, "mort")) return .mort;
         if (std.mem.eql(u8, name, "mort-rearrangement")) return .mort_rearrangement;
+        if (std.mem.eql(u8, name, "mort-contextual")) return .mort_contextual;
         return null;
     }
 
@@ -106,6 +108,7 @@ pub const BuiltinFont = enum {
             .kerx_cross_format_1_reset => "builtin:kerx-cross-format-1-reset",
             .mort => "builtin:mort",
             .mort_rearrangement => "builtin:mort-rearrangement",
+            .mort_contextual => "builtin:mort-contextual",
         };
     }
 };

@@ -96,6 +96,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .kerx_cross_format_1_reset => try cangjie.testing.test_font.buildKerxFormat1CrossStreamTtf(allocator, false, true),
         .mort => try cangjie.testing.test_font.buildMortTtf(allocator),
         .mort_rearrangement => try cangjie.testing.test_font.buildMortRearrangementTtf(allocator),
+        .mort_contextual => try cangjie.testing.test_font.buildMortContextualTtf(allocator),
     };
 }
 

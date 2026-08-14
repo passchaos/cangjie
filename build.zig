@@ -2448,6 +2448,24 @@ pub fn build(b: *std.Build) void {
         });
         shaping_aat_parity_smoke_step.dependOn(&mort_rearrangement_harfbuzz.step);
 
+        const mort_contextual_font = exportedBuiltinFont(
+            b,
+            shape_bench_exe,
+            "mort-contextual",
+            "mort-contextual.ttf",
+        );
+        const mort_contextual_harfbuzz = b.addRunArtifact(shape_bench_exe);
+        mort_contextual_harfbuzz.addArgs(&.{ "--engine", "compare-harfbuzz", "--font" });
+        mort_contextual_harfbuzz.addFileArg(mort_contextual_font);
+        mort_contextual_harfbuzz.addArgs(&.{
+            "--text",       "AB",
+            "--direction",  "ltr",
+            "--iterations", "1",
+            "--warmup",     "0",
+            "--samples",    "1",
+        });
+        shaping_aat_parity_smoke_step.dependOn(&mort_contextual_harfbuzz.step);
+
         // Hide Honoka's redundant GSUB directory record for both engines. The
         // unchanged mort payload and complete corpus then prove standalone
         // legacy substitution instead of letting OpenType `vert` hide it.

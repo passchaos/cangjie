@@ -41,13 +41,19 @@ pub fn validate(
                     subtable_start + 8,
                     subtable_length - 8,
                 ),
+                1 => try validateContextual(
+                    data,
+                    subtable_start + 8,
+                    subtable_length - 8,
+                    glyph_count,
+                ),
                 4 => try state_table.validateLookupU16(
                     data,
                     subtable_start + 8,
                     subtable_length - 8,
                     glyph_count,
                 ),
-                1, 2, 5 => {},
+                2, 5 => {},
                 else => return error.BadSfnt,
             }
             subtable_relative += subtable_length;
@@ -85,6 +91,64 @@ fn validateRearrangement(data: []const u8, offset: usize, length: usize) Error!v
         const flags = try readU16(data, offset + entry_relative + 2);
         if (new_state_offset < state_array_offset or new_state_offset >= entry_table_offset) return error.BadSfnt;
         if ((new_state_offset - state_array_offset) % class_count != 0 or (flags & 0x1ff0) != 0) return error.BadSfnt;
+    }
+}
+
+fn validateContextual(data: []const u8, offset: usize, length: usize, glyph_count: usize) Error!void {
+    if (length < 10) return error.BadSfnt;
+    const class_count: usize = try readU16(data, offset);
+    const class_table_offset: usize = try readU16(data, offset + 2);
+    const state_array_offset: usize = try readU16(data, offset + 4);
+    const entry_table_offset: usize = try readU16(data, offset + 6);
+    const substitution_offset: usize = try readU16(data, offset + 8);
+    if (class_count < 4 or
+        class_table_offset < 10 or
+        state_array_offset < 10 or
+        entry_table_offset < 10 or
+        substitution_offset < 10 or
+        class_table_offset >= length or
+        state_array_offset >= entry_table_offset or
+        entry_table_offset >= length or
+        substitution_offset > length)
+    {
+        return error.BadSfnt;
+    }
+    const class_glyph_count: usize = try readU16(data, offset + class_table_offset + 2);
+    if (class_glyph_count > length - class_table_offset - 4) return error.BadSfnt;
+    if ((entry_table_offset - state_array_offset) % class_count != 0) return error.BadSfnt;
+
+    for (data[offset + state_array_offset .. offset + entry_table_offset]) |entry_index| {
+        const entry_relative = std.math.add(usize, entry_table_offset, @as(usize, entry_index) * 8) catch return error.BadSfnt;
+        if (entry_relative > length or length - entry_relative < 8) return error.BadSfnt;
+        const new_state_offset: usize = try readU16(data, offset + entry_relative);
+        const flags = try readU16(data, offset + entry_relative + 2);
+        const mark_offset: i16 = try readI16(data, offset + entry_relative + 4);
+        const current_offset: i16 = try readI16(data, offset + entry_relative + 6);
+        if (new_state_offset < state_array_offset or new_state_offset >= entry_table_offset) return error.BadSfnt;
+        if ((new_state_offset - state_array_offset) % class_count != 0 or (flags & 0x3fff) != 0) return error.BadSfnt;
+        try validateContextualOffset(data, offset, length, substitution_offset, mark_offset, glyph_count);
+        try validateContextualOffset(data, offset, length, substitution_offset, current_offset, glyph_count);
+    }
+}
+
+fn validateContextualOffset(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    substitution_offset: usize,
+    action_offset: i16,
+    glyph_count: usize,
+) Error!void {
+    if (action_offset == 0) return;
+    for (0..glyph_count) |glyph| {
+        const word_index = @as(i64, action_offset) + @as(i64, @intCast(glyph));
+        if (word_index < 0) return error.BadSfnt;
+        const relative_i64 = std.math.mul(i64, word_index, 2) catch return error.BadSfnt;
+        if (relative_i64 < 0) return error.BadSfnt;
+        const relative: usize = @intCast(relative_i64);
+        if (relative < substitution_offset or relative > length or length - relative < 2) return error.BadSfnt;
+        const replacement = try readU16(data, offset + relative);
+        if (replacement >= glyph_count and replacement != 0) return error.BadSfnt;
     }
 }
 
@@ -148,6 +212,14 @@ pub fn apply(
                             glyphs,
                             options,
                         ),
+                        1 => try applyContextual(
+                            data,
+                            subtable_start + 8,
+                            subtable_length - 8,
+                            glyph_count,
+                            glyphs,
+                            options,
+                        ),
                         4 => try applyNoncontextual(
                             data,
                             subtable_start + 8,
@@ -159,7 +231,7 @@ pub fn apply(
                         // Obsolete state-table formats use different class and
                         // offset bases from their morx successors. Keep them
                         // inert until each executor has dedicated fixtures.
-                        1, 2, 5 => {},
+                        2, 5 => {},
                         else => return error.BadSfnt,
                     }
                 }
@@ -170,6 +242,113 @@ pub fn apply(
         chain_relative += chain_length;
     }
     if (chain_relative > table_length) return error.BadSfnt;
+}
+
+fn applyContextual(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyph_count: usize,
+    glyphs: *std.ArrayList(GlyphId),
+    options: gsub.LookupOptions,
+) Error!void {
+    const class_count: usize = try readU16(data, offset);
+    const class_table_offset: usize = try readU16(data, offset + 2);
+    const state_array_offset: usize = try readU16(data, offset + 4);
+    const entry_table_offset: usize = try readU16(data, offset + 6);
+    const substitution_offset: usize = try readU16(data, offset + 8);
+    const class_first: usize = try readU16(data, offset + class_table_offset);
+    const class_glyph_count: usize = try readU16(data, offset + class_table_offset + 2);
+
+    var operations_left = try state_table.operationBudget(glyphs.items.len);
+    var state_offset = state_array_offset;
+    var index: usize = 0;
+    var mark: usize = 0;
+    var mark_set = false;
+    while (true) {
+        if (operations_left == 0) return error.BadSfnt;
+        operations_left -= 1;
+        const class: usize = if (index >= glyphs.items.len)
+            state_table.class_end_of_text
+        else class: {
+            const glyph: usize = glyphs.items[index];
+            if (glyph < class_first or glyph >= class_first + class_glyph_count) {
+                break :class state_table.class_out_of_bounds;
+            }
+            break :class data[offset + class_table_offset + 4 + glyph - class_first];
+        };
+        const bounded_class = if (class < class_count) class else state_table.class_out_of_bounds;
+        const state_cell = std.math.add(usize, state_offset, bounded_class) catch return error.BadSfnt;
+        if (state_cell >= length) return error.BadSfnt;
+        const entry_index: usize = data[offset + state_cell];
+        const entry_relative = std.math.add(usize, entry_table_offset, entry_index * 8) catch return error.BadSfnt;
+        if (entry_relative > length or length - entry_relative < 8) return error.BadSfnt;
+        const new_state_offset: usize = try readU16(data, offset + entry_relative);
+        const flags = try readU16(data, offset + entry_relative + 2);
+        const mark_offset = try readI16(data, offset + entry_relative + 4);
+        const current_offset = try readI16(data, offset + entry_relative + 6);
+
+        if (index < glyphs.items.len or mark_set) {
+            try replaceContextualGlyph(
+                data,
+                offset,
+                length,
+                substitution_offset,
+                mark_offset,
+                glyph_count,
+                glyphs,
+                options,
+                mark,
+            );
+            if (glyphs.items.len != 0) {
+                try replaceContextualGlyph(
+                    data,
+                    offset,
+                    length,
+                    substitution_offset,
+                    current_offset,
+                    glyph_count,
+                    glyphs,
+                    options,
+                    @min(index, glyphs.items.len - 1),
+                );
+            }
+        }
+        if ((flags & 0x8000) != 0) {
+            mark_set = index < glyphs.items.len;
+            mark = index;
+        }
+        state_offset = new_state_offset;
+        if (index >= glyphs.items.len) break;
+        if ((flags & state_table.dont_advance) == 0) index += 1;
+    }
+}
+
+fn replaceContextualGlyph(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    substitution_offset: usize,
+    action_offset: i16,
+    glyph_count: usize,
+    glyphs: *std.ArrayList(GlyphId),
+    options: gsub.LookupOptions,
+    glyph_index: usize,
+) Error!void {
+    if (action_offset == 0 or glyph_index >= glyphs.items.len) return;
+    const word_index = @as(i64, action_offset) + glyphs.items[glyph_index];
+    if (word_index < 0) return error.BadSfnt;
+    const relative_i64 = word_index * 2;
+    if (relative_i64 < 0) return error.BadSfnt;
+    const relative: usize = @intCast(relative_i64);
+    if (relative < substitution_offset or relative > length or length - relative < 2) return error.BadSfnt;
+    const replacement = try readU16(data, offset + relative);
+    // Obsolete contextual tables use zero as "no substitution".
+    if (replacement == 0) return;
+    if (replacement >= glyph_count) return error.BadSfnt;
+    glyphs.items[glyph_index] = replacement;
+    if (options.glyph_substituted) |values| values.items[glyph_index] = true;
+    if (options.glyph_stage_substituted) |values| values.items[glyph_index] = true;
 }
 
 fn applyRearrangement(
@@ -289,6 +468,11 @@ fn readU16(data: []const u8, offset: usize) Error!u16 {
     return std.mem.readInt(u16, data[offset..][0..2], .big);
 }
 
+fn readI16(data: []const u8, offset: usize) Error!i16 {
+    if (offset > data.len or data.len - offset < 2) return error.EndOfStream;
+    return std.mem.readInt(i16, data[offset..][0..2], .big);
+}
+
 fn readU32(data: []const u8, offset: usize) Error!u32 {
     if (offset > data.len or data.len - offset < 4) return error.EndOfStream;
     return std.mem.readInt(u32, data[offset..][0..4], .big);
@@ -372,4 +556,49 @@ test "legacy mort rearrangement executes obsolete state offsets" {
     });
     try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1 }, glyphs.items);
     try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, sources.items);
+}
+
+test "legacy mort contextual substitution uses signed word offsets" {
+    var bytes = [_]u8{0} ** 96;
+    std.mem.writeInt(u32, bytes[0..4], 0x0001_0000, .big);
+    std.mem.writeInt(u32, bytes[4..8], 1, .big);
+    std.mem.writeInt(u32, bytes[8..12], 1, .big);
+    std.mem.writeInt(u32, bytes[12..16], 88, .big);
+    std.mem.writeInt(u16, bytes[16..18], 0, .big);
+    std.mem.writeInt(u16, bytes[18..20], 1, .big);
+    std.mem.writeInt(u16, bytes[20..22], 76, .big);
+    std.mem.writeInt(u16, bytes[22..24], 0x2001, .big);
+    std.mem.writeInt(u32, bytes[24..28], 1, .big);
+
+    const machine = 28;
+    std.mem.writeInt(u16, bytes[machine..][0..2], 4, .big);
+    std.mem.writeInt(u16, bytes[machine + 2 ..][0..2], 10, .big);
+    std.mem.writeInt(u16, bytes[machine + 4 ..][0..2], 18, .big);
+    std.mem.writeInt(u16, bytes[machine + 6 ..][0..2], 26, .big);
+    std.mem.writeInt(u16, bytes[machine + 8 ..][0..2], 50, .big);
+    std.mem.writeInt(u16, bytes[machine + 10 ..][0..2], 1, .big);
+    std.mem.writeInt(u16, bytes[machine + 12 ..][0..2], 2, .big);
+    bytes[machine + 14] = 3;
+    bytes[machine + 15] = 3;
+    bytes[machine + 18 + 3] = 1;
+    bytes[machine + 18 + 4 + 3] = 2;
+    std.mem.writeInt(u16, bytes[machine + 26 ..][0..2], 18, .big);
+    std.mem.writeInt(u16, bytes[machine + 34 ..][0..2], 22, .big);
+    std.mem.writeInt(u16, bytes[machine + 36 ..][0..2], 0x8000, .big);
+    std.mem.writeInt(u16, bytes[machine + 42 ..][0..2], 18, .big);
+    // Entry 2 substitutes current glyph 2. Obsolete offsets are word offsets
+    // from the state subtable, so 26 + glyph 2 addresses byte 56.
+    std.mem.writeInt(i16, bytes[machine + 48 ..][0..2], 26, .big);
+    std.mem.writeInt(u16, bytes[machine + 50 + 3 * 2 ..][0..2], 1, .big);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2 });
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.appendSlice(std.testing.allocator, &.{ false, false });
+
+    try apply(&bytes, 0, bytes.len, 3, &glyphs, .{ .glyph_substituted = &substituted });
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 1 }, glyphs.items);
+    try std.testing.expect(substituted.items[1]);
 }

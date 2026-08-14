@@ -1798,9 +1798,12 @@ shaping-performance superiority.
   metadata updates. Legacy type-0 Indic rearrangement now runs the obsolete
   byte-indexed state table while reusing the 15 verified rearrangement verbs
   and glyph-parallel metadata movement; a synthetic `AB` fixture matches
-  HarfBuzz. HarfRust currently has no `mort` table parser, so retained
+  HarfBuzz. Type-1 contextual substitution now supports obsolete byte-indexed
+  states plus signed word offsets from the state-subtable base, with a second
+  `AB` fixture retaining substitution metadata and matching HarfBuzz. HarfRust
+  currently has no `mort` table parser, so retained
   automated reference coverage for these paths is HarfBuzz. Stateful legacy
-  `mort` types 1/2/5 remain open.
+  `mort` types 2/5 remain open.
 
   AAT `kerx` formats 0, 1, 2, 4, and 6 now participate in actual shaping rather
   than metadata inspection only. The retained format-0/2/6 synthetic fonts

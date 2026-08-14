@@ -1564,6 +1564,15 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   the final F2Dot14-normalized fvar/avar location. The five retained checksums
   are `56299d01d22a7578`, `cf20e51869c39c0a`, `ba96f0ea76f18d3b`,
   `1128dc6c96d5b0a2`, and `cd0b59b81bd63b62`.
+- All twelve Unicode text-rendering `HVAR-{1,2}.tests` rows pass both
+  references at `wght=0,200,400,600,800,1000`. `TestHVAROne.otf` exercises
+  mapped CFF advance-width deltas across `ABC`; its six checksums are
+  `1cde33aa79622f01`, `ff0da980cf4cb6bd`, `843e1f581a14c246`,
+  `fbb94c9b0d2e01ca`, `8514cd3f14ac775e`, and `5fc7d4cc3e11cecb`.
+  `TestHVARTwo.ttf` exercises the TrueType metric path across `AB`; its
+  checksums are `c9e49495a6e43c93`, `6e5b88b1079710a0`,
+  `c354056763582773`, `a8fac55de53e66bf`, `73f5831a42821915`, and
+  `53efa1cbd254571d`.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

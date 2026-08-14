@@ -39,6 +39,10 @@ pub const GlyphRange = @import("core.zig").GlyphRange;
 pub const Language = @import("core.zig").Language;
 pub const Locale = @import("core.zig").Locale;
 pub const WordSegment = @import("unicode.zig").WordSegment;
+pub const WordBoundarySegment = @import("unicode.zig").WordBoundarySegment;
+pub const WordBoundaryIterator = @import("unicode.zig").WordBoundaryIterator;
+pub const wordSegments = @import("unicode.zig").wordSegments;
+pub const word_unicode_version = @import("unicode.zig").word_unicode_version;
 pub const SentenceSegment = @import("unicode.zig").SentenceSegment;
 pub const LineBreak = @import("unicode.zig").LineBreak;
 pub const LineBreakKind = @import("unicode.zig").LineBreakKind;
@@ -4186,6 +4190,42 @@ test "grapheme clusters keep controls atomic" {
     try std.testing.expectEqual(@as(usize, 4), paragraph_separator.len);
     try std.testing.expectEqualStrings("\u{2029}", "x\u{2029}\u{0301}y"[paragraph_separator[1].byte_start..][0..paragraph_separator[1].byte_len]);
     try std.testing.expectEqualStrings("\u{0301}", "x\u{2029}\u{0301}y"[paragraph_separator[2].byte_start..][0..paragraph_separator[2].byte_len]);
+}
+
+test "streams Unicode word boundaries separately from selectable words" {
+    const text = "can't 3.14 一丁 ក";
+    var iterator = try wordSegments(text);
+    const expected = [_][]const u8{
+        "can't",
+        " ",
+        "3.14",
+        " ",
+        "一",
+        "丁",
+        " ",
+        "ក",
+    };
+    const expected_word = [_]bool{
+        true,
+        false,
+        true,
+        false,
+        true,
+        true,
+        false,
+        true,
+    };
+    for (expected, expected_word) |segment_text, is_word| {
+        const segment = iterator.next() orelse return error.MissingWordSegment;
+        try std.testing.expectEqualStrings(
+            segment_text,
+            text[segment.byte_start..][0..segment.byte_len],
+        );
+        try std.testing.expectEqual(is_word, segment.is_word);
+    }
+    try std.testing.expectEqual(@as(?WordBoundarySegment, null), iterator.next());
+    try std.testing.expectEqual([3]u8{ 17, 0, 0 }, word_unicode_version);
+    try std.testing.expectError(error.InvalidUtf8, wordSegments("word\xff"));
 }
 
 test "word segments retain Unicode format controls" {

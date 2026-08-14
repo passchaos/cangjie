@@ -1,6 +1,8 @@
 const std = @import("std");
 const line_break = @import("text/line_break.zig");
 const grapheme_boundary = @import("unicode/grapheme/iterator.zig");
+const word_boundary = @import("unicode/word/iterator.zig");
+const word_selection = @import("unicode/word/selection.zig");
 const canonical_combining_class = @import("unicode/canonical_combining_class.zig");
 const canonical_decomposition = @import("unicode/canonical_decomposition.zig");
 const nonspacing_mark = @import("unicode/nonspacing_mark.zig");
@@ -700,10 +702,25 @@ test "streaming grapheme iterator matches allocating collector" {
     try std.testing.expectError(error.InvalidUtf8, graphemeClusters("\xff"));
 }
 
+pub const WordBoundarySegment = word_boundary.Segment;
+/// A selectable word span retained for editor/caret compatibility.
+///
+/// `wordSegments` exposes every UAX #29 segment and its `is_word` bit. This
+/// compact type intentionally keeps the established word-only collector ABI.
 pub const WordSegment = struct {
     byte_start: usize,
     byte_len: usize,
 };
+pub const WordBoundaryIterator = word_boundary.Iterator;
+pub const word_unicode_version = word_boundary.unicode_version;
+
+pub fn wordSegments(text: []const u8) word_boundary.Error!WordBoundaryIterator {
+    return word_boundary.segments(text);
+}
+
+pub fn wordSegmentsAssumeValid(text: []const u8) WordBoundaryIterator {
+    return word_boundary.assumeValid(text);
+}
 
 pub const SentenceSegment = struct {
     byte_start: usize,
@@ -1312,27 +1329,12 @@ fn isVaiScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0xa500 and codepoint <= 0xa63f;
 }
 
-fn isVaiWordCodepoint(codepoint: u21) bool {
-    // U+A60D..U+A60F are Vai punctuation. Syllables, the syllable lengthener,
-    // supplementary syllables, and native digits should group into normal
-    // space-delimited words instead of becoming one segment per codepoint.
-    return (codepoint >= 0xa500 and codepoint <= 0xa60c) or
-        (codepoint >= 0xa610 and codepoint <= 0xa62b);
-}
-
 fn isLisuScriptCodepoint(codepoint: u21) bool {
     // Lisu fonts select the `lisu` OpenType ScriptList entry for the Fraser
     // alphabet, tone letters, script punctuation, and the supplementary letter
     // YHA. Keeping the base block and supplement together avoids splitting
     // older or dialectal Lisu text through DFLT/unknown shaping runs.
     return (codepoint >= 0xa4d0 and codepoint <= 0xa4ff) or
-        codepoint == 0x11fb0;
-}
-
-fn isLisuWordCodepoint(codepoint: u21) bool {
-    // U+A4FE/U+A4FF are Lisu punctuation, not word letters. The rest of the
-    // base block plus U+11FB0 should group into normal space-delimited words.
-    return (codepoint >= 0xa4d0 and codepoint <= 0xa4fd) or
         codepoint == 0x11fb0;
 }
 
@@ -1385,28 +1387,12 @@ fn isNewaScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x11400 and codepoint <= 0x11461 and codepoint != 0x1145c;
 }
 
-fn isNewaWordCodepoint(codepoint: u21) bool {
-    // Letters, dependent signs, native digits, and the sandhi/Vedic signs form
-    // normal space-delimited words. Dandas and the punctuation ranges
-    // U+11448..U+1144F/U+1145A..U+1145D remain separators.
-    return (codepoint >= 0x11400 and codepoint <= 0x11447) or
-        (codepoint >= 0x11450 and codepoint <= 0x11459) or
-        (codepoint >= 0x1145e and codepoint <= 0x11461);
-}
-
 fn isKayahLiScriptCodepoint(codepoint: u21) bool {
     // Kayah Li fonts use the registered `kali` ScriptList entry for native
     // digits, letters, dependent vowels/tones, and script punctuation in the
     // compact A900 block. Keeping the whole assigned block in one run prevents
     // combining tone marks or native separators from forcing DFLT shaping.
     return codepoint >= 0xa900 and codepoint <= 0xa92f;
-}
-
-fn isKayahLiWordCodepoint(codepoint: u21) bool {
-    // Anchor word spans on Kayah Li digits and base letters. Vowels and tones
-    // attach through the generic extender table, while U+A92E/U+A92F are script
-    // punctuation that should keep shaping context but break selectable words.
-    return codepoint >= 0xa900 and codepoint <= 0xa925;
 }
 
 fn isSaurashtraScriptCodepoint(codepoint: u21) bool {
@@ -1416,11 +1402,6 @@ fn isSaurashtraScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0xa8ce and codepoint <= 0xa8d9);
 }
 
-fn isSaurashtraWordCodepoint(codepoint: u21) bool {
-    return (codepoint >= 0xa880 and codepoint <= 0xa8c5) or
-        (codepoint >= 0xa8d0 and codepoint <= 0xa8d9);
-}
-
 fn isRejangScriptCodepoint(codepoint: u21) bool {
     // Rejang has one compact block with letters, dependent vowel/consonant
     // signs, virama, and a native section mark. Keep only assigned scalars in
@@ -1428,13 +1409,6 @@ fn isRejangScriptCodepoint(codepoint: u21) bool {
     // silently inherit Rejang script or LTR bidi behavior.
     return (codepoint >= 0xa930 and codepoint <= 0xa953) or
         codepoint == 0xa95f;
-}
-
-fn isRejangWordCodepoint(codepoint: u21) bool {
-    // Word spans are anchored on Rejang letters. Dependent vowels, final
-    // consonant signs, and virama attach through the generic extender tables,
-    // while the section mark remains script text but not selectable word text.
-    return codepoint >= 0xa930 and codepoint <= 0xa946;
 }
 
 fn isGranthaScriptCodepoint(codepoint: u21) bool {
@@ -1458,10 +1432,6 @@ fn isGranthaScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x11370 and codepoint <= 0x11374);
 }
 
-fn isGranthaWordCodepoint(codepoint: u21) bool {
-    return isGranthaScriptCodepoint(codepoint);
-}
-
 fn isLimbuScriptCodepoint(codepoint: u21) bool {
     // Limbu has dependent vowel signs, subjoined letters, final consonant
     // signs, and native digits in one compact block. Fonts can expose these
@@ -1475,14 +1445,6 @@ fn isSharadaScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x11b60 and codepoint <= 0x11b67);
 }
 
-fn isSharadaWordCodepoint(codepoint: u21) bool {
-    return (codepoint >= 0x11180 and codepoint <= 0x111c4) or
-        (codepoint >= 0x111c9 and codepoint <= 0x111cc) or
-        (codepoint >= 0x111ce and codepoint <= 0x111da) or
-        codepoint == 0x111dc or
-        (codepoint >= 0x11b60 and codepoint <= 0x11b67);
-}
-
 fn isLepchaScriptCodepoint(codepoint: u21) bool {
     // Lepcha letters, subjoined letters, vowel/consonant signs, digits, and
     // native punctuation select the `lepc` OpenType ScriptList entry. Keep only
@@ -1490,15 +1452,6 @@ fn isLepchaScriptCodepoint(codepoint: u21) bool {
     // not silently inherit Lepcha script or LTR bidi behavior.
     return (codepoint >= 0x1c00 and codepoint <= 0x1c37) or
         (codepoint >= 0x1c3b and codepoint <= 0x1c49) or
-        (codepoint >= 0x1c4d and codepoint <= 0x1c4f);
-}
-
-fn isLepchaWordCodepoint(codepoint: u21) bool {
-    // Anchor word spans on Lepcha base letters and native digits. Dependent
-    // vowels, subjoined letters, finals, and nukta attach through the generic
-    // extender path, while Lepcha punctuation remains a word separator.
-    return (codepoint >= 0x1c00 and codepoint <= 0x1c23) or
-        (codepoint >= 0x1c40 and codepoint <= 0x1c49) or
         (codepoint >= 0x1c4d and codepoint <= 0x1c4f);
 }
 
@@ -1526,13 +1479,6 @@ fn isBatakScriptCodepoint(codepoint: u21) bool {
     // script while leaving U+1BF4..U+1BFB unknown for malformed data.
     return (codepoint >= 0x1bc0 and codepoint <= 0x1bf3) or
         (codepoint >= 0x1bfc and codepoint <= 0x1bff);
-}
-
-fn isBatakWordCodepoint(codepoint: u21) bool {
-    // Anchor word spans on Batak letters. Dependent vowels/consonant signs and
-    // pangolat attach through the generic extender tables; bindu punctuation
-    // remains in the script run for shaping but deliberately breaks words.
-    return codepoint >= 0x1bc0 and codepoint <= 0x1be5;
 }
 
 fn isMeeteiMayekScriptCodepoint(codepoint: u21) bool {
@@ -1581,13 +1527,6 @@ fn isKaithiScriptCodepoint(codepoint: u21) bool {
         codepoint == 0x110cd;
 }
 
-fn isKaithiWordCodepoint(codepoint: u21) bool {
-    // Anchor word spans on Kaithi letters. Dependent signs attach through the
-    // generic extender tables; number signs and punctuation stay in the script
-    // run for shaping but do not become selectable word text by themselves.
-    return codepoint >= 0x11083 and codepoint <= 0x110af;
-}
-
 fn isChakmaScriptCodepoint(codepoint: u21) bool {
     // Chakma uses an Indic-style shaping model under the registered `cakm`
     // OpenType ScriptList tag. Keep assigned letters, vowel signs, virama,
@@ -1617,17 +1556,6 @@ fn isTakriScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x116c0 and codepoint <= 0x116c9);
 }
 
-fn isChakmaWordCodepoint(codepoint: u21) bool {
-    // Word spans are anchored on Chakma letters and native digits. Dependent
-    // signs and virama attach through the generic extender path, while danda,
-    // section, and question punctuation remain shaping script text but break
-    // selectable word spans.
-    return (codepoint >= 0x11103 and codepoint <= 0x11126) or
-        (codepoint >= 0x11136 and codepoint <= 0x1113f) or
-        codepoint == 0x11144 or
-        codepoint == 0x11147;
-}
-
 fn isNushuScriptCodepoint(codepoint: u21) bool {
     // Nushu is encoded as a supplementary-plane ideographic script and has a
     // dedicated OpenType ScriptList tag (`nshu`). Classify the entire block as
@@ -1645,14 +1573,6 @@ fn isRunicScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x16a0 and codepoint <= 0x16ff;
 }
 
-fn isRunicWordCodepoint(codepoint: u21) bool {
-    // U+16EB..U+16ED are Runic word/division punctuation. Letters and Runic
-    // numeric symbols should group into normal word spans, while those
-    // separators deliberately break words just like spaces or punctuation.
-    return (codepoint >= 0x16a0 and codepoint <= 0x16ea) or
-        (codepoint >= 0x16ee and codepoint <= 0x16f8);
-}
-
 fn isCopticScriptCodepoint(codepoint: u21) bool {
     // Coptic is encoded partly as Coptic letters in the Greek block, partly in
     // the dedicated Coptic block, and partly as Coptic Epact Numbers in the
@@ -1663,17 +1583,6 @@ fn isCopticScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x102e0 and codepoint <= 0x102ff);
 }
 
-fn isCopticWordCodepoint(codepoint: u21) bool {
-    // Exclude Coptic block punctuation/fraction signs from words, but keep the
-    // historic letters and Epact number signs grouped as normal unspaced Coptic
-    // tokens. Combining marks attach through isWordExtender().
-    return (codepoint >= 0x03e2 and codepoint <= 0x03ef) or
-        (codepoint >= 0x2c80 and codepoint <= 0x2ce4) or
-        (codepoint >= 0x2ceb and codepoint <= 0x2cee) or
-        (codepoint >= 0x2cf2 and codepoint <= 0x2cf3) or
-        (codepoint >= 0x102e1 and codepoint <= 0x102fb);
-}
-
 fn isOghamScriptCodepoint(codepoint: u21) bool {
     // Ogham fonts use the historical `ogam` OpenType script tag for the block's
     // letters, native space mark, and feather punctuation. Keep those assigned
@@ -1681,24 +1590,11 @@ fn isOghamScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x1680 and codepoint <= 0x169c;
 }
 
-fn isOghamWordCodepoint(codepoint: u21) bool {
-    // U+1680 OGHAM SPACE MARK and U+169B/U+169C feather marks are separators,
-    // not word letters. The twenty-five letter names form normal unspaced word
-    // spans for caret movement and selection.
-    return codepoint >= 0x1681 and codepoint <= 0x169a;
-}
-
 fn isDuployanScriptCodepoint(codepoint: u21) bool {
     // Duployan shorthand fonts expose script-specific substitutions and
     // positioning under the registered `dupl` ScriptList entry. Keep the
     // shorthand block in one LTR shaping run instead of falling through DFLT.
     return codepoint >= 0x1bc00 and codepoint <= 0x1bc9f;
-}
-
-fn isDuployanWordCodepoint(codepoint: u21) bool {
-    // Anchor word spans on Duployan shorthand letters and affixes. Format
-    // controls such as shorthand overlap marks attach through isWordExtender().
-    return isDuployanScriptCodepoint(codepoint);
 }
 
 fn isPhoenicianScriptCodepoint(codepoint: u21) bool {
@@ -1711,30 +1607,12 @@ fn isPhoenicianScriptCodepoint(codepoint: u21) bool {
         codepoint == 0x1091f;
 }
 
-fn isPhoenicianWordCodepoint(codepoint: u21) bool {
-    // Phoenician number signs are strong RTL script characters and should group
-    // with adjacent letters for coarse word/caret primitives. U+1091F is a
-    // word separator, so it stays in the script run but deliberately breaks the
-    // selectable word span.
-    return codepoint >= 0x10900 and codepoint <= 0x1091b;
-}
-
 fn isSamaritanScriptCodepoint(codepoint: u21) bool {
     // Samaritan letters, vowel signs, reading marks, and punctuation all carry
     // strong RTL behavior and use the registered `samr` OpenType script tag.
     // Keep the assigned block together, while leaving U+083F unknown so
     // malformed/private data does not inherit Samaritan script semantics.
     return codepoint >= 0x0800 and codepoint <= 0x083e;
-}
-
-fn isSamaritanWordCodepoint(codepoint: u21) bool {
-    // Word spans are anchored on letters and spacing modifier letters. Vowel
-    // and reading marks attach through isWordExtender(), while the native
-    // punctuation remains part of the RTL script run but breaks word selection.
-    return (codepoint >= 0x0800 and codepoint <= 0x0815) or
-        codepoint == 0x081a or
-        codepoint == 0x0824 or
-        codepoint == 0x0828;
 }
 
 fn isMongolianScriptCodepoint(codepoint: u21) bool {
@@ -1756,17 +1634,6 @@ fn isNkoScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x07fd and codepoint <= 0x07ff);
 }
 
-fn isNkoWordCodepoint(codepoint: u21) bool {
-    // N'Ko words can contain native digits and spacing modifier letters. Tone
-    // and nasalization marks attach through isWordExtender(); punctuation,
-    // symbols, and currency signs stay in the script run but do not become
-    // selectable word text by themselves.
-    return (codepoint >= 0x07c0 and codepoint <= 0x07ea) or
-        codepoint == 0x07f4 or
-        codepoint == 0x07f5 or
-        codepoint == 0x07fa;
-}
-
 fn isAdlamScriptCodepoint(codepoint: u21) bool {
     // Adlam is a right-to-left script for Fulani with dedicated OpenType
     // shaping under `adlm`. Keep the assigned letters, combining marks,
@@ -1778,30 +1645,12 @@ fn isAdlamScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x1e95e and codepoint <= 0x1e95f);
 }
 
-fn isAdlamWordCodepoint(codepoint: u21) bool {
-    // Word spans include cased Adlam letters, the spacing nasalization mark,
-    // and native digits. Combining Adlam marks attach through isWordExtender(),
-    // while initial question/exclamation punctuation deliberately terminates a
-    // word rather than becoming selectable text by itself.
-    return (codepoint >= 0x1e900 and codepoint <= 0x1e943) or
-        codepoint == 0x1e94b or
-        (codepoint >= 0x1e950 and codepoint <= 0x1e959);
-}
-
 fn isThaanaScriptCodepoint(codepoint: u21) bool {
     // Thaana is an RTL abugida used for Dhivehi. Its base letters and fili
     // vowel signs must select the `thaa` OpenType ScriptList entry together;
     // otherwise vowel-mark positioning falls back to DFLT or gets split from
     // the surrounding right-to-left shaping run.
     return codepoint >= 0x0780 and codepoint <= 0x07b1;
-}
-
-fn isThaanaWordCodepoint(codepoint: u21) bool {
-    // Keep words anchored on Thaana letters. Fili marks attach through the
-    // generic word-extender path so a stray leading mark does not become a word
-    // by itself, but normal letter+mark syllables remain one selectable token.
-    return (codepoint >= 0x0780 and codepoint <= 0x07a5) or
-        codepoint == 0x07b1;
 }
 
 fn isThaiScriptCodepoint(codepoint: u21) bool {
@@ -1830,19 +1679,6 @@ fn isKhmerScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x19e0 and codepoint <= 0x19ff);
 }
 
-fn isKhmerWordCodepoint(codepoint: u21) bool {
-    // Khmer does not use spaces between every lexical word, so this compact
-    // primitive only exposes contiguous letter/sign/digit spans. It
-    // deliberately excludes Khmer sentence punctuation and lunar-date symbols:
-    // those should remain in the script run for shaping but should not become
-    // selectable "words" on their own.
-    return (codepoint >= 0x1780 and codepoint <= 0x17d3) or
-        codepoint == 0x17d7 or
-        codepoint == 0x17dc or
-        codepoint == 0x17dd or
-        (codepoint >= 0x17e0 and codepoint <= 0x17f9);
-}
-
 fn isMyanmarScriptCodepoint(codepoint: u21) bool {
     // Myanmar shaping depends on the modern `mym2` OpenType script system for
     // kinzi, medials, stacked consonants, and dependent vowel/tone placement.
@@ -1855,21 +1691,6 @@ fn isMyanmarScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x116d0 and codepoint <= 0x116e3);
 }
 
-fn isMyanmarWordCodepoint(codepoint: u21) bool {
-    // Exclude Myanmar section punctuation and symbols from word spans while
-    // keeping letters, dependent signs, medials, viramas/asat, tone marks, and
-    // native digits together as one orthographic token for selection and layout
-    // cache boundaries. Combining/spacing marks also attach through the generic
-    // extender tables, but listing them here keeps a mark following a Myanmar
-    // digit or extension letter in the same script-specific word class.
-    return (codepoint >= 0x1000 and codepoint <= 0x1049) or
-        (codepoint >= 0x1050 and codepoint <= 0x109d) or
-        (codepoint >= 0xa9e0 and codepoint <= 0xa9fe) or
-        (codepoint >= 0xaa60 and codepoint <= 0xaa76) or
-        (codepoint >= 0xaa7a and codepoint <= 0xaa7f) or
-        (codepoint >= 0x116d0 and codepoint <= 0x116e3);
-}
-
 fn isSyriacScriptCodepoint(codepoint: u21) bool {
     // Syriac is a right-to-left cursive script with script-specific OpenType
     // shaping. Its base letters, combining marks, abbreviations, and
@@ -1879,17 +1700,6 @@ fn isSyriacScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x0860 and codepoint <= 0x086f);
 }
 
-fn isSyriacWordCodepoint(codepoint: u21) bool {
-    // Anchor Syriac word spans on encoded letters only. Script punctuation and
-    // U+070F abbreviation formatting must remain inside the RTL shaping run,
-    // but they should not become selectable words; vowel/pointing marks attach
-    // through isWordExtender() once a word has started.
-    return codepoint == 0x0710 or
-        (codepoint >= 0x0712 and codepoint <= 0x072f) or
-        (codepoint >= 0x074d and codepoint <= 0x074f) or
-        (codepoint >= 0x0860 and codepoint <= 0x086a);
-}
-
 fn isMandaicScriptCodepoint(codepoint: u21) bool {
     // Mandaic is an RTL cursive script with script-specific OpenType shaping
     // under `mand`. Only assigned scalars in U+0840..U+085E should enter the
@@ -1897,13 +1707,6 @@ fn isMandaicScriptCodepoint(codepoint: u21) bool {
     // malformed/private data does not silently inherit Mandaic bidi behavior.
     return (codepoint >= 0x0840 and codepoint <= 0x085b) or
         codepoint == 0x085e;
-}
-
-fn isMandaicWordCodepoint(codepoint: u21) bool {
-    // Mandaic words are anchored by letters. Combining marks attach through the
-    // generic word-extender path, while U+085E punctuation remains a separator
-    // even though it stays in the Mandaic script run for shaping and bidi.
-    return codepoint >= 0x0840 and codepoint <= 0x0858;
 }
 
 fn isGeorgianScriptCodepoint(codepoint: u21) bool {
@@ -1935,14 +1738,6 @@ fn isTifinaghScriptCodepoint(codepoint: u21) bool {
         codepoint == 0x2d6f or
         codepoint == 0x2d70 or
         codepoint == 0x2d7f;
-}
-
-fn isTifinaghWordCodepoint(codepoint: u21) bool {
-    // Tifinagh words are anchored by letters plus U+2D6F labialization mark.
-    // U+2D70 is punctuation and U+2D7F attaches through isWordExtender(), so
-    // neither should start a selectable word on its own.
-    return (codepoint >= 0x2d30 and codepoint <= 0x2d67) or
-        codepoint == 0x2d6f;
 }
 
 fn isTibetanScriptCodepoint(codepoint: u21) bool {
@@ -1992,24 +1787,6 @@ fn isGujaratiScriptCodepoint(codepoint: u21) bool {
     // and modern combining additions select the same GSUB/GPOS ScriptList as
     // their base consonants instead of falling through DFLT/unknown.
     return codepoint >= 0x0a80 and codepoint <= 0x0aff;
-}
-
-fn isGujaratiWordCodepoint(codepoint: u21) bool {
-    // Exclude Gujarati abbreviation/currency signs from word spans while
-    // grouping letters, avagraha/OM, vocalic letters, and native digits.
-    // Dependent signs attach through isWordExtender(), which avoids letting a
-    // stray leading vowel mark become a selectable word by itself.
-    return (codepoint >= 0x0a85 and codepoint <= 0x0a8d) or
-        (codepoint >= 0x0a8f and codepoint <= 0x0a91) or
-        (codepoint >= 0x0a93 and codepoint <= 0x0aa8) or
-        (codepoint >= 0x0aaa and codepoint <= 0x0ab0) or
-        (codepoint >= 0x0ab2 and codepoint <= 0x0ab3) or
-        (codepoint >= 0x0ab5 and codepoint <= 0x0ab9) or
-        codepoint == 0x0abd or
-        codepoint == 0x0ad0 or
-        (codepoint >= 0x0ae0 and codepoint <= 0x0ae1) or
-        (codepoint >= 0x0ae6 and codepoint <= 0x0aef) or
-        codepoint == 0x0af9;
 }
 
 fn isOdiaScriptCodepoint(codepoint: u21) bool {
@@ -2180,14 +1957,6 @@ fn isGlagoliticScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x1e000 and codepoint <= 0x1e02a);
 }
 
-fn isGlagoliticWordCodepoint(codepoint: u21) bool {
-    // Word spans are anchored on Glagolitic base letters. Supplementary
-    // combining letters attach through isWordExtender(), which avoids turning a
-    // stray leading combining mark into a selectable word by itself while still
-    // preserving marked manuscript abbreviations as one token.
-    return codepoint >= 0x2c00 and codepoint <= 0x2c5f;
-}
-
 fn isOldItalicScriptCodepoint(codepoint: u21) bool {
     // Old Italic is a supplementary-plane historic script with a registered
     // OpenType ScriptList tag (`ital`). The Unicode block has unassigned gaps,
@@ -2196,13 +1965,6 @@ fn isOldItalicScriptCodepoint(codepoint: u21) bool {
     // semantics it should not inherit.
     return (codepoint >= 0x10300 and codepoint <= 0x10323) or
         (codepoint >= 0x1032d and codepoint <= 0x1032f);
-}
-
-fn isOldItalicWordCodepoint(codepoint: u21) bool {
-    // Native Old Italic numerals share the same strong LTR script behavior as
-    // letters in Unicode. Group them with adjacent letters for coarse word and
-    // caret primitives, while leaving the unassigned block gaps as separators.
-    return isOldItalicScriptCodepoint(codepoint);
 }
 
 fn isUgariticScriptCodepoint(codepoint: u21) bool {
@@ -2214,12 +1976,6 @@ fn isUgariticScriptCodepoint(codepoint: u21) bool {
         codepoint == 0x1039f;
 }
 
-fn isUgariticWordCodepoint(codepoint: u21) bool {
-    // U+1039F UGARITIC WORD DIVIDER separates words. Ugaritic letters form
-    // normal selectable word spans; the reserved U+1039E remains unknown.
-    return codepoint >= 0x10380 and codepoint <= 0x1039d;
-}
-
 fn isOldPersianScriptCodepoint(codepoint: u21) bool {
     // Old Persian cuneiform has a registered OpenType ScriptList tag (`xpeo`).
     // Classify only assigned signs, logograms, word divider, and native numbers
@@ -2227,15 +1983,6 @@ fn isOldPersianScriptCodepoint(codepoint: u21) bool {
     // neighbouring valid text.
     return (codepoint >= 0x103a0 and codepoint <= 0x103c3) or
         (codepoint >= 0x103c8 and codepoint <= 0x103d5);
-}
-
-fn isOldPersianWordCodepoint(codepoint: u21) bool {
-    // U+103D0 OLD PERSIAN WORD DIVIDER is script punctuation and should keep the
-    // surrounding shaping run in `xpeo`, but it deliberately breaks selectable
-    // word spans. Signs, logograms, and native numbers remain grouped.
-    return (codepoint >= 0x103a0 and codepoint <= 0x103c3) or
-        (codepoint >= 0x103c8 and codepoint <= 0x103cf) or
-        (codepoint >= 0x103d1 and codepoint <= 0x103d5);
 }
 
 fn isAvestanScriptCodepoint(codepoint: u21) bool {
@@ -2247,13 +1994,6 @@ fn isAvestanScriptCodepoint(codepoint: u21) bool {
         (codepoint >= 0x10b39 and codepoint <= 0x10b3f);
 }
 
-fn isAvestanWordCodepoint(codepoint: u21) bool {
-    // U+10B39..U+10B3F are Avestan separators and abbreviation punctuation,
-    // not word letters. Keep only the encoded letters in selectable word
-    // spans; the punctuation still remains in the surrounding RTL script run.
-    return codepoint >= 0x10b00 and codepoint <= 0x10b35;
-}
-
 fn isImperialAramaicScriptCodepoint(codepoint: u21) bool {
     // Imperial Aramaic is a supplementary-plane RTL script with the registered
     // OpenType tag `armi`. Keep letters, the section sign, and native numbers
@@ -2261,15 +2001,6 @@ fn isImperialAramaicScriptCodepoint(codepoint: u21) bool {
     // does not silently inherit right-to-left shaping semantics.
     return (codepoint >= 0x10840 and codepoint <= 0x10855) or
         (codepoint >= 0x10857 and codepoint <= 0x1085f);
-}
-
-fn isImperialAramaicWordCodepoint(codepoint: u21) bool {
-    // Native Imperial Aramaic number signs have strong RTL script behavior and
-    // should group with adjacent letters for coarse word/caret primitives. The
-    // section sign remains script text for shaping but deliberately separates
-    // selectable word spans.
-    return (codepoint >= 0x10840 and codepoint <= 0x10855) or
-        (codepoint >= 0x10858 and codepoint <= 0x1085f);
 }
 
 fn isOldSouthArabianScriptCodepoint(codepoint: u21) bool {
@@ -2280,25 +2011,11 @@ fn isOldSouthArabianScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x10a60 and codepoint <= 0x10a7f;
 }
 
-fn isOldSouthArabianWordCodepoint(codepoint: u21) bool {
-    // U+10A7F OLD SOUTH ARABIAN NUMERIC INDICATOR is script text but not a
-    // letter/number value by itself. Let it separate coarse word spans while
-    // grouping native number signs with adjacent letters like the other
-    // historic RTL scripts handled here.
-    return codepoint >= 0x10a60 and codepoint <= 0x10a7e;
-}
-
 fn isOldNorthArabianScriptCodepoint(codepoint: u21) bool {
     // Old North Arabian is an RTL historic script with registered OpenType tag
     // `narb`. The block is compact and currently fully assigned: letters and
     // native number signs share one shaping/bidi run for inscriptional text.
     return codepoint >= 0x10a80 and codepoint <= 0x10a9f;
-}
-
-fn isOldNorthArabianWordCodepoint(codepoint: u21) bool {
-    // Native Old North Arabian number signs have strong RTL script behavior.
-    // Group them with adjacent letters for coarse word/caret primitives.
-    return isOldNorthArabianScriptCodepoint(codepoint);
 }
 
 fn isMeroiticHieroglyphsScriptCodepoint(codepoint: u21) bool {
@@ -2310,13 +2027,6 @@ fn isMeroiticHieroglyphsScriptCodepoint(codepoint: u21) bool {
     return codepoint >= 0x10980 and codepoint <= 0x1099f;
 }
 
-fn isMeroiticHieroglyphsWordCodepoint(codepoint: u21) bool {
-    // The hieroglyphic block encodes letters and two logographic signs, all
-    // with strong RTL behavior. Group them as word text so caret/selection
-    // primitives do not fall back to one scalar per sign in inscriptions.
-    return isMeroiticHieroglyphsScriptCodepoint(codepoint);
-}
-
 fn isMeroiticCursiveScriptCodepoint(codepoint: u21) bool {
     // Meroitic Cursive shares the RTL writing direction with the hieroglyphic
     // script but uses a separate OpenType ScriptList tag (`merc`). Classify
@@ -2325,13 +2035,6 @@ fn isMeroiticCursiveScriptCodepoint(codepoint: u21) bool {
     return (codepoint >= 0x109a0 and codepoint <= 0x109b7) or
         (codepoint >= 0x109bc and codepoint <= 0x109cf) or
         (codepoint >= 0x109d2 and codepoint <= 0x109ff);
-}
-
-fn isMeroiticCursiveWordCodepoint(codepoint: u21) bool {
-    // Native numeric and fraction signs are strong RTL script characters in
-    // Unicode. Keep them with adjacent cursive letters/logograms for coarse
-    // word movement, matching the behavior of other historic-script numerals.
-    return isMeroiticCursiveScriptCodepoint(codepoint);
 }
 
 /// Classify only strong LTR/RTL scripts and neutral punctuation/spacing. The
@@ -2660,6 +2363,11 @@ pub fn itemizeGraphemeClusters(allocator: std.mem.Allocator, text: []const u8) !
 }
 
 pub fn itemizeWordSegments(allocator: std.mem.Allocator, text: []const u8) ![]WordSegment {
+    // This collector is intentionally a compatibility tailoring for editor
+    // word movement: it omits punctuation/whitespace and retains several
+    // script-specific numeric/symbol ranges that users expect to select with
+    // their neighboring letters. New code that needs standard UAX #29
+    // boundaries, including every non-word segment, should use `wordSegments`.
     var words = std.ArrayList(WordSegment).empty;
     errdefer words.deinit(allocator);
 
@@ -5674,71 +5382,47 @@ test "Myanmar text selects Myanmar v2 script primitives across extensions" {
     try std.testing.expectEqualStrings("\u{aa60}\u{aa7c}", text[words[3].byte_start..][0..words[3].byte_len]);
 }
 
-const WordKind = enum {
-    none,
-    single,
-    latin_number,
-    lisu,
-    vai,
-    arabic,
-    hebrew,
-    syriac,
-    samaritan,
-    phoenician,
-    armenian,
-    glagolitic,
-    old_italic,
-    ugaritic,
-    old_persian,
-    avestan,
-    imperial_aramaic,
-    old_south_arabian,
-    old_north_arabian,
-    meroitic_hieroglyphs,
-    meroitic_cursive,
-    thaana,
-    adlam,
-    mandaic,
-    nko,
-    khmer,
-    myanmar,
-    devanagari,
-    bengali,
-    odia,
-    gurmukhi,
-    gujarati,
-    telugu,
-    kannada,
-    sinhala,
-    tamil,
-    malayalam,
-    balinese,
-    javanese,
-    tai_tham,
-    marchen,
-    newa,
-    kayah_li,
-    saurashtra,
-    rejang,
-    grantha,
-    limbu,
-    sharada,
-    lepcha,
-    buginese,
-    sundanese,
-    batak,
-    meetei_mayek,
-    canadian_aboriginal,
-    tifinagh,
-    cham,
-    brahmi,
-    kaithi,
-    chakma,
-    runic,
-    coptic,
-    ogham,
-    duployan,
-};
+const WordKind = word_selection.Kind;
+
+fn wordKindForCodepoint(codepoint: u21) WordKind {
+    const script: word_selection.Script = switch (scriptForCodepoint(codepoint)) {
+        .han => .han,
+        .yi => .yi,
+        .nushu => .nushu,
+        .hiragana => .hiragana,
+        .katakana => .katakana,
+        .hangul => .hangul,
+        .arabic => .arabic,
+        .hebrew => .hebrew,
+        .armenian => .armenian,
+        .devanagari => .devanagari,
+        .bengali => .bengali,
+        .odia => .odia,
+        .gurmukhi => .gurmukhi,
+        .telugu => .telugu,
+        .kannada => .kannada,
+        .sinhala => .sinhala,
+        .tamil => .tamil,
+        .malayalam => .malayalam,
+        .balinese => .balinese,
+        .javanese => .javanese,
+        .tai_tham => .tai_tham,
+        .marchen => .marchen,
+        .limbu => .limbu,
+        .buginese => .buginese,
+        .sundanese => .sundanese,
+        .meetei_mayek => .meetei_mayek,
+        .canadian_aboriginal => .canadian_aboriginal,
+        .cham => .cham,
+        .brahmi => .brahmi,
+        .khudawadi => .khudawadi,
+        .tirhuta => .tirhuta,
+        .modi => .modi,
+        .takri => .takri,
+        else => .other,
+    };
+    return word_selection.kindForCodepoint(codepoint, script);
+}
 
 fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
     var cursor = start;
@@ -5798,82 +5482,6 @@ fn isSentenceTrailingClose(codepoint: u21) bool {
     return switch (codepoint) {
         '\'', '"', ')', ']', '}', 0x00bb, 0x2019, 0x201d, 0x3009, 0x300b, 0x300d, 0x300f, 0x3011, 0x3015, 0x3017, 0x3019, 0x301b => true,
         else => false,
-    };
-}
-
-fn wordKindForCodepoint(codepoint: u21) WordKind {
-    if ((codepoint >= 'A' and codepoint <= 'Z') or
-        (codepoint >= 'a' and codepoint <= 'z') or
-        (codepoint >= '0' and codepoint <= '9') or
-        codepoint == '_')
-    {
-        return .latin_number;
-    }
-    if (isLisuWordCodepoint(codepoint)) return .lisu;
-    if (isVaiWordCodepoint(codepoint)) return .vai;
-    if (isKhmerWordCodepoint(codepoint)) return .khmer;
-    if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
-    if (isThaanaWordCodepoint(codepoint)) return .thaana;
-    if (isAdlamWordCodepoint(codepoint)) return .adlam;
-    if (isSyriacWordCodepoint(codepoint)) return .syriac;
-    if (isSamaritanWordCodepoint(codepoint)) return .samaritan;
-    if (isMandaicWordCodepoint(codepoint)) return .mandaic;
-    if (isNkoWordCodepoint(codepoint)) return .nko;
-    if (isPhoenicianWordCodepoint(codepoint)) return .phoenician;
-    if (isLepchaWordCodepoint(codepoint)) return .lepcha;
-    if (isGujaratiWordCodepoint(codepoint)) return .gujarati;
-    if (isRunicWordCodepoint(codepoint)) return .runic;
-    if (isCopticWordCodepoint(codepoint)) return .coptic;
-    if (isOghamWordCodepoint(codepoint)) return .ogham;
-    if (isDuployanWordCodepoint(codepoint)) return .duployan;
-    if (isBatakWordCodepoint(codepoint)) return .batak;
-    if (isTifinaghWordCodepoint(codepoint)) return .tifinagh;
-    if (isGlagoliticWordCodepoint(codepoint)) return .glagolitic;
-    if (isOldItalicWordCodepoint(codepoint)) return .old_italic;
-    if (isUgariticWordCodepoint(codepoint)) return .ugaritic;
-    if (isOldPersianWordCodepoint(codepoint)) return .old_persian;
-    if (isAvestanWordCodepoint(codepoint)) return .avestan;
-    if (isImperialAramaicWordCodepoint(codepoint)) return .imperial_aramaic;
-    if (isOldSouthArabianWordCodepoint(codepoint)) return .old_south_arabian;
-    if (isOldNorthArabianWordCodepoint(codepoint)) return .old_north_arabian;
-    if (isMeroiticHieroglyphsWordCodepoint(codepoint)) return .meroitic_hieroglyphs;
-    if (isMeroiticCursiveWordCodepoint(codepoint)) return .meroitic_cursive;
-    if (isKayahLiWordCodepoint(codepoint)) return .kayah_li;
-    if (isSaurashtraWordCodepoint(codepoint)) return .saurashtra;
-    if (isRejangWordCodepoint(codepoint)) return .rejang;
-    if (isGranthaWordCodepoint(codepoint)) return .grantha;
-    if (isSharadaWordCodepoint(codepoint)) return .sharada;
-    if (isKaithiWordCodepoint(codepoint)) return .kaithi;
-    if (isChakmaWordCodepoint(codepoint)) return .chakma;
-    if (isNewaWordCodepoint(codepoint)) return .newa;
-    const script = scriptForCodepoint(codepoint);
-    return switch (script) {
-        .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
-        .arabic => .arabic,
-        .hebrew => .hebrew,
-        .armenian => .armenian,
-        .devanagari => .devanagari,
-        .bengali => .bengali,
-        .odia => .odia,
-        .gurmukhi => .gurmukhi,
-        .telugu => .telugu,
-        .kannada => .kannada,
-        .sinhala => .sinhala,
-        .tamil => .tamil,
-        .malayalam => .malayalam,
-        .balinese => .balinese,
-        .javanese => .javanese,
-        .tai_tham => .tai_tham,
-        .marchen => .marchen,
-        .limbu => .limbu,
-        .buginese => .buginese,
-        .sundanese => .sundanese,
-        .meetei_mayek => .meetei_mayek,
-        .canadian_aboriginal => .canadian_aboriginal,
-        .cham => .cham,
-        .brahmi => .brahmi,
-        .khudawadi, .tirhuta, .modi, .takri => .single,
-        else => .none,
     };
 }
 

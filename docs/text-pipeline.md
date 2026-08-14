@@ -115,6 +115,27 @@ caret-boundary API. USE shaping and parity normalization share this internal
 layer, so upgrading public UAX #29 data does not silently change GSUB cluster
 provenance.
 
+`src/unicode/word/iterator.zig` independently implements Unicode 17.0 default
+word boundaries:
+
+- `wordSegments(text)` validates UTF-8 and streams every UAX #29 segment
+  without allocation. Each result carries an `is_word` classification so
+  punctuation and whitespace remain observable without becoming editor word
+  stops.
+- The generated property byte combines `Word_Break`,
+  `Extended_Pictographic`, and a Unicode General_Category-based letter/number
+  anchor. Dictionary-segmented scripts with `WB=Other` therefore remain
+  identifiable as text without changing their default boundaries.
+- The state machine covers WB3 through WB16, including ignored Format/Extend
+  replacement, Hebrew quotes, decimal punctuation, Katakana, connectors,
+  emoji ZWJ sequences, and regional-indicator pairing.
+- `itemizeWordSegments` remains an explicitly documented compatibility
+  tailoring for existing editor movement. It emits only selectable words and
+  preserves established script-specific number/symbol grouping; standards
+  consumers use the streaming API instead.
+- All 1,944 cases from Unicode 17 `WordBreakTest.txt` run in the normal test
+  suite.
+
 `WrapMode.no_wrap` is also enforced by reflow now: width does not introduce
 soft lines, but mandatory Unicode line separators still do.
 
@@ -268,6 +289,36 @@ The public state machine has one explicit Cangjie tailoring: U+0A4D, U+0CCD,
 U+11046, U+110B9, and U+11442 remain InCB linkers to preserve established
 cross-script caret atoms. This is intentionally documented and tested as a
 tailoring rather than presented as Unicode 17's default property assignment.
+
+The word-boundary data and fixture are generated separately:
+
+```sh
+tools/unicode/word/generate_data.py \
+  path/to/WordBreakProperty.txt \
+  path/to/emoji-data.txt \
+  path/to/UnicodeData.txt \
+  src/unicode/word/data.bin
+
+tools/unicode/word/generate_conformance.py \
+  path/to/WordBreakTest.txt \
+  src/unicode/word/conformance.bin
+```
+
+Reference input SHA-256:
+
+- `WordBreakProperty.txt`:
+  `72274cac1e6b919507db35655c3e175aa27274668a1ece95c28d2069f2ad9852`
+- `WordBreakTest.txt`:
+  `1de23a75f37904abc7d206239ee8d34f8fdf0fb4ab32a7174dfbabbde25419b2`
+- `emoji-data.txt`:
+  `2cb2bb9455cda83e8481541ecf5b6dfda66a3bb89efa3fa7c5297eccf607b72b`
+- `UnicodeData.txt`:
+  `2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c`
+
+The generated word property blob SHA-256 is
+`81c4e27d01e49c1aaf3f57b17bcc6e0576ecb1a9717f3f46ada32bc7481f3540`;
+the 1,944-case conformance fixture SHA-256 is
+`e390fd977570cd63aef4a1c657d4afefa188bfff5e8cc39e60942444feb5b674`.
 
 ## Invariants
 

@@ -157,6 +157,26 @@ pub fn buildSingleCodepointTtf(allocator: std.mem.Allocator, codepoint: u16) ![]
     return buildSfnt(allocator, 0x00010000, try singleCodepointTtfTables(allocator, codepoint));
 }
 
+pub fn buildSingleCodepointTtfWithLineMetrics(
+    allocator: std.mem.Allocator,
+    codepoint: u16,
+    ascender: i16,
+    descender: i16,
+    line_gap: i16,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try singleCodepointTtfTablesWithLineMetrics(
+            allocator,
+            codepoint,
+            ascender,
+            descender,
+            line_gap,
+        ),
+    );
+}
+
 pub fn buildCodepointSetTtf(allocator: std.mem.Allocator, codepoints: []const u32) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try codepointSetTtfTables(allocator, codepoints));
 }
@@ -1422,6 +1442,24 @@ fn singleCodepointTtfTables(allocator: std.mem.Allocator, codepoint: u16) ![]Tab
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn singleCodepointTtfTablesWithLineMetrics(
+    allocator: std.mem.Allocator,
+    codepoint: u16,
+    ascender: i16,
+    descender: i16,
+    line_gap: i16,
+) ![]Table {
+    const tables = try singleCodepointTtfTables(allocator, codepoint);
+    for (tables) |*table| {
+        if (!std.mem.eql(u8, table.tag, "hhea")) continue;
+        writeI16(table.data, 4, ascender);
+        writeI16(table.data, 6, descender);
+        writeI16(table.data, 8, line_gap);
+        break;
+    }
     return tables;
 }
 

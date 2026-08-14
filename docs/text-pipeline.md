@@ -113,6 +113,15 @@ This is intentionally the mainstream space-expansion model; script-specific
 Arabic kashida insertion and CJK inter-character justification remain separate
 future tailoring rather than being guessed by the generic path.
 
+Automatic line metrics now aggregate the fonts and sizes that actually overlap
+each line. The cascade's primary font remains a minimum line strut for empty
+and fallback-only lines, while taller fallback ascenders, deeper descenders,
+and larger line gaps expand only the visual lines that contain them. Soft and
+hard line progression uses each preceding line's resolved height, so fallback
+glyphs cannot overlap the next line or be clipped by primary-font-only
+geometry. An explicit `line_height` remains a minimum line box rather than a
+request to crop larger font metrics.
+
 `ShapedParagraph` now implements the first width-independent paragraph
 boundary. It owns source text plus pristine shaped glyph/run snapshots.
 `ReflowBuffer` restores those snapshots before each layout, so different

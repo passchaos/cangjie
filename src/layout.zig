@@ -2786,8 +2786,6 @@ fn buildParagraphLines(
     analyzed_line_breaks: ?[]const unicode.LineBreak,
 ) !void {
     buffer.lines.clearRetainingCapacity();
-    const line_height = options.line_height orelse default_metrics.lineHeight();
-    const line_metrics = metricsForLineHeight(default_metrics, line_height);
     const max_width = if (options.max_width > 0) options.max_width else std.math.inf(f32);
     const wrap_width = if (options.wrap_mode == .no_wrap) std.math.inf(f32) else max_width;
     const alignment = defaultAlignment(options);
@@ -2832,12 +2830,19 @@ fn buildParagraphLines(
         if (isMandatoryLineBreak(glyph.codepoint)) {
             const break_end_index = if (glyph.codepoint == '\r' and index + 1 < buffer.glyphs.items.len and buffer.glyphs.items[index + 1].codepoint == '\n') index + 2 else index + 1;
             const line_byte_end = glyphSourceEnd(buffer.glyphs.items[break_end_index - 1]);
-            try appendParagraphLine(buffer, line_start, index, line_byte_start, line_byte_end, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+            const line_info = paragraphLineRunInfo(
+                buffer.runs.items,
+                line_start,
+                index,
+                default_metrics,
+                options.line_height,
+            );
+            try appendParagraphLine(buffer, line_start, index, line_byte_start, line_byte_end, line_width, line_info, y, alignment, max_width, lineIndent(line_in_paragraph, options));
             if (buffer.lines.items.len >= max_lines) {
                 try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
                 return;
             }
-            y += line_height + options.paragraph_spacing;
+            y += line_info.metrics.lineHeight() + options.paragraph_spacing;
             line_breaks.discardThrough(glyphSourceEnd(buffer.glyphs.items[break_end_index - 1]));
             line_start = break_end_index;
             line_byte_start = line_byte_end;
@@ -2888,12 +2893,19 @@ fn buildParagraphLines(
                     lineWidthLimitForIndent(max_width, indent),
                 );
             }
-            try appendParagraphLine(buffer, line_start, break_end, line_byte_start, line_byte_end, break_width, line_metrics, y, alignment, max_width, indent);
+            const line_info = paragraphLineRunInfo(
+                buffer.runs.items,
+                line_start,
+                break_end,
+                default_metrics,
+                options.line_height,
+            );
+            try appendParagraphLine(buffer, line_start, break_end, line_byte_start, line_byte_end, break_width, line_info, y, alignment, max_width, indent);
             if (buffer.lines.items.len >= max_lines) {
                 try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, true);
                 return;
             }
-            y += line_height;
+            y += line_info.metrics.lineHeight();
             line_in_paragraph += 1;
             line_start = next_line_start;
             line_byte_start = byteEndForGlyphPrefix(buffer.glyphs.items, line_start, line_byte_end);
@@ -2919,7 +2931,14 @@ fn buildParagraphLines(
     // that case `line_start == glyph_count`; appending again would fabricate an
     // empty trailing line even though the source contains no hard terminator.
     if (!terminal_emergency_line_committed) {
-        try appendParagraphLine(buffer, line_start, buffer.glyphs.items.len, line_byte_start, text.len, line_width, line_metrics, y, alignment, max_width, lineIndent(line_in_paragraph, options));
+        const line_info = paragraphLineRunInfo(
+            buffer.runs.items,
+            line_start,
+            buffer.glyphs.items.len,
+            default_metrics,
+            options.line_height,
+        );
+        try appendParagraphLine(buffer, line_start, buffer.glyphs.items.len, line_byte_start, text.len, line_width, line_info, y, alignment, max_width, lineIndent(line_in_paragraph, options));
     }
     try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, false);
 }
@@ -3205,15 +3224,15 @@ fn appendEllipsisToLastLine(buffer: *LayoutBuffer, max_width: f32, alignment: Te
     line.x = alignedLineX(line.width, max_width, alignment);
 }
 
-fn appendParagraphLine(buffer: *LayoutBuffer, glyph_start: usize, glyph_end: usize, byte_start: usize, byte_end: usize, width: f32, metrics: BaselineMetrics, y: f32, alignment: TextAlign, max_width: f32, indent: f32) !void {
+fn appendParagraphLine(buffer: *LayoutBuffer, glyph_start: usize, glyph_end: usize, byte_start: usize, byte_end: usize, width: f32, run_info: ParagraphLineRunInfo, y: f32, alignment: TextAlign, max_width: f32, indent: f32) !void {
     const available_width = lineWidthLimitForIndent(max_width, indent);
     const x = indent + alignedLineX(width, available_width, alignment);
-    const run_range = runRangeForGlyphs(buffer.runs.items, glyph_start, glyph_end);
+    const metrics = run_info.metrics;
     try buffer.lines.append(buffer.allocator, .{
         .glyph_start = glyph_start,
         .glyph_len = glyph_end - glyph_start,
-        .run_start = run_range.start,
-        .run_len = run_range.len,
+        .run_start = run_info.run_start,
+        .run_len = run_info.run_len,
         .byte_start = byte_start,
         .byte_len = byte_end - byte_start,
         .x = x,
@@ -3404,6 +3423,48 @@ fn defaultBaselineMetrics(font: *const Font, font_size: f32) BaselineMetrics {
         .ascent = ascender * scale,
         .descent = -descender * scale,
         .leading = line_gap * scale,
+    };
+}
+
+const ParagraphLineRunInfo = struct {
+    run_start: usize,
+    run_len: usize,
+    metrics: BaselineMetrics,
+};
+
+fn paragraphLineRunInfo(
+    runs: []const CascadeRun,
+    glyph_start: usize,
+    glyph_end: usize,
+    default_metrics: BaselineMetrics,
+    explicit_line_height: ?f32,
+) ParagraphLineRunInfo {
+    // The primary font is the paragraph's minimum strut, so empty lines and
+    // fallback-only lines retain a stable baseline. Actual runs can enlarge
+    // any side of that strut; otherwise a fallback with taller ascenders or
+    // deeper descenders would be clipped by primary-font-only geometry.
+    var metrics = default_metrics;
+    var first_run: ?usize = null;
+    var run_end_index: usize = 0;
+    for (runs, 0..) |run, run_index| {
+        const run_start = run.glyph_start;
+        const run_end = run.glyph_start + run.glyph_len;
+        if (run_end <= glyph_start or run_start >= glyph_end) continue;
+        if (first_run == null) first_run = run_index;
+        run_end_index = run_index + 1;
+        const run_metrics = defaultBaselineMetrics(run.font, run.font_size);
+        metrics.ascent = @max(metrics.ascent, run_metrics.ascent);
+        metrics.descent = @max(metrics.descent, run_metrics.descent);
+        metrics.leading = @max(metrics.leading, run_metrics.leading);
+    }
+    const run_start_index = first_run orelse 0;
+    return .{
+        .run_start = run_start_index,
+        .run_len = run_end_index - run_start_index,
+        .metrics = if (explicit_line_height) |line_height|
+            metricsForLineHeight(metrics, line_height)
+        else
+            metrics,
     };
 }
 

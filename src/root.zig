@@ -8747,6 +8747,117 @@ test "paragraph lines expose baseline metrics" {
     try std.testing.expectApproxEqAbs(@as(f32, 24.0), expanded.lines[0].height, 0.001);
 }
 
+test "paragraph line metrics include fallback fonts on each line" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const primary_bytes = try test_font.buildSingleCodepointTtfWithLineMetrics(
+        allocator,
+        'A',
+        800,
+        -200,
+        0,
+    );
+    defer allocator.free(primary_bytes);
+    const fallback_bytes = try test_font.buildSingleCodepointTtfWithLineMetrics(
+        allocator,
+        'B',
+        1100,
+        -350,
+        100,
+    );
+    defer allocator.free(fallback_bytes);
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var fallback = try Font.parse(allocator, fallback_bytes);
+    defer fallback.deinit();
+    const fonts = [_]*const Font{ &primary, &fallback };
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A\nB", 20, .{
+        .max_width = 100,
+        .paragraph_spacing = 3,
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 0), paragraph.lines[0].run_start);
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines[1].run_start);
+    try std.testing.expectApproxEqAbs(@as(f32, 16), paragraph.lines[0].ascent, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), paragraph.lines[0].descent, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), paragraph.lines[0].height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 22), paragraph.lines[1].ascent, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 7), paragraph.lines[1].descent, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), paragraph.lines[1].leading, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 31), paragraph.lines[1].height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 23), paragraph.lines[1].y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 54), paragraph.height, 0.001);
+
+    // A requested line height is a minimum: it can add leading to ordinary
+    // text but cannot make a fallback glyph's own vertical metrics disappear.
+    const explicit = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AB", 20, .{
+        .max_width = 100,
+        .line_height = 24,
+    });
+    try std.testing.expectEqual(@as(usize, 1), explicit.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 22), explicit.lines[0].ascent, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 7), explicit.lines[0].descent, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), explicit.lines[0].leading, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 31), explicit.lines[0].height, 0.001);
+
+    const soft_wrap = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A B", 20, .{
+        .max_width = 40,
+    });
+    try std.testing.expectEqual(@as(usize, 2), soft_wrap.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), soft_wrap.lines[0].height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), soft_wrap.lines[1].y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 31), soft_wrap.lines[1].height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 51), soft_wrap.height, 0.001);
+}
+
+test "empty paragraph lines retain the primary font strut" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const primary_bytes = try test_font.buildSingleCodepointTtfWithLineMetrics(
+        allocator,
+        'A',
+        800,
+        -200,
+        0,
+    );
+    defer allocator.free(primary_bytes);
+    const fallback_bytes = try test_font.buildSingleCodepointTtfWithLineMetrics(
+        allocator,
+        'B',
+        1100,
+        -350,
+        100,
+    );
+    defer allocator.free(fallback_bytes);
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var fallback = try Font.parse(allocator, fallback_bytes);
+    defer fallback.deinit();
+    const fonts = [_]*const Font{ &primary, &fallback };
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        "B\n",
+        20,
+        .{ .max_width = 100 },
+    );
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 31), paragraph.lines[0].height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), paragraph.lines[1].height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 31), paragraph.lines[1].y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 51), paragraph.height, 0.001);
+}
+
 test "builds debug overlay geometry for paragraph text" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

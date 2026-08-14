@@ -113,6 +113,12 @@ This is intentionally the mainstream space-expansion model; script-specific
 Arabic kashida insertion and CJK inter-character justification remain separate
 future tailoring rather than being guessed by the generic path.
 
+Paragraph alignment distinguishes logical and physical edges:
+`TextAlign.start`/`end` resolve through the paragraph direction, while
+`left`/`right` always name physical edges. `start` is the default, preserving
+the expected left edge for LTR and right edge for RTL without making it
+impossible for a caller to request physical-left RTL text.
+
 Automatic line metrics now aggregate the fonts and sizes that actually overlap
 each line. The cascade's primary font remains a minimum line strut for empty
 and fallback-only lines, while taller fallback ascenders, deeper descenders,

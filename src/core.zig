@@ -228,7 +228,7 @@ pub const OverflowMode = enum {
 
 pub const ParagraphStyle = struct {
     direction: layout.TextDirection = .ltr,
-    text_align: layout.TextAlign = .left,
+    text_align: layout.TextAlign = .start,
     vertical_align: VerticalAlign = .baseline,
     line_height: ?f32 = null,
     max_lines: ?usize = null,
@@ -738,6 +738,9 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectEqual(@as(usize, 2), options.tab_width);
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);
+
+    const defaults = (ParagraphStyle{}).paragraphOptions(80);
+    try std.testing.expectEqual(layout.TextAlign.start, defaults.alignment);
 }
 
 test "measures attributed text with primary style" {

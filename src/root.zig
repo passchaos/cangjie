@@ -7317,7 +7317,7 @@ test "paragraph shaping retains logical order before per-line bidi reordering" {
     });
 }
 
-test "defaults right-to-left paragraph alignment to the right edge" {
+test "logical and physical paragraph alignment stay distinct in RTL" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
@@ -7332,17 +7332,49 @@ test "defaults right-to-left paragraph alignment to the right edge" {
 
     var layout_buffer = LayoutBuffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+    const start = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
         .max_width = 80,
         .line_height = 24,
         .direction = .rtl,
     });
 
-    try std.testing.expectEqual(@as(usize, 1), paragraph.lines.len);
-    try std.testing.expectEqual(@as(u21, 'A'), paragraph.glyphs[0].codepoint);
-    try std.testing.expectEqual(@as(usize, 0), paragraph.glyphs[0].cluster);
-    try std.testing.expectApproxEqAbs(@as(f32, 30.0), paragraph.lines[0].width, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 50.0), paragraph.lines[0].x, 0.001);
+    try std.testing.expectEqual(@as(usize, 1), start.lines.len);
+    try std.testing.expectEqual(@as(u21, 'A'), start.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), start.glyphs[0].cluster);
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0), start.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 50.0), start.lines[0].x, 0.001);
+
+    const end = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+        .direction = .rtl,
+        .alignment = .end,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), end.lines[0].x, 0.001);
+
+    const physical_left = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+        .direction = .rtl,
+        .alignment = .left,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), physical_left.lines[0].x, 0.001);
+
+    const physical_right = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+        .direction = .ltr,
+        .alignment = .right,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 50), physical_right.lines[0].x, 0.001);
+
+    const ltr_end = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+        .direction = .ltr,
+        .alignment = .end,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 50), ltr_end.lines[0].x, 0.001);
 }
 
 test "wraps CJK text at character boundaries without spaces" {

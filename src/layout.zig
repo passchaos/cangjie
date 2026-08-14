@@ -369,14 +369,20 @@ pub const ShapedRunCache = struct {
 };
 
 pub const TextAlign = enum {
+    /// Physical left edge, independent of paragraph direction.
     left,
     center,
+    /// Physical right edge, independent of paragraph direction.
     right,
     /// Fill each non-terminal soft-wrapped line by expanding its breakable
     /// inter-word spaces. Hard-break lines, the final line of a paragraph,
     /// ellipsized last lines, unbounded layouts, and lines without expansion
     /// opportunities retain their natural width.
     justify,
+    /// Align to the logical inline start: left in LTR, right in RTL.
+    start,
+    /// Align to the logical inline end: right in LTR, left in RTL.
+    end,
 };
 
 pub const WrapMode = enum {
@@ -410,7 +416,7 @@ pub const TextMetrics = struct {
 pub const ParagraphOptions = struct {
     max_width: f32,
     wrap_mode: WrapMode = .word,
-    alignment: TextAlign = .left,
+    alignment: TextAlign = .start,
     line_height: ?f32 = null,
     direction: TextDirection = .ltr,
     max_lines: ?usize = null,
@@ -2788,7 +2794,7 @@ fn buildParagraphLines(
     buffer.lines.clearRetainingCapacity();
     const max_width = if (options.max_width > 0) options.max_width else std.math.inf(f32);
     const wrap_width = if (options.wrap_mode == .no_wrap) std.math.inf(f32) else max_width;
-    const alignment = defaultAlignment(options);
+    const alignment = resolvedAlignment(options);
     var line_start: usize = 0;
     var line_byte_start: usize = 0;
     var line_width: f32 = 0;
@@ -3127,9 +3133,12 @@ fn glyphIndexForSourceBoundary(glyphs: []const GlyphPosition, boundary: usize, l
     return null;
 }
 
-fn defaultAlignment(options: ParagraphOptions) TextAlign {
-    if (options.direction == .rtl and options.alignment == .left) return .right;
-    return options.alignment;
+fn resolvedAlignment(options: ParagraphOptions) TextAlign {
+    return switch (options.alignment) {
+        .start => if (options.direction == .rtl) .right else .left,
+        .end => if (options.direction == .rtl) .left else .right,
+        .left, .center, .right, .justify => options.alignment,
+    };
 }
 
 fn lineIndent(line_index: usize, options: ParagraphOptions) f32 {
@@ -3252,6 +3261,7 @@ fn alignedLineX(width: f32, max_width: f32, alignment: TextAlign) f32 {
         .left, .justify => 0,
         .center => @max(0, (max_width - width) / 2),
         .right => @max(0, max_width - width),
+        .start, .end => unreachable, // Resolved once at the reflow boundary.
     };
 }
 

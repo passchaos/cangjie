@@ -797,6 +797,192 @@ pub fn accumulateGlyphPointDeltasForPointCountSkippingInactiveRawScratchWithFlag
     return try accumulateGlyphPointDeltasForPointCountWithFlagsMode(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id, normalized_coords, point_count, raw_scratch, out, has_delta, .skip_inactive);
 }
 
+/// Decode and accumulate a simple glyph's deltas with OpenType's per-tuple IUP
+/// semantics.
+///
+/// Sparse point selections belong to one TupleVariation at a time. Missing
+/// contour deltas must therefore be inferred before that tuple is added to the
+/// result; merging explicit-point flags across tuples first changes the
+/// interpolation topology. Phantom points follow the real points in `out` but
+/// are never subject to IUP.
+pub fn accumulateSimpleGlyphPointDeltas(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    expected_glyph_count: usize,
+    expected_axis_count: usize,
+    glyph_id: usize,
+    normalized_coords: []const f32,
+    original_points: []const Point,
+    contour_ends: []const u16,
+    validate_inactive_payloads: bool,
+) Error!?[]ScaledPointDelta {
+    return try accumulateSimpleGlyphPointDeltasWithReader(
+        allocator,
+        data,
+        offset,
+        length,
+        expected_glyph_count,
+        expected_axis_count,
+        glyph_id,
+        normalized_coords,
+        []const Point,
+        original_points,
+        original_points.len,
+        pointAt,
+        contour_ends,
+        validate_inactive_payloads,
+    );
+}
+
+pub fn accumulateSimpleGlyphPointDeltasWithReader(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    expected_glyph_count: usize,
+    expected_axis_count: usize,
+    glyph_id: usize,
+    normalized_coords: []const f32,
+    comptime Context: type,
+    context: Context,
+    original_point_count: usize,
+    comptime read_point: fn (Context, usize) Point,
+    contour_ends: []const u16,
+    validate_inactive_payloads: bool,
+) Error!?[]ScaledPointDelta {
+    if (original_point_count > @as(usize, std.math.maxInt(u16)) - 3) return error.BadSfnt;
+    try validateSimpleContourEnds(original_point_count, contour_ends);
+
+    const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    const table = data[offset .. offset + length];
+    const glyph = (try glyphInfoFromParsed(table, parsed, glyph_id)) orelse return null;
+    const point_count = original_point_count + 4;
+    const shared_points = try sharedPointNumbers(table, glyph);
+
+    const raw_scratch = try allocator.alloc(PointDelta, point_count);
+    defer allocator.free(raw_scratch);
+    const tuple_scratch = try allocator.alloc(ScaledPointDelta, point_count);
+    defer allocator.free(tuple_scratch);
+    const has_delta = try allocator.alloc(bool, point_count);
+    defer allocator.free(has_delta);
+    const out = try allocator.alloc(ScaledPointDelta, point_count);
+    errdefer allocator.free(out);
+    initializeDensePointDeltas(out, point_count);
+
+    var any_active = false;
+    var header_offset = glyph.data_offset + 4;
+    const serialized_data_base = glyph.data_offset + glyph.tuple_data_offset;
+    var serialized_data_bytes: usize = if (shared_points) |shared| shared.info.bytes_consumed else 0;
+    for (0..glyph.tuple_count) |tuple_index| {
+        const tuple = try readTupleInfo(table, parsed, glyph, header_offset, tuple_index, serialized_data_bytes);
+        if (serialized_data_bytes > std.math.maxInt(usize) - serialized_data_base) return error.BadSfnt;
+        const tuple_data_offset = serialized_data_base + serialized_data_bytes;
+        const scalar = try tupleScalarFromTuple(table, parsed, tuple, normalized_coords);
+
+        if (scalar != 0 or validate_inactive_payloads) {
+            const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(
+                table,
+                tuple,
+                tuple_data_offset,
+                point_count,
+                shared_points,
+                raw_scratch,
+            );
+            if (scalar != 0) {
+                try accumulateSimpleTuple(
+                    Context,
+                    context,
+                    read_point,
+                    original_point_count,
+                    contour_ends,
+                    raw_scratch[0..raw_count],
+                    scalar,
+                    tuple_scratch,
+                    has_delta,
+                    out,
+                );
+                any_active = true;
+            }
+        }
+
+        header_offset += tuple.header_size;
+        serialized_data_bytes += tuple.variation_data_size;
+    }
+    if (!any_active) {
+        allocator.free(out);
+        return null;
+    }
+    return out;
+}
+
+fn validateSimpleContourEnds(point_count: usize, contour_ends: []const u16) Error!void {
+    if (point_count == 0) {
+        if (contour_ends.len != 0) return error.BadSfnt;
+        return;
+    }
+    if (contour_ends.len == 0) return error.BadSfnt;
+    var previous: ?u16 = null;
+    for (contour_ends) |end| {
+        if (end >= point_count) return error.BadSfnt;
+        if (previous) |last| if (end <= last) return error.BadSfnt;
+        previous = end;
+    }
+    if (@as(usize, contour_ends[contour_ends.len - 1]) + 1 != point_count) return error.BadSfnt;
+}
+
+fn accumulateSimpleTuple(
+    comptime Context: type,
+    context: Context,
+    comptime read_point: fn (Context, usize) Point,
+    original_point_count: usize,
+    contour_ends: []const u16,
+    raw_deltas: []const PointDelta,
+    scalar: f32,
+    tuple_scratch: []ScaledPointDelta,
+    has_delta: []bool,
+    out: []ScaledPointDelta,
+) Error!void {
+    if (tuple_scratch.len != out.len or has_delta.len != out.len or original_point_count > out.len) return error.BadSfnt;
+    const ContourReader = struct {
+        source: Context,
+        start: usize,
+
+        fn read(window: @This(), index: usize) Point {
+            return read_point(window.source, window.start + index);
+        }
+    };
+    initializeDensePointDeltas(tuple_scratch, tuple_scratch.len);
+    @memset(has_delta, false);
+    for (raw_deltas) |delta| {
+        const point: usize = delta.point;
+        if (point >= out.len) return error.BadSfnt;
+        tuple_scratch[point].x += @as(f32, @floatFromInt(delta.x)) * scalar;
+        tuple_scratch[point].y += @as(f32, @floatFromInt(delta.y)) * scalar;
+        has_delta[point] = true;
+    }
+
+    var contour_start: usize = 0;
+    for (contour_ends) |end| {
+        const contour_end: usize = end;
+        const contour_len = contour_end - contour_start + 1;
+        try interpolateContourScaledDeltasWithReader(
+            ContourReader,
+            .{ .source = context, .start = contour_start },
+            contour_len,
+            ContourReader.read,
+            has_delta[contour_start .. contour_end + 1],
+            tuple_scratch[contour_start .. contour_end + 1],
+        );
+        contour_start = contour_end + 1;
+    }
+    for (out, tuple_scratch) |*result, tuple_delta| {
+        result.x += tuple_delta.x;
+        result.y += tuple_delta.y;
+    }
+}
+
 pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, all_points: []const u16, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
     const glyph = (try glyphInfo(data, offset, length, expected_glyph_count, expected_axis_count, glyph_id)) orelse return 0;
     var out_count: usize = 0;
@@ -1730,4 +1916,62 @@ test "gvar IUP interpolates scaled dense deltas in place" {
     try std.testing.expectEqual(@as(f32, 10), deltas[3].x);
     try std.testing.expectEqual(@as(u16, 1), deltas[1].point);
     try std.testing.expectEqual(@as(u16, 3), deltas[3].point);
+}
+
+test "gvar simple tuples run IUP independently before accumulation" {
+    const original = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 5, .y = 0 },
+        .{ .x = 10, .y = 0 },
+    };
+    const contour_ends = [_]u16{2};
+    var tuple_scratch: [7]ScaledPointDelta = undefined;
+    var has_delta: [7]bool = undefined;
+    var out: [7]ScaledPointDelta = undefined;
+    initializeDensePointDeltas(&out, out.len);
+
+    // Tuple one moves only the middle point, so IUP translates the whole
+    // contour. Tuple two references both endpoints and infers its middle
+    // independently. Merging explicit-point masks before IUP would produce a
+    // different result.
+    try accumulateSimpleTuple(
+        []const Point,
+        &original,
+        pointAt,
+        original.len,
+        &contour_ends,
+        &.{.{ .point = 1, .x = 6, .y = 0 }},
+        1,
+        &tuple_scratch,
+        &has_delta,
+        &out,
+    );
+    try accumulateSimpleTuple(
+        []const Point,
+        &original,
+        pointAt,
+        original.len,
+        &contour_ends,
+        &.{
+            .{ .point = 0, .x = 0, .y = 0 },
+            .{ .point = 2, .x = 10, .y = 0 },
+        },
+        1,
+        &tuple_scratch,
+        &has_delta,
+        &out,
+    );
+
+    try std.testing.expectEqual(@as(f32, 6), out[0].x);
+    try std.testing.expectEqual(@as(f32, 11), out[1].x);
+    try std.testing.expectEqual(@as(f32, 16), out[2].x);
+    try std.testing.expectEqual(@as(f32, 0), out[3].x);
+}
+
+test "gvar simple accumulation accepts phantom-only glyphs" {
+    // The point reader is unused because a contourless glyph has no real
+    // points; this verifies the structural boundary used by metric-only gvar
+    // tuples before any serialized tuple data is involved.
+    try validateSimpleContourEnds(0, &.{});
+    try std.testing.expectError(error.BadSfnt, validateSimpleContourEnds(0, &.{0}));
 }

@@ -212,13 +212,29 @@ fn harfrustVariationText(allocator: std.mem.Allocator, coords: []const cangjie.V
     errdefer out.deinit(allocator);
     for (coords, 0..) |coord, index| {
         if (index != 0) try out.append(allocator, ',');
-        try out.appendSlice(allocator, &coord.tag);
+        // HarfRust's Variation parser follows the HarfBuzz text syntax: short
+        // tags are written without their OpenType storage padding and are
+        // padded back to four bytes by Tag::from_str. Passing the internal
+        // `M1  ` bytes verbatim leaves spaces before `=` and is rejected.
+        const tag_text = std.mem.trimEnd(u8, &coord.tag, " ");
+        if (tag_text.len == 0) return error.InvalidArguments;
+        try out.appendSlice(allocator, tag_text);
         try out.append(allocator, '=');
         const value_text = try std.fmt.allocPrint(allocator, "{d}", .{coord.value});
         defer allocator.free(value_text);
         try out.appendSlice(allocator, value_text);
     }
     return try out.toOwnedSlice(allocator);
+}
+
+test "HarfRust variation text removes OpenType tag padding" {
+    const allocator = std.testing.allocator;
+    const text = try harfrustVariationText(allocator, &.{
+        .{ .tag = .{ 'M', '1', ' ', ' ' }, .value = -1 },
+        .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 700 },
+    });
+    defer allocator.free(text);
+    try std.testing.expectEqualStrings("M1=-1,wght=700", text);
 }
 
 fn parseGlyphLines(allocator: std.mem.Allocator, output: []const u8, text_lines: []const []const u8) ![]ParsedLine {

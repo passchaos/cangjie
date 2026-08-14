@@ -496,11 +496,15 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
             if (options.variation_design_coord_count >= options.variation_design_coord_buf.len) return error.InvalidArguments;
             const equals = std.mem.indexOfScalar(u8, item, '=') orelse return error.InvalidArguments;
             const tag_text = item[0..equals];
-            if (tag_text.len != 4 or equals + 1 >= item.len) return error.InvalidArguments;
+            if (tag_text.len == 0 or tag_text.len > 4 or equals + 1 >= item.len) return error.InvalidArguments;
             const value = try std.fmt.parseFloat(f32, item[equals + 1 ..]);
             if (!std.math.isFinite(value)) return error.InvalidArguments;
             options.variation_design_coord_buf[options.variation_design_coord_count] = .{
-                .tag = tag_text[0..4].*,
+                // Match hb_tag_from_string(): unquoted OpenType tags with one
+                // to three bytes are right-padded with spaces. This is needed
+                // by real variable fonts such as Zycon (`M1  ` / `T1  `), and
+                // keeps the CLI able to express every legal four-byte axis.
+                .tag = variationTag(tag_text),
                 .value = value,
             };
             options.variation_design_coord_count += 1;
@@ -513,6 +517,29 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
             options.variation_coord_count += 1;
         }
     }
+}
+
+fn variationTag(text: []const u8) [4]u8 {
+    std.debug.assert(text.len > 0 and text.len <= 4);
+    var tag = [_]u8{' '} ** 4;
+    @memcpy(tag[0..text.len], text);
+    return tag;
+}
+
+test "variation design coordinates right-pad short OpenType tags" {
+    var options: Options = .{};
+    try parseVariationCoords(&options, "M1=-1,T1=0.5,wght=700");
+
+    try std.testing.expectEqual(@as(usize, 3), options.variation_design_coord_count);
+    try std.testing.expectEqual([4]u8{ 'M', '1', ' ', ' ' }, options.variation_design_coord_buf[0].tag);
+    try std.testing.expectEqual(@as(f32, -1), options.variation_design_coord_buf[0].value);
+    try std.testing.expectEqual([4]u8{ 'T', '1', ' ', ' ' }, options.variation_design_coord_buf[1].tag);
+    try std.testing.expectEqual(@as(f32, 0.5), options.variation_design_coord_buf[1].value);
+    try std.testing.expectEqual([4]u8{ 'w', 'g', 'h', 't' }, options.variation_design_coord_buf[2].tag);
+    try std.testing.expectEqual(@as(f32, 700), options.variation_design_coord_buf[2].value);
+
+    try std.testing.expectError(error.InvalidArguments, parseVariationCoords(&options, "=1"));
+    try std.testing.expectError(error.InvalidArguments, parseVariationCoords(&options, "ABCDE=1"));
 }
 
 fn parsePositiveUsize(text: []const u8) !usize {

@@ -3387,13 +3387,12 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, fvar);
         try validateFvarTable(self.data, fvar);
         if (self.name) |name| {
-            // Axis and instance name IDs are user-facing metadata, not opaque
-            // numbers. Parsed fonts require them to resolve through `name`;
-            // repeat that cross-table check before exposing axis records so a
-            // borrowed-buffer mutation cannot leave callers with dangling UI
-            // labels while the structural fvar bytes still look well-formed.
+            // This API exposes only axes. A stale named-instance label must not
+            // prevent design coordinates from reaching otherwise valid fvar,
+            // avar, and glyph-variation data; variationInstances() separately
+            // keeps the complete instance-name contract strict.
             const name_index = try readNameIdIndex(self.data, name);
-            try validateFvarNameReferences(self.data, fvar, &name_index);
+            try validateFvarAxisNameReferences(self.data, fvar, &name_index);
         }
         const info = try readFvarInfo(self.data, fvar);
 
@@ -4550,18 +4549,29 @@ pub const Font = struct {
         const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
-        const target_count = try gvarTargetCountForGlyphData(data);
-        var inline_has_delta: [64]bool = undefined;
-        const has_delta = if (target_count <= inline_has_delta.len)
-            inline_has_delta[0..target_count]
-        else
-            try allocator.alloc(bool, target_count);
-        defer if (target_count > inline_has_delta.len) allocator.free(has_delta);
-        const deltas = (try self.gvarPointDeltasAtCoordsPreparedNoShrink(allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse return try self.glyphOutlineForReadMode(allocator, glyph_id, read_mode);
-        defer allocator.free(deltas);
-        try appendSimpleGlyph(&outline, null, data, @intCast(contour_count), Transform.identity(), deltas, has_delta);
-        try applyGvarSimpleGlyphMetricDeltas(&outline, default_bounds, metrics, deltas, target_count - 4);
+        const variation = try self.simpleGlyphVariationContext(glyph_id, normalized_coords, read_mode);
+        if (try appendSimpleGlyph(&outline, null, data, @intCast(contour_count), Transform.identity(), variation)) |phantom| {
+            applyGvarGlyphMetricDeltas(&outline, default_bounds, metrics, phantom);
+        }
         return outline;
+    }
+
+    fn simpleGlyphVariationContext(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!?SimpleGlyphVariation {
+        const gvar = self.gvar orelse return null;
+        if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, gvar);
+        return .{
+            .data = self.data,
+            .table_offset = gvar.offset,
+            .table_length = gvar.length,
+            .glyph_count = self.glyph_count,
+            .axis_count = try self.fvarAxisCountForReadMode(read_mode),
+            .glyph_id = glyph_id,
+            .normalized_coords = normalized_coords,
+            // Public outline APIs remain defensive against malformed inactive
+            // tuple payloads. Parsed raster paths already crossed Font.parse's
+            // whole-table proof and may avoid decoding zero-scalar tuples.
+            .validate_inactive_payloads = read_mode.shouldRevalidate(),
+        };
     }
 
     fn glyfCompoundGlyphOutlineAtCoords(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, data: []const u8, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
@@ -4970,7 +4980,7 @@ pub const Font = struct {
         if (contour_count >= 0) {
             // Simple glyf outlines store contour end points plus compressed
             // point deltas. Compound outlines recurse into component glyphs.
-            try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, null, null);
+            _ = try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, null);
         } else if (points) |compound_points| {
             try self.appendCompoundGlyph(outline, compound_points, data, transform, depth + 1);
         } else {
@@ -4990,19 +5000,8 @@ pub const Font = struct {
         if (data.len == 0) return;
         const contour_count = try bin.readI16At(data, 0);
         if (contour_count >= 0) {
-            const target_count = try gvarTargetCountForGlyphData(data);
-            var inline_has_delta: [64]bool = undefined;
-            const has_delta = if (target_count <= inline_has_delta.len)
-                inline_has_delta[0..target_count]
-            else
-                try outline.allocator.alloc(bool, target_count);
-            defer if (target_count > inline_has_delta.len) outline.allocator.free(has_delta);
-            const deltas = (try self.gvarPointDeltasAtCoordsPreparedNoShrink(outline.allocator, glyph_id, normalized_coords, target_count, has_delta, read_mode)) orelse {
-                try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, null, null);
-                return;
-            };
-            defer outline.allocator.free(deltas);
-            try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, deltas, has_delta);
+            const variation = try self.simpleGlyphVariationContext(glyph_id, normalized_coords, read_mode);
+            _ = try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, variation);
         } else {
             try self.appendCompoundGlyphAtCoords(outline, points, data, transform, depth + 1, glyph_id, normalized_coords, read_mode);
         }
@@ -7616,6 +7615,10 @@ fn validateKernFormat0Body(data: []const u8, glyph_count: u16) FontError!void {
 }
 
 fn validateKernFormat0SearchParameters(data: []const u8, pair_count: u16) FontError!void {
+    // FontTools and deployed fonts retain the one-record searchRange (6)
+    // when nPairs is zero, with a zero rangeShift. Treat that de-facto empty
+    // descriptor explicitly rather than subtracting 6 from a zero-byte pair
+    // array, which otherwise underflows before the header can be accepted.
     var max_power_of_two: usize = 1;
     var expected_entry_selector: u16 = 0;
     while (max_power_of_two * 2 <= pair_count) {
@@ -7626,7 +7629,7 @@ fn validateKernFormat0SearchParameters(data: []const u8, pair_count: u16) FontEr
     const expected_search_range = max_power_of_two * 6;
     const pair_record_bytes = @as(usize, pair_count) * 6;
     if (expected_search_range > std.math.maxInt(u16) or pair_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
-    const expected_range_shift = pair_record_bytes - expected_search_range;
+    const expected_range_shift = if (pair_count == 0) 0 else pair_record_bytes - expected_search_range;
 
     // The legacy and Apple kern format-0 bodies share this OpenType binary
     // search descriptor. Cangjie validates it even though lookups recompute the
@@ -7638,6 +7641,26 @@ fn validateKernFormat0SearchParameters(data: []const u8, pair_count: u16) FontEr
     {
         return error.BadSfnt;
     }
+}
+
+test "kern format 0 accepts the canonical empty pair array" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    // FontTools emits the one-record searchRange for an empty pair array, but
+    // keeps rangeShift zero because no pair-record bytes exist.
+    var kern: [18]u8 = .{0} ** 18;
+    writeU16Test(&kern, 2, 1);
+    writeU16Test(&kern, 4 + 2, 14);
+    writeU16Test(&kern, 4 + 4, 0x0001);
+    writeU16Test(&kern, 4 + 6 + 2, 6);
+
+    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectEqual(@as(?i16, 0), try font.kerning(1, 1));
 }
 
 fn isPostGlyphName(name: []const u8) bool {
@@ -9991,16 +10014,49 @@ fn kernFormat2ClassValue(data: []const u8, class_table_offset: usize, glyph: gly
     return try bin.readU16At(data, value_offset);
 }
 
+const SimpleGlyphVariation = struct {
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    glyph_count: usize,
+    axis_count: usize,
+    glyph_id: glyph_mod.GlyphId,
+    normalized_coords: []const f32,
+    validate_inactive_payloads: bool,
+};
+
 fn appendSimpleGlyph(
     outline: *glyph_mod.GlyphOutline,
     transformed_points: ?*std.ArrayList(glyph_mod.Point),
     data: []const u8,
     contour_count: u16,
     transform: Transform,
-    gvar_deltas: ?[]GvarScaledPointDelta,
-    gvar_has_delta: ?[]const bool,
-) FontError!void {
-    if (contour_count == 0) return;
+    variation: ?SimpleGlyphVariation,
+) FontError!?GvarPhantomPointDeltas {
+    if (contour_count == 0) {
+        // A contourless simple glyph can still vary its four metric phantom
+        // points. Do not require real contours merely to preserve its advance
+        // and side-bearing deltas.
+        const gvar = variation orelse return null;
+        const deltas = try gvar_mod.accumulateSimpleGlyphPointDeltas(
+            outline.allocator,
+            gvar.data,
+            gvar.table_offset,
+            gvar.table_length,
+            gvar.glyph_count,
+            gvar.axis_count,
+            gvar.glyph_id,
+            gvar.normalized_coords,
+            &.{},
+            &.{},
+            gvar.validate_inactive_payloads,
+        );
+        defer if (deltas) |owned| outline.allocator.free(owned);
+        return if (deltas) |all_deltas|
+            try gvar_mod.phantomPointDeltasFromDense(0, all_deltas)
+        else
+            null;
+    }
     var r = bin.Reader.init(data);
     _ = try r.readI16();
     try r.skip(8);
@@ -10078,40 +10134,41 @@ fn appendSimpleGlyph(
         y += dy;
         point.y = y;
     }
-    if (gvar_deltas) |deltas| {
-        if (gvar_has_delta) |has_delta| {
-            if (deltas.len != 0) {
-                if (has_delta.len < points.len) return error.BadSfnt;
-                if (deltas.len < points.len) return error.BadSfnt;
-                const real_deltas = deltas[0..points.len];
-                std.debug.assert(gvarDensePointIdsMatch(real_deltas));
-                var contour_start: usize = 0;
-                for (end_pts) |end_pt| {
-                    const contour_end: usize = end_pt;
-                    try gvar_mod.interpolateContourScaledDeltasWithReader(
-                        []const FlaggedPoint,
-                        points[contour_start .. contour_end + 1],
-                        contour_end - contour_start + 1,
-                        flaggedPointForGvarIup,
-                        has_delta[contour_start .. contour_end + 1],
-                        real_deltas[contour_start .. contour_end + 1],
-                    );
-                    contour_start = contour_end + 1;
-                }
-                for (points, real_deltas) |*point, delta| {
-                    point.x = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.x)) + delta.x));
-                    point.y = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.y)) + delta.y));
-                }
-            }
-        } else {
-            for (deltas) |delta| {
-                if (delta.point >= points.len) continue;
-                const point = &points[delta.point];
+    var phantom_deltas: ?GvarPhantomPointDeltas = null;
+    if (variation) |gvar| {
+        const deltas = try gvar_mod.accumulateSimpleGlyphPointDeltasWithReader(
+            outline.allocator,
+            gvar.data,
+            gvar.table_offset,
+            gvar.table_length,
+            gvar.glyph_count,
+            gvar.axis_count,
+            gvar.glyph_id,
+            gvar.normalized_coords,
+            []const FlaggedPoint,
+            points,
+            points.len,
+            flaggedPointForGvarIup,
+            end_pts,
+            gvar.validate_inactive_payloads,
+        );
+        defer if (deltas) |owned| outline.allocator.free(owned);
+        if (deltas) |all_deltas| {
+            const real_deltas = all_deltas[0..points.len];
+            std.debug.assert(gvarDensePointIdsMatch(real_deltas));
+            for (points, real_deltas) |*point, delta| {
                 point.x = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.x)) + delta.x));
                 point.y = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.y)) + delta.y));
             }
+            // glyf headers remain authoritative when this glyph has no active
+            // tuple. Recompute bounds only after gvar actually changed the
+            // decoded point set.
+            outline.bounds = boundsForFlaggedPoints(points);
+            // The same tuple walk already decoded the four phantom points.
+            // Return them to the top-level simple-glyph caller instead of
+            // reparsing gvar solely to update advance and side-bearing fields.
+            phantom_deltas = try gvar_mod.phantomPointDeltasFromDense(points.len, all_deltas);
         }
-        outline.bounds = boundsForFlaggedPoints(points);
     }
 
     if (transformed_points) |raw_points| {
@@ -10130,6 +10187,7 @@ fn appendSimpleGlyph(
         try appendContour(&builder, points[start .. end + 1], transform);
         start = end + 1;
     }
+    return phantom_deltas;
 }
 
 fn gvarDensePointIdsMatch(deltas: []const GvarScaledPointDelta) bool {
@@ -10180,16 +10238,6 @@ fn applyGvarGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: 
     const varied_left_phantom = default_left_phantom + phantom.left.x;
     outline.left_side_bearing = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(outline.bounds.x_min)) - varied_left_phantom));
     outline.advance_width = clampF32ToU16(roundOpenTypeF32(@as(f32, @floatFromInt(default_metrics.advance_width)) + phantom.horizontalAdvanceDelta()));
-}
-
-fn applyGvarSimpleGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: glyph_mod.Bounds, default_metrics: HorizontalMetricInfo, deltas: []const GvarScaledPointDelta, point_count: usize) FontError!void {
-    const phantom = try gvar_mod.phantomPointDeltasFromDense(point_count, deltas);
-    // TrueType's horizontal phantom points define metric deltas:
-    // pp1 = xMin - lsb, pp2 = pp1 + advance. Cangjie keeps outline commands in
-    // the same design-space coordinate convention as `glyphOutline()`, so only
-    // the metric fields are adjusted here; point-coordinate variation is already
-    // applied by appendSimpleGlyph().
-    applyGvarGlyphMetricDeltas(outline, default_bounds, default_metrics, phantom);
 }
 
 fn clampF32ToU16(value: f32) u16 {
@@ -10297,8 +10345,13 @@ fn f2dot14(value: i16) f32 {
 }
 
 fn quantizeNormalizedF2Dot14(value: f32) f32 {
-    const fixed: i16 = @intFromFloat(@round(value * 16384.0));
-    return f2dot14(fixed);
+    // HarfBuzz's public design-coordinate path first represents normalized
+    // fvar/avar output in 16.16, then rounds that fixed value to F2Dot14.
+    // Collapsing the two steps is not equivalent: 0.1 becomes 6554 in 16.16
+    // and then 1639 in F2Dot14, while direct 14-bit rounding produces 1638.
+    const fixed_16_16: i32 = @intFromFloat(@round(value * 65536.0));
+    const fixed_2_14: i16 = @intCast((fixed_16_16 + 2) >> 2);
+    return f2dot14(fixed_2_14);
 }
 
 fn fixed16_16ToF32(value: i32) f32 {
@@ -10356,11 +10409,13 @@ fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u
         break :blk &name_index_storage;
     } else null;
 
-    // fvar carries user-visible IDs that affect variation selection, so keep it
-    // strict for ordinary faces. TTC system faces historically need a broader
-    // parse-time name tolerance to stay aligned with CoreText font loading.
+    // Axis labels describe the public design-coordinate controls and stay
+    // strict for ordinary faces. Named instances are optional convenience
+    // metadata: deployed variable fonts and upstream rendering fixtures can
+    // carry stale instance labels while their axes and variation data remain
+    // usable. variationInstances() revalidates the complete name contract.
     if (fvar) |fvar_table| {
-        validateFvarNameReferences(data, fvar_table, name_index) catch |err| switch (err) {
+        validateFvarAxisNameReferences(data, fvar_table, name_index) catch |err| switch (err) {
             error.InvalidName => if (!options.compat_ttc_face) return err,
             else => return err,
         };
@@ -10379,12 +10434,20 @@ fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u
 }
 
 fn validateFvarNameReferences(data: []const u8, fvar: TableRecord, name_index: ?*const NameIdIndex) FontError!void {
+    try validateFvarAxisNameReferences(data, fvar, name_index);
+    try validateFvarInstanceNameReferences(data, fvar, name_index);
+}
+
+fn validateFvarAxisNameReferences(data: []const u8, fvar: TableRecord, name_index: ?*const NameIdIndex) FontError!void {
     const info = try readFvarInfo(data, fvar);
     for (0..info.axis_count) |index| {
         const axis_offset = fvarAxisOffset(fvar, info, index);
         try validateNameIdReference(name_index, try bin.readU16At(data, axis_offset + 18));
     }
+}
 
+fn validateFvarInstanceNameReferences(data: []const u8, fvar: TableRecord, name_index: ?*const NameIdIndex) FontError!void {
+    const info = try readFvarInfo(data, fvar);
     for (0..info.instance_count) |index| {
         const instance_offset = fvarInstanceOffset(fvar, info, index);
         try validateNameIdReference(name_index, try bin.readU16At(data, instance_offset));
@@ -16682,7 +16745,7 @@ test "simple glyf contours reject non-increasing end points" {
     );
     defer outline.deinit();
 
-    try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, null, &glyph_data, 2, Transform.identity(), null, null));
+    try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, null, &glyph_data, 2, Transform.identity(), null));
 }
 
 test "glyph outline API revalidates borrowed loca and glyf bytes" {
@@ -20649,6 +20712,7 @@ test "normalized variation coordinates quantize final locations to F2Dot14" {
     // so all downstream gvar and ItemVariationStore consumers see one value.
     try std.testing.expectEqual(@as(f32, -0.33331298828125), quantizeNormalizedF2Dot14(-1.0 / 3.0));
     try std.testing.expectEqual(@as(f32, 0.4000244140625), quantizeNormalizedF2Dot14(0.4));
+    try std.testing.expectEqual(@as(f32, 0.10003662109375), quantizeNormalizedF2Dot14(0.1));
     try std.testing.expectEqual(@as(f32, -1.0), quantizeNormalizedF2Dot14(-1.0));
     try std.testing.expectEqual(@as(f32, 1.0), quantizeNormalizedF2Dot14(1.0));
 }
@@ -20883,6 +20947,9 @@ test "fvar instance name IDs resolve through name table" {
 
     var missing_subfamily = bytes;
     writeU16Test(&missing_subfamily, 36, 400);
+    // Stale named-instance UI metadata does not invalidate the axis controls
+    // used by shaping, but the complete instance metadata API stays strict.
+    try validateFvarAxisNameReferences(&missing_subfamily, fvar, &names);
     try std.testing.expectError(error.InvalidName, validateFvarNameReferences(&missing_subfamily, fvar, &names));
 
     var missing_postscript = bytes;

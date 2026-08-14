@@ -1592,6 +1592,19 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   half-unit ties use OpenType's round-toward-positive-infinity rule. HarfRust's
   current CLI reports zero outline extents for these rows, so it remains the
   second shaping reference while HarfBuzz is the geometry reference.
+- The remaining 56 Unicode text-rendering `GVAR-{4..9}.tests` instances are
+  retained under the same HarfBuzz-extents/HarfRust-shaping split, completing
+  all 83 `GVAR-1..9` rows. The matrix covers Zycon's short padded `M1  `,
+  `T1  `, and `HV  ` axis tags, two-axis locations, negative coordinates,
+  sparse tuple point sets, and fractional design locations including
+  `T1=0.1` and `TEST=0.944444`. It exposed three compatibility boundaries:
+  simple-glyph IUP must run independently per TupleVariation before tuple
+  deltas accumulate; HarfBuzz quantizes design locations through 16.16 before
+  F2Dot14; and zero-pair legacy `kern` format 0 commonly carries the
+  FontTools-style `searchRange=6, rangeShift=0` descriptor. The
+  `TestGVAREight.ttf` fixture also has a stale optional fvar named-instance
+  label; shaping and axis APIs now remain usable while `variationInstances()`
+  continues to reject unresolved instance metadata.
 - Both Unicode text-rendering `KERN-{1,2}.tests` rows are retained in
   `tests/data/kern-rendering-tests.txt` with `TestKERNOne.otf`. Cangjie,
   HarfBuzz, and HarfRust produce 17 glyphs with checksum

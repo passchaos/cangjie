@@ -4230,10 +4230,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         );
         glyph_stage_substituted.clearRetainingCapacity();
         // Every earlier public stage has validated the run it received, and
-        // GSUB mutation helpers preserve glyph bounds plus source-parallel
-        // cardinalities. Prove the current maximal USE metadata contract once
-        // after stage-only scratch is detached, then reuse it through all
-        // remaining explicit stages.
+        // GSUB mutation helpers preserve source-parallel cardinalities even
+        // when a format-1 delta temporarily leaves maxp's renderable range.
+        // Prove the current maximal USE metadata contract once after stage-only
+        // scratch is detached, then reuse it through all remaining stages.
         try gsub.validateScriptShaperRunMetadata(use_options, glyph_ids.items.len);
         try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         if (use_shaper.hasBrokenSyllable(source_syllables.items)) {
@@ -4454,6 +4454,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             try applyGsubFeatureApplicationsAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("dnom"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
         }
     }
+
+    // OpenType SingleSubst format 1 is a modulo-16-bit graph. Individual
+    // lookups may use IDs above maxp as internal states, but no such transient
+    // value may escape the complete GSUB stage into GPOS, metrics, or outlines.
+    try font.validateShapedGlyphRunForShaping(glyph_ids.items);
 
     if (shape_profile) |p| p.gsub_ns += shapeProfileElapsed(gsub_start, profile_io);
 

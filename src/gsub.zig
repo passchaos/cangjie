@@ -63,6 +63,12 @@ const Table = struct {
     /// may use detached GSUB data; parse-time validation attaches this bound so
     /// every supported glyph reference can be proven to name a real glyph.
     glyph_count: ?u16 = null,
+    /// Shaping follows HarfBuzz's full 16-bit SingleSubst format-1 graph: one
+    /// lookup may emit a transient ID above maxp and a later lookup may map it
+    /// back into the font. Detached strict validation leaves this false; the
+    /// font shaping validator enables it and validates the eventual run before
+    /// metrics or outlines consume the result.
+    allow_transient_single_delta: bool = false,
 };
 
 const FeatureSelection = struct {
@@ -1015,9 +1021,11 @@ pub fn applyFeatureLookupPlanWithOptions(
 ///
 /// This is an internal shaping fast path. It is sound across consecutive GSUB
 /// stages because every supported substitution updates glyph ids and all
-/// source-parallel arrays atomically, and validated lookup outputs stay within
-/// maxp. Callers must not use it for an independently supplied or externally
-/// mutated run; `applyFeatureLookupPlanWithOptions` remains the defensive API.
+/// source-parallel arrays atomically. SingleSubst format 1 may temporarily
+/// leave maxp's renderable range, so the complete shaper must validate final
+/// glyph IDs before GPOS or metrics. Callers must not use it for an
+/// independently supplied or externally mutated run;
+/// `applyFeatureLookupPlanWithOptions` remains the defensive API.
 pub fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
     data: []const u8,
     offset: usize,
@@ -2869,7 +2877,13 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
 
 pub fn validateGlyphBoundsForShaping(data: []const u8, offset: usize, length: usize, glyph_count: u16) GsubError!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    const table = Table{ .data = data, .offset = offset, .length = length, .glyph_count = glyph_count };
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .glyph_count = glyph_count,
+        .allow_transient_single_delta = true,
+    };
     const major = try readU16BadGsub(table, 0);
     if (major != 1) return error.UnsupportedGsub;
     if (try isEmptyGsubTopology(table)) return;
@@ -7538,13 +7552,24 @@ fn ensureSubstitutionSubtableVariableDataWithinForShaping(table: Table, subtable
 fn ensureSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
     const subst_format = try readU16BadGsub(table, subtable_offset);
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-    try ensureCoverageTableWithin(table, coverage_offset);
     switch (subst_format) {
-        1 => if (table.glyph_count != null) {
+        // Format 1 explicitly defines modulo-16-bit results. A lookup may use
+        // an intermediate ID outside maxp as both this lookup's output and a
+        // later format-1 lookup's Coverage input (the OpenType AOTS modulo
+        // fixture does exactly this). Validate the Coverage topology and full
+        // 16-bit domain, but defer renderable-glyph bounds until the complete
+        // GSUB lookup sequence has finished.
+        1 => if (table.allow_transient_single_delta) {
+            var transient_table = table;
+            transient_table.glyph_count = null;
+            try ensureCoverageTableWithin(transient_table, coverage_offset);
+        } else {
+            try ensureCoverageTableWithin(table, coverage_offset);
             const delta = try readI16BadGsub(table, subtable_offset + 4);
             try ensureSingleDeltaSubstitutionWithinMaxp(table, coverage_offset, delta);
         },
         2 => {
+            try ensureCoverageTableWithin(table, coverage_offset);
             const glyph_count = try readU16BadGsub(table, subtable_offset + 4);
             // Format 2 Coverage indexes address the substitute glyph array
             // directly. Reject uncovered array slots at validation time instead
@@ -8067,10 +8092,6 @@ fn ensureCoverageTableWithinForMembership(table: Table, coverage_offset: usize) 
 }
 
 fn ensureSingleDeltaSubstitutionWithinMaxp(table: Table, coverage_offset: usize, delta: i16) GsubError!void {
-    // SingleSubst format 1 computes substitutes with modulo-16-bit addition.
-    // At font load time the whole covered domain must still map back into
-    // maxp.numGlyphs; otherwise the first shaped text that hits the boundary
-    // can produce a glyph id with no metrics or outline data.
     const format = try readU16BadGsub(table, coverage_offset);
     switch (format) {
         1 => {
@@ -10609,6 +10630,21 @@ test "GSUB glyph ids are validated against maxp glyph count" {
         writeCoverage1(&bytes, subtable + 6, 3); // Invalid Coverage glyph.
 
         try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+    }
+
+    {
+        var bytes = [_]u8{0} ** 38;
+        const subtable = writeSingleLookupGsubTest(&bytes, 1);
+        writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
+        writeU16Test(&bytes, subtable + 2, 6);
+        writeI16Test(&bytes, subtable + 4, 0x7fff);
+        writeCoverage1(&bytes, subtable + 6, 1);
+
+        // Delta results use the full 16-bit glyph-id domain and may be
+        // transient inputs to a later lookup. Only the covered source glyph
+        // must be renderable at this validation boundary.
+        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
+        try validateGlyphBoundsForShaping(&bytes, 0, bytes.len, max_glyphs);
     }
 
     {

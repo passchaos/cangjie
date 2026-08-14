@@ -206,6 +206,30 @@ const retained_corpus_parity_gates = [_]struct {
     },
 };
 
+const retained_aots_parity_gates = [_]struct {
+    font_file: []const u8,
+    text: []const u8,
+    no_positions: bool = false,
+}{
+    .{
+        .font_file = "gpos2_1_next_glyph_f1.otf",
+        .text = "\u{0012}\u{0012}\u{0012}\u{0012}",
+    },
+    .{
+        .font_file = "gpos_context1_boundary_f2.otf",
+        .text = "\u{0011}\u{0014}\u{0014}\u{0014}\u{0014}\u{0014}\u{0011}",
+    },
+    .{
+        .font_file = "gpos_context1_next_glyph_f1.otf",
+        .text = "\u{0011}\u{0014}\u{0014}\u{0014}\u{0014}\u{0014}\u{0011}",
+    },
+    .{
+        .font_file = "gsub1_1_modulo_f1.otf",
+        .text = "\u{0011}\u{0012}\u{0013}\u{0014}\u{0015}\u{0016}\u{0017}\u{0018}",
+        .no_positions = true,
+    },
+};
+
 const retained_inline_harfbuzz_parity_gates = [_]struct {
     font_hash: []const u8,
     text: []const u8,
@@ -2430,6 +2454,7 @@ pub fn build(b: *std.Build) void {
         const harfrust_benches = b.fmt("{s}/harfrust/harfrust/benches", .{work_root});
         const harfbuzz_in_house_fonts = b.fmt("{s}/harfbuzz/test/shape/data/in-house/fonts", .{work_root});
         const harfbuzz_text_rendering_fonts = b.fmt("{s}/harfbuzz/test/shape/data/text-rendering-tests/fonts", .{work_root});
+        const harfbuzz_aots_fonts = b.fmt("{s}/harfbuzz/test/shape/data/aots/fonts", .{work_root});
         const honokamin_font = b.fmt("{s}/KaTeX/test/screenshotter/fonts/mincho/font_1_honokamin.ttf", .{work_root});
 
         const dev_parity_cmd = b.addRunArtifact(shape_bench_exe);
@@ -2468,6 +2493,33 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_corpus_parity_smoke_step.dependOn(&corpus_harfrust_parity_cmd.step);
+        }
+        for (retained_aots_parity_gates) |gate| {
+            // AOTS fonts are generated specifically for one OpenType feature.
+            // Retain the exact lookup-cursor and modulo-delta boundaries that
+            // broad natural-language corpora are unlikely to synthesize.
+            const font_path = b.fmt("{s}/{s}", .{ harfbuzz_aots_fonts, gate.font_file });
+            const harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            harfbuzz_parity_cmd.addArgs(&.{
+                "--engine", "compare-harfbuzz",
+                "--font", font_path,
+                "--text", gate.text,
+                "--direction", "ltr",
+                "--enable-feature", "test",
+            });
+            if (gate.no_positions) harfbuzz_parity_cmd.addArg("--no-positions");
+            shaping_corpus_parity_smoke_step.dependOn(&harfbuzz_parity_cmd.step);
+
+            const harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
+            harfrust_parity_cmd.addArgs(&.{
+                "--engine", "compare-harfrust",
+                "--font", font_path,
+                "--text", gate.text,
+                "--direction", "ltr",
+                "--enable-feature", "test",
+            });
+            if (gate.no_positions) harfrust_parity_cmd.addArg("--no-positions");
+            shaping_corpus_parity_smoke_step.dependOn(&harfrust_parity_cmd.step);
         }
         for (retained_inline_harfbuzz_parity_gates) |gate| {
             const inline_parity_cmd = b.addRunArtifact(shape_bench_exe);

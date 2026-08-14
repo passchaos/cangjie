@@ -2780,6 +2780,10 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, gsub);
         try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         try self.applyGsubWithOptionsUsingGdefForShaping(glyphs, allocator, options, gdef_metadata);
+        // A single public GSUB call is a complete shaping boundary. Internal
+        // staged shapers use the narrower `ForShaping` entry point so modulo
+        // SingleSubst intermediates may survive only until their next stage.
+        try self.validateGlyphRun(glyphs.items);
     }
 
     pub fn applyGsubWithOptionsUsingGdefForShaping(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
@@ -2955,6 +2959,7 @@ pub const Font = struct {
         try validateSfntTableChecksum(self.data, gsub);
         try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         try self.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyphs, allocator, options, gdef_metadata);
+        try self.validateGlyphRun(glyphs.items);
     }
 
     pub fn applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(self: *const Font, applications: []const gsub_mod.FeatureApplication, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
@@ -2983,10 +2988,10 @@ pub const Font = struct {
     }
 
     /// Continue an internal multi-stage shaping run after its glyph/source
-    /// metadata was validated by the first stage.
-    ///
-    /// Validated GSUB lookup outputs stay within this font's maxp range, and
-    /// the GSUB mutation helpers keep every source-parallel array in lockstep.
+    /// metadata was validated by the first stage. SingleSubst format 1 may
+    /// temporarily leave maxp's renderable range before a later lookup maps the
+    /// ID back, so this boundary proves metadata cardinality rather than final
+    /// glyph bounds. The complete shaper validates the run before GPOS/metrics.
     /// Keep this narrower than the public defensive entry point above: callers
     /// must not pass a freshly constructed or externally mutated glyph run.
     pub fn applyGsubFeatureLookupPlanUsingGdefAfterRunProof(self: *const Font, plan: gsub_mod.FeatureLookupPlan, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
@@ -3200,6 +3205,14 @@ pub const Font = struct {
         for (glyphs) |glyph_id| {
             if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         }
+    }
+
+    /// Validate the final glyph stream at the boundary between substitution
+    /// and all consumers that require concrete font glyphs. This remains an
+    /// internal shaping API because callers must not treat transient GSUB IDs
+    /// as renderable merely because they fit the 16-bit GlyphId type.
+    pub fn validateShapedGlyphRunForShaping(self: *const Font, glyphs: []const glyph_mod.GlyphId) FontError!void {
+        try self.validateGlyphRun(glyphs);
     }
 
     pub fn nameString(self: *const Font, name_id: NameId, out: []u8) FontError!?[]const u8 {

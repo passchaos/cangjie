@@ -100,6 +100,19 @@ layer is a separate migration.
 `WrapMode.no_wrap` is also enforced by reflow now: width does not introduce
 soft lines, but mandatory Unicode line separators still do.
 
+`TextAlign.justify` now provides portable inter-word justification. Reflow
+expands UAX #14 `SP` source atoms on non-terminal soft-wrapped lines until the
+line reaches its available width (after first-line indentation). Hard-break
+lines, final paragraph lines, ellipsized terminal lines, tabs, non-breaking
+glue, unbounded layouts, and lines without spaces retain their natural width.
+The expansion is stored in glyph advances, so rendering, hit testing,
+selection geometry, bidi visual reordering, and debug overlays consume one
+consistent layout result. Retained reflow restores pristine advances before
+every width/alignment change, preventing justification from accumulating.
+This is intentionally the mainstream space-expansion model; script-specific
+Arabic kashida insertion and CJK inter-character justification remain separate
+future tailoring rather than being guessed by the generic path.
+
 `ShapedParagraph` now implements the first width-independent paragraph
 boundary. It owns source text plus pristine shaped glyph/run snapshots.
 `ReflowBuffer` restores those snapshots before each layout, so different
@@ -190,7 +203,10 @@ Future changes must preserve these rules:
 4. Add optional dictionary segmentation and hyphenation as tailoring layers;
    do not bake language-specific guesses into the default UAX #14 state
    machine.
-5. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
+5. Add script-specific justification tailoring where portable references exist,
+   including Arabic kashida and CJK inter-character expansion, without changing
+   the generic inter-word contract.
+6. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
    does not by itself establish end-to-end superiority over reference engines.
 
 The standalone iterator benchmark is:

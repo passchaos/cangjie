@@ -7576,6 +7576,134 @@ test "paragraph no-wrap mode preserves explicit hard breaks" {
     try std.testing.expect(paragraph.lines[1].width > 10);
 }
 
+test "paragraph justification expands only non-terminal soft-wrapped lines" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A A A", 20, .{
+        .max_width = 50,
+        .line_height = 24,
+        .alignment = .justify,
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 3), paragraph.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines[1].glyph_len);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), paragraph.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), paragraph.lines[0].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 16), paragraph.lines[1].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), paragraph.lines[1].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 18), paragraph.glyphs[1].x_advance, 0.001);
+
+    // Caret and selection geometry consume the expanded advance instead of a
+    // second, renderer-only spacing sidecar.
+    const after_space = paragraph.caretRect(.{
+        .glyph_index = paragraph.lines[0].glyph_start + 2,
+        .cluster = 2,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 34), after_space.x, 0.001);
+    const first_line_selection = try paragraph.selectionRects(allocator, 0, 3);
+    defer allocator.free(first_line_selection);
+    try std.testing.expectEqual(@as(usize, 1), first_line_selection.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), first_line_selection[0].width, 0.001);
+}
+
+test "paragraph justification skips hard breaks tabs and lines without spaces" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const hard_break = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A A\nA A", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+        .alignment = .justify,
+    });
+    try std.testing.expectEqual(@as(usize, 2), hard_break.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 42), hard_break.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 42), hard_break.lines[1].width, 0.001);
+
+    const natural_tabs = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A\tA A", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+        .alignment = .left,
+    });
+    try std.testing.expectEqual(@as(usize, 2), natural_tabs.lines.len);
+    const natural_tab_line_width = natural_tabs.lines[0].width;
+    const natural_tab_advance = natural_tabs.glyphs[1].x_advance;
+
+    const tabs = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A\tA A", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+        .alignment = .justify,
+    });
+    try std.testing.expectEqual(@as(usize, 2), tabs.lines.len);
+    try std.testing.expectApproxEqAbs(natural_tab_line_width, tabs.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(natural_tab_advance, tabs.glyphs[1].x_advance, 0.001);
+
+    const cjk_bytes = try test_font.buildNamedCjkTtf(allocator);
+    defer allocator.free(cjk_bytes);
+    var cjk_font = try Font.parse(allocator, cjk_bytes);
+    defer cjk_font.deinit();
+    const cjk_fonts = [_]*const Font{&cjk_font};
+    const cjk = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&cjk_fonts),
+        &layout_buffer,
+        "一丁丂",
+        20,
+        .{
+            .max_width = 32,
+            .line_height = 24,
+            .alignment = .justify,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), cjk.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 29), cjk.lines[0].width, 0.001);
+}
+
+test "right-to-left justification keeps line origin and survives bidi reorder" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "אב אב אב", 20, .{
+        .max_width = 80,
+        .line_height = 24,
+        .direction = .rtl,
+        .alignment = .justify,
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 80), paragraph.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), paragraph.lines[0].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), paragraph.lines[1].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 80), lineAdvanceSum(paragraph.lines[0].glyphs(paragraph)), 0.001);
+}
+
 test "shaped paragraphs reflow repeatedly without reshaping or accumulating layout changes" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -7645,6 +7773,60 @@ test "shaped paragraphs reflow repeatedly without reshaping or accumulating layo
     try std.testing.expectEqualSlices(LineBreak, pristine_breaks, paragraph.line_breaks);
 }
 
+test "shaped paragraphs restore advances between justified reflows" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "A A A",
+        20,
+        .{ .max_width = 200 },
+    );
+    defer paragraph.deinit();
+    const pristine_space_advance = paragraph.glyphs[1].x_advance;
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const justified = try paragraph.layout(&reflow, .{
+        .max_width = 50,
+        .alignment = .justify,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 50), justified.lines[0].width, 0.001);
+    try std.testing.expect(justified.glyphs[1].x_advance > pristine_space_advance);
+
+    const natural = try paragraph.layout(&reflow, .{
+        .max_width = 500,
+        .alignment = .left,
+    });
+    try std.testing.expectEqual(@as(usize, 1), natural.lines.len);
+    try std.testing.expectApproxEqAbs(pristine_space_advance, natural.glyphs[1].x_advance, 0.001);
+
+    const justified_again = try paragraph.layout(&reflow, .{
+        .max_width = 50,
+        .alignment = .justify,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 50), justified_again.lines[0].width, 0.001);
+    try std.testing.expectEqualSlices(GlyphPosition, paragraph.glyphs, shape_buffer.glyphs.items);
+}
+
+fn lineAdvanceSum(glyphs: []const GlyphPosition) f32 {
+    var sum: f32 = 0;
+    for (glyphs) |glyph| sum += glyph.x_advance;
+    return sum;
+}
+
 test "shaped paragraph reflow restores content after ellipsis truncation" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -7683,6 +7865,33 @@ test "shaped paragraph reflow restores content after ellipsis truncation" {
     try std.testing.expectEqual(shaped_glyph_count, restored.glyphs.len);
     try std.testing.expectEqual(@as(usize, 1), restored.lines.len);
     try std.testing.expectEqual(@as(u21, 'A'), restored.glyphs[restored.glyphs.len - 1].codepoint);
+}
+
+test "ellipsis keeps the last visible justified line at natural width" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A A A A", 20, .{
+        .max_width = 60,
+        .max_lines = 1,
+        .ellipsis = true,
+        .alignment = .justify,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines.len);
+    const line = paragraph.lines[0];
+    try std.testing.expect(line.width < 60);
+    try std.testing.expectApproxEqAbs(line.width, lineAdvanceSum(line.glyphs(paragraph)), 0.001);
+    try std.testing.expectEqual(@as(u21, '.'), line.glyphs(paragraph)[line.glyph_len - 1].codepoint);
 }
 
 test "shaped paragraph rejects options that require reshaping" {

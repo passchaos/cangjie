@@ -3,6 +3,7 @@ const line_break = @import("text/line_break.zig");
 const grapheme_boundary = @import("unicode/grapheme/iterator.zig");
 const word_boundary = @import("unicode/word/iterator.zig");
 const word_selection = @import("unicode/word/selection.zig");
+const sentence_boundary = @import("unicode/sentence/iterator.zig");
 const canonical_combining_class = @import("unicode/canonical_combining_class.zig");
 const canonical_decomposition = @import("unicode/canonical_decomposition.zig");
 const nonspacing_mark = @import("unicode/nonspacing_mark.zig");
@@ -722,10 +723,19 @@ pub fn wordSegmentsAssumeValid(text: []const u8) WordBoundaryIterator {
     return word_boundary.assumeValid(text);
 }
 
-pub const SentenceSegment = struct {
-    byte_start: usize,
-    byte_len: usize,
-};
+pub const SentenceSegment = sentence_boundary.Segment;
+pub const SentenceBoundaryIterator = sentence_boundary.Iterator;
+pub const sentence_unicode_version = sentence_boundary.unicode_version;
+
+pub fn sentenceSegments(
+    text: []const u8,
+) sentence_boundary.Error!SentenceBoundaryIterator {
+    return sentence_boundary.segments(text);
+}
+
+pub fn sentenceSegmentsAssumeValid(text: []const u8) SentenceBoundaryIterator {
+    return sentence_boundary.assumeValid(text);
+}
 
 pub const LineBreakKind = line_break.BreakKind;
 pub const LineBreak = line_break.Break;
@@ -2448,34 +2458,13 @@ pub fn itemizeSentenceSegments(allocator: std.mem.Allocator, text: []const u8) !
     var sentences = std.ArrayList(SentenceSegment).empty;
     errdefer sentences.deinit(allocator);
 
-    var sentence_start: usize = 0;
-    var sentence_end: usize = 0;
-    var pending_break = false;
-    var previous_codepoint: ?u21 = null;
-    var cursor: usize = 0;
-    while (cursor < text.len) {
-        const byte_start = cursor;
-        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
-        const codepoint = decoded.codepoint;
-        const byte_end = decoded.next;
-        cursor = byte_end;
-        sentence_end = byte_end;
-
-        if (pending_break and !isSentenceTrailingSpace(codepoint) and !isSentenceTrailingClose(codepoint)) {
-            try appendSentenceIfNotBlank(allocator, &sentences, text, sentence_start, byte_start);
-            sentence_start = byte_start;
-            pending_break = false;
+    var iterator = try sentenceSegments(text);
+    while (iterator.next()) |segment| {
+        const slice = text[segment.byte_start..][0..segment.byte_len];
+        if (!sentenceSegmentIsBlank(slice)) {
+            try sentences.append(allocator, segment);
         }
-
-        if (isSentenceHardBreak(codepoint) or
-            (isSentenceTerminator(codepoint) and !isMidNumberSentencePeriod(codepoint, previous_codepoint, text, byte_end)))
-        {
-            pending_break = true;
-        }
-        previous_codepoint = codepoint;
     }
-
-    try appendSentenceIfNotBlank(allocator, &sentences, text, sentence_start, sentence_end);
     return try sentences.toOwnedSlice(allocator);
 }
 
@@ -5424,42 +5413,6 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
     return word_selection.kindForCodepoint(codepoint, script);
 }
 
-fn appendSentenceIfNotBlank(allocator: std.mem.Allocator, sentences: *std.ArrayList(SentenceSegment), text: []const u8, start: usize, end: usize) !void {
-    var cursor = start;
-    while (cursor < end) {
-        const codepoint_len = std.unicode.utf8ByteSequenceLength(text[cursor]) catch break;
-        const codepoint = std.unicode.utf8Decode(text[cursor..][0..codepoint_len]) catch break;
-        if (!isSentenceTrailingSpace(codepoint)) break;
-        cursor += codepoint_len;
-    }
-    if (cursor >= end) return;
-    try sentences.append(allocator, .{ .byte_start = start, .byte_len = end - start });
-}
-
-fn isSentenceTerminator(codepoint: u21) bool {
-    return codepoint == '.' or codepoint == '!' or codepoint == '?' or
-        codepoint == 0x3002 or codepoint == 0xff01 or codepoint == 0xff1f;
-}
-
-fn isSentenceHardBreak(codepoint: u21) bool {
-    return codepoint == '\r' or codepoint == '\n';
-}
-
-fn isMidNumberSentencePeriod(codepoint: u21, previous: ?u21, text: []const u8, byte_end: usize) bool {
-    // UAX #29 keeps full stops and similar STerm codepoints inside numeric
-    // tokens (SB8), e.g. version strings and decimal values. The segmenter is
-    // intentionally compact, but avoiding breaks in the common digit '.' digit
-    // case prevents obviously incorrect sentence cuts in UI text. Treat the
-    // decimal digit sets already recognized by the bidi layer as digits here
-    // too, so Arabic-Indic and Extended Arabic-Indic numbers are not split in
-    // mixed-script documents.
-    if (codepoint != '.') return false;
-    const before = previous orelse return false;
-    if (!isDecimalDigit(before)) return false;
-    const after = nextCodepointAt(text, byte_end) orelse return false;
-    return isDecimalDigit(after);
-}
-
 fn nextCodepointAt(text: []const u8, offset: usize) ?u21 {
     return (decodeCodepointAt(text, offset) orelse return null).codepoint;
 }
@@ -5474,15 +5427,13 @@ fn isAsciiApostrophe(codepoint: u21) bool {
     return codepoint == '\'';
 }
 
-fn isSentenceTrailingSpace(codepoint: u21) bool {
-    return codepoint == ' ' or codepoint == '\t' or codepoint == '\n' or codepoint == '\r';
-}
-
-fn isSentenceTrailingClose(codepoint: u21) bool {
-    return switch (codepoint) {
-        '\'', '"', ')', ']', '}', 0x00bb, 0x2019, 0x201d, 0x3009, 0x300b, 0x300d, 0x300f, 0x3011, 0x3015, 0x3017, 0x3019, 0x301b => true,
-        else => false,
-    };
+fn sentenceSegmentIsBlank(text: []const u8) bool {
+    for (text) |byte| {
+        if (byte != ' ' and byte != '\t' and byte != '\n' and byte != '\r') {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn isWordExtender(codepoint: u21) bool {

@@ -44,6 +44,9 @@ pub const WordBoundaryIterator = @import("unicode.zig").WordBoundaryIterator;
 pub const wordSegments = @import("unicode.zig").wordSegments;
 pub const word_unicode_version = @import("unicode.zig").word_unicode_version;
 pub const SentenceSegment = @import("unicode.zig").SentenceSegment;
+pub const SentenceBoundaryIterator = @import("unicode.zig").SentenceBoundaryIterator;
+pub const sentenceSegments = @import("unicode.zig").sentenceSegments;
+pub const sentence_unicode_version = @import("unicode.zig").sentence_unicode_version;
 pub const LineBreak = @import("unicode.zig").LineBreak;
 pub const LineBreakKind = @import("unicode.zig").LineBreakKind;
 pub const LineBreakClass = @import("unicode.zig").LineBreakClass;
@@ -4266,6 +4269,10 @@ test "itemizes basic sentence segments" {
     try std.testing.expectEqualStrings("He said ‘hi!’ ", quoted_text[quoted[0].byte_start..][0..quoted[0].byte_len]);
     try std.testing.expectEqualStrings("Next.", quoted_text[quoted[1].byte_start..][0..quoted[1].byte_len]);
 
+    const blank = try itemizeSentenceSegments(allocator, " \t\r\n");
+    defer allocator.free(blank);
+    try std.testing.expectEqual(@as(usize, 0), blank.len);
+
     try std.testing.expectError(error.InvalidUtf8, itemizeSentenceSegments(allocator, "Hello.\xffNext"));
 }
 
@@ -4279,6 +4286,24 @@ test "sentence segments keep decimal full stops inside numbers" {
     try std.testing.expectEqual(@as(usize, 2), sentences.len);
     try std.testing.expectEqualStrings("Version 1.2 works. ", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
     try std.testing.expectEqualStrings("Next.", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
+}
+
+test "streams Unicode sentence boundaries with lowercase abbreviation context" {
+    const text = "etc. there is more. Next.";
+    var iterator = try sentenceSegments(text);
+    const first = iterator.next() orelse return error.MissingSentenceSegment;
+    try std.testing.expectEqualStrings(
+        "etc. there is more. ",
+        text[first.byte_start..][0..first.byte_len],
+    );
+    const second = iterator.next() orelse return error.MissingSentenceSegment;
+    try std.testing.expectEqualStrings(
+        "Next.",
+        text[second.byte_start..][0..second.byte_len],
+    );
+    try std.testing.expectEqual(@as(?SentenceSegment, null), iterator.next());
+    try std.testing.expectEqual([3]u8{ 17, 0, 0 }, sentence_unicode_version);
+    try std.testing.expectError(error.InvalidUtf8, sentenceSegments("One.\xffTwo"));
 }
 
 test "itemizes line break opportunities" {

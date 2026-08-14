@@ -136,6 +136,22 @@ word boundaries:
 - All 1,944 cases from Unicode 17 `WordBreakTest.txt` run in the normal test
   suite.
 
+`src/unicode/sentence/iterator.zig` completes the Unicode 17 default
+segmentation layer:
+
+- `sentenceSegments(text)` streams every UAX #29 sentence segment without
+  allocation and validates UTF-8 at the public boundary.
+- Generated `Sentence_Break` data drives SB3 through SB11, including CRLF and
+  paragraph separators, Format/Extend replacement, decimal periods,
+  uppercase abbreviation contexts, lowercase continuations, Unicode sentence
+  terminators, closing punctuation, and trailing spaces.
+- `itemizeSentenceSegments` remains the compatibility collector used by
+  existing editor/debug APIs; it filters pure ASCII whitespace segments but
+  otherwise preserves the standard boundaries.
+- All 512 cases from Unicode 17 `SentenceBreakTest.txt` run in the normal test
+  suite. Language-specific abbreviation dictionaries remain an explicit
+  future tailoring rather than being guessed by the default iterator.
+
 `WrapMode.no_wrap` is also enforced by reflow now: width does not introduce
 soft lines, but mandatory Unicode line separators still do.
 
@@ -319,6 +335,30 @@ The generated word property blob SHA-256 is
 `81c4e27d01e49c1aaf3f57b17bcc6e0576ecb1a9717f3f46ada32bc7481f3540`;
 the 1,944-case conformance fixture SHA-256 is
 `e390fd977570cd63aef4a1c657d4afefa188bfff5e8cc39e60942444feb5b674`.
+
+Sentence-boundary data is generated with:
+
+```sh
+tools/unicode/sentence/generate_data.py \
+  path/to/SentenceBreakProperty.txt \
+  src/unicode/sentence/data.bin
+
+tools/unicode/sentence/generate_conformance.py \
+  path/to/SentenceBreakTest.txt \
+  src/unicode/sentence/conformance.bin
+```
+
+Reference input SHA-256:
+
+- `SentenceBreakProperty.txt`:
+  `871c0c985ad95125e25b302414065a10839d068970bceb383ecec138f22a0a18`
+- `SentenceBreakTest.txt`:
+  `12cb47d028ded0c1cb8a28558f95479cbcd24559c46977015c82f3b50a1cc6e4`
+
+The generated sentence property blob SHA-256 is
+`c163eb450ba6df51a31fe2ac4a74e3c1d9d154c37ec9124af46dffce6a5844e8`;
+the 512-case conformance fixture SHA-256 is
+`ad12cc4dc33a16ffe0da235ac34cb8f0ddfc3c9e85a62c657ee88bb3beeba5cc`.
 
 ## Invariants
 

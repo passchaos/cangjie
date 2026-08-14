@@ -378,6 +378,32 @@ test "formats 0, 2, and 6 resolve tuple vectors" {
         @as(i32, -40),
         try pairKerning(&format6, 0, format6.len, 2, 1, 1, false, resolver),
     );
+
+    var format6_long = [_]u8{0} ** 84;
+    writeU16Test(&format6_long, 0, 4);
+    writeU32Test(&format6_long, 4, 1);
+    writeFormat6SubtableTest(&format6_long, 8, true);
+    writeU32Test(&format6_long, 8, 72);
+    writeU32Test(&format6_long, 16, 2);
+    writeU32Test(&format6_long, 8 + 32, 68);
+    writeU32Test(&format6_long, 8 + 64, 0);
+    writeI16Test(&format6_long, 8 + 68, -30);
+    writeI16Test(&format6_long, 8 + 70, -20);
+    writeU32Test(&format6_long, 80, std.math.maxInt(u32));
+    try validate(&format6_long, 0, format6_long.len, 2);
+    try std.testing.expectEqual(
+        @as(i32, -40),
+        try pairKerning(
+            &format6_long,
+            0,
+            format6_long.len,
+            2,
+            1,
+            1,
+            false,
+            resolver,
+        ),
+    );
 }
 
 fn testTupleResolver(_: *const anyopaque, vector: []const u8) Error!i32 {

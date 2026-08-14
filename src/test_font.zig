@@ -97,6 +97,10 @@ pub fn buildMortContextualTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mortContextualTtfTables(allocator));
 }
 
+pub fn buildMortInsertionTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try mortInsertionTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -1157,6 +1161,21 @@ fn mortContextualTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, 3) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
     tables[7] = .{ .tag = "mort", .data = try mortContextualTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn mortInsertionTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "glyf", .data = try emptyGlyfTable(allocator, 3) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, 3) };
+    tables[5] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, 3) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
+    tables[7] = .{ .tag = "mort", .data = try mortInsertionTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
@@ -3645,6 +3664,39 @@ fn mortContextualTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, machine + 42, 18);
     writeI16(bytes, machine + 48, 26);
     writeU16(bytes, machine + 50 + 3 * 2, 1);
+    return bytes;
+}
+
+fn mortInsertionTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 92);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x0001_0000);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 1);
+    writeU32(bytes, 12, 84);
+    writeU16(bytes, 16, 0);
+    writeU16(bytes, 18, 1);
+    writeU16(bytes, 20, 72);
+    writeU16(bytes, 22, 0x2005);
+    writeU32(bytes, 24, 1);
+    const machine = 28;
+    writeU16(bytes, machine, 4);
+    writeU16(bytes, machine + 2, 10);
+    writeU16(bytes, machine + 4, 18);
+    writeU16(bytes, machine + 6, 22);
+    writeU16(bytes, machine + 8, 62);
+    writeU16(bytes, machine + 10, 1);
+    writeU16(bytes, machine + 12, 1);
+    bytes[machine + 14] = 3;
+    bytes[machine + 18 + 3] = 1;
+    writeU16(bytes, machine + 22, 18);
+    writeU16(bytes, machine + 30, 18);
+    writeU16(bytes, machine + 32, 0x0020);
+    // Type-5 entries index glyphs from insertionOffset; 0xFFFF is the
+    // no-insertion sentinel, so index zero is a live first action.
+    writeU16(bytes, machine + 34, 0);
+    writeU16(bytes, machine + 36, 0xffff);
+    writeU16(bytes, machine + 62, 2);
     return bytes;
 }
 

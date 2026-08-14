@@ -1803,7 +1803,12 @@ shaping-performance superiority.
   `AB` fixture retaining substitution metadata and matching HarfBuzz. HarfRust
   currently has no `mort` table parser, so retained
   automated reference coverage for these paths is HarfBuzz. Stateful legacy
-  `mort` types 2/5 remain open.
+  type-5 insertion now executes obsolete byte-indexed states while keeping the
+  insertion table's distinct addressing rules: the header carries a
+  state-subtable-relative byte offset, but each action is a zero-based glyph
+  index and `0xFFFF` is the no-action sentinel. A synthetic `A` fixture inserts
+  glyph 2 after glyph 1, clones source/substitution metadata, and matches
+  HarfBuzz. Stateful legacy `mort` type 2 ligatures remain open.
 
   AAT `kerx` formats 0, 1, 2, 4, and 6 now participate in actual shaping rather
   than metadata inspection only. The retained format-0/2/6 synthetic fonts

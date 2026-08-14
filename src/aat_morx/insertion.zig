@@ -174,7 +174,7 @@ fn outputInsertionGlyphs(
 /// `skip_glyph`; assigning the boundary directly models `move_to`. This keeps
 /// the state-machine semantics exact without exposing HarfBuzz's dual-buffer
 /// storage strategy to the rest of the shaper.
-const WorkingRun = struct {
+pub const WorkingRun = struct {
     glyphs: std.ArrayList(GlyphId) = .empty,
     sources: std.ArrayList(usize) = .empty,
     clusters: std.ArrayList(usize) = .empty,
@@ -187,7 +187,7 @@ const WorkingRun = struct {
     has_stage_substituted: bool = false,
     has_ligatures: bool = false,
 
-    fn init(
+    pub fn init(
         allocator: std.mem.Allocator,
         glyphs: *const std.ArrayList(GlyphId),
         options: gsub.LookupOptions,
@@ -218,7 +218,7 @@ const WorkingRun = struct {
         return run;
     }
 
-    fn deinit(run: *WorkingRun, allocator: std.mem.Allocator) void {
+    pub fn deinit(run: *WorkingRun, allocator: std.mem.Allocator) void {
         run.ligatures.deinit(allocator);
         run.stage_substituted.deinit(allocator);
         run.substituted.deinit(allocator);
@@ -228,14 +228,14 @@ const WorkingRun = struct {
         run.* = .{};
     }
 
-    fn copyCurrent(run: *WorkingRun, allocator: std.mem.Allocator, cursor: *usize) Error!void {
+    pub fn copyCurrent(run: *WorkingRun, allocator: std.mem.Allocator, cursor: *usize) Error!void {
         if (cursor.* >= run.glyphs.items.len) return;
         const metadata = run.metadataAt(cursor.*);
         try run.insertMetadata(allocator, cursor.*, run.glyphs.items[cursor.*], metadata, false);
         cursor.* += 1;
     }
 
-    fn outputGlyph(run: *WorkingRun, allocator: std.mem.Allocator, cursor: *usize, glyph: GlyphId) Error!void {
+    pub fn outputGlyph(run: *WorkingRun, allocator: std.mem.Allocator, cursor: *usize, glyph: GlyphId) Error!void {
         if (run.glyphs.items.len == 0) return;
         const template = if (cursor.* < run.glyphs.items.len) cursor.* else cursor.* - 1;
         const metadata = run.metadataAt(template);
@@ -278,7 +278,7 @@ const WorkingRun = struct {
         if (run.has_ligatures) try insertValue(ligature_provenance.Info, allocator, &run.ligatures, index, metadata.ligature);
     }
 
-    fn skipCurrent(run: *WorkingRun, index: usize) void {
+    pub fn skipCurrent(run: *WorkingRun, index: usize) void {
         _ = run.glyphs.orderedRemove(index);
         if (run.has_sources) _ = run.sources.orderedRemove(index);
         if (run.has_clusters) _ = run.clusters.orderedRemove(index);
@@ -287,7 +287,7 @@ const WorkingRun = struct {
         if (run.has_ligatures) _ = run.ligatures.orderedRemove(index);
     }
 
-    fn commit(
+    pub fn commit(
         run: *WorkingRun,
         allocator: std.mem.Allocator,
         glyphs: *std.ArrayList(GlyphId),

@@ -2,10 +2,18 @@ const std = @import("std");
 
 const GlyphId = @import("glyph.zig").GlyphId;
 const gsub = @import("gsub.zig");
+const insertion = @import("aat_morx/insertion.zig");
 const rearrangement = @import("aat_morx/rearrangement.zig");
 const state_table = @import("aat_morx/state_table.zig");
 
 pub const Error = error{ BadSfnt, InvalidShapingInput } || std.mem.Allocator.Error || error{EndOfStream};
+
+const insertion_set_mark: u16 = 0x8000;
+const insertion_current_before: u16 = 0x0800;
+const insertion_marked_before: u16 = 0x0400;
+const insertion_current_count: u16 = 0x03e0;
+const insertion_marked_count: u16 = 0x001f;
+const no_insertion: u16 = 0xffff;
 
 pub fn validate(
     data: []const u8,
@@ -47,13 +55,19 @@ pub fn validate(
                     subtable_length - 8,
                     glyph_count,
                 ),
+                5 => try validateInsertion(
+                    data,
+                    subtable_start + 8,
+                    subtable_length - 8,
+                    glyph_count,
+                ),
                 4 => try state_table.validateLookupU16(
                     data,
                     subtable_start + 8,
                     subtable_length - 8,
                     glyph_count,
                 ),
-                2, 5 => {},
+                2 => {},
                 else => return error.BadSfnt,
             }
             subtable_relative += subtable_length;
@@ -62,6 +76,64 @@ pub fn validate(
         chain_relative += chain_length;
     }
     if (chain_relative > table_length) return error.BadSfnt;
+}
+
+fn validateInsertion(data: []const u8, offset: usize, length: usize, glyph_count: usize) Error!void {
+    if (length < 10) return error.BadSfnt;
+    const class_count: usize = try readU16(data, offset);
+    const class_table_offset: usize = try readU16(data, offset + 2);
+    const state_array_offset: usize = try readU16(data, offset + 4);
+    const entry_table_offset: usize = try readU16(data, offset + 6);
+    const insertion_offset: usize = try readU16(data, offset + 8);
+    if (class_count < 4 or
+        class_table_offset < 10 or
+        state_array_offset < 10 or
+        entry_table_offset < 10 or
+        insertion_offset < 10 or
+        class_table_offset >= length or
+        state_array_offset >= entry_table_offset or
+        entry_table_offset >= length or
+        insertion_offset > length)
+    {
+        return error.BadSfnt;
+    }
+    const class_glyph_count: usize = try readU16(data, offset + class_table_offset + 2);
+    if (class_glyph_count > length - class_table_offset - 4) return error.BadSfnt;
+    if ((entry_table_offset - state_array_offset) % class_count != 0) return error.BadSfnt;
+    for (data[offset + state_array_offset .. offset + entry_table_offset]) |entry_index| {
+        const entry_relative = std.math.add(usize, entry_table_offset, @as(usize, entry_index) * 8) catch return error.BadSfnt;
+        if (entry_relative > length or length - entry_relative < 8) return error.BadSfnt;
+        const new_state_offset: usize = try readU16(data, offset + entry_relative);
+        const flags = try readU16(data, offset + entry_relative + 2);
+        const current_index: usize = try readU16(data, offset + entry_relative + 4);
+        const marked_index: usize = try readU16(data, offset + entry_relative + 6);
+        if (new_state_offset < state_array_offset or new_state_offset >= entry_table_offset) return error.BadSfnt;
+        if ((new_state_offset - state_array_offset) % class_count != 0) return error.BadSfnt;
+        try validateInsertionList(data, offset, length, insertion_offset, current_index, (flags & insertion_current_count) >> 5, glyph_count);
+        try validateInsertionList(data, offset, length, insertion_offset, marked_index, flags & insertion_marked_count, glyph_count);
+    }
+}
+
+fn validateInsertionList(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    insertion_offset: usize,
+    list_index: usize,
+    count: usize,
+    glyph_count: usize,
+) Error!void {
+    if (list_index == no_insertion or count == 0) return;
+    // Unlike the insertionOffset header field, an entry stores a zero-based
+    // glyph index into the insertion table. In particular, zero selects the
+    // first action and 0xFFFF—not zero—is the no-action sentinel.
+    const index_bytes = std.math.mul(usize, list_index, 2) catch return error.BadSfnt;
+    const list_offset = std.math.add(usize, insertion_offset, index_bytes) catch return error.BadSfnt;
+    const bytes = std.math.mul(usize, count, 2) catch return error.BadSfnt;
+    if (list_offset > length or bytes > length - list_offset) return error.BadSfnt;
+    for (0..count) |index| {
+        if (try readU16(data, offset + list_offset + index * 2) >= glyph_count) return error.BadSfnt;
+    }
 }
 
 fn validateRearrangement(data: []const u8, offset: usize, length: usize) Error!void {
@@ -156,11 +228,12 @@ fn validateContextualOffset(
 ///
 /// `mort` predates `morx`: chain and subtable lengths/counts are 16-bit and
 /// coverage is an 8-bit flag byte packed above the subtable type. The deployed
-/// Honoka Mincho face motivating this path uses only type-4 noncontextual
-/// substitution. Stateful obsolete formats remain intentionally unsupported;
-/// accepting their structure without executing it would be worse than exposing
-/// the current, explicit coverage boundary.
+/// Types 0, 1, 4, and 5 have dedicated obsolete-layout executors. Type 2
+/// remains intentionally inert: its offsets differ from modern `morx`, so
+/// accepting its structure without executing it is preferable to accidentally
+/// applying the incompatible modern ligature machine.
 pub fn apply(
+    allocator: std.mem.Allocator,
     data: []const u8,
     table_offset: usize,
     table_length: usize,
@@ -220,6 +293,15 @@ pub fn apply(
                             glyphs,
                             options,
                         ),
+                        5 => try applyInsertion(
+                            allocator,
+                            data,
+                            subtable_start + 8,
+                            subtable_length - 8,
+                            glyph_count,
+                            glyphs,
+                            options,
+                        ),
                         4 => try applyNoncontextual(
                             data,
                             subtable_start + 8,
@@ -228,10 +310,10 @@ pub fn apply(
                             glyphs,
                             options,
                         ),
-                        // Obsolete state-table formats use different class and
-                        // offset bases from their morx successors. Keep them
-                        // inert until each executor has dedicated fixtures.
-                        2, 5 => {},
+                        // The obsolete ligature format has different offset
+                        // bases from its morx successor. Keep it inert until
+                        // its executor has dedicated reference fixtures.
+                        2 => {},
                         else => return error.BadSfnt,
                     }
                 }
@@ -242,6 +324,109 @@ pub fn apply(
         chain_relative += chain_length;
     }
     if (chain_relative > table_length) return error.BadSfnt;
+}
+
+fn applyInsertion(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyph_count: usize,
+    glyphs: *std.ArrayList(GlyphId),
+    options: gsub.LookupOptions,
+) Error!void {
+    const class_count: usize = try readU16(data, offset);
+    const class_table_offset: usize = try readU16(data, offset + 2);
+    const state_array_offset: usize = try readU16(data, offset + 4);
+    const entry_table_offset: usize = try readU16(data, offset + 6);
+    const insertion_offset: usize = try readU16(data, offset + 8);
+    const class_first: usize = try readU16(data, offset + class_table_offset);
+    const class_glyph_count: usize = try readU16(data, offset + class_table_offset + 2);
+
+    var run = try insertion.WorkingRun.init(allocator, glyphs, options);
+    defer run.deinit(allocator);
+    var operations_left = try state_table.operationBudget(glyphs.items.len);
+    var state_offset = state_array_offset;
+    var cursor: usize = 0;
+    var mark: usize = 0;
+    while (true) {
+        if (operations_left == 0) return error.BadSfnt;
+        operations_left -= 1;
+        const class: usize = if (cursor >= run.glyphs.items.len)
+            state_table.class_end_of_text
+        else class: {
+            const glyph: usize = run.glyphs.items[cursor];
+            if (glyph < class_first or glyph >= class_first + class_glyph_count) break :class state_table.class_out_of_bounds;
+            break :class data[offset + class_table_offset + 4 + glyph - class_first];
+        };
+        const bounded_class = if (class < class_count) class else state_table.class_out_of_bounds;
+        const state_cell = std.math.add(usize, state_offset, bounded_class) catch return error.BadSfnt;
+        if (state_cell >= length) return error.BadSfnt;
+        const entry_relative = std.math.add(usize, entry_table_offset, @as(usize, data[offset + state_cell]) * 8) catch return error.BadSfnt;
+        if (entry_relative > length or length - entry_relative < 8) return error.BadSfnt;
+        const new_state_offset: usize = try readU16(data, offset + entry_relative);
+        const flags = try readU16(data, offset + entry_relative + 2);
+        const current_index: usize = try readU16(data, offset + entry_relative + 4);
+        const marked_index: usize = try readU16(data, offset + entry_relative + 6);
+        const mark_location = cursor;
+
+        const marked_count: usize = flags & insertion_marked_count;
+        if (marked_index != no_insertion and marked_count != 0) {
+            const count = marked_count;
+            if (count >= operations_left) return error.BadSfnt;
+            operations_left -= count;
+            const end = cursor;
+            if (mark > run.glyphs.items.len) return error.BadSfnt;
+            cursor = mark;
+            const before = (flags & insertion_marked_before) != 0;
+            if (cursor < run.glyphs.items.len and !before) try run.copyCurrent(allocator, &cursor);
+            try outputMortInsertion(allocator, data, offset, length, insertion_offset, marked_index, count, glyph_count, &run, &cursor);
+            if (cursor < run.glyphs.items.len and !before) run.skipCurrent(cursor);
+            cursor = std.math.add(usize, end, count) catch return error.BadSfnt;
+            if (cursor > run.glyphs.items.len) return error.BadSfnt;
+        }
+        if ((flags & insertion_set_mark) != 0) mark = mark_location;
+        const current_count: usize = (flags & insertion_current_count) >> 5;
+        if (current_index != no_insertion and current_count != 0) {
+            const count = current_count;
+            if (count >= operations_left) return error.BadSfnt;
+            operations_left -= count;
+            const end = cursor;
+            const before = (flags & insertion_current_before) != 0;
+            if (cursor < run.glyphs.items.len and !before) try run.copyCurrent(allocator, &cursor);
+            try outputMortInsertion(allocator, data, offset, length, insertion_offset, current_index, count, glyph_count, &run, &cursor);
+            if (cursor < run.glyphs.items.len and !before) run.skipCurrent(cursor);
+            cursor = if ((flags & state_table.dont_advance) != 0) end else std.math.add(usize, end, count) catch return error.BadSfnt;
+            if (cursor > run.glyphs.items.len) return error.BadSfnt;
+        }
+        state_offset = new_state_offset;
+        if (cursor >= run.glyphs.items.len) break;
+        if ((flags & state_table.dont_advance) == 0) cursor += 1;
+    }
+    try run.commit(allocator, glyphs, options);
+}
+
+fn outputMortInsertion(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    insertion_offset: usize,
+    list_index: usize,
+    count: usize,
+    glyph_count: usize,
+    run: *insertion.WorkingRun,
+    cursor: *usize,
+) Error!void {
+    const index_bytes = std.math.mul(usize, list_index, 2) catch return error.BadSfnt;
+    const list_offset = std.math.add(usize, insertion_offset, index_bytes) catch return error.BadSfnt;
+    const byte_count = std.math.mul(usize, count, 2) catch return error.BadSfnt;
+    if (list_offset > length or byte_count > length - list_offset) return error.BadSfnt;
+    for (0..count) |index| {
+        const glyph = try readU16(data, offset + list_offset + index * 2);
+        if (glyph >= glyph_count) return error.BadSfnt;
+        try run.outputGlyph(allocator, cursor, glyph);
+    }
 }
 
 fn applyContextual(
@@ -502,7 +687,7 @@ test "legacy mort noncontextual substitutions update glyph metadata" {
     defer substituted.deinit(std.testing.allocator);
     try substituted.append(std.testing.allocator, false);
 
-    try apply(&bytes, 0, bytes.len, 3, &glyphs, .{ .glyph_substituted = &substituted });
+    try apply(std.testing.allocator, &bytes, 0, bytes.len, 3, &glyphs, .{ .glyph_substituted = &substituted });
     try std.testing.expectEqual(@as(GlyphId, 2), glyphs.items[0]);
     try std.testing.expect(substituted.items[0]);
 }
@@ -550,7 +735,7 @@ test "legacy mort rearrangement executes obsolete state offsets" {
     defer clusters.deinit(std.testing.allocator);
     try clusters.appendSlice(std.testing.allocator, &.{ 0, 1 });
 
-    try apply(&bytes, 0, bytes.len, 3, &glyphs, .{
+    try apply(std.testing.allocator, &bytes, 0, bytes.len, 3, &glyphs, .{
         .glyph_source_indices = &sources,
         .glyph_cluster_indices = &clusters,
     });
@@ -598,7 +783,57 @@ test "legacy mort contextual substitution uses signed word offsets" {
     defer substituted.deinit(std.testing.allocator);
     try substituted.appendSlice(std.testing.allocator, &.{ false, false });
 
-    try apply(&bytes, 0, bytes.len, 3, &glyphs, .{ .glyph_substituted = &substituted });
+    try apply(std.testing.allocator, &bytes, 0, bytes.len, 3, &glyphs, .{ .glyph_substituted = &substituted });
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 1 }, glyphs.items);
     try std.testing.expect(substituted.items[1]);
+}
+
+test "legacy mort insertion clones glyph metadata" {
+    var bytes = [_]u8{0} ** 92;
+    std.mem.writeInt(u32, bytes[0..4], 0x0001_0000, .big);
+    std.mem.writeInt(u32, bytes[4..8], 1, .big);
+    std.mem.writeInt(u32, bytes[8..12], 1, .big);
+    std.mem.writeInt(u32, bytes[12..16], 84, .big);
+    std.mem.writeInt(u16, bytes[16..18], 0, .big);
+    std.mem.writeInt(u16, bytes[18..20], 1, .big);
+    std.mem.writeInt(u16, bytes[20..22], 72, .big);
+    std.mem.writeInt(u16, bytes[22..24], 0x2005, .big);
+    std.mem.writeInt(u32, bytes[24..28], 1, .big);
+
+    const machine = 28;
+    std.mem.writeInt(u16, bytes[machine..][0..2], 4, .big);
+    std.mem.writeInt(u16, bytes[machine + 2 ..][0..2], 10, .big);
+    std.mem.writeInt(u16, bytes[machine + 4 ..][0..2], 18, .big);
+    std.mem.writeInt(u16, bytes[machine + 6 ..][0..2], 22, .big);
+    std.mem.writeInt(u16, bytes[machine + 8 ..][0..2], 62, .big);
+    std.mem.writeInt(u16, bytes[machine + 10 ..][0..2], 1, .big);
+    std.mem.writeInt(u16, bytes[machine + 12 ..][0..2], 1, .big);
+    bytes[machine + 14] = 3;
+    bytes[machine + 18 + 3] = 1;
+    std.mem.writeInt(u16, bytes[machine + 22 ..][0..2], 18, .big);
+    std.mem.writeInt(u16, bytes[machine + 30 ..][0..2], 18, .big);
+    std.mem.writeInt(u16, bytes[machine + 32 ..][0..2], 0x0020, .big);
+    // Entry 1 inserts glyph 2 after current glyph 1. The action value is a
+    // zero-based glyph index, while the header's 62 is its byte-offset base.
+    std.mem.writeInt(u16, bytes[machine + 34 ..][0..2], 0, .big);
+    std.mem.writeInt(u16, bytes[machine + 36 ..][0..2], 0xffff, .big);
+    std.mem.writeInt(u16, bytes[machine + 62 ..][0..2], 2, .big);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.append(std.testing.allocator, 1);
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.append(std.testing.allocator, 7);
+    var substituted = std.ArrayList(bool).empty;
+    defer substituted.deinit(std.testing.allocator);
+    try substituted.append(std.testing.allocator, false);
+
+    try apply(std.testing.allocator, &bytes, 0, bytes.len, 3, &glyphs, .{
+        .glyph_source_indices = &sources,
+        .glyph_substituted = &substituted,
+    });
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+    try std.testing.expectEqualSlices(usize, &.{ 7, 7 }, sources.items);
+    try std.testing.expectEqualSlices(bool, &.{ false, true }, substituted.items);
 }

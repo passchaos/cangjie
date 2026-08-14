@@ -2951,7 +2951,7 @@ pub const Font = struct {
         try self.validateGlyphRun(glyphs.items);
         const mort = self.mort orelse return;
         try validateSfntTableChecksum(self.data, mort);
-        try aat_mort.apply(self.data, mort.offset, mort.length, self.glyph_count, glyphs, options);
+        try aat_mort.apply(allocator, self.data, mort.offset, mort.length, self.glyph_count, glyphs, options);
     }
 
     pub fn applyMorxForShaping(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {

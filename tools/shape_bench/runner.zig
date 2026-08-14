@@ -97,6 +97,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .mort => try cangjie.testing.test_font.buildMortTtf(allocator),
         .mort_rearrangement => try cangjie.testing.test_font.buildMortRearrangementTtf(allocator),
         .mort_contextual => try cangjie.testing.test_font.buildMortContextualTtf(allocator),
+        .mort_insertion => try cangjie.testing.test_font.buildMortInsertionTtf(allocator),
     };
 }
 

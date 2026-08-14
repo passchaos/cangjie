@@ -1505,6 +1505,13 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   Both references produce 70 glyphs with checksum `2b8749a819fda434`,
   covering joining-form selection and mixed Urdu presentation sequences in an
   RTL run.
+- Unicode text-rendering `GSUB-{1,2}.tests` are retained verbatim in
+  `tests/data/gsub-{1,2}-*.txt` against both HarfBuzz and HarfRust.
+  `TestGSUBOne.otf` covers context-sensitive substitution across a space
+  (three glyphs, checksum `187a97943eb156df`). `TestShapeEthi.ttf` covers all
+  eleven Ethiopic numeral joining rows, including initial, medial, and final
+  substitutions across two- and five-scalar sequences (27 glyphs, checksum
+  `413b2570b14af642`).
 - Unicode text-rendering `GSUB-3.tests` is retained as a bounded-rejection
   gate for `TestGSUBThree.ttf`. Its expected output is deliberately `*`: nine
   chaining-context lookups recursively expand the middle `o` with a 19-glyph

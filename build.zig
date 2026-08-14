@@ -1305,6 +1305,20 @@ const retained_text_rendering_parity_gates = [_]struct {
         .direction = "rtl",
     },
     .{
+        .font_file = "TestGSUBOne.otf",
+        .text_file = "tests/data/gsub-1-rendering-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
+        .font_file = "TestShapeEthi.ttf",
+        .text_file = "tests/data/gsub-2-ethiopic-tests.txt",
+        .direction = "ltr",
+        .size = "1000",
+        .remove_default_ignorables = true,
+    },
+    .{
         .font_file = "TestGPOSOne.ttf",
         .text_file = "tests/data/gpos-1-rendering-tests.txt",
         .direction = "ltr",

@@ -1795,9 +1795,12 @@ shaping-performance superiority.
   engines without rewriting table payloads; all 598 rows still pass HarfBuzz
   through Cangjie's standalone legacy `mort` type-4 noncontextual executor.
   A synthetic format-8 lookup fixture separately proves glyph/substitution
-  metadata updates. HarfRust currently has no `mort` table parser, so retained
-  automated reference coverage for this path is HarfBuzz. Stateful legacy
-  `mort` types 0/1/2/5 remain open.
+  metadata updates. Legacy type-0 Indic rearrangement now runs the obsolete
+  byte-indexed state table while reusing the 15 verified rearrangement verbs
+  and glyph-parallel metadata movement; a synthetic `AB` fixture matches
+  HarfBuzz. HarfRust currently has no `mort` table parser, so retained
+  automated reference coverage for these paths is HarfBuzz. Stateful legacy
+  `mort` types 1/2/5 remain open.
 
   AAT `kerx` formats 0, 1, 2, 4, and 6 now participate in actual shaping rather
   than metadata inspection only. The retained format-0/2/6 synthetic fonts

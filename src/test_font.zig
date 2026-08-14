@@ -89,6 +89,10 @@ pub fn buildMortTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mortTtfTables(allocator));
 }
 
+pub fn buildMortRearrangementTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try mortRearrangementTtfTables(allocator));
+}
+
 pub fn buildTrakTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trakTtfTables(allocator));
 }
@@ -1119,6 +1123,21 @@ fn mortTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "mort", .data = try mortTable(allocator) };
+    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn mortRearrangementTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapFormat12RangeTable(allocator, 65, 66, 1) };
+    tables[1] = .{ .tag = "glyf", .data = try emptyGlyfTable(allocator, 3) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, 3) };
+    tables[5] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, 3) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
+    tables[7] = .{ .tag = "mort", .data = try mortRearrangementTable(allocator) };
     tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
@@ -3541,6 +3560,38 @@ fn mortTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 30, 1);
     writeU16(bytes, 32, 1);
     writeU16(bytes, 34, 0);
+    return bytes;
+}
+
+fn mortRearrangementTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 80);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x0001_0000);
+    writeU32(bytes, 4, 1);
+    writeU32(bytes, 8, 1);
+    writeU32(bytes, 12, 72);
+    writeU16(bytes, 16, 0);
+    writeU16(bytes, 18, 1);
+    writeU16(bytes, 20, 60);
+    writeU16(bytes, 22, 0x2000);
+    writeU32(bytes, 24, 1);
+
+    const machine = 28;
+    writeU16(bytes, machine, 4);
+    writeU16(bytes, machine + 2, 8);
+    writeU16(bytes, machine + 4, 16);
+    writeU16(bytes, machine + 6, 24);
+    writeU16(bytes, machine + 8, 1);
+    writeU16(bytes, machine + 10, 2);
+    bytes[machine + 12] = 3;
+    bytes[machine + 13] = 3;
+    bytes[machine + 16 + 3] = 1;
+    bytes[machine + 16 + 4 + 3] = 2;
+    writeU16(bytes, machine + 24, 16);
+    writeU16(bytes, machine + 28, 20);
+    writeU16(bytes, machine + 30, 0x8000);
+    writeU16(bytes, machine + 32, 16);
+    writeU16(bytes, machine + 34, 0x2001);
     return bytes;
 }
 

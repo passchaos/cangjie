@@ -74,7 +74,7 @@ pub fn apply(
     }
 }
 
-fn applyVerb(
+pub fn applyVerb(
     glyphs: *std.ArrayList(GlyphId),
     options: gsub.LookupOptions,
     start: usize,

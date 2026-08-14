@@ -9067,6 +9067,32 @@ test "applies GPOS pair positioning during shaping" {
     try std.testing.expectApproxEqAbs(@as(f32, -1.0), run.glyphs[1].y_offset, 0.001);
 }
 
+test "empty GSUB topology does not suppress independent GPOS shaping" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildEmptyGsubGposTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const selection = try font.selectGsubScriptForShaping(.latin, null);
+    try std.testing.expectEqual(@as(?OpenTypeScriptTag, null), selection.tag);
+    try std.testing.expect(!selection.requested);
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &layout_buffer, "AA", 20);
+
+    // The null GSUB lists are inert, but GPOS still owns the normal PairPos
+    // result. This protects the table-plan boundary that the Unicode GPOS-4
+    // fixture exercises rather than only testing the low-level GSUB parser.
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0), run.width(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.0), run.glyphs[1].y_offset, 0.001);
+}
+
 test "prefers GPOS pair positioning over legacy kern for same pair" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

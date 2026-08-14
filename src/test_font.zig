@@ -584,6 +584,10 @@ pub fn buildMinimalGposTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGposTtfTables(allocator));
 }
 
+pub fn buildEmptyGsubGposTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try emptyGsubGposTtfTables(allocator));
+}
+
 pub fn buildMinimalGposAndKernTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGposAndKernTtfTables(allocator));
 }
@@ -2612,6 +2616,21 @@ fn minimalGposTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[6] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[7] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    return tables;
+}
+
+fn emptyGsubGposTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "GPOS", .data = try gposTable(allocator) };
+    tables[1] = .{ .tag = "GSUB", .data = try emptyLayoutTable(allocator) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     return tables;
 }
 
@@ -6145,6 +6164,16 @@ fn inertLayoutTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 8, 14);
     // Non-null empty top-level lists make this a valid OpenType Layout table
     // while guaranteeing that it cannot mutate the test glyph stream.
+    return bytes;
+}
+
+fn emptyLayoutTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 10);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    // HarfBuzz accepts this exact all-null top-level topology as an empty
+    // OpenType Layout table. It appears in real text-rendering fixtures and
+    // must not prevent an independent GPOS table from running.
     return bytes;
 }
 

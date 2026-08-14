@@ -1318,6 +1318,11 @@ const retained_text_rendering_parity_gates = [_]struct {
         .direction = "ltr",
     },
     .{
+        .font_file = "TestGPOSThree.ttf",
+        .text_file = "tests/data/gpos-4-mark-stacking-tests.txt",
+        .direction = "ltr",
+    },
+    .{
         .font_file = "NotoSerifKannada-Regular.ttf",
         .text_file = "tests/data/kannada-shknda-1-tests.txt",
         .direction = "ltr",

@@ -1538,6 +1538,15 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   (General_Category=Mn, GCB=Extend); Cangjie now keeps the complete range in
   the preceding base's grapheme and shaping cluster instead of exposing a
   separate caret/cluster before the positioned mark.
+- All four `GPOS-4.tests` mark-stacking rows are retained in
+  `tests/data/gpos-4-mark-stacking-tests.txt` with `TestGPOSThree.ttf`; both
+  references produce 13 glyphs with checksum `4aed1aa1061c5ac0`. The font has
+  an independent valid GPOS table but a ten-byte GSUB header whose ScriptList,
+  FeatureList, and LookupList offsets are all null. Cangjie now treats only
+  that exact all-null topology as an inert GSUB, including font-level script
+  selection and lookup-plan construction, so it can continue to the mark
+  positioning table. Partial-null topologies remain malformed because their
+  activation and lookup graphs cannot be navigated consistently.
 - Newa passes all five script-specific cases retained from upstream
   `in-house/use-syllable.tests` across three fixture fonts. The slice covers
   virama+ZWNJ termination, CGJ transparency in contextual and nested ligature

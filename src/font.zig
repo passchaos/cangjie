@@ -2773,6 +2773,20 @@ pub const Font = struct {
     ) FontError!LayoutScriptSelection {
         const record = table_record orelse return .{};
         try validateSfntTableChecksum(self.data, record);
+        return self.selectLayoutScriptAfterProof(record, script, explicit_tag);
+    }
+
+    /// Select from a layout table whose borrowed payload checksum was already
+    /// proved by the caller. GSUB needs this boundary because HarfBuzz accepts
+    /// the all-null ten-byte header as an empty table, so it must inspect that
+    /// topology before entering the generic ScriptList parser without hashing
+    /// every ordinary GSUB table twice.
+    fn selectLayoutScriptAfterProof(
+        self: *const Font,
+        record: TableRecord,
+        script: unicode_mod.Script,
+        explicit_tag: ?unicode_mod.OpenTypeScriptTag,
+    ) FontError!LayoutScriptSelection {
         const table = self.data[record.offset .. record.offset + record.length];
 
         var tag_buf: [3]u32 = undefined;
@@ -2800,7 +2814,14 @@ pub const Font = struct {
         script: unicode_mod.Script,
         explicit_tag: ?unicode_mod.OpenTypeScriptTag,
     ) FontError!LayoutScriptSelection {
-        return self.selectLayoutScriptForShaping(self.gsub, script, explicit_tag);
+        const gsub = self.gsub orelse return .{};
+        try validateSfntTableChecksum(self.data, gsub);
+        // Some deployed fonts contain only the version and three null top-level
+        // GSUB offsets. HarfBuzz treats that exact topology as an inert table;
+        // routing it through the generic selector would interpret version bytes
+        // as a ScriptList and reject an otherwise usable GPOS table.
+        if (try gsub_mod.isEmptyTable(self.data, gsub.offset, gsub.length)) return .{};
+        return self.selectLayoutScriptAfterProof(gsub, script, explicit_tag);
     }
 
     pub fn selectGposScriptForShaping(

@@ -619,6 +619,7 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return;
     // Script/language/feature selection happens before the lookup list pass.
     // When no explicit features are supplied, selectedLookupIndices returns the
     // default-enabled lookups for the requested script/language.
@@ -688,6 +689,7 @@ pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: 
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return try allocator.alloc(u16, 0);
     var lookups = try selectedLookupIndices(table, allocator, options);
     return try lookups.toOwnedSlice(allocator);
 }
@@ -705,12 +707,21 @@ pub fn hasFeature(data: []const u8, offset: usize, length: usize, feature_tag: u
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = true };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return false;
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16(table, feature_list_offset);
     for (0..feature_count) |feature_i| {
         if (try readU32(table, feature_list_offset + 2 + feature_i * 6) == feature_tag) return true;
     }
     return false;
+}
+
+pub fn isEmptyTable(data: []const u8, offset: usize, length: usize) GsubError!bool {
+    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
+    const table = Table{ .data = data, .offset = offset, .length = length };
+    const major = try readU16BadGsub(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+    return isEmptyGsubTopology(table);
 }
 
 /// Return the table-wide `rand` capability retained by an exact accelerator.
@@ -796,6 +807,7 @@ pub fn applyFeatureSequenceWithOptions(
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return;
     var run_digest_cache = RunDigestCache.init();
 
     // Preserve arbitrary LangSys-required features even when a higher-level
@@ -864,6 +876,9 @@ pub fn buildFeatureLookupPlan(
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) {
+        return .{ .entries = try allocator.alloc(FeatureLookupPlanEntry, 0) };
+    }
 
     var feature_indices = std.ArrayList(FeatureSelection).empty;
     defer feature_indices.deinit(allocator);
@@ -924,6 +939,12 @@ pub fn buildMergedFeatureLookupPlan(
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) {
+        return .{
+            .lookups = try allocator.alloc(MergedFeatureLookup, 0),
+            .lookup_offsets = try allocator.alloc(usize, 0),
+        };
+    }
 
     var feature_indices = std.ArrayList(FeatureSelection).empty;
     defer feature_indices.deinit(allocator);
@@ -1018,6 +1039,13 @@ pub fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) {
+        // Cached plans built for this topology are necessarily empty. Keep the
+        // executor independently safe because callers may retain a plan across
+        // cache layers rather than re-entering the builder on every run.
+        if (plan.entries.len != 0) return error.BadGsub;
+        return;
+    }
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
@@ -1078,6 +1106,10 @@ pub fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) {
+        if (plan.lookups.len != 0 or plan.lookup_offsets.len != 0) return error.BadGsub;
+        return;
+    }
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
@@ -1343,6 +1375,7 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = true };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return try allocator.alloc(LookupAccelerator, 0);
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
@@ -2818,6 +2851,7 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const table = Table{ .data = data, .offset = offset, .length = length, .glyph_count = glyph_count };
     const major = try readU16BadGsub(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return;
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGsub(table, lookup_list_offset);
@@ -2838,6 +2872,7 @@ pub fn validateGlyphBoundsForShaping(data: []const u8, offset: usize, length: us
     const table = Table{ .data = data, .offset = offset, .length = length, .glyph_count = glyph_count };
     const major = try readU16BadGsub(table, 0);
     if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return;
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGsub(table, lookup_list_offset);
@@ -8092,6 +8127,17 @@ fn checkedExtensionSubtablePayloadOffset(table: Table, extension_offset: usize, 
     return checkedSubtableOffset(table, extension_offset, relative_offset);
 }
 
+fn isEmptyGsubTopology(table: Table) GsubError!bool {
+    const script_list = try readU16BadGsub(table, 4);
+    const feature_list = try readU16BadGsub(table, 6);
+    const lookup_list = try readU16BadGsub(table, 8);
+    if (script_list == 0 and feature_list == 0 and lookup_list == 0) return true;
+    // Only the all-null triple denotes HarfBuzz's empty table. A partial
+    // topology would make activation and lookup navigation disagree and stays
+    // subject to the required-offset checks below.
+    return false;
+}
+
 fn checkedRequiredScriptListOffset(table: Table) GsubError!usize {
     // ScriptList is a required top-level OpenType Layout table. An offset of
     // zero aliases the GSUB version/header bytes as a ScriptList and makes
@@ -9490,6 +9536,63 @@ test "GSUB rejects null LookupList child offsets" {
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
     try applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{});
     try std.testing.expectEqualSlices(GlyphId, &.{2}, glyphs.items);
+}
+
+test "GSUB accepts the all-null empty topology" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 10;
+    writeU32Test(&bytes, 0, 0x00010000);
+
+    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
+    try std.testing.expect(try isEmptyGsubTopology(table));
+    try std.testing.expect(try isEmptyTable(&bytes, 0, bytes.len));
+    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
+    try std.testing.expect(!(try hasFeature(&bytes, 0, bytes.len, unicode.tag("liga"))));
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2 });
+    try applyWithOptions(&bytes, 0, bytes.len, &glyphs, allocator, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+
+    const selected = try selectedLookupIndicesForOptions(&bytes, 0, bytes.len, allocator, .{});
+    defer allocator.free(selected);
+    try std.testing.expectEqual(@as(usize, 0), selected.len);
+
+    var feature_plan = try buildFeatureLookupPlan(
+        &bytes,
+        0,
+        bytes.len,
+        &.{.{ .tag = unicode.tag("liga") }},
+        allocator,
+        .{},
+    );
+    defer feature_plan.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), feature_plan.entries.len);
+    try applyFeatureLookupPlanWithOptions(&bytes, 0, bytes.len, feature_plan, &glyphs, allocator, .{});
+
+    var merged_plan = try buildMergedFeatureLookupPlan(
+        &bytes,
+        0,
+        bytes.len,
+        &.{.{ .tag = unicode.tag("liga") }},
+        allocator,
+        .{},
+    );
+    defer merged_plan.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), merged_plan.lookups.len);
+    try applyMergedFeatureLookupPlanWithOptions(&bytes, 0, bytes.len, merged_plan, &glyphs, allocator, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
+
+    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    defer allocator.free(accelerators);
+    try std.testing.expectEqual(@as(usize, 0), accelerators.len);
+
+    // A partial null topology is not an empty table and must retain required
+    // child-pointer validation.
+    writeU16Test(&bytes, 4, 2);
+    try std.testing.expect(!(try isEmptyGsubTopology(table)));
+    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 }
 
 test "GSUB rejects null top-level ScriptList and FeatureList offsets" {

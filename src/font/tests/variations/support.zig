@@ -81,3 +81,14 @@ pub fn writeF2Dot14(bytes: []u8, offset: usize, value: f32) void {
     const fixed: i16 = @intFromFloat(value * 16384.0);
     std.mem.writeInt(i16, bytes[offset..][0..2], fixed, .big);
 }
+
+pub fn expectInstancesError(
+    font: *const Font,
+    allocator: std.mem.Allocator,
+    expected: anyerror,
+) !void {
+    try std.testing.expectError(
+        expected,
+        font.variationInstances(allocator),
+    );
+}

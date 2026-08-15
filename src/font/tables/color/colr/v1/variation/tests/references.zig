@@ -3,8 +3,20 @@
 const std = @import("std");
 
 const glyphs = @import("../../validate/glyphs.zig");
+const support = @import("support.zig");
 const types = @import("../../types.zig");
 const variation = @import("../root.zig");
+
+const writeF16Dot16Test = support.writeF16Dot16;
+const writeF2Dot14Test = support.writeF2Dot14;
+const writeI16Test = support.writeI16;
+const writeItemVariationStoreWithItems =
+    support.writeItemVariationStoreWithItems;
+const writeItemVariationStoreWithOneItem =
+    support.writeItemVariationStoreWithOneItem;
+const writeU16Test = support.writeU16;
+const writeU24Test = support.writeU24;
+const writeU32Test = support.writeU32;
 
 test "COLR v1 variable ClipBoxes own varIndexBase bytes" {
     var bytes: [176]u8 = .{0} ** 176;
@@ -178,56 +190,4 @@ test "COLR v1 variable transform paints validate variation indexes" {
     var bad_matrix_index = bytes;
     writeU32Test(&bad_matrix_index, colr_offset + 75, 1); // Matrix deltas need rows 1 through 6.
     try std.testing.expectError(error.BadSfnt, variation.validate(&bad_matrix_index, colr, 1, 2));
-}
-
-fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
-    std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
-}
-
-fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {
-    std.mem.writeInt(i16, bytes[offset..][0..2], value, .big);
-}
-
-fn writeU24Test(bytes: []u8, offset: usize, value: u32) void {
-    std.debug.assert(value <= 0x00ff_ffff);
-    bytes[offset] = @intCast(value >> 16);
-    bytes[offset + 1] = @intCast((value >> 8) & 0xff);
-    bytes[offset + 2] = @intCast(value & 0xff);
-}
-
-fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
-    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
-}
-
-fn writeF2Dot14Test(bytes: []u8, offset: usize, value: f32) void {
-    writeI16Test(bytes, offset, @intFromFloat(@round(value * 16384.0)));
-}
-
-fn writeF16Dot16Test(bytes: []u8, offset: usize, value: f32) void {
-    std.mem.writeInt(i32, bytes[offset..][0..4], @intFromFloat(@round(value * 65536.0)), .big);
-}
-
-fn writeItemVariationStoreWithOneItem(bytes: []u8, offset: usize) void {
-    writeItemVariationStoreWithItems(bytes, offset, 1);
-}
-
-fn writeItemVariationStoreWithItems(bytes: []u8, offset: usize, item_count: u16) void {
-    writeU16Test(bytes, offset, 1);
-    writeU32Test(bytes, offset + 2, 12);
-    writeU16Test(bytes, offset + 6, 1);
-    writeU32Test(bytes, offset + 8, 24);
-
-    writeU16Test(bytes, offset + 12, 1);
-    writeU16Test(bytes, offset + 14, 1);
-    writeF2Dot14Test(bytes, offset + 16, -1.0);
-    writeF2Dot14Test(bytes, offset + 18, 0.0);
-    writeF2Dot14Test(bytes, offset + 20, 1.0);
-
-    writeU16Test(bytes, offset + 24, item_count);
-    writeU16Test(bytes, offset + 26, 1);
-    writeU16Test(bytes, offset + 28, 1);
-    writeU16Test(bytes, offset + 30, 0);
-    for (0..item_count) |index| {
-        writeI16Test(bytes, offset + 32 + index * 2, 7);
-    }
 }

@@ -3,14 +3,12 @@
 const std = @import("std");
 
 const bin = @import("../../../../../binary.zig");
-const paint = @import("paint/root.zig");
+const paint = @import("paint/core.zig");
+const paint_types = @import("paint/types.zig");
+const types = @import("types.zig");
 
-pub const Error = paint.Error;
-
-pub const Table = struct {
-    offset: usize,
-    length: usize,
-};
+pub const Error = paint_types.Error;
+pub const Table = types.Table;
 
 pub const List = struct {
     start: usize,
@@ -99,7 +97,7 @@ fn headerAt(
     table: Table,
     list: List,
     index: usize,
-) Error!paint.Range {
+) Error!paint_types.Range {
     const absolute = try paintOffset(
         data,
         table,

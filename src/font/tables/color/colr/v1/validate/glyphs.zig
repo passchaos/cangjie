@@ -6,7 +6,6 @@ const bin = @import("../../../../../../binary.zig");
 const bases = @import("../bases.zig");
 const clip = @import("../clip.zig");
 const glyph = @import("../../../../../../glyph.zig");
-const layers = @import("../layers.zig");
 const paint = @import("../paint/root.zig");
 const types = @import("../types.zig");
 
@@ -28,177 +27,61 @@ pub fn validate(
     const base_list = try bases.read(data, table);
     if (base_list) |list| {
         for (0..list.record_count) |index| {
-            const record = try bases.recordAt(data, table, list, index);
-            try validateGlyphId(record.glyph_id, glyph_count);
-            var guard = paint.Guard{};
-            try validateGraph(
-                data,
-                table,
+            try validateGlyphId(
+                (try bases.recordAt(data, table, list, index)).glyph_id,
                 glyph_count,
-                base_list,
-                record.paint_offset,
-                &guard,
             );
         }
     }
 
-    const layer_table = layers.Table{
-        .offset = table.offset,
-        .length = table.length,
+    var visitor = Visitor{
+        .glyph_count = glyph_count,
+        .base_list = base_list,
     };
-    if (try layers.read(data, layer_table)) |layer_list| {
-        for (0..layer_list.layer_count) |index| {
-            var guard = paint.Guard{};
-            try validateGraph(
-                data,
-                table,
-                glyph_count,
-                base_list,
-                try layers.paintOffset(
-                    data,
-                    layer_table,
-                    layer_list,
-                    @intCast(index),
-                ),
-                &guard,
-            );
-        }
-    }
+    try paint.walkAll(data, table, &visitor);
 }
 
-fn validateGraph(
-    data: []const u8,
-    table: types.Table,
+const Visitor = struct {
     glyph_count: u16,
     base_list: ?bases.List,
-    offset: usize,
-    guard: *paint.Guard,
-) types.Error!void {
-    const paint_table = paint.Table{
-        .offset = table.offset,
-        .length = table.length,
-    };
-    const info = try paint.validateRecord(data, paint_table, offset);
-    try guard.enter(offset);
-    defer guard.leave();
-    try guard.claimPaintRecord(data, paint_table, offset, info);
 
-    switch (info.kind) {
-        .colr_layers => {
-            const layer_count = data[offset + 1];
-            if (layer_count == 0) return;
-            const first_layer_index = try bin.readU32At(data, offset + 2);
-            const layer_table = layers.Table{
-                .offset = table.offset,
-                .length = table.length,
-            };
-            const layer_list =
-                (try layers.read(data, layer_table)) orelse
-                return error.BadSfnt;
-            const first: usize = @intCast(first_layer_index);
-            if (first > layer_list.layer_count or
-                @as(usize, layer_count) > layer_list.layer_count - first)
-            {
-                return error.BadSfnt;
-            }
-            for (0..layer_count) |layer_offset| {
-                try validateGraph(
+    pub fn visit(
+        self: *const Visitor,
+        data: []const u8,
+        table: types.Table,
+        offset: usize,
+        info: paint.FormatInfo,
+    ) types.Error!void {
+        switch (info.kind) {
+            .glyph => try validateGlyphId(
+                try bin.readU16At(data, offset + 4),
+                self.glyph_count,
+            ),
+            .colr_glyph => {
+                const referenced_glyph = try bin.readU16At(data, offset + 1);
+                try validateGlyphId(referenced_glyph, self.glyph_count);
+                const list = self.base_list orelse return error.BadSfnt;
+                _ = (try bases.paintOffsetForGlyph(
                     data,
                     table,
-                    glyph_count,
-                    base_list,
-                    try layers.paintOffset(
-                        data,
-                        layer_table,
-                        layer_list,
-                        first_layer_index + @as(u32, @intCast(layer_offset)),
-                    ),
-                    guard,
-                );
-            }
-        },
-        .glyph => {
-            try validateGlyphId(
-                try bin.readU16At(data, offset + 4),
-                glyph_count,
-            );
-            try validateGraph(
-                data,
-                table,
-                glyph_count,
-                base_list,
-                try paint.childOffset(
-                    data,
-                    paint_table,
-                    offset,
-                    info.min_size,
-                    1,
-                ),
-                guard,
-            );
-        },
-        .colr_glyph => {
-            const referenced_glyph = try bin.readU16At(data, offset + 1);
-            try validateGlyphId(referenced_glyph, glyph_count);
-            const list = base_list orelse return error.BadSfnt;
-            _ = (try bases.paintOffsetForGlyph(
-                data,
-                table,
-                list,
-                referenced_glyph,
-            )) orelse return error.BadSfnt;
-            // Cross-glyph recursion is a traversal concern: rejecting a cycle
-            // while parsing would make unrelated valid color glyphs unusable.
-            // The renderer's lazy traversal owns that glyph stack. Here we
-            // prove only that the referenced BaseGlyphPaintRecord exists.
-        },
-        .single_child => try validateGraph(
-            data,
-            table,
-            glyph_count,
-            base_list,
-            try paint.childOffset(
-                data,
-                paint_table,
-                offset,
-                info.min_size,
-                1,
-            ),
-            guard,
-        ),
-        .composite => {
-            try validateGraph(
-                data,
-                table,
-                glyph_count,
-                base_list,
-                try paint.childOffset(
-                    data,
-                    paint_table,
-                    offset,
-                    info.min_size,
-                    1,
-                ),
-                guard,
-            );
-            try validateGraph(
-                data,
-                table,
-                glyph_count,
-                base_list,
-                try paint.childOffset(
-                    data,
-                    paint_table,
-                    offset,
-                    info.min_size,
-                    5,
-                ),
-                guard,
-            );
-        },
-        .solid, .color_line, .terminal => return,
+                    list,
+                    referenced_glyph,
+                )) orelse return error.BadSfnt;
+                // Cross-glyph recursion is a renderer traversal concern:
+                // rejecting a cycle here would make unrelated valid glyphs
+                // unusable. This pass proves only that the referenced base
+                // glyph exists and belongs to maxp.
+            },
+            .terminal,
+            .colr_layers,
+            .solid,
+            .color_line,
+            .single_child,
+            .composite,
+            => {},
+        }
     }
-}
+};
 
 fn validateGlyphId(
     glyph_id: glyph.GlyphId,

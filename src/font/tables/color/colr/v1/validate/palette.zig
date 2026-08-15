@@ -3,8 +3,6 @@
 const std = @import("std");
 
 const bin = @import("../../../../../../binary.zig");
-const bases = @import("../bases.zig");
-const layers = @import("../layers.zig");
 const paint = @import("../paint/root.zig");
 const types = @import("../types.zig");
 
@@ -22,40 +20,8 @@ pub fn validate(
         return error.BadSfnt;
     }
 
-    if (try bases.read(data, table)) |base_list| {
-        for (0..base_list.record_count) |index| {
-            var guard = paint.Guard{};
-            try validateGraph(
-                data,
-                table,
-                palette_entries,
-                try bases.paintOffsetAt(data, table, base_list, index),
-                &guard,
-            );
-        }
-    }
-
-    const layer_table = layers.Table{
-        .offset = table.offset,
-        .length = table.length,
-    };
-    if (try layers.read(data, layer_table)) |layer_list| {
-        for (0..layer_list.layer_count) |index| {
-            var guard = paint.Guard{};
-            try validateGraph(
-                data,
-                table,
-                palette_entries,
-                try layers.paintOffset(
-                    data,
-                    layer_table,
-                    layer_list,
-                    @intCast(index),
-                ),
-                &guard,
-            );
-        }
-    }
+    var visitor = Visitor{ .palette_entries = palette_entries };
+    try paint.walkAll(data, table, &visitor);
 }
 
 pub fn validateIndex(
@@ -69,110 +35,38 @@ pub fn validateIndex(
     if (palette_index >= entries) return error.BadSfnt;
 }
 
-fn validateGraph(
-    data: []const u8,
-    table: types.Table,
+const Visitor = struct {
     palette_entries: ?u16,
-    offset: usize,
-    guard: *paint.Guard,
-) types.Error!void {
-    const paint_table = paint.Table{
-        .offset = table.offset,
-        .length = table.length,
-    };
-    const info = try paint.validateRecord(data, paint_table, offset);
-    try guard.enter(offset);
-    defer guard.leave();
-    try guard.claimPaintRecord(data, paint_table, offset, info);
 
-    switch (info.kind) {
-        .colr_layers => {
-            const layer_count = data[offset + 1];
-            if (layer_count == 0) return;
-            const first_layer_index = try bin.readU32At(data, offset + 2);
-            const layer_table = layers.Table{
-                .offset = table.offset,
-                .length = table.length,
-            };
-            const layer_list =
-                (try layers.read(data, layer_table)) orelse
-                return error.BadSfnt;
-            const first: usize = @intCast(first_layer_index);
-            if (first > layer_list.layer_count or
-                @as(usize, layer_count) > layer_list.layer_count - first)
-            {
-                return error.BadSfnt;
-            }
-            for (0..layer_count) |layer_offset| {
-                try validateGraph(
-                    data,
-                    table,
-                    palette_entries,
-                    try layers.paintOffset(
-                        data,
-                        layer_table,
-                        layer_list,
-                        first_layer_index + @as(u32, @intCast(layer_offset)),
-                    ),
-                    guard,
-                );
-            }
-        },
-        .solid => try validateIndex(
-            try bin.readU16At(data, offset + 1),
-            palette_entries,
-        ),
-        .glyph, .single_child => try validateGraph(
-            data,
-            table,
-            palette_entries,
-            try paint.childOffset(
+    pub fn visit(
+        self: *const Visitor,
+        data: []const u8,
+        table: types.Table,
+        offset: usize,
+        info: paint.FormatInfo,
+    ) types.Error!void {
+        switch (info.kind) {
+            .solid => try validateIndex(
+                try bin.readU16At(data, offset + 1),
+                self.palette_entries,
+            ),
+            .color_line => try validateColorLine(
                 data,
-                paint_table,
+                table,
+                self.palette_entries,
                 offset,
                 info.min_size,
-                1,
             ),
-            guard,
-        ),
-        .color_line => try validateColorLine(
-            data,
-            paint_table,
-            palette_entries,
-            offset,
-            info.min_size,
-        ),
-        .composite => {
-            try validateGraph(
-                data,
-                table,
-                palette_entries,
-                try paint.childOffset(
-                    data,
-                    paint_table,
-                    offset,
-                    info.min_size,
-                    1,
-                ),
-                guard,
-            );
-            try validateGraph(
-                data,
-                table,
-                palette_entries,
-                try paint.childOffset(
-                    data,
-                    paint_table,
-                    offset,
-                    info.min_size,
-                    5,
-                ),
-                guard,
-            );
-        },
-        .colr_glyph, .terminal => return,
+            .terminal,
+            .colr_layers,
+            .glyph,
+            .colr_glyph,
+            .single_child,
+            .composite,
+            => {},
+        }
     }
-}
+};
 
 fn validateColorLine(
     data: []const u8,

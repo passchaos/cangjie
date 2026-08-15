@@ -572,14 +572,6 @@ fn colrV1Table(record: TableRecord) colr_v1_mod.Table {
     return .{ .offset = record.offset, .length = record.length };
 }
 
-fn colrPaintTable(record: TableRecord) colr_paint.Table {
-    return .{ .offset = record.offset, .length = record.length };
-}
-
-fn colrLayerTable(record: TableRecord) colr_layers.Table {
-    return .{ .offset = record.offset, .length = record.length };
-}
-
 fn variationTable(record: TableRecord) item_store.Table {
     return .{ .offset = record.offset, .length = record.length };
 }
@@ -3687,8 +3679,11 @@ pub const Font = struct {
             base_list,
             glyph_id,
         )) orelse return null;
-        var graph_guard = colr_paint.Guard{};
-        try validateColorPaintGraph(self, paint_start, &graph_guard);
+        try colr_paint.validateGraph(
+            self.data,
+            colrV1Table(colr),
+            paint_start,
+        );
         return try readColorPaint(self, paint_start, read_context);
     }
 
@@ -3776,18 +3771,6 @@ pub const Font = struct {
             normalized_coords,
         ));
         return result;
-    }
-
-    fn validateColorPaletteIndex(self: *const Font, color_index: u16) FontError!void {
-        // COLR palette indices are only meaningful when a CPAL table declares a
-        // color slot for them.  Validate at parse/read boundaries so rendering
-        // code does not silently drop malformed color layers or paints as if
-        // they merely selected an absent runtime palette.
-        // 0xFFFF is the spec-defined foreground/currentColor sentinel and does
-        // not name a CPAL entry.
-        if (color_index == 0xffff) return;
-        if (self.cpal == null) return error.BadSfnt;
-        _ = (try self.paletteColor(0, color_index)) orelse return error.BadSfnt;
     }
 
     /// Read validated metadata from the optional SFNT `VORG` table.
@@ -3925,11 +3908,19 @@ pub const Font = struct {
         if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
         }
-        const layer_list = (try colr_layers.read(self.data, colrLayerTable(colr))) orelse return null;
+        const layer_list = (try colr_layers.read(self.data, colrV1Table(colr))) orelse return null;
         if (layer_index >= layer_list.layer_count) return null;
-        const paint_start = try colr_layers.paintOffset(self.data, colrLayerTable(colr), layer_list, layer_index);
-        var graph_guard = colr_paint.Guard{};
-        try validateColorPaintLayer(self, layer_list, layer_index, &graph_guard);
+        const paint_start = try colr_layers.paintOffset(
+            self.data,
+            colrV1Table(colr),
+            layer_list,
+            layer_index,
+        );
+        try colr_paint.validateGraph(
+            self.data,
+            colrV1Table(colr),
+            paint_start,
+        );
         return try readColorPaint(self, paint_start, .{
             .normalized_coords = normalized_coords,
             .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
@@ -3953,11 +3944,11 @@ pub const Font = struct {
         if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
         }
-        const info = try validateColrPaintRecord(self.data, colr, child.offset);
-        var graph_guard = colr_paint.Guard{};
-        try graph_guard.enter(child.offset);
-        defer graph_guard.leave();
-        try graph_guard.claimPaintRecord(self.data, colrPaintTable(colr), child.offset, info);
+        try colr_paint.validateGraph(
+            self.data,
+            colrV1Table(colr),
+            child.offset,
+        );
         return try readColorPaint(self, child.offset, .{
             .normalized_coords = normalized_coords,
             .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
@@ -10637,68 +10628,6 @@ fn validateColrVariationData(
 
 fn validateGlyphIdInMaxp(glyph_id: u32, glyph_count: u16) FontError!void {
     if (glyph_id >= glyph_count) return error.BadSfnt;
-}
-
-fn validateColrPaintRecord(
-    data: []const u8,
-    colr: TableRecord,
-    offset: usize,
-) FontError!colr_paint.FormatInfo {
-    return try colr_paint.validateRecord(
-        data,
-        colrPaintTable(colr),
-        offset,
-    );
-}
-
-fn validateColorPaintLayer(font: *const Font, layer_list: colr_layers.List, layer_index: u32, guard: *colr_paint.Guard) FontError!void {
-    const colr = font.colr orelse return error.BadSfnt;
-    const paint_offset = try colr_layers.paintOffset(font.data, colrLayerTable(colr), layer_list, layer_index);
-    try validateColorPaintGraph(font, paint_offset, guard);
-}
-
-fn validateColorPaintGraph(font: *const Font, offset: usize, guard: *colr_paint.Guard) FontError!void {
-    const colr = font.colr orelse return error.BadSfnt;
-    const data = font.data;
-    if (offset >= colr.offset + colr.length) return error.BadSfnt;
-    const info = try validateColrPaintRecord(data, colr, offset);
-    try guard.enter(offset);
-    defer guard.leave();
-    try guard.claimPaintRecord(data, colrPaintTable(colr), offset, info);
-
-    const format = data[offset];
-    switch (format) {
-        1 => {
-            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
-            const layer_count = data[offset + 1];
-            const first_layer_index = try bin.readU32At(data, offset + 2);
-            if (layer_count == 0) return;
-            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
-            const first: usize = @intCast(first_layer_index);
-            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
-            for (0..layer_count) |layer_offset| {
-                try validateColorPaintLayer(font, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)), guard);
-            }
-        },
-        2, 3 => {
-            if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
-            try font.validateColorPaletteIndex(try bin.readU16At(data, offset + 1));
-        },
-        10 => {
-            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
-            const child_offset: usize = @intCast(try readU24At(data, offset + 1));
-            if (child_offset < 6) return error.BadSfnt;
-            if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
-            try validateColorPaintGraph(font, offset + child_offset, guard);
-        },
-        12...31 => try validateColorPaintGraph(
-            font,
-            try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1),
-            guard,
-        ),
-        // Other unsupported terminal/composite formats remain a lazy error.
-        else => return,
-    }
 }
 
 fn readColorPaint(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint {

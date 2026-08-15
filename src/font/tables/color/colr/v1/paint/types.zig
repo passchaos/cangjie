@@ -1,11 +1,13 @@
 //! Shared COLR v1 Paint byte-grammar records.
 
-pub const Error = error{BadSfnt} || error{EndOfStream};
+const colr = @import("../types.zig");
 
-pub const Table = struct {
-    offset: usize,
-    length: usize,
-};
+// Paint parsing lives below the COLR v1 module but consumes the same byte
+// domain and error contract. Keeping these as aliases avoids subtly distinct
+// table descriptors at every boundary between directories, walkers, readers,
+// and validators.
+pub const Error = colr.Error;
+pub const Table = colr.Table;
 
 pub const Kind = enum {
     terminal,

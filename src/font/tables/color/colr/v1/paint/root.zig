@@ -1,27 +1,25 @@
-//! Shared COLR v1 Paint byte grammar and graph guard.
+//! Shared COLR v1 Paint grammar, traversal, and validation surface.
 
 const std = @import("std");
 
 const core = @import("core.zig");
-const guard = @import("guard.zig");
 const types = @import("types.zig");
+const walker = @import("walk.zig");
 
-pub const Error = types.Error;
 pub const Table = types.Table;
-pub const Kind = types.Kind;
 pub const FormatInfo = types.FormatInfo;
 pub const Range = types.Range;
-pub const Guard = guard.Guard;
 
 pub const formatInfo = core.formatInfo;
 pub const validateRecord = core.validateRecord;
 pub const childOffset = core.childOffset;
-pub const headerRange = core.headerRange;
 pub const transformPayloadRange = core.transformPayloadRange;
 pub const colorLineRange = core.colorLineRange;
 pub const usesVariableColorLine = core.usesVariableColorLine;
 pub const colorStopSize = core.colorStopSize;
-pub const overlaps = core.overlaps;
+pub const validateGraph = walker.validate;
+pub const walkAll = walker.walkAll;
+pub const walkAllWithForbiddenRange = walker.walkAllWithForbiddenRange;
 
 test "format metadata covers every assigned COLR v1 Paint format" {
     try std.testing.expect(formatInfo(0) == null);

@@ -4,7 +4,8 @@ const std = @import("std");
 
 const bin = @import("../../../../../binary.zig");
 const glyph = @import("../../../../../glyph.zig");
-const paint = @import("paint/root.zig");
+const paint = @import("paint/core.zig");
+const paint_types = @import("paint/types.zig");
 const types = @import("types.zig");
 
 pub const List = struct {
@@ -168,7 +169,7 @@ fn headerAt(
     table: types.Table,
     list: List,
     index: usize,
-) types.Error!paint.Range {
+) types.Error!paint_types.Range {
     const absolute = try paintOffsetAt(data, table, list, index);
     return try paint.headerRange(
         data,

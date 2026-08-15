@@ -7600,6 +7600,205 @@ test "paragraph wrapping consumes Unicode line break data" {
     try std.testing.expectEqual(@as(usize, 3), ivs.lines[1].byte_len);
 }
 
+test "soft hyphen becomes visible only at a selected wrap" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const font_bytes = try test_font.buildCodepointSetTtf(allocator, &.{
+        0x0020,
+        0x002d,
+        'a',
+        'c',
+        'e',
+        'o',
+        'p',
+        'r',
+        't',
+        0x00ad,
+        0x2010,
+    });
+    defer allocator.free(font_bytes);
+    var font = try Font.parse(allocator, font_bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+    const text = "co\u{00ad}operate";
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const unwrapped = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{ .max_width = 1000 },
+    );
+    try std.testing.expectEqual(@as(usize, 1), unwrapped.lines.len);
+    try std.testing.expectEqual(@as(u21, 0x00ad), unwrapped.glyphs[2].codepoint);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        unwrapped.glyphs[2].x_advance,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        unwrapped.selectionRectForBytes(2, 4).width,
+        0.001,
+    );
+
+    const hyphen_glyph = try font.glyphIndex(0x2010);
+    const hyphen_metrics = try font.horizontalMetrics(hyphen_glyph);
+    const hyphen_width = @as(
+        f32,
+        @floatFromInt(hyphen_metrics.advance_width),
+    ) * (20.0 / @as(f32, @floatFromInt(font.units_per_em)));
+    const first_line_width =
+        unwrapped.glyphs[0].x_advance +
+        unwrapped.glyphs[1].x_advance +
+        hyphen_width +
+        0.5;
+    const wrapped = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{ .max_width = first_line_width },
+    );
+    try std.testing.expect(wrapped.lines.len >= 2);
+    try std.testing.expectEqual(@as(usize, 3), wrapped.lines[0].glyph_len);
+    try std.testing.expect(
+        wrapped.glyphs[wrapped.lines[0].glyph_start + 2].codepoint == 0x2010 or
+            wrapped.glyphs[wrapped.lines[0].glyph_start + 2].codepoint == '-',
+    );
+    try std.testing.expect(
+        wrapped.glyphs[wrapped.lines[0].glyph_start + 2].x_advance > 0,
+    );
+    try std.testing.expectEqual(@as(usize, 0), wrapped.lines[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 4), wrapped.lines[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 4), wrapped.lines[1].byte_start);
+    try std.testing.expect(
+        wrapped.selectionRectForBytes(2, 4).width > 0,
+    );
+    for (wrapped.lines[1..], 1..) |line, line_index| {
+        try std.testing.expectEqual(
+            wrapped.lines[line_index - 1].byteEnd(),
+            line.byte_start,
+        );
+    }
+    try std.testing.expectEqual(
+        text.len,
+        wrapped.lines[wrapped.lines.len - 1].byteEnd(),
+    );
+
+    const spaced = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{ .max_width = 1000, .letter_spacing = 7 },
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        spaced.glyphs[2].x_advance,
+        0.001,
+    );
+
+    const rtl_text = "اب\u{00ad}جد";
+    const rtl_unwrapped = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        rtl_text,
+        20,
+        .{ .max_width = 1000, .direction = .rtl },
+    );
+    const rtl_width =
+        rtl_unwrapped.glyphs[0].x_advance +
+        rtl_unwrapped.glyphs[1].x_advance +
+        hyphen_width +
+        0.5;
+    const rtl_wrapped = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        rtl_text,
+        20,
+        .{ .max_width = rtl_width, .direction = .rtl },
+    );
+    try std.testing.expect(rtl_wrapped.lines.len >= 2);
+    const rtl_first = rtl_wrapped.lines[0].glyphs(rtl_wrapped);
+    try std.testing.expect(rtl_first.len != 0);
+    try std.testing.expect(rtl_first[0].discretionary_hyphen);
+}
+
+test "retained reflow restores an unselected soft hyphen" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+    const font_bytes = try test_font.buildCodepointSetTtf(allocator, &.{
+        0x0020,
+        0x002d,
+        'a',
+        'c',
+        'e',
+        'o',
+        'p',
+        'r',
+        't',
+        0x00ad,
+        0x2010,
+    });
+    defer allocator.free(font_bytes);
+    var font = try Font.parse(allocator, font_bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "co\u{00ad}operate",
+        20,
+        .{ .max_width = 1000 },
+    );
+    defer paragraph.deinit();
+    try std.testing.expectEqual(@as(u21, 0x00ad), paragraph.glyphs[2].codepoint);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), paragraph.glyphs[2].x_advance, 0.001);
+    const pristine_glyphs = try allocator.dupe(GlyphPosition, paragraph.glyphs);
+    defer allocator.free(pristine_glyphs);
+
+    const hyphen_metrics = try font.horizontalMetrics(try font.glyphIndex(0x2010));
+    const narrow_width =
+        paragraph.glyphs[0].x_advance +
+        paragraph.glyphs[1].x_advance +
+        @as(f32, @floatFromInt(hyphen_metrics.advance_width)) *
+            (20.0 / @as(f32, @floatFromInt(font.units_per_em))) +
+        0.5;
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const narrow = try paragraph.layout(&reflow, .{ .max_width = narrow_width });
+    try std.testing.expect(narrow.lines.len >= 2);
+    try std.testing.expectEqual(@as(u21, 0x2010), narrow.glyphs[2].codepoint);
+    try std.testing.expect(narrow.glyphs[2].x_advance > 0);
+
+    const wide = try paragraph.layout(&reflow, .{ .max_width = 1000 });
+    try std.testing.expectEqual(@as(usize, 1), wide.lines.len);
+    try std.testing.expectEqual(@as(u21, 0x00ad), wide.glyphs[2].codepoint);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), wide.glyphs[2].x_advance, 0.001);
+    try std.testing.expectEqual(@as(u21, 0x00ad), paragraph.glyphs[2].codepoint);
+    try std.testing.expectEqualSlices(GlyphPosition, pristine_glyphs, paragraph.glyphs);
+
+    const ellipsized = try paragraph.layout(&reflow, .{
+        .max_width = narrow_width,
+        .max_lines = 1,
+        .ellipsis = true,
+    });
+    try std.testing.expectEqual(@as(usize, 1), ellipsized.lines.len);
+    for (ellipsized.lines[0].glyphs(ellipsized)) |glyph| {
+        try std.testing.expect(!glyph.discretionary_hyphen);
+    }
+}
+
 test "paragraph layout preserves an empty caret line after trailing newline" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");

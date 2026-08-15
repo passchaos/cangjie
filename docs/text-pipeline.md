@@ -180,6 +180,17 @@ segmentation layer:
 `WrapMode.no_wrap` is also enforced by reflow now: width does not introduce
 soft lines, but mandatory Unicode line separators still do.
 
+Soft hyphen now follows the mainstream discretionary-break contract. U+00AD is
+kept as a zero-advance, invisible shaping atom when its opportunity is not
+chosen. If reflow selects that UAX #14 boundary, the same source atom is
+materialized with U+2010 from its owning font, falling back to U+002D and then
+the font's U+00AD glyph. Its advance participates in break fitting, alignment,
+justification, selection, and hit testing. Retained reflow restores the
+invisible atom before every width change, and paragraph bidi preserves a
+materialized X9 atom at the visual line end without inventing a new source
+range. This is explicit soft-hyphen support, not language-specific automatic
+hyphenation.
+
 `TextAlign.justify` now provides portable inter-word justification. Reflow
 expands UAX #14 `SP` source atoms on non-terminal soft-wrapped lines until the
 line reaches its available width (after first-line indentation). Hard-break

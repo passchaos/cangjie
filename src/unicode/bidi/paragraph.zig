@@ -64,6 +64,25 @@ pub const Paragraph = struct {
         scalar_start: usize,
         scalar_end: usize,
     ) ![]u8 {
+        return self.lineLevelsRetaining(
+            allocator,
+            scalar_start,
+            scalar_end,
+            &.{},
+        );
+    }
+
+    /// Applies L1 while assigning selected X9 scalars their preceding level.
+    ///
+    /// Layout uses this only when a normally removed control acquires visual
+    /// content (currently a materialized U+00AD discretionary hyphen).
+    pub fn lineLevelsRetaining(
+        self: Paragraph,
+        allocator: std.mem.Allocator,
+        scalar_start: usize,
+        scalar_end: usize,
+        retained: []const usize,
+    ) ![]u8 {
         if (scalar_start > scalar_end or scalar_end > self.levels.len) {
             return error.InvalidScalarRange;
         }
@@ -76,6 +95,16 @@ pub const Paragraph = struct {
             result,
             self.base_level,
         );
+        for (retained) |scalar_index| {
+            if (scalar_index < scalar_start or scalar_index >= scalar_end) {
+                return error.InvalidScalarRange;
+            }
+            if (result[scalar_index - scalar_start] != resolver.removed_level) {
+                continue;
+            }
+            result[scalar_index - scalar_start] =
+                self.inheritedLevel(scalar_index);
+        }
         return result;
     }
 
@@ -86,10 +115,26 @@ pub const Paragraph = struct {
         scalar_start: usize,
         scalar_end: usize,
     ) ![]usize {
-        const levels = try self.lineLevels(
+        return self.visualOrderRetaining(
             allocator,
             scalar_start,
             scalar_end,
+            &.{},
+        );
+    }
+
+    pub fn visualOrderRetaining(
+        self: Paragraph,
+        allocator: std.mem.Allocator,
+        scalar_start: usize,
+        scalar_end: usize,
+        retained: []const usize,
+    ) ![]usize {
+        const levels = try self.lineLevelsRetaining(
+            allocator,
+            scalar_start,
+            scalar_end,
+            retained,
         );
         defer allocator.free(levels);
         var retained_count: usize = 0;
@@ -133,6 +178,16 @@ pub const Paragraph = struct {
             mirroredCodepoint(codepoint)
         else
             codepoint;
+    }
+
+    fn inheritedLevel(self: Paragraph, scalar_index: usize) u8 {
+        var previous = scalar_index;
+        while (previous > 0) {
+            previous -= 1;
+            const level = self.levels[previous];
+            if (level != resolver.removed_level) return level;
+        }
+        return self.base_level;
     }
 };
 

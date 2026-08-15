@@ -17,6 +17,7 @@ const layout_scratch = @import("layout_scratch.zig");
 const myanmar = @import("myanmar.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
+const discretionary_hyphen = @import("layout/discretionary_hyphen.zig");
 const styled_bidi = @import("layout/styled_bidi.zig");
 const styled_buffer = @import("layout/styled_buffer.zig");
 const styled_paragraph = @import("layout/styled_paragraph.zig");
@@ -59,6 +60,9 @@ pub const GlyphPosition = struct {
     x_offset: f32 = 0,
     y_offset: f32 = 0,
     vertical: bool = false,
+    /// An invisible U+00AD source atom materialized at a selected line break.
+    /// UAX #9 X9 otherwise removes the original scalar from visual ordering.
+    discretionary_hyphen: bool = false,
 
     pub fn outputGlyphId(self: GlyphPosition) u32 {
         return self.synthetic_glyph_id orelse self.glyph_id;
@@ -2939,16 +2943,29 @@ fn applyParagraphLineBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, di
             const scalar_end = bidi_paragraph.scalarIndexForByte(
                 line.byteEnd(),
             ) orelse return error.InvalidBidiMap;
-            const visual_order = try bidi_paragraph.visualOrder(
+            var retained_x9: [1]usize = undefined;
+            var retained_x9_count: usize = 0;
+            for (old_glyphs[old_line_start..old_line_end]) |source_glyph| {
+                if (!source_glyph.discretionary_hyphen) continue;
+                retained_x9[0] = bidi_paragraph.scalarIndexForByte(
+                    source_glyph.cluster,
+                ) orelse return error.InvalidBidiMap;
+                retained_x9_count = 1;
+                break;
+            }
+            const retained = retained_x9[0..retained_x9_count];
+            const visual_order = try bidi_paragraph.visualOrderRetaining(
                 buffer.allocator,
                 scalar_start,
                 scalar_end,
+                retained,
             );
             defer buffer.allocator.free(visual_order);
-            const line_levels = try bidi_paragraph.lineLevels(
+            const line_levels = try bidi_paragraph.lineLevelsRetaining(
                 buffer.allocator,
                 scalar_start,
                 scalar_end,
+                retained,
             );
             defer buffer.allocator.free(line_levels);
             for (visual_order) |scalar_index| {
@@ -3057,6 +3074,7 @@ fn buildParagraphLines(
     var line_width: f32 = 0;
     var last_break: ?usize = null;
     var width_at_break: f32 = 0;
+    var last_break_hyphen: ?discretionary_hyphen.Candidate = null;
     var y: f32 = 0;
     var index: usize = 0;
     var line_in_paragraph: usize = 0;
@@ -3112,6 +3130,7 @@ fn buildParagraphLines(
             line_width = 0;
             last_break = null;
             width_at_break = 0;
+            last_break_hyphen = null;
             line_in_paragraph = 0;
             index = break_end_index - 1;
             continue :glyph_loop;
@@ -3126,7 +3145,21 @@ fn buildParagraphLines(
         line_width += glyph.x_advance;
         const current_line_limit = lineWidthLimit(line_in_paragraph, wrap_width, options);
         if (line_width > current_line_limit and index + 1 > line_start) {
-            const overflow_break = chooseOverflowBreak(buffer.glyphs.items, grapheme_clusters, index, line_start, last_break);
+            // A discretionary opportunity includes the visible hyphen width.
+            // Reject it when that completed line would itself overflow and
+            // fall back to the ordinary grapheme emergency break.
+            const fitting_last_break = if (last_break != null and
+                width_at_break <= current_line_limit)
+                last_break
+            else
+                null;
+            const overflow_break = chooseOverflowBreak(
+                buffer.glyphs.items,
+                grapheme_clusters,
+                index,
+                line_start,
+                fitting_last_break,
+            );
             if (overflow_break.defer_until_cluster_end) continue;
             const break_end = overflow_break.index;
             var break_width = if (overflow_break.uses_current_discardable)
@@ -3135,6 +3168,14 @@ fn buildParagraphLines(
                 width_at_break
             else
                 lineWidth(buffer.glyphs.items[line_start..break_end]);
+            if (last_break != null and break_end == last_break.?) {
+                if (last_break_hyphen) |candidate| {
+                    discretionary_hyphen.materialize(
+                        &buffer.glyphs.items[candidate.glyph_index],
+                        candidate.resolved,
+                    );
+                }
+            }
             var next_line_start = break_end;
             trimLeadingSoftBreaks(buffer.glyphs.items, &next_line_start);
             // Boundary whitespace is omitted from both visual glyph ranges but
@@ -3176,6 +3217,7 @@ fn buildParagraphLines(
             terminal_emergency_line_committed = break_end == buffer.glyphs.items.len;
             last_break = null;
             width_at_break = 0;
+            last_break_hyphen = null;
         }
         const atom_continues = index + 1 < buffer.glyphs.items.len and
             glyphClusterStart(buffer.glyphs.items[index + 1]) == glyphClusterStart(glyph.*);
@@ -3183,7 +3225,18 @@ fn buildParagraphLines(
             const glyph_source_end = glyphSourceEnd(glyph.*);
             while (line_breaks.nextThrough(glyph_source_end)) |line_break| {
                 switch (line_break.kind) {
-                    .soft => recordSoftLineBreak(buffer.glyphs.items, line_break.byte_offset, index, line_start, line_width, &last_break, &width_at_break),
+                    .soft => try recordSoftLineBreak(
+                        buffer.glyphs.items,
+                        buffer.runs.items,
+                        line_break.byte_offset,
+                        index,
+                        line_start,
+                        line_width,
+                        &last_break,
+                        &width_at_break,
+                        &last_break_hyphen,
+                        options.normalized_variation_coords,
+                    ),
                     .hard => {},
                 }
             }
@@ -3218,13 +3271,25 @@ fn chooseOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []const
     return graphemeOverflowBreak(glyphs, grapheme_clusters, index, line_start);
 }
 
-fn recordSoftLineBreak(glyphs: []const GlyphPosition, byte_offset: usize, index: usize, line_start: usize, line_width: f32, last_break: *?usize, width_at_break: *f32) void {
+fn recordSoftLineBreak(
+    glyphs: []const GlyphPosition,
+    runs: []const CascadeRun,
+    byte_offset: usize,
+    index: usize,
+    line_start: usize,
+    line_width: f32,
+    last_break: *?usize,
+    width_at_break: *f32,
+    last_break_hyphen: *?discretionary_hyphen.Candidate,
+    normalized_variation_coords: []const f32,
+) !void {
     if (glyphs.len == 0) return;
     const current = glyphs[index];
     if (isDiscardableBreak(current.codepoint) and glyphSourceEnd(current) == byte_offset) {
         if (index > line_start) {
             last_break.* = index;
             width_at_break.* = line_width - current.x_advance;
+            last_break_hyphen.* = null;
         }
         return;
     }
@@ -3242,8 +3307,23 @@ fn recordSoftLineBreak(glyphs: []const GlyphPosition, byte_offset: usize, index:
         // linear search through every glyph accumulated on the current line.
         const break_index = index + 1;
         if (break_index > line_start) {
+            const resolved_hyphen = if (discretionary_hyphen.isCandidate(
+                current.codepoint,
+            ))
+                try discretionary_hyphen.resolveForGlyph(
+                    runs,
+                    index,
+                    normalized_variation_coords,
+                )
+            else
+                null;
             last_break.* = break_index;
-            width_at_break.* = line_width;
+            width_at_break.* = line_width +
+                if (resolved_hyphen) |resolved| resolved.x_advance else 0;
+            last_break_hyphen.* = if (resolved_hyphen) |resolved| .{
+                .glyph_index = index,
+                .resolved = resolved,
+            } else null;
         }
         return;
     }
@@ -3251,6 +3331,7 @@ fn recordSoftLineBreak(glyphs: []const GlyphPosition, byte_offset: usize, index:
     if (break_index > line_start) {
         last_break.* = break_index;
         width_at_break.* = lineWidth(glyphs[line_start..break_index]);
+        last_break_hyphen.* = null;
     }
 }
 
@@ -3273,13 +3354,36 @@ test "soft line break mapping never splits a shaped source atom" {
     };
     var last_break: ?usize = null;
     var width_at_break: f32 = 0;
+    var last_break_hyphen: ?discretionary_hyphen.Candidate = null;
 
     // A boundary inside a ligature/source span is unsafe without reshaping.
-    recordSoftLineBreak(&glyphs, 1, 1, 0, 15, &last_break, &width_at_break);
+    try recordSoftLineBreak(
+        &glyphs,
+        &.{},
+        1,
+        1,
+        0,
+        15,
+        &last_break,
+        &width_at_break,
+        &last_break_hyphen,
+        &.{},
+    );
     try std.testing.expectEqual(@as(?usize, null), last_break);
 
     // A boundary at the atom's source end consumes every output glyph.
-    recordSoftLineBreak(&glyphs, 2, 1, 0, 15, &last_break, &width_at_break);
+    try recordSoftLineBreak(
+        &glyphs,
+        &.{},
+        2,
+        1,
+        0,
+        15,
+        &last_break,
+        &width_at_break,
+        &last_break_hyphen,
+        &.{},
+    );
     try std.testing.expectEqual(@as(?usize, 2), last_break);
     try std.testing.expectApproxEqAbs(@as(f32, 15), width_at_break, 0.001);
 }
@@ -3461,6 +3565,21 @@ fn appendEllipsisToLastLine(buffer: *LayoutBuffer, max_width: f32, alignment: Te
     const dot_advance = @as(f32, @floatFromInt(dot_metrics.advance_width)) * (run.font_size / @as(f32, @floatFromInt(run.font.units_per_em)));
     const ellipsis_width = dot_advance * @as(f32, @floatFromInt(ellipsis_count));
     const width_limit = if (std.math.isFinite(max_width)) max_width else std.math.inf(f32);
+
+    // An ellipsis terminates the visible paragraph rather than continuing the
+    // word on another line, so a discretionary line-end hyphen is no longer
+    // semantically active.
+    while (line.glyph_len > 0 and
+        buffer.glyphs.items[
+            line.glyph_start + line.glyph_len - 1
+        ].discretionary_hyphen)
+    {
+        const remove_index = line.glyph_start + line.glyph_len - 1;
+        line.width -= buffer.glyphs.items[remove_index].x_advance;
+        _ = buffer.glyphs.pop();
+        line.glyph_len -= 1;
+        if (run.glyph_len > 0) run.glyph_len -= 1;
+    }
 
     while (line.glyph_len > 0 and line.width + ellipsis_width > width_limit) {
         const remove_index = line.glyph_start + line.glyph_len - 1;
@@ -3652,6 +3771,7 @@ fn tabAdvance(current_width: f32, tab_stop: f32, fallback_advance: f32) f32 {
 
 fn spacingForGlyph(codepoint: u21, options: ParagraphOptions) f32 {
     if (codepoint == '\n') return 0;
+    if (codepoint == discretionary_hyphen.soft_hyphen) return 0;
     if (codepoint == ' ' or codepoint == '\t') return options.word_spacing;
     return options.letter_spacing;
 }

@@ -4,6 +4,8 @@ const clip = @import("v1/clip.zig");
 const directories = @import("v1/directories.zig");
 const types = @import("v1/types.zig");
 
+pub const paint = @import("v1/paint/root.zig");
+
 pub const Error = types.Error;
 pub const Table = types.Table;
 pub const Range = types.Range;

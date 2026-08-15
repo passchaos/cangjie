@@ -36,6 +36,7 @@ const color_tables = @import("font/tables/color/root.zig");
 const colr_v0_mod = color_tables.colr_v0;
 const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
+const colr_layers = colr_v1_mod.layers;
 const cpal_mod = color_tables.cpal;
 const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
@@ -564,6 +565,10 @@ fn colrV1Table(record: TableRecord) colr_v1_mod.Table {
 }
 
 fn colrPaintTable(record: TableRecord) colr_paint.Table {
+    return .{ .offset = record.offset, .length = record.length };
+}
+
+fn colrLayerTable(record: TableRecord) colr_layers.Table {
     return .{ .offset = record.offset, .length = record.length };
 }
 
@@ -3920,9 +3925,9 @@ pub const Font = struct {
         if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
         }
-        const layer_list = (try colrLayerList(self.data, colr)) orelse return null;
+        const layer_list = (try colr_layers.read(self.data, colrLayerTable(colr))) orelse return null;
         if (layer_index >= layer_list.layer_count) return null;
-        const paint_start = try colrLayerPaintOffset(self.data, colr, layer_list, layer_index);
+        const paint_start = try colr_layers.paintOffset(self.data, colrLayerTable(colr), layer_list, layer_index);
         var graph_guard = colr_paint.Guard{};
         try validateColorPaintLayer(self, layer_list, layer_index, &graph_guard);
         return try readColorPaint(self, paint_start, .{
@@ -10657,9 +10662,9 @@ fn validateColrV1PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette
         }
     }
 
-    if (try colrLayerList(data, colr)) |layer_list| {
+    if (try colr_layers.read(data, colrLayerTable(colr))) |layer_list| {
         for (0..layer_list.layer_count) |layer_index| {
-            const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
+            const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, @intCast(layer_index));
             var guard = colr_paint.Guard{};
             try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, &guard);
         }
@@ -10677,11 +10682,11 @@ fn validateColorPaintPaletteBounds(data: []const u8, colr: TableRecord, cpal_pal
             const layer_count = data[offset + 1];
             const first_layer_index = try bin.readU32At(data, offset + 2);
             if (layer_count == 0) return;
-            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
             const first: usize = @intCast(first_layer_index);
             if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
             for (0..layer_count) |layer_offset| {
-                const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
+                const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
                 try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, guard);
             }
         },
@@ -10748,9 +10753,9 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
         }
     }
 
-    if (try colrLayerList(data, colr)) |layer_list| {
+    if (try colr_layers.read(data, colrLayerTable(colr))) |layer_list| {
         for (0..layer_list.layer_count) |layer_index| {
-            const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
+            const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, @intCast(layer_index));
             var paint_guard = colr_paint.Guard{};
             var base_guard = ColrV1BaseGlyphGraphGuard{};
             try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, paint_offset, &paint_guard, &base_guard);
@@ -10945,9 +10950,9 @@ fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRe
         }
     }
 
-    if (try colrLayerList(data, colr)) |layer_list| {
+    if (try colr_layers.read(data, colrLayerTable(colr))) |layer_list| {
         for (0..layer_list.layer_count) |layer_index| {
-            const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
+            const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, @intCast(layer_index));
             var guard = colr_paint.Guard{};
             try validateColorPaintVariationRefs(data, colr, paint_offset, context, &guard);
         }
@@ -11074,9 +11079,9 @@ fn validateColrVariationRangeDisjointFromPaintPayloads(data: []const u8, colr: T
         }
     }
 
-    if (try colrLayerList(data, colr)) |layer_list| {
+    if (try colr_layers.read(data, colrLayerTable(colr))) |layer_list| {
         for (0..layer_list.layer_count) |layer_index| {
-            const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, @intCast(layer_index));
+            const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, @intCast(layer_index));
             var guard = colr_paint.Guard{ .forbidden_range = forbidden };
             try validateColorPaintPayloadsDisjointFromRange(data, colr, paint_offset, &guard);
         }
@@ -11094,11 +11099,11 @@ fn validateColorPaintPayloadsDisjointFromRange(data: []const u8, colr: TableReco
             const layer_count = data[offset + 1];
             const first_layer_index = try bin.readU32At(data, offset + 2);
             if (layer_count == 0) return;
-            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
             const first: usize = @intCast(first_layer_index);
             if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
             for (0..layer_count) |layer_offset| {
-                const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
+                const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
                 try validateColorPaintPayloadsDisjointFromRange(data, colr, paint_offset, guard);
             }
         },
@@ -11204,11 +11209,11 @@ fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: 
             const layer_count = data[offset + 1];
             const first_layer_index = try bin.readU32At(data, offset + 2);
             if (layer_count == 0) return;
-            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
             const first: usize = @intCast(first_layer_index);
             if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
             for (0..layer_count) |layer_offset| {
-                const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
+                const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
                 try validateColorPaintVariationRefs(data, colr, paint_offset, context, guard);
             }
         },
@@ -11319,11 +11324,11 @@ fn validateColorPaintGlyphBounds(
             const layer_count = data[offset + 1];
             const first_layer_index = try bin.readU32At(data, offset + 2);
             if (layer_count == 0) return;
-            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
             const first: usize = @intCast(first_layer_index);
             if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
             for (0..layer_count) |layer_offset| {
-                const paint_offset = try colrLayerPaintOffset(data, colr, layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
+                const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
                 try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, paint_offset, guard, base_graph_guard);
             }
         },
@@ -11424,79 +11429,9 @@ fn validateColrColorLinePaletteBounds(data: []const u8, colr: TableRecord, offse
     }
 }
 
-const ColrLayerList = struct {
-    start: usize,
-    layer_count: usize,
-    offsets_start: usize,
-    paint_data_start: usize,
-};
-
-fn colrLayerList(data: []const u8, colr: TableRecord) FontError!?ColrLayerList {
-    if (colr.length < 22) return error.BadSfnt;
-    const layer_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 18));
-    if (layer_list_offset == 0) return null;
-    try validateColrV1OptionalOffset(layer_list_offset, colr, 4);
-
-    const list_start = colr.offset + layer_list_offset;
-    const layer_count: usize = @intCast(try bin.readU32At(data, list_start));
-    const offsets_start = list_start + 4;
-    if (layer_count > (colr.offset + colr.length - offsets_start) / 4) return error.BadSfnt;
-    const layer_list = ColrLayerList{
-        .start = list_start,
-        .layer_count = layer_count,
-        .offsets_start = offsets_start,
-        .paint_data_start = 4 + layer_count * 4,
-    };
-    try validateColrLayerListPaintHeaders(data, colr, layer_list);
-    return layer_list;
-}
-
-fn validateColrLayerListPaintHeaders(data: []const u8, colr: TableRecord, layer_list: ColrLayerList) FontError!void {
-    const colr_end = colr.offset + colr.length;
-    const layer_list_offset = layer_list.start - colr.offset;
-    for (0..layer_list.layer_count) |index| {
-        const paint_offset: usize = @intCast(try bin.readU32At(data, layer_list.offsets_start + index * 4));
-        if (paint_offset < layer_list.paint_data_start or paint_offset > colr.length - layer_list_offset) return error.BadSfnt;
-        const paint_start = layer_list.start + paint_offset;
-        if (paint_start >= colr_end) return error.BadSfnt;
-        const info = colr_paint.formatInfo(data[paint_start]) orelse return error.BadSfnt;
-        if (info.min_size > colr_end - paint_start) return error.BadSfnt;
-
-        // Layer order is independent of physical table order, and exact Paint
-        // sharing is a normal COLR v1 DAG optimization. Only two distinct
-        // headers that partially overlap are ambiguous typed data.
-        for (0..index) |previous_index| {
-            const previous_offset: usize = @intCast(try bin.readU32At(data, layer_list.offsets_start + previous_index * 4));
-            if (previous_offset == paint_offset) continue;
-            const previous_start = layer_list.start + previous_offset;
-            if (previous_start >= colr_end) return error.BadSfnt;
-            const previous_info = colr_paint.formatInfo(data[previous_start]) orelse return error.BadSfnt;
-            if (previous_info.min_size > colr_end - previous_start) return error.BadSfnt;
-            if (paint_offset < previous_offset + previous_info.min_size and
-                previous_offset < paint_offset + info.min_size)
-            {
-                return error.BadSfnt;
-            }
-        }
-    }
-}
-
-fn colrLayerPaintOffset(data: []const u8, colr: TableRecord, layer_list: ColrLayerList, layer_index: u32) FontError!usize {
-    const index: usize = @intCast(layer_index);
-    if (index >= layer_list.layer_count) return error.BadSfnt;
-    const paint_offset: usize = @intCast(try bin.readU32At(data, layer_list.offsets_start + index * 4));
-    // LayerList Paint offsets are relative to the LayerList table. They must
-    // point past the declared offset array so a malformed font cannot treat
-    // list metadata as a Paint table, and they must remain inside COLR.
-    if (paint_offset < layer_list.paint_data_start) return error.BadSfnt;
-    const layer_list_offset = layer_list.start - colr.offset;
-    if (paint_offset > colr.length - layer_list_offset) return error.BadSfnt;
-    return layer_list.start + paint_offset;
-}
-
-fn validateColorPaintLayer(font: *const Font, layer_list: ColrLayerList, layer_index: u32, guard: *colr_paint.Guard) FontError!void {
+fn validateColorPaintLayer(font: *const Font, layer_list: colr_layers.List, layer_index: u32, guard: *colr_paint.Guard) FontError!void {
     const colr = font.colr orelse return error.BadSfnt;
-    const paint_offset = try colrLayerPaintOffset(font.data, colr, layer_list, layer_index);
+    const paint_offset = try colr_layers.paintOffset(font.data, colrLayerTable(colr), layer_list, layer_index);
     try validateColorPaintGraph(font, paint_offset, guard);
 }
 
@@ -11516,7 +11451,7 @@ fn validateColorPaintGraph(font: *const Font, offset: usize, guard: *colr_paint.
             const layer_count = data[offset + 1];
             const first_layer_index = try bin.readU32At(data, offset + 2);
             if (layer_count == 0) return;
-            const layer_list = (try colrLayerList(data, colr)) orelse return error.BadSfnt;
+            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
             const first: usize = @intCast(first_layer_index);
             if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
             for (0..layer_count) |layer_offset| {
@@ -17635,39 +17570,6 @@ test "COLR v1 paint offsets cannot overlap parent metadata" {
 
     const paint_glyph_font = colrOnlyFont(&paint_glyph_overlap);
     try std.testing.expectError(error.BadSfnt, paint_glyph_font.colorPaint(1));
-}
-
-test "COLR v1 LayerList allows shared and reordered paint offsets" {
-    var bytes: [56]u8 = .{0} ** 56;
-    writeU16Test(&bytes, 0, 1); // COLR version 1.
-    writeU32Test(&bytes, 18, 34); // LayerListOffset.
-
-    writeU32Test(&bytes, 34, 2); // two layer paint offsets.
-    writeU32Test(&bytes, 38, 12); // PaintSolid at LayerList + 12.
-    writeU32Test(&bytes, 42, 17); // Adjacent PaintSolid after the first header.
-    bytes[46] = 2;
-    writeU16Test(&bytes, 47, 0);
-    writeF2Dot14Test(&bytes, 49, 1.0);
-    bytes[51] = 2;
-    writeU16Test(&bytes, 52, 1);
-    writeF2Dot14Test(&bytes, 54, 1.0);
-
-    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateColrGlyphBounds(&bytes, colr, 2);
-
-    var duplicate_header = bytes;
-    writeU32Test(&duplicate_header, 42, 12); // Reuses the first layer's PaintSolid header.
-    try validateColrGlyphBounds(&duplicate_header, colr, 2);
-
-    var partial_overlap = bytes;
-    writeU32Test(&partial_overlap, 42, 14); // Starts inside the first PaintSolid header.
-    partial_overlap[48] = 2; // Keep the aliased byte looking like a valid paint format.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&partial_overlap, colr, 2));
-
-    var decreasing_order = bytes;
-    writeU32Test(&decreasing_order, 38, 17);
-    writeU32Test(&decreasing_order, 42, 12); // Disjoint headers, but not in LayerList order.
-    try validateColrGlyphBounds(&decreasing_order, colr, 2);
 }
 
 test "COLR v1 paint graph rejects cyclic layer references" {

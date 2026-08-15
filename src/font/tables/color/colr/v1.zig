@@ -5,6 +5,7 @@ const directories = @import("v1/directories.zig");
 const types = @import("v1/types.zig");
 
 pub const paint = @import("v1/paint/root.zig");
+pub const layers = @import("v1/layers.zig");
 
 pub const Error = types.Error;
 pub const Table = types.Table;

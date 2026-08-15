@@ -101,6 +101,20 @@ breaking never performs OpenType substitution or positioning.
 Paragraph wrapping consumes this iterator through a one-item lookahead. It no
 longer allocates a full line-break array.
 
+Paragraph reflow is organized under `src/layout/line_break/reflow/` rather
+than embedded in the shaping implementation:
+
+- `root.zig` owns the greedy line-selection state machine.
+- `opportunities.zig` maps streaming or retained Unicode opportunities onto
+  shaped output while enforcing `unsafe-to-break`.
+- `geometry.zig` owns line struts, alignment, indentation, tabs, spacing, and
+  run ranges.
+- `truncation.zig` owns line limits and plain-text ellipsis materialization.
+
+`src/layout.zig` retains the public paragraph types and orchestration entry
+points only. This keeps shaping, boundary selection, geometry, and truncation
+independently testable without changing the `TextContext` surface.
+
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 

@@ -1142,7 +1142,7 @@ pub const Font = struct {
     }
 
     pub fn faceCount(data: []const u8) FontError!usize {
-        const header = (try parseTtcHeader(data)) orelse return 1;
+        const header = (try sfnt.collection.parse(data)) orelse return 1;
         return header.face_count;
     }
 
@@ -1153,7 +1153,13 @@ pub const Font = struct {
     /// both as absolute offsets lets the rest of the parser use one addressing
     /// model for TTF, OTF/CFF, and TTC-backed faces.
     pub fn parseFace(allocator: std.mem.Allocator, data: []const u8, face_index: usize) FontError!Font {
-        const start = try sfntOffset(data, face_index);
+        const collection = try sfnt.collection.parse(data);
+        const start = if (collection) |header|
+            try sfnt.collection.faceOffset(data, header, face_index)
+        else if (face_index == 0)
+            0
+        else
+            return error.BadSfnt;
         if (start >= data.len) return error.BadSfnt;
         var r = bin.Reader.init(data);
         try r.seek(start);
@@ -1173,7 +1179,7 @@ pub const Font = struct {
             start,
             num_tables,
         );
-        const ttc_header = try parseTtcHeader(data);
+        const ttc_header = collection;
         const is_ttc_face = ttc_header != null;
         const reserved_prefix_end = if (ttc_header) |header| header.header_length else 0;
 
@@ -8121,102 +8127,6 @@ fn compoundGlyphPointCount(adjacency: []const CompoundGlyphLinks, point_counts: 
 
     point_counts[index] = total;
     return total;
-}
-
-const TtcHeader = struct {
-    face_count: usize,
-    header_length: usize,
-    dsig_range: ?TtcDsigRange = null,
-};
-
-const TtcDsigRange = struct {
-    start: usize,
-    end: usize,
-};
-
-fn parseTtcHeader(data: []const u8) FontError!?TtcHeader {
-    const tag = try bin.readU32At(data, 0);
-    if (tag != 0x74746366) return null; // "ttcf"
-
-    const version = try bin.readU32At(data, 4);
-    const major = version >> 16;
-    if (major != 1 and major != 2) return error.BadSfnt;
-
-    const face_count: usize = @intCast(try bin.readU32At(data, 8));
-    if (face_count == 0) return error.BadSfnt;
-    if (face_count > (data.len - 12) / 4) return error.BadSfnt;
-
-    // TTC face offsets are an array immediately following the fixed 12-byte
-    // header. Version 2 collections add three DSIG fields after that array.
-    // Treat the complete header as reserved so a malformed offset cannot make
-    // the SFNT parser reinterpret collection metadata as an embedded font.
-    var header_length = 12 + face_count * 4;
-    var dsig_range: ?TtcDsigRange = null;
-    if (major == 2) {
-        if (header_length > data.len - 12) return error.BadSfnt;
-        const dsig_tag = try bin.readU32At(data, header_length);
-        const dsig_length = try bin.readU32At(data, header_length + 4);
-        const dsig_offset = try bin.readU32At(data, header_length + 8);
-        header_length += 12;
-
-        // The optional DSIG table is described by absolute collection offsets.
-        // Empty descriptors are encoded as all zero; any partially-populated
-        // descriptor must identify an in-file range after the complete TTC
-        // header. Otherwise a v2 collection can advertise signatures that alias
-        // face offsets or point beyond the borrowed byte slice.
-        if (dsig_tag == 0 and dsig_length == 0 and dsig_offset == 0) {
-            // No digital-signature table is present.
-        } else {
-            if (dsig_tag != 0x44534947 or dsig_length == 0) return error.BadSfnt;
-            const dsig_start: usize = @intCast(dsig_offset);
-            const length: usize = @intCast(dsig_length);
-            if (dsig_start < header_length) return error.BadSfnt;
-            if (dsig_start > data.len or length > data.len - dsig_start) return error.BadSfnt;
-            dsig_range = .{ .start = dsig_start, .end = dsig_start + length };
-        }
-    }
-
-    for (0..face_count) |face_offset_index| {
-        const face_offset: usize = @intCast(try bin.readU32At(data, 12 + face_offset_index * 4));
-        // A TTC face offset is an absolute SFNT offset-table address. Validate
-        // every advertised face while parsing the collection header so metadata
-        // queries such as faceCount cannot report a usable collection whose
-        // unselected face later aliases header bytes or lands mid-word.
-        if ((face_offset & 3) != 0) return error.BadSfnt;
-        if (face_offset < header_length) return error.BadSfnt;
-        if (face_offset > data.len - 12) return error.BadSfnt;
-        if (dsig_range) |dsig| {
-            if (sfnt.overlaps(
-                .{ .start = face_offset, .end = face_offset + 12 },
-                .{ .start = dsig.start, .end = dsig.end },
-            )) return error.BadSfnt;
-        }
-    }
-
-    return .{
-        .face_count = face_count,
-        .header_length = header_length,
-        .dsig_range = dsig_range,
-    };
-}
-
-fn sfntOffset(data: []const u8, face_index: usize) FontError!usize {
-    const header = (try parseTtcHeader(data)) orelse return 0;
-    if (face_index >= header.face_count) return error.BadSfnt;
-    const offset = try bin.readU32At(data, 12 + face_index * 4);
-    if (offset < header.header_length) return error.BadSfnt;
-    if (offset > data.len - 12) return error.BadSfnt;
-    if (header.dsig_range) |dsig| {
-        const sfnt_header_end = offset + 12;
-        // TTC v2 DSIG is a collection-level table, not an SFNT face.  Reject a
-        // face offset that lands inside the signature payload before the SFNT
-        // parser can reinterpret a signed blob as a plausible offset table.
-        if (sfnt.overlaps(
-            .{ .start = offset, .end = sfnt_header_end },
-            .{ .start = dsig.start, .end = dsig.end },
-        )) return error.BadSfnt;
-    }
-    return offset;
 }
 
 fn parseCmapSubtables(allocator: std.mem.Allocator, data: []const u8, cmap: TableRecord, glyph_count: u16) FontError![]CmapSubtable {

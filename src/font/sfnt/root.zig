@@ -1,6 +1,7 @@
 //! Shared SFNT table-directory surface.
 
 const checksum_mod = @import("checksum.zig");
+const collection_mod = @import("collection.zig");
 const directory_mod = @import("directory.zig");
 const record_mod = @import("record.zig");
 
@@ -21,6 +22,12 @@ pub const validateDirectory = directory_mod.validate;
 pub const validateRanges = directory_mod.validateRanges;
 pub const validatePadding = directory_mod.validatePadding;
 pub const validateDisjoint = directory_mod.validateDisjoint;
+
+pub const collection = struct {
+    pub const Header = collection_mod.Header;
+    pub const parse = collection_mod.parse;
+    pub const faceOffset = collection_mod.faceOffset;
+};
 
 pub const checksum = struct {
     pub const validateAll = checksum_mod.validateAll;

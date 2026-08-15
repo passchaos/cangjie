@@ -13495,64 +13495,6 @@ test "post table structural contracts are validated at parse time" {
     }
 }
 
-test "post glyph names are exposed and revalidated from borrowed bytes" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    var post: [44]u8 = .{0} ** 44;
-    writePostHeaderTest(&post, 0x00020000);
-    writeU16Test(&post, 32, 2);
-    writeU16Test(&post, 34, 0); // glyph 0 uses the standard .notdef name.
-    writeU16Test(&post, 36, 258); // glyph 1 uses the first custom Pascal string.
-    post[38] = 5;
-    @memcpy(post[39..44], "A.alt");
-
-    const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqualStrings(".notdef", (try font.glyphName(0)).?);
-    try std.testing.expectEqualStrings("A.alt", (try font.glyphName(1)).?);
-    try std.testing.expectError(error.InvalidGlyph, font.glyphName(2));
-
-    const post_offset = try sfntTableOffset(bytes, "post");
-    bytes[post_offset + 43] = '/';
-    // `post` custom names are borrowed from the original SFNT buffer. A caller
-    // mutating that buffer after Font.parse must not make the public API return
-    // a name that the parser would reject if it saw the bytes now.
-    try std.testing.expectError(error.BadSfnt, font.glyphName(1));
-}
-
-test "post glyph names revalidate borrowed table checksum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    var post: [44]u8 = .{0} ** 44;
-    writePostHeaderTest(&post, 0x00020000);
-    writeU16Test(&post, 32, 2);
-    writeU16Test(&post, 34, 0);
-    writeU16Test(&post, 36, 258);
-    post[38] = 5;
-    @memcpy(post[39..44], "A.alt");
-
-    const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqualStrings("A.alt", (try font.glyphName(1)).?);
-
-    const post_offset = try sfntTableOffset(bytes, "post");
-    // Keep the Pascal string grammar valid while changing the borrowed custom
-    // name after parse. The lazy public API must reject the table because its
-    // SFNT checksum no longer matches the parsed font map.
-    bytes[post_offset + 39] = 'B';
-    try std.testing.expectError(error.BadSfnt, font.glyphName(1));
-}
-
 test "post glyph names support standard aliases and absent-name formats" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -14076,52 +14018,6 @@ test "PostScript name strings validate FontName syntax" {
         var out: [64]u8 = undefined;
         try std.testing.expectError(error.InvalidName, font.nameString(.postscript_name, &out));
     }
-}
-
-test "lazy PostScript name lookup revalidates borrowed bytes" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "CangjieSans-Regular");
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    var out: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("CangjieSans-Regular", (try font.nameString(.postscript_name, &out)).?);
-
-    const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
-    const record = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.postscript_name));
-    const storage_offset: usize = @intCast(try bin.readU16At(bytes, name_offset + 4));
-    const string_offset: usize = @intCast(try bin.readU16At(bytes, record + 10));
-    bytes[name_offset + storage_offset + string_offset + 1] = ' ';
-
-    try std.testing.expectError(error.BadSfnt, font.nameString(.postscript_name, &out));
-}
-
-test "lazy name lookup revalidates borrowed table checksum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular", "CangjieSans-Regular");
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    var out: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("Cangjie Sans", (try font.nameString(.family, &out)).?);
-
-    const name_offset: usize = @intCast(try sfntTableOffset(bytes, "name"));
-    const record = try nameRecordOffsetForId(bytes, name_offset, @intFromEnum(NameId.family));
-    const storage_offset: usize = @intCast(try bin.readU16At(bytes, name_offset + 4));
-    const string_offset: usize = @intCast(try bin.readU16At(bytes, record + 10));
-    // Keep the UTF-16 string well-formed while changing user-facing metadata
-    // after parse. The public lookup must reject the table because its SFNT
-    // checksum no longer matches the parsed font map.
-    bytes[name_offset + storage_offset + string_offset + 1] = 'D';
-    try std.testing.expectError(error.BadSfnt, font.nameString(.family, &out));
 }
 
 test "name table format 1 language ids reference valid UTF-16 language tags" {
@@ -15530,51 +15426,6 @@ test "OS/2 style attributes respect versioned table lengths" {
     writeU16Test(&truncated_v5, 6, 5);
     const short_v5 = os2OnlyFont(&truncated_v5, 96);
     try std.testing.expectError(error.BadSfnt, short_v5.styleAttributes());
-}
-
-test "OS/2 style attributes revalidate borrowed table bytes" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Regular", "Metric Sans Regular", 400, 5, false, false);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    const initial = try font.styleAttributes();
-    try std.testing.expectEqual(@as(u16, 400), initial.weight);
-    try std.testing.expectEqual(@as(u16, 5), initial.width);
-
-    const os2_offset = try sfntTableOffset(bytes, "OS/2");
-    writeU16Test(bytes, os2_offset + 6, 10);
-    try std.testing.expectError(error.BadSfnt, font.styleAttributes());
-
-    writeU16Test(bytes, os2_offset + 6, 5);
-    writeU16Test(bytes, os2_offset + 62, 0x0060);
-    try std.testing.expectError(error.BadSfnt, font.styleAttributes());
-}
-
-test "OS/2 style attributes revalidate borrowed table checksum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildNamedTtfWithStyle(allocator, "Metric Sans", "Regular", "Metric Sans Regular", 400, 5, false, false);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    const initial = try font.styleAttributes();
-    try std.testing.expectEqual(@as(u16, 400), initial.weight);
-    try std.testing.expectEqual(@as(u16, 5), initial.width);
-
-    const os2_offset: usize = @intCast(try sfntTableOffset(bytes, "OS/2"));
-    // Keep OS/2 style metadata in its valid range while changing the borrowed
-    // payload after Font.parse. The lazy API must reject the table because its
-    // SFNT directory checksum no longer matches the parsed font map.
-    writeU16Test(bytes, os2_offset + 4, 500);
-    try std.testing.expectError(error.BadSfnt, font.styleAttributes());
 }
 
 test "OS/2 table is validated at parse time" {

@@ -20,6 +20,7 @@ const gsub_executor = gsub_pipeline.executor;
 const gsub_features = gsub_pipeline.features;
 const gsub_fraction = gsub_pipeline.fraction;
 const gsub_hangul = gsub_pipeline.hangul;
+const gsub_arabic = gsub_pipeline.shapers.arabic;
 const positioning = @import("shaping/pipeline/positioning/root.zig");
 const position_adjustments = positioning.adjustments;
 const position_attachments = positioning.attachments;
@@ -2105,171 +2106,28 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             codepoints.items,
         );
     }
-    if (usesArabicJoiningShaper(lookup_options.script_tag) and codepoints.items.len != 0) {
-        try source_features.resize(buffer.allocator, codepoints.items.len);
-        if (shape_in_native_direction) {
-            markArabicJoiningSourceFeatures(source_features.items, codepoints.items, glyph_source_indices.items);
-        } else {
-            try joining_forms.resize(buffer.allocator, codepoints.items.len);
-            try resolveJoiningFormsWithItemContext(
-                buffer.allocator,
-                lookup_options.context_before,
-                codepoints.items,
-                lookup_options.context_after,
-                joining_forms.items,
-            );
-            for (joining_forms.items, source_features.items) |form, *feature| {
-                feature.* = joiningFormFeatureTag(form);
-            }
-        }
-        if (lookup_options.script_tag == .mong) {
-            inheritMongolianVariationSelectorFeatures(source_features.items, codepoints.items);
-        }
-        var joining_options = gsub_options;
-        joining_options.source_features = source_features.items;
-        arabic_joining_features = source_features.items;
-
-        const stch_enabled = gsub_features.enabled(unicode.tag("stch"), lookup_options.features, true);
-        var common_features_buf: [2]gsub.FeatureApplication = undefined;
-        var common_feature_count: usize = 0;
-        if (gsub_features.randomApplication(lookup_options.features)) |application| {
-            common_features_buf[common_feature_count] = application;
-            common_feature_count += 1;
-        }
-        if (stch_enabled) {
-            common_features_buf[common_feature_count] = .{
-                .tag = unicode.tag("stch"),
-                .auto_zwj = false,
-            };
-            common_feature_count += 1;
-        }
-        if (common_feature_count != 0) {
-            // `rand` is a common HarfBuzz feature collected before the Arabic
-            // shaper adds `stch`; both therefore occupy the same GSUB stage.
-            // Merge by lookup-list order rather than applying tag order, while
-            // retaining the random semantic bit in the resulting plan.
-            try gsub_executor.applyMerged(
-                font,
-                gsub_context,
-                gsub_after_proof,
-                common_features_buf[0..common_feature_count],
-                glyph_ids,
-                joining_options,
-                gdef_metadata.*,
-            );
-        }
-        if (stch_enabled) {
-            recordStchActions(ligature_components);
-        }
-
-        // Unicode Arabic joining forms are position-scoped and must run after
-        // canonical/localized substitutions but before required ligatures.
-        // Keeping the order explicit mirrors the OpenType Arabic shaping plan
-        // without globally enabling mutually-exclusive form features.
-        var applications_buf: [15]gsub.FeatureApplication = undefined;
-        var application_count: usize = 0;
-        const planned_features = [_]gsub.FeatureApplication{
-            .{ .tag = unicode.tag("ccmp"), .auto_zwj = false },
-            .{ .tag = unicode.tag("locl"), .auto_zwj = false },
-            .{ .tag = unicode.tag("ltrm"), .auto_zwj = false },
-            .{ .tag = unicode.tag("rtlm"), .auto_zwj = false },
-            .{ .tag = unicode.tag("isol"), .source_scoped = true, .auto_zwj = false },
-            .{ .tag = unicode.tag("fina"), .source_scoped = true, .auto_zwj = false },
-            .{ .tag = unicode.tag("fin2"), .source_scoped = true, .auto_zwj = false },
-            .{ .tag = unicode.tag("fin3"), .source_scoped = true, .auto_zwj = false },
-            .{ .tag = unicode.tag("medi"), .source_scoped = true, .auto_zwj = false },
-            .{ .tag = unicode.tag("med2"), .source_scoped = true, .auto_zwj = false },
-            .{ .tag = unicode.tag("init"), .source_scoped = true, .auto_zwj = false },
-        };
-        for (planned_features) |application| {
-            if (lookup_options.script_tag == .mong and (application.tag == unicode.tag("rlig") or application.tag == unicode.tag("calt"))) continue;
-            if (lookup_options.script_tag != .phag and (application.tag == unicode.tag("ltrm") or application.tag == unicode.tag("rtlm"))) continue;
-            if (!gsub_features.enabled(application.tag, lookup_options.features, true)) continue;
-            applications_buf[application_count] = application;
-            application_count += 1;
-        }
-        if (gsub_features.scriptPositionApplication(lookup_options.script_position)) |application| {
-            applications_buf[application_count] = application;
-            application_count += 1;
-        }
-        if (shape_profile) |profile| {
-            for (applications_buf[0..application_count], 0..) |application, stage_index| {
-                const stage_start = shapeProfileNow(shape_profile, profile_io);
-                const lookup_count_before = profile.gsub_lookup_count;
-                if (gsub_after_proof) {
-                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
-                } else {
-                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
-                }
-                if (stage_index < profile.arabic_stage_ns.len) {
-                    profile.arabic_stage_ns[stage_index] += shapeProfileElapsed(stage_start, profile_io);
-                    profile.arabic_stage_lookup_count[stage_index] += profile.gsub_lookup_count - lookup_count_before;
-                    profile.arabic_stage_count = @max(profile.arabic_stage_count, stage_index + 1);
-                }
-            }
-        } else {
-            if (gsub_after_proof and buffer.lookup_selection_cache != null) {
-                const plan = try buffer.lookup_selection_cache.?.gsubFeatureLookupPlan(font, applications_buf[0..application_count], joining_options, gdef_metadata.*);
-                try font.applyGsubFeatureLookupPlanUsingGdefAfterProof(plan, glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
-            } else if (gsub_after_proof) {
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications_buf[0..application_count], glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
-            } else {
-                try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications_buf[0..application_count], glyph_ids, buffer.allocator, joining_options, gdef_metadata.*);
-            }
-        }
-        if (lookup_options.script_tag == .mong) {
-            var merged_features_buf: [2]gsub.FeatureApplication = undefined;
-            var merged_feature_count: usize = 0;
-            const mongolian_merged_features = [_]gsub.FeatureApplication{
-                .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
-                .{ .tag = unicode.tag("calt"), .auto_zwj = false },
-            };
-            for (mongolian_merged_features) |application| {
-                if (!gsub_features.enabled(application.tag, lookup_options.features, true)) continue;
-                merged_features_buf[merged_feature_count] = application;
-                merged_feature_count += 1;
-            }
-            try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, merged_features_buf[0..merged_feature_count], glyph_ids, joining_options, gdef_metadata.*);
-        }
-        var final_features_buf: [24]gsub.FeatureApplication = undefined;
-        var final_feature_count: usize = 0;
-        if (lookup_options.script_tag == .arab and gsub_features.enabled(unicode.tag("rlig"), lookup_options.features, true)) {
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, &.{.{ .tag = unicode.tag("rlig"), .auto_zwj = false }}, glyph_ids, joining_options, gdef_metadata.*);
-        }
-        if (lookup_options.script_tag == .arab) {
-            var arabic_calt_features_buf: [2]gsub.FeatureApplication = undefined;
-            var arabic_calt_feature_count: usize = 0;
-            const arabic_calt_features = [_]gsub.FeatureApplication{
-                .{ .tag = unicode.tag("calt"), .auto_zwj = false },
-                .{ .tag = unicode.tag("rclt"), .auto_zwj = false },
-            };
-            for (arabic_calt_features) |application| {
-                if (!gsub_features.enabled(application.tag, lookup_options.features, true)) continue;
-                arabic_calt_features_buf[arabic_calt_feature_count] = application;
-                arabic_calt_feature_count += 1;
-            }
-            try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, arabic_calt_features_buf[0..arabic_calt_feature_count], glyph_ids, joining_options, gdef_metadata.*);
-        }
-        const final_features = [_]gsub.FeatureApplication{
-            .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
-            .{ .tag = unicode.tag("calt"), .auto_zwj = false },
-            .{ .tag = unicode.tag("rclt"), .auto_zwj = false },
-            .{ .tag = unicode.tag("liga"), .auto_zwj = false },
-            .{ .tag = unicode.tag("clig"), .auto_zwj = false },
-        };
-        for (final_features) |application| {
-            if (lookup_options.script_tag == .arab and application.tag == unicode.tag("rlig")) continue;
-            if (lookup_options.script_tag == .arab and (application.tag == unicode.tag("calt") or application.tag == unicode.tag("rclt"))) continue;
-            if (lookup_options.script_tag == .mong and (application.tag == unicode.tag("rlig") or application.tag == unicode.tag("calt"))) continue;
-            if (!gsub_features.enabled(application.tag, lookup_options.features, true)) continue;
-            final_features_buf[final_feature_count] = application;
-            final_feature_count += 1;
-        }
-        final_feature_count += gsub_features.appendExplicitOptional(
-            final_features_buf[final_feature_count..],
-            lookup_options.features,
-        );
-        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, final_features_buf[0..final_feature_count], glyph_ids, gsub_options, gdef_metadata.*);
+    if (gsub_arabic.supports(lookup_options.script_tag) and
+        codepoints.items.len != 0)
+    {
+        const arabic_result = try gsub_arabic.run(.{
+            .allocator = buffer.allocator,
+            .font = font,
+            .context = gsub_context,
+            .table_proved = gsub_after_proof,
+            .glyph_ids = glyph_ids,
+            .codepoints = codepoints.items,
+            .glyph_source_indices = glyph_source_indices.items,
+            .ligature_components = ligature_components,
+            .source_features = source_features,
+            .joining_forms = joining_forms,
+            .base_gsub_options = gsub_options,
+            .lookup_options = lookup_options,
+            .gdef_metadata = gdef_metadata.*,
+            .shape_in_native_direction = shape_in_native_direction,
+            .profile = shape_profile,
+            .profile_io = profile_io,
+        });
+        arabic_joining_features = arabic_result.joining_features;
     } else if (myanmar_shape) {
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
         myanmar.markSourceSyllables(
@@ -2415,7 +2273,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             glyph_source_indices.items,
         );
         if (useShapeUsesArabicJoiningMasks(lookup_options.script_tag)) {
-            overlayArabicJoiningSourceFeatures(source_features.items, codepoints.items, glyph_source_indices.items);
+            gsub_arabic.joining.overlayNativeOrder(
+                source_features.items,
+                codepoints.items,
+                glyph_source_indices.items,
+            );
         }
         var use_options = gsub_options;
         use_options.source_features = source_features.items;
@@ -2870,121 +2732,6 @@ fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
     return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
 }
 
-fn markArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
-    @memset(source_features, 0);
-    overlayArabicJoiningSourceFeatures(source_features, codepoints, glyph_source_indices);
-}
-
-fn overlayArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
-    if (codepoints.len == 0 or glyph_source_indices.len == 0) return;
-
-    var ordered_codepoints: [128]u21 = undefined;
-    var ordered_sources: [128]usize = undefined;
-    if (glyph_source_indices.len > ordered_codepoints.len) {
-        markArabicJoiningSourceFeaturesFallback(source_features, codepoints, glyph_source_indices);
-        return;
-    }
-
-    var ordered_len: usize = 0;
-    for (glyph_source_indices) |source| {
-        if (source >= codepoints.len) continue;
-        ordered_sources[ordered_len] = source;
-        ordered_codepoints[ordered_len] = codepoints[source];
-        ordered_len += 1;
-    }
-    if (ordered_len == 0) return;
-
-    var forms: [128]unicode.JoiningForm = undefined;
-    unicode.resolveJoiningForms(ordered_codepoints[0..ordered_len], forms[0..ordered_len]) catch return;
-    for (forms[0..ordered_len], ordered_sources[0..ordered_len]) |form, source| {
-        setArabicJoiningSourceFeature(source_features, source, form);
-    }
-}
-
-fn markArabicJoiningSourceFeaturesFallback(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
-    var previous_source: ?usize = null;
-    var previous_form: unicode.JoiningForm = .none;
-    for (glyph_source_indices) |source| {
-        if (source >= codepoints.len) continue;
-        var pair = [_]u21{ codepoints[source], 0 };
-        if (previous_source) |prev| {
-            pair[0] = codepoints[prev];
-            pair[1] = codepoints[source];
-            var forms: [2]unicode.JoiningForm = undefined;
-            unicode.resolveJoiningForms(&pair, &forms) catch {
-                previous_source = source;
-                previous_form = .none;
-                continue;
-            };
-            if (previous_form == .none) setArabicJoiningSourceFeature(source_features, prev, forms[0]);
-            previous_form = forms[1];
-            setArabicJoiningSourceFeature(source_features, source, forms[1]);
-        } else {
-            previous_form = .none;
-        }
-        previous_source = source;
-    }
-}
-
-fn setArabicJoiningSourceFeature(source_features: []u32, source: usize, form: unicode.JoiningForm) void {
-    if (source >= source_features.len) return;
-    const joining_mask =
-        (gsub.sourceFeatureMaskForTag(unicode.tag("isol")).? |
-            gsub.sourceFeatureMaskForTag(unicode.tag("init")).? |
-            gsub.sourceFeatureMaskForTag(unicode.tag("medi")).? |
-            gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?) & ~gsub.source_feature_mask_marker;
-    const form_mask = switch (form) {
-        .isolated => gsub.sourceFeatureMaskForTag(unicode.tag("isol")).?,
-        .initial => gsub.sourceFeatureMaskForTag(unicode.tag("init")).?,
-        .medial => gsub.sourceFeatureMaskForTag(unicode.tag("medi")).?,
-        .final => gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?,
-        .none => 0,
-    };
-    const existing = source_features[source];
-    source_features[source] = (existing & ~joining_mask) | form_mask;
-}
-
-fn joiningFormFeatureTag(form: unicode.JoiningForm) u32 {
-    return switch (form) {
-        .isolated => unicode.tag("isol"),
-        .initial => unicode.tag("init"),
-        .medial => unicode.tag("medi"),
-        .final => unicode.tag("fina"),
-        .none => 0,
-    };
-}
-
-fn resolveJoiningFormsWithItemContext(
-    allocator: std.mem.Allocator,
-    before: []const u8,
-    item_codepoints: []const u21,
-    after: []const u8,
-    item_forms: []unicode.JoiningForm,
-) !void {
-    if (before.len == 0 and after.len == 0) {
-        return try unicode.resolveJoiningForms(item_codepoints, item_forms);
-    }
-
-    var context_codepoints = std.ArrayList(u21).empty;
-    defer context_codepoints.deinit(allocator);
-    try appendUtf8Codepoints(allocator, &context_codepoints, before);
-    const item_start = context_codepoints.items.len;
-    try context_codepoints.appendSlice(allocator, item_codepoints);
-    try appendUtf8Codepoints(allocator, &context_codepoints, after);
-
-    const context_forms = try allocator.alloc(unicode.JoiningForm, context_codepoints.items.len);
-    defer allocator.free(context_forms);
-    try unicode.resolveJoiningForms(context_codepoints.items, context_forms);
-    @memcpy(item_forms, context_forms[item_start..][0..item_codepoints.len]);
-}
-
-fn appendUtf8Codepoints(allocator: std.mem.Allocator, out: *std.ArrayList(u21), text: []const u8) !void {
-    var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (iterator.nextCodepoint()) |codepoint| {
-        try out.append(allocator, codepoint);
-    }
-}
-
 fn insertBeginningDottedCircle(
     allocator: std.mem.Allocator,
     glyph_ids: *std.ArrayList(GlyphId),
@@ -3061,35 +2808,12 @@ test "beginning item dotted circle creates a synthetic base source" {
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, cluster_owners.items);
 }
 
-test "Arabic item context influences only joining forms" {
-    const allocator = std.testing.allocator;
-    const item = [_]u21{0x0628};
-    var forms: [1]unicode.JoiningForm = undefined;
-
-    try resolveJoiningFormsWithItemContext(allocator, "", &item, "", &forms);
-    try std.testing.expectEqual(unicode.JoiningForm.isolated, forms[0]);
-
-    try resolveJoiningFormsWithItemContext(allocator, "ب", &item, "ب", &forms);
-    try std.testing.expectEqual(unicode.JoiningForm.medial, forms[0]);
-}
-
-fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong;
-}
-
 fn useShapeUsesArabicJoiningMasks(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .phag;
 }
 
 fn useShapeUsesDirectionFeatures(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .phag;
-}
-
-fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {
-    for (codepoints, 0..) |codepoint, index| {
-        if (!unicode.isMongolianFreeVariationSelector(codepoint) or index == 0) continue;
-        source_features[index] = source_features[index - 1];
-    }
 }
 
 const isShapeNativeDirectionDecimalNumber = source_pipeline.isDecimalNumber;

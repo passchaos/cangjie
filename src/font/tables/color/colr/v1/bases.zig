@@ -216,6 +216,9 @@ test "BaseGlyphList validates ordering and supports binary lookup" {
 
     writeU16(&bytes, 50, 4);
     try std.testing.expectError(error.BadSfnt, read(&bytes, table));
+
+    writeU16(&bytes, 50, 3);
+    try std.testing.expectError(error.BadSfnt, read(&bytes, table));
 }
 
 test "BaseGlyphList rejects metadata and out-of-table Paint offsets" {

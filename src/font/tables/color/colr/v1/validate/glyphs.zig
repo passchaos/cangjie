@@ -121,6 +121,14 @@ test "glyph validation covers PaintGlyph and declared PaintColrGlyph targets" {
     // A self-edge remains structurally valid; lazy traversal rejects it only
     // when that glyph is actually rendered.
     try validate(&bytes, table, 4);
+
+    var indirect_cycle = bytes;
+    writeU16(&indirect_cycle, 57, 2);
+    indirect_cycle[59] = 11;
+    writeU16(&indirect_cycle, 60, 1);
+    // Cross-glyph cycles are likewise a lazy traversal concern. Parse-time
+    // validation proves that each edge names a declared BaseGlyphPaintRecord.
+    try validate(&indirect_cycle, table, 4);
 }
 
 test "glyph validation covers LayerList Paints and ClipList ranges" {

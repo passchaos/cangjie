@@ -21,11 +21,13 @@ const run_metadata = @import("shaping/run_metadata.zig");
 const discretionary_hyphen = @import("layout/discretionary_hyphen.zig");
 const glyph_position = @import("layout/glyph_position.zig");
 const horizontal_justification = @import("layout/justification/horizontal.zig");
+const line_break_analysis = @import("layout/line_break/analysis.zig");
 const shaped_boundary = @import("layout/line_break/shaped_boundary.zig");
 const styled_bidi = @import("layout/styled_bidi.zig");
 const styled_buffer = @import("layout/styled_buffer.zig");
 const styled_paragraph = @import("layout/styled_paragraph.zig");
 const bidi = @import("text/bidi.zig");
+const segmentation = @import("text/segmentation/root.zig");
 const space_fallback = @import("space_fallback.zig");
 const unicode = @import("unicode.zig");
 const unicode_glyph_fallback = @import("unicode_glyph_fallback.zig");
@@ -411,6 +413,12 @@ pub const ParagraphOptions = struct {
     word_spacing: f32 = 0,
     first_line_indent: f32 = 0,
     paragraph_spacing: f32 = 0,
+    /// Optional language dictionary for scripts that normally omit spaces.
+    ///
+    /// The dictionary adds soft opportunities to UAX #14; all candidates still
+    /// pass grapheme and shaping `unsafe-to-break` checks. The dictionary must
+    /// outlive this layout call and any `ShapedParagraph` created from it.
+    word_break_dictionary: ?*const segmentation.WordBreakDictionary = null,
     /// Optional shaping controls used before wrapping. Paragraph layout keeps
     /// these beside spacing/line options so higher-level styled text can drive
     /// GSUB/GPOS without doing a separate pre-shape pass.
@@ -765,6 +773,7 @@ pub const ShapedParagraph = struct {
     runs: []const CascadeRun,
     grapheme_clusters: []const unicode.GraphemeCluster,
     line_breaks: []const unicode.LineBreak,
+    word_break_dictionary: ?*const segmentation.WordBreakDictionary,
     default_metrics: BaselineMetrics,
     shape_key: ShapePlanKey,
     needs_bidi_reorder: bool,
@@ -789,7 +798,9 @@ pub const ShapedParagraph = struct {
     /// concurrently for the same paragraph; one buffer itself is single-user.
     pub fn layout(self: *const ShapedParagraph, reflow: *ReflowBuffer, options: ParagraphOptions) !ParagraphLayout {
         try validateParagraphOptions(options);
-        if (!paragraphOptionsMatchShapeKey(self.text, options, self.shape_key)) {
+        if (options.word_break_dictionary != self.word_break_dictionary or
+            !paragraphOptionsMatchShapeKey(self.text, options, self.shape_key))
+        {
             return error.ParagraphShapingOptionsChanged;
         }
         try reflow.restore(self);
@@ -801,6 +812,7 @@ pub const ShapedParagraph = struct {
             self.default_metrics,
             self.grapheme_clusters,
             self.line_breaks,
+            self.word_break_dictionary,
         );
         if (self.needs_bidi_reorder) {
             try applyParagraphLineBidiVisualOrder(&reflow.buffer, self.text, options.direction);
@@ -1158,7 +1170,7 @@ pub fn diagnoseClusterCaretConsistencyUtf8(
     try buildParagraphLines(&buffer, text, .{
         .max_width = std.math.inf(f32),
         .direction = options.direction,
-    }, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null);
+    }, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null, null);
     return try diagnoseClusterCaretConsistencyForLayout(allocator, text, buffer.paragraphLayout());
 }
 
@@ -1820,7 +1832,12 @@ pub const TextShaper = struct {
         errdefer allocator.free(owned_runs);
         const grapheme_clusters = try unicode.itemizeGraphemeClusters(allocator, text);
         errdefer allocator.free(grapheme_clusters);
-        const line_breaks = try unicode.itemizeLineBreaks(allocator, text);
+        const line_breaks = try line_break_analysis.itemize(
+            allocator,
+            text,
+            grapheme_clusters,
+            options.word_break_dictionary,
+        );
         errdefer allocator.free(line_breaks);
 
         return .{
@@ -1830,6 +1847,7 @@ pub const TextShaper = struct {
             .runs = owned_runs,
             .grapheme_clusters = grapheme_clusters,
             .line_breaks = line_breaks,
+            .word_break_dictionary = options.word_break_dictionary,
             .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
             .shape_key = ShapePlanKey.fromText(text, shape_options),
             .needs_bidi_reorder = options.direction == .rtl or textHasRtlBidiClass(text),
@@ -1863,7 +1881,15 @@ pub const TextShaper = struct {
         // positioning independent from wrapping policy.
         _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
-        try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null);
+        try buildParagraphLines(
+            buffer,
+            text,
+            options,
+            defaultBaselineMetrics(cascade.fonts[0], font_size),
+            null,
+            null,
+            options.word_break_dictionary,
+        );
         if (options.direction == .rtl or textHasRtlBidiClass(text)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
@@ -1874,7 +1900,15 @@ pub const TextShaper = struct {
         try validateParagraphOptions(options);
         _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
-        try buildParagraphLines(buffer, text, options, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null);
+        try buildParagraphLines(
+            buffer,
+            text,
+            options,
+            defaultBaselineMetrics(cascade.fonts[0], font_size),
+            null,
+            null,
+            options.word_break_dictionary,
+        );
         if (options.direction == .rtl or textHasRtlBidiClass(text)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
@@ -2153,6 +2187,7 @@ const StyledParagraphDriver = struct {
             ),
             null,
             null,
+            self.options.word_break_dictionary,
         );
         const content_omitted = self.buffer.glyphs.items.len < shaped_glyph_count or
             (self.buffer.lines.items.len != 0 and
@@ -3039,6 +3074,7 @@ fn buildParagraphLines(
     default_metrics: BaselineMetrics,
     analyzed_graphemes: ?[]const unicode.GraphemeCluster,
     analyzed_line_breaks: ?[]const unicode.LineBreak,
+    dictionary: ?*const segmentation.WordBreakDictionary,
 ) !void {
     buffer.lines.clearRetainingCapacity();
     const max_width = if (options.max_width > 0) options.max_width else std.math.inf(f32);
@@ -3067,7 +3103,20 @@ fn buildParagraphLines(
         owned_graphemes = try unicode.itemizeGraphemeClusters(buffer.allocator, text);
         break :clusters owned_graphemes.?;
     };
-    var line_breaks = LineBreakCursor.init(text, analyzed_line_breaks);
+    var owned_line_breaks: ?[]unicode.LineBreak = null;
+    defer if (owned_line_breaks) |breaks| buffer.allocator.free(breaks);
+    const effective_line_breaks = analyzed_line_breaks orelse breaks: {
+        const selected_dictionary = dictionary orelse break :breaks null;
+        if (options.wrap_mode == .no_wrap) break :breaks null;
+        owned_line_breaks = try line_break_analysis.itemize(
+            buffer.allocator,
+            text,
+            grapheme_clusters,
+            selected_dictionary,
+        );
+        break :breaks owned_line_breaks.?;
+    };
+    var line_breaks = LineBreakCursor.init(text, effective_line_breaks);
 
     // Greedy line breaking tracks the most recent soft break. When a line
     // overflows, it prefers that break; otherwise it breaks at the overflowing

@@ -66,6 +66,8 @@ pub const LineBreakKind = @import("unicode.zig").LineBreakKind;
 pub const LineBreakClass = @import("unicode.zig").LineBreakClass;
 pub const LineBreakIterator = @import("unicode.zig").LineBreakIterator;
 pub const line_break_unicode_version = @import("unicode.zig").line_break_unicode_version;
+pub const WordBreakDictionary =
+    @import("text/segmentation/root.zig").WordBreakDictionary;
 pub const OverflowMode = @import("core.zig").OverflowMode;
 pub const FeatureOverride = @import("unicode.zig").FeatureOverride;
 pub const GsubFeatureRange = @import("unicode.zig").GsubFeatureRange;
@@ -10554,6 +10556,7 @@ fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
 
 test {
     _ = @import("layout/tests/cjk_justification.zig");
+    _ = @import("layout/tests/dictionary_breaking.zig");
     _ = @import("layout/tests/positioning_break_safety.zig");
     _ = @import("shaping/context/tests.zig");
     _ = @import("text/attributed/tests.zig");

@@ -1,6 +1,7 @@
 const std = @import("std");
 const layout = @import("layout.zig");
 const raster = @import("raster.zig");
+const segmentation = @import("text/segmentation/root.zig");
 const unicode = @import("unicode.zig");
 const attributed_paragraph = @import("text/attributed/paragraph.zig");
 
@@ -239,6 +240,11 @@ pub const ParagraphStyle = struct {
     tab_width: usize = 4,
     first_line_indent: f32 = 0,
     paragraph_spacing: f32 = 0,
+    /// Optional segmentation for Thai, Lao, Khmer, or Myanmar text.
+    ///
+    /// The dictionary is borrowed and must outlive layout or any retained
+    /// paragraph created from these options.
+    word_break_dictionary: ?*const segmentation.WordBreakDictionary = null,
 
     pub fn paragraphOptions(self: ParagraphStyle, max_width: f32) layout.ParagraphOptions {
         return .{
@@ -254,6 +260,7 @@ pub const ParagraphStyle = struct {
             .word_spacing = 0,
             .first_line_indent = self.first_line_indent,
             .paragraph_spacing = self.paragraph_spacing,
+            .word_break_dictionary = self.word_break_dictionary,
         };
     }
 };
@@ -737,6 +744,12 @@ test "core identifiers locale and glyph cluster helpers" {
 }
 
 test "paragraph style converts to paragraph options" {
+    const dictionary = try segmentation.WordBreakDictionary.init(
+        std.testing.allocator,
+        .thai,
+        &.{"ไทย"},
+    );
+    defer dictionary.deinit();
     const style = ParagraphStyle{
         .direction = .rtl,
         .text_align = .center,
@@ -747,6 +760,7 @@ test "paragraph style converts to paragraph options" {
         .tab_width = 2,
         .first_line_indent = 10,
         .paragraph_spacing = 4,
+        .word_break_dictionary = dictionary,
     };
     const options = style.paragraphOptions(80);
 
@@ -757,6 +771,7 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectEqual(@as(usize, 2), options.max_lines.?);
     try std.testing.expect(options.ellipsis);
     try std.testing.expectEqual(@as(usize, 2), options.tab_width);
+    try std.testing.expectEqual(dictionary, options.word_break_dictionary.?);
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);
 

@@ -101,6 +101,26 @@ breaking never performs OpenType substitution or positioning.
 Paragraph wrapping consumes this iterator through a one-item lookahead. It no
 longer allocates a full line-break array.
 
+`WordBreakDictionary` is the optional tailoring for mainstream scripts whose
+orthography normally omits spaces:
+
+- The public value is an opaque immutable handle constructed for Thai, Lao,
+  Khmer, or Myanmar. Construction copies and validates UTF-8 words, rejects
+  mixed-script and duplicate entries, and stores a Unicode-scalar trie.
+- Dictionary segmentation uses dynamic programming over each matching script
+  run. It first minimizes unknown grapheme clusters and then minimizes word
+  count, preferring longer known words when coverage is equal.
+- The resulting UTF-8 byte boundaries are merged with, rather than substituted
+  for, UAX #14 opportunities. Unknown-only regions are not arbitrarily split
+  into dictionary words.
+- One-shot, retained, and styled paragraphs all consume the same
+  `ParagraphOptions.word_break_dictionary`. Every candidate still passes
+  grapheme and shaped `unsafe-to-break` checks before line wrapping.
+- The dictionary is borrowed by `ParagraphOptions` and `ShapedParagraph`; it
+  must outlive the layout call or retained paragraph. A retained paragraph
+  rejects reflow with a different dictionary because its analyzed boundary
+  set is width-independent retained state.
+
 `src/unicode/grapheme/iterator.zig` now owns Unicode 17.0 extended grapheme
 boundaries:
 
@@ -487,8 +507,8 @@ Future changes must preserve these rules:
 2. Continue moving internal cache and scratch implementations under the
    `shaping/context` module boundary now that `TextContext` owns their public
    lifetime.
-3. Add optional dictionary segmentation and hyphenation as tailoring layers;
-   do not bake language-specific guesses into the default UAX #14 state
+3. Add language-aware hyphenation as the next optional tailoring layer; keep
+   dictionary segmentation and hyphenation outside the default UAX #14 state
    machine.
 4. Add Arabic kashida and language-specific CJK punctuation
    compression/hanging where portable references exist, without changing the

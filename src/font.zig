@@ -34,6 +34,7 @@ const ot_layout = @import("opentype/layout.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
 const sfnt = @import("font/sfnt/root.zig");
+const table_only_fixture = @import("font/tests/fixtures/table_only.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
 const colr_v0_mod = color_tables.colr_v0;
@@ -16775,128 +16776,28 @@ test "OS/2 table is validated at parse time" {
     }
 }
 
-fn tableOnlyFont(
-    data: []const u8,
-    glyph_count: u16,
-    number_of_h_metrics: u16,
-) Font {
-    const empty_tables: []TableRecord = &.{};
-    const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table = TableRecord{
-        .tag = .{ 0, 0, 0, 0 },
-        .checksum = 0,
-        .offset = 0,
-        .length = 0,
-    };
-    return .{
-        .data = data,
-        .format = .truetype,
-        .units_per_em = 1000,
-        .index_to_loc_format = 0,
-        .glyph_count = glyph_count,
-        .ascender = 0,
-        .descender = 0,
-        .line_gap = 0,
-        .number_of_h_metrics = number_of_h_metrics,
-        .head = dummy_table,
-        .hhea = dummy_table,
-        .maxp = dummy_table,
-        .hmtx = dummy_table,
-        .hdmx = null,
-        .ltsh = null,
-        .ltag = null,
-        .loca = null,
-        .cmap = dummy_table,
-        .kern = null,
-        .kerx = null,
-        .mort = null,
-        .morx = null,
-        .os2 = null,
-        .gasp = null,
-        .gdef = null,
-        .gpos = null,
-        .gsub = null,
-        .ankr = null,
-        .feat = null,
-        .trak = null,
-        .name = null,
-        .math = null,
-        .meta = null,
-        .post = null,
-        .pclt = null,
-        .stat = null,
-        .fvar = null,
-        .avar = null,
-        .cvt = null,
-        .cvar = null,
-        .gvar = null,
-        .fpgm = null,
-        .prep = null,
-        .hvar = null,
-        .mvar = null,
-        .vvar = null,
-        .varc = null,
-        .ift = null,
-        .iftx = null,
-        .colr = null,
-        .cpal = null,
-        .base = null,
-        .dsig = null,
-        .vorg = null,
-        .svg = null,
-        .sbix = null,
-        .cblc = null,
-        .cbdt = null,
-        .eblc = null,
-        .ebdt = null,
-        .glyf = null,
-        .cff = null,
-        .cff_parsed = null,
-        .cff2 = null,
-        .cmap_subtables = empty_cmaps,
-        .owned_tables = empty_tables,
-        .allocator = std.testing.allocator,
-    };
-}
-
-fn testTableRecord(
-    data: []const u8,
-    tag: [4]u8,
-    offset: usize,
-    length: usize,
-) TableRecord {
-    var record = TableRecord{
-        .tag = tag,
-        .checksum = 0,
-        .offset = offset,
-        .length = length,
-    };
-    record.checksum = sfnt.checksum.table(data, record) catch 0;
-    return record;
-}
-
 fn gdefOnlyFont(data: []const u8) Font {
-    var font = tableOnlyFont(data, 64, 1);
-    font.gdef = testTableRecord(data, .{ 'G', 'D', 'E', 'F' }, 0, data.len);
+    var font = table_only_fixture.init(Font, data, 64, 1);
+    font.gdef = table_only_fixture.record(data, .{ 'G', 'D', 'E', 'F' }, 0, data.len);
     return font;
 }
 
 fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
-    var font = tableOnlyFont(data, 2, 2);
-    font.os2 = testTableRecord(data, .{ 'O', 'S', '/', '2' }, 0, declared_length);
+    var font = table_only_fixture.init(Font, data, 2, 2);
+    font.os2 = table_only_fixture.record(data, .{ 'O', 'S', '/', '2' }, 0, declared_length);
     return font;
 }
 
 fn colrOnlyFont(data: []const u8) Font {
-    var font = tableOnlyFont(data, 16, 2);
-    font.colr = testTableRecord(data, .{ 'C', 'O', 'L', 'R' }, 0, data.len);
+    var font = table_only_fixture.init(Font, data, 16, 2);
+    font.colr = table_only_fixture.record(data, .{ 'C', 'O', 'L', 'R' }, 0, data.len);
     return font;
 }
 
 fn colrCpalOnlyFont(data: []const u8, colr_length: usize) Font {
     var font = colrOnlyFont(data);
-    font.colr = testTableRecord(data, .{ 'C', 'O', 'L', 'R' }, 0, colr_length);
-    font.cpal = testTableRecord(
+    font.colr = table_only_fixture.record(data, .{ 'C', 'O', 'L', 'R' }, 0, colr_length);
+    font.cpal = table_only_fixture.record(
         data,
         .{ 'C', 'P', 'A', 'L' },
         colr_length,
@@ -16906,39 +16807,39 @@ fn colrCpalOnlyFont(data: []const u8, colr_length: usize) Font {
 }
 
 fn cpalOnlyFont(data: []const u8) Font {
-    var font = tableOnlyFont(data, 2, 2);
-    font.cpal = testTableRecord(data, .{ 'C', 'P', 'A', 'L' }, 0, data.len);
+    var font = table_only_fixture.init(Font, data, 2, 2);
+    font.cpal = table_only_fixture.record(data, .{ 'C', 'P', 'A', 'L' }, 0, data.len);
     return font;
 }
 
 fn svgOnlyFont(data: []const u8) Font {
-    var font = tableOnlyFont(data, 4, 2);
-    font.svg = testTableRecord(data, .{ 'S', 'V', 'G', ' ' }, 0, data.len);
+    var font = table_only_fixture.init(Font, data, 4, 2);
+    font.svg = table_only_fixture.record(data, .{ 'S', 'V', 'G', ' ' }, 0, data.len);
     return font;
 }
 
 fn sbixOnlyFont(data: []const u8) Font {
-    var font = tableOnlyFont(data, 2, 2);
-    font.sbix = testTableRecord(data, .{ 's', 'b', 'i', 'x' }, 0, data.len);
+    var font = table_only_fixture.init(Font, data, 2, 2);
+    font.sbix = table_only_fixture.record(data, .{ 's', 'b', 'i', 'x' }, 0, data.len);
     return font;
 }
 
 fn fvarOnlyFont(data: []const u8) Font {
-    var font = tableOnlyFont(data, 2, 2);
-    font.fvar = testTableRecord(data, .{ 'f', 'v', 'a', 'r' }, 0, data.len);
+    var font = table_only_fixture.init(Font, data, 2, 2);
+    font.fvar = table_only_fixture.record(data, .{ 'f', 'v', 'a', 'r' }, 0, data.len);
     return font;
 }
 
 fn avarOnlyFont(data: []const u8) Font {
-    var font = tableOnlyFont(data, 2, 2);
-    font.avar = testTableRecord(data, .{ 'a', 'v', 'a', 'r' }, 0, data.len);
+    var font = table_only_fixture.init(Font, data, 2, 2);
+    font.avar = table_only_fixture.record(data, .{ 'a', 'v', 'a', 'r' }, 0, data.len);
     return font;
 }
 
 fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
     var font = fvarOnlyFont(data);
-    font.fvar = testTableRecord(data, .{ 'f', 'v', 'a', 'r' }, 0, fvar_length);
-    font.avar = testTableRecord(
+    font.fvar = table_only_fixture.record(data, .{ 'f', 'v', 'a', 'r' }, 0, fvar_length);
+    font.avar = table_only_fixture.record(
         data,
         .{ 'a', 'v', 'a', 'r' },
         fvar_length,
@@ -16948,8 +16849,8 @@ fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
 }
 
 fn kernOnlyFont(data: []const u8) Font {
-    var font = tableOnlyFont(data, 2, 2);
-    font.kern = testTableRecord(data, .{ 'k', 'e', 'r', 'n' }, 0, data.len);
+    var font = table_only_fixture.init(Font, data, 2, 2);
+    font.kern = table_only_fixture.record(data, .{ 'k', 'e', 'r', 'n' }, 0, data.len);
     return font;
 }
 

@@ -252,6 +252,19 @@ without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
+`TextContext` is the public ownership boundary for this pipeline. It is an
+opaque, heap-backed handle that owns reusable output/scratch arrays plus cmap,
+metric, fallback, GDEF, GSUB/GPOS proof/plan, and optional whole-run caches.
+`TextContext.Options` independently controls font-derived and whole-run
+caching. Its concise
+`shape`, `shapeWithFeatureRanges`, `shapeCascade`, `shapeScriptRuns`,
+`shapeParagraph`, `layoutParagraph`, `layoutStyledParagraph`, and
+`measureParagraph` methods replace public APIs that required callers to
+construct several independent caches and write internal buffer pointers.
+Returned run and layout slices borrow the context and remain valid until its
+next shaping/layout call. Fonts must outlive the context, or the caller must
+invoke `clearCaches` before destroying them.
+
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
 bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore
@@ -471,8 +484,9 @@ Future changes must preserve these rules:
 
 1. Extend the existing HarfBuzz-compatible shaping-boundary flags only when a
    new portable shaping relationship can change retained-run reuse semantics.
-2. Consolidate plan caches and transient arrays into reusable shaping/layout
-   contexts, following HarfBuzz and Swash lifetime boundaries.
+2. Continue moving internal cache and scratch implementations under the
+   `shaping/context` module boundary now that `TextContext` owns their public
+   lifetime.
 3. Add optional dictionary segmentation and hyphenation as tailoring layers;
    do not bake language-specific guesses into the default UAX #14 state
    machine.

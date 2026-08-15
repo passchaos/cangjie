@@ -25,17 +25,19 @@ pub fn main(init: std.process.Init) !void {
     defer font.deinit();
     const fonts = [_]*const cangjie.Font{&font};
     const cascade = cangjie.FontCascade.init(&fonts);
-    var shape_buffer = cangjie.LayoutBuffer.init(allocator);
-    defer shape_buffer.deinit();
-    var shaped_cache = cangjie.ShapedRunCache.init(allocator);
-    defer shaped_cache.deinit();
+    const uncached_context = try cangjie.TextContext.init(allocator, .{});
+    defer uncached_context.deinit();
+    const cached_context = try cangjie.TextContext.init(
+        allocator,
+        .{ .cache_shaped_runs = true },
+    );
+    defer cached_context.deinit();
 
     // Warm the shaping and layout allocation paths before measuring either
     // strategy so compile/startup and first-capacity costs do not decide the
     // comparison.
-    _ = try cangjie.TextShaper.layoutParagraphUtf8(
+    _ = try uncached_context.layoutParagraph(
         cascade,
-        &shape_buffer,
         default_text,
         20,
         .{ .max_width = widths[0] },
@@ -44,9 +46,8 @@ pub fn main(init: std.process.Init) !void {
     var shape_each_checksum: usize = 0;
     const shape_each_start = std.Io.Clock.now(.awake, init.io).nanoseconds;
     for (0..iterations) |iteration| {
-        const layout = try cangjie.TextShaper.layoutParagraphUtf8(
+        const layout = try uncached_context.layoutParagraph(
             cascade,
-            &shape_buffer,
             default_text,
             20,
             .{ .max_width = widths[iteration % widths.len] },
@@ -55,13 +56,8 @@ pub fn main(init: std.process.Init) !void {
     }
     const shape_each_ns = std.Io.Clock.now(.awake, init.io).nanoseconds - shape_each_start;
 
-    _ = try cangjie.TextShaper.layoutParagraphUtf8WithCaches(
+    _ = try cached_context.layoutParagraph(
         cascade,
-        null,
-        null,
-        null,
-        &shaped_cache,
-        &shape_buffer,
         default_text,
         20,
         .{ .max_width = widths[0] },
@@ -69,13 +65,8 @@ pub fn main(init: std.process.Init) !void {
     var cached_layout_checksum: usize = 0;
     const cached_layout_start = std.Io.Clock.now(.awake, init.io).nanoseconds;
     for (0..iterations) |iteration| {
-        const layout = try cangjie.TextShaper.layoutParagraphUtf8WithCaches(
+        const layout = try cached_context.layoutParagraph(
             cascade,
-            null,
-            null,
-            null,
-            &shaped_cache,
-            &shape_buffer,
             default_text,
             20,
             .{ .max_width = widths[iteration % widths.len] },
@@ -84,10 +75,8 @@ pub fn main(init: std.process.Init) !void {
     }
     const cached_layout_ns = std.Io.Clock.now(.awake, init.io).nanoseconds - cached_layout_start;
 
-    var paragraph = try cangjie.TextShaper.shapeParagraphUtf8(
-        allocator,
+    var paragraph = try uncached_context.shapeParagraph(
         cascade,
-        &shape_buffer,
         default_text,
         20,
         .{ .max_width = widths[0] },

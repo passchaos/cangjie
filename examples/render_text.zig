@@ -43,9 +43,14 @@ pub fn main(init: std.process.Init) !void {
     var font = try cangjie.Font.parse(allocator, font_bytes);
     defer font.deinit();
 
-    var layout_buffer = cangjie.LayoutBuffer.init(allocator);
-    defer layout_buffer.deinit();
-    const run = try cangjie.TextShaper.shapeUtf8(&font, &layout_buffer, options.text, options.size);
+    const text_context = try cangjie.TextContext.init(allocator, .{});
+    defer text_context.deinit();
+    const run = try text_context.shape(
+        &font,
+        options.text,
+        options.size,
+        .{},
+    );
 
     var target = try cangjie.RenderTarget.init(allocator, options.width, options.height);
     defer target.deinit();

@@ -39,9 +39,9 @@ test "macOS SFNSMono parses shapes and rasterizes stable grayscale glyphs" {
     try std.testing.expect((try font.glyphIndex('C')) > 0);
     try std.testing.expect((try font.glyphIndex('j')) > 0);
 
-    var layout_buffer = cangjie.LayoutBuffer.init(allocator);
-    defer layout_buffer.deinit();
-    const run = try cangjie.TextShaper.shapeUtf8(&font, &layout_buffer, "Cangjie", 36);
+    const text_context = try cangjie.TextContext.init(allocator, .{});
+    defer text_context.deinit();
+    const run = try text_context.shape(&font, "Cangjie", 36, .{});
     try std.testing.expectEqual(@as(usize, 7), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 155.77734), run.width(), 0.001);
 
@@ -78,9 +78,14 @@ test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
     defer font.deinit();
     try std.testing.expect((try font.glyphIndex(0x0645)) > 0); // Arabic meem.
 
-    var layout_buffer = cangjie.LayoutBuffer.init(allocator);
-    defer layout_buffer.deinit();
-    const run = try cangjie.TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "مرحبا بالعالم 123", 32, .{ .direction = .rtl });
+    const text_context = try cangjie.TextContext.init(allocator, .{});
+    defer text_context.deinit();
+    const run = try text_context.shape(
+        &font,
+        "مرحبا بالعالم 123",
+        32,
+        .{ .direction = .rtl },
+    );
     try std.testing.expectEqual(@as(usize, 17), run.glyphs.len);
     // These are the positional-form glyphs and advances selected by the same
     // Noto Sans Arabic file through Pango/HarfBuzz. Keep a small tolerance for
@@ -118,15 +123,14 @@ test "Linux Noto Sans CJK vertical shaping uses real vert substitutions and vmtx
     defer font.deinit();
     try std.testing.expect(font.hasVerticalMetrics());
 
-    var layout_buffer = cangjie.LayoutBuffer.init(allocator);
-    defer layout_buffer.deinit();
-    const horizontal = try cangjie.TextShaper.shapeUtf8(&font, &layout_buffer, "中、（", 32);
+    const text_context = try cangjie.TextContext.init(allocator, .{});
+    defer text_context.deinit();
+    const horizontal = try text_context.shape(&font, "中、（", 32, .{});
     var horizontal_ids: [3]cangjie.GlyphId = undefined;
     for (horizontal.glyphs, &horizontal_ids) |glyph, *id| id.* = glyph.glyph_id;
 
-    const vertical = try cangjie.TextShaper.shapeUtf8WithOptions(
+    const vertical = try text_context.shape(
         &font,
-        &layout_buffer,
         "中、（",
         32,
         .{ .writing_mode = .vertical_rl },

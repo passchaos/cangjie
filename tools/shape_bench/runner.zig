@@ -156,29 +156,11 @@ pub fn resolvedVariationCoords(allocator: std.mem.Allocator, font: *const cangji
 }
 
 pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.Font, options: options_mod.Options) !BenchResult {
-    var layout_buffer = cangjie.LayoutBuffer.init(allocator);
-    defer layout_buffer.deinit();
-
-    var metrics_cache = cangjie.GlyphMetricsCache.init(allocator);
-    defer metrics_cache.deinit();
-    var glyph_index_cache = cangjie.GlyphIndexCache.init(allocator);
-    defer glyph_index_cache.deinit();
-    var gdef_cache = cangjie.GdefMetadataCache.init(allocator);
-    defer gdef_cache.deinit();
-    var gsub_proof_cache = cangjie.GsubTableProofCache.init(allocator);
-    defer gsub_proof_cache.deinit();
-    var gpos_proof_cache = cangjie.GposTableProofCache.init(allocator);
-    defer gpos_proof_cache.deinit();
-    var lookup_selection_cache = cangjie.LookupSelectionCache.init(allocator);
-    defer lookup_selection_cache.deinit();
-    var shaped_cache = cangjie.ShapedRunCache.init(allocator);
-    defer shaped_cache.deinit();
-    if (options.use_caches) {
-        layout_buffer.gdef_metadata_cache = &gdef_cache;
-        layout_buffer.gsub_table_proof_cache = &gsub_proof_cache;
-        layout_buffer.gpos_table_proof_cache = &gpos_proof_cache;
-        layout_buffer.lookup_selection_cache = &lookup_selection_cache;
-    }
+    const text_context = try cangjie.TextContext.init(allocator, .{
+        .cache_font_data = options.use_caches,
+        .cache_shaped_runs = options.use_shaped_cache,
+    });
+    defer text_context.deinit();
 
     const cascade_fonts = [_]*const cangjie.Font{font};
     const cascade = cangjie.FontCascade.init(&cascade_fonts);
@@ -212,21 +194,26 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     var warmup_index: usize = 0;
     while (warmup_index < options.warmup) : (warmup_index += 1) {
         for (text_lines) |line| {
-            _ = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, line, options, shape_options);
+            _ = try shapeOnce(
+                text_context,
+                font,
+                cascade,
+                line,
+                options,
+                shape_options,
+            );
         }
     }
 
     var profile = cangjie.ShapeStageProfile{};
     if (options.profile) {
-        layout_buffer.shape_profile = &profile;
-        layout_buffer.profile_fast_path = options.profile_fast_path;
-        layout_buffer.profile_io = io;
+        text_context.enableProfiling(
+            &profile,
+            io,
+            options.profile_fast_path,
+        );
     }
-    defer if (options.profile) {
-        layout_buffer.shape_profile = null;
-        layout_buffer.profile_fast_path = false;
-        layout_buffer.profile_io = null;
-    };
+    defer if (options.profile) text_context.disableProfiling();
 
     var checksum: u64 = 0;
     var glyph_count: usize = 0;
@@ -240,7 +227,14 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         var i: usize = 0;
         while (i < options.iterations) : (i += 1) {
             for (text_lines, 0..) |line, line_index| {
-                const glyphs = try shapeOnce(font, cascade, &metrics_cache, &glyph_index_cache, if (options.use_shaped_cache) &shaped_cache else null, &layout_buffer, line, options, shape_options);
+                const glyphs = try shapeOnce(
+                    text_context,
+                    font,
+                    cascade,
+                    line,
+                    options,
+                    shape_options,
+                );
                 sample_glyph_count += glyphs.len;
                 const line_checksum = glyphsChecksum(glyphs);
                 sample_checksum = updateChecksumWithLine(sample_checksum, line_checksum);
@@ -274,6 +268,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     }
     var elapsed: i128 = 0;
     for (samples.items) |sample| elapsed += sample.elapsed_ns;
+    const cache_stats = text_context.stats();
 
     return .{
         .elapsed_ns = elapsed,
@@ -282,20 +277,20 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         .profile = profile,
         .line_summaries = try line_summaries.toOwnedSlice(allocator),
         .samples = try samples.toOwnedSlice(allocator),
-        .glyph_index_cache_hits = glyph_index_cache.hits,
-        .glyph_index_cache_misses = glyph_index_cache.misses,
-        .glyph_metrics_cache_hits = metrics_cache.hits,
-        .glyph_metrics_cache_misses = metrics_cache.misses,
-        .gdef_cache_hits = gdef_cache.hits,
-        .gdef_cache_misses = gdef_cache.misses,
-        .gsub_proof_cache_hits = gsub_proof_cache.hits,
-        .gsub_proof_cache_misses = gsub_proof_cache.misses,
-        .gpos_proof_cache_hits = gpos_proof_cache.hits,
-        .gpos_proof_cache_misses = gpos_proof_cache.misses,
-        .lookup_selection_cache_hits = lookup_selection_cache.hits,
-        .lookup_selection_cache_misses = lookup_selection_cache.misses,
-        .shaped_cache_hits = shaped_cache.hits,
-        .shaped_cache_misses = shaped_cache.misses,
+        .glyph_index_cache_hits = cache_stats.glyph_indices.hits,
+        .glyph_index_cache_misses = cache_stats.glyph_indices.misses,
+        .glyph_metrics_cache_hits = cache_stats.glyph_metrics.hits,
+        .glyph_metrics_cache_misses = cache_stats.glyph_metrics.misses,
+        .gdef_cache_hits = cache_stats.gdef_metadata.hits,
+        .gdef_cache_misses = cache_stats.gdef_metadata.misses,
+        .gsub_proof_cache_hits = cache_stats.gsub_table_proofs.hits,
+        .gsub_proof_cache_misses = cache_stats.gsub_table_proofs.misses,
+        .gpos_proof_cache_hits = cache_stats.gpos_table_proofs.hits,
+        .gpos_proof_cache_misses = cache_stats.gpos_table_proofs.misses,
+        .lookup_selection_cache_hits = cache_stats.lookup_selection.hits,
+        .lookup_selection_cache_misses = cache_stats.lookup_selection.misses,
+        .shaped_cache_hits = cache_stats.shaped_runs.hits,
+        .shaped_cache_misses = cache_stats.shaped_runs.misses,
     };
 }
 
@@ -498,34 +493,44 @@ fn fontUnitPosition(font: *const cangjie.Font, font_size: f32, value: f32) i32 {
 }
 
 fn shapeOnce(
+    text_context: *cangjie.TextContext,
     font: *const cangjie.Font,
     cascade: cangjie.FontCascade,
-    metrics_cache: *cangjie.GlyphMetricsCache,
-    glyph_index_cache: *cangjie.GlyphIndexCache,
-    shaped_cache: ?*cangjie.ShapedRunCache,
-    layout_buffer: *cangjie.LayoutBuffer,
     text: []const u8,
     options: options_mod.Options,
     shape_options: cangjie.ShapeOptions,
 ) ![]const cangjie.GlyphPosition {
     if (options.feature_range_count != 0) return shapeOnceWithGsubFeatureRanges(
+        text_context,
         font,
-        metrics_cache,
-        glyph_index_cache,
-        layout_buffer,
         text,
         options,
         shape_options,
     );
     if (options.use_caches) {
-        if (shaped_cache) |cache| {
-            const shaped = try cangjie.TextShaper.shapeUtf8CascadeWithCaches(cascade, null, metrics_cache, glyph_index_cache, cache, layout_buffer, text, options.size, shape_options);
+        if (options.use_shaped_cache) {
+            const shaped = try text_context.shapeCascade(
+                cascade,
+                text,
+                options.size,
+                shape_options,
+            );
             return shaped.glyphs;
         }
-        const run = try cangjie.TextShaper.shapeUtf8WithCaches(font, metrics_cache, glyph_index_cache, layout_buffer, text, options.size, shape_options);
+        const run = try text_context.shape(
+            font,
+            text,
+            options.size,
+            shape_options,
+        );
         return run.glyphs;
     }
-    const run = try cangjie.TextShaper.shapeUtf8WithOptions(font, layout_buffer, text, options.size, shape_options);
+    const run = try text_context.shape(
+        font,
+        text,
+        options.size,
+        shape_options,
+    );
     return run.glyphs;
 }
 
@@ -533,35 +538,20 @@ fn shapeOnce(
 // otherwise its code-size change would contaminate the zero-range A/B intended
 // to measure the shaping library rather than this dispatch wrapper.
 noinline fn shapeOnceWithGsubFeatureRanges(
+    text_context: *cangjie.TextContext,
     font: *const cangjie.Font,
-    metrics_cache: *cangjie.GlyphMetricsCache,
-    glyph_index_cache: *cangjie.GlyphIndexCache,
-    layout_buffer: *cangjie.LayoutBuffer,
     text: []const u8,
     options: options_mod.Options,
     shape_options: cangjie.ShapeOptions,
 ) ![]const cangjie.GlyphPosition {
     const ranges = options.featureRanges();
-    const run = if (options.use_caches)
-        try cangjie.TextShaper.shapeUtf8WithCachesAndGsubFeatureRanges(
-            font,
-            metrics_cache,
-            glyph_index_cache,
-            layout_buffer,
-            text,
-            options.size,
-            ranges,
-            shape_options,
-        )
-    else
-        try cangjie.TextShaper.shapeUtf8WithGsubFeatureRanges(
-            font,
-            layout_buffer,
-            text,
-            options.size,
-            ranges,
-            shape_options,
-        );
+    const run = try text_context.shapeWithFeatureRanges(
+        font,
+        text,
+        options.size,
+        ranges,
+        shape_options,
+    );
     return run.glyphs;
 }
 

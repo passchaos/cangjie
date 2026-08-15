@@ -1600,7 +1600,7 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   intermediate lookup states before a later lookup maps them back. The final
   post-GSUB run is still checked against `maxp` before GPOS and metrics. The
   three AlternateSubst rows now use
-  `TextShaper.shapeUtf8WithGsubFeatureRanges` and public UTF-8 byte-scoped
+  `TextContext.shapeWithFeatureRanges` and public UTF-8 byte-scoped
   `GsubFeatureRange` values, including disabled spans, one-based alternate
   values, lookup-flag skipping, and overlapping declarations where the later
   value wins. The dedicated API keeps rare range data out of `ShapeOptions`

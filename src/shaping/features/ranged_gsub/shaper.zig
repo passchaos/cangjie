@@ -7,8 +7,8 @@
 const std = @import("std");
 
 const Font = @import("../../../font.zig").Font;
-const GlyphMetricsCache = @import("../../../layout_cache.zig").GlyphMetricsCache;
-const GlyphIndexCache = @import("../../../layout_cache.zig").GlyphIndexCache;
+const GlyphMetricsCache = @import("../../context/cache/root.zig").GlyphMetricsCache;
+const GlyphIndexCache = @import("../../context/cache/root.zig").GlyphIndexCache;
 const executor = @import("executor.zig");
 const gsub = @import("../../../gsub.zig");
 const layout = @import("../../../layout.zig");

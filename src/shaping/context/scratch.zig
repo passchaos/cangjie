@@ -1,11 +1,11 @@
 const std = @import("std");
 
-const GlyphId = @import("glyph.zig").GlyphId;
-const aat_kerx = @import("aat_kerx.zig");
-const cluster_safety = @import("shaping/cluster_safety.zig");
-const gpos = @import("gpos.zig");
-const ligature_provenance = @import("ligature_provenance.zig");
-const unicode = @import("unicode.zig");
+const GlyphId = @import("../../glyph.zig").GlyphId;
+const aat_kerx = @import("../../aat_kerx.zig");
+const cluster_safety = @import("../cluster_safety.zig");
+const gpos = @import("../../gpos.zig");
+const ligature_provenance = @import("../../ligature_provenance.zig");
+const unicode = @import("../../unicode.zig");
 
 pub const ShapeScratch = struct {
     glyph_ids: std.ArrayList(GlyphId) = .empty,
@@ -29,7 +29,7 @@ pub const ShapeScratch = struct {
     kerx_simple_pair_eligible: std.ArrayList(bool) = .empty,
     kerx_adjustments: std.ArrayList(aat_kerx.Adjustment) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
-    attachment_links: std.ArrayList(@import("attachment.zig").Link) = .empty,
+    attachment_links: std.ArrayList(@import("../../attachment.zig").Link) = .empty,
 
     pub fn deinit(self: *ShapeScratch, allocator: std.mem.Allocator) void {
         self.attachment_links.deinit(allocator);

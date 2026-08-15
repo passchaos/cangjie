@@ -1,7 +1,7 @@
 const std = @import("std");
 const Font = @import("font.zig").Font;
 const GlyphId = @import("glyph.zig").GlyphId;
-const GlyphIndexCache = @import("layout_cache.zig").GlyphIndexCache;
+const GlyphIndexCache = @import("shaping/context/cache/root.zig").GlyphIndexCache;
 
 pub const Composition = struct {
     codepoint: u21,

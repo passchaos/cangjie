@@ -127,6 +127,17 @@ Post-shaping bidi output reconstruction is similarly isolated under
 Styled glyph metadata keeps its separate `styled_bidi` permutation sidecar;
 ordinary shaping therefore does not pay for attributed-text state.
 
+Public result records are separated from shaping algorithms under
+`src/layout/types/`:
+
+- `runs.zig` owns glyph runs, cascade runs, and scripted/shaped result views.
+- `paragraph.zig` owns paragraph lines, metrics, hit testing, caret movement,
+  and selection geometry.
+
+`src/layout.zig` re-exports these records under their existing names, so
+`TextContext` callers keep one intentional public surface while implementation
+files no longer mix data-model methods with OpenType shaping stages.
+
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 

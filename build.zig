@@ -230,6 +230,28 @@ const retained_aots_parity_gates = [_]struct {
     },
 };
 
+const retained_aots_feature_range_gates = [_]struct {
+    font_file: []const u8,
+    text: []const u8,
+    ranges: []const []const u8,
+}{
+    .{
+        .font_file = "gsub3_1_simple_f1.otf",
+        .text = "\u{0011}\u{0012}\u{0011}\u{0012}\u{0011}\u{0012}\u{0011}\u{0012}\u{0011}\u{0012}\u{0011}\u{0012}\u{0011}",
+        .ranges = &.{ "test=0:1:2", "test=1:3:4", "test=2:5:6", "test=3:7:8", "test=0:9:10", "test=1:11:12" },
+    },
+    .{
+        .font_file = "gsub3_1_multiple_f1.otf",
+        .text = "\u{0011}\u{0012}\u{0012}\u{0012}\u{0012}\u{0013}\u{0013}\u{0013}\u{0013}\u{0011}",
+        .ranges = &.{ "test=0:1:2", "test=1:2:3", "test=2:3:4", "test=0:4:5", "test=0:5:6", "test=1:6:7", "test=2:7:8", "test=0:8:9" },
+    },
+    .{
+        .font_file = "gsub3_1_lookupflag_f1.otf",
+        .text = "\u{0011}\u{0012}\u{0012}\u{0012}\u{0013}\u{0013}\u{0013}\u{0013}\u{0011}",
+        .ranges = &.{ "test=0:4:5", "test=1:5:6", "test=2:6:7", "test=0:7:8" },
+    },
+};
+
 const retained_inline_harfbuzz_parity_gates = [_]struct {
     font_hash: []const u8,
     text: []const u8,
@@ -2695,6 +2717,23 @@ pub fn build(b: *std.Build) void {
             });
             if (gate.no_positions) harfrust_parity_cmd.addArg("--no-positions");
             shaping_corpus_parity_smoke_step.dependOn(&harfrust_parity_cmd.step);
+        }
+        for (retained_aots_feature_range_gates) |gate| {
+            const font_path = b.fmt("{s}/{s}", .{ harfbuzz_aots_fonts, gate.font_file });
+            inline for ([_][]const u8{ "compare-harfbuzz", "compare-harfrust" }) |engine| {
+                const parity_cmd = b.addRunArtifact(shape_bench_exe);
+                parity_cmd.addArgs(&.{
+                    "--engine", engine,
+                    "--font", font_path,
+                    "--text", gate.text,
+                    "--direction", "ltr",
+                    "--no-positions",
+                });
+                for (gate.ranges) |range| {
+                    parity_cmd.addArgs(&.{ "--feature-range", range });
+                }
+                shaping_corpus_parity_smoke_step.dependOn(&parity_cmd.step);
+            }
         }
         for (retained_inline_harfbuzz_parity_gates) |gate| {
             const inline_parity_cmd = b.addRunArtifact(shape_bench_exe);

@@ -508,6 +508,15 @@ fn shapeOnce(
     options: options_mod.Options,
     shape_options: cangjie.ShapeOptions,
 ) ![]const cangjie.GlyphPosition {
+    if (options.feature_range_count != 0) return shapeOnceWithGsubFeatureRanges(
+        font,
+        metrics_cache,
+        glyph_index_cache,
+        layout_buffer,
+        text,
+        options,
+        shape_options,
+    );
     if (options.use_caches) {
         if (shaped_cache) |cache| {
             const shaped = try cangjie.TextShaper.shapeUtf8CascadeWithCaches(cascade, null, metrics_cache, glyph_index_cache, cache, layout_buffer, text, options.size, shape_options);
@@ -517,6 +526,42 @@ fn shapeOnce(
         return run.glyphs;
     }
     const run = try cangjie.TextShaper.shapeUtf8WithOptions(font, layout_buffer, text, options.size, shape_options);
+    return run.glyphs;
+}
+
+// Keep CLI-only rare-path setup out of the benchmark's common per-line helper;
+// otherwise its code-size change would contaminate the zero-range A/B intended
+// to measure the shaping library rather than this dispatch wrapper.
+noinline fn shapeOnceWithGsubFeatureRanges(
+    font: *const cangjie.Font,
+    metrics_cache: *cangjie.GlyphMetricsCache,
+    glyph_index_cache: *cangjie.GlyphIndexCache,
+    layout_buffer: *cangjie.LayoutBuffer,
+    text: []const u8,
+    options: options_mod.Options,
+    shape_options: cangjie.ShapeOptions,
+) ![]const cangjie.GlyphPosition {
+    const ranges = options.featureRanges();
+    const run = if (options.use_caches)
+        try cangjie.TextShaper.shapeUtf8WithCachesAndGsubFeatureRanges(
+            font,
+            metrics_cache,
+            glyph_index_cache,
+            layout_buffer,
+            text,
+            options.size,
+            ranges,
+            shape_options,
+        )
+    else
+        try cangjie.TextShaper.shapeUtf8WithGsubFeatureRanges(
+            font,
+            layout_buffer,
+            text,
+            options.size,
+            ranges,
+            shape_options,
+        );
     return run.glyphs;
 }
 

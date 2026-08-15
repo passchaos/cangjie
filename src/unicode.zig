@@ -928,6 +928,11 @@ pub const FeatureOverride = struct {
     }
 };
 
+/// One OpenType GSUB feature value active for source clusters in
+/// `[byte_start, byte_end)`. Offsets are UTF-8 bytes and later overlapping
+/// entries with the same tag take precedence.
+pub const GsubFeatureRange = @import("shaping/features/ranged_gsub/ranges.zig").Range;
+
 /// Map the internal script enum to the OpenType script tag used for GSUB/GPOS
 /// ScriptList selection.
 pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {

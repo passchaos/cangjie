@@ -782,6 +782,171 @@ pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: 
     return try lookups.toOwnedSlice(allocator);
 }
 
+/// Return one feature's active LookupList indexes for a selected Script/LangSys.
+///
+/// This selection API supports the rare ranged-feature layer without adding
+/// range state to `LookupOptions`. The ordinary hot path continues to cache and
+/// apply its complete global plan unchanged.
+pub fn selectedFeatureLookupIndicesForOptions(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    feature_tag: u32,
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)![]u16 {
+    if (length < 10 or offset > data.len or length > data.len - offset) {
+        return error.BadGsub;
+    }
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = options.assume_validated,
+    };
+    const major = try readU16(table, 0);
+    if (major != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return try allocator.alloc(u16, 0);
+
+    var feature_indices = std.ArrayList(FeatureSelection).empty;
+    defer feature_indices.deinit(allocator);
+    const script_list_offset = try checkedRequiredScriptListOffset(table);
+    const script_count = try readU16(table, script_list_offset);
+    const script_offset = try findScriptOffset(
+        table,
+        script_list_offset,
+        script_count,
+        @intFromEnum(options.script_tag),
+    ) orelse try findScriptOffset(
+        table,
+        script_list_offset,
+        script_count,
+        @intFromEnum(unicode.OpenTypeScriptTag.dflt),
+    ) orelse 0;
+    if (script_offset != 0) {
+        try collectScriptFeatures(
+            table,
+            script_offset,
+            options.language_tag,
+            &feature_indices,
+            allocator,
+        );
+    }
+    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
+    const feature_count = try readU16(table, feature_list_offset);
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+    return selectedFeatureLookupsFromPlanOwned(
+        table,
+        feature_tag,
+        feature_indices.items,
+        feature_list_offset,
+        feature_count,
+        lookup_count,
+        allocator,
+        options,
+    );
+}
+
+/// Apply a preselected lookup list to sources carrying `source_feature`.
+///
+/// Source metadata is already stable across GSUB cardinality changes. Keeping
+/// range assignment outside this function lets callers reuse one selection for
+/// every distinct feature value without widening the ordinary lookup options.
+pub fn applySelectedSourceFeatureWithOptions(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    selected_lookups: []const u16,
+    source_feature: u32,
+    feature_value: u32,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    if (selected_lookups.len == 0 or feature_value == 0) return;
+    if (length < 10 or offset > data.len or length > data.len - offset) {
+        return error.BadGsub;
+    }
+    var scoped_options = options;
+    scoped_options.selected_lookups = selected_lookups;
+    scoped_options.active_source_feature = source_feature;
+    scoped_options.active_feature_value = feature_value;
+    try validateShapingMetadata(scoped_options, glyphs.items.len);
+    var mutation_generation: usize = 0;
+    const shaping_options = optionsWithRunDigestGeneration(
+        scoped_options,
+        &mutation_generation,
+    );
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = shaping_options.assume_validated,
+    };
+    if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return;
+    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_count = try readU16(table, lookup_list_offset);
+    var run_digest_cache = RunDigestCache.init();
+    try applyLookupIndices(
+        table,
+        lookup_list_offset,
+        lookup_count,
+        selected_lookups,
+        glyphs,
+        allocator,
+        shaping_options,
+        &run_digest_cache,
+    );
+}
+
+test "GSUB ranged feature helper selects and applies only assigned sources" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 80;
+    writeCachedSingleFeatureGsubTest(&bytes);
+
+    const lookups = try selectedFeatureLookupIndicesForOptions(
+        &bytes,
+        0,
+        bytes.len,
+        unicode.tag("liga"),
+        allocator,
+        .{ .script_tag = .dflt },
+    );
+    defer allocator.free(lookups);
+    try std.testing.expectEqualSlices(u16, &.{0}, lookups);
+
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 10, 10, 10 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+    var clusters = std.ArrayList(usize).empty;
+    defer clusters.deinit(allocator);
+    try clusters.appendSlice(allocator, &.{ 0, 1, 2 });
+    const source_features = [_]u32{ unicode.tag("liga"), 0, unicode.tag("liga") };
+
+    try applySelectedSourceFeatureWithOptions(
+        &bytes,
+        0,
+        bytes.len,
+        lookups,
+        unicode.tag("liga"),
+        1,
+        &glyphs,
+        allocator,
+        .{
+            .script_tag = .dflt,
+            .glyph_source_indices = &sources,
+            .glyph_cluster_indices = &clusters,
+            .source_features = &source_features,
+        },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 11, 10, 11 }, glyphs.items);
+}
+
 fn canFallbackFromBadGsubSelection(table: Table) GsubError!bool {
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);

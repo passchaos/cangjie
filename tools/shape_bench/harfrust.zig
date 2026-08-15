@@ -184,6 +184,23 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
         try args.append(allocator, "--features");
         try args.append(allocator, feature_text);
     }
+    for (options.featureRanges()) |range| {
+        var tag_buf: [4]u8 = undefined;
+        options_mod.writeFeatureTag(&tag_buf, range.tag);
+        const feature_text = try std.fmt.allocPrint(
+            allocator,
+            "{s}[{d}:{d}]={d}",
+            .{
+                tag_buf[0..],
+                range.byte_start,
+                range.byte_end,
+                range.value,
+            },
+        );
+        try owned_args.append(allocator, feature_text);
+        try args.append(allocator, "--features");
+        try args.append(allocator, feature_text);
+    }
 
     const result = std.process.run(allocator, io, .{
         .argv = args.items,

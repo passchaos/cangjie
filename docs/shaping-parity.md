@@ -1591,17 +1591,22 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   the final F2Dot14-normalized fvar/avar location. The five retained checksums
   are `56299d01d22a7578`, `cf20e51869c39c0a`, `ba96f0ea76f18d3b`,
   `1128dc6c96d5b0a2`, and `cd0b59b81bd63b62`.
-- A portable OpenType AOTS audit now passes 252/252 GSUB/GPOS rows whose
-  `test` feature applies to the complete input, against HarfBuzz. Four focused
-  rows are permanent dual-reference gates: PairPos format 1 consumes the
+- A portable OpenType AOTS audit now passes all 255 supported GSUB/GPOS rows
+  against HarfBuzz. Seven focused rows are permanent dual-reference gates:
+  PairPos format 1 consumes the
   second glyph only when `ValueFormat2` is present; ContextPos format 1 advances
   to the end of its matched input rather than blindly skipping or overlapping;
   and SingleSubst format 1 can use modulo-16-bit IDs above `maxp.numGlyphs` as
   intermediate lookup states before a later lookup maps them back. The final
-  post-GSUB run is still checked against `maxp` before GPOS and metrics. Three
-  AlternateSubst rows that require per-character feature ranges are outside the
-  current global `FeatureOverride` API and were not counted in the 252-row
-  result.
+  post-GSUB run is still checked against `maxp` before GPOS and metrics. The
+  three AlternateSubst rows now use
+  `TextShaper.shapeUtf8WithGsubFeatureRanges` and public UTF-8 byte-scoped
+  `GsubFeatureRange` values, including disabled spans, one-based alternate
+  values, lookup-flag skipping, and overlapping declarations where the later
+  value wins. The dedicated API keeps rare range data out of `ShapeOptions`
+  and its ordinary cache identity. Ranges gate only lookup candidates;
+  contextual lookups still see the complete surrounding glyph stream,
+  matching HarfBuzz feature masks.
 - All twelve Unicode text-rendering `HVAR-{1,2}.tests` rows pass both
   references at `wght=0,200,400,600,800,1000`. `TestHVAROne.otf` exercises
   mapped CFF advance-width deltas across `ABC`; its six checksums are

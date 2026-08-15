@@ -2,6 +2,7 @@ const std = @import("std");
 const cangjie = @import("cangjie");
 
 const max_feature_overrides = 16;
+const max_feature_ranges = 32;
 const max_variation_coords = 32;
 pub const default_harfrust_bin = "hr-shape";
 
@@ -228,6 +229,8 @@ pub const Options = struct {
     remove_default_ignorables: bool = false,
     feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
     feature_override_count: usize = 0,
+    feature_range_buf: [max_feature_ranges]cangjie.GsubFeatureRange = undefined,
+    feature_range_count: usize = 0,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
     variation_coord_count: usize = 0,
     variation_design_coord_buf: [max_variation_coords]cangjie.VariationCoordinate = undefined,
@@ -245,6 +248,10 @@ pub const Options = struct {
 
     pub fn featureOverrides(self: *const Options) []const cangjie.FeatureOverride {
         return self.feature_override_buf[0..self.feature_override_count];
+    }
+
+    pub fn featureRanges(self: *const Options) []const cangjie.GsubFeatureRange {
+        return self.feature_range_buf[0..self.feature_range_count];
     }
 
     pub fn featureOverrideCount(self: Options) usize {
@@ -443,6 +450,10 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             try appendFeatureOverride(&options, args[i], 0);
+        } else if (std.mem.eql(u8, arg, "--feature-range")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            try appendFeatureRange(&options, args[i]);
         } else if (std.mem.eql(u8, arg, "--variation") or std.mem.eql(u8, arg, "--variations")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -575,6 +586,30 @@ fn appendFeatureOverride(options: *Options, text: []const u8, default_value: u32
     options.feature_override_count += 1;
 }
 
+fn appendFeatureRange(options: *Options, text: []const u8) !void {
+    if (options.feature_range_count >= options.feature_range_buf.len) {
+        return error.InvalidArguments;
+    }
+    const equals = std.mem.indexOfScalar(u8, text, '=') orelse
+        return error.InvalidArguments;
+    const colon = std.mem.indexOfScalarPos(u8, text, equals + 1, ':') orelse
+        return error.InvalidArguments;
+    const second_colon = std.mem.indexOfScalarPos(u8, text, colon + 1, ':') orelse
+        return error.InvalidArguments;
+    if (equals != 4 or colon == equals + 1 or second_colon == colon + 1 or
+        second_colon + 1 >= text.len)
+    {
+        return error.InvalidArguments;
+    }
+    options.feature_range_buf[options.feature_range_count] = .{
+        .tag = runtimeOpenTypeTag(text[0..4]),
+        .value = try std.fmt.parseInt(u32, text[equals + 1 .. colon], 10),
+        .byte_start = try std.fmt.parseInt(usize, text[colon + 1 .. second_colon], 10),
+        .byte_end = try std.fmt.parseInt(usize, text[second_colon + 1 ..], 10),
+    };
+    options.feature_range_count += 1;
+}
+
 fn runtimeOpenTypeTag(bytes: []const u8) u32 {
     return (@as(u32, bytes[0]) << 24) |
         (@as(u32, bytes[1]) << 16) |
@@ -704,6 +739,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --unsafe-to-concat           produce unsafe-to-concat glyph flags
         \\  --enable-feature TAG         enable one OpenType feature tag for Cangjie
         \\  --disable-feature TAG        disable one OpenType feature tag for Cangjie
+        \\  --feature-range TAG=V:S:E    set a GSUB value for UTF-8 bytes [S,E)
         \\  --variation CSV              comma-separated normalized coordinates or tag=value design coordinates
         \\  --not-found-variation-selector-glyph GLYPH
         \\                               make unsupported variation selectors visible as a zero-advance synthetic glyph

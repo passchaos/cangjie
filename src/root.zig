@@ -58,6 +58,7 @@ pub const LineBreakIterator = @import("unicode.zig").LineBreakIterator;
 pub const line_break_unicode_version = @import("unicode.zig").line_break_unicode_version;
 pub const OverflowMode = @import("core.zig").OverflowMode;
 pub const FeatureOverride = @import("unicode.zig").FeatureOverride;
+pub const GsubFeatureRange = @import("unicode.zig").GsubFeatureRange;
 pub const ParagraphStyle = @import("core.zig").ParagraphStyle;
 pub const StyleSpan = @import("core.zig").StyleSpan;
 pub const TextDecoration = @import("core.zig").TextDecoration;
@@ -299,7 +300,7 @@ pub const WritingMode = @import("layout.zig").WritingMode;
 pub const TextPosition = @import("layout.zig").TextPosition;
 pub const TextRect = @import("layout.zig").TextRect;
 pub const TextSelectionGeometry = @import("render_bridge.zig").TextSelectionGeometry;
-pub const TextShaper = @import("layout.zig").TextShaper;
+pub const TextShaper = @import("shaping/text_shaper.zig").TextShaper;
 pub const buildBidiMap = @import("unicode.zig").buildBidiMap;
 pub const buildDebugOverlays = @import("debug.zig").buildDebugOverlays;
 pub const buildGlyphDrawList = @import("render_bridge.zig").buildGlyphDrawList;
@@ -9540,6 +9541,110 @@ test "applies GSUB alternate substitution during shaping" {
 
     try std.testing.expectEqual(@as(usize, 1), run.glyphs.len);
     try std.testing.expectEqual(@as(GlyphId, 3), run.glyphs[0].glyph_id);
+}
+
+test "applies GSUB feature values by UTF-8 source byte range" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildScriptFeatureGsubTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const enable_alternate = [_]GsubFeatureRange{.{
+        .tag = openTypeTag("sups"),
+        .value = 1,
+        .byte_start = 1,
+        .byte_end = 3,
+    }};
+    const run = try TextShaper.shapeUtf8WithGsubFeatureRanges(
+        &font,
+        &layout_buffer,
+        "AAA",
+        20,
+        &enable_alternate,
+        .{},
+    );
+    try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &.{ 1, 2, 2 },
+        &.{
+            run.glyphs[0].glyph_id,
+            run.glyphs[1].glyph_id,
+            run.glyphs[2].glyph_id,
+        },
+    );
+
+    const overlapping = [_]GsubFeatureRange{
+        .{ .tag = openTypeTag("sups"), .value = 1, .byte_start = 0, .byte_end = 3 },
+        .{ .tag = openTypeTag("sups"), .value = 0, .byte_start = 1, .byte_end = 2 },
+    };
+    const later_wins = try TextShaper.shapeUtf8WithGsubFeatureRanges(
+        &font,
+        &layout_buffer,
+        "AAA",
+        20,
+        &overlapping,
+        .{},
+    );
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &.{ 2, 1, 2 },
+        &.{
+            later_wins.glyphs[0].glyph_id,
+            later_wins.glyphs[1].glyph_id,
+            later_wins.glyphs[2].glyph_id,
+        },
+    );
+}
+
+test "rejects invalid or stage-specific GSUB feature ranges" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("test_font.zig");
+
+    const bytes = try test_font.buildAlternateGsubTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    try std.testing.expectError(
+        error.InvalidFeatureRange,
+        TextShaper.shapeUtf8WithGsubFeatureRanges(
+            &font,
+            &layout_buffer,
+            "\u{00e9}",
+            20,
+            &.{.{
+                .tag = openTypeTag("test"),
+                .value = 1,
+                .byte_start = 1,
+                .byte_end = 2,
+            }},
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.UnsupportedFeatureRanges,
+        TextShaper.shapeUtf8WithGsubFeatureRanges(
+            &font,
+            &layout_buffer,
+            "A",
+            20,
+            &.{.{
+                .tag = openTypeTag("rand"),
+                .value = 1,
+                .byte_start = 0,
+                .byte_end = 1,
+            }},
+            .{},
+        ),
+    );
 }
 
 test "applies GSUB extension substitution during shaping" {

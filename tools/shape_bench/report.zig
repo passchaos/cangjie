@@ -23,6 +23,7 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         \\warmup={d}
         \\samples={d}
         \\feature_overrides={d}
+        \\feature_ranges={d}
         \\variation_coords={d}
         \\use_caches={any}
         \\use_shaped_cache={any}
@@ -46,6 +47,7 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         options.warmup,
         options.samples,
         options.featureOverrideCount(),
+        options.featureRanges().len,
         options.variationCoordCount(),
         options.use_caches,
         options.use_shaped_cache,
@@ -103,6 +105,20 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
             tag_buf[0..],
             feature.effectiveValue(),
             feature.enabled,
+        });
+    }
+    for (options.featureRanges(), 0..) |range, index| {
+        var tag_buf: [4]u8 = undefined;
+        options_mod.writeFeatureTag(&tag_buf, range.tag);
+        std.debug.print(
+            \\feature_range index={d} tag={s} value={d} start={d} end={d}
+            \\
+        , .{
+            index,
+            tag_buf[0..],
+            range.value,
+            range.byte_start,
+            range.byte_end,
         });
     }
     std.debug.print(

@@ -316,13 +316,25 @@ fn freeLineSummaries(allocator: std.mem.Allocator, summaries: []const runner.Ben
 
 fn harfBuzzFeatures(allocator: std.mem.Allocator, options: options_mod.Options) ![]hb.hb_feature_t {
     const overrides = options.featureOverrides();
-    const features = try allocator.alloc(hb.hb_feature_t, overrides.len);
-    for (overrides, features) |feature, *hb_feature| {
+    const ranges = options.featureRanges();
+    const features = try allocator.alloc(
+        hb.hb_feature_t,
+        overrides.len + ranges.len,
+    );
+    for (overrides, features[0..overrides.len]) |feature, *hb_feature| {
         hb_feature.* = .{
             .tag = feature.tag,
             .value = feature.effectiveValue(),
             .start = 0,
             .end = std.math.maxInt(c_uint),
+        };
+    }
+    for (ranges, features[overrides.len..]) |range, *hb_feature| {
+        hb_feature.* = .{
+            .tag = range.tag,
+            .value = range.value,
+            .start = @intCast(range.byte_start),
+            .end = @intCast(range.byte_end),
         };
     }
     return features;

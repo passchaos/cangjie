@@ -2958,6 +2958,54 @@ pub const Font = struct {
         return try gsub_mod.selectedLookupIndicesForOptions(self.data, gsub.offset, gsub.length, allocator, gsub_options);
     }
 
+    pub fn selectGsubFeatureLookupsAfterProof(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        feature_tag: u32,
+        options: gsub_mod.LookupOptions,
+        gdef_metadata: GdefLookupMetadata,
+    ) FontError![]u16 {
+        const gsub = self.gsub orelse return try allocator.alloc(u16, 0);
+        var gsub_options = options;
+        gsub_options.assume_validated = true;
+        gdef_metadata.applyToGsubOptions(&gsub_options);
+        return try gsub_mod.selectedFeatureLookupIndicesForOptions(
+            self.data,
+            gsub.offset,
+            gsub.length,
+            feature_tag,
+            allocator,
+            gsub_options,
+        );
+    }
+
+    pub fn applyGsubSelectedSourceFeatureAfterProof(
+        self: *const Font,
+        selected_lookups: []const u16,
+        source_feature: u32,
+        feature_value: u32,
+        glyphs: *std.ArrayList(glyph_mod.GlyphId),
+        allocator: std.mem.Allocator,
+        options: gsub_mod.LookupOptions,
+        gdef_metadata: GdefLookupMetadata,
+    ) FontError!void {
+        const gsub = self.gsub orelse return;
+        var gsub_options = options;
+        gsub_options.assume_validated = true;
+        gdef_metadata.applyToGsubOptions(&gsub_options);
+        try gsub_mod.applySelectedSourceFeatureWithOptions(
+            self.data,
+            gsub.offset,
+            gsub.length,
+            selected_lookups,
+            source_feature,
+            feature_value,
+            glyphs,
+            allocator,
+            gsub_options,
+        );
+    }
+
     pub fn hasGsubFeatureForShaping(self: *const Font, feature_tag: u32) FontError!bool {
         const gsub = self.gsub orelse return false;
         try validateSfntTableChecksum(self.data, gsub);

@@ -15168,40 +15168,6 @@ test "CPAL palette entry labels public API revalidates borrowed names" {
     try std.testing.expectError(error.InvalidName, font.paletteEntryLabels(allocator));
 }
 
-test "COLR palette indices must be declared by CPAL" {
-    const allocator = std.testing.allocator;
-
-    var colr_v0_with_cpal: [42]u8 = .{0} ** 42;
-    writeU16Test(&colr_v0_with_cpal, 0, 0); // COLR version 0.
-    writeU16Test(&colr_v0_with_cpal, 2, 1); // one BaseGlyphRecord.
-    writeU32Test(&colr_v0_with_cpal, 4, 14);
-    writeU32Test(&colr_v0_with_cpal, 8, 20);
-    writeU16Test(&colr_v0_with_cpal, 12, 1);
-    writeU16Test(&colr_v0_with_cpal, 14, 1); // base glyph.
-    writeU16Test(&colr_v0_with_cpal, 16, 0);
-    writeU16Test(&colr_v0_with_cpal, 18, 1);
-    writeU16Test(&colr_v0_with_cpal, 20, 1); // layer glyph.
-    writeU16Test(&colr_v0_with_cpal, 22, 1); // Invalid: CPAL only declares color index 0.
-    writeSingleEntryCpalTest(&colr_v0_with_cpal, 24);
-
-    const colr_v0_font = colrCpalOnlyFont(&colr_v0_with_cpal, 24);
-    try std.testing.expectError(error.BadSfnt, colr_v0_font.colorLayers(allocator, 1));
-
-    var colr_v1_with_cpal: [67]u8 = .{0} ** 67;
-    writeU16Test(&colr_v1_with_cpal, 0, 1); // COLR version 1.
-    writeU32Test(&colr_v1_with_cpal, 14, 34); // BaseGlyphListOffset.
-    writeU32Test(&colr_v1_with_cpal, 34, 1);
-    writeU16Test(&colr_v1_with_cpal, 38, 1);
-    writeU32Test(&colr_v1_with_cpal, 40, 10); // PaintSolid at byte 44.
-    colr_v1_with_cpal[44] = 2;
-    writeU16Test(&colr_v1_with_cpal, 45, 1); // Invalid: CPAL only declares color index 0.
-    writeF2Dot14Test(&colr_v1_with_cpal, 47, 1.0);
-    writeSingleEntryCpalTest(&colr_v1_with_cpal, 49);
-
-    const colr_v1_font = colrCpalOnlyFont(&colr_v1_with_cpal, 49);
-    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaint(1));
-}
-
 test "COLR public APIs revalidate borrowed glyph references" {
     const allocator = std.testing.allocator;
 
@@ -15350,31 +15316,6 @@ test "COLR public APIs revalidate borrowed palette references" {
     // be hidden merely because the requested layer still names a valid color.
     writeU16Test(&colr_v1_layers_with_cpal, 52, 1);
     try std.testing.expectError(error.BadSfnt, colr_v1_layers_font.colorPaintLayer(0));
-}
-
-test "COLR foreground palette sentinel is valid in v0 and v1" {
-    var v0: [18]u8 = .{0} ** 18;
-    writeU16Test(&v0, 0, 0);
-    writeU16Test(&v0, 2, 0);
-    writeU32Test(&v0, 4, 14);
-    writeU32Test(&v0, 8, 14);
-    writeU16Test(&v0, 12, 1);
-    writeU16Test(&v0, 14, 1);
-    writeU16Test(&v0, 16, 0xffff);
-    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = v0.len };
-    try validateColrPaletteBounds(&v0, colr, null);
-
-    var v1: [49]u8 = .{0} ** 49;
-    writeU16Test(&v1, 0, 1);
-    writeU32Test(&v1, 14, 34);
-    writeU32Test(&v1, 34, 1);
-    writeU16Test(&v1, 38, 1);
-    writeU32Test(&v1, 40, 10);
-    v1[44] = 2;
-    writeU16Test(&v1, 45, 0xffff);
-    writeF2Dot14Test(&v1, 47, 1);
-    const colr_v1 = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = v1.len };
-    try validateColrPaletteBounds(&v1, colr_v1, null);
 }
 
 test "TTC v2 DSIG descriptor validates range and null consistency" {

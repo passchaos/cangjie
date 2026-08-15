@@ -123,6 +123,8 @@ test "palette validation covers base and layer Paint roots" {
 
     writeU16(&bytes, 58, 0xffff);
     try validate(&bytes, table, 1);
+    try validateIndex(0xffff, null);
+    try std.testing.expectError(error.BadSfnt, validateIndex(0, null));
 }
 
 test "palette validation follows ColorLine and nested Paint graphs" {

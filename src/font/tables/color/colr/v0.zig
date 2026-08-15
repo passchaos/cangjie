@@ -320,6 +320,11 @@ test "validation checks ordering ownership glyphs and palette entries" {
     );
     writeU16(&bad_palette, 28, 0xffff);
     _ = try validate(&bad_palette, table, 4, 1);
+    try validatePaletteIndex(0xffff, null);
+    try std.testing.expectError(
+        error.BadSfnt,
+        validatePaletteIndex(0, null),
+    );
 }
 
 test "validated layout reads the selected glyph layers" {

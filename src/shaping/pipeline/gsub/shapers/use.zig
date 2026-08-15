@@ -9,18 +9,24 @@ const GlyphId = @import("../../../../glyph.zig").GlyphId;
 const gsub = @import("../../../../gsub.zig");
 const ligature_provenance =
     @import("../../../../ligature_provenance.zig");
+const cache = @import("../../../context/cache/root.zig");
 const use_shaper = @import("../../../../use_shaper.zig");
 const executor = @import("../executor.zig");
 const features = @import("../features.zig");
 const pipeline_types = @import("../../types.zig");
+const source_pipeline = @import("../../source/root.zig");
 const unicode = @import("../../../../unicode.zig");
 const arabic_joining = @import("arabic/joining.zig");
 
 pub const supports = use_shaper.shouldShape;
+pub const insertVowelConstraintDottedCircles =
+    use_shaper.insertVowelConstraintDottedCircles;
+pub const decomposeCanonicalSources = use_shaper.decomposeCanonicalSources;
 
 pub const Input = struct {
     allocator: std.mem.Allocator,
     font: *const Font,
+    glyph_index_cache: ?*cache.GlyphIndexCache,
     context: executor.Context,
     table_proved: bool,
     glyph_ids: *std.ArrayList(GlyphId),
@@ -37,7 +43,6 @@ pub const Input = struct {
     base_gsub_options: gsub.LookupOptions,
     lookup_options: pipeline_types.LookupOptions,
     gdef_metadata: GdefLookupMetadata,
-    dotted_circle_glyph: GlyphId,
 };
 
 pub fn run(input: Input) !void {
@@ -97,6 +102,11 @@ pub fn run(input: Input) !void {
         input.gdef_metadata,
     );
     if (use_shaper.hasBrokenSyllable(input.source_syllables.items)) {
+        const dotted_circle_glyph = try source_pipeline.glyphIndex(
+            input.font,
+            input.glyph_index_cache,
+            0x25cc,
+        );
         try use_shaper.insertDottedCirclesForBrokenSyllables(
             input.allocator,
             input.glyph_ids,
@@ -108,7 +118,7 @@ pub fn run(input: Input) !void {
             input.source_rphf_substituted.items,
             input.source_pref_substituted.items,
             input.codepoints,
-            input.dotted_circle_glyph,
+            dotted_circle_glyph,
         );
     }
     use_shaper.reorderGlyphs(

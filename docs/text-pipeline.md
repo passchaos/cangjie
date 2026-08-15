@@ -183,6 +183,22 @@ Shared GSUB infrastructure is grouped under `src/shaping/pipeline/gsub/`:
 Script shapers now share this small execution surface instead of duplicating
 cache/proof branches inside the main segment function.
 
+Script-specific GSUB orchestration is grouped under
+`src/shaping/pipeline/gsub/shapers/`:
+
+- `arabic/` separates Unicode joining-mask construction from Arabic, Syriac,
+  Adlam, and Mongolian feature-stage ordering.
+- `myanmar.zig`, `khmer.zig`, and `use.zig` own their source sidecars,
+  dotted-circle insertion, stage observations, and post-GSUB reordering.
+- `generic.zig` owns Hangul Jamo setup, AAT substitution selection, cached
+  generic GSUB execution, and script-position features.
+- `indic.zig` wraps generic execution with explicit source preparation and
+  post-substitution Indic stages.
+
+The shared executor now accepts a minimal allocator/lookup-cache context rather
+than an implicit layout buffer. Script shapers therefore do not import
+paragraph, line, or final-output state.
+
 Final positioning is grouped under `src/shaping/pipeline/positioning/`:
 
 - `collect.zig` owns GPOS option construction, cached lookup selection, table

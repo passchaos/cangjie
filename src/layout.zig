@@ -6,7 +6,6 @@ const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const gsub = @import("gsub.zig");
-const indic = @import("indic.zig");
 const layout_cache = @import("shaping/context/cache/root.zig");
 const layout_scratch = @import("shaping/context/scratch.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
@@ -19,6 +18,8 @@ const gsub_features = gsub_pipeline.features;
 const gsub_fraction = gsub_pipeline.fraction;
 const gsub_hangul = gsub_pipeline.hangul;
 const gsub_arabic = gsub_pipeline.shapers.arabic;
+const gsub_generic = gsub_pipeline.shapers.generic;
+const gsub_indic = gsub_pipeline.shapers.indic;
 const gsub_khmer = gsub_pipeline.shapers.khmer;
 const gsub_myanmar = gsub_pipeline.shapers.myanmar;
 const gsub_use = gsub_pipeline.shapers.use;
@@ -2180,11 +2181,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .dotted_circle_glyph = dotted_circle_glyph,
         });
     } else if (use_shape) {
-        const dotted_circle_glyph =
-            try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
         try gsub_use.run(.{
             .allocator = buffer.allocator,
             .font = font,
+            .glyph_index_cache = glyph_index_cache,
             .context = gsub_context,
             .table_proved = gsub_after_proof,
             .glyph_ids = glyph_ids,
@@ -2201,196 +2201,51 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .base_gsub_options = gsub_options,
             .lookup_options = lookup_options,
             .gdef_metadata = gdef_metadata.*,
-            .dotted_circle_glyph = dotted_circle_glyph,
         });
     } else {
-        const indic_shape = indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
-        if (indic_shape) {
-            const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-            try use_shaper.insertVowelConstraintDottedCircles(
-                buffer.allocator,
-                glyph_ids,
-                codepoints,
-                clusters,
-                source_ends,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                dotted_circle_glyph,
-                true,
-            );
-            try use_shaper.decomposeCanonicalSources(
-                buffer.allocator,
-                font,
-                glyph_ids,
-                codepoints,
-                clusters,
-                source_ends,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                lookup_options.cluster_level orelse .monotone_graphemes,
-            );
-            gsub_options.source_codepoints = codepoints.items;
-            source_boundaries.bindSourceByteStarts(clusters.items);
-        }
-        if (lookup_options.script_tag == .hang and gsub_hangul.hasJamo(codepoints.items)) {
-            try source_features.resize(buffer.allocator, codepoints.items.len);
-            if (gsub_hangul.markSourceFeatures(source_features.items, codepoints.items) and
-                gsub_hangul.featuresCoverAll(source_features.items, codepoints.items))
-            {
-                gsub_hangul.mergeClusters(glyph_cluster_indices.items, glyph_source_indices.items, codepoints.items);
-                var hangul_jamo_feature_overrides_buf: [32]unicode.FeatureOverride = undefined;
-                const hangul_features = gsub_hangul.withJamoFeatures(hangul_jamo_feature_overrides_buf[0..], gsub_options.features) orelse gsub_options.features;
-                var hangul_options = gsub_options;
-                hangul_options.features = hangul_features;
-                if (gsub_after_proof) {
-                    try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, hangul_options, gdef_metadata.*);
-                } else {
-                    try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, hangul_options, gdef_metadata.*);
-                }
-            }
-        }
-        const apply_aat_substitution = font.hasAatSubstitutionForShaping() and
-            (!lookup_options.writing_mode.isVertical() or !font.hasGsubTableForShaping());
-        if (apply_aat_substitution) {
-            try font.applyAatSubstitutionForShaping(glyph_ids, buffer.allocator, gsub_options);
-        } else {
-            const gsub_needs_value_selection = gsub_features.needsValueAwareSelection(
-                font,
-                gsub_options.features,
-                gsub_options.lookup_accelerators,
-                gsub_after_proof,
-            );
-            if (lookup_options.normalized_variation_coords.len == 0 and !gsub_needs_value_selection) if (buffer.lookup_selection_cache) |selection_cache| {
-                gsub_options.selected_lookups = try selection_cache.gsubLookups(font, gsub_options, gdef_metadata.*);
-            };
-            if (gsub_after_proof) {
-                const has_cached_selection = if (gsub_options.selected_lookups) |lookups|
-                    lookups.len != 0
-                else
-                    false;
-                if (has_cached_selection and buffer.lookup_selection_cache != null) {
-                    try gsub_executor.applyGenericAfterTableProof(
-                        font,
-                        gsub_context,
-                        glyph_ids,
-                        gsub_options,
-                        gdef_metadata.*,
-                    );
-                } else {
-                    try font.applyGsubWithOptionsUsingGdefAfterProof(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
-                }
-            } else {
-                try font.applyGsubWithOptionsUsingGdefForShaping(glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
-            }
-            if (gsub_features.scriptPositionApplication(lookup_options.script_position)) |application| {
-                if (gsub_after_proof) {
-                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
-                } else {
-                    try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(&.{application}, glyph_ids, buffer.allocator, gsub_options, gdef_metadata.*);
-                }
-            }
-        }
-        if (indic_shape) {
-            const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-            try indic.insertDottedCirclesForBrokenClusters(
-                buffer.allocator,
-                glyph_ids,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                codepoints.items,
-                dotted_circle_glyph,
-                lookup_options.script_tag,
-            );
-            indic.mergeMalayalamDotRephBrokenCluster(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
-            indic.mergePlaceholderDependentMarks(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
-            indic.mergeTrailingDependentMarks(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
-            indic.mergeKannadaOldSpecTrailingBlwf(glyph_cluster_indices, glyph_source_indices, codepoints.items, lookup_options.script_tag);
-            indic.normalizeOldSpecPostBaseHalantOrder(
-                glyph_ids,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                codepoints.items,
-                lookup_options.script_tag,
-            );
-            indic.normalizeInitialConsonantSyllableOrder(
-                glyph_ids,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                codepoints.items,
-                lookup_options.script_tag,
-            );
-            indic.normalizeOldSpecBengaliRaViramaOrder(
-                glyph_ids,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                codepoints.items,
-                lookup_options.script_tag,
-            );
-
-            try source_features.resize(buffer.allocator, codepoints.items.len);
-            try source_syllables.resize(buffer.allocator, codepoints.items.len);
-            indic.markSourceSyllables(source_syllables.items, codepoints.items, lookup_options.script_tag);
-            try source_pref_substituted.resize(buffer.allocator, codepoints.items.len);
-            @memset(source_pref_substituted.items, false);
-            const has_basic_source_features = indic.markBasicSourceFeatures(source_features.items, codepoints.items, lookup_options.script_tag);
-            gsub_options.source_features = source_features.items;
-            gsub_options.source_syllables = source_syllables.items;
-
-            try gsub.validateScriptShaperRunMetadata(gsub_options, glyph_ids.items.len);
-            // The maximal proof covers the pre-reorder stage too: source
-            // features/syllables and every glyph-parallel sidecar are already
-            // complete here, and all supported GSUB mutations preserve those
-            // contracts. Start the trusted cached-plan sequence immediately
-            // instead of defensively validating this same run twice.
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
-            // Kannada BEFORE_SUB vowels must already be between the main and
-            // below-base consonants when `blwf` evaluates its context. Telugu
-            // performs its related move during final reordering instead.
-            indic.reorderInitialKannadaVowels(
-                glyph_ids,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                codepoints.items,
-                lookup_options.script_tag,
-            );
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
-            try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
-            @memset(glyph_stage_substituted.items, false);
-            var pref_options = gsub_options;
-            pref_options.glyph_stage_substituted = glyph_stage_substituted;
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.prefFeatureApplications(), glyph_ids, pref_options, gdef_metadata.*);
-            indic.recordPrefSubstitutions(
-                glyph_source_indices.items,
-                glyph_stage_substituted.items,
-                source_pref_substituted.items,
-            );
-            glyph_stage_substituted.clearRetainingCapacity();
-            indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
-            indic.reorderPrefGlyphs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, source_pref_substituted.items, codepoints.items, lookup_options.script_tag);
-            _ = indic.markInitialMatraGlyphSources(source_features.items, glyph_source_indices.items, codepoints.items, lookup_options.script_tag);
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
-            indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
-            indic.reorderLogicalRepha(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
-            indic.reorderBeforeSubscriptVowels(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
-            indic.reorderBengaliBelowVowelsAfterBase(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
-            indic.mergeMalayalamOldSpecTrailingViramaClusters(glyph_cluster_indices, glyph_source_indices, ligature_components, codepoints.items, lookup_options.script_tag);
-            indic.reorderGujaratiSplitMatraComponents(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
-        }
+        const indic_shape =
+            gsub_indic.supports(lookup_options.script_tag) and
+            codepoints.items.len != 0;
+        const indic_input = gsub_indic.Input{
+            .allocator = buffer.allocator,
+            .font = font,
+            .glyph_index_cache = glyph_index_cache,
+            .context = gsub_context,
+            .table_proved = gsub_after_proof,
+            .glyph_ids = glyph_ids,
+            .codepoints = codepoints,
+            .clusters = clusters,
+            .source_ends = source_ends,
+            .glyph_source_indices = glyph_source_indices,
+            .glyph_cluster_indices = glyph_cluster_indices,
+            .glyph_substituted = glyph_substituted,
+            .glyph_stage_substituted = glyph_stage_substituted,
+            .ligature_components = ligature_components,
+            .source_features = source_features,
+            .source_syllables = source_syllables,
+            .source_pref_substituted = source_pref_substituted,
+            .source_boundaries = source_boundaries,
+            .options = &gsub_options,
+            .lookup_options = lookup_options,
+            .gdef_metadata = gdef_metadata.*,
+        };
+        if (indic_shape) try gsub_indic.prepare(indic_input);
+        try gsub_generic.run(.{
+            .allocator = buffer.allocator,
+            .font = font,
+            .context = gsub_context,
+            .table_proved = gsub_after_proof,
+            .glyph_ids = glyph_ids,
+            .codepoints = codepoints.items,
+            .glyph_source_indices = glyph_source_indices,
+            .glyph_cluster_indices = glyph_cluster_indices,
+            .source_features = source_features,
+            .ligature_components = ligature_components,
+            .options = &gsub_options,
+            .lookup_options = lookup_options,
+            .gdef_metadata = gdef_metadata.*,
+        });
+        if (indic_shape) try gsub_indic.finish(indic_input);
     }
     if (gsub_fraction.hasRunnable(codepoints.items)) {
         try source_features.resize(buffer.allocator, codepoints.items.len);

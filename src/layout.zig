@@ -2007,6 +2007,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     if (buffer.lookup_selection_cache) |selection_cache| {
         gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
     }
+    const gsub_context = gsub_executor.Context{
+        .allocator = buffer.allocator,
+        .lookup_selection_cache = buffer.lookup_selection_cache,
+    };
     if (lookup_options.beginning_of_text and
         lookup_options.context_before.len == 0 and
         codepoints.items.len != 0 and
@@ -2146,7 +2150,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             // retaining the random semantic bit in the resulting plan.
             try gsub_executor.applyMerged(
                 font,
-                buffer,
+                gsub_context,
                 gsub_after_proof,
                 common_features_buf[0..common_feature_count],
                 glyph_ids,
@@ -2225,12 +2229,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 merged_features_buf[merged_feature_count] = application;
                 merged_feature_count += 1;
             }
-            try gsub_executor.applyMergedAfterRunProof(font, buffer, gsub_after_proof, merged_features_buf[0..merged_feature_count], glyph_ids, joining_options, gdef_metadata.*);
+            try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, merged_features_buf[0..merged_feature_count], glyph_ids, joining_options, gdef_metadata.*);
         }
         var final_features_buf: [24]gsub.FeatureApplication = undefined;
         var final_feature_count: usize = 0;
         if (lookup_options.script_tag == .arab and gsub_features.enabled(unicode.tag("rlig"), lookup_options.features, true)) {
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("rlig"), .auto_zwj = false }}, glyph_ids, joining_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, &.{.{ .tag = unicode.tag("rlig"), .auto_zwj = false }}, glyph_ids, joining_options, gdef_metadata.*);
         }
         if (lookup_options.script_tag == .arab) {
             var arabic_calt_features_buf: [2]gsub.FeatureApplication = undefined;
@@ -2244,7 +2248,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 arabic_calt_features_buf[arabic_calt_feature_count] = application;
                 arabic_calt_feature_count += 1;
             }
-            try gsub_executor.applyMergedAfterRunProof(font, buffer, gsub_after_proof, arabic_calt_features_buf[0..arabic_calt_feature_count], glyph_ids, joining_options, gdef_metadata.*);
+            try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, arabic_calt_features_buf[0..arabic_calt_feature_count], glyph_ids, joining_options, gdef_metadata.*);
         }
         const final_features = [_]gsub.FeatureApplication{
             .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
@@ -2265,7 +2269,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             final_features_buf[final_feature_count..],
             lookup_options.features,
         );
-        try gsub_executor.applyMergedAfterRunProof(font, buffer, gsub_after_proof, final_features_buf[0..final_feature_count], glyph_ids, gsub_options, gdef_metadata.*);
+        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, final_features_buf[0..final_feature_count], glyph_ids, gsub_options, gdef_metadata.*);
     } else if (myanmar_shape) {
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
         myanmar.markSourceSyllables(
@@ -2280,7 +2284,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         // those features before dotted-circle insertion and reordering.
         try gsub_executor.apply(
             font,
-            buffer,
+            gsub_context,
             gsub_after_proof,
             &.{ .{ .tag = unicode.tag("locl") }, .{ .tag = unicode.tag("ccmp") } },
             glyph_ids,
@@ -2310,10 +2314,10 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             codepoints.items,
         );
         try gsub.validateScriptShaperRunMetadata(myanmar_options, glyph_ids.items.len);
-        try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.rphf), glyph_ids, myanmar_options, gdef_metadata.*);
-        try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.pref), glyph_ids, myanmar_options, gdef_metadata.*);
-        try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.blwf), glyph_ids, myanmar_options, gdef_metadata.*);
-        try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, myanmar.featureApplications(.pstf), glyph_ids, myanmar_options, gdef_metadata.*);
+        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, myanmar.featureApplications(.rphf), glyph_ids, myanmar_options, gdef_metadata.*);
+        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, myanmar.featureApplications(.pref), glyph_ids, myanmar_options, gdef_metadata.*);
+        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, myanmar.featureApplications(.blwf), glyph_ids, myanmar_options, gdef_metadata.*);
+        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, myanmar.featureApplications(.pstf), glyph_ids, myanmar_options, gdef_metadata.*);
 
         var myanmar_final_buf: [20]gsub.FeatureApplication = undefined;
         var myanmar_final_count: usize = 0;
@@ -2342,7 +2346,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         // LookupList index; applying two batches changes authored lookup order.
         try gsub_executor.applyMergedAfterRunProof(
             font,
-            buffer,
+            gsub_context,
             gsub_after_proof,
             myanmar_final_buf[0..myanmar_final_count],
             glyph_ids,
@@ -2394,8 +2398,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         );
         khmer.assignJoinerClusterOwners(glyph_cluster_indices, glyph_source_indices, codepoints.items);
         try gsub.validateScriptShaperRunMetadata(khmer_options, glyph_ids.items.len);
-        try gsub_executor.applyMergedAfterRunProof(font, buffer, gsub_after_proof, khmer.featureApplications(.basic), glyph_ids, khmer_options, gdef_metadata.*);
-        try gsub_executor.applyMergedAfterRunProof(font, buffer, gsub_after_proof, khmer.featureApplications(.final), glyph_ids, khmer_options, gdef_metadata.*);
+        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, khmer.featureApplications(.basic), glyph_ids, khmer_options, gdef_metadata.*);
+        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, khmer.featureApplications(.final), glyph_ids, khmer_options, gdef_metadata.*);
     } else if (use_shape) {
         try source_features.resize(buffer.allocator, codepoints.items.len);
         try source_syllables.resize(buffer.allocator, codepoints.items.len);
@@ -2435,14 +2439,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 direction_features_buf[direction_feature_count] = application;
                 direction_feature_count += 1;
             }
-            try gsub_executor.applyMerged(font, buffer, gsub_after_proof, direction_features_buf[0..direction_feature_count], glyph_ids, use_options, gdef_metadata.*);
+            try gsub_executor.applyMerged(font, gsub_context, gsub_after_proof, direction_features_buf[0..direction_feature_count], glyph_ids, use_options, gdef_metadata.*);
         }
-        try gsub_executor.apply(font, buffer, gsub_after_proof, use_shaper.defaultPreprocessingFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try gsub_executor.apply(font, gsub_context, gsub_after_proof, use_shaper.defaultPreprocessingFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
         @memset(glyph_stage_substituted.items, false);
         var rphf_options = use_options;
         rphf_options.glyph_stage_substituted = glyph_stage_substituted;
-        try gsub_executor.apply(font, buffer, gsub_after_proof, use_shaper.rphfFeatureApplications(), glyph_ids, rphf_options, gdef_metadata.*);
+        try gsub_executor.apply(font, gsub_context, gsub_after_proof, use_shaper.rphfFeatureApplications(), glyph_ids, rphf_options, gdef_metadata.*);
         use_shaper.recordRphfSubstitutions(
             glyph_source_indices.items,
             glyph_stage_substituted.items,
@@ -2455,7 +2459,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         @memset(glyph_stage_substituted.items, false);
         var pref_options = use_options;
         pref_options.glyph_stage_substituted = glyph_stage_substituted;
-        try gsub_executor.apply(font, buffer, gsub_after_proof, use_shaper.prefFeatureApplications(), glyph_ids, pref_options, gdef_metadata.*);
+        try gsub_executor.apply(font, gsub_context, gsub_after_proof, use_shaper.prefFeatureApplications(), glyph_ids, pref_options, gdef_metadata.*);
         use_shaper.recordPrefSubstitutions(
             glyph_source_indices.items,
             glyph_stage_substituted.items,
@@ -2468,7 +2472,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         // Prove the current maximal USE metadata contract once after stage-only
         // scratch is detached, then reuse it through all remaining stages.
         try gsub.validateScriptShaperRunMetadata(use_options, glyph_ids.items.len);
-        try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
         if (use_shaper.hasBrokenSyllable(source_syllables.items)) {
             const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
             try use_shaper.insertDottedCirclesForBrokenSyllables(
@@ -2496,9 +2500,9 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             source_pref_substituted.items,
             codepoints.items,
         );
-        try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, use_shaper.topographicalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try gsub_executor.applyMergedAfterRunProof(font, buffer, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try gsub_executor.applyMergedAfterRunProof(font, buffer, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, use_shaper.topographicalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
+        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
     } else {
         const indic_shape = indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
         if (indic_shape) {
@@ -2571,7 +2575,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 if (has_cached_selection and buffer.lookup_selection_cache != null) {
                     try gsub_executor.applyGenericAfterTableProof(
                         font,
-                        buffer,
+                        gsub_context,
                         glyph_ids,
                         gsub_options,
                         gdef_metadata.*,
@@ -2650,7 +2654,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             // complete here, and all supported GSUB mutations preserve those
             // contracts. Start the trusted cached-plan sequence immediately
             // instead of defensively validating this same run twice.
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.preReorderFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             // Kannada BEFORE_SUB vowels must already be between the main and
             // below-base consonants when `blwf` evaluates its context. Telugu
             // performs its related move during final reordering instead.
@@ -2663,12 +2667,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 codepoints.items,
                 lookup_options.script_tag,
             );
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.basicFeatureApplications(has_basic_source_features), glyph_ids, gsub_options, gdef_metadata.*);
             try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
             @memset(glyph_stage_substituted.items, false);
             var pref_options = gsub_options;
             pref_options.glyph_stage_substituted = glyph_stage_substituted;
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, indic.prefFeatureApplications(), glyph_ids, pref_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.prefFeatureApplications(), glyph_ids, pref_options, gdef_metadata.*);
             indic.recordPrefSubstitutions(
                 glyph_source_indices.items,
                 glyph_stage_substituted.items,
@@ -2678,12 +2682,12 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             indic.reorderPreBaseMatras(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
             indic.reorderPrefGlyphs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, source_pref_substituted.items, codepoints.items, lookup_options.script_tag);
             _ = indic.markInitialMatraGlyphSources(source_features.items, glyph_source_indices.items, codepoints.items, lookup_options.script_tag);
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.preRephFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.reorderRephs(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
             indic.reorderLogicalRepha(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
             indic.reorderBeforeSubscriptVowels(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
             indic.reorderBengaliBelowVowelsAfterBase(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, indic.finalFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
             indic.mergeMalayalamOldSpecTrailingViramaClusters(glyph_cluster_indices, glyph_source_indices, ligature_components, codepoints.items, lookup_options.script_tag);
             indic.reorderGujaratiSplitMatraComponents(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints.items, lookup_options.script_tag);
         }
@@ -2693,13 +2697,13 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         var fraction_options = gsub_options;
         fraction_options.source_features = source_features.items;
         if (gsub_fraction.mark(source_features.items, codepoints.items, .numerator)) {
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("numr"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, &.{.{ .tag = unicode.tag("numr"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
         }
         if (gsub_fraction.mark(source_features.items, codepoints.items, .fraction)) {
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("frac"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, &.{.{ .tag = unicode.tag("frac"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
         }
         if (gsub_fraction.mark(source_features.items, codepoints.items, .denominator)) {
-            try gsub_executor.applyAfterRunProof(font, buffer, gsub_after_proof, &.{.{ .tag = unicode.tag("dnom"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
+            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, &.{.{ .tag = unicode.tag("dnom"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
         }
     }
 

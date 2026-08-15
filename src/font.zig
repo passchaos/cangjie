@@ -43,6 +43,7 @@ const colr_bases = colr_v1_mod.bases;
 const colr_glyphs = colr_v1_mod.validation.glyphs;
 const colr_layers = colr_v1_mod.layers;
 const colr_palette = colr_v1_mod.validation.palette;
+const colr_read = colr_v1_mod.read;
 const colr_variation = colr_v1_mod.variation;
 const cpal_mod = color_tables.cpal;
 const svg_mod = @import("font/tables/svg/root.zig");
@@ -10582,10 +10583,7 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
 const ColrVariationContext = colr_variation.Context;
 const no_colr_variation_index = colr_variation.no_index;
 
-const ColorPaintReadContext = struct {
-    normalized_coords: []const f32,
-    variation: ?ColrVariationContext,
-};
+const ColorPaintReadContext = colr_read.Context;
 
 fn readColrVariationContext(data: []const u8, colr: TableRecord) FontError!?ColrVariationContext {
     return try colr_variation.read(data, colrV1Table(colr));
@@ -10750,151 +10748,36 @@ fn readColorPaint(font: *const Font, offset: usize, context: ColorPaintReadConte
             };
         },
         11 => .{ .colr_glyph = .{ .glyph_id = try bin.readU16At(data, offset + 1) } },
-        4, 5 => .{ .linear_gradient = try readColorLinearGradient(font, offset, context) },
-        6, 7 => .{ .radial_gradient = try readColorRadialGradient(font, offset, context) },
-        8, 9 => .{ .sweep_gradient = try readColorSweepGradient(font, offset, context) },
-        12...31 => .{ .transform = try readColorTransform(font, offset, context) },
+        4, 5 => .{ .linear_gradient = try colr_read.linearGradient(
+            data,
+            colrV1Table(colr),
+            offset,
+            context,
+        ) },
+        6, 7 => .{ .radial_gradient = try colr_read.radialGradient(
+            data,
+            colrV1Table(colr),
+            offset,
+            context,
+        ) },
+        8, 9 => .{ .sweep_gradient = try colr_read.sweepGradient(
+            data,
+            colrV1Table(colr),
+            offset,
+            context,
+        ) },
+        12...31 => .{ .transform = try colr_read.transform(
+            data,
+            colrV1Table(colr),
+            offset,
+            context,
+        ) },
         32 => .{ .composite = .{
             .source = .{ .offset = try colr_paint.childOffset(data, colrPaintTable(colr), offset, 8, 1) },
             .mode = std.enums.fromInt(ColorPaint.CompositeMode, data[offset + 4]) orelse return error.BadSfnt,
             .backdrop = .{ .offset = try colr_paint.childOffset(data, colrPaintTable(colr), offset, 8, 5) },
         } },
         else => error.UnsupportedGlyph,
-    };
-}
-
-fn readColorTransform(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.TransformPaint {
-    const colr = font.colr orelse return error.BadSfnt;
-    const format = font.data[offset];
-    const info = colr_paint.formatInfo(format) orelse return error.BadSfnt;
-    const child_offset = try colr_paint.childOffset(font.data, colrPaintTable(colr), offset, info.min_size, 1);
-
-    const affine = switch (format) {
-        12, 13 => try readColorAffineTransform(font, colr, offset, info, context),
-        14, 15 => blk: {
-            const var_index_base = if (format == 15) try bin.readU32At(font.data, offset + 8) else no_colr_variation_index;
-            break :blk ColorAffine{
-                .dx = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 4))) +
-                    @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 0))),
-                .dy = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) +
-                    @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 1))),
-            };
-        },
-        16...23 => try readColorScaleTransform(font, colr, offset, format, context),
-        24...27 => try readColorRotateTransform(font, colr, offset, format, context),
-        28...31 => try readColorSkewTransform(font, colr, offset, format, context),
-        else => return error.BadSfnt,
-    };
-    return .{ .affine = affine, .child = .{ .offset = child_offset } };
-}
-
-fn readColorAffineTransform(font: *const Font, colr: TableRecord, offset: usize, info: colr_paint.FormatInfo, context: ColorPaintReadContext) FontError!ColorAffine {
-    const matrix = try colr_paint.transformPayloadRange(font.data, colrPaintTable(colr), offset, info.min_size);
-    const base = matrix.start;
-    const var_index_base = if (font.data[offset] == 13) try bin.readU32At(font.data, base + 24) else no_colr_variation_index;
-    var values: [6]f32 = undefined;
-    for (&values, 0..) |*value, index| {
-        value.* = fixed16_16ToF32(try bin.readI32At(font.data, base + index * 4)) +
-            @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, index)) / 65536.0));
-    }
-    return .{ .xx = values[0], .yx = values[1], .xy = values[2], .yy = values[3], .dx = values[4], .dy = values[5] };
-}
-
-fn readColorScaleTransform(font: *const Font, colr: TableRecord, offset: usize, format: u8, context: ColorPaintReadContext) FontError!ColorAffine {
-    const variable = (format & 1) != 0;
-    const around_center = format == 18 or format == 19 or format == 22 or format == 23;
-    const uniform = format >= 20;
-    const var_index_base = if (variable)
-        try bin.readU32At(font.data, offset + colr_paint.formatInfo(format).?.min_size - 4)
-    else
-        no_colr_variation_index;
-    const scale_x = f2dot14(try bin.readI16At(font.data, offset + 4)) +
-        @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 0)) / 16384.0));
-    const scale_y = if (uniform)
-        scale_x
-    else
-        f2dot14(try bin.readI16At(font.data, offset + 6)) +
-            @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 1)) / 16384.0));
-    const center_delta_base: usize = if (uniform) 1 else 2;
-    const center_offset: usize = if (uniform) 6 else 8;
-    const center_x = if (around_center)
-        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + center_offset))) +
-            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, center_delta_base)))
-    else
-        0;
-    const center_y = if (around_center)
-        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + center_offset + 2))) +
-            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, center_delta_base + 1)))
-    else
-        0;
-    return .{
-        .xx = scale_x,
-        .yy = scale_y,
-        .dx = center_x - scale_x * center_x,
-        .dy = center_y - scale_y * center_y,
-    };
-}
-
-fn readColorRotateTransform(font: *const Font, colr: TableRecord, offset: usize, format: u8, context: ColorPaintReadContext) FontError!ColorAffine {
-    const variable = (format & 1) != 0;
-    const around_center = format >= 26;
-    const var_index_base = if (variable)
-        try bin.readU32At(font.data, offset + colr_paint.formatInfo(format).?.min_size - 4)
-    else
-        no_colr_variation_index;
-    const angle = f2dot14(try bin.readI16At(font.data, offset + 4)) +
-        @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 0)) / 16384.0));
-    const center_x = if (around_center)
-        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) +
-            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 1)))
-    else
-        0;
-    const center_y = if (around_center)
-        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 8))) +
-            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 2)))
-    else
-        0;
-    const radians = angle * std.math.pi;
-    const sine = @sin(radians);
-    const cosine = @cos(radians);
-    return .{
-        .xx = cosine,
-        .yx = sine,
-        .xy = -sine,
-        .yy = cosine,
-        .dx = sine * center_y + (1.0 - cosine) * center_x,
-        .dy = -sine * center_x + (1.0 - cosine) * center_y,
-    };
-}
-
-fn readColorSkewTransform(font: *const Font, colr: TableRecord, offset: usize, format: u8, context: ColorPaintReadContext) FontError!ColorAffine {
-    const variable = (format & 1) != 0;
-    const around_center = format >= 30;
-    const var_index_base = if (variable)
-        try bin.readU32At(font.data, offset + colr_paint.formatInfo(format).?.min_size - 4)
-    else
-        no_colr_variation_index;
-    const x_angle = f2dot14(try bin.readI16At(font.data, offset + 4)) +
-        @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 0)) / 16384.0));
-    const y_angle = f2dot14(try bin.readI16At(font.data, offset + 6)) +
-        @as(f32, @floatCast((try colorPaintDelta(font, colr, context, var_index_base, 1)) / 16384.0));
-    const center_x = if (around_center)
-        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 8))) +
-            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 2)))
-    else
-        0;
-    const center_y = if (around_center)
-        @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 10))) +
-            @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 3)))
-    else
-        0;
-    const tan_x = @tan(x_angle * std.math.pi);
-    const tan_y = @tan(y_angle * std.math.pi);
-    return .{
-        .xy = -tan_x,
-        .yx = tan_y,
-        .dx = tan_x * center_y,
-        .dy = -tan_y * center_x,
     };
 }
 
@@ -10965,7 +10848,7 @@ test "COLR v1 transform formats resolve affine matrices" {
             else => unreachable,
         }
 
-        const result = try readColorTransform(&font, 0, context);
+        const result = try colr_read.transform(font.data, colrV1Table(font.colr.?), 0, context);
         try std.testing.expectEqual(@as(usize, info.min_size), result.child.offset);
         switch (format) {
             12, 13 => {
@@ -10986,92 +10869,10 @@ test "COLR v1 transform formats resolve affine matrices" {
             else => unreachable,
         }
         if ((format & 1) != 0) {
-            const varied = try readColorTransform(&font, 0, varied_context);
+            const varied = try colr_read.transform(font.data, colrV1Table(font.colr.?), 0, varied_context);
             try std.testing.expect(!std.meta.eql(result.affine, varied.affine));
         }
     }
-}
-
-fn readColorSweepGradient(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.SweepGradient {
-    const colr = font.colr orelse return error.BadSfnt;
-    const format = font.data[offset];
-    const info = colr_paint.formatInfo(format).?;
-    const color_line_offset = try colr_paint.childOffset(font.data, colrPaintTable(colr), offset, info.min_size, 1);
-    const var_index_base = if (format == 9) try bin.readU32At(font.data, offset + 12) else no_colr_variation_index;
-    const center_x_delta = try colorPaintDelta(font, colr, context, var_index_base, 0);
-    const center_y_delta = try colorPaintDelta(font, colr, context, var_index_base, 1);
-    const start_delta = try colorPaintDelta(font, colr, context, var_index_base, 2);
-    const end_delta = try colorPaintDelta(font, colr, context, var_index_base, 3);
-    return .{
-        .center = .{
-            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 4))) + @as(f32, @floatCast(center_x_delta)),
-            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) + @as(f32, @floatCast(center_y_delta)),
-        },
-        // OpenType 1.9.1 shifts the F2Dot14 angle domain so -1 and +1
-        // conveniently encode 0° and 360° respectively.
-        .start_angle = (f2dot14(try bin.readI16At(font.data, offset + 8)) + @as(f32, @floatCast(start_delta / 16384.0))) * 180.0 + 180.0,
-        .end_angle = (f2dot14(try bin.readI16At(font.data, offset + 10)) + @as(f32, @floatCast(end_delta / 16384.0))) * 180.0 + 180.0,
-        .color_line = try readColorLine(font, colr, color_line_offset, format == 9),
-    };
-}
-
-fn readColorRadialGradient(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.RadialGradient {
-    const colr = font.colr orelse return error.BadSfnt;
-    const format = font.data[offset];
-    const info = colr_paint.formatInfo(format).?;
-    const color_line_offset = try colr_paint.childOffset(font.data, colrPaintTable(colr), offset, info.min_size, 1);
-    const var_index_base = if (format == 7) try bin.readU32At(font.data, offset + 16) else no_colr_variation_index;
-    return .{
-        .c0 = .{
-            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 4))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 0))),
-            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 1))),
-        },
-        .r0 = @as(f32, @floatFromInt(try bin.readU16At(font.data, offset + 8))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 2))),
-        .c1 = .{
-            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 10))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 3))),
-            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 12))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 4))),
-        },
-        .r1 = @as(f32, @floatFromInt(try bin.readU16At(font.data, offset + 14))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 5))),
-        .color_line = try readColorLine(font, colr, color_line_offset, format == 7),
-    };
-}
-
-fn readColorLine(font: *const Font, colr: TableRecord, color_line_offset: usize, variable: bool) FontError!ColorPaint.ColorLine {
-    const extend = std.enums.fromInt(ColorPaint.Extend, font.data[color_line_offset]) orelse return error.BadSfnt;
-    const stop_count = try bin.readU16At(font.data, color_line_offset + 1);
-    if (stop_count == 0) return error.BadSfnt;
-    const stops_start = color_line_offset + 3;
-    const stops_len = @as(usize, stop_count) * colr_paint.colorStopSize(variable);
-    if (stops_len > colr.offset + colr.length - stops_start) return error.BadSfnt;
-    return .{
-        .extend = extend,
-        .stop_count = stop_count,
-        .stops_data = font.data[stops_start .. stops_start + stops_len],
-        .variable = variable,
-    };
-}
-
-fn readColorLinearGradient(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint.LinearGradient {
-    const colr = font.colr orelse return error.BadSfnt;
-    const format = font.data[offset];
-    const info = colr_paint.formatInfo(format).?;
-    const color_line_offset = try colr_paint.childOffset(font.data, colrPaintTable(colr), offset, info.min_size, 1);
-    const var_index_base = if (format == 5) try bin.readU32At(font.data, offset + 16) else no_colr_variation_index;
-    return .{
-        .p0 = .{
-            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 4))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 0))),
-            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 6))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 1))),
-        },
-        .p1 = .{
-            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 8))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 2))),
-            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 10))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 3))),
-        },
-        .p2 = .{
-            .x = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 12))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 4))),
-            .y = @as(f32, @floatFromInt(try bin.readI16At(font.data, offset + 14))) + @as(f32, @floatCast(try colorPaintDelta(font, colr, context, var_index_base, 5))),
-        },
-        .color_line = try readColorLine(font, colr, color_line_offset, format == 5),
-    };
 }
 
 fn readU24At(data: []const u8, offset: usize) FontError!u32 {

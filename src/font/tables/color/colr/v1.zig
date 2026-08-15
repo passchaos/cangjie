@@ -7,6 +7,7 @@ const types = @import("v1/types.zig");
 pub const paint = @import("v1/paint/root.zig");
 pub const bases = @import("v1/bases.zig");
 pub const layers = @import("v1/layers.zig");
+pub const read = @import("v1/read/root.zig");
 pub const validation = @import("v1/validate/root.zig");
 pub const variation = @import("v1/variation/root.zig");
 

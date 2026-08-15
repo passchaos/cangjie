@@ -12,6 +12,7 @@ const delta_map = variation_common.delta_set_index_map;
 const item_store = variation_common.item_store;
 
 pub const Context = runtime.Context;
+pub const Error = runtime.Error;
 pub const no_index = runtime.no_index;
 pub const read = runtime.read;
 pub const delta = runtime.delta;

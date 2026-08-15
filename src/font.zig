@@ -16775,22 +16775,29 @@ test "OS/2 table is validated at parse time" {
     }
 }
 
-fn gdefOnlyFont(data: []const u8) Font {
+fn tableOnlyFont(
+    data: []const u8,
+    glyph_count: u16,
+    number_of_h_metrics: u16,
+) Font {
     const empty_tables: []TableRecord = &.{};
     const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
-    const gdef_record: TableRecord = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = data.len };
-    const gdef_checksum = sfnt.checksum.table(data, gdef_record) catch 0;
+    const dummy_table = TableRecord{
+        .tag = .{ 0, 0, 0, 0 },
+        .checksum = 0,
+        .offset = 0,
+        .length = 0,
+    };
     return .{
         .data = data,
         .format = .truetype,
         .units_per_em = 1000,
         .index_to_loc_format = 0,
-        .glyph_count = 64,
+        .glyph_count = glyph_count,
         .ascender = 0,
         .descender = 0,
         .line_gap = 0,
-        .number_of_h_metrics = 1,
+        .number_of_h_metrics = number_of_h_metrics,
         .head = dummy_table,
         .hhea = dummy_table,
         .maxp = dummy_table,
@@ -16806,7 +16813,7 @@ fn gdefOnlyFont(data: []const u8) Font {
         .morx = null,
         .os2 = null,
         .gasp = null,
-        .gdef = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = gdef_checksum, .offset = 0, .length = data.len },
+        .gdef = null,
         .gpos = null,
         .gsub = null,
         .ankr = null,
@@ -16850,576 +16857,100 @@ fn gdefOnlyFont(data: []const u8) Font {
         .owned_tables = empty_tables,
         .allocator = std.testing.allocator,
     };
+}
+
+fn testTableRecord(
+    data: []const u8,
+    tag: [4]u8,
+    offset: usize,
+    length: usize,
+) TableRecord {
+    var record = TableRecord{
+        .tag = tag,
+        .checksum = 0,
+        .offset = offset,
+        .length = length,
+    };
+    record.checksum = sfnt.checksum.table(data, record) catch 0;
+    return record;
+}
+
+fn gdefOnlyFont(data: []const u8) Font {
+    var font = tableOnlyFont(data, 64, 1);
+    font.gdef = testTableRecord(data, .{ 'G', 'D', 'E', 'F' }, 0, data.len);
+    return font;
 }
 
 fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
-    const empty_tables: []TableRecord = &.{};
-    const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
-    const os2_record: TableRecord = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = 0, .offset = 0, .length = declared_length };
-    const os2_checksum = sfnt.checksum.table(data, os2_record) catch 0;
-    return .{
-        .data = data,
-        .format = .truetype,
-        .units_per_em = 1000,
-        .index_to_loc_format = 0,
-        .glyph_count = 2,
-        .ascender = 0,
-        .descender = 0,
-        .line_gap = 0,
-        .number_of_h_metrics = 2,
-        .head = dummy_table,
-        .hhea = dummy_table,
-        .maxp = dummy_table,
-        .hmtx = dummy_table,
-        .hdmx = null,
-        .ltsh = null,
-        .ltag = null,
-        .loca = null,
-        .cmap = dummy_table,
-        .kern = null,
-        .kerx = null,
-        .mort = null,
-        .morx = null,
-        .os2 = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = os2_checksum, .offset = 0, .length = declared_length },
-        .gasp = null,
-        .gdef = null,
-        .gpos = null,
-        .gsub = null,
-        .ankr = null,
-        .feat = null,
-        .trak = null,
-        .name = null,
-        .math = null,
-        .meta = null,
-        .post = null,
-        .pclt = null,
-        .stat = null,
-        .fvar = null,
-        .avar = null,
-        .cvt = null,
-        .cvar = null,
-        .gvar = null,
-        .fpgm = null,
-        .prep = null,
-        .hvar = null,
-        .mvar = null,
-        .vvar = null,
-        .varc = null,
-        .ift = null,
-        .iftx = null,
-        .colr = null,
-        .cpal = null,
-        .base = null,
-        .dsig = null,
-        .vorg = null,
-        .svg = null,
-        .sbix = null,
-        .cblc = null,
-        .cbdt = null,
-        .eblc = null,
-        .ebdt = null,
-        .glyf = null,
-        .cff = null,
-        .cff_parsed = null,
-        .cff2 = null,
-        .cmap_subtables = empty_cmaps,
-        .owned_tables = empty_tables,
-        .allocator = std.testing.allocator,
-    };
+    var font = tableOnlyFont(data, 2, 2);
+    font.os2 = testTableRecord(data, .{ 'O', 'S', '/', '2' }, 0, declared_length);
+    return font;
 }
 
 fn colrOnlyFont(data: []const u8) Font {
-    const empty_tables: []TableRecord = &.{};
-    const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
-    const colr_record: TableRecord = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = data.len };
-    const colr_checksum = sfnt.checksum.table(data, colr_record) catch 0;
-    return .{
-        .data = data,
-        .format = .truetype,
-        .units_per_em = 1000,
-        .index_to_loc_format = 0,
-        .glyph_count = 16,
-        .ascender = 0,
-        .descender = 0,
-        .line_gap = 0,
-        .number_of_h_metrics = 2,
-        .head = dummy_table,
-        .hhea = dummy_table,
-        .maxp = dummy_table,
-        .hmtx = dummy_table,
-        .hdmx = null,
-        .ltsh = null,
-        .ltag = null,
-        .loca = null,
-        .cmap = dummy_table,
-        .kern = null,
-        .kerx = null,
-        .mort = null,
-        .morx = null,
-        .os2 = null,
-        .gasp = null,
-        .gdef = null,
-        .gpos = null,
-        .gsub = null,
-        .ankr = null,
-        .feat = null,
-        .trak = null,
-        .name = null,
-        .math = null,
-        .meta = null,
-        .post = null,
-        .pclt = null,
-        .stat = null,
-        .fvar = null,
-        .avar = null,
-        .cvt = null,
-        .cvar = null,
-        .gvar = null,
-        .fpgm = null,
-        .prep = null,
-        .hvar = null,
-        .mvar = null,
-        .vvar = null,
-        .varc = null,
-        .ift = null,
-        .iftx = null,
-        .colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = data.len },
-        .cpal = null,
-        .base = null,
-        .dsig = null,
-        .vorg = null,
-        .svg = null,
-        .sbix = null,
-        .cblc = null,
-        .cbdt = null,
-        .eblc = null,
-        .ebdt = null,
-        .glyf = null,
-        .cff = null,
-        .cff_parsed = null,
-        .cff2 = null,
-        .cmap_subtables = empty_cmaps,
-        .owned_tables = empty_tables,
-        .allocator = std.testing.allocator,
-    };
+    var font = tableOnlyFont(data, 16, 2);
+    font.colr = testTableRecord(data, .{ 'C', 'O', 'L', 'R' }, 0, data.len);
+    return font;
 }
 
 fn colrCpalOnlyFont(data: []const u8, colr_length: usize) Font {
     var font = colrOnlyFont(data);
-    const colr_record: TableRecord = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_length };
-    const colr_checksum = sfnt.checksum.table(data, colr_record) catch 0;
-    font.colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = colr_length };
-    const cpal_record: TableRecord = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = colr_length, .length = data.len - colr_length };
-    const cpal_checksum = sfnt.checksum.table(data, cpal_record) catch 0;
-    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = colr_length, .length = data.len - colr_length };
+    font.colr = testTableRecord(data, .{ 'C', 'O', 'L', 'R' }, 0, colr_length);
+    font.cpal = testTableRecord(
+        data,
+        .{ 'C', 'P', 'A', 'L' },
+        colr_length,
+        data.len - colr_length,
+    );
     return font;
 }
 
 fn cpalOnlyFont(data: []const u8) Font {
-    const empty_tables: []TableRecord = &.{};
-    const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
-    const cpal_record: TableRecord = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = data.len };
-    const cpal_checksum = sfnt.checksum.table(data, cpal_record) catch 0;
-    return .{
-        .data = data,
-        .format = .truetype,
-        .units_per_em = 1000,
-        .index_to_loc_format = 0,
-        .glyph_count = 2,
-        .ascender = 0,
-        .descender = 0,
-        .line_gap = 0,
-        .number_of_h_metrics = 2,
-        .head = dummy_table,
-        .hhea = dummy_table,
-        .maxp = dummy_table,
-        .hmtx = dummy_table,
-        .hdmx = null,
-        .ltsh = null,
-        .ltag = null,
-        .loca = null,
-        .cmap = dummy_table,
-        .kern = null,
-        .kerx = null,
-        .mort = null,
-        .morx = null,
-        .os2 = null,
-        .gasp = null,
-        .gdef = null,
-        .gpos = null,
-        .gsub = null,
-        .ankr = null,
-        .feat = null,
-        .trak = null,
-        .name = null,
-        .math = null,
-        .meta = null,
-        .post = null,
-        .pclt = null,
-        .stat = null,
-        .fvar = null,
-        .avar = null,
-        .cvt = null,
-        .cvar = null,
-        .gvar = null,
-        .fpgm = null,
-        .prep = null,
-        .hvar = null,
-        .mvar = null,
-        .vvar = null,
-        .varc = null,
-        .ift = null,
-        .iftx = null,
-        .colr = null,
-        .cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = 0, .length = data.len },
-        .base = null,
-        .dsig = null,
-        .vorg = null,
-        .svg = null,
-        .sbix = null,
-        .cblc = null,
-        .cbdt = null,
-        .eblc = null,
-        .ebdt = null,
-        .glyf = null,
-        .cff = null,
-        .cff_parsed = null,
-        .cff2 = null,
-        .cmap_subtables = empty_cmaps,
-        .owned_tables = empty_tables,
-        .allocator = std.testing.allocator,
-    };
+    var font = tableOnlyFont(data, 2, 2);
+    font.cpal = testTableRecord(data, .{ 'C', 'P', 'A', 'L' }, 0, data.len);
+    return font;
 }
 
 fn svgOnlyFont(data: []const u8) Font {
-    const empty_tables: []TableRecord = &.{};
-    const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
-    const svg_record: TableRecord = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = data.len };
-    const svg_checksum = sfnt.checksum.table(data, svg_record) catch 0;
-    return .{
-        .data = data,
-        .format = .truetype,
-        .units_per_em = 1000,
-        .index_to_loc_format = 0,
-        .glyph_count = 4,
-        .ascender = 0,
-        .descender = 0,
-        .line_gap = 0,
-        .number_of_h_metrics = 2,
-        .head = dummy_table,
-        .hhea = dummy_table,
-        .maxp = dummy_table,
-        .hmtx = dummy_table,
-        .hdmx = null,
-        .ltsh = null,
-        .ltag = null,
-        .loca = null,
-        .cmap = dummy_table,
-        .kern = null,
-        .kerx = null,
-        .mort = null,
-        .morx = null,
-        .os2 = null,
-        .gasp = null,
-        .gdef = null,
-        .gpos = null,
-        .gsub = null,
-        .ankr = null,
-        .feat = null,
-        .trak = null,
-        .name = null,
-        .math = null,
-        .meta = null,
-        .post = null,
-        .pclt = null,
-        .stat = null,
-        .fvar = null,
-        .avar = null,
-        .cvt = null,
-        .cvar = null,
-        .gvar = null,
-        .fpgm = null,
-        .prep = null,
-        .hvar = null,
-        .mvar = null,
-        .vvar = null,
-        .varc = null,
-        .ift = null,
-        .iftx = null,
-        .colr = null,
-        .cpal = null,
-        .base = null,
-        .dsig = null,
-        .vorg = null,
-        .svg = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = svg_checksum, .offset = 0, .length = data.len },
-        .sbix = null,
-        .cblc = null,
-        .cbdt = null,
-        .eblc = null,
-        .ebdt = null,
-        .glyf = null,
-        .cff = null,
-        .cff_parsed = null,
-        .cff2 = null,
-        .cmap_subtables = empty_cmaps,
-        .owned_tables = empty_tables,
-        .allocator = std.testing.allocator,
-    };
+    var font = tableOnlyFont(data, 4, 2);
+    font.svg = testTableRecord(data, .{ 'S', 'V', 'G', ' ' }, 0, data.len);
+    return font;
 }
 
 fn sbixOnlyFont(data: []const u8) Font {
-    const empty_tables: []TableRecord = &.{};
-    const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
-    const sbix_record: TableRecord = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = data.len };
-    const sbix_checksum = sfnt.checksum.table(data, sbix_record) catch 0;
-    return .{
-        .data = data,
-        .format = .truetype,
-        .units_per_em = 1000,
-        .index_to_loc_format = 0,
-        .glyph_count = 2,
-        .ascender = 0,
-        .descender = 0,
-        .line_gap = 0,
-        .number_of_h_metrics = 2,
-        .head = dummy_table,
-        .hhea = dummy_table,
-        .maxp = dummy_table,
-        .hmtx = dummy_table,
-        .hdmx = null,
-        .ltsh = null,
-        .ltag = null,
-        .loca = null,
-        .cmap = dummy_table,
-        .kern = null,
-        .kerx = null,
-        .mort = null,
-        .morx = null,
-        .os2 = null,
-        .gasp = null,
-        .gdef = null,
-        .gpos = null,
-        .gsub = null,
-        .ankr = null,
-        .feat = null,
-        .trak = null,
-        .name = null,
-        .math = null,
-        .meta = null,
-        .post = null,
-        .pclt = null,
-        .stat = null,
-        .fvar = null,
-        .avar = null,
-        .cvt = null,
-        .cvar = null,
-        .gvar = null,
-        .fpgm = null,
-        .prep = null,
-        .hvar = null,
-        .mvar = null,
-        .vvar = null,
-        .varc = null,
-        .ift = null,
-        .iftx = null,
-        .colr = null,
-        .cpal = null,
-        .base = null,
-        .dsig = null,
-        .vorg = null,
-        .svg = null,
-        .sbix = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = sbix_checksum, .offset = 0, .length = data.len },
-        .cblc = null,
-        .cbdt = null,
-        .eblc = null,
-        .ebdt = null,
-        .glyf = null,
-        .cff = null,
-        .cff_parsed = null,
-        .cff2 = null,
-        .cmap_subtables = empty_cmaps,
-        .owned_tables = empty_tables,
-        .allocator = std.testing.allocator,
-    };
+    var font = tableOnlyFont(data, 2, 2);
+    font.sbix = testTableRecord(data, .{ 's', 'b', 'i', 'x' }, 0, data.len);
+    return font;
 }
 
 fn fvarOnlyFont(data: []const u8) Font {
-    const empty_tables: []TableRecord = &.{};
-    const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
-    const fvar_record: TableRecord = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len };
-    const fvar_checksum = sfnt.checksum.table(data, fvar_record) catch 0;
-    return .{
-        .data = data,
-        .format = .truetype,
-        .units_per_em = 1000,
-        .index_to_loc_format = 0,
-        .glyph_count = 2,
-        .ascender = 0,
-        .descender = 0,
-        .line_gap = 0,
-        .number_of_h_metrics = 2,
-        .head = dummy_table,
-        .hhea = dummy_table,
-        .maxp = dummy_table,
-        .hmtx = dummy_table,
-        .hdmx = null,
-        .ltsh = null,
-        .ltag = null,
-        .loca = null,
-        .cmap = dummy_table,
-        .kern = null,
-        .kerx = null,
-        .mort = null,
-        .morx = null,
-        .os2 = null,
-        .gasp = null,
-        .gdef = null,
-        .gpos = null,
-        .gsub = null,
-        .ankr = null,
-        .feat = null,
-        .trak = null,
-        .name = null,
-        .math = null,
-        .meta = null,
-        .post = null,
-        .pclt = null,
-        .stat = null,
-        .fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = data.len },
-        .avar = null,
-        .cvt = null,
-        .cvar = null,
-        .gvar = null,
-        .fpgm = null,
-        .prep = null,
-        .hvar = null,
-        .mvar = null,
-        .vvar = null,
-        .varc = null,
-        .ift = null,
-        .iftx = null,
-        .colr = null,
-        .cpal = null,
-        .base = null,
-        .dsig = null,
-        .vorg = null,
-        .svg = null,
-        .sbix = null,
-        .cblc = null,
-        .cbdt = null,
-        .eblc = null,
-        .ebdt = null,
-        .glyf = null,
-        .cff = null,
-        .cff_parsed = null,
-        .cff2 = null,
-        .cmap_subtables = empty_cmaps,
-        .owned_tables = empty_tables,
-        .allocator = std.testing.allocator,
-    };
+    var font = tableOnlyFont(data, 2, 2);
+    font.fvar = testTableRecord(data, .{ 'f', 'v', 'a', 'r' }, 0, data.len);
+    return font;
 }
 
 fn avarOnlyFont(data: []const u8) Font {
-    var font = fvarOnlyFont(data);
-    font.fvar = null;
-    const avar_record: TableRecord = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len };
-    const avar_checksum = sfnt.checksum.table(data, avar_record) catch 0;
-    font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = avar_checksum, .offset = 0, .length = data.len };
+    var font = tableOnlyFont(data, 2, 2);
+    font.avar = testTableRecord(data, .{ 'a', 'v', 'a', 'r' }, 0, data.len);
     return font;
 }
 
 fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
     var font = fvarOnlyFont(data);
-    const fvar_record: TableRecord = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = fvar_length };
-    const fvar_checksum = sfnt.checksum.table(data, fvar_record) catch 0;
-    font.fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = fvar_length };
-    const avar_record: TableRecord = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = fvar_length, .length = data.len - fvar_length };
-    const avar_checksum = sfnt.checksum.table(data, avar_record) catch 0;
-    font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = avar_checksum, .offset = fvar_length, .length = data.len - fvar_length };
+    font.fvar = testTableRecord(data, .{ 'f', 'v', 'a', 'r' }, 0, fvar_length);
+    font.avar = testTableRecord(
+        data,
+        .{ 'a', 'v', 'a', 'r' },
+        fvar_length,
+        data.len - fvar_length,
+    );
     return font;
 }
 
 fn kernOnlyFont(data: []const u8) Font {
-    const empty_tables: []TableRecord = &.{};
-    const empty_cmaps: []CmapSubtable = &.{};
-    const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
-    const kern_record: TableRecord = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = 0, .offset = 0, .length = data.len };
-    const kern_checksum = sfnt.checksum.table(data, kern_record) catch 0;
-    return .{
-        .data = data,
-        .format = .truetype,
-        .units_per_em = 1000,
-        .index_to_loc_format = 0,
-        .glyph_count = 2,
-        .ascender = 0,
-        .descender = 0,
-        .line_gap = 0,
-        .number_of_h_metrics = 2,
-        .head = dummy_table,
-        .hhea = dummy_table,
-        .maxp = dummy_table,
-        .hmtx = dummy_table,
-        .hdmx = null,
-        .ltsh = null,
-        .ltag = null,
-        .loca = null,
-        .cmap = dummy_table,
-        .kern = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = kern_checksum, .offset = 0, .length = data.len },
-        .kerx = null,
-        .mort = null,
-        .morx = null,
-        .os2 = null,
-        .gasp = null,
-        .gdef = null,
-        .gpos = null,
-        .gsub = null,
-        .ankr = null,
-        .feat = null,
-        .trak = null,
-        .name = null,
-        .math = null,
-        .meta = null,
-        .post = null,
-        .pclt = null,
-        .stat = null,
-        .fvar = null,
-        .avar = null,
-        .cvt = null,
-        .cvar = null,
-        .gvar = null,
-        .fpgm = null,
-        .prep = null,
-        .hvar = null,
-        .mvar = null,
-        .vvar = null,
-        .varc = null,
-        .ift = null,
-        .iftx = null,
-        .colr = null,
-        .cpal = null,
-        .base = null,
-        .dsig = null,
-        .vorg = null,
-        .svg = null,
-        .sbix = null,
-        .cblc = null,
-        .cbdt = null,
-        .eblc = null,
-        .ebdt = null,
-        .glyf = null,
-        .cff = null,
-        .cff_parsed = null,
-        .cff2 = null,
-        .cmap_subtables = empty_cmaps,
-        .owned_tables = empty_tables,
-        .allocator = std.testing.allocator,
-    };
+    var font = tableOnlyFont(data, 2, 2);
+    font.kern = testTableRecord(data, .{ 'k', 'e', 'r', 'n' }, 0, data.len);
+    return font;
 }
 
 fn updateSfntTableChecksum(bytes: []u8, comptime table_tag: []const u8) FontError!void {

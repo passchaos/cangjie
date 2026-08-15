@@ -4,6 +4,7 @@ const std = @import("std");
 
 const font_mod = @import("../../../font.zig");
 const table_only = @import("../fixtures/table_only.zig");
+const support = @import("support.zig");
 
 const Font = font_mod.Font;
 
@@ -22,7 +23,7 @@ test "sbix public bitmap APIs revalidate borrowed strike offsets" {
     );
 
     // The unrequested glyph boundary makes the whole borrowed strike invalid.
-    writeU32(&bytes, 24, 12);
+    support.writeU32(&bytes, 24, 12);
     try std.testing.expectError(
         error.BadSfnt,
         font.bitmapStrikes(std.testing.allocator),
@@ -46,7 +47,7 @@ test "sbix public bitmap APIs revalidate borrowed table checksum" {
     );
 
     // ppem 17 remains structurally valid, isolating the checksum contract.
-    writeU16(&bytes, 12, 17);
+    support.writeU16(&bytes, 12, 17);
     try std.testing.expectError(
         error.BadSfnt,
         font.bestBitmapStrikePpem(16),
@@ -94,21 +95,13 @@ fn fixture(data: []const u8) Font {
 
 fn emptySbix() [40]u8 {
     var bytes: [40]u8 = .{0} ** 40;
-    writeU16(&bytes, 0, 1);
-    writeU32(&bytes, 4, 1);
-    writeU32(&bytes, 8, 12);
-    writeU16(&bytes, 12, 16);
-    writeU16(&bytes, 14, 72);
-    writeU32(&bytes, 16, 16);
-    writeU32(&bytes, 20, 16);
-    writeU32(&bytes, 24, 16);
+    support.writeU16(&bytes, 0, 1);
+    support.writeU32(&bytes, 4, 1);
+    support.writeU32(&bytes, 8, 12);
+    support.writeU16(&bytes, 12, 16);
+    support.writeU16(&bytes, 14, 72);
+    support.writeU32(&bytes, 16, 16);
+    support.writeU32(&bytes, 20, 16);
+    support.writeU32(&bytes, 24, 16);
     return bytes;
-}
-
-fn writeU16(bytes: []u8, offset: usize, value: u16) void {
-    std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
-}
-
-fn writeU32(bytes: []u8, offset: usize, value: u32) void {
-    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
 }

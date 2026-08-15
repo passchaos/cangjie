@@ -3945,6 +3945,11 @@ pub const Font = struct {
         const colr = self.colr orelse return error.BadSfnt;
         try sfnt.checksum.validate(self.data, colr);
         if (child.offset < colr.offset or child.offset >= colr.offset + colr.length) return error.BadSfnt;
+        // A child reference is a public lazy entry point just like a base or
+        // layer root. Revalidate the complete borrowed graph before the pure
+        // decoder trusts palette and glyph references.
+        try validateColrGlyphBounds(self.data, colr, self.glyph_count);
+        try validateColrPaletteBounds(self.data, colr, self.cpal);
         if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
         }
@@ -10607,11 +10612,6 @@ fn colrVariationDelta(
     );
 }
 
-fn colorPaintDelta(font: *const Font, colr: TableRecord, context: ColorPaintReadContext, var_index_base: u32, sequence_index: usize) FontError!f64 {
-    const variation = context.variation orelse return 0;
-    return try colrVariationDelta(font.data, colr, variation, var_index_base, sequence_index, context.normalized_coords);
-}
-
 fn validateColrVariationData(
     data: []const u8,
     colr: TableRecord,
@@ -10703,82 +10703,12 @@ fn validateColorPaintGraph(font: *const Font, offset: usize, guard: *colr_paint.
 
 fn readColorPaint(font: *const Font, offset: usize, context: ColorPaintReadContext) FontError!ColorPaint {
     const colr = font.colr orelse return error.BadSfnt;
-    const data = font.data;
-    if (offset + 5 > colr.offset + colr.length) return error.BadSfnt;
-    const format = data[offset];
-    return switch (format) {
-        2, 3 => blk: {
-            const palette_index = try bin.readU16At(data, offset + 1);
-            try font.validateColorPaletteIndex(palette_index);
-            const alpha_delta = if (format == 3)
-                try colorPaintDelta(font, colr, context, try bin.readU32At(data, offset + 5), 0)
-            else
-                0;
-            break :blk .{ .solid = .{
-                .palette_index = palette_index,
-                .alpha = f2dot14(try bin.readI16At(data, offset + 3)) + @as(f32, @floatCast(alpha_delta / 16384.0)),
-            } };
-        },
-        1 => blk: {
-            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
-            break :blk .{ .layers = .{
-                .layer_count = data[offset + 1],
-                .first_layer_index = try bin.readU32At(data, offset + 2),
-            } };
-        },
-        10 => blk: {
-            if (offset + 6 > colr.offset + colr.length) return error.BadSfnt;
-            const child_offset: usize = @intCast(try readU24At(data, offset + 1));
-            const glyph_id = try bin.readU16At(data, offset + 4);
-            // A PaintGlyph child starts after this six-byte parent record.
-            // Smaller offsets overlap the parent's Offset24/GlyphID fields;
-            // offset zero would recurse into the same PaintGlyph forever.
-            if (child_offset < 6) return error.BadSfnt;
-            if (child_offset > colr.offset + colr.length - offset) return error.BadSfnt;
-            const child = try readColorPaint(font, offset + child_offset, context);
-            break :blk switch (child) {
-                .solid => |solid| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .solid = solid } } },
-                .linear_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .linear_gradient = gradient } } },
-                .radial_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .radial_gradient = gradient } } },
-                .sweep_gradient => |gradient| .{ .glyph = .{ .glyph_id = glyph_id, .brush = .{ .sweep_gradient = gradient } } },
-                else => .{ .clip_glyph = .{
-                    .glyph_id = glyph_id,
-                    .child = .{ .offset = offset + child_offset },
-                } },
-            };
-        },
-        11 => .{ .colr_glyph = .{ .glyph_id = try bin.readU16At(data, offset + 1) } },
-        4, 5 => .{ .linear_gradient = try colr_read.linearGradient(
-            data,
-            colrV1Table(colr),
-            offset,
-            context,
-        ) },
-        6, 7 => .{ .radial_gradient = try colr_read.radialGradient(
-            data,
-            colrV1Table(colr),
-            offset,
-            context,
-        ) },
-        8, 9 => .{ .sweep_gradient = try colr_read.sweepGradient(
-            data,
-            colrV1Table(colr),
-            offset,
-            context,
-        ) },
-        12...31 => .{ .transform = try colr_read.transform(
-            data,
-            colrV1Table(colr),
-            offset,
-            context,
-        ) },
-        32 => .{ .composite = .{
-            .source = .{ .offset = try colr_paint.childOffset(data, colrPaintTable(colr), offset, 8, 1) },
-            .mode = std.enums.fromInt(ColorPaint.CompositeMode, data[offset + 4]) orelse return error.BadSfnt,
-            .backdrop = .{ .offset = try colr_paint.childOffset(data, colrPaintTable(colr), offset, 8, 5) },
-        } },
-        else => error.UnsupportedGlyph,
-    };
+    return try colr_read.paint(
+        font.data,
+        colrV1Table(colr),
+        offset,
+        context,
+    );
 }
 
 test "COLR v1 transform formats resolve affine matrices" {

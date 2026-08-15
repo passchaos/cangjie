@@ -1,10 +1,12 @@
 //! Runtime decoding of COLR v1 transforms, gradients, and ColorLines.
 
 const gradients = @import("gradients.zig");
+const paints = @import("paint.zig");
 const transforms = @import("transforms.zig");
 
 pub const Context = @import("types.zig").Context;
 
+pub const paint = paints.read;
 pub const transform = transforms.transform;
 pub const linearGradient = gradients.linearGradient;
 pub const radialGradient = gradients.radialGradient;

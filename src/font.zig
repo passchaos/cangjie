@@ -43,6 +43,7 @@ const colr_bases = colr_v1_mod.bases;
 const colr_glyphs = colr_v1_mod.validation.glyphs;
 const colr_layers = colr_v1_mod.layers;
 const colr_palette = colr_v1_mod.validation.palette;
+const colr_variation = colr_v1_mod.variation;
 const cpal_mod = color_tables.cpal;
 const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
@@ -10423,6 +10424,37 @@ fn validateMetricVariationTopLevelPayloads(data: []const u8, table: TableRecord,
     }
 }
 
+fn validateDeltaSetIndexMap(
+    data: []const u8,
+    table: TableRecord,
+    store_offset: usize,
+    item_data_count: usize,
+    map_offset: usize,
+    minimum_map_offset: usize,
+) FontError!delta_map.Map {
+    const map = try delta_map.read(
+        data,
+        variationTable(table),
+        map_offset,
+        minimum_map_offset,
+    );
+    for (0..map.map_count) |index| {
+        const mapped = try delta_map.entry(data, map, index);
+        if (mapped.outer == 0xffff and mapped.inner == 0xffff) continue;
+        if (mapped.outer >= item_data_count or
+            mapped.inner >= try item_store.itemCount(
+                data,
+                variationTable(table),
+                store_offset,
+                mapped.outer,
+            ))
+        {
+            return error.BadSfnt;
+        }
+    }
+    return map;
+}
+
 fn validateMvarTable(data: []const u8, mvar: TableRecord, fvar_axis_count: usize) FontError!void {
     const mvar_header = try mvar_mod.header(data, mvar.offset, mvar.length);
     try mvar_mod.validateValueRecords(data, mvar.offset, mvar_header);
@@ -10547,17 +10579,8 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
     );
 }
 
-const ColrV1StructuralRange = colr_v1_mod.Range;
-
-const DeltaSetIndexMapInfo = delta_map.Map;
-
-const ColrVariationContext = struct {
-    store_offset: usize,
-    item_data_count: usize,
-    map: ?DeltaSetIndexMapInfo,
-};
-
-const no_colr_variation_index = std.math.maxInt(u32);
+const ColrVariationContext = colr_variation.Context;
+const no_colr_variation_index = colr_variation.no_index;
 
 const ColorPaintReadContext = struct {
     normalized_coords: []const f32,
@@ -10565,23 +10588,7 @@ const ColorPaintReadContext = struct {
 };
 
 fn readColrVariationContext(data: []const u8, colr: TableRecord) FontError!?ColrVariationContext {
-    if (colr.length < 34) return error.BadSfnt;
-    const store_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 30));
-    if (store_offset == 0) return null;
-    if (store_offset > colr.length or colr.length - store_offset < 8) return error.BadSfnt;
-    const store = colr.offset + store_offset;
-    if (try bin.readU16At(data, store) != 1) return error.BadSfnt;
-    const item_data_count: usize = @intCast(try bin.readU16At(data, store + 6));
-
-    const map_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 26));
-    return .{
-        .store_offset = store_offset,
-        .item_data_count = item_data_count,
-        .map = if (map_offset == 0)
-            null
-        else
-            try readDeltaSetIndexMapInfo(data, colr, map_offset, 34),
-    };
+    return try colr_variation.read(data, colrV1Table(colr));
 }
 
 fn colrVariationDelta(
@@ -10592,25 +10599,12 @@ fn colrVariationDelta(
     sequence_index: usize,
     normalized_coords: []const f32,
 ) FontError!f64 {
-    if (normalized_coords.len == 0 or var_index_base == no_colr_variation_index) return 0;
-    if (@as(usize, var_index_base) > std.math.maxInt(u32) - sequence_index) return error.BadSfnt;
-    const logical_index: u32 = var_index_base + @as(u32, @intCast(sequence_index));
-
-    const outer_index, const inner_index = if (context.map) |map| blk: {
-        const mapped = try delta_map.mappedIndex(data, map, logical_index);
-        break :blk .{ mapped.outer, mapped.inner };
-    } else blk: {
-        if (logical_index > std.math.maxInt(u16)) return error.BadSfnt;
-        break :blk .{ @as(usize, 0), @as(usize, logical_index) };
-    };
-
-    if (outer_index == 0xffff and inner_index == 0xffff) return 0;
-    return try metric_variation_mod.itemVariationDeltaF64(
+    return try colr_variation.delta(
         data,
-        colr.offset,
-        colr.length,
-        context.store_offset,
-        .{ .outer = outer_index, .inner = inner_index },
+        colrV1Table(colr),
+        context,
+        var_index_base,
+        sequence_index,
         normalized_coords,
     );
 }
@@ -10620,392 +10614,27 @@ fn colorPaintDelta(font: *const Font, colr: TableRecord, context: ColorPaintRead
     return try colrVariationDelta(font.data, colr, variation, var_index_base, sequence_index, context.normalized_coords);
 }
 
-fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRecord, glyph_count: u16) FontError!void {
-    if (colr.length < 2) return error.BadSfnt;
-    const version = try bin.readU16At(data, colr.offset);
-    if (version != 1) return;
-    if (colr.length < 34) return error.BadSfnt;
-
-    const var_index_map_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 26));
-    const store_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 30));
-    if (var_index_map_offset != 0 and store_offset == 0) return error.BadSfnt;
-
-    var context_storage: ColrVariationContext = undefined;
-    const context: ?*const ColrVariationContext = if (store_offset != 0) blk: {
-        const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
-        const store_info = try item_store.validate(
-            data,
-            variationTable(colr),
-            store_offset,
-            fvar_info.axis_count,
-            34,
-        );
-        const store_range = ColrV1StructuralRange{ .start = store_offset, .end = store_info.end_offset };
-        try validateColrVariationRangeDisjointFromOwnedColrData(data, colr, store_range);
-        const map = if (var_index_map_offset != 0) blk_map: {
-            const map = try validateDeltaSetIndexMap(data, colr, store_offset, store_info.item_data_count, var_index_map_offset, 34);
-            try validateColrVariationTopLevelRanges(store_offset, store_info.end_offset, map.offset, map.end_offset);
-            // Variation subtables share the same COLR-relative offset space as
-            // BaseGlyphList, LayerList, and ClipList. Keep their structural
-            // payloads disjoint so a valid paint list cannot also be decoded as
-            // a VarIndexMap or ItemVariationStore header.
-            try validateColrVariationRangeDisjointFromOwnedColrData(data, colr, .{ .start = map.offset, .end = map.end_offset });
-            break :blk_map map;
-        } else null;
-        context_storage = .{
-            .store_offset = store_offset,
-            .item_data_count = store_info.item_data_count,
-            .map = map,
-        };
-        break :blk &context_storage;
-    } else null;
-
-    try validateColrV1ClipListVariationRefs(data, colr, glyph_count, context);
-
-    if (try colr_bases.read(data, colrV1Table(colr))) |base_list| {
-        for (0..base_list.record_count) |index| {
-            const paint_offset = try colr_bases.paintOffsetAt(
-                data,
-                colrV1Table(colr),
-                base_list,
-                index,
-            );
-            var guard = colr_paint.Guard{};
-            try validateColorPaintVariationRefs(data, colr, paint_offset, context, &guard);
-        }
-    }
-
-    if (try colr_layers.read(data, colrLayerTable(colr))) |layer_list| {
-        for (0..layer_list.layer_count) |layer_index| {
-            const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, @intCast(layer_index));
-            var guard = colr_paint.Guard{};
-            try validateColorPaintVariationRefs(data, colr, paint_offset, context, &guard);
-        }
-    }
-}
-
-fn validateDeltaSetIndexMap(data: []const u8, table: TableRecord, store_offset: usize, item_data_count: usize, map_offset: usize, minimum_map_offset: usize) FontError!DeltaSetIndexMapInfo {
-    const info = try readDeltaSetIndexMapInfo(data, table, map_offset, minimum_map_offset);
-    for (0..info.map_count) |index| {
-        const mapped = try delta_map.entry(data, info, index);
-        // 0xFFFF_FFFF is the variation-common no-delta sentinel. Production
-        // COLR maps use it for sparse logical indexes, so it is not a dangling
-        // reference to outer item-data index 65535.
-        if (mapped.outer == 0xffff and mapped.inner == 0xffff) continue;
-        try validateDeltaSetReference(
-            data,
-            table,
-            store_offset,
-            item_data_count,
-            mapped.outer,
-            mapped.inner,
-        );
-    }
-    return info;
-}
-
-fn readDeltaSetIndexMapInfo(data: []const u8, table: TableRecord, map_offset: usize, minimum_map_offset: usize) FontError!DeltaSetIndexMapInfo {
-    return try delta_map.read(
-        data,
-        .{ .offset = table.offset, .length = table.length },
-        map_offset,
-        minimum_map_offset,
-    );
-}
-
-fn validateColrVariationTopLevelRanges(store_offset: usize, store_end_offset: usize, map_offset: usize, map_end_offset: usize) FontError!void {
-    // COLR VarIndexMap and ItemVariationStore are independent top-level
-    // subtables.  Their offsets are both relative to COLR, so accepting
-    // overlapping ranges would let one subtable reinterpret the other's count,
-    // offset array, or delta payload as a different variation structure.
-    if (map_offset < store_end_offset and store_offset < map_end_offset) return error.BadSfnt;
-}
-
-fn validateColrVariationRangeDisjointFromOwnedColrData(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
-    if (try colr_bases.read(data, colrV1Table(colr))) |base_list| {
-        const structural_range = colr_bases.range(
-            colrV1Table(colr),
-            base_list,
-        );
-        if (colr_v1_mod.overlaps(variation_range, structural_range)) return error.BadSfnt;
-    }
-
-    const layer_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 18));
-    if (layer_list_offset != 0) {
-        const structural_range = try colr_v1_mod.layerListRange(data, colrV1Table(colr), layer_list_offset);
-        if (colr_v1_mod.overlaps(variation_range, structural_range)) return error.BadSfnt;
-    }
-
-    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
-    if (clip_list_offset != 0) {
-        const structural_range = try colr_v1_mod.clipListRange(data, colrV1Table(colr), clip_list_offset);
-        if (colr_v1_mod.overlaps(variation_range, structural_range)) return error.BadSfnt;
-    }
-
-    try validateColrVariationRangeDisjointFromClipBoxes(data, colr, variation_range);
-    try validateColrVariationRangeDisjointFromPaintPayloads(data, colr, variation_range);
-}
-
-fn validateColrVariationRangeDisjointFromClipBoxes(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
-    const list = (try colr_v1_mod.clipListDirectory(
-        data,
-        colrV1Table(colr),
-    )) orelse return;
-    for (0..list.count) |index| {
-        const clip_box_range = (try colr_v1_mod.clipBoxAtIndex(
-            data,
-            colrV1Table(colr),
-            list,
-            index,
-        )).range;
-        // ItemVariationStore and VarIndexMap are top-level COLR payloads, not
-        // scratch space inside ClipBox bounds or varIndexBase fields. Keeping
-        // these ranges disjoint preserves ClipRecord ownership even when the
-        // overlapping bytes can be decoded as both a valid ClipBox and a valid
-        // variation subtable.
-        if (colr_v1_mod.overlaps(variation_range, clip_box_range)) return error.BadSfnt;
-    }
-}
-
-fn validateColrVariationRangeDisjointFromPaintPayloads(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
-    const forbidden = colr_paint.Range{
-        .start = colr.offset + variation_range.start,
-        .end = colr.offset + variation_range.end,
-    };
-
-    if (try colr_bases.read(data, colrV1Table(colr))) |base_list| {
-        for (0..base_list.record_count) |index| {
-            const paint_offset = try colr_bases.paintOffsetAt(
-                data,
-                colrV1Table(colr),
-                base_list,
-                index,
-            );
-            var guard = colr_paint.Guard{ .forbidden_range = forbidden };
-            try validateColorPaintPayloadsDisjointFromRange(data, colr, paint_offset, &guard);
-        }
-    }
-
-    if (try colr_layers.read(data, colrLayerTable(colr))) |layer_list| {
-        for (0..layer_list.layer_count) |layer_index| {
-            const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, @intCast(layer_index));
-            var guard = colr_paint.Guard{ .forbidden_range = forbidden };
-            try validateColorPaintPayloadsDisjointFromRange(data, colr, paint_offset, &guard);
-        }
-    }
-}
-
-fn validateColorPaintPayloadsDisjointFromRange(data: []const u8, colr: TableRecord, offset: usize, guard: *colr_paint.Guard) FontError!void {
-    const info = try validateColrPaintRecord(data, colr, offset);
-    try guard.enter(offset);
-    defer guard.leave();
-    try guard.claimPaintRecord(data, colrPaintTable(colr), offset, info);
-
-    switch (info.kind) {
-        .colr_layers => {
-            const layer_count = data[offset + 1];
-            const first_layer_index = try bin.readU32At(data, offset + 2);
-            if (layer_count == 0) return;
-            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
-            const first: usize = @intCast(first_layer_index);
-            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
-            for (0..layer_count) |layer_offset| {
-                const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
-                try validateColorPaintPayloadsDisjointFromRange(data, colr, paint_offset, guard);
-            }
-        },
-        .glyph, .single_child => try validateColorPaintPayloadsDisjointFromRange(data, colr, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), guard),
-        .composite => {
-            try validateColorPaintPayloadsDisjointFromRange(data, colr, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), guard);
-            try validateColorPaintPayloadsDisjointFromRange(data, colr, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 5), guard);
-        },
-        .solid, .color_line, .colr_glyph, .terminal => return,
-    }
-}
-
-fn validateDeltaSetReference(data: []const u8, table: TableRecord, store_offset: usize, item_data_count: usize, outer_index: usize, inner_index: usize) FontError!void {
-    if (outer_index >= item_data_count) return error.BadSfnt;
-    const item_count = try item_store.itemCount(
-        data,
-        variationTable(table),
-        store_offset,
-        outer_index,
-    );
-    if (inner_index >= item_count) return error.BadSfnt;
-}
-
-fn validateColrVariationIndexSequence(data: []const u8, colr: TableRecord, context: ?*const ColrVariationContext, var_index_base: u32, item_count: usize) FontError!void {
-    if (item_count == 0) return;
-    if (var_index_base == no_colr_variation_index) return;
-    const ctx = context orelse return error.BadSfnt;
-    if (@as(usize, var_index_base) > std.math.maxInt(u32) - (item_count - 1)) return error.BadSfnt;
-
-    if (ctx.map) |map| {
-        if (map.map_count == 0) {
-            for (0..item_count) |sequence_index| {
-                const var_index = var_index_base + @as(u32, @intCast(sequence_index));
-                const outer_index: usize = @intCast(var_index >> 16);
-                const inner_index: usize = @intCast(var_index & 0xffff);
-                if (outer_index == 0xffff and inner_index == 0xffff) continue;
-                try validateDeltaSetReference(data, colr, ctx.store_offset, ctx.item_data_count, outer_index, inner_index);
-            }
-            return;
-        }
-        for (0..item_count) |sequence_index| {
-            const logical_index = @as(usize, var_index_base) + sequence_index;
-            const mapped = try delta_map.mappedIndex(data, map, logical_index);
-            if (mapped.outer == 0xffff and mapped.inner == 0xffff) continue;
-            try validateDeltaSetReference(
-                data,
-                colr,
-                ctx.store_offset,
-                ctx.item_data_count,
-                mapped.outer,
-                mapped.inner,
-            );
-        }
-        return;
-    }
-
-    for (0..item_count) |sequence_index| {
-        const inner_index = @as(usize, var_index_base) + sequence_index;
-        if (inner_index > std.math.maxInt(u16)) return error.BadSfnt;
-        // COLR defines varIndexBase as a logical index into its optional map.
-        // Without that map, the implicit mapping selects VarData[0] and uses
-        // the logical index as the inner row (matching Skrifa and FreeType).
-        try validateDeltaSetReference(data, colr, ctx.store_offset, ctx.item_data_count, 0, inner_index);
-    }
-}
-
-fn validateColrV1ClipListVariationRefs(data: []const u8, colr: TableRecord, glyph_count: u16, context: ?*const ColrVariationContext) FontError!void {
-    const list = (try colr_v1_mod.validateClipList(
-        data,
-        colrV1Table(colr),
-        glyph_count,
-    )) orelse return;
-    for (0..list.count) |index| {
-        const box = try colr_v1_mod.clipBoxAtIndex(
-            data,
-            colrV1Table(colr),
-            list,
-            index,
-        );
-        const var_index_base = box.var_index_base orelse continue;
-        try validateColrVariationIndexSequence(
-            data,
-            colr,
-            context,
-            var_index_base,
-            4,
-        );
-    }
-}
-
-fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext, guard: *colr_paint.Guard) FontError!void {
-    const info = try validateColrPaintRecord(data, colr, offset);
-    try guard.enter(offset);
-    defer guard.leave();
-    try guard.claimPaintRecord(data, colrPaintTable(colr), offset, info);
-
-    switch (info.kind) {
-        .colr_layers => {
-            const layer_count = data[offset + 1];
-            const first_layer_index = try bin.readU32At(data, offset + 2);
-            if (layer_count == 0) return;
-            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
-            const first: usize = @intCast(first_layer_index);
-            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
-            for (0..layer_count) |layer_offset| {
-                const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
-                try validateColorPaintVariationRefs(data, colr, paint_offset, context, guard);
-            }
-        },
-        .solid => {
-            if (data[offset] == 3) {
-                // PaintVarSolid varies only its alpha field, so varIndexBase
-                // must resolve exactly one delta-set reference. Validating it
-                // during parsing keeps malformed COLR graphs from reaching a
-                // renderer with a dangling ItemVariationStore reference.
-                try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, offset + 5), 1);
-            }
-        },
-        .glyph, .single_child => {
-            try validateColrVariableTransformVariationRefs(data, colr, offset, info, context);
-            try validateColorPaintVariationRefs(data, colr, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), context, guard);
-        },
-        .composite => {
-            try validateColorPaintVariationRefs(data, colr, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), context, guard);
-            try validateColorPaintVariationRefs(data, colr, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 5), context, guard);
-        },
-        .color_line => try validateColorPaintGradientVariationRefs(data, colr, offset, context),
-        .colr_glyph, .terminal => return,
-    }
-}
-
-fn validateColrVariableTransformVariationRefs(data: []const u8, colr: TableRecord, offset: usize, info: colr_paint.FormatInfo, context: ?*const ColrVariationContext) FontError!void {
-    const item_count = colrVariableTransformItemCount(data[offset]) orelse return;
-    // PaintVarTransform keeps varIndexBase in the referenced VarAffine2x3
-    // payload, after its six Fixed values. Other variable transforms append it
-    // directly to their paint record.
-    const var_index_offset = if (data[offset] == 13)
-        (try colr_paint.transformPayloadRange(data, colrPaintTable(colr), offset, info.min_size)).end - 4
+fn validateColrVariationData(
+    data: []const u8,
+    colr: TableRecord,
+    fvar: ?TableRecord,
+    glyph_count: u16,
+) FontError!void {
+    // Static COLR v1 data does not consume FVAR. Preserve that independence so
+    // merely carrying an unrelated FVAR table cannot affect a static color
+    // graph's validation path.
+    const has_store = colr.length >= 34 and
+        try bin.readU32At(data, colr.offset + 30) != 0;
+    const axis_count = if (has_store)
+        (try readFvarInfo(data, fvar orelse return error.BadSfnt)).axis_count
     else
-        offset + info.min_size - 4;
-    try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, var_index_offset), item_count);
-}
-
-fn colrVariableTransformItemCount(format: u8) ?usize {
-    return switch (format) {
-        13 => 6, // PaintVarTransform: xx, yx, xy, yy, dx, dy.
-        15 => 2, // PaintVarTranslate: dx, dy.
-        17 => 2, // PaintVarScale: scaleX, scaleY.
-        19 => 4, // PaintVarScaleAroundCenter: scaleX, scaleY, centerX, centerY.
-        21 => 1, // PaintVarScaleUniform: scale.
-        23 => 3, // PaintVarScaleUniformAroundCenter: scale, centerX, centerY.
-        25 => 1, // PaintVarRotate: angle.
-        27 => 3, // PaintVarRotateAroundCenter: angle, centerX, centerY.
-        29 => 2, // PaintVarSkew: xSkewAngle, ySkewAngle.
-        31 => 4, // PaintVarSkewAroundCenter: xSkewAngle, ySkewAngle, centerX, centerY.
-        else => null,
-    };
-}
-
-fn validateColorPaintGradientVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext) FontError!void {
-    const format = data[offset];
-    const info = colr_paint.formatInfo(format).?;
-    const coordinate_item_count: usize = switch (format) {
-        5, 7 => 6,
-        9 => 4,
-        else => return,
-    };
-
-    // Variable gradient paints have two independent variation consumers: the
-    // paint's geometry varIndexBase and each VarColorStop's stop/alpha
-    // varIndexBase.  Validate both here so a syntactically valid gradient
-    // cannot later dereference missing delta-set rows only when variation
-    // coordinates are applied.
-    try validateColrVariationIndexSequence(
+        null;
+    return try colr_variation.validate(
         data,
-        colr,
-        context,
-        try bin.readU32At(data, offset + info.min_size - 4),
-        coordinate_item_count,
+        colrV1Table(colr),
+        axis_count,
+        glyph_count,
     );
-
-    const color_line_offset = try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1);
-    const stop_count: usize = @intCast(try bin.readU16At(data, color_line_offset + 1));
-    const stops_start = color_line_offset + 3;
-    for (0..stop_count) |index| {
-        // A VarColorStop varies StopOffset and Alpha; PaletteIndex remains a
-        // discrete CPAL reference and is checked by palette-bound validation.
-        try validateColrVariationIndexSequence(
-            data,
-            colr,
-            context,
-            try bin.readU32At(data, stops_start + index * colr_paint.colorStopSize(true) + 6),
-            2,
-        );
-    }
 }
 
 fn validateGlyphIdInMaxp(glyph_id: u32, glyph_count: u16) FontError!void {

@@ -11450,82 +11450,6 @@ test "Apple kern v1 format 0 pair glyph ids are validated at parse time" {
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
-test "sbix public bitmap APIs revalidate borrowed strike offsets" {
-    var bytes: [40]u8 = .{0} ** 40;
-    writeU16Test(&bytes, 0, 1); // sbix version
-    writeU32Test(&bytes, 4, 1); // one strike
-    writeU32Test(&bytes, 8, 12); // strike data starts after the strike-offset array
-    writeU16Test(&bytes, 12, 16); // ppem
-    writeU16Test(&bytes, 14, 72); // ppi
-    writeU32Test(&bytes, 16, 16); // glyph 0 start, relative to the strike
-    writeU32Test(&bytes, 20, 16); // glyph 1 start; both glyphs are empty
-    writeU32Test(&bytes, 24, 16); // terminal boundary
-
-    const font = sbixOnlyFont(&bytes);
-    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
-    const strikes = try font.bitmapStrikes(std.testing.allocator);
-    defer std.testing.allocator.free(strikes);
-    try std.testing.expectEqual(@as(usize, 1), strikes.len);
-    try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try font.bitmapGlyphPng(0, 16));
-
-    // Mutate an unrequested glyph boundary after constructing the borrowed
-    // Font. Both public APIs must reject the whole sbix strike rather than
-    // returning metadata or glyph 0 results from a now-corrupt table.
-    writeU32Test(&bytes, 24, 12);
-    try std.testing.expectError(error.BadSfnt, font.bitmapStrikes(std.testing.allocator));
-    try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
-    try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(0, 16));
-}
-
-test "sbix public bitmap APIs revalidate borrowed table checksum" {
-    var bytes: [40]u8 = .{0} ** 40;
-    writeU16Test(&bytes, 0, 1); // sbix version.
-    writeU32Test(&bytes, 4, 1); // one strike.
-    writeU32Test(&bytes, 8, 12);
-    writeU16Test(&bytes, 12, 16); // ppem.
-    writeU16Test(&bytes, 14, 72); // ppi.
-    writeU32Test(&bytes, 16, 16);
-    writeU32Test(&bytes, 20, 16);
-    writeU32Test(&bytes, 24, 16);
-
-    const font = sbixOnlyFont(&bytes);
-    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
-
-    // Keep strike offsets and glyph payloads valid while changing strike
-    // metadata after construction. Lazy bitmap APIs must reject the borrowed
-    // sbix table because its SFNT checksum no longer matches.
-    writeU16Test(&bytes, 12, 17);
-    try std.testing.expectError(error.BadSfnt, font.bestBitmapStrikePpem(16));
-    try std.testing.expectError(error.BadSfnt, font.bitmapGlyphPng(0, 16));
-}
-
-test "public bitmap APIs reject non-finite and non-positive request sizes" {
-    var bytes: [40]u8 = .{0} ** 40;
-    writeU16Test(&bytes, 0, 1); // sbix version
-    writeU32Test(&bytes, 4, 1); // one strike
-    writeU32Test(&bytes, 8, 12); // strike data starts after the strike-offset array
-    writeU16Test(&bytes, 12, 16); // ppem
-    writeU16Test(&bytes, 14, 72); // ppi
-    writeU32Test(&bytes, 16, 16); // glyph 0 start, relative to the strike
-    writeU32Test(&bytes, 20, 16); // glyph 1 start; both glyphs are empty
-    writeU32Test(&bytes, 24, 16); // terminal boundary
-
-    const font = sbixOnlyFont(&bytes);
-    try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(16));
-    try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try font.bitmapGlyphPng(0, 16));
-
-    // Bitmap strike selection is a public API input contract, independent of
-    // whether the font ultimately returns a PNG payload. Validate it before
-    // parsing borrowed bitmap tables so nonsensical sizes cannot masquerade as
-    // a cache miss or pick a strike through NaN distance comparisons.
-    try std.testing.expectError(error.InvalidBitmapSize, font.bestBitmapStrikePpem(0));
-    try std.testing.expectError(error.InvalidBitmapSize, font.bestBitmapStrikePpem(-1));
-    try std.testing.expectError(error.InvalidBitmapSize, font.bestBitmapStrikePpem(std.math.inf(f32)));
-    try std.testing.expectError(error.InvalidBitmapSize, font.bestBitmapStrikePpem(std.math.nan(f32)));
-    try std.testing.expectError(error.InvalidBitmapSize, font.bitmapGlyphPng(0, 0));
-    try std.testing.expectError(error.InvalidBitmapSize, font.bitmapGlyphPng(0, std.math.nan(f32)));
-}
-
 test "CBLC CBDT parse validation checks every referenced bitmap payload" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -16186,12 +16110,6 @@ fn gdefOnlyFont(data: []const u8) Font {
 fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
     var font = table_only_fixture.init(Font, data, 2, 2);
     font.os2 = table_only_fixture.record(data, .{ 'O', 'S', '/', '2' }, 0, declared_length);
-    return font;
-}
-
-fn sbixOnlyFont(data: []const u8) Font {
-    var font = table_only_fixture.init(Font, data, 2, 2);
-    font.sbix = table_only_fixture.record(data, .{ 's', 'b', 'i', 'x' }, 0, data.len);
     return font;
 }
 

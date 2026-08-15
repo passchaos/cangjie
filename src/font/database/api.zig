@@ -1,7 +1,7 @@
 //! Public font database wrapper.
 //!
 //! Discovery owns its imported font bytes. The wrapper converts the internal
-//! cascade allocation to opaque face pointers before it crosses the facade.
+//! cascade allocation to public face pointers before it crosses the facade.
 
 const std = @import("std");
 
@@ -23,18 +23,18 @@ pub const Query = impl.FontQuery;
 pub const Source = impl.FontSource;
 pub const Style = impl.FontStyle;
 
-pub const Database = opaque {
-    pub fn init(allocator: std.mem.Allocator) !*Database {
-        const implementation = try allocator.create(impl.FontDatabase);
-        implementation.* = impl.FontDatabase.init(allocator);
-        return @ptrCast(implementation);
+pub const Database = struct {
+    /// Source-visible implementation storage; use the focused methods below.
+    implementation: impl.FontDatabase,
+
+    pub fn init(allocator: std.mem.Allocator) Database {
+        return .{
+            .implementation = impl.FontDatabase.init(allocator),
+        };
     }
 
     pub fn deinit(self: *Database) void {
-        const implementation = implMut(self);
-        const allocator = implementation.allocator;
-        implementation.deinit();
-        allocator.destroy(implementation);
+        self.implementation.deinit();
     }
 
     pub fn addFace(
@@ -247,9 +247,9 @@ pub const Database = opaque {
 };
 
 fn implMut(database: *Database) *impl.FontDatabase {
-    return @ptrCast(@alignCast(database));
+    return &database.implementation;
 }
 
 fn implConst(database: *const Database) *const impl.FontDatabase {
-    return @ptrCast(@alignCast(database));
+    return &database.implementation;
 }

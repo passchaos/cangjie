@@ -144,7 +144,7 @@ fn writeSfntSearchParameters(data: []u8, table_count: u16) void {
     std.mem.writeInt(u16, data[10..12], table_count * 16 - search_range, .big);
 }
 
-pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !*cangjie.font.Face {
+pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !cangjie.font.Face {
     return try cangjie.font.Face.parseIndex(allocator, font_bytes, options.face_index);
 }
 
@@ -156,7 +156,7 @@ pub fn resolvedVariationCoords(allocator: std.mem.Allocator, font: *const cangji
 }
 
 pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, options: options_mod.Options) !BenchResult {
-    const engine = try cangjie.Engine.init(allocator, .{
+    var engine = cangjie.Engine.init(allocator, .{
         .cache_font_data = options.use_caches,
         .cache_shaped_runs = options.use_shaped_cache,
     });
@@ -195,7 +195,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     while (warmup_index < options.warmup) : (warmup_index += 1) {
         for (text_lines) |line| {
             _ = try shapeOnce(
-                engine,
+                &engine,
                 font,
                 cascade,
                 line,
@@ -228,7 +228,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         while (i < options.iterations) : (i += 1) {
             for (text_lines, 0..) |line, line_index| {
                 const glyphs = try shapeOnce(
-                    engine,
+                    &engine,
                     font,
                     cascade,
                     line,

@@ -27,7 +27,7 @@ test "public facade uses domain names without legacy aliases" {
     );
 
     const Face = cangjie.font.Face;
-    try std.testing.expect(@typeInfo(Face) == .@"opaque");
+    try std.testing.expect(@typeInfo(Face) == .@"struct");
     try std.testing.expect(@hasDecl(Face, "parse"));
     try std.testing.expect(@hasDecl(Face, "parseIndex"));
     try std.testing.expect(@hasDecl(Face, "properties"));
@@ -54,17 +54,26 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(
         !@hasDecl(Face, "resolvedSvgGlyphDocumentForRaster"),
     );
+    inline for (.{
+        cangjie.font.Glyphs,
+        cangjie.font.Metrics,
+        cangjie.font.Names,
+        cangjie.font.Variations,
+        cangjie.font.Color,
+    }) |View| {
+        try std.testing.expect(@typeInfo(View) == .@"struct");
+    }
 
     const Rasterizer = cangjie.render.Rasterizer;
-    try std.testing.expect(@typeInfo(Rasterizer) == .@"opaque");
-    try std.testing.expect(@typeInfo(cangjie.render.Prepared) == .@"opaque");
+    try std.testing.expect(@typeInfo(Rasterizer) == .@"struct");
+    try std.testing.expect(@typeInfo(cangjie.render.Prepared) == .@"struct");
     try std.testing.expect(@hasDecl(Rasterizer, "drawRun"));
     try std.testing.expect(@hasDecl(Rasterizer, "drawColorGlyph"));
     try std.testing.expect(!@hasDecl(Rasterizer, "renderRun"));
     try std.testing.expect(!@hasDecl(Rasterizer, "renderColorGlyph"));
 
     const Database = cangjie.font.database.Database;
-    try std.testing.expect(@typeInfo(Database) == .@"opaque");
+    try std.testing.expect(@typeInfo(Database) == .@"struct");
     try std.testing.expect(@hasDecl(Database, "addFace"));
     try std.testing.expect(@hasDecl(Database, "cascadeForText"));
     try std.testing.expect(@hasDecl(Database, "layoutAttributed"));
@@ -74,16 +83,20 @@ test "public facade uses domain names without legacy aliases" {
         !@hasDecl(Database, "layoutAttributedParagraphUtf8"),
     );
     try std.testing.expect(
-        @typeInfo(cangjie.font.container.OwnedFace) == .@"opaque",
+        @typeInfo(cangjie.font.container.OwnedFace) == .@"struct",
+    );
+    try std.testing.expect(@typeInfo(cangjie.Engine) == .@"struct");
+    try std.testing.expect(
+        @typeInfo(cangjie.text.segmentation.WordDictionary) == .@"struct",
     );
 }
 
-test "opaque face views cover the normal application workflow" {
+test "concrete face views cover the normal application workflow" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(bytes);
 
-    const face = try cangjie.font.Face.parse(allocator, bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
     defer face.deinit();
 
     const properties = face.properties();
@@ -93,19 +106,43 @@ test "opaque face views cover the normal application workflow" {
     const metrics = try face.metrics().horizontal(1);
     try std.testing.expect(metrics.advance_width > 0);
 
-    const engine = try cangjie.Engine.init(allocator, .{});
+    var engine = cangjie.Engine.init(allocator, .{});
     defer engine.deinit();
-    const run = try engine.shape(face, .{ .text = "A", .font_size = 20 });
+    const run = try engine.shape(&face, .{ .text = "A", .font_size = 20 });
     try std.testing.expectEqual(@as(usize, 1), run.glyphs.len);
-    try std.testing.expectEqual(face, run.font);
+    try std.testing.expectEqual(&face, run.font);
 }
 
-test "public container owner keeps decoded bytes behind its handle" {
+test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);
     defer allocator.free(bytes);
 
-    const owned = try cangjie.font.container.OwnedFace.load(
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    var original = cangjie.Engine.init(allocator, .{});
+    // Moving before first use is the normal return-value path. Moving after a
+    // call additionally proves that work methods rebind cache pointers that
+    // previously targeted the old value address.
+    _ = try original.shape(&face, .{ .text = "A", .font_size = 20 });
+    var moved = original;
+    original = undefined;
+    defer moved.deinit();
+
+    const run = try moved.shape(
+        &face,
+        .{ .text = "AA", .font_size = 20 },
+    );
+    try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+}
+
+test "public container value keeps decoded bytes alive for its face" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var owned = try cangjie.font.container.OwnedFace.load(
         allocator,
         bytes,
         bytes.len,
@@ -117,12 +154,12 @@ test "public container owner keeps decoded bytes behind its handle" {
     );
 }
 
-test "public database returns opaque faces and cascades" {
+test "public database returns concrete faces and cascades" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildNamedTtf(allocator);
     defer allocator.free(bytes);
 
-    const database = try cangjie.font.database.Database.init(allocator);
+    var database = cangjie.font.database.Database.init(allocator);
     defer database.deinit();
     _ = try database.addBytes(bytes);
 

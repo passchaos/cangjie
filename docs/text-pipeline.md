@@ -219,7 +219,7 @@ pipeline stages do not import the paragraph/layout orchestrator.
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 
-- The public value is an opaque immutable handle constructed for Thai, Lao,
+- The public value is a concrete immutable dictionary constructed for Thai, Lao,
   Khmer, or Myanmar. Construction copies and validates UTF-8 words, rejects
   mixed-script and duplicate entries, and stores a Unicode-scalar trie.
 - Dictionary segmentation uses dynamic programming over each matching script
@@ -389,7 +389,7 @@ rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
 `cangjie.Engine` is the public ownership boundary for this pipeline.
-It is an opaque, heap-backed handle that owns reusable output/scratch arrays
+It is a concrete value type that owns reusable output/scratch arrays
 plus cmap, metric, fallback, GDEF, GSUB/GPOS proof/plan, and optional whole-run
 caches. `Engine.Options` independently controls font-derived and whole-run
 caching. Its methods accept named `cangjie.shaping.Request`,

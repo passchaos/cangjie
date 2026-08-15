@@ -1,7 +1,8 @@
 //! Public reusable ownership boundary for shaping and paragraph layout.
 //!
-//! The engine is a small heap-backed handle. Internal scratch arrays and
-//! caches cannot be accidentally copied or rewired by callers.
+//! The engine is a concrete source-level value with stable public methods.
+//! Methods rebind internal cache pointers before work so moving an initialized
+//! value remains safe until a returned borrowing view is requested.
 
 const std = @import("std");
 
@@ -54,7 +55,11 @@ pub const StyledParagraphRequest = struct {
 /// shaping/layout call. Faces referenced by cache keys and returned runs must
 /// outlive the engine, or `clearCaches` must be called before they are freed.
 /// An engine is not thread-safe; use one engine per concurrent worker.
-pub const Engine = opaque {
+pub const Engine = struct {
+    /// Source-visible implementation storage. Applications should use the
+    /// methods below rather than depending on this field's evolving layout.
+    state: state_mod.State,
+
     pub const Options = struct {
         cache_font_data: bool = true,
         cache_shaped_runs: bool = false,
@@ -69,22 +74,18 @@ pub const Engine = opaque {
     pub fn init(
         allocator: std.mem.Allocator,
         options: Options,
-    ) !*Engine {
-        const state = try allocator.create(state_mod.State);
-        state.* = state_mod.State.init(
-            allocator,
-            options.cache_font_data,
-            options.cache_shaped_runs,
-        );
-        state.bindPlanCaches();
-        return @ptrCast(state);
+    ) Engine {
+        return .{
+            .state = state_mod.State.init(
+                allocator,
+                options.cache_font_data,
+                options.cache_shaped_runs,
+            ),
+        };
     }
 
     pub fn deinit(self: *Engine) void {
-        const state: *state_mod.State = @ptrCast(@alignCast(self));
-        const allocator = state.allocator;
-        state.deinit();
-        allocator.destroy(state);
+        self.state.deinit();
     }
 
     /// Enable or disable complete shaped-run caching without discarding entries.
@@ -112,7 +113,7 @@ pub const Engine = opaque {
         io: std.Io,
         fast_path: bool,
     ) void {
-        const state = self.getState();
+        const state = self.getStateForWork();
         state.output.shape_profile = profile;
         state.output.profile_io = io;
         state.output.profile_fast_path = fast_path;
@@ -130,7 +131,7 @@ pub const Engine = opaque {
         face: *const face_mod.Face,
         request: ShapeRequest,
     ) !layout_mod.GlyphRun {
-        const state = self.getState();
+        const state = self.getStateForWork();
         const font = face_mod.backend.font(face);
         if (request.feature_ranges.len != 0) {
             return text_shaper.TextShaper
@@ -162,7 +163,7 @@ pub const Engine = opaque {
         cascade: face_mod.Cascade,
         request: CascadeRequest,
     ) !layout_mod.ShapedText {
-        const state = self.getState();
+        const state = self.getStateForWork();
         return layout_mod.TextShaper.shapeUtf8CascadeWithCaches(
             internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
@@ -182,7 +183,7 @@ pub const Engine = opaque {
         cascade: face_mod.Cascade,
         request: CascadeRequest,
     ) !layout_mod.ScriptedText {
-        const state = self.getState();
+        const state = self.getStateForWork();
         return layout_mod.TextShaper.shapeUtf8ScriptRuns(
             internalCascade(cascade),
             &state.output,
@@ -198,7 +199,7 @@ pub const Engine = opaque {
         cascade: face_mod.Cascade,
         request: ParagraphRequest,
     ) !layout_mod.ShapedParagraph {
-        const state = self.getState();
+        const state = self.getStateForWork();
         return layout_mod.TextShaper.shapeParagraphUtf8WithCaches(
             state.allocator,
             internalCascade(cascade),
@@ -219,7 +220,7 @@ pub const Engine = opaque {
         cascade: face_mod.Cascade,
         request: ParagraphRequest,
     ) !layout_mod.ParagraphLayout {
-        const state = self.getState();
+        const state = self.getStateForWork();
         return layout_mod.TextShaper.layoutParagraphUtf8WithCaches(
             internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
@@ -238,7 +239,7 @@ pub const Engine = opaque {
         cascade: face_mod.Cascade,
         request: StyledParagraphRequest,
     ) !StyledParagraph {
-        const state = self.getState();
+        const state = self.getStateForWork();
         const paragraph = try layout_mod.TextShaper.layoutStyledParagraphUtf8(
             internalCascade(cascade),
             &state.output,
@@ -282,11 +283,16 @@ pub const Engine = opaque {
     }
 
     fn getState(self: *Engine) *state_mod.State {
-        return @ptrCast(@alignCast(self));
+        return &self.state;
+    }
+
+    fn getStateForWork(self: *Engine) *state_mod.State {
+        self.state.bindPlanCaches();
+        return &self.state;
     }
 
     fn getStateConst(self: *const Engine) *const state_mod.State {
-        return @ptrCast(@alignCast(self));
+        return &self.state;
     }
 };
 

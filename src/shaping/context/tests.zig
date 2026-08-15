@@ -12,7 +12,7 @@ test "engine owns reusable caches and resets them together" {
     var font = try Font.parse(std.testing.allocator, bytes);
     defer font.deinit();
 
-    const engine = try context_mod.Engine.init(std.testing.allocator, .{});
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
     defer engine.deinit();
 
     const face = face_mod.backend.face(&font);
@@ -46,7 +46,7 @@ test "engine optionally retains complete cascade runs" {
     const fonts = [_]*const Font{&font};
     const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
 
-    const engine = try context_mod.Engine.init(
+    var engine = context_mod.Engine.init(
         std.testing.allocator,
         .{ .cache_shaped_runs = true },
     );
@@ -66,7 +66,7 @@ test "engine can bypass all font-derived caches" {
     var font = try Font.parse(std.testing.allocator, bytes);
     defer font.deinit();
 
-    const engine = try context_mod.Engine.init(
+    var engine = context_mod.Engine.init(
         std.testing.allocator,
         .{ .cache_font_data = false },
     );
@@ -89,7 +89,7 @@ test "engine owns styled metadata and paragraph measurement" {
     const fonts = [_]*const Font{&font};
     const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
 
-    const engine = try context_mod.Engine.init(std.testing.allocator, .{});
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
     defer engine.deinit();
     const spans = [_]layout.StyledParagraphSpan{.{
         .byte_start = 0,

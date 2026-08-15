@@ -1,10 +1,10 @@
 //! Optional dictionary segmentation for scripts whose orthography normally
 //! omits spaces between words.
 //!
-//! The public dictionary is an opaque immutable handle that can be shared by
-//! multiple `Engine` instances. Internally, words are stored as a
-//! Unicode-scalar trie; segmentation returns UTF-8 byte boundaries so it
-//! composes directly with paragraph coordinates and shaping safety checks.
+//! The public dictionary is a concrete immutable source-level type that can be
+//! shared by multiple `Engine` instances. Words are stored as a Unicode-scalar
+//! trie; segmentation returns UTF-8 byte boundaries so it composes directly
+//! with paragraph coordinates and shaping safety checks.
 
 const std = @import("std");
 
@@ -22,7 +22,7 @@ const Node = struct {
 
 const Impl = struct {
     allocator: std.mem.Allocator,
-    script: WordBreakDictionary.Script,
+    script: DictionaryScript,
     nodes: std.ArrayList(Node) = .empty,
     max_word_scalars: usize = 0,
 
@@ -70,18 +70,23 @@ const Impl = struct {
     }
 };
 
+const DictionaryScript = enum {
+    thai,
+    lao,
+    khmer,
+    myanmar,
+};
+
 /// Immutable language word list for scripts that normally omit spaces.
 ///
 /// Construction copies words into an internal trie, so the source word slices
-/// may be released immediately. The returned handle is safe to share between
+/// may be released immediately. The returned dictionary is safe to share between
 /// contexts and concurrent layout calls; only `deinit` mutates it.
-pub const WordBreakDictionary = opaque {
-    pub const Script = enum {
-        thai,
-        lao,
-        khmer,
-        myanmar,
-    };
+pub const WordBreakDictionary = struct {
+    /// Source-visible trie storage; its layout is not a compatibility promise.
+    implementation: Impl,
+
+    pub const Script = DictionaryScript;
     pub const InitError = std.mem.Allocator.Error || error{
         EmptyDictionary,
         EmptyDictionaryWord,
@@ -95,30 +100,27 @@ pub const WordBreakDictionary = opaque {
         allocator: std.mem.Allocator,
         script: Script,
         words: []const []const u8,
-    ) InitError!*WordBreakDictionary {
+    ) InitError!WordBreakDictionary {
         if (words.len == 0) return error.EmptyDictionary;
-        const result = try allocator.create(Impl);
-        result.* = .{
-            .allocator = allocator,
-            .script = script,
+        var result = WordBreakDictionary{
+            .implementation = .{
+                .allocator = allocator,
+                .script = script,
+            },
         };
-        errdefer allocator.destroy(result);
-        errdefer result.deinit();
-        try result.nodes.append(allocator, .{});
-        for (words) |word| try result.insert(word);
-        return @ptrCast(result);
+        errdefer result.implementation.deinit();
+        try result.implementation.nodes.append(allocator, .{});
+        for (words) |word| try result.implementation.insert(word);
+        return result;
     }
 
     pub fn deinit(self: *WordBreakDictionary) void {
-        const result: *Impl = @ptrCast(@alignCast(self));
-        const allocator = result.allocator;
-        result.deinit();
-        allocator.destroy(result);
+        self.implementation.deinit();
+        self.* = undefined;
     }
 };
 
-/// Internal script identity used by the segmentation pass. The module root
-/// exports only the opaque handle, so helpers do not expand the public surface.
+/// Internal script identity used by the segmentation pass.
 pub fn scriptOf(dictionary: *const WordBreakDictionary) unicode.Script {
     return unicodeScript(implConst(dictionary).script);
 }
@@ -161,7 +163,7 @@ pub fn matchEnds(
 }
 
 fn implConst(dictionary: *const WordBreakDictionary) *const Impl {
-    return @ptrCast(@alignCast(dictionary));
+    return &dictionary.implementation;
 }
 
 fn unicodeScript(script: WordBreakDictionary.Script) unicode.Script {
@@ -208,7 +210,7 @@ fn decodeValid(text: []const u8, offset: usize) Decoded {
 }
 
 test "dictionary validates script and reports longest matches first" {
-    const dictionary = try WordBreakDictionary.init(
+    var dictionary = try WordBreakDictionary.init(
         std.testing.allocator,
         .thai,
         &.{ "ภาษา", "ภาษาไทย", "ไทย" },
@@ -217,7 +219,7 @@ test "dictionary validates script and reports longest matches first" {
 
     var matches: [4]usize = undefined;
     const text = "ภาษาไทย";
-    const count = matchEnds(dictionary, text, 0, &matches);
+    const count = matchEnds(&dictionary, text, 0, &matches);
     try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqual(text.len, matches[0]);
     try std.testing.expectEqual("ภาษา".len, matches[1]);
@@ -259,7 +261,7 @@ test "dictionary accepts every supported script" {
         .{ .script = .myanmar, .word = "\u{1000}" },
     };
     for (samples) |sample| {
-        const dictionary = try WordBreakDictionary.init(
+        var dictionary = try WordBreakDictionary.init(
             std.testing.allocator,
             sample.script,
             &.{sample.word},

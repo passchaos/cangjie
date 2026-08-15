@@ -3,74 +3,73 @@
 const font_mod = @import("../../../font.zig");
 const glyph_mod = @import("../../../glyph.zig");
 
-pub const View = opaque {
+pub const View = struct {
+    /// Borrowed source-level view backing; use the methods below.
+    implementation: *const font_mod.Font,
+
     pub fn horizontal(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
     ) font_mod.FontError!font_mod.HorizontalMetricInfo {
-        return font(self).horizontalMetrics(glyph_id);
+        return self.implementation.horizontalMetrics(glyph_id);
     }
 
     pub fn horizontalAt(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
         normalized_coords: []const f32,
     ) font_mod.FontError!font_mod.HorizontalMetricInfo {
-        return font(self).horizontalMetricsAtCoords(
+        return self.implementation.horizontalMetricsAtCoords(
             glyph_id,
             normalized_coords,
         );
     }
 
-    pub fn hasVertical(self: *const View) bool {
-        return font(self).hasVerticalMetrics();
+    pub fn hasVertical(self: View) bool {
+        return self.implementation.hasVerticalMetrics();
     }
 
     pub fn vertical(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
     ) font_mod.FontError!?font_mod.VerticalMetrics {
-        return font(self).verticalMetrics(glyph_id);
+        return self.implementation.verticalMetrics(glyph_id);
     }
 
     pub fn verticalAt(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
         normalized_coords: []const f32,
     ) font_mod.FontError!?font_mod.VerticalMetrics {
-        return font(self).verticalMetricsAtCoords(
+        return self.implementation.verticalMetricsAtCoords(
             glyph_id,
             normalized_coords,
         );
     }
 
     pub fn verticalOrigin(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
     ) font_mod.FontError!?i16 {
-        return font(self).verticalOriginY(glyph_id);
+        return self.implementation.verticalOriginY(glyph_id);
     }
 
     /// Vertical origin used by shaping when VORG is absent.
     pub fn shapingVerticalOrigin(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
         normalized_coords: []const f32,
     ) font_mod.FontError!i32 {
         return font_mod.shaping.verticalOriginYAtCoords(
-            font(self),
+            self.implementation,
             glyph_id,
             normalized_coords,
         );
     }
 
     pub fn decoration(
-        self: *const View,
+        self: View,
     ) font_mod.FontError!font_mod.FontDecorationMetrics {
-        return font(self).decorationMetrics();
+        return self.implementation.decorationMetrics();
     }
 };
-
-fn font(view: *const View) *const font_mod.Font {
-    return @ptrCast(@alignCast(view));
-}

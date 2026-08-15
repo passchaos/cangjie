@@ -21,13 +21,13 @@ pub fn main(init: std.process.Init) !void {
 
     const font_bytes = try cangjie.testing.test_font.buildMinimalTtf(allocator);
     defer allocator.free(font_bytes);
-    const font = try cangjie.font.Face.parse(allocator, font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
     defer font.deinit();
-    const fonts = [_]*const cangjie.font.Face{font};
+    const fonts = [_]*const cangjie.font.Face{&font};
     const cascade = cangjie.font.Cascade.init(&fonts);
-    const uncached_context = try cangjie.Engine.init(allocator, .{});
+    var uncached_context = cangjie.Engine.init(allocator, .{});
     defer uncached_context.deinit();
-    const cached_context = try cangjie.Engine.init(
+    var cached_context = cangjie.Engine.init(
         allocator,
         .{ .cache_shaped_runs = true },
     );

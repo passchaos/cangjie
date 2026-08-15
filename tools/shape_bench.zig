@@ -76,9 +76,9 @@ pub fn main(init: std.process.Init) !void {
 
     const result = switch (options.engine) {
         .cangjie => result: {
-            const font = try runner.parseFont(allocator, font_bytes, options);
+            var font = try runner.parseFont(allocator, font_bytes, options);
             defer font.deinit();
-            break :result try runner.runCangjie(init.io, allocator, font, options);
+            break :result try runner.runCangjie(init.io, allocator, &font, options);
         },
         .coretext => try coretext.run(init.io, allocator, font_bytes, options),
         .harfrust => try harfrust.run(init.io, allocator, options),
@@ -139,9 +139,9 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
         options.compare_positions = false;
     }
 
-    const font = try runner.parseFont(allocator, font_bytes, options);
+    var font = try runner.parseFont(allocator, font_bytes, options);
     defer font.deinit();
-    const cangjie_result = try runner.runCangjie(io, allocator, font, options);
+    const cangjie_result = try runner.runCangjie(io, allocator, &font, options);
     defer freeResult(allocator, cangjie_result);
 
     var reference_options = options;
@@ -215,9 +215,9 @@ fn runReferenceComparison(io: std.Io, allocator: std.mem.Allocator, font_bytes: 
             std.debug.print("\nsource_codepoints=", .{});
             printSourceCodepoints(mismatch_text);
             std.debug.print("\ncangjie_glyph_window=", .{});
-            try printGlyphWindow(font, m.cangjie_glyph_ids, m.cangjie_clusters, diff_index);
+            try printGlyphWindow(&font, m.cangjie_glyph_ids, m.cangjie_clusters, diff_index);
             std.debug.print("\n{s}_glyph_window=", .{reference_label});
-            try printGlyphWindow(font, m.harfrust.glyph_ids, m.harfrust.clusters, diff_index);
+            try printGlyphWindow(&font, m.harfrust.glyph_ids, m.harfrust.clusters, diff_index);
         }
         if (m.kind == .cluster) {
             std.debug.print("\ncangjie_clusters=", .{});

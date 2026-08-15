@@ -5,64 +5,76 @@ const std = @import("std");
 const font_mod = @import("../../../font.zig");
 const glyph_mod = @import("../../../glyph.zig");
 
-pub const View = opaque {
+pub const View = struct {
+    /// Borrowed source-level view backing; use the methods below.
+    implementation: *const font_mod.Font,
+
     pub fn index(
-        self: *const View,
+        self: View,
         codepoint: u21,
     ) font_mod.FontError!glyph_mod.GlyphId {
-        return font(self).glyphIndex(codepoint);
+        return self.implementation.glyphIndex(codepoint);
     }
 
     pub fn indexForVariation(
-        self: *const View,
+        self: View,
         codepoint: u21,
         selector: u21,
     ) font_mod.FontError!?glyph_mod.GlyphId {
-        return font(self).glyphIndexWithVariation(codepoint, selector);
+        return self.implementation.glyphIndexWithVariation(
+            codepoint,
+            selector,
+        );
     }
 
     pub fn variationKind(
-        self: *const View,
+        self: View,
         codepoint: u21,
         selector: u21,
     ) font_mod.FontError!font_mod.VariationSequenceKind {
-        return font(self).variationSequenceKind(codepoint, selector);
+        return self.implementation.variationSequenceKind(
+            codepoint,
+            selector,
+        );
     }
 
-    pub fn hasOutlines(self: *const View) bool {
-        return font(self).hasOutlineData();
+    pub fn hasOutlines(self: View) bool {
+        return self.implementation.hasOutlineData();
     }
 
     pub fn bounds(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
     ) font_mod.FontError!glyph_mod.Bounds {
-        return font(self).glyphBounds(glyph_id);
+        return self.implementation.glyphBounds(glyph_id);
     }
 
     pub fn boundsAt(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
         normalized_coords: []const f32,
     ) font_mod.FontError!glyph_mod.Bounds {
-        return font(self).glyphBoundsAtCoords(glyph_id, normalized_coords);
+        return self.implementation.glyphBoundsAtCoords(
+            glyph_id,
+            normalized_coords,
+        );
     }
 
     pub fn outline(
-        self: *const View,
+        self: View,
         allocator: std.mem.Allocator,
         glyph_id: glyph_mod.GlyphId,
     ) font_mod.FontError!glyph_mod.GlyphOutline {
-        return font(self).glyphOutline(allocator, glyph_id);
+        return self.implementation.glyphOutline(allocator, glyph_id);
     }
 
     pub fn outlineAt(
-        self: *const View,
+        self: View,
         allocator: std.mem.Allocator,
         glyph_id: glyph_mod.GlyphId,
         normalized_coords: []const f32,
     ) font_mod.FontError!glyph_mod.GlyphOutline {
-        return font(self).glyphOutlineAtCoords(
+        return self.implementation.glyphOutlineAtCoords(
             allocator,
             glyph_id,
             normalized_coords,
@@ -70,13 +82,9 @@ pub const View = opaque {
     }
 
     pub fn name(
-        self: *const View,
+        self: View,
         glyph_id: glyph_mod.GlyphId,
     ) font_mod.FontError!?[]const u8 {
-        return font(self).glyphName(glyph_id);
+        return self.implementation.glyphName(glyph_id);
     }
 };
-
-fn font(view: *const View) *const font_mod.Font {
-    return @ptrCast(@alignCast(view));
-}

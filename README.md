@@ -18,13 +18,13 @@ paragraph layout, and CPU rasterization behind domain-oriented APIs:
 ```zig
 const cangjie = @import("cangjie");
 
-const face = try cangjie.font.Face.parse(allocator, font_bytes);
+var face = try cangjie.font.Face.parse(allocator, font_bytes);
 defer face.deinit();
 
-const engine = try cangjie.Engine.init(allocator, .{});
+var engine = cangjie.Engine.init(allocator, .{});
 defer engine.deinit();
 
-const run = try engine.shape(face, .{
+const run = try engine.shape(&face, .{
     .text = "Hello, 世界",
     .font_size = 32,
 });
@@ -32,7 +32,7 @@ const run = try engine.shape(face, .{
 var target = try cangjie.render.GrayTarget.init(allocator, 640, 96);
 defer target.deinit();
 
-const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+var rasterizer = cangjie.render.Rasterizer.init(allocator);
 defer rasterizer.deinit();
 try rasterizer.drawRun(&target, run, 16, 64);
 ```
@@ -53,3 +53,9 @@ under `text.bidi`, `text.segmentation`, `text.script`, `text.opentype`,
 `font.metadata.core`, `metrics`, `variations`, `color`, `layout`, `math`, and
 `incremental`; AAT-specific records live one level deeper at
 `font.metadata.layout.aat`.
+
+Cangjie is a Zig source library, not a stable binary ABI. Public owners such as
+`font.Face`, `Engine`, `font.database.Database`, and `render.Rasterizer` are
+concrete value types. Their documented methods and records form the supported
+source API; internal storage layout may evolve between versions. Pointers in
+the API express borrowing and lifetime relationships, not opaque ABI handles.

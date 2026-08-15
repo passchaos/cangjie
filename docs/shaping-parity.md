@@ -2470,8 +2470,8 @@ shaping-performance superiority.
   from roughly 90.5M to 70.8M median, rather than regressing the common path.
   Full Roboto `en-words` (`checksum=fd03166ae7017b20`) and Amiri `fa-words`
   (`checksum=246e98435cc9c642`) still pass in-process HarfBuzz parity.
-- Repeated glyph rendering now has an explicit opaque `render.Prepared` API and a
-  `raster-prepared` benchmark mode. Preparation flattens curves once, removes
+- Repeated glyph rendering now has an explicit concrete `render.Prepared` API
+  and a `raster-prepared` benchmark mode. Preparation flattens curves once, removes
   horizontal/non-finite edges, computes slopes, sorts by activation y, and
   caches raw bounds; subsequent renders retain independent scratch and are safe
   to run concurrently. The existing direct `renderGlyph` scanner remains in its

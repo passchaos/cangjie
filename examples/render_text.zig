@@ -40,20 +40,20 @@ pub fn main(init: std.process.Init) !void {
     const font_bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, options.font_path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(font_bytes);
 
-    const face = try cangjie.font.Face.parse(allocator, font_bytes);
+    var face = try cangjie.font.Face.parse(allocator, font_bytes);
     defer face.deinit();
 
-    const engine = try cangjie.Engine.init(allocator, .{});
+    var engine = cangjie.Engine.init(allocator, .{});
     defer engine.deinit();
     const run = try engine.shape(
-        face,
+        &face,
         .{ .text = options.text, .font_size = options.size },
     );
 
     var target = try cangjie.render.GrayTarget.init(allocator, options.width, options.height);
     defer target.deinit();
 
-    const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     defer rasterizer.deinit();
     try rasterizer.drawRun(&target, run, options.x, options.baseline);
 

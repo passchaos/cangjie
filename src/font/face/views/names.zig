@@ -2,45 +2,44 @@
 
 const font_mod = @import("../../../font.zig");
 
-pub const View = opaque {
+pub const View = struct {
+    /// Borrowed source-level view backing; use the methods below.
+    implementation: *const font_mod.Font,
+
     pub fn get(
-        self: *const View,
+        self: View,
         name_id: font_mod.NameId,
         out: []u8,
     ) font_mod.FontError!?[]const u8 {
-        return font(self).nameString(name_id, out);
+        return self.implementation.nameString(name_id, out);
     }
 
     pub fn family(
-        self: *const View,
+        self: View,
         out: []u8,
     ) font_mod.FontError!?[]const u8 {
-        return font(self).familyName(out);
+        return self.implementation.familyName(out);
     }
 
     pub fn subfamily(
-        self: *const View,
+        self: View,
         out: []u8,
     ) font_mod.FontError!?[]const u8 {
-        return font(self).subfamilyName(out);
+        return self.implementation.subfamilyName(out);
     }
 
     pub fn full(
-        self: *const View,
+        self: View,
         out: []u8,
     ) font_mod.FontError!?[]const u8 {
-        return font(self).fullName(out);
+        return self.implementation.fullName(out);
     }
 
     pub fn languageTag(
-        self: *const View,
+        self: View,
         language_id: u16,
         out: []u8,
     ) font_mod.FontError!?[]const u8 {
-        return font(self).nameLanguageTag(language_id, out);
+        return self.implementation.nameLanguageTag(language_id, out);
     }
 };
-
-fn font(view: *const View) *const font_mod.Font {
-    return @ptrCast(@alignCast(view));
-}

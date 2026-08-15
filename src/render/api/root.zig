@@ -1,7 +1,7 @@
 //! Public rendering facade over the internal CPU rasterizer.
 //!
-//! The wrapper accepts opaque font faces and public shaping results. Internal
-//! paint traversal and parsed-font fast paths stay in `raster.zig`.
+//! The wrapper accepts public font faces and shaping results. These are concrete
+//! Zig source-level types; internal paint traversal stays in `raster.zig`.
 
 const std = @import("std");
 
@@ -10,32 +10,33 @@ const glyph_mod = @import("../../glyph.zig");
 const layout = @import("../../layout.zig");
 const raster = @import("../../raster.zig");
 
-pub const Rasterizer = opaque {
-    pub fn init(allocator: std.mem.Allocator) !*Rasterizer {
-        const implementation = try allocator.create(raster.Rasterizer);
-        implementation.* = raster.Rasterizer.init(allocator);
-        return @ptrCast(implementation);
+pub const Rasterizer = struct {
+    /// Source-visible implementation storage; its layout is not API-stable.
+    implementation: raster.Rasterizer,
+
+    pub fn init(allocator: std.mem.Allocator) Rasterizer {
+        return .{
+            .implementation = raster.Rasterizer.init(allocator),
+        };
     }
 
     pub fn deinit(self: *Rasterizer) void {
-        const implementation = impl(self);
-        const allocator = implementation.allocator;
-        allocator.destroy(implementation);
+        self.* = undefined;
     }
 
     pub fn setSampling(self: *Rasterizer, samples_per_axis: u8) void {
-        impl(self).samples_per_axis = samples_per_axis;
+        self.implementation.samples_per_axis = samples_per_axis;
     }
 
     pub fn setHintSize(self: *Rasterizer, size_px: ?f32) void {
-        impl(self).hint_size_px = size_px;
+        self.implementation.hint_size_px = size_px;
     }
 
     pub fn setSmallGlyphEmboldening(
         self: *Rasterizer,
         enabled: bool,
     ) void {
-        impl(self).embolden_small_glyphs = enabled;
+        self.implementation.embolden_small_glyphs = enabled;
     }
 
     pub fn prepare(
@@ -45,12 +46,9 @@ pub const Rasterizer = opaque {
         baseline_y: f32,
         font_size: f32,
         units_per_em: u16,
-    ) !*Prepared {
-        const implementation = impl(self);
-        const prepared = try implementation.allocator.create(PreparedImpl);
-        errdefer implementation.allocator.destroy(prepared);
-        prepared.* = .{
-            .allocator = implementation.allocator,
+    ) !Prepared {
+        const implementation = &self.implementation;
+        return .{
             .glyph = try implementation.prepareGlyph(
                 outline,
                 x,
@@ -59,7 +57,6 @@ pub const Rasterizer = opaque {
                 units_per_em,
             ),
         };
-        return @ptrCast(prepared);
     }
 
     pub fn drawPrepared(
@@ -67,9 +64,9 @@ pub const Rasterizer = opaque {
         target: *raster.RenderTarget,
         prepared: *const Prepared,
     ) !void {
-        return impl(self).renderPreparedGlyph(
+        return self.implementation.renderPreparedGlyph(
             target,
-            &preparedImpl(prepared).glyph,
+            &prepared.glyph,
         );
     }
 
@@ -82,7 +79,7 @@ pub const Rasterizer = opaque {
         font_size: f32,
         units_per_em: u16,
     ) !void {
-        return impl(self).renderGlyph(
+        return self.implementation.renderGlyph(
             target,
             outline,
             x,
@@ -99,7 +96,7 @@ pub const Rasterizer = opaque {
         x: f32,
         baseline_y: f32,
     ) !void {
-        return impl(self).renderRun(target, run, x, baseline_y);
+        return self.implementation.renderRun(target, run, x, baseline_y);
     }
 
     pub fn drawRunAt(
@@ -110,7 +107,7 @@ pub const Rasterizer = opaque {
         baseline_y: f32,
         normalized_coords: []const f32,
     ) !void {
-        return impl(self).renderRunAtCoords(
+        return self.implementation.renderRunAtCoords(
             target,
             run,
             x,
@@ -126,7 +123,7 @@ pub const Rasterizer = opaque {
         x: f32,
         baseline_y: f32,
     ) !void {
-        return impl(self).renderShapedText(
+        return self.implementation.renderShapedText(
             target,
             shaped,
             x,
@@ -142,7 +139,7 @@ pub const Rasterizer = opaque {
         baseline_y: f32,
         palette_index: u16,
     ) !void {
-        return impl(self).renderColorRun(
+        return self.implementation.renderColorRun(
             target,
             run,
             x,
@@ -161,7 +158,7 @@ pub const Rasterizer = opaque {
         baseline_y: f32,
         palette_index: u16,
     ) !void {
-        return impl(self).renderColorGlyph(
+        return self.implementation.renderColorGlyph(
             target,
             face_mod.backend.font(face),
             glyph_id,
@@ -183,7 +180,7 @@ pub const Rasterizer = opaque {
         palette_index: u16,
         normalized_coords: []const f32,
     ) !void {
-        return impl(self).renderColorGlyphAtCoords(
+        return self.implementation.renderColorGlyphAtCoords(
             target,
             face_mod.backend.font(face),
             glyph_id,
@@ -196,34 +193,17 @@ pub const Rasterizer = opaque {
     }
 };
 
-pub const Prepared = opaque {
+pub const Prepared = struct {
+    /// Prepared geometry owns its scanline storage and can outlive the
+    /// rasterizer that created it.
+    glyph: raster.PreparedGlyph,
+
     pub fn recommendedForRepeatedRendering(self: *const Prepared) bool {
-        return preparedImpl(self).glyph.recommendedForRepeatedRendering();
+        return self.glyph.recommendedForRepeatedRendering();
     }
 
     pub fn deinit(self: *Prepared) void {
-        const implementation = preparedImplMut(self);
-        const allocator = implementation.allocator;
-        implementation.glyph.deinit();
-        allocator.destroy(implementation);
+        self.glyph.deinit();
+        self.* = undefined;
     }
 };
-
-fn impl(rasterizer_value: *Rasterizer) *raster.Rasterizer {
-    return @ptrCast(@alignCast(rasterizer_value));
-}
-
-const PreparedImpl = struct {
-    /// Prepared geometry can outlive the rasterizer that created it. Retaining
-    /// the allocator here gives the handle an independent ownership contract.
-    allocator: std.mem.Allocator,
-    glyph: raster.PreparedGlyph,
-};
-
-fn preparedImpl(prepared: *const Prepared) *const PreparedImpl {
-    return @ptrCast(@alignCast(prepared));
-}
-
-fn preparedImplMut(prepared: *Prepared) *PreparedImpl {
-    return @ptrCast(@alignCast(prepared));
-}

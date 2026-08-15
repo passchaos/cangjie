@@ -28,13 +28,13 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
     const fonts = [_]*const font_mod.Font{&font};
     const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
 
-    const dictionary = try dictionary_mod.WordBreakDictionary.init(
+    var dictionary = try dictionary_mod.WordBreakDictionary.init(
         allocator,
         .thai,
         &.{ "ก", "ขคง" },
     );
     defer dictionary.deinit();
-    const engine = try context_mod.Engine.init(allocator, .{});
+    var engine = context_mod.Engine.init(allocator, .{});
     defer engine.deinit();
 
     // UAX #14 treats this SA run as one alphabetic fragment by default. Its
@@ -57,7 +57,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
             .font_size = 20,
             .options = .{
                 .max_width = 35,
-                .word_break_dictionary = dictionary,
+                .word_break_dictionary = &dictionary,
             },
         },
     );
@@ -70,7 +70,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
             .font_size = 20,
             .options = .{
                 .max_width = 100,
-                .word_break_dictionary = dictionary,
+                .word_break_dictionary = &dictionary,
             },
         },
     );
@@ -79,7 +79,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
     defer reflow.deinit();
     const retained = try shaped.layout(&reflow, .{
         .max_width = 35,
-        .word_break_dictionary = dictionary,
+        .word_break_dictionary = &dictionary,
     });
     try expectDictionaryFirstLine(retained);
     try std.testing.expectError(
@@ -101,7 +101,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
             .spans = &spans,
             .options = .{
                 .max_width = 35,
-                .word_break_dictionary = dictionary,
+                .word_break_dictionary = &dictionary,
             },
         },
     );
@@ -126,13 +126,13 @@ test "dictionary opportunities cannot bypass shaped boundary safety" {
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
     const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
-    const dictionary = try dictionary_mod.WordBreakDictionary.init(
+    var dictionary = try dictionary_mod.WordBreakDictionary.init(
         allocator,
         .thai,
         &.{ "ก", "ขคง" },
     );
     defer dictionary.deinit();
-    const engine = try context_mod.Engine.init(allocator, .{});
+    var engine = context_mod.Engine.init(allocator, .{});
     defer engine.deinit();
 
     const paragraph = try engine.layout(
@@ -142,7 +142,7 @@ test "dictionary opportunities cannot bypass shaped boundary safety" {
             .font_size = 20,
             .options = .{
                 .max_width = 20,
-                .word_break_dictionary = dictionary,
+                .word_break_dictionary = &dictionary,
             },
         },
     );

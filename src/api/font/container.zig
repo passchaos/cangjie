@@ -13,12 +13,17 @@ pub const decodeAlloc = impl.decodeFontContainerAlloc;
 pub const detectFormat = impl.detectFormat;
 
 /// Owns decoded SFNT bytes and the parsed face that borrows them.
-pub const OwnedFace = opaque {
+pub const OwnedFace = struct {
+    /// Source-visible ownership state; callers should use `face` and `deinit`.
+    allocator: std.mem.Allocator,
+    bytes: []u8,
+    parsed_face: face_mod.Face,
+
     pub fn load(
         allocator: std.mem.Allocator,
         data: []const u8,
         max_decoded_size: usize,
-    ) !*OwnedFace {
+    ) !OwnedFace {
         return loadIndex(allocator, data, 0, max_decoded_size);
     }
 
@@ -27,46 +32,28 @@ pub const OwnedFace = opaque {
         data: []const u8,
         face_index: usize,
         max_decoded_size: usize,
-    ) !*OwnedFace {
+    ) !OwnedFace {
         const bytes = try decodeAlloc(allocator, data, max_decoded_size);
         errdefer allocator.free(bytes);
-        const owned = try allocator.create(Implementation);
-        errdefer allocator.destroy(owned);
-        owned.* = .{
+        return .{
             .allocator = allocator,
             .bytes = bytes,
-            .face = try face_mod.Face.parseIndex(
+            .parsed_face = try face_mod.Face.parseIndex(
                 allocator,
                 bytes,
                 face_index,
             ),
         };
-        return @ptrCast(owned);
     }
 
     pub fn deinit(self: *OwnedFace) void {
-        const owned = implementation(self);
-        const allocator = owned.allocator;
-        owned.face.deinit();
-        allocator.free(owned.bytes);
-        allocator.destroy(owned);
+        const allocator = self.allocator;
+        self.parsed_face.deinit();
+        allocator.free(self.bytes);
+        self.* = undefined;
     }
 
     pub fn face(self: *const OwnedFace) *const face_mod.Face {
-        return implementationConst(self).face;
+        return &self.parsed_face;
     }
 };
-
-const Implementation = struct {
-    allocator: std.mem.Allocator,
-    bytes: []u8,
-    face: *face_mod.Face,
-};
-
-fn implementation(owned: *OwnedFace) *Implementation {
-    return @ptrCast(@alignCast(owned));
-}
-
-fn implementationConst(owned: *const OwnedFace) *const Implementation {
-    return @ptrCast(@alignCast(owned));
-}

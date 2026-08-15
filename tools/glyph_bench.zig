@@ -34,13 +34,13 @@ pub fn main(init: std.process.Init) !void {
         report.print(options, result);
         return;
     }
-    const font = try cangjie.font.Face.parse(allocator, font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
     defer font.deinit();
 
     if (options.engine == .compare_freetype) {
         var cangjie_options = options;
         cangjie_options.engine = .cangjie;
-        const cangjie_result = try runner.run(init.io, allocator, font, cangjie_options);
+        const cangjie_result = try runner.run(init.io, allocator, &font, cangjie_options);
         defer allocator.free(cangjie_result.samples);
         report.print(cangjie_options, cangjie_result);
 
@@ -53,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    const result = try runner.run(init.io, allocator, font, options);
+    const result = try runner.run(init.io, allocator, &font, options);
     defer allocator.free(result.samples);
     report.print(options, result);
 }

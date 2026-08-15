@@ -744,7 +744,7 @@ test "core identifiers locale and glyph cluster helpers" {
 }
 
 test "paragraph style converts to paragraph options" {
-    const dictionary = try segmentation.WordBreakDictionary.init(
+    var dictionary = try segmentation.WordBreakDictionary.init(
         std.testing.allocator,
         .thai,
         &.{"ไทย"},
@@ -760,7 +760,7 @@ test "paragraph style converts to paragraph options" {
         .tab_width = 2,
         .first_line_indent = 10,
         .paragraph_spacing = 4,
-        .word_break_dictionary = dictionary,
+        .word_break_dictionary = &dictionary,
     };
     const options = style.paragraphOptions(80);
 
@@ -771,7 +771,7 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectEqual(@as(usize, 2), options.max_lines.?);
     try std.testing.expect(options.ellipsis);
     try std.testing.expectEqual(@as(usize, 2), options.tab_width);
-    try std.testing.expectEqual(dictionary, options.word_break_dictionary.?);
+    try std.testing.expectEqual(&dictionary, options.word_break_dictionary.?);
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);
 

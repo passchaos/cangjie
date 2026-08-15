@@ -4,49 +4,54 @@ const std = @import("std");
 
 const font_mod = @import("../../../font.zig");
 
-pub const View = opaque {
+pub const View = struct {
+    /// Borrowed source-level view backing; use the methods below.
+    implementation: *const font_mod.Font,
+
     pub fn axes(
-        self: *const View,
+        self: View,
         allocator: std.mem.Allocator,
     ) font_mod.FontError![]font_mod.VariationAxis {
-        return font(self).variationAxes(allocator);
+        return self.implementation.variationAxes(allocator);
     }
 
     pub fn normalize(
-        self: *const View,
+        self: View,
         allocator: std.mem.Allocator,
         coordinates: []const font_mod.VariationCoordinate,
     ) font_mod.FontError![]f32 {
-        return font(self).normalizedVariationCoordinates(
+        return self.implementation.normalizedVariationCoordinates(
             allocator,
             coordinates,
         );
     }
 
     pub fn map(
-        self: *const View,
+        self: View,
         axis_index: usize,
         normalized: f32,
     ) font_mod.FontError!f32 {
-        return font(self).mapVariationCoordinate(axis_index, normalized);
+        return self.implementation.mapVariationCoordinate(
+            axis_index,
+            normalized,
+        );
     }
 
     pub fn instances(
-        self: *const View,
+        self: View,
         allocator: std.mem.Allocator,
     ) font_mod.FontError![]font_mod.VariationInstance {
-        return font(self).variationInstances(allocator);
+        return self.implementation.variationInstances(allocator);
     }
 
     pub fn freeInstances(
-        self: *const View,
+        self: View,
         allocator: std.mem.Allocator,
         instances_value: []font_mod.VariationInstance,
     ) void {
-        font(self).freeVariationInstances(allocator, instances_value);
+        self.implementation.freeVariationInstances(
+            allocator,
+            instances_value,
+        );
     }
 };
-
-fn font(view: *const View) *const font_mod.Font {
-    return @ptrCast(@alignCast(view));
-}

@@ -269,7 +269,7 @@ fn clusterBelongsToScript(
 }
 
 test "dictionary segmentation minimizes unknown text then word count" {
-    const dictionary = try dictionary_mod.WordBreakDictionary.init(
+    var dictionary = try dictionary_mod.WordBreakDictionary.init(
         std.testing.allocator,
         .thai,
         &.{ "ภาษา", "ไทย", "ภาษาไทย", "ดี" },
@@ -286,7 +286,7 @@ test "dictionary segmentation minimizes unknown text then word count" {
     try append(
         std.testing.allocator,
         &breaks,
-        dictionary,
+        &dictionary,
         text,
         graphemes,
     );
@@ -299,7 +299,7 @@ test "dictionary segmentation minimizes unknown text then word count" {
 }
 
 test "dictionary segmentation does not absorb common punctuation" {
-    const dictionary = try dictionary_mod.WordBreakDictionary.init(
+    var dictionary = try dictionary_mod.WordBreakDictionary.init(
         std.testing.allocator,
         .thai,
         &.{ "ก", "ข" },
@@ -316,7 +316,7 @@ test "dictionary segmentation does not absorb common punctuation" {
     try append(
         std.testing.allocator,
         &breaks,
-        dictionary,
+        &dictionary,
         text,
         graphemes,
     );

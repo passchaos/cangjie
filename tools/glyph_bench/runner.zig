@@ -79,7 +79,7 @@ fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.
 fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     defer rasterizer.deinit();
     rasterizer.setHintSize(options.font_size);
     rasterizer.setSampling(options.samples_per_axis);
@@ -110,7 +110,7 @@ fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.f
 
     var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     defer rasterizer.deinit();
     rasterizer.setHintSize(options.font_size);
     rasterizer.setSampling(options.samples_per_axis);
@@ -133,11 +133,11 @@ fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangji
 
     var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     defer rasterizer.deinit();
     rasterizer.setHintSize(options.font_size);
     rasterizer.setSampling(options.samples_per_axis);
-    const prepared = try rasterizer.prepare(
+    var prepared = try rasterizer.prepare(
         &outline,
         0,
         options.font_size,
@@ -149,7 +149,7 @@ fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangji
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         target.clear(0);
-        try rasterizer.drawPrepared(&target, prepared);
+        try rasterizer.drawPrepared(&target, &prepared);
         checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
     }
 }

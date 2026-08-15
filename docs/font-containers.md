@@ -23,7 +23,7 @@ TTC/OTC, web fonts, or current color-font formats.
 ## Ownership And Limits
 
 `cangjie.font.Face.parse` and `parseIndex` are zero-copy APIs: a `Face` borrows
-the caller's SFNT bytes. Both return an opaque parsed-face handle; use
+the caller's SFNT bytes. Both return a concrete parsed-face value; use
 `properties()`, `glyphs()`, `metrics()`, `names()`, `variations()`, and
 `color()` rather than depending on parser table records. Compressed containers
 and DFONT resources require

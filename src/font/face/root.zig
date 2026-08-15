@@ -1,9 +1,8 @@
-//! Stable public handles for parsed faces and their common capability views.
+//! Stable source-level API for parsed faces and common capability views.
 //!
-//! The parser implementation is intentionally not the public type. Keeping the
-//! handle opaque prevents table records, shaping executors, cache proofs, and
-//! renderer fast paths from becoming API merely because they are fields or
-//! methods of the implementation object.
+//! `Face` is a concrete Zig type rather than an ABI-oriented hidden handle.
+//! Its focused method set still keeps parser-only operations out of normal
+//! application completion lists.
 
 const std = @import("std");
 
@@ -21,14 +20,20 @@ pub const Properties = struct {
 
 /// A parsed, zero-copy font face.
 ///
-/// The handle owns parser bookkeeping but borrows the supplied SFNT/TTC bytes.
+/// The face owns parser bookkeeping but borrows the supplied SFNT/TTC bytes.
 /// Those bytes must therefore remain alive and unchanged until `deinit`.
-pub const Face = opaque {
+pub const Face = struct {
+    /// Source-visible implementation storage, not a stable layout contract.
+    /// `Face` deliberately contains it at offset zero so repository pipeline
+    /// modules can reinterpret existing borrowed `Font` pointers without
+    /// allocating facade objects.
+    implementation: Font,
+
     /// Parse the first face in a standalone SFNT or collection.
     pub fn parse(
         allocator: std.mem.Allocator,
         data: []const u8,
-    ) font_mod.FontError!*Face {
+    ) font_mod.FontError!Face {
         return parseIndex(allocator, data, 0);
     }
 
@@ -37,11 +42,14 @@ pub const Face = opaque {
         allocator: std.mem.Allocator,
         data: []const u8,
         face_index: usize,
-    ) font_mod.FontError!*Face {
-        const implementation = try allocator.create(Font);
-        errdefer allocator.destroy(implementation);
-        implementation.* = try Font.parseFace(allocator, data, face_index);
-        return backend.faceMut(implementation);
+    ) font_mod.FontError!Face {
+        return .{
+            .implementation = try Font.parseFace(
+                allocator,
+                data,
+                face_index,
+            ),
+        };
     }
 
     pub fn count(data: []const u8) font_mod.FontError!usize {
@@ -49,14 +57,11 @@ pub const Face = opaque {
     }
 
     pub fn deinit(self: *Face) void {
-        const implementation = backend.fontMut(self);
-        const allocator = implementation.allocator;
-        implementation.deinit();
-        allocator.destroy(implementation);
+        self.implementation.deinit();
     }
 
     pub fn properties(self: *const Face) Properties {
-        const implementation = backend.font(self);
+        const implementation = &self.implementation;
         return .{
             .format = implementation.format,
             .units_per_em = implementation.units_per_em,
@@ -67,24 +72,24 @@ pub const Face = opaque {
         };
     }
 
-    pub fn glyphs(self: *const Face) *const Glyphs {
-        return @ptrCast(self);
+    pub fn glyphs(self: *const Face) Glyphs {
+        return .{ .implementation = &self.implementation };
     }
 
-    pub fn metrics(self: *const Face) *const Metrics {
-        return @ptrCast(self);
+    pub fn metrics(self: *const Face) Metrics {
+        return .{ .implementation = &self.implementation };
     }
 
-    pub fn names(self: *const Face) *const Names {
-        return @ptrCast(self);
+    pub fn names(self: *const Face) Names {
+        return .{ .implementation = &self.implementation };
     }
 
-    pub fn variations(self: *const Face) *const Variations {
-        return @ptrCast(self);
+    pub fn variations(self: *const Face) Variations {
+        return .{ .implementation = &self.implementation };
     }
 
-    pub fn color(self: *const Face) *const Color {
-        return @ptrCast(self);
+    pub fn color(self: *const Face) Color {
+        return .{ .implementation = &self.implementation };
     }
 };
 
@@ -113,16 +118,15 @@ pub const Color = @import("views/color.zig").View;
 
 /// Internal conversion boundary shared by shaping, databases, and rendering.
 ///
-/// Every public handle is a pointer-only view over the same heap-allocated
-/// `Font`; no view may add fields or change alignment. Slice casts are valid
-/// because they rewrite only the pointee type of each pointer-sized element.
+/// `Face` is layout-compatible with its single implementation field. Slice
+/// casts rewrite only pointer pointee types; no pointed-to bytes move.
 pub const backend = struct {
     pub fn font(face_value: *const Face) *const Font {
-        return @ptrCast(@alignCast(face_value));
+        return &face_value.implementation;
     }
 
     pub fn fontMut(face_value: *Face) *Font {
-        return @ptrCast(@alignCast(face_value));
+        return &face_value.implementation;
     }
 
     pub fn face(font_value: *const Font) *const Face {
@@ -147,3 +151,12 @@ pub const backend = struct {
         )[0..font_values.len];
     }
 };
+
+comptime {
+    if (@offsetOf(Face, "implementation") != 0 or
+        @sizeOf(Face) != @sizeOf(Font) or
+        @alignOf(Face) != @alignOf(Font))
+    {
+        @compileError("Face backend conversions require a zero-offset Font");
+    }
+}

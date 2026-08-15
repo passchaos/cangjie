@@ -2509,7 +2509,7 @@ pub fn build(b: *std.Build) void {
                 .{
                     .name = "line_break",
                     .module = b.createModule(.{
-                        .root_source_file = b.path("src/text/line_break.zig"),
+                        .root_source_file = b.path("src/unicode/line_break/iterator.zig"),
                         .target = target,
                         .optimize = optimize,
                     }),

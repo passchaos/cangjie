@@ -1,5 +1,5 @@
 const std = @import("std");
-const line_break = @import("text/line_break.zig");
+const line_break = @import("unicode/line_break/iterator.zig");
 const grapheme_boundary = @import("unicode/grapheme/iterator.zig");
 const word_boundary = @import("unicode/word/iterator.zig");
 const word_selection = @import("unicode/word/selection.zig");

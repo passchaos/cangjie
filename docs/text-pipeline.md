@@ -14,9 +14,9 @@ than copying one API:
   explicit segment properties, mutable scratch buffer, cluster invariants, and
   unsafe-to-break flags demonstrate that shaping is a bounded transformation of
   one homogeneous run—not a paragraph layout engine.
-- **unicode-linebreak 0.1.5** provides the UAX #14 model used here: a
-  zero-allocation forward iterator backed by a compressed Unicode property trie
-  and generated pair-state table.
+- **UAX #14 Unicode 17.0** provides the line-breaking model used here: a
+  zero-allocation forward iterator backed by generated Unicode properties and
+  bounded context state for numeric, quote, emoji, and Brahmic rules.
 - **Parley** is the paragraph/reflow reference. Font-independent analysis,
   itemization, fallback, and shaping produce reusable paragraph content; line
   breaking, per-line bidi ordering, and alignment are later operations that can
@@ -30,7 +30,8 @@ than copying one API:
 
 These references were inspected at:
 
-- unicode-linebreak `v0.1.5` (`829adeed`)
+- unicode-linebreak `v0.1.5` (`829adeed`), as the original compact iterator
+  and state-table reference before the Unicode 17 rule upgrade
 - Parley `0cdb6d9`
 - Swash `7773843`
 - HarfBuzz `9f2f031`
@@ -77,17 +78,20 @@ breaking never performs OpenType substitution or positioning.
 
 ## Implemented First Slice
 
-`src/text/line_break.zig` now owns Unicode line breaking:
+`src/unicode/line_break/iterator.zig` now owns Unicode line breaking:
 
 - `lineBreaks(text)` validates UTF-8 and returns a zero-allocation iterator.
   Internal layout bypasses redundant validation only after its public shaping
   boundary has validated the same text.
-- `lineBreakClassForCodepoint` performs a generated compressed-trie lookup.
-- The pair-state table implements default UAX #14 behavior, including CRLF,
-  ZWJ handling, regional indicators, East Asian punctuation, glue, and a
-  mandatory end-of-text boundary.
-- The generated data is Unicode 15.0.0 and records its version in the binary
-  header.
+- `lineBreakClassForCodepoint` performs a generated deduplicated-page lookup.
+- The Unicode 17 state machine implements LB1 through LB31, including CRLF,
+  ZWJ handling, regional indicators, East Asian quotation/parenthesis
+  behavior, numeric expressions, emoji modifiers, Brahmic orthographic
+  syllables, glue, and a mandatory end-of-text boundary.
+- Generated property words combine `Line_Break`, the General_Category subset
+  needed by contextual rules, `$EastAsian`, and `Extended_Pictographic`.
+- All 19,338 official Unicode 17 `LineBreakTest.txt` cases run in the normal
+  test suite; no tailorable or fallback rows are excluded.
 - `itemizeLineBreaks` remains as an allocating compatibility collector, but new
   internal consumers should prefer the iterator.
 
@@ -232,38 +236,42 @@ per-byte fallback/cache loop.
 
 ## Generated Data And Reproducibility
 
-The runtime table is generated from `unicode-linebreak 0.1.5`'s `tables.rs`:
+The Unicode 17 line-break property blob is generated with:
 
 ```sh
-tools/generate_line_break_data.py \
-  path/to/unicode-linebreak-0.1.5/src/tables.rs \
-  src/text/line_break_data.bin
+tools/unicode/line_break/generate_data.py \
+  path/to/LineBreak.txt \
+  path/to/UnicodeData.txt \
+  path/to/EastAsianWidth.txt \
+  path/to/emoji-data.txt \
+  src/unicode/line_break/data.bin
 ```
 
-Reference input:
-
-- crates.io archive SHA-256:
-  `3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f`
-- `tables.rs` SHA-256:
-  `1821b437dfb31164ce8180af3937ca42270f1edf963a2d2e41cbaaf999553c94`
-- generated runtime blob SHA-256:
-  `cac38551eb3dcbc798abeae2a675c7241f66722111d2d2081897c788bd77206b`
-
-The conformance fixture is generated from Unicode
-`LineBreakTest-15.0.0.txt`:
+The conformance fixture is generated separately:
 
 ```sh
-tools/generate_line_break_test_data.py \
+tools/unicode/line_break/generate_conformance.py \
   path/to/LineBreakTest.txt \
-  src/text/line_break_test_data.bin
+  src/unicode/line_break/conformance.bin
 ```
 
 Reference input SHA-256:
-`371bde4052aa593b108684ae292d8ea2dbb93c19990e0cdf416fa7239557aac3`.
-The compact fixture SHA-256 is
-`65a703330dde9d51c16b77ea5e23ac0c4965ac438c98cbf8d96d031fb1b807a5`.
-It contains 6,424 default-algorithm cases. Like unicode-linebreak's upstream
-runner, explicitly tailorable `[30.22]` and `[999.0]` cases are excluded.
+
+- `LineBreak.txt`:
+  `e6a18fa91f8f6a6f8e534b1d3f128c21ada45bfe152eb6b1bcc5e15fd8ac92e6`
+- `LineBreakTest.txt`:
+  `e69884e0dde6a8724873f885d68c52dc14518abf9ae4ca9e2283b8773db3b752`
+- `UnicodeData.txt`:
+  `2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c`
+- `EastAsianWidth.txt`:
+  `ea7ce50f3444a050333448dffef1cadd9325af55cbb764b4a2280faf52170a33`
+- `emoji-data.txt`:
+  `2cb2bb9455cda83e8481541ecf5b6dfda66a3bb89efa3fa7c5297eccf607b72b`
+
+The generated property blob SHA-256 is
+`0fef55798282a97581de58698c3617ee0990a52ff40342230fd083f6f881fa92`;
+the 19,338-case conformance fixture SHA-256 is
+`28e470fb325428ef1cb18b027b8889add6a18f7bf8046e34a986626b687a8ab9`.
 
 The grapheme property blob is generated from Unicode 17.0.0:
 
@@ -400,15 +408,21 @@ zig build line-break-bench -Doptimize=ReleaseFast -- \
   --text-file path/to/utf8.txt --iterations 1000
 ```
 
-On the initial mixed-script 123-byte fixture, 100,000 iterations measured about
-`2.26 ns/byte` for Cangjie's checked public constructor and about
-`1.69 ns/byte` for its validated iterator-only path. An equivalent Release-mode
-`unicode-linebreak 0.1.5` harness measured about `1.54–1.59 ns/byte`, with
-identical break counts and checksums. Cangjie's constructor validates UTF-8,
-whereas Rust's `&str` carries validity in its type; the benchmark reports both
-contracts explicitly. Moving valid-scalar decoding to a branch-minimal hot path
-improved the prior checked result by about 18%, but mixed-script iteration still
-trails the reference slightly and must not be presented as an overall win.
+The Unicode 17 implementation deliberately prioritizes current conformance over
+the smaller Unicode 15 pair table it replaced. Fixed-core ReleaseFast A/B runs
+against that previous implementation retained identical output on the measured
+corpora but remained slower: about `5.1` versus `3.8 ns/byte` on the HarfBuzz
+English word list, `6.4` versus `3.9 ns/byte` on punctuation-heavy English, and
+`3.7` versus `1.2 ns/byte` on the HarfBuzz Hindi word list. A bounded
+AL/HL/NU/CM run scanner removed most of the initial complex-script regression.
+The remaining difference is a known cost of this implementation and a future
+optimization target; it is not evidence that full Unicode 17 semantics require
+that overhead. These figures are micro-iterator measurements, not claims about
+paragraph or end-to-end layout performance.
+
+Cangjie's constructor validates UTF-8, whereas references whose input type
+already guarantees valid UTF-8 do not repeat that work. The benchmark therefore
+reports checked and prevalidated iterator contracts separately.
 
 Repeated reflow can be compared with the legacy shape-on-every-layout path:
 

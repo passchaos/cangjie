@@ -107,3 +107,7 @@ fn validateReference(
         return error.BadSfnt;
     }
 }
+
+test {
+    _ = @import("tests/root.zig");
+}

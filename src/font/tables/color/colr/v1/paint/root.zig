@@ -102,3 +102,7 @@ fn writeU24(bytes: []u8, offset: usize, value: u32) void {
     bytes[offset + 1] = @intCast((value >> 8) & 0xff);
     bytes[offset + 2] = @intCast(value & 0xff);
 }
+
+test {
+    _ = @import("tests/root.zig");
+}

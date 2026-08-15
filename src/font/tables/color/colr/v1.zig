@@ -7,6 +7,7 @@ const types = @import("v1/types.zig");
 pub const paint = @import("v1/paint/root.zig");
 pub const bases = @import("v1/bases.zig");
 pub const layers = @import("v1/layers.zig");
+pub const palette = @import("v1/palette.zig");
 
 pub const Error = types.Error;
 pub const Table = types.Table;

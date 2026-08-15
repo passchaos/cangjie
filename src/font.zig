@@ -38,6 +38,7 @@ const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
 const colr_bases = colr_v1_mod.bases;
 const colr_layers = colr_v1_mod.layers;
+const colr_palette = colr_v1_mod.palette;
 const cpal_mod = color_tables.cpal;
 const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
@@ -10615,15 +10616,13 @@ fn validateColrPaletteBounds(data: []const u8, colr: TableRecord, cpal: ?TableRe
     const version = try bin.readU16At(data, colr.offset);
     switch (version) {
         0 => try validateColrV0PaletteBounds(data, colr, cpal_palette_entries),
-        1 => try validateColrV1PaletteBounds(data, colr, cpal_palette_entries),
+        1 => try colr_palette.validate(
+            data,
+            colrV1Table(colr),
+            cpal_palette_entries,
+        ),
         else => {},
     }
-}
-
-fn validateColrPaletteIndexBounds(palette_index: u16, cpal_palette_entries: ?u16) FontError!void {
-    if (palette_index == 0xffff) return;
-    const palette_entries = cpal_palette_entries orelse return error.BadSfnt;
-    if (palette_index >= palette_entries) return error.BadSfnt;
 }
 
 fn validateColrV0PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16) FontError!void {
@@ -10632,62 +10631,6 @@ fn validateColrV0PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette
         colrV0Table(colr),
         cpal_palette_entries,
     );
-}
-
-fn validateColrV1PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16) FontError!void {
-    if (colr.length < 34) return error.BadSfnt;
-    if (try colr_bases.read(data, colrV1Table(colr))) |base_list| {
-        for (0..base_list.record_count) |index| {
-            const paint_offset = try colr_bases.paintOffsetAt(
-                data,
-                colrV1Table(colr),
-                base_list,
-                index,
-            );
-            var guard = colr_paint.Guard{};
-            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, &guard);
-        }
-    }
-
-    if (try colr_layers.read(data, colrLayerTable(colr))) |layer_list| {
-        for (0..layer_list.layer_count) |layer_index| {
-            const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, @intCast(layer_index));
-            var guard = colr_paint.Guard{};
-            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, &guard);
-        }
-    }
-}
-
-fn validateColorPaintPaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16, offset: usize, guard: *colr_paint.Guard) FontError!void {
-    const info = try validateColrPaintRecord(data, colr, offset);
-    try guard.enter(offset);
-    defer guard.leave();
-    try guard.claimPaintRecord(data, colrPaintTable(colr), offset, info);
-
-    switch (info.kind) {
-        .colr_layers => {
-            const layer_count = data[offset + 1];
-            const first_layer_index = try bin.readU32At(data, offset + 2);
-            if (layer_count == 0) return;
-            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
-            const first: usize = @intCast(first_layer_index);
-            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
-            for (0..layer_count) |layer_offset| {
-                const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
-                try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, guard);
-            }
-        },
-        .solid => {
-            try validateColrPaletteIndexBounds(try bin.readU16At(data, offset + 1), cpal_palette_entries);
-        },
-        .glyph, .single_child => try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), guard),
-        .color_line => try validateColrColorLinePaletteBounds(data, colr, offset, info.min_size, cpal_palette_entries),
-        .composite => {
-            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), guard);
-            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 5), guard);
-        },
-        .colr_glyph, .terminal => return,
-    }
 }
 
 fn validateColrGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
@@ -11350,23 +11293,6 @@ fn validateColrPaintRecord(
         colrPaintTable(colr),
         offset,
     );
-}
-
-fn validateColrColorLinePaletteBounds(data: []const u8, colr: TableRecord, offset: usize, paint_header_size: usize, cpal_palette_entries: ?u16) FontError!void {
-    const variable = colr_paint.usesVariableColorLine(data[offset]);
-    const range = try colr_paint.colorLineRange(
-        data,
-        colrPaintTable(colr),
-        offset,
-        paint_header_size,
-        variable,
-    );
-    const stop_count: usize = @intCast(try bin.readU16At(data, range.start + 1));
-    const stops_start = range.start + 3;
-    const stop_size = colr_paint.colorStopSize(variable);
-    for (0..stop_count) |index| {
-        try validateColrPaletteIndexBounds(try bin.readU16At(data, stops_start + index * stop_size + 2), cpal_palette_entries);
-    }
 }
 
 fn validateColorPaintLayer(font: *const Font, layer_list: colr_layers.List, layer_index: u32, guard: *colr_paint.Guard) FontError!void {

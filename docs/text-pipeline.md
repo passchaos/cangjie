@@ -138,6 +138,15 @@ Public result records are separated from shaping algorithms under
 `TextContext` callers keep one intentional public surface while implementation
 files no longer mix data-model methods with OpenType shaping stages.
 
+Arabic/Syriac stretch post-processing lives under
+`src/shaping/features/stch/`:
+
+- `actions.zig` records GSUB multiple-substitution provenance and maintains the
+  lazy emitted-glyph action sidecar.
+- `stretch.zig` measures fixed/repeating tiles in font units and expands them
+  against neighboring word context.
+- `root.zig` is the single positioning-stage integration surface.
+
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 

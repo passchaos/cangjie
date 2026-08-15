@@ -30,6 +30,7 @@ const name_mod = @import("opentype/name.zig");
 const ot_layout = @import("opentype/layout.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
+const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode_mod = @import("unicode.zig");
 const varc_mod = @import("opentype/varc.zig");
@@ -730,40 +731,8 @@ pub const ColorPaint = union(enum) {
     };
 };
 
-pub const SvgGlyphDocument = struct {
-    start_glyph_id: glyph_mod.GlyphId,
-    end_glyph_id: glyph_mod.GlyphId,
-    data: []const u8,
-};
-
-/// Validated SVG XML ready for a renderer.
-///
-/// Plain documents borrow the Font's backing SFNT bytes. Gzip documents own a
-/// bounded decoded allocation. Keeping ownership in the handle prevents callers
-/// from accidentally retaining a temporary decompression buffer through the
-/// existing borrowed-slice API.
-pub const ResolvedSvgGlyphDocument = struct {
-    start_glyph_id: glyph_mod.GlyphId,
-    end_glyph_id: glyph_mod.GlyphId,
-    data: []const u8,
-    allocator: ?std.mem.Allocator = null,
-
-    pub fn deinit(self: *ResolvedSvgGlyphDocument) void {
-        if (self.allocator) |allocator| allocator.free(self.data);
-        self.* = undefined;
-    }
-
-    /// Transfer a decoded gzip buffer to a longer-lived owner.
-    ///
-    /// Returns null for a document that already borrows the Font's SFNT bytes.
-    pub fn takeOwnedData(self: *ResolvedSvgGlyphDocument) ?[]u8 {
-        if (self.allocator == null) return null;
-        const data: []u8 = @constCast(self.data);
-        self.allocator = null;
-        self.data = &.{};
-        return data;
-    }
-};
+pub const SvgGlyphDocument = svg_mod.Document;
+pub const ResolvedSvgGlyphDocument = svg_mod.ResolvedDocument;
 
 pub const BitmapGlyphPng = struct {
     /// Table family determines whether the vertical offset is a top bearing
@@ -822,6 +791,10 @@ const TableRecord = struct {
     offset: usize,
     length: usize,
 };
+
+fn svgTable(record: TableRecord) svg_mod.Table {
+    return .{ .offset = record.offset, .length = record.length };
+}
 
 const NameIdIndex = name_mod.NameIdIndex;
 
@@ -1426,7 +1399,12 @@ pub const Font = struct {
         if (base) |base_table| try validateBaseTable(data, base_table);
         if (dsig) |dsig_table| try validateDsigTable(data, dsig_table);
         if (vorg) |vorg_table| try validateVorgTable(data, vorg_table, glyph_count);
-        if (svg) |svg_table| try validateSvgGlyphBounds(allocator, data, svg_table, glyph_count);
+        if (svg) |svg_table| try svg_mod.validate(
+            allocator,
+            data,
+            svgTable(svg_table),
+            glyph_count,
+        );
         if (sbix) |sbix_table| try validateSbixTable(allocator, data, sbix_table, glyph_count);
         if (cblc != null and cbdt != null) try validateCblcCbdtTables(data, cblc.?, cbdt.?, glyph_count);
         if (eblc != null and ebdt != null) try validateCblcCbdtTables(data, eblc.?, ebdt.?, glyph_count);
@@ -4318,30 +4296,13 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const svg = self.svg orelse return null;
         try validateSfntTableChecksum(self.data, svg);
-        const document_list = try svgDocumentList(self.data, svg);
-
-        var previous_end_glyph_id: ?glyph_mod.GlyphId = null;
-        var match: ?SvgGlyphDocument = null;
-        for (0..document_list.entry_count) |index| {
-            const record = try readSvgDocumentRecord(self.data, document_list.records_start + index * 12);
-            try validateSvgDocumentRecord(record, document_list, self.glyph_count, &previous_end_glyph_id);
-            try validateSvgDocumentByteRangeAgainstPreviousRecords(self.data, document_list, record, index);
-            const document_start = document_list.start + record.document_offset;
-            // SVG documents are returned as borrowed slices. Re-parse every
-            // advertised payload at this lazy boundary so a post-parse mutation
-            // cannot leave an unrequested malformed XML document hidden in the
-            // table, nor return a slice whose root no longer satisfies the
-            // parse-time SVG contract.
-            try validateSvgDocumentPayload(self.allocator, self.data[document_start .. document_start + record.document_length]);
-            if (glyph_id >= record.start_glyph_id and glyph_id <= record.end_glyph_id) {
-                match = .{
-                    .start_glyph_id = record.start_glyph_id,
-                    .end_glyph_id = record.end_glyph_id,
-                    .data = self.data[document_start .. document_start + record.document_length],
-                };
-            }
-        }
-        return match;
+        return try svg_mod.rawDocument(
+            self.allocator,
+            self.data,
+            svgTable(svg),
+            self.glyph_count,
+            glyph_id,
+        );
     }
 
     /// Resolve an SVG document to validated cleartext XML.
@@ -4369,34 +4330,14 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const svg = self.svg orelse return null;
         if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, svg);
-        const document_list = try svgDocumentList(self.data, svg);
-
-        var previous_end_glyph_id: ?glyph_mod.GlyphId = null;
-        var match: ?ResolvedSvgGlyphDocument = null;
-        errdefer if (match) |*document| document.deinit();
-        for (0..document_list.entry_count) |index| {
-            const record = try readSvgDocumentRecord(self.data, document_list.records_start + index * 12);
-            try validateSvgDocumentRecord(record, document_list, self.glyph_count, &previous_end_glyph_id);
-            if (read_mode.shouldRevalidate()) {
-                try validateSvgDocumentByteRangeAgainstPreviousRecords(self.data, document_list, record, index);
-            }
-            if (glyph_id < record.start_glyph_id or glyph_id > record.end_glyph_id) continue;
-            const document_start = document_list.start + record.document_offset;
-            var resolved = try resolveSvgDocumentPayload(
-                allocator,
-                self.data[document_start .. document_start + record.document_length],
-            );
-            match = .{
-                .start_glyph_id = record.start_glyph_id,
-                .end_glyph_id = record.end_glyph_id,
-                .data = resolved.data,
-                .allocator = resolved.allocator,
-            };
-            resolved.allocator = null;
-            resolved.deinit();
-            if (!read_mode.shouldRevalidate()) break;
-        }
-        return match;
+        return try svg_mod.resolvedDocument(
+            allocator,
+            self.data,
+            svgTable(svg),
+            self.glyph_count,
+            glyph_id,
+            read_mode.shouldRevalidate(),
+        );
     }
 
     /// Return the validated raw SVG table payload.
@@ -11990,413 +11931,27 @@ fn mapAvarSegment(segment_data: []const u8, normalized: f32) FontError!f32 {
     return previous_to;
 }
 
-const SvgDocumentList = struct {
-    start: usize,
-    length: usize,
-    entry_count: usize,
-    records_start: usize,
-    document_data_start: usize,
-};
+const max_svg_document_size = svg_mod.document.max_document_size;
 
-const SvgDocumentRecord = struct {
-    start_glyph_id: glyph_mod.GlyphId,
-    end_glyph_id: glyph_mod.GlyphId,
-    document_offset: usize,
-    document_length: usize,
-};
-
-const SvgDocumentByteRange = struct {
-    start: usize,
-    end: usize,
-};
-
-const gzip_magic = [_]u8{ 0x1f, 0x8b };
-const gzip_deflate_method = 8;
-const max_svg_document_size = 16 * 1024 * 1024;
-
-fn svgDocumentList(data: []const u8, svg: TableRecord) FontError!SvgDocumentList {
-    if (svg.length < 10) return error.BadSfnt;
-    const version = try bin.readU16At(data, svg.offset);
-    if (version != 0) return error.BadSfnt;
-    const document_list_offset: usize = @intCast(try bin.readU32At(data, svg.offset + 2));
-    const reserved = try bin.readU32At(data, svg.offset + 6);
-    // The final four bytes of the SVG table header are reserved and must be
-    // zero. Treating them as padding rather than validating them would make a
-    // malformed header indistinguishable from future incompatible semantics.
-    if (reserved != 0) return error.BadSfnt;
-    // Offsets in the SVG table are relative to the SVG table or to the
-    // SVGDocumentList. Keep both child regions past their fixed metadata so
-    // malformed fonts cannot reinterpret the header or records as XML data.
-    if (document_list_offset < 10) return error.BadSfnt;
-    if (document_list_offset > svg.length or 2 > svg.length - document_list_offset) return error.BadSfnt;
-
-    const list_start = svg.offset + document_list_offset;
-    const list_length = svg.length - document_list_offset;
-    const entry_count = try bin.readU16At(data, list_start);
-    const records_start = list_start + 2;
-    const record_bytes = @as(usize, entry_count) * 12;
-    if (record_bytes > list_length - 2) return error.BadSfnt;
-    return .{
-        .start = list_start,
-        .length = list_length,
-        .entry_count = entry_count,
-        .records_start = records_start,
-        .document_data_start = 2 + record_bytes,
-    };
+fn validateSvgDocumentPayload(
+    allocator: std.mem.Allocator,
+    document: []const u8,
+) FontError!void {
+    return try svg_mod.document.validate(allocator, document);
 }
 
-fn readSvgDocumentRecord(data: []const u8, offset: usize) FontError!SvgDocumentRecord {
-    return .{
-        .start_glyph_id = try bin.readU16At(data, offset),
-        .end_glyph_id = try bin.readU16At(data, offset + 2),
-        .document_offset = @intCast(try bin.readU32At(data, offset + 4)),
-        .document_length = @intCast(try bin.readU32At(data, offset + 8)),
-    };
-}
-
-fn validateSvgDocumentRecord(record: SvgDocumentRecord, document_list: SvgDocumentList, glyph_count: u16, previous_end_glyph_id: *?glyph_mod.GlyphId) FontError!void {
-    // SVGDocumentRecords are global glyph metadata, so every advertised
-    // inclusive range must fit maxp.numGlyphs even if callers never request
-    // that document. Otherwise an accepted font can later surface a color
-    // glyph id that has no metrics, outline, or bitmap contract.
-    if (record.end_glyph_id < record.start_glyph_id) return error.BadSfnt;
-    try validateGlyphIdInMaxp(record.start_glyph_id, glyph_count);
-    try validateGlyphIdInMaxp(record.end_glyph_id, glyph_count);
-
-    // The OpenType SVG document list is a sorted search table over glyph-id
-    // ranges. Enforcing monotonic, disjoint ranges at parse time avoids
-    // ambiguous ownership when two records could both describe the same glyph
-    // and keeps later lookups independent of linear-scan accident.
-    if (previous_end_glyph_id.*) |previous_end| {
-        if (record.start_glyph_id <= previous_end) return error.BadSfnt;
-    }
-    previous_end_glyph_id.* = record.end_glyph_id;
-
-    if (record.document_offset < document_list.document_data_start) return error.BadSfnt;
-    if (record.document_length == 0) return error.BadSfnt;
-    if (record.document_offset > document_list.length or record.document_length > document_list.length - record.document_offset) return error.BadSfnt;
-}
-
-fn validateSvgDocumentByteRanges(ranges: []SvgDocumentByteRange) FontError!void {
-    if (ranges.len < 2) return;
-
-    std.mem.sort(SvgDocumentByteRange, ranges, {}, struct {
-        fn lessThan(_: void, lhs: SvgDocumentByteRange, rhs: SvgDocumentByteRange) bool {
-            if (lhs.start == rhs.start) return lhs.end < rhs.end;
-            return lhs.start < rhs.start;
-        }
-    }.lessThan);
-
-    for (ranges[1..], 1..) |range, index| {
-        const previous = ranges[index - 1];
-        if (range.start < previous.end) {
-            // Multiple glyph ranges may intentionally reference the exact same
-            // SVG document bytes.  Partial overlaps, however, make one XML
-            // document borrow bytes from another and leave later renderers with
-            // no deterministic document boundary, so reject them at parse time.
-            if (range.start != previous.start or range.end != previous.end) return error.BadSfnt;
-        }
-    }
-}
-
-fn validateSvgDocumentByteRangeAgainstPreviousRecords(data: []const u8, document_list: SvgDocumentList, record: SvgDocumentRecord, record_index: usize) FontError!void {
-    const current = SvgDocumentByteRange{
-        .start = record.document_offset,
-        .end = record.document_offset + record.document_length,
-    };
-    for (0..record_index) |previous_index| {
-        const previous_record = try readSvgDocumentRecord(data, document_list.records_start + previous_index * 12);
-        const previous = SvgDocumentByteRange{
-            .start = previous_record.document_offset,
-            .end = previous_record.document_offset + previous_record.document_length,
-        };
-        // Public SVG lookup borrows the original SFNT bytes, so re-check the
-        // same document ownership rule enforced at parse time. Exact byte
-        // sharing is intentional in the SVG table, but partial overlap means
-        // the returned slice would borrow the tail or prefix of a different XML
-        // document after caller-owned bytes mutate post-parse.
-        if (current.start < previous.end and previous.start < current.end) {
-            if (current.start != previous.start or current.end != previous.end) return error.BadSfnt;
-        }
-    }
-}
-
-fn validateSvgDocumentPayload(allocator: std.mem.Allocator, document: []const u8) FontError!void {
-    var resolved = try resolveSvgDocumentPayload(allocator, document);
-    defer resolved.deinit();
-}
-
-const ResolvedSvgPayload = struct {
+fn validateSvgGlyphBounds(
+    allocator: std.mem.Allocator,
     data: []const u8,
-    allocator: ?std.mem.Allocator = null,
-
-    fn deinit(self: *ResolvedSvgPayload) void {
-        if (self.allocator) |allocator| allocator.free(self.data);
-        self.* = undefined;
-    }
-};
-
-fn resolveSvgDocumentPayload(allocator: std.mem.Allocator, document: []const u8) FontError!ResolvedSvgPayload {
-    const payload = stripUtf8Bom(document);
-    if (payload.len == 0) return error.BadSfnt;
-    if (payload.len > max_svg_document_size and !isGzipSvgDocument(payload)) return error.BadSfnt;
-    if (std.mem.startsWith(u8, payload, &gzip_magic)) {
-        if (!isGzipSvgDocument(payload)) return error.BadSfnt;
-        const decoded = vort.decodeGzipAllocLimited(allocator, payload, max_svg_document_size) catch |err| return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => error.BadSfnt,
-        };
-        errdefer allocator.free(decoded);
-        try validateCleartextSvgDocumentPayload(allocator, decoded);
-        return .{ .data = decoded, .allocator = allocator };
-    }
-    try validateCleartextSvgDocumentPayload(allocator, payload);
-    return .{ .data = payload };
-}
-
-fn validateCleartextSvgDocumentPayload(allocator: std.mem.Allocator, payload: []const u8) FontError!void {
-    if (payload.len == 0 or payload.len > max_svg_document_size) return error.BadSfnt;
-    var stack = std.ArrayList([]const u8).empty;
-    defer stack.deinit(allocator);
-
-    var cursor = try skipXmlBeforeRootTrivia(payload, 0);
-    var root_seen = false;
-    while (cursor < payload.len) {
-        if (payload[cursor] != '<') {
-            const next_tag = std.mem.indexOfScalarPos(u8, payload, cursor, '<') orelse payload.len;
-            if (stack.items.len == 0 and !isXmlWhitespaceOnly(payload[cursor..next_tag])) return error.BadSfnt;
-            cursor = next_tag;
-            continue;
-        }
-
-        if (std.mem.startsWith(u8, payload[cursor..], "<!--")) {
-            cursor = (try xmlCommentEnd(payload, cursor)) + 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, payload[cursor..], "<?")) {
-            cursor = (try xmlProcessingInstructionEnd(payload, cursor)) + 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, payload[cursor..], "<![CDATA[")) {
-            if (stack.items.len == 0) return error.BadSfnt;
-            cursor = (try xmlCdataEnd(payload, cursor)) + 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, payload[cursor..], "<!DOCTYPE")) {
-            // A DOCTYPE declaration is only part of the XML prolog. Accepting
-            // it after the root has started would let a second top-level
-            // construct hide behind markup the renderer never expects.
-            if (root_seen or stack.items.len != 0) return error.BadSfnt;
-            cursor = (try xmlDeclarationEnd(payload, cursor)) + 1;
-            cursor = try skipXmlBeforeRootTrivia(payload, cursor);
-            continue;
-        }
-        if (std.mem.startsWith(u8, payload[cursor..], "<!")) return error.BadSfnt;
-
-        const tag_end = try xmlTagEnd(payload, cursor);
-        const closing = cursor + 1 < payload.len and payload[cursor + 1] == '/';
-        const name = xmlTagName(payload, cursor, tag_end, closing) orelse return error.BadSfnt;
-        if (closing) {
-            if (stack.items.len == 0) return error.BadSfnt;
-            const active_name = stack.items[stack.items.len - 1];
-            stack.items.len -= 1;
-            if (!std.mem.eql(u8, active_name, name)) return error.BadSfnt;
-            cursor = tag_end + 1;
-            if (stack.items.len == 0) {
-                cursor = try skipXmlTrailingTrivia(payload, cursor);
-                if (cursor != payload.len) return error.BadSfnt;
-                return;
-            }
-            continue;
-        }
-
-        if (stack.items.len == 0) {
-            if (root_seen) return error.BadSfnt;
-            if (!std.mem.eql(u8, xmlLocalName(name), "svg")) return error.BadSfnt;
-            root_seen = true;
-        }
-        if (xmlTagSelfCloses(payload, cursor, tag_end)) {
-            cursor = tag_end + 1;
-            if (stack.items.len == 0) {
-                cursor = try skipXmlTrailingTrivia(payload, cursor);
-                if (cursor != payload.len) return error.BadSfnt;
-                return;
-            }
-        } else {
-            try stack.append(allocator, name);
-            cursor = tag_end + 1;
-        }
-    }
-
-    if (!root_seen or stack.items.len != 0) return error.BadSfnt;
-}
-
-fn stripUtf8Bom(document: []const u8) []const u8 {
-    return if (std.mem.startsWith(u8, document, "\xef\xbb\xbf")) document[3..] else document;
-}
-
-fn isGzipSvgDocument(document: []const u8) bool {
-    // The gzip trailer is eight bytes (CRC32 + ISIZE); Vort validates both
-    // fields and rejects concatenated/trailing members for this single-document
-    // OpenType payload.
-    return document.len >= 18 and
-        std.mem.startsWith(u8, document, &gzip_magic) and
-        document[2] == gzip_deflate_method;
-}
-
-fn skipXmlBeforeRootTrivia(document: []const u8, start: usize) FontError!usize {
-    var cursor = start;
-    while (cursor < document.len) {
-        cursor = skipXmlWhitespace(document, cursor);
-        if (std.mem.startsWith(u8, document[cursor..], "<?")) {
-            cursor = (try xmlProcessingInstructionEnd(document, cursor)) + 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, document[cursor..], "<!--")) {
-            cursor = (try xmlCommentEnd(document, cursor)) + 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, document[cursor..], "<!DOCTYPE")) {
-            cursor = (try xmlDeclarationEnd(document, cursor)) + 1;
-            continue;
-        }
-        return cursor;
-    }
-    return cursor;
-}
-
-fn skipXmlTrailingTrivia(document: []const u8, start: usize) FontError!usize {
-    var cursor = start;
-    while (cursor < document.len) {
-        cursor = skipXmlWhitespace(document, cursor);
-        if (std.mem.startsWith(u8, document[cursor..], "<?")) {
-            cursor = (try xmlProcessingInstructionEnd(document, cursor)) + 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, document[cursor..], "<!--")) {
-            cursor = (try xmlCommentEnd(document, cursor)) + 1;
-            continue;
-        }
-        return cursor;
-    }
-    return cursor;
-}
-
-fn skipXmlWhitespace(document: []const u8, start: usize) usize {
-    var cursor = start;
-    while (cursor < document.len and isXmlWhitespace(document[cursor])) : (cursor += 1) {}
-    return cursor;
-}
-
-fn isXmlWhitespaceOnly(bytes: []const u8) bool {
-    for (bytes) |byte| {
-        if (!isXmlWhitespace(byte)) return false;
-    }
-    return true;
-}
-
-fn isXmlWhitespace(byte: u8) bool {
-    return byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r';
-}
-
-fn xmlProcessingInstructionEnd(document: []const u8, start: usize) FontError!usize {
-    return std.mem.indexOfPos(u8, document, start + 2, "?>") orelse error.BadSfnt;
-}
-
-fn xmlCommentEnd(document: []const u8, start: usize) FontError!usize {
-    return (std.mem.indexOfPos(u8, document, start + 4, "-->") orelse return error.BadSfnt) + 2;
-}
-
-fn xmlCdataEnd(document: []const u8, start: usize) FontError!usize {
-    return (std.mem.indexOfPos(u8, document, start + "<![CDATA[".len, "]]>") orelse return error.BadSfnt) + 2;
-}
-
-fn xmlDeclarationEnd(document: []const u8, start: usize) FontError!usize {
-    var cursor = start + 2;
-    var quote: ?u8 = null;
-    var bracket_depth: usize = 0;
-    while (cursor < document.len) : (cursor += 1) {
-        const byte = document[cursor];
-        if (quote) |active_quote| {
-            if (byte == active_quote) quote = null;
-            continue;
-        }
-        switch (byte) {
-            '"', '\'' => quote = byte,
-            '[' => bracket_depth += 1,
-            ']' => if (bracket_depth != 0) {
-                bracket_depth -= 1;
-            },
-            '>' => if (bracket_depth == 0) return cursor,
-            else => {},
-        }
-    }
-    return error.BadSfnt;
-}
-
-fn xmlTagEnd(document: []const u8, start: usize) FontError!usize {
-    var cursor = start + 1;
-    var quote: ?u8 = null;
-    while (cursor < document.len) : (cursor += 1) {
-        const byte = document[cursor];
-        if (quote) |active_quote| {
-            if (byte == active_quote) quote = null;
-            continue;
-        }
-        switch (byte) {
-            '"', '\'' => quote = byte,
-            '>' => return cursor,
-            else => {},
-        }
-    }
-    return error.BadSfnt;
-}
-
-fn xmlTagName(document: []const u8, tag_start: usize, tag_end: usize, closing: bool) ?[]const u8 {
-    var cursor = tag_start + 1;
-    if (closing) cursor += 1;
-    if (cursor >= tag_end or !isXmlNameByte(document[cursor])) return null;
-    const name_start = cursor;
-    while (cursor < tag_end and isXmlNameByte(document[cursor])) : (cursor += 1) {}
-    return document[name_start..cursor];
-}
-
-fn xmlTagSelfCloses(document: []const u8, tag_start: usize, tag_end: usize) bool {
-    var cursor = tag_end;
-    while (cursor > tag_start + 1) {
-        cursor -= 1;
-        if (isXmlWhitespace(document[cursor])) continue;
-        return document[cursor] == '/';
-    }
-    return false;
-}
-
-fn xmlLocalName(name: []const u8) []const u8 {
-    return if (std.mem.lastIndexOfScalar(u8, name, ':')) |colon| name[colon + 1 ..] else name;
-}
-
-fn isXmlNameByte(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-' or byte == ':' or byte == '.';
-}
-
-fn validateSvgGlyphBounds(allocator: std.mem.Allocator, data: []const u8, svg: TableRecord, glyph_count: u16) FontError!void {
-    const document_list = try svgDocumentList(data, svg);
-
-    const byte_ranges = try allocator.alloc(SvgDocumentByteRange, document_list.entry_count);
-    defer allocator.free(byte_ranges);
-
-    var previous_end_glyph_id: ?glyph_mod.GlyphId = null;
-    for (0..document_list.entry_count) |index| {
-        const record = try readSvgDocumentRecord(data, document_list.records_start + index * 12);
-        try validateSvgDocumentRecord(record, document_list, glyph_count, &previous_end_glyph_id);
-        byte_ranges[index] = .{
-            .start = record.document_offset,
-            .end = record.document_offset + record.document_length,
-        };
-        const document_start = document_list.start + record.document_offset;
-        try validateSvgDocumentPayload(allocator, data[document_start .. document_start + record.document_length]);
-    }
-    try validateSvgDocumentByteRanges(byte_ranges);
+    svg: TableRecord,
+    glyph_count: u16,
+) FontError!void {
+    return try svg_mod.validate(
+        allocator,
+        data,
+        svgTable(svg),
+        glyph_count,
+    );
 }
 
 fn validateCpalPaletteEntries(data: []const u8, cpal: TableRecord) FontError!u16 {

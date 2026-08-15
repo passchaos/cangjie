@@ -32,6 +32,8 @@ const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
 const sfnt = @import("font/sfnt/root.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
+const color_tables = @import("font/tables/color/root.zig");
+const cpal_mod = color_tables.cpal;
 const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode_mod = @import("unicode.zig");
@@ -509,19 +511,10 @@ pub const ColorLayer = struct {
     palette_index: u16,
 };
 
-pub const PaletteColor = struct {
-    red: u8,
-    green: u8,
-    blue: u8,
-    alpha: u8,
-};
-
-pub const PaletteInfo = struct {
-    first_color_index: u16,
-    color_count: u16,
-    palette_type: u32 = 0,
-    label_name_id: ?u16 = null,
-};
+// Preserve the established public color metadata surface while CPAL parsing
+// lives in the focused modern color-table module.
+pub const PaletteColor = cpal_mod.Color;
+pub const PaletteInfo = cpal_mod.Palette;
 
 pub const ColorClipBox = struct {
     x_min: f32,
@@ -759,6 +752,10 @@ fn svgTable(record: TableRecord) svg_mod.Table {
 }
 
 fn bitmapTable(record: TableRecord) bitmap_mod.Table {
+    return .{ .offset = record.offset, .length = record.length };
+}
+
+fn cpalTable(record: TableRecord) cpal_mod.Table {
     return .{ .offset = record.offset, .length = record.length };
 }
 
@@ -1366,8 +1363,11 @@ pub const Font = struct {
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBoundsForShaping(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
         if (cpal) |cpal_table| {
-            _ = try validateCpalPaletteEntries(data, cpal_table);
-            validateCpalNameReferences(data, cpal_table, name) catch |err| switch (err) {
+            _ = cpal_mod.validate(
+                data,
+                cpalTable(cpal_table),
+                if (name) |name_table| nameTableView(name_table) else null,
+            ) catch |err| switch (err) {
                 error.InvalidName => if (!is_ttc_face) return err,
                 else => return err,
             };
@@ -3758,119 +3758,64 @@ pub const Font = struct {
 
     pub fn paletteColor(self: *const Font, palette_index: u16, color_index: u16) FontError!?PaletteColor {
         const cpal = self.cpal orelse return null;
-        try sfnt.checksum.validate(self.data, cpal);
-        if (cpal.length < 12) return error.BadSfnt;
-        const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
         // CPAL v1 label arrays borrow name IDs from the same caller-owned SFNT
         // bytes as the color records. Revalidate those cross-table references
         // for lazy palette reads too, so a post-parse mutation cannot leave UI
         // palette metadata dangling while color lookup still appears valid.
-        try validateCpalNameReferences(self.data, cpal, self.name);
-        const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
-        const color_records_offset: usize = @intCast(try bin.readU32At(self.data, cpal.offset + 8));
-
-        if (palette_index >= palette_count or color_index >= palette_entries) return null;
-        const palette_start_offset = cpal.offset + 12 + @as(usize, palette_index) * 2;
-        const first_color_index = try bin.readU16At(self.data, palette_start_offset);
-        const record_index = @as(usize, first_color_index) + color_index;
-        const record = cpal.offset + color_records_offset + record_index * 4;
-        return .{
-            .blue = self.data[record],
-            .green = self.data[record + 1],
-            .red = self.data[record + 2],
-            .alpha = self.data[record + 3],
-        };
+        const layout = try self.validatedCpalLayout(cpal);
+        return try cpal_mod.color(
+            self.data,
+            cpalTable(cpal),
+            layout,
+            palette_index,
+            color_index,
+        );
     }
 
     pub fn paletteColors(self: *const Font, allocator: std.mem.Allocator, palette_index: u16) FontError![]PaletteColor {
         const cpal = self.cpal orelse return try allocator.alloc(PaletteColor, 0);
-        try sfnt.checksum.validate(self.data, cpal);
-        if (cpal.length < 12) return error.BadSfnt;
-        const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
-        try validateCpalNameReferences(self.data, cpal, self.name);
-        const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
-        const color_records_offset: usize = @intCast(try bin.readU32At(self.data, cpal.offset + 8));
-        if (palette_index >= palette_count) return try allocator.alloc(PaletteColor, 0);
-
-        const colors = try allocator.alloc(PaletteColor, palette_entries);
-        errdefer allocator.free(colors);
-        const palette_start_offset = cpal.offset + 12 + @as(usize, palette_index) * 2;
-        const first_color_index = try bin.readU16At(self.data, palette_start_offset);
-        for (colors, 0..) |*color, color_index| {
-            const record_index = @as(usize, first_color_index) + color_index;
-            const record = cpal.offset + color_records_offset + record_index * 4;
-            color.* = .{
-                .blue = self.data[record],
-                .green = self.data[record + 1],
-                .red = self.data[record + 2],
-                .alpha = self.data[record + 3],
-            };
-        }
-        return colors;
+        const layout = try self.validatedCpalLayout(cpal);
+        return try cpal_mod.colors(
+            allocator,
+            self.data,
+            cpalTable(cpal),
+            layout,
+            palette_index,
+        );
     }
 
     pub fn colorPalettes(self: *const Font, allocator: std.mem.Allocator) FontError![]PaletteInfo {
         const cpal = self.cpal orelse return try allocator.alloc(PaletteInfo, 0);
-        try sfnt.checksum.validate(self.data, cpal);
-        if (cpal.length < 12) return error.BadSfnt;
-        const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
-        try validateCpalNameReferences(self.data, cpal, self.name);
-
-        const version = try bin.readU16At(self.data, cpal.offset);
-        const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
-        const palettes = try allocator.alloc(PaletteInfo, palette_count);
-        errdefer allocator.free(palettes);
-
-        const version_0_header_len = 12 + @as(usize, palette_count) * 2;
-        const palette_types_offset: usize = if (version == 1)
-            @intCast(try bin.readU32At(self.data, cpal.offset + version_0_header_len))
-        else
-            0;
-        const palette_labels_offset: usize = if (version == 1)
-            @intCast(try bin.readU32At(self.data, cpal.offset + version_0_header_len + 4))
-        else
-            0;
-
-        for (palettes, 0..) |*palette, index| {
-            palette.* = .{
-                .first_color_index = try bin.readU16At(self.data, cpal.offset + 12 + index * 2),
-                .color_count = palette_entries,
-                .palette_type = if (palette_types_offset != 0)
-                    try bin.readU32At(self.data, cpal.offset + palette_types_offset + index * 4)
-                else
-                    0,
-                .label_name_id = if (palette_labels_offset != 0) label: {
-                    const name_id = try bin.readU16At(self.data, cpal.offset + palette_labels_offset + index * 2);
-                    break :label if (name_id == 0xffff) null else name_id;
-                } else null,
-            };
-        }
-        return palettes;
+        const layout = try self.validatedCpalLayout(cpal);
+        return try cpal_mod.palettes(
+            allocator,
+            self.data,
+            cpalTable(cpal),
+            layout,
+        );
     }
 
     pub fn paletteEntryLabels(self: *const Font, allocator: std.mem.Allocator) FontError![]?u16 {
         const cpal = self.cpal orelse return try allocator.alloc(?u16, 0);
+        const layout = try self.validatedCpalLayout(cpal);
+        return try cpal_mod.entryLabels(
+            allocator,
+            self.data,
+            cpalTable(cpal),
+            layout,
+        );
+    }
+
+    fn validatedCpalLayout(
+        self: *const Font,
+        cpal: TableRecord,
+    ) FontError!cpal_mod.Layout {
         try sfnt.checksum.validate(self.data, cpal);
-        if (cpal.length < 12) return error.BadSfnt;
-        const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
-        try validateCpalNameReferences(self.data, cpal, self.name);
-
-        const labels = try allocator.alloc(?u16, palette_entries);
-        errdefer allocator.free(labels);
-        @memset(labels, null);
-
-        const version = try bin.readU16At(self.data, cpal.offset);
-        if (version != 1) return labels;
-        const palette_count = try bin.readU16At(self.data, cpal.offset + 4);
-        const version_0_header_len = 12 + @as(usize, palette_count) * 2;
-        const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(self.data, cpal.offset + version_0_header_len + 8));
-        if (palette_entry_labels_offset == 0) return labels;
-
-        for (labels, 0..) |*label, index| {
-            const name_id = try bin.readU16At(self.data, cpal.offset + palette_entry_labels_offset + index * 2);
-            label.* = if (name_id == 0xffff) null else name_id;
-        }
-        return labels;
+        return try cpal_mod.validate(
+            self.data,
+            cpalTable(cpal),
+            if (self.name) |name| nameTableView(name) else null,
+        );
     }
 
     pub fn colorPaint(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorPaint {
@@ -10828,203 +10773,15 @@ fn validateSvgGlyphBounds(
     );
 }
 
-fn validateCpalPaletteEntries(data: []const u8, cpal: TableRecord) FontError!u16 {
-    if (cpal.length < 12) return error.BadSfnt;
-    const version = try bin.readU16At(data, cpal.offset);
-    if (version > 1) return error.BadSfnt;
-    const palette_entries = try bin.readU16At(data, cpal.offset + 2);
-    const palette_count = try bin.readU16At(data, cpal.offset + 4);
-    const color_count = try bin.readU16At(data, cpal.offset + 6);
-    const color_records_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + 8));
-
-    const palette_indices_len = @as(usize, palette_count) * 2;
-    if (palette_indices_len > cpal.length - 12) return error.BadSfnt;
-    const version_0_header_len = 12 + palette_indices_len;
-    const header_len = if (version == 1) blk: {
-        if (12 > cpal.length - version_0_header_len) return error.BadSfnt;
-        const palette_types_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len));
-        const palette_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 4));
-        const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 8));
-        const extended_header_len = version_0_header_len + 12;
-        try validateCpalPaletteTypeValues(data, cpal, extended_header_len, palette_types_offset, palette_count);
-        try validateCpalOptionalArray(cpal, extended_header_len, palette_labels_offset, palette_count, 2);
-        try validateCpalOptionalArray(cpal, extended_header_len, palette_entry_labels_offset, palette_entries, 2);
-        break :blk extended_header_len;
-    } else version_0_header_len;
-
-    // The palette-start indices and v1 extension offsets are declared metadata,
-    // not color payload. Keeping ColorRecordsArray after that header prevents a
-    // malformed CPAL table from reinterpreting palette indices or optional name
-    // arrays as BGRA color records during parse-time COLR validation.
-    if (color_records_offset < header_len or color_records_offset > cpal.length) return error.BadSfnt;
-    if (@as(usize, color_count) > (cpal.length - color_records_offset) / 4) return error.BadSfnt;
-
-    if (version == 1) {
-        const palette_types_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len));
-        const palette_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 4));
-        const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 8));
-        try validateCpalV1PayloadRanges(
-            cpal,
-            header_len,
-            palette_types_offset,
-            palette_labels_offset,
-            palette_entry_labels_offset,
-            palette_count,
-            palette_entries,
-            color_records_offset,
-            color_count,
-        );
-    }
-
-    try validateCpalPaletteSlices(data, cpal, palette_count, palette_entries, color_count);
-    return palette_entries;
-}
-
-fn validateCpalPaletteSlices(data: []const u8, cpal: TableRecord, palette_count: u16, palette_entries: u16, color_count: u16) FontError!void {
-    var previous_first_color_index: ?usize = null;
-    var previous_palette_end: ?usize = null;
-
-    for (0..palette_count) |palette_index| {
-        const first_color_index: usize = @intCast(try bin.readU16At(data, cpal.offset + 12 + palette_index * 2));
-        const entries: usize = @intCast(palette_entries);
-        const colors: usize = @intCast(color_count);
-        if (first_color_index > colors or entries > colors - first_color_index) return error.BadSfnt;
-
-        if (previous_first_color_index) |previous_first| {
-            // CPAL palettes are fixed-size slices into ColorRecordsArray. Keep
-            // the declared firstColorIndex array canonical and non-overlapping
-            // so palette lookup cannot depend on duplicated or reordered
-            // slices that reinterpret the same BGRA records as distinct
-            // palettes.
-            if (first_color_index <= previous_first) return error.BadSfnt;
-            if (first_color_index < previous_palette_end.?) return error.BadSfnt;
-        }
-
-        previous_first_color_index = first_color_index;
-        previous_palette_end = first_color_index + entries;
-    }
-}
-
-fn validateCpalOptionalArray(cpal: TableRecord, header_len: usize, offset: usize, count: usize, item_size: usize) FontError!void {
-    if (offset == 0) return;
-    if (offset < header_len or offset > cpal.length) return error.BadSfnt;
-    if (count > (cpal.length - offset) / item_size) return error.BadSfnt;
-}
-
-const CpalPayloadRange = struct {
-    start: usize,
-    end: usize,
-};
-
-fn validateCpalV1PayloadRanges(
-    cpal: TableRecord,
-    header_len: usize,
-    palette_types_offset: usize,
-    palette_labels_offset: usize,
-    palette_entry_labels_offset: usize,
-    palette_count: usize,
-    palette_entries: usize,
-    color_records_offset: usize,
-    color_count: usize,
-) FontError!void {
-    var ranges: [4]CpalPayloadRange = undefined;
-    var range_count: usize = 0;
-
-    try appendCpalPayloadRange(&ranges, &range_count, cpal, header_len, palette_types_offset, palette_count, 4);
-    try appendCpalPayloadRange(&ranges, &range_count, cpal, header_len, palette_labels_offset, palette_count, 2);
-    try appendCpalPayloadRange(&ranges, &range_count, cpal, header_len, palette_entry_labels_offset, palette_entries, 2);
-    try appendCpalPayloadRange(&ranges, &range_count, cpal, header_len, color_records_offset, color_count, 4);
-
-    for (ranges[0..range_count], 0..) |lhs, lhs_index| {
-        for (ranges[lhs_index + 1 .. range_count]) |rhs| {
-            // CPAL v1 offsets name independently typed arrays. Even when two
-            // arrays have compatible element widths, sharing bytes would let a
-            // palette label, palette-type flag, or BGRA color record be
-            // reinterpreted as a different payload later in the pipeline.
-            if (cpalPayloadRangesOverlap(lhs, rhs)) return error.BadSfnt;
-        }
-    }
-}
-
-fn appendCpalPayloadRange(
-    ranges: *[4]CpalPayloadRange,
-    range_count: *usize,
-    cpal: TableRecord,
-    header_len: usize,
-    offset: usize,
-    count: usize,
-    item_size: usize,
-) FontError!void {
-    if (offset == 0) return;
-    try validateCpalOptionalArray(cpal, header_len, offset, count, item_size);
-    const byte_len = count * item_size;
-    ranges[range_count.*] = .{ .start = offset, .end = offset + byte_len };
-    range_count.* += 1;
-}
-
-fn cpalPayloadRangesOverlap(lhs: CpalPayloadRange, rhs: CpalPayloadRange) bool {
-    return lhs.start < rhs.end and rhs.start < lhs.end;
-}
-
-const cpal_known_palette_type_mask: u32 = 0x0000_0003;
-
-fn validateCpalPaletteTypeValues(data: []const u8, cpal: TableRecord, header_len: usize, offset: usize, palette_count: usize) FontError!void {
-    if (offset == 0) return;
-    try validateCpalOptionalArray(cpal, header_len, offset, palette_count, 4);
-
-    // CPAL v1 palette type values are bitsets whose currently assigned bits
-    // only describe light/dark-background suitability.  Rejecting reserved bits
-    // at parse time keeps future flags from being silently misinterpreted by
-    // palette selection code that only understands today's two-bit contract.
-    for (0..palette_count) |palette_index| {
-        const palette_type = try bin.readU32At(data, cpal.offset + offset + palette_index * 4);
-        if (palette_type & ~cpal_known_palette_type_mask != 0) return error.BadSfnt;
-    }
-}
-
-fn validateCpalNameReferences(data: []const u8, cpal: TableRecord, name: ?TableRecord) FontError!void {
-    if (cpal.length < 12) return error.BadSfnt;
-    const version = try bin.readU16At(data, cpal.offset);
-    if (version == 0) return;
-    if (version > 1) return error.BadSfnt;
-
-    const palette_entries: usize = @intCast(try bin.readU16At(data, cpal.offset + 2));
-    const palette_count: usize = @intCast(try bin.readU16At(data, cpal.offset + 4));
-    const palette_indices_len = palette_count * 2;
-    if (palette_indices_len > cpal.length - 12) return error.BadSfnt;
-    const version_0_header_len = 12 + palette_indices_len;
-    if (12 > cpal.length - version_0_header_len) return error.BadSfnt;
-
-    const palette_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 4));
-    const palette_entry_labels_offset: usize = @intCast(try bin.readU32At(data, cpal.offset + version_0_header_len + 8));
-    if (palette_labels_offset == 0 and palette_entry_labels_offset == 0) return;
-
-    var name_index_storage: NameIdIndex = undefined;
-    const name_index: ?*const NameIdIndex = if (name) |name_table| blk: {
-        name_index_storage = try readNameIdIndex(data, name_table);
-        break :blk &name_index_storage;
-    } else null;
-
-    // CPAL v1 label arrays contain optional name IDs, not raw strings.  Check
-    // them while parsing so palette UIs never expose a dangling or undecodable
-    // localized label after the font has otherwise been accepted.
-    const extended_header_len = version_0_header_len + 12;
-    try validateCpalNameIdArray(data, cpal, extended_header_len, palette_labels_offset, palette_count, name_index);
-    try validateCpalNameIdArray(data, cpal, extended_header_len, palette_entry_labels_offset, palette_entries, name_index);
-}
-
-fn validateCpalNameIdArray(data: []const u8, cpal: TableRecord, header_len: usize, offset: usize, count: usize, name_index: ?*const NameIdIndex) FontError!void {
-    if (offset == 0) return;
-    try validateCpalOptionalArray(cpal, header_len, offset, count, 2);
-    for (0..count) |index| {
-        const name_id = try bin.readU16At(data, cpal.offset + offset + index * 2);
-        try validateOptionalNameIdReference(name_index, name_id);
-    }
-}
-
 fn validateColrPaletteBounds(data: []const u8, colr: TableRecord, cpal: ?TableRecord) FontError!void {
     if (colr.length < 2) return error.BadSfnt;
-    const cpal_palette_entries = if (cpal) |cpal_table| try validateCpalPaletteEntries(data, cpal_table) else null;
+    const cpal_palette_entries = if (cpal) |cpal_table|
+        (try cpal_mod.validateStructure(
+            data,
+            cpalTable(cpal_table),
+        )).palette_entries
+    else
+        null;
     const version = try bin.readU16At(data, colr.offset);
     switch (version) {
         0 => try validateColrV0PaletteBounds(data, colr, cpal_palette_entries),
@@ -17305,73 +17062,6 @@ test "CPAL palette entries stay inside declared color records" {
     try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
 }
 
-test "CPAL palette slices must be ordered and non-overlapping" {
-    var bytes: [32]u8 = .{0} ** 32;
-    writeU16Test(&bytes, 0, 0); // CPAL version 0.
-    writeU16Test(&bytes, 2, 2); // each palette has two entries.
-    writeU16Test(&bytes, 4, 2); // two firstColorIndex entries.
-    writeU16Test(&bytes, 6, 4); // four BGRA records are declared.
-    writeU32Test(&bytes, 8, 16);
-    writeU16Test(&bytes, 12, 0);
-    writeU16Test(&bytes, 14, 2);
-
-    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(u16, 2), try validateCpalPaletteEntries(&bytes, cpal));
-
-    var duplicate_start = bytes;
-    writeU16Test(&duplicate_start, 14, 0);
-    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&duplicate_start, cpal));
-
-    var overlapping_slice = bytes;
-    writeU16Test(&overlapping_slice, 14, 1);
-    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&overlapping_slice, cpal));
-
-    var out_of_order = bytes;
-    writeU16Test(&out_of_order, 12, 2);
-    writeU16Test(&out_of_order, 14, 0);
-    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&out_of_order, cpal));
-}
-
-test "CPAL v1 labels must resolve through the name table" {
-    var bytes: [54]u8 = .{0} ** 54;
-    writeU16Test(&bytes, 0, 1); // CPAL version 1 includes optional label arrays.
-    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
-    writeU16Test(&bytes, 4, 1); // numPalettes.
-    writeU16Test(&bytes, 6, 1); // numColorRecords.
-    writeU32Test(&bytes, 8, 30); // ColorRecordsArray follows both label arrays.
-    writeU16Test(&bytes, 12, 0); // First color index for palette 0.
-    writeU32Test(&bytes, 14, 0); // no palette type array.
-    writeU32Test(&bytes, 18, 26); // one palette label NameID.
-    writeU32Test(&bytes, 22, 28); // one palette-entry label NameID.
-    writeU16Test(&bytes, 26, 256);
-    writeU16Test(&bytes, 28, 0xffff); // Explicitly unlabeled palette entry.
-    bytes[30] = 10;
-    bytes[31] = 20;
-    bytes[32] = 30;
-    bytes[33] = 40;
-
-    const name_offset = 34;
-    writeU16Test(&bytes, name_offset + 0, 0);
-    writeU16Test(&bytes, name_offset + 2, 1);
-    writeU16Test(&bytes, name_offset + 4, 18);
-    writeUtf16NameRecordTest(&bytes, name_offset + 6, 256, 2, 0);
-    bytes[name_offset + 19] = 'P';
-
-    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = name_offset };
-    const name = TableRecord{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = name_offset, .length = bytes.len - name_offset };
-    try validateCpalNameReferences(&bytes, cpal, name);
-
-    var missing_palette_label = bytes;
-    writeU16Test(&missing_palette_label, 26, 257);
-    try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&missing_palette_label, cpal, name));
-
-    var missing_entry_label = bytes;
-    writeU16Test(&missing_entry_label, 28, 257);
-    try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&missing_entry_label, cpal, name));
-
-    try std.testing.expectError(error.InvalidName, validateCpalNameReferences(&bytes, cpal, null));
-}
-
 test "CPAL palette lookup revalidates borrowed label name IDs" {
     var bytes: [54]u8 = .{0} ** 54;
     writeU16Test(&bytes, 0, 1); // CPAL version 1 includes optional label arrays.
@@ -17478,62 +17168,6 @@ test "CPAL palette lookup revalidates borrowed table checksum" {
     // because the table no longer matches the SFNT checksum.
     bytes[16] = 31;
     try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
-}
-
-test "CPAL v1 palette types reject reserved bits" {
-    var bytes: [34]u8 = .{0} ** 34;
-    writeU16Test(&bytes, 0, 1); // CPAL version 1 includes optional palette-type flags.
-    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
-    writeU16Test(&bytes, 4, 1); // numPalettes.
-    writeU16Test(&bytes, 6, 1); // numColorRecords.
-    writeU32Test(&bytes, 8, 30); // ColorRecordsArray follows the type array.
-    writeU16Test(&bytes, 12, 0); // First color index for palette 0.
-    writeU32Test(&bytes, 14, 26); // one palette type value.
-    writeU32Test(&bytes, 18, 0); // no palette label array.
-    writeU32Test(&bytes, 22, 0); // no palette-entry label array.
-    writeU32Test(&bytes, 26, 0x0000_0004); // Reserved CPAL palette-type bit.
-    bytes[30] = 10;
-    bytes[31] = 20;
-    bytes[32] = 30;
-    bytes[33] = 40;
-
-    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&bytes, cpal));
-
-    writeU32Test(&bytes, 26, 0x0000_0003); // Valid: light and dark background suitability bits.
-    try std.testing.expectEqual(@as(u16, 1), try validateCpalPaletteEntries(&bytes, cpal));
-}
-
-test "CPAL v1 payload arrays cannot alias each other" {
-    var bytes: [38]u8 = .{0} ** 38;
-    writeU16Test(&bytes, 0, 1); // CPAL version 1.
-    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
-    writeU16Test(&bytes, 4, 1); // numPalettes.
-    writeU16Test(&bytes, 6, 1); // numColorRecords.
-    writeU32Test(&bytes, 8, 34); // ColorRecordsArray follows all optional arrays.
-    writeU16Test(&bytes, 12, 0);
-    writeU32Test(&bytes, 14, 26); // paletteTypesArray: bytes 26..30.
-    writeU32Test(&bytes, 18, 30); // paletteLabelsArray: bytes 30..32.
-    writeU32Test(&bytes, 22, 32); // paletteEntryLabelsArray: bytes 32..34.
-    writeU32Test(&bytes, 26, 0x0000_0003);
-    writeU16Test(&bytes, 30, 0xffff);
-    writeU16Test(&bytes, 32, 0xffff);
-    bytes[34] = 10;
-    bytes[35] = 20;
-    bytes[36] = 30;
-    bytes[37] = 40;
-
-    const cpal = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(u16, 1), try validateCpalPaletteEntries(&bytes, cpal));
-
-    var label_alias = bytes;
-    writeU32Test(&label_alias, 22, 30); // Entry labels reuse the palette-label payload.
-    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&label_alias, cpal));
-
-    var color_alias = bytes;
-    writeU32Test(&color_alias, 8, 28); // BGRA color records start inside the palette-type array.
-    writeU32Test(&color_alias, 26, 0); // Keep reserved type bits clear while testing ownership.
-    try std.testing.expectError(error.BadSfnt, validateCpalPaletteEntries(&color_alias, cpal));
 }
 
 test "COLR glyph references stay within maxp glyph count" {

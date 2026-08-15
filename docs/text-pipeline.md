@@ -147,6 +147,16 @@ Arabic/Syriac stretch post-processing lives under
   against neighboring word context.
 - `root.zig` is the single positioning-stage integration surface.
 
+Renderer-free analysis is organized under `src/shaping/diagnostics/`:
+
+- `types.zig` owns the stable fallback, quality, and caret report records.
+- `quality.zig` aggregates already-shaped font/script runs.
+- `caret.zig` validates UTF-8 source spans and caret round trips.
+
+The public `diagnose*Utf8` functions remain thin orchestration entry points in
+the layout surface, while report storage and pure analysis no longer depend on
+the shaping executor.
+
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 

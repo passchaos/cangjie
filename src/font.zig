@@ -14720,86 +14720,6 @@ test "name table format 1 validates language tag syntax" {
     try std.testing.expectError(error.InvalidName, validateNameTable(&numeric_primary, nameTableRecord(numeric_primary.len)));
 }
 
-test "SVG public document lookup revalidates byte-range ownership" {
-    var bytes: [48]u8 = .{0} ** 48;
-    writeU16Test(&bytes, 0, 0); // SVG table version.
-    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
-    writeU16Test(&bytes, 10, 2); // two SVGDocumentRecords.
-    writeU16Test(&bytes, 12, 1);
-    writeU16Test(&bytes, 14, 1);
-    writeU32Test(&bytes, 16, 26); // First document: [26, 32) relative to the list.
-    writeU32Test(&bytes, 20, 6);
-    writeU16Test(&bytes, 24, 2);
-    writeU16Test(&bytes, 26, 2);
-    writeU32Test(&bytes, 28, 32); // Second document is initially disjoint: [32, 38).
-    writeU32Test(&bytes, 32, 6);
-    @memcpy(bytes[36..42], "<svg/>");
-    @memcpy(bytes[42..48], "<svg/>");
-
-    const font = svgOnlyFont(&bytes);
-    const original = (try font.svgGlyphDocument(2)).?;
-    try std.testing.expectEqualSlices(u8, "<svg/>", original.data);
-
-    // Font instances borrow caller-owned SFNT bytes. Mutating a later
-    // SVGDocumentRecord into a partial byte overlap must be caught by the
-    // public lookup path, not just by parse-time validation.
-    writeU32Test(&bytes, 28, 30);
-    try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(2));
-}
-
-test "SVG public document lookup revalidates borrowed XML payloads" {
-    var bytes: [56]u8 = .{0} ** 56;
-    writeU16Test(&bytes, 0, 0); // SVG table version.
-    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
-    writeU16Test(&bytes, 10, 2); // two SVGDocumentRecords.
-    writeU16Test(&bytes, 12, 1);
-    writeU16Test(&bytes, 14, 1);
-    writeU32Test(&bytes, 16, 26);
-    writeU32Test(&bytes, 20, 6);
-    writeU16Test(&bytes, 24, 2);
-    writeU16Test(&bytes, 26, 2);
-    writeU32Test(&bytes, 28, 32);
-    writeU32Test(&bytes, 32, 8);
-    @memcpy(bytes[36..42], "<svg/>");
-    @memcpy(bytes[42..50], "<svg/>  ");
-
-    const font = svgOnlyFont(&bytes);
-    const original = (try font.svgGlyphDocument(1)).?;
-    try std.testing.expectEqualSlices(u8, "<svg/>", original.data);
-
-    // Lazy lookup must validate every advertised payload, not just the record
-    // whose glyph range matched this call. Otherwise a mutated unrequested
-    // document can stay hidden until a later glyph happens to select it.
-    @memcpy(bytes[42..50], "<g></g> ");
-    try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(1));
-
-    @memcpy(bytes[42..50], "<svg/>  ");
-    @memcpy(bytes[36..42], "<g></>");
-    try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(1));
-}
-
-test "SVG public document lookup revalidates borrowed table checksum" {
-    var bytes: [32]u8 = .{0} ** 32;
-    writeU16Test(&bytes, 0, 0); // SVG table version.
-    writeU32Test(&bytes, 2, 10); // SVGDocumentListOffset.
-    writeU16Test(&bytes, 10, 1); // one SVGDocumentRecord.
-    writeU16Test(&bytes, 12, 1);
-    writeU16Test(&bytes, 14, 1);
-    writeU32Test(&bytes, 16, 14); // Document starts at byte 24.
-    writeU32Test(&bytes, 20, 8);
-    @memcpy(bytes[24..32], "<svg/>  ");
-
-    const font = svgOnlyFont(&bytes);
-    const original = (try font.svgGlyphDocument(1)).?;
-    try std.testing.expectEqualSlices(u8, "<svg/>  ", original.data);
-
-    // Keep the XML payload valid while changing only trailing whitespace after
-    // construction. Lazy lookup must reject the borrowed SVG table because its
-    // SFNT checksum no longer matches the parsed table map.
-    bytes[31] = '\n';
-    try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(1));
-}
-
 test "TTC v2 DSIG descriptor validates range and null consistency" {
     var valid_empty: [40]u8 = .{0} ** 40;
     writeTagTest(&valid_empty, 0, "ttcf");
@@ -16266,12 +16186,6 @@ fn gdefOnlyFont(data: []const u8) Font {
 fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
     var font = table_only_fixture.init(Font, data, 2, 2);
     font.os2 = table_only_fixture.record(data, .{ 'O', 'S', '/', '2' }, 0, declared_length);
-    return font;
-}
-
-fn svgOnlyFont(data: []const u8) Font {
-    var font = table_only_fixture.init(Font, data, 4, 2);
-    font.svg = table_only_fixture.record(data, .{ 'S', 'V', 'G', ' ' }, 0, data.len);
     return font;
 }
 

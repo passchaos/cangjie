@@ -183,6 +183,23 @@ Shared GSUB infrastructure is grouped under `src/shaping/pipeline/gsub/`:
 Script shapers now share this small execution surface instead of duplicating
 cache/proof branches inside the main segment function.
 
+Final positioning is grouped under `src/shaping/pipeline/positioning/`:
+
+- `collect.zig` owns GPOS option construction, cached lookup selection, table
+  proof use, and the GPOS-versus-kerx engine decision.
+- `engine.zig` plans AAT kerx, legacy kern, and geometric mark fallback after
+  the table-level engine choice is known.
+- `adjustments.zig`, `attachments.zig`, `policy.zig`, and `source_span.zig`
+  own sparse adjustment lookup, attachment remapping, script/class policies,
+  and public source extents respectively.
+- `output/` converts font-unit adjustments into public glyph geometry, with
+  separate Arabic cmap fallback, per-glyph geometry, and shared state records.
+
+The segment orchestrator therefore no longer owns metric fallback, attachment
+compaction, default-ignorable suppression, or the final glyph construction
+loop. Shared resolved run properties live in `shaping/pipeline/types.zig`, so
+pipeline stages do not import the paragraph/layout orchestrator.
+
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 

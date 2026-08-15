@@ -1,10 +1,7 @@
 const std = @import("std");
-const aat_kerx = @import("aat_kerx.zig");
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
-const fallback_mark = @import("shaping/fallback/mark.zig");
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
-const GlyphClass = @import("font.zig").GlyphClass;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
 const khmer = @import("khmer.zig");
@@ -16,13 +13,20 @@ const layout_scratch = @import("shaping/context/scratch.zig");
 const myanmar = @import("myanmar.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
-const run_metadata = @import("shaping/run_metadata.zig");
+const pipeline_types = @import("shaping/pipeline/types.zig");
 const source_pipeline = @import("shaping/pipeline/source/root.zig");
 const gsub_pipeline = @import("shaping/pipeline/gsub/root.zig");
 const gsub_executor = gsub_pipeline.executor;
 const gsub_features = gsub_pipeline.features;
 const gsub_fraction = gsub_pipeline.fraction;
 const gsub_hangul = gsub_pipeline.hangul;
+const positioning = @import("shaping/pipeline/positioning/root.zig");
+const position_adjustments = positioning.adjustments;
+const position_attachments = positioning.attachments;
+const position_collect = positioning.collect;
+const position_engine = positioning.engine;
+const position_output = positioning.output;
+const position_policy = positioning.policy;
 const diagnostics = @import("shaping/diagnostics/root.zig");
 const diagnostic_caret = diagnostics.caret;
 const diagnostic_quality = diagnostics.quality;
@@ -40,7 +44,6 @@ const styled_buffer = @import("layout/styled_buffer.zig");
 const styled_paragraph = @import("layout/styled_paragraph.zig");
 const bidi = @import("text/bidi.zig");
 const segmentation = @import("text/segmentation/root.zig");
-const space_fallback = @import("space_fallback.zig");
 const unicode = @import("unicode.zig");
 const use_shaper = @import("use_shaper.zig");
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
@@ -52,7 +55,7 @@ pub const GposTableProofCache = layout_cache.GposTableProofCache;
 pub const GsubTableProofCache = layout_cache.GsubTableProofCache;
 pub const LookupSelectionCache = layout_cache.LookupSelectionCache;
 pub const VerticalGlyphMetrics = layout_cache.VerticalGlyphMetrics;
-pub const ClusterLevel = shaping_metadata.ClusterLevel;
+pub const ClusterLevel = pipeline_types.ClusterLevel;
 pub const GlyphPosition = glyph_position.GlyphPosition;
 
 pub const GlyphRun = run_types.GlyphRun;
@@ -61,32 +64,10 @@ pub const ShapedText = run_types.ShapedText;
 pub const ScriptedRun = run_types.ScriptedRun;
 pub const ScriptedText = run_types.ScriptedText;
 
-pub const TextDirection = enum {
-    ltr,
-    rtl,
-};
-
-pub const WritingMode = enum {
-    horizontal_tb,
-    vertical_rl,
-    vertical_lr,
-
-    pub fn isVertical(self: WritingMode) bool {
-        return self != .horizontal_tb;
-    }
-};
-
-pub const TextOrientation = enum {
-    mixed,
-    upright,
-    sideways,
-};
-
-pub const ScriptPosition = enum {
-    normal,
-    superscript,
-    subscript,
-};
+pub const TextDirection = pipeline_types.TextDirection;
+pub const WritingMode = pipeline_types.WritingMode;
+pub const TextOrientation = pipeline_types.TextOrientation;
+pub const ScriptPosition = pipeline_types.ScriptPosition;
 
 pub const ShapeOptions = struct {
     direction: TextDirection = .ltr,
@@ -1774,34 +1755,8 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     return next_pen;
 }
 
-const LookupOptions = struct {
-    script: unicode.Script = .common,
-    script_tag: unicode.OpenTypeScriptTag = .dflt,
-    script_tag_explicit: bool = false,
-    language_tag: unicode.OpenTypeLanguageTag = .dflt,
-    direction: TextDirection = .ltr,
-    reorder_bidi: bool = true,
-    native_direction_shaping: bool = false,
-    script_position: ScriptPosition = .normal,
-    features: []const unicode.FeatureOverride = &.{},
-    writing_mode: WritingMode = .horizontal_tb,
-    text_orientation: TextOrientation = .mixed,
-    normalized_variation_coords: []const f32 = &.{},
-    not_found_variation_selector_glyph: ?u32 = null,
-    remove_default_ignorables: bool = false,
-    context_before: []const u8 = &.{},
-    context_after: []const u8 = &.{},
-    beginning_of_text: bool = false,
-    end_of_text: bool = false,
-    cluster_level: ?ClusterLevel = null,
-    run_has_decimal_number: bool = false,
-    run_has_letter: bool = false,
-};
-
-const ResolvedLookupOptions = struct {
-    lookup: LookupOptions,
-    all_ascii: bool,
-};
+const LookupOptions = pipeline_types.LookupOptions;
+const ResolvedLookupOptions = pipeline_types.ResolvedLookupOptions;
 
 fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupOptions {
     const infer_language = options.language_tag == null;
@@ -1987,7 +1942,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     selected_lookup_options.run_has_letter = source_result.run_has_letter;
     const lookup_options = selected_lookup_options;
 
-    const shape_in_native_direction = shouldShapeInNativeDirection(lookup_options);
+    const shape_in_native_direction = lookup_options.shouldShapeInNativeDirection();
     if (shape_in_native_direction) {
         reverseScratchGlyphOrderForNativeDirection(scratch);
     }
@@ -2757,492 +2712,110 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 
     const gpos_adjustments = &scratch.gpos_adjustments;
     const gpos_start = shapeProfileNow(shape_profile, profile_io);
-    var gpos_unsafe_glyphs = run_metadata.UnsafeGlyphs{};
-    const gpos_run_metadata = run_metadata.Positioning{
+    const position_collection = try position_collect.run(.{
+        .allocator = buffer.allocator,
+        .font = font,
+        .lookup_selection_cache = buffer.lookup_selection_cache,
+        .gpos_table_proof_cache = buffer.gpos_table_proof_cache,
+        .glyph_ids = glyph_ids.items,
         .glyph_source_indices = glyph_source_indices.items,
-        .source_codepoints = codepoints.items,
+        .codepoints = codepoints.items,
         .glyph_substituted = glyph_substituted.items,
         .ligature_components = ligature_components,
         .source_boundaries = source_boundaries,
-    };
-    var gpos_options = gpos.LookupOptions{
-        .script_tag = gpos_script_tag,
-        .language_tag = lookup_options.language_tag,
-        .direction = if (shapingDirectionForGpos(lookup_options) == .rtl) .rtl else .ltr,
-        .vertical = lookup_options.writing_mode.isVertical(),
-        .features = lookup_options.features,
-        .normalized_variation_coords = lookup_options.normalized_variation_coords,
-        .apply_all_if_unselected = false,
-        .run_may_have_mark_attachments = runMayHaveMarkAttachments(glyph_ids.items, codepoints.items, glyph_source_indices.items, gdef_metadata.*),
-        .run_has_default_ignorables = has_default_ignorable,
-        .run_metadata = &gpos_run_metadata,
-        .unsafe_glyphs = &gpos_unsafe_glyphs,
-        .shape_profile = shape_profile,
+        .gdef_metadata = gdef_metadata.*,
+        .gpos_script_tag = gpos_script_tag,
+        .options = lookup_options,
+        .has_default_ignorable = has_default_ignorable,
+        .run_may_have_mark_attachments = position_policy.runMayHaveMarkAttachments(
+            glyph_ids.items,
+            codepoints.items,
+            glyph_source_indices.items,
+            gdef_metadata.*,
+        ),
+        .adjustments = gpos_adjustments,
+        .profile = shape_profile,
         .profile_io = profile_io,
-        .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
-    };
-    const apply_aat_substitution = font.hasAatSubstitutionForShaping() and
-        (!lookup_options.writing_mode.isVertical() or !font.hasGsubTableForShaping());
-    // HarfBuzz prefers GPOS whenever GSUB and GPOS are both the active
-    // OpenType engines. If horizontal morx was selected, GSUB is deliberately
-    // excluded from that pair and kerx owns positioning instead.
-    const use_kerx_positioning = font.hasKerxTableForShaping() and
-        (apply_aat_substitution or
-            !(font.hasGsubTableForShaping() and font.hasGposTableForShaping()));
-    if (!use_kerx_positioning) {
-        if (buffer.lookup_selection_cache) |selection_cache| {
-            gpos_options.lookup_accelerators = try selection_cache.gposLookupAccelerators(font);
-            gpos_options.selected_lookups = try selection_cache.gposLookups(font, gpos_options, gdef_metadata.*);
-        }
-        if (buffer.gpos_table_proof_cache) |proof_cache| {
-            try proof_cache.prove(font);
-            try font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
-        } else {
-            try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyph_ids.items, gpos_adjustments, buffer.allocator, gpos_options, gdef_metadata.*);
-        }
-    }
+    });
+    const gpos_unsafe_glyphs = position_collection.unsafe_glyphs;
+    const use_kerx_positioning = position_collection.use_kerx_positioning;
     if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
 
     const position_start = shapeProfileNow(shape_profile, profile_io);
     const position_sort_start = shapeProfileNow(shape_profile, profile_io);
-    std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, adjustmentIndexLessThan);
+    std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, position_adjustments.lessThan);
     if (shape_profile) |p| p.position_sort_ns += shapeProfileElapsed(position_sort_start, profile_io);
-    const has_gpos_attachments = adjustmentsHaveAttachments(gpos_adjustments.items);
-    const has_gdef_glyph_classes = gdef_metadata.glyph_classes != null;
-    const has_gpos_positioning = font.hasGposTableForShaping() and !use_kerx_positioning;
-    const kerning_enabled = gsub_features.enabled(
-        if (lookup_options.writing_mode.isVertical()) unicode.tag("vkrn") else unicode.tag("kern"),
-        lookup_options.features,
-        !lookup_options.writing_mode.isVertical(),
-    );
-    // HarfBuzz chooses kerx ahead of both GPOS and legacy kern unless GSUB and
-    // GPOS are the active OpenType engines. This AAT path intentionally
-    // preserves that table-level decision, so a present kerx table suppresses
-    // duplicate legacy `kern` application even when no subtable changes this
-    // particular run.
-    // Cross-stream format-1 actions apply even when `kern`/`vkrn` is disabled,
-    // so retain the selected kerx engine independently of the pair-feature
-    // mask. The ordered executor receives `kerning_enabled` and suppresses only
-    // kerning-requested same/simple subtables.
-    const kerx_lookup = if (use_kerx_positioning)
-        try font.kerxLookupForShaping()
-    else
-        null;
+    const has_gpos_attachments = position_attachments.hasGpos(gpos_adjustments.items);
     const kerx_adjustments = &scratch.kerx_adjustments;
     const kerx_simple_pair_eligible = &scratch.kerx_simple_pair_eligible;
-    var kerx_summary = aat_kerx.Summary{};
-    if (kerx_lookup) |lookup| {
-        const vertical = lookup_options.writing_mode.isVertical();
-        if (try lookup.hasOutputSideAdjustments(vertical, kerning_enabled)) {
-            try kerx_simple_pair_eligible.resize(buffer.allocator, glyph_ids.items.len);
-            for (glyph_ids.items, kerx_simple_pair_eligible.items, 0..) |glyph_id, *eligible, index| {
-                const source_index = if (index < glyph_source_indices.items.len)
-                    @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
-                else
-                    @min(index, codepoints.items.len -| 1);
-                const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
-                const glyph_class = gdef_metadata.glyphClass(glyph_id);
-                const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
-                eligible.* = !kerxMachineSkipsGlyph(
-                    glyph_class,
-                    has_gdef_glyph_classes,
-                    source_codepoint,
-                    was_substituted,
-                );
-            }
-            kerx_summary = try lookup.collectOrderedAdjustments(
-                glyph_ids.items,
-                kerx_adjustments,
-                buffer.allocator,
-                vertical,
-                shapingDirectionForGpos(lookup_options) == .rtl,
-                kerning_enabled,
-                kerx_simple_pair_eligible.items,
-                lookup_options.normalized_variation_coords,
-            );
-        }
-    }
-    const has_kerx_state_attachments = adjustmentsHaveKerxAttachments(kerx_adjustments.items);
-    // GPOS and kerx adjustments are accumulated in font units, then scaled
-    // into user-space coordinates for the final GlyphPosition stream.
-    const fallback_mark_enabled = fallback_mark.enabled(
-        lookup_options.script_tag,
-        early_zero_mark_shape,
-        has_gpos_positioning,
-        has_gpos_attachments or has_kerx_state_attachments,
-        use_kerx_positioning,
-        lookup_options.writing_mode.isVertical(),
-    );
-    var previous_kern_glyph: ?GlyphId = null;
-    var previous_kern_output_index: ?usize = null;
-    var fallback_mark_base: ?fallback_mark.Base = null;
-    var adjustment_cursor: usize = 0;
-    const kern_lookup = if (kerx_lookup == null and
-        !font.hasKerxTableForShaping() and
-        !lookup_options.writing_mode.isVertical() and
-        shouldApplyLegacyKernFallback(lookup_options.script_tag) and
-        kerning_enabled)
-        try font.kernLookupForShaping()
-    else
-        null;
+    const position_engine_plan = try position_engine.prepare(.{
+        .allocator = buffer.allocator,
+        .font = font,
+        .glyph_ids = glyph_ids.items,
+        .codepoints = codepoints.items,
+        .glyph_source_indices = glyph_source_indices.items,
+        .glyph_substituted = glyph_substituted.items,
+        .gdef_metadata = gdef_metadata.*,
+        .use_kerx_positioning = use_kerx_positioning,
+        .has_gpos_attachments = has_gpos_attachments,
+        .early_zero_mark_shape = early_zero_mark_shape,
+        .options = lookup_options,
+        .simple_pair_eligible = kerx_simple_pair_eligible,
+        .kerx_adjustments = kerx_adjustments,
+    });
     const invisible_glyph_id = if (has_default_ignorable)
-        if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
-            const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
+        if (default_ignorable_invisible_glyph_id) |glyph|
+            glyph
+        else resolve: {
+            const glyph =
+                try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
             default_ignorable_invisible_glyph_id = glyph;
             break :resolve glyph;
         }
     else
         0;
-    const segment_glyph_start = buffer.glyphs.items.len;
-    // Positioning can suppress untouched default-ignorables but never emits
-    // more final glyphs than the post-GSUB stream. Reserve the segment once so
-    // the output loop does not repeat a large GlyphPosition capacity check.
-    try buffer.glyphs.ensureUnusedCapacity(buffer.allocator, glyph_ids.items.len);
+    const output_result = try position_output.emit(.{
+        .allocator = buffer.allocator,
+        .font = font,
+        .metrics_cache = metrics_cache,
+        .glyph_index_cache = glyph_index_cache,
+        .source_boundaries = source_boundaries,
+        .gdef_metadata = gdef_metadata.*,
+        .gpos_adjustments = gpos_adjustments.items,
+        .gpos_unsafe_glyphs = gpos_unsafe_glyphs,
+        .kerx_lookup = position_engine_plan.kerx_lookup,
+        .kern_lookup = position_engine_plan.kern_lookup,
+        .kerx_adjustments = kerx_adjustments.items,
+        .kerning_enabled = position_engine_plan.kerning_enabled,
+        .has_gpos_attachments = has_gpos_attachments,
+        .has_kerx_state_attachments = position_engine_plan.has_state_attachments,
+        .has_gpos_positioning = position_engine_plan.has_gpos_positioning,
+        .early_zero_mark_shape = early_zero_mark_shape,
+        .fallback_mark_enabled = position_engine_plan.fallback_mark_enabled,
+        .invisible_glyph_id = invisible_glyph_id,
+        .arabic_joining_features = arabic_joining_features,
+        .cluster_base = cluster_base,
+        .font_size = font_size,
+        .scale = scale,
+        .options = lookup_options,
+        .output = &buffer.glyphs,
+        .scratch = scratch,
+        .profile = shape_profile,
+        .profile_io = profile_io,
+    });
+    const segment_glyph_start = output_result.segment_glyph_start;
     const attachment_links = &scratch.attachment_links;
-    const needs_attachment_remapping = has_gpos_attachments or
-        has_kerx_state_attachments;
-    if (needs_attachment_remapping) {
-        // Parent indexes refer to the post-GSUB input stream. Simple
-        // cross-stream kerx activates the whole run's cursive chain even when
-        // only one pair has a non-zero value, so reserve the reusable sidecars
-        // before walking output rather than allocating inside the pair loop.
-        try attachment_links.resize(buffer.allocator, glyph_ids.items.len);
-        @memset(attachment_links.items, .{});
-        try glyph_output_indices.resize(buffer.allocator, glyph_ids.items.len);
-        @memset(glyph_output_indices.items, std.math.maxInt(usize));
-    }
-    const position_loop_start = shapeProfileNow(shape_profile, profile_io);
-    for (glyph_ids.items, 0..) |input_glyph_id, index| {
-        const source_index = if (index < glyph_source_indices.items.len)
-            @min(glyph_source_indices.items[index], codepoints.items.len -| 1)
-        else
-            @min(index, codepoints.items.len -| 1);
-        const cluster_index = if (index < glyph_cluster_indices.items.len)
-            @min(glyph_cluster_indices.items[index], clusters.items.len -| 1)
-        else
-            source_index;
-        const source_span = sourceSpanForGlyph(index, source_index, cluster_index, clusters.items, source_ends.items, ligature_components) orelse
-            SourceSpan{ .start = cluster_base, .end = cluster_base };
-        const source_codepoint = if (codepoints.items.len == 0) 0 else codepoints.items[source_index];
-        var glyph_id = input_glyph_id;
-        if (arabic_joining_features) |features| {
-            if (try arabicPresentationFallbackGlyph(font, glyph_index_cache, glyph_id, source_codepoint, source_index, features)) |fallback_glyph| {
-                glyph_id = fallback_glyph;
-            }
-        }
-        const metrics = try horizontalMetricsWithOptionalCache(font, metrics_cache, glyph_id, lookup_options.normalized_variation_coords);
-        const glyph_class = gdef_metadata.glyphClass(glyph_id);
-        const kerx_adjustment = if (index < kerx_adjustments.items.len)
-            kerx_adjustments.items[index]
-        else
-            aat_kerx.Adjustment{};
-        var kern_x_advance: f32 = 0;
-        const kerx_state_x_offset = @as(f32, @floatFromInt(kerx_adjustment.x_offset)) * scale;
-        var kern_x_offset: f32 = 0;
-        const was_substituted = index < glyph_substituted.items.len and glyph_substituted.items[index];
-        const kerx_skips_glyph = kerx_lookup != null and kerxMachineSkipsGlyph(
-            glyph_class,
-            has_gdef_glyph_classes,
-            source_codepoint,
-            was_substituted,
-        );
-        const active_kern = if (kerx_lookup) |lookup|
-            if (kerning_enabled and !kerx_skips_glyph) if (previous_kern_glyph) |previous|
-                try lookup.kerning(
-                    previous,
-                    glyph_id,
-                    lookup_options.writing_mode.isVertical(),
-                    lookup_options.normalized_variation_coords,
-                )
-            else
-                0 else 0
-        else if (kern_lookup) |lookup|
-            if (previous_kern_glyph) |previous|
-                try lookup.kerning(previous, glyph_id)
-            else
-                0
-        else
-            0;
-        if (!lookup_options.writing_mode.isVertical()) {
-            if (previous_kern_glyph != null) {
-                const previous_adjustment = findAdjustmentSorted(gpos_adjustments.items, index - 1, &adjustment_cursor);
-                if (kerx_lookup != null or !previous_adjustment.pair_positioned) {
-                    if (active_kern != 0) if (previous_kern_output_index) |previous_output_index| {
-                        // Legacy `kern` relates the previous participating
-                        // source to the current one. HarfBuzz marks that span
-                        // unsafe because reshaping either side independently
-                        // would lose the pair adjustment.
-                        if (kern_lookup != null and index != 0) {
-                            try source_boundaries.markGlyphPair(
-                                buffer.allocator,
-                                glyph_source_indices.items,
-                                index - 1,
-                                index,
-                            );
-                        }
-                        // Format 6 can carry 32-bit values. Split in that
-                        // wider domain before scaling so large but valid AAT
-                        // adjustments are not truncated to legacy i16 range.
-                        const kern_1 = active_kern >> 1;
-                        const kern_2 = active_kern - kern_1;
-                        buffer.glyphs.items[previous_output_index].x_advance += @as(f32, @floatFromInt(kern_1)) * scale;
-                        kern_x_advance = @as(f32, @floatFromInt(kern_2)) * scale;
-                        kern_x_offset = kern_x_advance;
-                    };
-                }
-            }
-        }
-        const adjustment = findAdjustmentSorted(gpos_adjustments.items, index, &adjustment_cursor);
-        const stch_action: ligature_provenance.StchAction = if (index < ligature_components.infos.items.len)
-            ligature_components.infos.items[index].flags.stch_action
-        else
-            .none;
-        const adjustment_x_advance = if (adjustment.x_advance_absolute)
-            @as(f32, @floatFromInt(adjustment.x_advance)) - @as(f32, @floatFromInt(metrics.advance_width))
-        else
-            @as(f32, @floatFromInt(adjustment.x_advance));
-        const attachment_cross_x = if (lookup_options.writing_mode.isVertical())
-            @as(f32, @floatFromInt(adjustment.attachment_cross_offset)) * scale
-        else
-            0.0;
-        const attachment_cross_y = if (lookup_options.writing_mode.isVertical())
-            0.0
-        else
-            @as(f32, @floatFromInt(adjustment.attachment_cross_offset)) * scale;
-        const gpos_x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale +
-            attachment_cross_x;
-        const mark_attachment = adjustment.attachment_type == .mark;
-        const synthetic_base = index < ligature_components.infos.items.len and
-            ligature_components.infos.items[index].flags.synthetic_base;
-        const visible_not_found_variation_selector = lookup_options.not_found_variation_selector_glyph != null and
-            unicode.isVariationSelector(source_codepoint) and
-            !was_substituted and
-            !synthetic_base;
-        const hide_default_ignorable = isDefaultIgnorableForShaping(source_codepoint) and
-            !was_substituted and
-            !synthetic_base and
-            !visible_not_found_variation_selector;
-        const skip_default_ignorable = hide_default_ignorable and
-            (lookup_options.remove_default_ignorables or
-                invisible_glyph_id == 0 or
-                (glyph_id == 0 and unicode.isVariationSelector(source_codepoint) and
-                    !variationSelectorFallbackShouldRender(index, source_index, ligature_components)));
-        // HarfBuzz removes an untouched default-ignorable when the font has no
-        // usable invisible/space glyph. Do this after GPOS so the character was
-        // still available to every contextual lookup, then remap attachment
-        // links below for the compacted output stream.
-        if (skip_default_ignorable) {
-            // Removed controls must not become pair candidates, but still
-            // record their absent output slot so a later cross-stream chain
-            // can compact around them safely.
-            if (needs_attachment_remapping) {
-                glyph_output_indices.items[index] = std.math.maxInt(usize);
-            }
-            if (kerx_lookup == null) previous_kern_glyph = glyph_id;
-            continue;
-        }
-        const output_glyph_id = if (hide_default_ignorable and invisible_glyph_id != 0) invisible_glyph_id else glyph_id;
-        const synthetic_glyph_id = if (visible_not_found_variation_selector)
-            lookup_options.not_found_variation_selector_glyph
-        else
-            null;
-        const mark_zeroing = markAdvanceZeroingPolicy(
-            early_zero_mark_shape,
-            glyph_class,
-            has_gdef_glyph_classes,
-            source_codepoint,
-            synthetic_base,
-            mark_attachment,
-            has_gpos_positioning,
-            lookup_options,
-        );
-        const fallback_space_advance = if (!lookup_options.writing_mode.isVertical() and space_fallback.mayNeedHorizontalAdvanceFallback(source_codepoint))
-            try space_fallback.advanceWidth(font, source_codepoint, glyph_id, metrics.advance_width)
-        else
-            null;
-        const default_vertical_advance_units: i32 = @as(i32, font.ascender) - @as(i32, font.descender);
-        const fallback_space_vertical_advance = if (lookup_options.writing_mode.isVertical() and space_fallback.mayNeedVerticalAdvanceFallback(source_codepoint))
-            try space_fallback.advanceHeight(font, source_codepoint, glyph_id, default_vertical_advance_units)
-        else
-            null;
-        const base_advance = if (hide_default_ignorable or mark_zeroing.zero_advance)
-            0
-        else if (fallback_space_advance) |value|
-            value
-        else
-            metrics.advance_width;
-        const horizontal_advance = if (hide_default_ignorable)
-            0
-        else
-            (@as(f32, @floatFromInt(base_advance)) + adjustment_x_advance +
-                @as(f32, @floatFromInt(kerx_adjustment.x_advance))) * scale + kern_x_advance;
-        const use_sideways_vertical_advance = lookup_options.writing_mode.isVertical() and
-            glyphUsesSidewaysAdvance(source_codepoint, lookup_options.text_orientation);
-        const vertical_metrics = if (lookup_options.writing_mode.isVertical())
-            try verticalMetricsWithOptionalCache(font, metrics_cache, glyph_id, lookup_options.normalized_variation_coords)
-        else
-            null;
-        const unzeroed_vertical_advance = if (use_sideways_vertical_advance)
-            (@as(f32, @floatFromInt(metrics.advance_width)) + adjustment_x_advance +
-                @as(f32, @floatFromInt(kerx_adjustment.y_advance))) * scale
-        else if (vertical_metrics) |value|
-            @as(f32, @floatFromInt(value.advance_height)) * scale
-        else
-            font_size;
-        const vertical_advance = if (mark_zeroing.zero_advance)
-            0
-        else if (fallback_space_vertical_advance) |value|
-            (@as(f32, @floatFromInt(value)) + @as(f32, @floatFromInt(kerx_adjustment.y_advance))) * scale
-        else if (use_sideways_vertical_advance)
-            unzeroed_vertical_advance
-        else if (vertical_metrics) |value|
-            (@as(f32, @floatFromInt(value.advance_height)) + @as(f32, @floatFromInt(kerx_adjustment.y_advance))) * scale
-        else
-            font_size + @as(f32, @floatFromInt(kerx_adjustment.y_advance)) * scale;
-        const vertical_x_offset = if (vertical_metrics) |_|
-            // OpenType's synthesized vertical origin is centered in the
-            // horizontal advance box. This keeps upright ideographs centered
-            // on the column without rotating the entire run.
-            (@as(f32, @floatFromInt(metrics.advance_width)) * 0.5) * scale
-        else
-            0.0;
-        const vertical_y_offset = if (lookup_options.writing_mode.isVertical()) origin: {
-            // Store the complete vertical-origin translation in the public
-            // positioned glyph, not only vmtx's top-side bearing. This lets
-            // raster/render bridges place upright glyphs correctly for VORG,
-            // glyf+vmtx, and the no-vmtx extent-centering fallback alike.
-            const origin_y = try font.shapingVerticalOriginYForShaping(
-                glyph_id,
-                lookup_options.normalized_variation_coords,
-            );
-            break :origin @as(f32, @floatFromInt(origin_y)) * scale;
-        } else 0.0;
-        // USE zeroes marks before GPOS. Without a positioning table, HarfBuzz
-        // preserves the visual origin of a forward-direction mark by moving it
-        // back by its original advance before clearing that advance.
-        const zeroed_mark_x_offset = if (mark_zeroing.adjust_offsets and !lookup_options.writing_mode.isVertical())
-            -@as(f32, @floatFromInt(metrics.advance_width)) * scale
-        else
-            0.0;
-        const zeroed_mark_y_offset = if (mark_zeroing.adjust_offsets and lookup_options.writing_mode.isVertical())
-            -unzeroed_vertical_advance
-        else
-            0.0;
-        var fallback_mark_offset = fallback_mark.Offset{};
-        if (fallback_mark_enabled and
-            unicode.isNonspacingMarkCodepoint(source_codepoint))
-        {
-            if (fallback_mark_base) |*base| {
-                fallback_mark_offset = fallback_mark.offset(
-                    font,
-                    glyph_id,
-                    source_codepoint,
-                    source_span.start,
-                    base,
-                    scale,
-                ) catch .{};
-                // Safety metadata is best-effort under allocation failure,
-                // matching GPOS's existing source-boundary fallback: shaping
-                // geometry itself remains available if a long-run dynamic
-                // bitset cannot grow.
-                fallback_mark_offset.recordBreakSafety(
-                    source_boundaries,
-                    buffer.allocator,
-                ) catch {};
-            }
-        }
-        if (needs_attachment_remapping) {
-            glyph_output_indices.items[index] = buffer.glyphs.items.len - segment_glyph_start;
-        }
-        const output_x_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
-            0
-        else if (lookup_options.writing_mode.isVertical())
-            if (kerx_adjustment.cross_stream_assigned or kerx_adjustment.cross_stream_reset)
-                // Cross-stream kerning assigns the current minor-axis offset;
-                // it does not add to the default vertical origin. The cursive
-                // chain below then accumulates the parent's origin and prior
-                // cross-stream assignments exactly once.
-                kerx_state_x_offset
-            else if (kerx_adjustment.attachment_type == .cursive and
-                kerx_adjustment.attachment_parent_index != null)
-                // Cursive propagation adds the parent's complete minor-axis
-                // offset. HarfBuzz's pre-propagation vertical origin is
-                // negative, so non-root chain members start at the negative
-                // origin while the edge root retains Cangjie's public positive
-                // origin convention.
-                -vertical_x_offset + kerx_state_x_offset
-            else
-                vertical_x_offset + gpos_x_offset + kerx_state_x_offset +
-                    zeroed_mark_x_offset + fallback_mark_offset.x
-        else
-            gpos_x_offset + kerx_state_x_offset + kern_x_offset + zeroed_mark_x_offset + fallback_mark_offset.x;
-        const output_y_offset = if (hide_default_ignorable or visible_not_found_variation_selector)
-            0
-        else if (lookup_options.writing_mode.isVertical())
-            vertical_y_offset +
-                @as(f32, @floatFromInt(adjustment.y_placement + kerx_adjustment.y_offset)) * scale +
-                attachment_cross_y + zeroed_mark_y_offset + fallback_mark_offset.y
-        else
-            @as(f32, @floatFromInt(adjustment.y_placement + kerx_adjustment.y_offset)) * scale +
-                attachment_cross_y + zeroed_mark_y_offset + fallback_mark_offset.y;
-        buffer.glyphs.appendAssumeCapacity(.{
-            .glyph_id = output_glyph_id,
-            .synthetic_glyph_id = synthetic_glyph_id,
-            .codepoint = source_codepoint,
-            .cluster = source_span.start,
-            .source_byte_len = source_span.end - source_span.start,
-            .flags = .{
-                .unsafe_to_break_before = gpos_unsafe_glyphs.isUnsafeBefore(index) or
-                    source_boundaries.isUnsafeBeforeByte(source_span.start),
-            },
-            .x_advance = if (visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
-            .y_advance = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
-            .x_offset = output_x_offset,
-            .y_offset = output_y_offset,
-            .vertical = lookup_options.writing_mode.isVertical(),
-        });
-        if (lookup_options.writing_mode.isVertical() and active_kern != 0) if (previous_kern_output_index) |previous_output_index| {
-            const kern_1 = active_kern >> 1;
-            const kern_2 = active_kern - kern_1;
-            buffer.glyphs.items[previous_output_index].y_advance += @as(f32, @floatFromInt(kern_1)) * scale;
-            buffer.glyphs.items[buffer.glyphs.items.len - 1].y_advance += @as(f32, @floatFromInt(kern_2)) * scale;
-            buffer.glyphs.items[buffer.glyphs.items.len - 1].y_offset += @as(f32, @floatFromInt(kern_2)) * scale;
-        };
-        try appendStchActionForOutput(
-            buffer.allocator,
-            stch_actions,
-            stch_action,
-            buffer.glyphs.items.len - segment_glyph_start,
-        );
-        if (needs_attachment_remapping and !hide_default_ignorable) {
-            attachment_links.items[index] = attachmentLinkForKerxAdjustment(
-                kerx_adjustment,
-                adjustment,
-            );
-        }
-        if (fallback_mark_enabled and !hide_default_ignorable and !visible_not_found_variation_selector and !unicode.isNonspacingMarkCodepoint(source_codepoint)) {
-            fallback_mark_base = fallback_mark.baseForGlyph(font, glyph_id, source_span.end, output_y_offset, horizontal_advance, scale, shapingDirectionForGpos(lookup_options) == .ltr) catch null;
-        }
-        if (!kerx_skips_glyph) {
-            previous_kern_glyph = glyph_id;
-            previous_kern_output_index = buffer.glyphs.items.len - 1;
-        }
-    }
-    if (shape_profile) |p| {
-        p.position_loop_ns += shapeProfileElapsed(position_loop_start, profile_io);
-        p.position_output_glyphs += buffer.glyphs.items.len - segment_glyph_start;
-    }
-    const has_kerx_attachments = (has_kerx_state_attachments and
-        kerx_summary.has_cross_stream_adjustment) or
-        adjustmentsHaveKerxMarkAttachments(kerx_adjustments.items);
+    const has_kerx_attachments = (position_engine_plan.has_state_attachments and
+        position_engine_plan.summary.has_cross_stream_adjustment) or
+        position_attachments.hasKerxMarks(kerx_adjustments.items);
     if (has_gpos_attachments or has_kerx_attachments) {
         const attachment_start = shapeProfileNow(shape_profile, profile_io);
-        compactAttachmentLinks(
+        position_attachments.compact(
             attachment_links.items,
             glyph_output_indices.items,
             buffer.glyphs.items.len - segment_glyph_start,
         );
-        propagateGlyphAttachmentOffsets(
+        position_attachments.propagate(
             buffer.glyphs.items[segment_glyph_start..],
             attachment_links.items[0 .. buffer.glyphs.items.len - segment_glyph_start],
             lookup_options,
@@ -3257,7 +2830,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             stch_actions.items,
             segment_glyph_start,
             lookup_options.direction == .rtl,
-            shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl,
+            shape_in_native_direction and lookup_options.shapingDirection() == .rtl,
             scale,
             font,
             metrics_cache,
@@ -3277,7 +2850,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         }
         if (shape_profile) |p| p.position_tracking_ns += shapeProfileElapsed(tracking_start, profile_io);
     }
-    if (shape_in_native_direction and shapingDirectionForGpos(lookup_options) == .rtl) {
+    if (shape_in_native_direction and lookup_options.shapingDirection() == .rtl) {
         const reverse_start = shapeProfileNow(shape_profile, profile_io);
         std.mem.reverse(GlyphPosition, buffer.glyphs.items[segment_glyph_start..]);
         if (shape_profile) |p| p.position_reverse_ns += shapeProfileElapsed(reverse_start, profile_io);
@@ -3296,45 +2869,6 @@ fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
 fn markArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
     @memset(source_features, 0);
     overlayArabicJoiningSourceFeatures(source_features, codepoints, glyph_source_indices);
-}
-
-fn arabicPresentationFallbackGlyph(
-    font: *const Font,
-    glyph_index_cache: ?*GlyphIndexCache,
-    glyph_id: GlyphId,
-    codepoint: u21,
-    source: usize,
-    source_features: []const u32,
-) !?GlyphId {
-    if (font.hasGsubTableForShaping()) return null;
-    if (source >= source_features.len) return null;
-    const fallback_codepoint = arabicPresentationFallbackCodepoint(codepoint, source_features[source]) orelse return null;
-    const fallback_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, fallback_codepoint);
-    if (fallback_glyph == 0 or fallback_glyph == glyph_id) return null;
-    return fallback_glyph;
-}
-
-fn arabicPresentationFallbackCodepoint(codepoint: u21, source_feature: u32) ?u21 {
-    const bare_features = source_feature & ~gsub.source_feature_mask_marker;
-    const fina_mask = gsub.sourceFeatureMaskForTag(unicode.tag("fina")).? & ~gsub.source_feature_mask_marker;
-    const medi_mask = gsub.sourceFeatureMaskForTag(unicode.tag("medi")).? & ~gsub.source_feature_mask_marker;
-    if ((bare_features & fina_mask) != 0) {
-        return switch (codepoint) {
-            0x0627 => 0xfe8e,
-            0x06cc => 0xfbfd,
-            else => null,
-        };
-    }
-    if ((bare_features & medi_mask) != 0) {
-        return switch (codepoint) {
-            0x062a => 0xfe98,
-            0x0644 => 0xfee0,
-            0x0645 => 0xfee4,
-            0x06cc => 0xfbff,
-            else => null,
-        };
-    }
-    return null;
 }
 
 fn overlayArabicJoiningSourceFeatures(source_features: []u32, codepoints: []const u21, glyph_source_indices: []const usize) void {
@@ -3535,16 +3069,6 @@ test "Arabic item context influences only joining forms" {
     try std.testing.expectEqual(unicode.JoiningForm.medial, forms[0]);
 }
 
-test "Arabic presentation fallback maps retained positional cmap forms" {
-    const fina_mask = gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?;
-    const medi_mask = gsub.sourceFeatureMaskForTag(unicode.tag("medi")).?;
-
-    try std.testing.expectEqual(@as(?u21, 0xfe8e), arabicPresentationFallbackCodepoint(0x0627, fina_mask));
-    try std.testing.expectEqual(@as(?u21, 0xfee0), arabicPresentationFallbackCodepoint(0x0644, medi_mask));
-    try std.testing.expectEqual(@as(?u21, 0xfe98), arabicPresentationFallbackCodepoint(0x062a, medi_mask));
-    try std.testing.expectEqual(@as(?u21, null), arabicPresentationFallbackCodepoint(0x0644, fina_mask));
-}
-
 fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong;
 }
@@ -3555,21 +3079,6 @@ fn useShapeUsesArabicJoiningMasks(script_tag: unicode.OpenTypeScriptTag) bool {
 
 fn useShapeUsesDirectionFeatures(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .phag;
-}
-
-fn shouldApplyLegacyKernFallback(script_tag: unicode.OpenTypeScriptTag) bool {
-    if (indic.shouldShape(script_tag) or use_shaper.shouldShape(script_tag) or myanmar.shouldShape(script_tag)) return false;
-    return switch (script_tag) {
-        .deva, .dev2, .dev3, .hang, .khmr => false,
-        else => true,
-    };
-}
-
-fn usesLateGdefMarkZeroing(script_tag: unicode.OpenTypeScriptTag) bool {
-    return switch (script_tag) {
-        .arab, .hebr, .thai, .lao, .dflt => true,
-        else => false,
-    };
 }
 
 fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {
@@ -3604,32 +3113,6 @@ fn isShapeNativeDirectionFormatControl(codepoint: u21) bool {
         codepoint == 0x0d4e or
         codepoint == 0x110bd or
         codepoint == 0x110cd;
-}
-
-fn shouldShapeInNativeDirection(options: LookupOptions) bool {
-    if (!options.reorder_bidi and !options.native_direction_shaping) return false;
-    if (options.writing_mode.isVertical()) return false;
-    const native_direction = textDirectionFromBidiClass(nativeHorizontalDirection(options) orelse return false);
-    if (options.direction == .ltr and native_direction == .rtl and options.run_has_decimal_number and !options.run_has_letter) return false;
-    return options.direction != native_direction;
-}
-
-fn nativeHorizontalDirection(options: LookupOptions) ?unicode.BidiClass {
-    // ScriptList negotiation may select DFLT/latn or a generation-specific
-    // OpenType tag. Text direction remains a Unicode-script property, not a
-    // property of whichever font table entry happened to provide lookups.
-    // An explicit caller override is authoritative, however.
-    const direction_tag = if (options.script_tag_explicit)
-        options.script_tag
-    else if (options.script != .common and options.script != .inherited and options.script != .unknown)
-        unicode.openTypeScriptTag(options.script)
-    else
-        options.script_tag;
-    return unicode.openTypeScriptHorizontalDirection(direction_tag);
-}
-
-fn textDirectionFromBidiClass(direction: unicode.BidiClass) TextDirection {
-    return if (direction == .rtl) .rtl else .ltr;
 }
 
 fn reverseScratchGlyphOrderForNativeDirection(scratch: *layout_scratch.ShapeScratch) void {
@@ -3680,109 +3163,14 @@ fn swapScratchGlyphs(scratch: *layout_scratch.ShapeScratch, a: usize, b: usize) 
     std.mem.swap(ligature_provenance.Info, &scratch.ligature_components.infos.items[a], &scratch.ligature_components.infos.items[b]);
 }
 
-const SourceSpan = struct {
-    start: usize,
-    end: usize,
-};
-
-fn sourceSpanForGlyph(glyph_index: usize, fallback_source_index: usize, fallback_cluster_index: usize, starts: []const usize, ends: []const usize, ligature_components: *const ligature_provenance.Store) ?SourceSpan {
-    const cluster = sourceSpanForIndex(fallback_cluster_index, starts, ends);
-    if (glyph_index < ligature_components.infos.items.len and ligature_components.infos.items[glyph_index].component_count > 1) {
-        const info = ligature_components.infos.items[glyph_index];
-        var span: ?SourceSpan = null;
-        const component_sources = ligature_components.componentSources(info) orelse return cluster;
-        for (component_sources) |component_source| {
-            const component_span = sourceSpanForIndex(component_source, starts, ends) orelse continue;
-            if (span) |*accumulated| {
-                accumulated.start = @min(accumulated.start, component_span.start);
-                accumulated.end = @max(accumulated.end, component_span.end);
-            } else {
-                span = component_span;
-            }
-        }
-        if (span) |value| {
-            // Ligature components determine the source extent, but GSUB's
-            // cluster-owner metadata determines the public cluster start.
-            // Reordering or a later ligature can merge that owner farther left
-            // than the ligature's own first logical component.
-            return .{ .start = if (cluster) |owner| owner.start else value.start, .end = value.end };
-        }
-    }
-    const span = sourceSpanForIndex(fallback_source_index, starts, ends) orelse return cluster;
-    const owner = cluster orelse return span;
-    return .{ .start = owner.start, .end = span.end };
-}
-
-fn sourceSpanForIndex(source_index: usize, starts: []const usize, ends: []const usize) ?SourceSpan {
-    if (starts.len == 0) return null;
-    const index = @min(source_index, starts.len - 1);
-    const start = starts[index];
-    const end = if (index < ends.len) @max(ends[index], start) else start;
-    return .{ .start = start, .end = end };
-}
-
-test "ligature source spans honor a merged cluster owner" {
-    const starts = [_]usize{ 0, 3, 6, 9 };
-    const ends = [_]usize{ 3, 6, 9, 12 };
-    var provenance = ligature_provenance.Store{};
-    defer provenance.deinit(std.testing.allocator);
-    const info = try provenance.addLigature(std.testing.allocator, &.{ 2, 3 });
-    try provenance.infos.append(std.testing.allocator, info);
-
-    const span = sourceSpanForGlyph(0, 2, 1, &starts, &ends, &provenance).?;
-
-    try std.testing.expectEqual(SourceSpan{ .start = 3, .end = 12 }, span);
-}
-
-fn attachmentLinkForAdjustment(adjustment: gpos.Adjustment) attachment.Link {
-    return switch (adjustment.attachment_type) {
-        .none => .{},
-        .mark => .{
-            .kind = .mark,
-            .parent_index = adjustment.attachment_parent_index,
-            .cross_axis_resolved = true,
-        },
-        .cursive => .{ .kind = .cursive, .parent_index = adjustment.attachment_parent_index },
-    };
-}
-
-fn adjustmentsHaveAttachments(adjustments: []const gpos.Adjustment) bool {
-    for (adjustments) |adjustment| {
-        if (adjustment.attachment_type != .none) return true;
-    }
-    return false;
-}
-
-fn adjustmentsHaveKerxAttachments(adjustments: []const aat_kerx.Adjustment) bool {
-    for (adjustments) |adjustment| {
-        if (adjustment.attachment_type != .none and adjustment.attachment_parent_index != null) return true;
-    }
-    return false;
-}
-
-fn adjustmentsHaveKerxMarkAttachments(adjustments: []const aat_kerx.Adjustment) bool {
-    for (adjustments) |adjustment| {
-        if (adjustment.attachment_type == .mark and adjustment.attachment_parent_index != null) return true;
-    }
-    return false;
-}
-
-fn attachmentLinkForKerxAdjustment(kerx_adjustment: aat_kerx.Adjustment, gpos_adjustment: gpos.Adjustment) attachment.Link {
-    return switch (kerx_adjustment.attachment_type) {
-        .none => attachmentLinkForAdjustment(gpos_adjustment),
-        .mark => .{ .kind = .mark, .parent_index = kerx_adjustment.attachment_parent_index },
-        .cursive => .{ .kind = .cursive, .parent_index = kerx_adjustment.attachment_parent_index },
-    };
-}
-
 test "attachment scratch is needed only for emitted attachment adjustments" {
-    try std.testing.expect(!adjustmentsHaveAttachments(&.{
+    try std.testing.expect(!position_attachments.hasGpos(&.{
         .{ .index = 0, .x_advance = -20, .pair_positioned = true },
     }));
-    try std.testing.expect(adjustmentsHaveAttachments(&.{
+    try std.testing.expect(position_attachments.hasGpos(&.{
         .{ .index = 0, .attachment_type = .mark, .attachment_parent_index = 1 },
     }));
-    try std.testing.expect(adjustmentsHaveAttachments(&.{
+    try std.testing.expect(position_attachments.hasGpos(&.{
         .{ .index = 0, .attachment_type = .cursive, .attachment_parent_index = 1 },
     }));
 }
@@ -3813,49 +3201,6 @@ test "attachment remapping scratch follows emitted adjustment type across runs" 
     try std.testing.expectEqual(@as(usize, 0), buffer.shape_scratch.glyph_output_indices.items.len);
 }
 
-fn remapAttachmentLinkForOutput(link: attachment.Link, output_indices: []const usize) attachment.Link {
-    const parent = link.parent_index orelse return link;
-    if (parent >= output_indices.len) return .{};
-    const output_parent = output_indices[parent];
-    if (output_parent == std.math.maxInt(usize)) return .{};
-    return .{
-        .kind = link.kind,
-        .parent_index = output_parent,
-        .cross_axis_resolved = link.cross_axis_resolved,
-    };
-}
-
-fn compactAttachmentLinks(links: []attachment.Link, output_indices: []const usize, output_len: usize) void {
-    for (output_indices, 0..) |output_index, input_index| {
-        if (output_index == std.math.maxInt(usize) or output_index >= output_len) continue;
-        links[output_index] = remapAttachmentLinkForOutput(links[input_index], output_indices);
-    }
-}
-
-test "attachment links remap after hidden glyph removal" {
-    const removed = std.math.maxInt(usize);
-    const output_indices = [_]usize{ 0, removed, 1 };
-    var links = [_]attachment.Link{
-        .{},
-        .{},
-        .{ .kind = .mark, .parent_index = 0 },
-    };
-
-    compactAttachmentLinks(&links, &output_indices, 2);
-
-    try std.testing.expectEqual(attachment.Link{}, links[0]);
-    try std.testing.expectEqual(attachment.Link{ .kind = .mark, .parent_index = 0 }, links[1]);
-}
-
-fn propagateGlyphAttachmentOffsets(glyphs: []GlyphPosition, links: []attachment.Link, options: LookupOptions) void {
-    const direction: attachment.Direction = switch (shapingDirectionForGpos(options)) {
-        .ltr => .forward,
-        .rtl => .backward,
-    };
-    const axis: attachment.Axis = if (options.writing_mode.isVertical()) .vertical else .horizontal;
-    attachment.propagateOffsets(GlyphPosition, glyphs, links, direction, axis);
-}
-
 const recordStchActions = stch_feature.recordSubstitutions;
 const appendStchActionForOutput = stch_feature.appendOutput;
 
@@ -3878,141 +3223,6 @@ test "ordinary shaping clears and leaves stch sidecar empty" {
     const run = try TextShaper.shapeUtf8(&font, &buffer, "AA", 20);
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectEqual(@as(usize, 0), buffer.shape_scratch.stch_actions.items.len);
-}
-
-fn shapingDirectionForGpos(options: LookupOptions) TextDirection {
-    if (shouldShapeInNativeDirection(options)) {
-        const native = nativeHorizontalDirection(options) orelse return options.direction;
-        return textDirectionFromBidiClass(native);
-    }
-    return options.direction;
-}
-
-fn kerxMachineSkipsGlyph(glyph_class: GlyphClass, has_gdef_glyph_classes: bool, source_codepoint: u21, was_substituted: bool) bool {
-    if (glyph_class == .mark) return true;
-    // HarfBuzz synthesizes a mark class from Unicode Mn only when the font has
-    // no GDEF GlyphClassDef. Default-ignorables stay base-like during that
-    // synthesis but remain transparent to positioning unless GSUB consumed
-    // and replaced them.
-    if (!has_gdef_glyph_classes and
-        unicode.isNonspacingMarkCodepoint(source_codepoint) and
-        !unicode.isDefaultIgnorableForShaping(source_codepoint))
-    {
-        return true;
-    }
-    return unicode.isDefaultIgnorableForShaping(source_codepoint) and !was_substituted;
-}
-
-test "kerx machine skips GDEF marks and untouched Unicode controls" {
-    try std.testing.expect(kerxMachineSkipsGlyph(.mark, true, 'A', false));
-    try std.testing.expect(kerxMachineSkipsGlyph(.unclassified, false, 0x0301, false));
-    try std.testing.expect(!kerxMachineSkipsGlyph(.unclassified, true, 0x0301, false));
-    try std.testing.expect(kerxMachineSkipsGlyph(.unclassified, false, 0x200d, false));
-    try std.testing.expect(!kerxMachineSkipsGlyph(.unclassified, false, 0x200d, true));
-    try std.testing.expect(!kerxMachineSkipsGlyph(.base, true, 'A', false));
-}
-
-const MarkAdvanceZeroing = struct {
-    zero_advance: bool = false,
-    adjust_offsets: bool = false,
-};
-
-fn markAdvanceZeroingPolicy(
-    use_shape: bool,
-    glyph_class: GlyphClass,
-    has_gdef_glyph_classes: bool,
-    source_codepoint: u21,
-    synthetic_base: bool,
-    mark_attachment: bool,
-    has_gpos_positioning: bool,
-    options: LookupOptions,
-) MarkAdvanceZeroing {
-    if (synthetic_base) return .{};
-
-    const gdef_mark = glyph_class == .mark and
-        (!unicode.isSpacingMarkCodepoint(source_codepoint) or use_shape) and
-        !indic.shouldShape(options.script_tag);
-    // HarfBuzz only synthesizes classes when the face has no GlyphClassDef at
-    // all. An unclassified glyph in a present ClassDef remains unclassified;
-    // falling back per glyph would override an explicit font-author decision.
-    const synthesized_mark = !has_gdef_glyph_classes and
-        unicode.isNonspacingMarkCodepoint(source_codepoint) and
-        !unicode.isDefaultIgnorableForShaping(source_codepoint) and
-        (use_shape or usesLateGdefMarkZeroing(options.script_tag));
-    const attachment_mark_without_gdef = mark_attachment and !has_gdef_glyph_classes;
-    const zero_advance = gdef_mark or synthesized_mark or attachment_mark_without_gdef;
-    if (!zero_advance) return .{};
-
-    const forward_direction = options.writing_mode.isVertical() or
-        shapingDirectionForGpos(options) == .ltr;
-    return .{
-        .zero_advance = true,
-        // USE's early-zero mode shifts marks only when later GPOS cannot
-        // replace the provisional placement. Other shapers retain the previous
-        // Cangjie policy until their early/late/fallback plans are represented.
-        .adjust_offsets = use_shape and !has_gpos_positioning and forward_direction,
-    };
-}
-
-test "USE mark zeroing synthesizes only nonspacing marks without GDEF classes" {
-    const options = LookupOptions{ .script_tag = .brah };
-
-    const nonspacing = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11038, false, false, false, options);
-    try std.testing.expect(nonspacing.zero_advance);
-    try std.testing.expect(nonspacing.adjust_offsets);
-
-    const spacing = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11000, false, false, false, options);
-    try std.testing.expectEqual(MarkAdvanceZeroing{}, spacing);
-
-    const explicit_unclassified = markAdvanceZeroingPolicy(true, .unclassified, true, 0x11038, false, false, false, options);
-    try std.testing.expectEqual(MarkAdvanceZeroing{}, explicit_unclassified);
-
-    const dotted_circle = markAdvanceZeroingPolicy(true, .unclassified, false, 0x11038, true, false, false, options);
-    try std.testing.expectEqual(MarkAdvanceZeroing{}, dotted_circle);
-}
-
-test "Indic shaper preserves GDEF mark advances" {
-    const malayalam = markAdvanceZeroingPolicy(false, .mark, true, 0x0d41, false, false, false, .{ .script_tag = .mlm2 });
-    try std.testing.expectEqual(MarkAdvanceZeroing{}, malayalam);
-}
-
-test "USE mark zeroing honors explicit GDEF spacing marks" {
-    const tai_tham = markAdvanceZeroingPolicy(true, .mark, true, 0x1a6e, false, false, false, .{ .script_tag = .lana });
-    try std.testing.expect(tai_tham.zero_advance);
-    try std.testing.expect(tai_tham.adjust_offsets);
-}
-
-test "USE mark zeroing leaves offset adjustment to GPOS and honors native direction" {
-    const with_gpos = markAdvanceZeroingPolicy(
-        true,
-        .unclassified,
-        false,
-        0x11038,
-        false,
-        false,
-        true,
-        .{ .script_tag = .brah },
-    );
-    try std.testing.expect(with_gpos.zero_advance);
-    try std.testing.expect(!with_gpos.adjust_offsets);
-
-    // A forced RTL request is normalized to Brahmi's native LTR shaping
-    // direction before positioning, so it remains a forward buffer.
-    const native_ltr = markAdvanceZeroingPolicy(
-        true,
-        .unclassified,
-        false,
-        0x11038,
-        false,
-        false,
-        false,
-        .{
-            .script_tag = .brah,
-            .direction = .rtl,
-            .native_direction_shaping = true,
-        },
-    );
-    try std.testing.expect(native_ltr.adjust_offsets);
 }
 
 test "USE shaping zeroes synthesized nonspacing marks without a GDEF table" {
@@ -4039,27 +3249,6 @@ test "USE shaping zeroes synthesized nonspacing marks without a GDEF table" {
     try std.testing.expectApproxEqAbs(@as(f32, 800), run.glyphs[0].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, -800), run.glyphs[1].x_offset, 0.001);
-}
-
-fn glyphUsesSidewaysAdvance(_: u21, orientation: TextOrientation) bool {
-    return switch (orientation) {
-        .sideways => true,
-        .upright => false,
-        // Keep mixed-mode advances on the existing vertical metrics path until
-        // the Linux vertical gate has a true browser/CSS writing-mode
-        // reference.  The current Pango gravity reference is still sensitive to
-        // its rotated-line geometry, so changing mixed defaults here would
-        // regress the committed quality signal even though explicit sideways
-        // text benefits from horizontal advances.
-        .mixed => false,
-    };
-}
-
-fn variationSelectorFallbackShouldRender(glyph_index: usize, source_index: usize, ligature_components: *const ligature_provenance.Store) bool {
-    if (glyph_index == 0 or glyph_index - 1 >= ligature_components.infos.items.len) return false;
-    const sources = ligature_components.componentSources(ligature_components.infos.items[glyph_index - 1]) orelse return false;
-    if (sources.len <= 1) return false;
-    return source_index > sources[0] and source_index < sources[sources.len - 1];
 }
 
 fn reorderMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, cluster_level: ?ClusterLevel) void {
@@ -4233,55 +3422,6 @@ test "missing Unicode spaces still fall back to the cached ASCII space" {
     try std.testing.expectEqual(@as(GlyphId, 1), try fallbackGlyphIndexWithOptionalCache(&font, &cache, 0x2002));
     try std.testing.expectEqual(@as(usize, 2), cache.hits);
     try std.testing.expectEqual(@as(usize, 2), cache.misses);
-}
-
-fn runMayHaveMarkAttachments(glyphs: []const GlyphId, codepoints: []const u21, glyph_source_indices: []const usize, metadata: GdefLookupMetadata) bool {
-    const classes = metadata.glyph_classes orelse return true;
-    for (glyphs, 0..) |glyph, index| {
-        if (glyph < classes.len and classes[glyph] == @intFromEnum(GlyphClass.mark)) return true;
-        const source_index = if (index < glyph_source_indices.len)
-            @min(glyph_source_indices[index], codepoints.len -| 1)
-        else
-            @min(index, codepoints.len -| 1);
-        if (source_index < codepoints.len and unicode.isUnicodeMarkCodepoint(codepoints[source_index])) return true;
-    }
-    return false;
-}
-
-fn horizontalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId, normalized_variation_coords: []const f32) !GlyphMetrics {
-    if (cache) |metrics_cache| return try metrics_cache.horizontalMetricsAtCoords(font, glyph_id, normalized_variation_coords);
-    const raw = if (normalized_variation_coords.len == 0)
-        try font.horizontalMetrics(glyph_id)
-    else
-        try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords);
-    return .{
-        .advance_width = raw.advance_width,
-        .left_side_bearing = raw.left_side_bearing,
-    };
-}
-
-fn verticalMetricsWithOptionalCache(font: *const Font, cache: ?*GlyphMetricsCache, glyph_id: GlyphId, normalized_variation_coords: []const f32) !?VerticalGlyphMetrics {
-    if (cache) |metrics_cache| {
-        return metrics_cache.verticalMetricsAtCoords(font, glyph_id, normalized_variation_coords) catch |err| switch (err) {
-            // Some deployed CJK fonts advertise optional vhea/vmtx tables with
-            // unusable header line metrics. Vertical shaping must still retain
-            // its y-axis contract and vert substitutions; fall back to one em
-            // advance instead of abandoning shaping and rendering horizontally.
-            error.InvalidMetrics => null,
-            else => return err,
-        };
-    }
-    const raw = (if (normalized_variation_coords.len == 0)
-        font.verticalMetrics(glyph_id)
-    else
-        font.verticalMetricsAtCoords(glyph_id, normalized_variation_coords)) catch |err| switch (err) {
-        error.InvalidMetrics => null,
-        else => return err,
-    };
-    return if (raw) |value| .{
-        .advance_height = value.advance_height,
-        .top_side_bearing = value.top_side_bearing,
-    } else null;
 }
 
 test "font fallback diagnostics expose deterministic variation and missing glyph decisions" {
@@ -4968,43 +4108,6 @@ test "vertical shaped cache and fallback runs preserve independent y pens" {
     try std.testing.expectEqual(WritingMode.horizontal_tb, cache.entries.items[0].key.plan.writing_mode);
     try std.testing.expectEqual(WritingMode.vertical_lr, cache.entries.items[1].key.plan.writing_mode);
     try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.runs[0].y_offset, 0.001);
-}
-
-fn adjustmentIndexLessThan(_: void, lhs: gpos.Adjustment, rhs: gpos.Adjustment) bool {
-    return lhs.index < rhs.index;
-}
-
-fn findAdjustmentSorted(adjustments: []const gpos.Adjustment, index: usize, cursor: *usize) gpos.Adjustment {
-    while (cursor.* < adjustments.len and adjustments[cursor.*].index < index) {
-        cursor.* += 1;
-    }
-    if (cursor.* < adjustments.len and adjustments[cursor.*].index == index) return adjustments[cursor.*];
-    return .{ .index = index };
-}
-
-test "sorted adjustment cursor finds sparse GPOS entries in linear order" {
-    const adjustments = [_]gpos.Adjustment{
-        .{ .index = 1, .x_advance = 10 },
-        .{ .index = 3, .x_placement = -4, .pair_positioned = true },
-    };
-    var cursor: usize = 0;
-
-    const missing_0 = findAdjustmentSorted(&adjustments, 0, &cursor);
-    try std.testing.expectEqual(@as(usize, 0), missing_0.index);
-    try std.testing.expectEqual(@as(i16, 0), missing_0.x_advance);
-    try std.testing.expectEqual(@as(usize, 0), cursor);
-
-    const found_1 = findAdjustmentSorted(&adjustments, 1, &cursor);
-    try std.testing.expectEqual(@as(i16, 10), found_1.x_advance);
-    try std.testing.expectEqual(@as(usize, 0), cursor);
-
-    const missing_2 = findAdjustmentSorted(&adjustments, 2, &cursor);
-    try std.testing.expectEqual(@as(usize, 2), missing_2.index);
-    try std.testing.expectEqual(@as(usize, 1), cursor);
-
-    const found_3 = findAdjustmentSorted(&adjustments, 3, &cursor);
-    try std.testing.expectEqual(@as(i16, -4), found_3.x_placement);
-    try std.testing.expect(found_3.pair_positioned);
 }
 
 test "mark attachment propagation keeps long advances in user space" {

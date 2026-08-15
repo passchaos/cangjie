@@ -1,5 +1,6 @@
 //! Runtime decoding of COLR v1 transforms, gradients, and ColorLines.
 
+const clip_boxes = @import("clip_box.zig");
 const color_lines = @import("color_line.zig");
 const gradients = @import("gradients.zig");
 const paints = @import("paint.zig");
@@ -15,3 +16,4 @@ pub const sweepGradient = gradients.sweepGradient;
 pub const colorLine = color_lines.read;
 pub const colorStop = color_lines.stop;
 pub const colorStops = color_lines.stops;
+pub const clipBox = clip_boxes.resolve;

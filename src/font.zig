@@ -3714,63 +3714,35 @@ pub const Font = struct {
             list,
             glyph_id,
         )) orelse return null;
-        var result = ColorClipBox{
-            .x_min = @floatFromInt(box.x_min),
-            .y_min = @floatFromInt(box.y_min),
-            .x_max = @floatFromInt(box.x_max),
-            .y_max = @floatFromInt(box.y_max),
-        };
-        const var_index_base = box.var_index_base orelse return result;
-        if (normalizedVariationCoordinatesAreDefault(normalized_coords) or
-            var_index_base == no_colr_variation_index)
-        {
-            return result;
+        var context: ?ColrVariationContext = null;
+        const uses_variation = if (box.var_index_base) |var_index_base|
+            var_index_base != colr_variation.no_index and
+                !normalizedVariationCoordinatesAreDefault(normalized_coords)
+        else
+            false;
+        if (uses_variation) {
+            // The Font borrows its backing bytes, so repeat cross-reference
+            // validation immediately before dereferencing a variation row. Static
+            // boxes stay on the cheaper ClipList-only path.
+            try validateColrVariationData(
+                self.data,
+                colr,
+                self.fvar,
+                self.glyph_count,
+            );
+            context =
+                (try readColrVariationContext(self.data, colr)) orelse
+                return error.BadSfnt;
         }
-        // The Font borrows its backing bytes, so repeat cross-reference
-        // validation immediately before dereferencing a variation row. Static
-        // boxes stay on the cheaper ClipList-only path.
-        try validateColrVariationData(
+        return try colr_read.clipBox(
             self.data,
-            colr,
-            self.fvar,
-            self.glyph_count,
+            colrV1Table(colr),
+            box,
+            .{
+                .normalized_coords = normalized_coords,
+                .variation = context,
+            },
         );
-        const context =
-            (try readColrVariationContext(self.data, colr)) orelse
-            return error.BadSfnt;
-        result.x_min += @floatCast(try colrVariationDelta(
-            self.data,
-            colr,
-            context,
-            var_index_base,
-            0,
-            normalized_coords,
-        ));
-        result.y_min += @floatCast(try colrVariationDelta(
-            self.data,
-            colr,
-            context,
-            var_index_base,
-            1,
-            normalized_coords,
-        ));
-        result.x_max += @floatCast(try colrVariationDelta(
-            self.data,
-            colr,
-            context,
-            var_index_base,
-            2,
-            normalized_coords,
-        ));
-        result.y_max += @floatCast(try colrVariationDelta(
-            self.data,
-            colr,
-            context,
-            var_index_base,
-            3,
-            normalized_coords,
-        ));
-        return result;
     }
 
     /// Read validated metadata from the optional SFNT `VORG` table.
@@ -10574,7 +10546,6 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
 }
 
 const ColrVariationContext = colr_variation.Context;
-const no_colr_variation_index = colr_variation.no_index;
 
 const ColorPaintReadContext = colr_read.Context;
 
@@ -10585,24 +10556,6 @@ const ColorLineReadState = struct {
 
 fn readColrVariationContext(data: []const u8, colr: TableRecord) FontError!?ColrVariationContext {
     return try colr_variation.read(data, colrV1Table(colr));
-}
-
-fn colrVariationDelta(
-    data: []const u8,
-    colr: TableRecord,
-    context: ColrVariationContext,
-    var_index_base: u32,
-    sequence_index: usize,
-    normalized_coords: []const f32,
-) FontError!f64 {
-    return try colr_variation.delta(
-        data,
-        colrV1Table(colr),
-        context,
-        var_index_base,
-        sequence_index,
-        normalized_coords,
-    );
 }
 
 fn validateColrVariationData(

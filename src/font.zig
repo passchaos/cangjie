@@ -31,6 +31,7 @@ const ot_layout = @import("opentype/layout.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
 const sfnt = @import("font/sfnt/root.zig");
+const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode_mod = @import("unicode.zig");
@@ -735,47 +736,12 @@ pub const ColorPaint = union(enum) {
 pub const SvgGlyphDocument = svg_mod.Document;
 pub const ResolvedSvgGlyphDocument = svg_mod.ResolvedDocument;
 
-pub const BitmapGlyphPng = struct {
-    /// Table family determines whether the vertical offset is a top bearing
-    /// (CBDT/EBDT) or a bottom-edge offset (sbix).
-    source: BitmapStrikeSource,
-    ppem: u16,
-    ppi: u16,
-    origin_offset_x: i16,
-    origin_offset_y: i16,
-    width: u32,
-    height: u32,
-    data: []const u8,
-};
-
-pub const BitmapGlyphInfo = struct {
-    source: BitmapStrikeSource,
-    glyph_id: glyph_mod.GlyphId,
-    ppem: u16,
-    ppi: u16,
-    origin_offset_x: i16,
-    origin_offset_y: i16,
-    width: u32,
-    height: u32,
-    image_format: ?u16 = null,
-    data_offset: usize,
-    data_length: usize,
-    is_png: bool,
-};
-
-pub const BitmapStrikeSource = enum {
-    sbix,
-    cblc_cbdt,
-    eblc_ebdt,
-};
-
-pub const BitmapStrikeInfo = struct {
-    source: BitmapStrikeSource,
-    ppem: u16,
-    ppi: u16,
-    start_glyph: glyph_mod.GlyphId = 0,
-    end_glyph: glyph_mod.GlyphId = 0,
-};
+// Preserve the established public type identities while their implementation
+// and table grammar live in the focused embedded-bitmap module.
+pub const BitmapGlyphPng = bitmap_mod.GlyphPng;
+pub const BitmapGlyphInfo = bitmap_mod.GlyphInfo;
+pub const BitmapStrikeSource = bitmap_mod.StrikeSource;
+pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
 
 pub const GlyphClass = enum(u16) {
     unclassified = 0,
@@ -789,6 +755,10 @@ pub const GlyphClass = enum(u16) {
 const TableRecord = sfnt.Record;
 
 fn svgTable(record: TableRecord) svg_mod.Table {
+    return .{ .offset = record.offset, .length = record.length };
+}
+
+fn bitmapTable(record: TableRecord) bitmap_mod.Table {
     return .{ .offset = record.offset, .length = record.length };
 }
 
@@ -4379,10 +4349,10 @@ pub const Font = struct {
         try sfnt.checksum.validate(self.data, location_table);
         try sfnt.checksum.validate(self.data, data_table);
         try validateCblcCbdtTables(self.data, location_table, data_table, self.glyph_count);
-        const strike_count = try cblcStrikeCount(self.data, location_table);
+        const strike_count = try bitmap_mod.cblc.strikeCount(self.data, bitmapTable(location_table));
         try strikes.ensureUnusedCapacity(allocator, strike_count);
         for (0..strike_count) |strike_index| {
-            const strike = try cblcStrike(self.data, location_table, self.glyph_count, strike_index);
+            const strike = try bitmap_mod.cblc.strike(self.data, bitmapTable(location_table), self.glyph_count, strike_index);
             strikes.appendAssumeCapacity(.{
                 .source = source,
                 .ppem = strike.ppem,
@@ -4403,10 +4373,10 @@ pub const Font = struct {
         try sfnt.checksum.validate(self.data, location_table);
         try sfnt.checksum.validate(self.data, data_table);
         try validateCblcCbdtTables(self.data, location_table, data_table, self.glyph_count);
-        const strike_count = try cblcStrikeCount(self.data, location_table);
+        const strike_count = try bitmap_mod.cblc.strikeCount(self.data, bitmapTable(location_table));
         for (0..strike_count) |strike_index| {
-            const strike = try cblcStrike(self.data, location_table, self.glyph_count, strike_index);
-            recordBestBitmapPpem(strike.ppem, size_px, best_ppem);
+            const strike = try bitmap_mod.cblc.strike(self.data, bitmapTable(location_table), self.glyph_count, strike_index);
+            bitmap_mod.recordBestPpem(strike.ppem, size_px, best_ppem);
         }
     }
 
@@ -4417,10 +4387,10 @@ pub const Font = struct {
         if (self.sbix) |sbix| {
             try sfnt.checksum.validate(self.data, sbix);
             try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
-            const strike_count = try sbixStrikeCount(self.data, sbix);
+            const strike_count = try bitmap_mod.sbix.strikeCount(self.data, bitmapTable(sbix));
             try strikes.ensureUnusedCapacity(allocator, strike_count);
             for (0..strike_count) |strike_index| {
-                const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
+                const strike = try bitmap_mod.sbix.strike(self.data, bitmapTable(sbix), self.glyph_count, strike_index);
                 strikes.appendAssumeCapacity(.{
                     .source = .sbix,
                     .ppem = strike.ppem,
@@ -4442,7 +4412,7 @@ pub const Font = struct {
     }
 
     pub fn bestBitmapStrikePpem(self: *const Font, size_px: f32) FontError!?u16 {
-        try validateBitmapRequestSize(size_px);
+        try bitmap_mod.validateRequestSize(size_px);
         var best_ppem: ?u16 = null;
 
         if (self.sbix) |sbix| {
@@ -4452,10 +4422,10 @@ pub const Font = struct {
             // boundary so post-parse byte mutations cannot hide a corrupt
             // unselected glyph or strike behind a valid requested size.
             try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
-            const strike_count = try sbixStrikeCount(self.data, sbix);
+            const strike_count = try bitmap_mod.sbix.strikeCount(self.data, bitmapTable(sbix));
             for (0..strike_count) |strike_index| {
-                const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-                recordBestBitmapPpem(strike.ppem, size_px, &best_ppem);
+                const strike = try bitmap_mod.sbix.strike(self.data, bitmapTable(sbix), self.glyph_count, strike_index);
+                bitmap_mod.recordBestPpem(strike.ppem, size_px, &best_ppem);
             }
         }
 
@@ -4477,17 +4447,17 @@ pub const Font = struct {
     /// smaller strike, in that order.
     pub fn bitmapGlyphInfo(self: *const Font, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        try validateBitmapRequestSize(size_px);
+        try bitmap_mod.validateRequestSize(size_px);
 
         var best: ?BitmapGlyphInfo = null;
 
         if (self.sbix) |sbix| {
             try sfnt.checksum.validate(self.data, sbix);
             try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
-            const strike_count = try sbixStrikeCount(self.data, sbix);
+            const strike_count = try bitmap_mod.sbix.strikeCount(self.data, bitmapTable(sbix));
             for (0..strike_count) |strike_index| {
-                const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-                if (try sbixGlyphInfo(self.data, strike, glyph_id, self.glyph_count)) |info| recordBestBitmapInfo(info, size_px, &best);
+                const strike = try bitmap_mod.sbix.strike(self.data, bitmapTable(sbix), self.glyph_count, strike_index);
+                if (try bitmap_mod.sbix.glyphInfo(self.data, strike, glyph_id, self.glyph_count)) |info| bitmap_mod.recordBestGlyphInfo(info, size_px, &best);
             }
             if (best) |info| return info;
         }
@@ -4498,7 +4468,7 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, cblc);
             try sfnt.checksum.validate(self.data, cbdt);
             try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
-            if (try cblcGlyphInfo(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |info| return info;
+            if (try bitmap_mod.cblc.glyphInfo(self.data, bitmapTable(cblc), bitmapTable(cbdt), self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |info| return info;
         }
         if (self.eblc != null and self.ebdt != null) {
             const eblc = self.eblc.?;
@@ -4506,25 +4476,25 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, eblc);
             try sfnt.checksum.validate(self.data, ebdt);
             try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
-            if (try cblcGlyphInfo(self.data, eblc, ebdt, self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |info| return info;
+            if (try bitmap_mod.cblc.glyphInfo(self.data, bitmapTable(eblc), bitmapTable(ebdt), self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |info| return info;
         }
         return null;
     }
 
     pub fn bitmapGlyphPng(self: *const Font, glyph_id: glyph_mod.GlyphId, size_px: f32) FontError!?BitmapGlyphPng {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        try validateBitmapRequestSize(size_px);
+        try bitmap_mod.validateRequestSize(size_px);
 
         if (self.sbix) |sbix| {
             try sfnt.checksum.validate(self.data, sbix);
             try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
-            const strike_count = try sbixStrikeCount(self.data, sbix);
+            const strike_count = try bitmap_mod.sbix.strikeCount(self.data, bitmapTable(sbix));
             var best: ?BitmapGlyphPng = null;
             for (0..strike_count) |strike_index| {
-                const strike = try sbixStrike(self.data, sbix, self.glyph_count, strike_index);
-                const maybe_glyph = try sbixGlyphPng(self.data, strike, glyph_id, self.glyph_count);
+                const strike = try bitmap_mod.sbix.strike(self.data, bitmapTable(sbix), self.glyph_count, strike_index);
+                const maybe_glyph = try bitmap_mod.sbix.glyphPng(self.data, strike, glyph_id, self.glyph_count);
                 if (maybe_glyph) |glyph| {
-                    if (best == null or bitmapPpemIsPreferred(glyph.ppem, best.?.ppem, size_px)) best = glyph;
+                    if (best == null or bitmap_mod.ppemIsPreferred(glyph.ppem, best.?.ppem, size_px)) best = glyph;
                 }
             }
             if (best) |glyph| return glyph;
@@ -4536,7 +4506,7 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, cblc);
             try sfnt.checksum.validate(self.data, cbdt);
             try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
-            if (try cblcGlyphPng(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |png| return png;
+            if (try bitmap_mod.cblc.glyphPng(self.data, bitmapTable(cblc), bitmapTable(cbdt), self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |png| return png;
         }
         if (self.eblc != null and self.ebdt != null) {
             const eblc = self.eblc.?;
@@ -4544,7 +4514,7 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, eblc);
             try sfnt.checksum.validate(self.data, ebdt);
             try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
-            if (try cblcGlyphPng(self.data, eblc, ebdt, self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |png| return png;
+            if (try bitmap_mod.cblc.glyphPng(self.data, bitmapTable(eblc), bitmapTable(ebdt), self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |png| return png;
         }
         return null;
     }
@@ -5451,844 +5421,32 @@ fn translatePathCommand(command: *glyph_mod.PathCommand, offset: glyph_mod.Point
     }
 }
 
-const SbixStrike = struct {
-    ppem: u16,
-    ppi: u16,
-    offset: usize,
-    length: usize,
-    bitmap_data_offset: usize,
-};
-
-const CblcStrike = struct {
-    ppem: u16,
-    ppi: u16,
-    offset: usize,
-    index_tables_size: usize,
-    table_count: usize,
-    start_glyph: glyph_mod.GlyphId,
-    end_glyph: glyph_mod.GlyphId,
-};
-
-const CblcGlyphLocation = struct {
-    image_format: u16,
-    offset: usize,
-    length: usize,
-    /// Index subtable formats 2 and 5 store one BigGlyphMetrics record shared
-    /// by their images. CBDT image format 19 has no inline metrics and must
-    /// consume this value for placement and dimensions.
-    shared_metrics: ?BitmapMetrics = null,
-};
-
-fn cblcImageLocation(
-    image_format: u16,
-    image_base: usize,
-    start: usize,
-    end: usize,
-    shared_metrics: ?BitmapMetrics,
-) FontError!?CblcGlyphLocation {
-    if (end < start) return error.BadSfnt;
-    if (end == start) return null;
-    if (start > std.math.maxInt(usize) - image_base) return error.BadSfnt;
-    const offset = image_base + start;
-    const length = end - start;
-    // Validate the addition that cbdtGlyphPng will later use for the declared
-    // image slice. Very large CBLC imageDataOffset values are legal u32s but
-    // cannot describe an in-memory CBDT range if adding the glyph payload span
-    // wraps usize.
-    if (length > std.math.maxInt(usize) - offset) return error.BadSfnt;
-    return .{
-        .image_format = image_format,
-        .offset = offset,
-        .length = length,
-        .shared_metrics = shared_metrics,
-    };
-}
-
-const BitmapMetrics = struct {
-    height: u8,
-    width: u8,
-    bearing_x: i8,
-    bearing_y: i8,
-    advance: u8,
-};
-
-fn bitmapPpemIsPreferred(candidate: u16, current: u16, size_px: f32) bool {
-    const candidate_size: f32 = @floatFromInt(candidate);
-    const current_size: f32 = @floatFromInt(current);
-    const candidate_is_large_enough = candidate_size >= size_px;
-    const current_is_large_enough = current_size >= size_px;
-
-    // Prefer the smallest strike that does not require upscaling. If every
-    // available strike is smaller than the request, use the largest one. This
-    // exact -> nearest larger -> nearest smaller policy matches modern Skrifa
-    // and HarfBuzz and avoids magnifying low-resolution emoji merely because
-    // that strike is numerically closer to the requested size.
-    if (candidate_is_large_enough != current_is_large_enough) return candidate_is_large_enough;
-    return if (candidate_is_large_enough) candidate < current else candidate > current;
-}
-
-fn recordBestBitmapPpem(ppem: u16, size_px: f32, best_ppem: *?u16) void {
-    if (best_ppem.* == null or bitmapPpemIsPreferred(ppem, best_ppem.*.?, size_px)) best_ppem.* = ppem;
-}
-
-fn recordBestBitmapInfo(candidate: BitmapGlyphInfo, size_px: f32, best: *?BitmapGlyphInfo) void {
-    if (best.* == null or bitmapPpemIsPreferred(candidate.ppem, best.*.?.ppem, size_px)) best.* = candidate;
-}
-
-test "bitmap strike preference avoids upscaling when a larger strike exists" {
-    try std.testing.expect(bitmapPpemIsPreferred(64, 16, 17));
-    try std.testing.expect(!bitmapPpemIsPreferred(16, 64, 17));
-    try std.testing.expect(bitmapPpemIsPreferred(64, 128, 17));
-    try std.testing.expect(bitmapPpemIsPreferred(128, 64, 200));
-    try std.testing.expect(!bitmapPpemIsPreferred(16, 64, 200));
-    try std.testing.expect(!bitmapPpemIsPreferred(64, 64, 64));
-
-    var best: ?u16 = null;
-    for ([_]u16{ 128, 16, 64 }) |ppem| recordBestBitmapPpem(ppem, 17, &best);
-    try std.testing.expectEqual(@as(?u16, 64), best);
-
-    best = null;
-    for ([_]u16{ 16, 128, 64 }) |ppem| recordBestBitmapPpem(ppem, 200, &best);
-    try std.testing.expectEqual(@as(?u16, 128), best);
-
-    // Candidate enumeration is glyph-specific. If the nearest nominal strike
-    // has no image for this glyph, the next larger available image still wins
-    // over a smaller image that would require upscaling.
-    best = null;
-    for ([_]u16{ 16, 128 }) |ppem| recordBestBitmapPpem(ppem, 17, &best);
-    try std.testing.expectEqual(@as(?u16, 128), best);
-}
-
-fn validateBitmapRequestSize(size_px: f32) FontError!void {
-    // Public bitmap selection compares the requested CSS/device pixel size
-    // against strike ppem values. NaN/Inf and non-positive sizes do not name a
-    // meaningful target strike and can otherwise poison ordered size
-    // comparisons, causing APIs to return arbitrary metadata or null.
-    if (!std.math.isFinite(size_px) or size_px <= 0) return error.InvalidBitmapSize;
-}
-
-fn sbixStrikeCount(data: []const u8, sbix: TableRecord) FontError!usize {
-    if (sbix.length < 8) return error.BadSfnt;
-    const version = try bin.readU16At(data, sbix.offset);
-    if (version != 1) return error.BadSfnt;
-    const count = try bin.readU32At(data, sbix.offset + 4);
-    if (@as(usize, count) * 4 > sbix.length - 8) return error.BadSfnt;
-    return @intCast(count);
-}
-
-fn sbixStrike(data: []const u8, sbix: TableRecord, glyph_count: u16, strike_index: usize) FontError!SbixStrike {
-    const strike_count = try sbixStrikeCount(data, sbix);
-    if (strike_index >= strike_count) return error.BadSfnt;
-    const offset = try bin.readU32At(data, sbix.offset + 8 + strike_index * 4);
-    // Strike offsets are relative to the sbix table, but their targets are
-    // strike payloads.  A target inside the sbix header/strike-offset array
-    // would reinterpret table metadata as ppem/ppi and glyph offsets.
-    const minimum_strike_offset = 8 + strike_count * 4;
-    if (offset < minimum_strike_offset or offset >= sbix.length) return error.BadSfnt;
-    const next_offset = if (strike_index + 1 < strike_count)
-        try bin.readU32At(data, sbix.offset + 8 + (strike_index + 1) * 4)
-    else
-        @as(u32, @intCast(sbix.length));
-    if (next_offset < offset or next_offset > sbix.length) return error.BadSfnt;
-
-    const absolute = sbix.offset + offset;
-    const length = @as(usize, next_offset - offset);
-    const offsets_len = (@as(usize, glyph_count) + 1) * 4;
-    if (length < 4 + offsets_len) return error.BadSfnt;
-    return .{
-        .ppem = try bin.readU16At(data, absolute),
-        .ppi = try bin.readU16At(data, absolute + 2),
-        .offset = absolute,
-        .length = length,
-        .bitmap_data_offset = 4 + offsets_len,
-    };
-}
-
-const SbixGlyphRecord = struct {
-    glyph_start: usize,
-    origin_offset_x: i16,
-    origin_offset_y: i16,
-    graphic_type: [4]u8,
-    payload: []const u8,
-};
-
-fn sbixGlyphRecord(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId, glyph_count: u16) FontError!?SbixGlyphRecord {
-    if (glyph_id >= glyph_count) return error.BadSfnt;
-    const glyph_offset_pos = strike.offset + 4 + @as(usize, glyph_id) * 4;
-    const start = try bin.readU32At(data, glyph_offset_pos);
-    const end = try bin.readU32At(data, glyph_offset_pos + 4);
-    if (start < strike.bitmap_data_offset or end < strike.bitmap_data_offset) return error.BadSfnt;
-    if (end < start or end > strike.length) return error.BadSfnt;
-    if (end == start) return null;
-    if (end - start < 8) return error.BadSfnt;
-
-    const glyph_start = strike.offset + start;
-    const glyph_end = strike.offset + end;
-    return .{
-        .glyph_start = glyph_start,
-        .origin_offset_x = try bin.readI16At(data, glyph_start),
-        .origin_offset_y = try bin.readI16At(data, glyph_start + 2),
-        .graphic_type = try bin.readTagAt(data, glyph_start + 4),
-        .payload = data[glyph_start + 8 .. glyph_end],
-    };
-}
-
-fn resolveSbixGlyphRecord(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId, glyph_count: u16) FontError!?SbixGlyphRecord {
-    var current = glyph_id;
-    var remaining: usize = glyph_count;
-    while (true) {
-        const record = (try sbixGlyphRecord(data, strike, current, glyph_count)) orelse return null;
-        if (!bin.tagEq(record.graphic_type, "dupe")) return record;
-
-        // `dupe` is exactly one big-endian glyph ID. Requiring exact payload
-        // length avoids treating private trailing bytes as a second grammar.
-        if (record.payload.len != 2) return error.BadSfnt;
-        current = try bin.readU16At(record.payload, 0);
-        if (current >= glyph_count) return error.BadSfnt;
-
-        // Every edge has one target in the finite glyph set. Following more
-        // than glyph_count edges proves that some active node repeated, which
-        // rejects both direct and indirect cycles without allocating per read.
-        if (remaining == 0) return error.BadSfnt;
-        remaining -= 1;
-    }
-}
-
-fn sbixGlyphInfo(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId, glyph_count: u16) FontError!?BitmapGlyphInfo {
-    const record = (try resolveSbixGlyphRecord(data, strike, glyph_id, glyph_count)) orelse return null;
-    const is_png = bin.tagEq(record.graphic_type, "png ");
-    const dimensions = if (is_png)
-        try validatePngBitmapPayload(record.payload)
-    else
-        PngDimensions{ .width = 0, .height = 0 };
-    return .{
-        .source = .sbix,
-        .glyph_id = glyph_id,
-        .ppem = strike.ppem,
-        .ppi = strike.ppi,
-        // A `dupe` says to use the target glyph's bitmap data. Following
-        // HarfBuzz/FreeType, placement comes from that final image record too.
-        .origin_offset_x = record.origin_offset_x,
-        .origin_offset_y = record.origin_offset_y,
-        .width = dimensions.width,
-        .height = dimensions.height,
-        .data_offset = record.glyph_start + 8,
-        .data_length = record.payload.len,
-        .is_png = is_png,
-    };
-}
-
-fn sbixGlyphPng(data: []const u8, strike: SbixStrike, glyph_id: glyph_mod.GlyphId, glyph_count: u16) FontError!?BitmapGlyphPng {
-    const record = (try resolveSbixGlyphRecord(data, strike, glyph_id, glyph_count)) orelse return null;
-    if (!bin.tagEq(record.graphic_type, "png ")) return null;
-    return try bitmapGlyphPngFromData(
-        record.payload,
-        .sbix,
-        strike.ppem,
-        strike.ppi,
-        record.origin_offset_x,
-        record.origin_offset_y,
+fn validateSbixTable(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    table: TableRecord,
+    glyph_count: u16,
+) FontError!void {
+    return try bitmap_mod.sbix.validate(
+        allocator,
+        data,
+        bitmapTable(table),
+        glyph_count,
     );
 }
 
-fn validateSbixTable(allocator: std.mem.Allocator, data: []const u8, sbix: TableRecord, glyph_count: u16) FontError!void {
-    const strike_count = try sbixStrikeCount(data, sbix);
-    for (0..strike_count) |strike_index| {
-        const strike = try sbixStrike(data, sbix, glyph_count, strike_index);
-        try validateSbixStrikeGlyphOffsets(data, strike, glyph_count);
-        try validateSbixStrikeBitmapPayloads(allocator, data, strike, glyph_count);
-    }
-}
-
-fn validateSbixStrikeGlyphOffsets(data: []const u8, strike: SbixStrike, glyph_count: u16) FontError!void {
-    var previous = try bin.readU32At(data, strike.offset + 4);
-    if (previous < strike.bitmap_data_offset or previous > strike.length) return error.BadSfnt;
-
-    for (0..glyph_count) |glyph_index| {
-        const offset_pos = strike.offset + 4 + (glyph_index + 1) * 4;
-        const current = try bin.readU32At(data, offset_pos);
-        // The glyph offset array is a monotonic list of boundaries relative to
-        // the strike start. Validate the entire array at parse time so bitmap
-        // selection APIs cannot accept a font whose unused glyph records point
-        // back into strike metadata or beyond the declared sbix table.
-        if (current < previous) return error.BadSfnt;
-        if (current < strike.bitmap_data_offset or current > strike.length) return error.BadSfnt;
-        if (current != previous and current - previous < 8) return error.BadSfnt;
-        previous = current;
-    }
-}
-
-fn validateSbixStrikeBitmapPayloads(allocator: std.mem.Allocator, data: []const u8, strike: SbixStrike, glyph_count: u16) FontError!void {
-    // Direct-image-only sbix is the overwhelmingly common case. Allocate graph
-    // scratch lazily so adding strict `dupe` validation does not add heap work
-    // to ordinary strike validation and bitmap lookup.
-    var maybe_dupe_nodes: ?[]SbixDupeNode = null;
-    defer if (maybe_dupe_nodes) |nodes| allocator.free(nodes);
-
-    for (0..glyph_count) |glyph_index| {
-        const record = (try sbixGlyphRecord(data, strike, @intCast(glyph_index), glyph_count)) orelse continue;
-        if (bin.tagEq(record.graphic_type, "png ")) {
-            _ = try validatePngBitmapPayload(record.payload);
-        } else if (bin.tagEq(record.graphic_type, "dupe")) {
-            if (record.payload.len != 2) return error.BadSfnt;
-            const target = try bin.readU16At(record.payload, 0);
-            if (target >= glyph_count) return error.BadSfnt;
-            if (maybe_dupe_nodes == null) {
-                const nodes = try allocator.alloc(SbixDupeNode, glyph_count);
-                @memset(nodes, .{});
-                maybe_dupe_nodes = nodes;
-            }
-            maybe_dupe_nodes.?[glyph_index].target = target;
-        }
-    }
-
-    if (maybe_dupe_nodes) |nodes| try validateSbixDupeGraph(nodes);
-}
-
-const SbixDupeNode = struct {
-    target: ?glyph_mod.GlyphId = null,
-    state: enum(u2) {
-        unseen,
-        active,
-        resolved,
-    } = .unseen,
-};
-
-fn validateSbixDupeGraph(nodes: []SbixDupeNode) FontError!void {
-    // 0 = unseen, 1 = active in this DFS chain, 2 = fully resolved. This accepts
-    // exact DAG sharing while rejecting only cycles, matching the table's
-    // reference semantics without imposing HarfBuzz/FreeType's shallow cap.
-    // Target and state share one scratch allocation because public bitmap APIs
-    // deliberately repeat whole-table validation for borrowed font bytes.
-    for (nodes, 0..) |_, start_index| {
-        if (nodes[start_index].state == .resolved) continue;
-        var current: glyph_mod.GlyphId = @intCast(start_index);
-        while (true) {
-            if (nodes[current].state == .resolved) break;
-            if (nodes[current].state == .active) return error.BadSfnt;
-            nodes[current].state = .active;
-            current = nodes[current].target orelse break;
-        }
-
-        // The graph is functional (at most one edge per node), so replay the
-        // same chain to finish it rather than keeping a second O(glyph_count)
-        // stack. Reaching a previously-finished node terminates the replay.
-        current = @intCast(start_index);
-        while (nodes[current].state == .active) {
-            nodes[current].state = .resolved;
-            current = nodes[current].target orelse break;
-        }
-    }
-}
-
-fn cblcStrikeCount(data: []const u8, cblc: TableRecord) FontError!usize {
-    if (cblc.length < 8) return error.BadSfnt;
-    const major = try bin.readU16At(data, cblc.offset);
-    const minor = try bin.readU16At(data, cblc.offset + 2);
-    if ((major != 2 and major != 3) or minor != 0) return error.BadSfnt;
-    const count = try bin.readU32At(data, cblc.offset + 4);
-    if (@as(usize, count) * 48 > cblc.length - 8) return error.BadSfnt;
-    return @intCast(count);
-}
-
-fn cblcStrike(data: []const u8, cblc: TableRecord, glyph_count: u16, strike_index: usize) FontError!CblcStrike {
-    const strike_count = try cblcStrikeCount(data, cblc);
-    if (strike_index >= strike_count) return error.BadSfnt;
-    const offset = cblc.offset + 8 + strike_index * 48;
-    const index_array_offset = try bin.readU32At(data, offset);
-    const index_tables_size = try bin.readU32At(data, offset + 4);
-    const table_count = try bin.readU32At(data, offset + 8);
-    const minimum_index_array_offset = 8 + strike_count * 48;
-    // IndexSubTableArray is payload for a strike, not part of the CBLC header
-    // or bitmapSizeTable directory.  Requiring it to start after the full
-    // strike directory prevents malformed fonts from reinterpreting strike
-    // metadata as glyph-range records.
-    if (index_array_offset < minimum_index_array_offset) return error.BadSfnt;
-    if (index_array_offset > cblc.length) return error.BadSfnt;
-    if (index_tables_size > cblc.length - index_array_offset) return error.BadSfnt;
-    if (@as(usize, table_count) * 8 > index_tables_size) return error.BadSfnt;
-    const start_glyph = try bin.readU16At(data, offset + 40);
-    const end_glyph = try bin.readU16At(data, offset + 42);
-    if (start_glyph > end_glyph) return error.BadSfnt;
-    if (end_glyph >= glyph_count) return error.BadSfnt;
-    return .{
-        .ppem = data[offset + 44],
-        .ppi = 0,
-        .offset = cblc.offset + index_array_offset,
-        .index_tables_size = index_tables_size,
-        .table_count = table_count,
-        .start_glyph = start_glyph,
-        .end_glyph = end_glyph,
-    };
-}
-
-fn cblcGlyphInfo(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16, glyph_id: glyph_mod.GlyphId, size_px: f32, source: BitmapStrikeSource) FontError!?BitmapGlyphInfo {
-    var best: ?BitmapGlyphInfo = null;
-    const strike_count = try cblcStrikeCount(data, cblc);
-    for (0..strike_count) |strike_index| {
-        const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
-        const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
-        if (try cbdtGlyphInfo(data, cbdt, strike, location, glyph_id, source)) |info| recordBestBitmapInfo(info, size_px, &best);
-    }
-    return best;
-}
-
-fn cblcGlyphPng(
+fn validateCblcCbdtTables(
     data: []const u8,
-    cblc: TableRecord,
-    cbdt: TableRecord,
+    location_table: TableRecord,
+    data_table: TableRecord,
     glyph_count: u16,
-    glyph_id: glyph_mod.GlyphId,
-    size_px: f32,
-    source: BitmapStrikeSource,
-) FontError!?BitmapGlyphPng {
-    const strike_count = try cblcStrikeCount(data, cblc);
-    var best: ?BitmapGlyphPng = null;
-    for (0..strike_count) |strike_index| {
-        const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
-        if (glyph_id < strike.start_glyph or glyph_id > strike.end_glyph) continue;
-        const location = (try cblcGlyphLocation(data, strike, glyph_id)) orelse continue;
-        const glyph = (try cbdtGlyphPng(data, cbdt, strike, location, source)) orelse continue;
-        if (best == null or bitmapPpemIsPreferred(glyph.ppem, best.?.ppem, size_px)) best = glyph;
-    }
-    return best;
-}
-
-fn validateCblcCbdtTables(data: []const u8, cblc: TableRecord, cbdt: TableRecord, glyph_count: u16) FontError!void {
-    const strike_count = try cblcStrikeCount(data, cblc);
-    for (0..strike_count) |strike_index| {
-        const strike = try cblcStrike(data, cblc, glyph_count, strike_index);
-        for (strike.start_glyph..@as(usize, strike.end_glyph) + 1) |glyph_index| {
-            const location = (try cblcGlyphLocation(data, strike, @intCast(glyph_index))) orelse continue;
-            try validateCbdtGlyphData(data, cbdt, location, glyph_count);
-        }
-    }
-}
-
-fn validateCbdtGlyphData(data: []const u8, cbdt: TableRecord, location: CblcGlyphLocation, glyph_count: u16) FontError!void {
-    if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
-    if (location.image_format == 19 and location.shared_metrics == null) return error.BadSfnt;
-
-    // CBLC is an index over CBDT payloads, so all non-empty locations must be
-    // structurally safe even when this library does not render that bitmap
-    // format. Validating every referenced payload at parse time prevents an
-    // unused strike or glyph from hiding an out-of-bounds CBDT slice that would
-    // otherwise surface only during a later bitmap lookup.
-    const start = cbdt.offset + location.offset;
-    const end = start + location.length;
-    const slice = data[start..end];
-    switch (location.image_format) {
-        1 => return try validateCbdtBitmapPayload(slice, 5, true),
-        2 => return try validateCbdtBitmapPayload(slice, 5, false),
-        6 => return try validateCbdtBitmapPayload(slice, 8, true),
-        7 => return try validateCbdtBitmapPayload(slice, 8, false),
-        8 => return try validateCbdtCompoundPayload(slice, 5, glyph_count),
-        9 => return try validateCbdtCompoundPayload(slice, 8, glyph_count),
-        17 => return try validateCbdtEmbeddedDataPayload(slice, 5),
-        18 => return try validateCbdtEmbeddedDataPayload(slice, 8),
-        19 => return try validateCbdtEmbeddedDataPayload(slice, 0),
-        else => return,
-    }
-}
-
-fn validateCbdtBitmapPayload(slice: []const u8, metrics_len: usize, byte_aligned_rows: bool) FontError!void {
-    if (slice.len < metrics_len) return error.BadSfnt;
-
-    const metrics = switch (metrics_len) {
-        5 => try readSmallBitmapMetrics(slice, 0),
-        8 => try readBigBitmapMetrics(slice, 0),
-        else => unreachable,
-    };
-    const bitmap_len = if (byte_aligned_rows)
-        @as(usize, metrics.height) * ((@as(usize, metrics.width) + 7) / 8)
-    else
-        (@as(usize, metrics.height) * @as(usize, metrics.width) + 7) / 8;
-    if (bitmap_len > slice.len - metrics_len) return error.BadSfnt;
-}
-
-fn validateCbdtCompoundPayload(slice: []const u8, metrics_len: usize, glyph_count: u16) FontError!void {
-    const components_start = metrics_len + 3;
-    if (slice.len < components_start) return error.BadSfnt;
-    switch (metrics_len) {
-        5 => _ = try readSmallBitmapMetrics(slice, 0),
-        8 => _ = try readBigBitmapMetrics(slice, 0),
-        else => unreachable,
-    }
-
-    // CBDT compound bitmap payloads recursively reference glyph IDs through a
-    // compact component array. Validate the array count and target glyphs here
-    // so an otherwise-unused bitmap strike cannot contain dangling references
-    // that would only be discovered by a future non-PNG renderer.
-    const component_count = try bin.readU16At(slice, metrics_len + 1);
-    if (@as(usize, component_count) > (slice.len - components_start) / 4) return error.BadSfnt;
-    for (0..component_count) |component_index| {
-        const component = components_start + component_index * 4;
-        try validateGlyphIdInMaxp(try bin.readU16At(slice, component), glyph_count);
-    }
-}
-
-fn validateCbdtEmbeddedDataPayload(slice: []const u8, metrics_len: usize) FontError!void {
-    if (slice.len < metrics_len + 4) return error.BadSfnt;
-    const data_len = try bin.readU32At(slice, metrics_len);
-    if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
-    _ = try validatePngBitmapPayload(slice[metrics_len + 4 .. metrics_len + 4 + data_len]);
-}
-
-fn cblcGlyphLocation(data: []const u8, strike: CblcStrike, glyph_id: glyph_mod.GlyphId) FontError!?CblcGlyphLocation {
-    const SelectedIndexSubtable = struct {
-        first: glyph_mod.GlyphId,
-        last: glyph_mod.GlyphId,
-        offset: usize,
-    };
-    var selected: ?SelectedIndexSubtable = null;
-    var previous_last: ?glyph_mod.GlyphId = null;
-    for (0..strike.table_count) |table_index| {
-        const record = strike.offset + table_index * 8;
-        if (record + 8 > data.len or record + 8 > strike.offset + strike.index_tables_size) return error.BadSfnt;
-        const first = try bin.readU16At(data, record);
-        const last = try bin.readU16At(data, record + 2);
-        const subtable_offset = try bin.readU32At(data, record + 4);
-        if (first > last) return error.BadSfnt;
-        if (first < strike.start_glyph or last > strike.end_glyph) return error.BadSfnt;
-        if (previous_last) |previous| {
-            // The IndexSubTableArray is sorted by glyph range.  Overlapping or
-            // decreasing ranges make glyph lookup order-dependent, and can hide
-            // malformed records behind an earlier match.
-            if (first <= previous) return error.BadSfnt;
-        }
-        previous_last = last;
-        // Subtable offsets are relative to the IndexSubTableArray and should
-        // point past the array records themselves.  Offsets into the record
-        // array would reinterpret glyph range metadata as an index subtable.
-        const subtable_data_start = @as(usize, strike.table_count) * 8;
-        if (subtable_offset < subtable_data_start or subtable_offset >= strike.index_tables_size) return error.BadSfnt;
-        if (glyph_id >= first and glyph_id <= last) selected = .{ .first = first, .last = last, .offset = subtable_offset };
-    }
-    const entry = selected orelse return null;
-    const subtable = strike.offset + entry.offset;
-    if (subtable + 8 > data.len or subtable + 8 > strike.offset + strike.index_tables_size) return error.BadSfnt;
-    const index_format = try bin.readU16At(data, subtable);
-    const image_format = try bin.readU16At(data, subtable + 2);
-    const image_data_offset = try bin.readU32At(data, subtable + 4);
-    if (image_data_offset > std.math.maxInt(usize)) return error.BadSfnt;
-    const image_base: usize = @intCast(image_data_offset);
-    const local_index: usize = glyph_id - entry.first;
-    return switch (index_format) {
-        1 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, entry.first, entry.last, local_index, image_format, image_base, 4),
-        2 => try cblcGlyphLocationFormat2(data, strike, subtable + 8, entry.first, entry.last, local_index, image_format, image_base),
-        3 => try cblcGlyphLocationFormat1Or3(data, strike, subtable + 8, entry.first, entry.last, local_index, image_format, image_base, 2),
-        4 => try cblcGlyphLocationFormat4(data, strike, subtable + 8, glyph_id, image_format, image_base),
-        5 => try cblcGlyphLocationFormat5(data, strike, subtable + 8, entry.first, entry.last, glyph_id, image_format, image_base),
-        else => null,
-    };
-}
-
-fn cblcGlyphLocationFormat1Or3(data: []const u8, strike: CblcStrike, offsets_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, local_index: usize, image_format: u16, image_base: usize, offset_size: usize) FontError!?CblcGlyphLocation {
-    const glyphs = @as(usize, last - first) + 1;
-    const offsets_len = (glyphs + 1) * offset_size;
-    if (offsets_offset + offsets_len > data.len or offsets_offset + offsets_len > strike.offset + strike.index_tables_size) return error.BadSfnt;
-    const start = try readCblcOffset(data, offsets_offset + local_index * offset_size, offset_size);
-    const end = try readCblcOffset(data, offsets_offset + (local_index + 1) * offset_size, offset_size);
-    // Equal adjacent offsets are the CBLC encoding for "no bitmap for this
-    // glyph". A decreasing range is different: it means the index subtable is
-    // corrupt and must not be silently treated as a missing glyph.
-    return try cblcImageLocation(image_format, image_base, start, end, null);
-}
-
-fn cblcGlyphLocationFormat2(data: []const u8, strike: CblcStrike, body_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, local_index: usize, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
-    if (body_offset + 12 > data.len or body_offset + 12 > strike.offset + strike.index_tables_size) return error.BadSfnt;
-    const image_size = try bin.readU32At(data, body_offset);
-    if (image_size == 0) return error.BadSfnt;
-    const shared_metrics = try readBigBitmapMetrics(data, body_offset + 4);
-
-    // Index format 2 is a fixed-size dense range: every glyph covered by the
-    // IndexSubTableArray entry consumes exactly imageSize bytes in CBDT.  Check
-    // the terminal offset, not just the requested glyph, so an oversized range
-    // or multiplication overflow is caught while parsing CBLC/CBDT metadata.
-    const glyphs = @as(usize, last - first) + 1;
-    const last_start = try checkedCblcImageStart(glyphs - 1, image_size);
-    _ = try checkedCblcImageEnd(last_start, image_size);
-
-    const start = try checkedCblcImageStart(local_index, image_size);
-    const end = try checkedCblcImageEnd(start, image_size);
-    return try cblcImageLocation(image_format, image_base, start, end, shared_metrics);
-}
-
-fn cblcGlyphLocationFormat4(data: []const u8, strike: CblcStrike, body_offset: usize, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
-    if (body_offset + 4 > data.len or body_offset + 4 > strike.offset + strike.index_tables_size) return error.BadSfnt;
-    const pair_count = try bin.readU32At(data, body_offset);
-    const pairs_offset = body_offset + 4;
-    const pairs_len = try checkedCblcPairArrayLength(pair_count);
-    if (pairs_len > std.math.maxInt(usize) - pairs_offset) return error.BadSfnt;
-    const pairs_end = pairs_offset + pairs_len;
-    if (pairs_end > data.len or pairs_end > strike.offset + strike.index_tables_size) return error.BadSfnt;
-    var previous_glyph: ?glyph_mod.GlyphId = null;
-    var match: ?CblcGlyphLocation = null;
-    for (0..pair_count) |index| {
-        const pair = pairs_offset + @as(usize, index) * 4;
-        const current_glyph = try bin.readU16At(data, pair);
-        const start = try bin.readU16At(data, pair + 2);
-        const end = try bin.readU16At(data, pair + 6);
-        // Index format 4 is sparse, but its codeOffsetPair array is still a
-        // sorted directory scoped by the enclosing IndexSubTableArray range.
-        // Validate every advertised pair before returning a match so an
-        // unrequested malformed glyph cannot hide behind an earlier valid one
-        // during parse-time CBLC/CBDT walks or public bitmap lookups.
-        if (current_glyph < strike.start_glyph or current_glyph > strike.end_glyph) return error.BadSfnt;
-        if (previous_glyph) |previous| {
-            if (current_glyph <= previous) return error.BadSfnt;
-        }
-        previous_glyph = current_glyph;
-        const location = try cblcImageLocation(image_format, image_base, start, end, null);
-        if (current_glyph == glyph_id) match = location;
-    }
-    return match;
-}
-
-fn cblcGlyphLocationFormat5(data: []const u8, strike: CblcStrike, body_offset: usize, first: glyph_mod.GlyphId, last: glyph_mod.GlyphId, glyph_id: glyph_mod.GlyphId, image_format: u16, image_base: usize) FontError!?CblcGlyphLocation {
-    if (body_offset + 16 > data.len or body_offset + 16 > strike.offset + strike.index_tables_size) return error.BadSfnt;
-    const image_size = try bin.readU32At(data, body_offset);
-    const shared_metrics = try readBigBitmapMetrics(data, body_offset + 4);
-    const glyph_count = try bin.readU32At(data, body_offset + 12);
-    if (glyph_count == 0) return error.BadSfnt;
-    if (image_size == 0) return error.BadSfnt;
-
-    const range_glyphs = @as(usize, last - first) + 1;
-    if (@as(usize, glyph_count) > range_glyphs) return error.BadSfnt;
-    const glyphs_offset = body_offset + 16;
-    if (glyphs_offset + @as(usize, glyph_count) * 2 > data.len or glyphs_offset + @as(usize, glyph_count) * 2 > strike.offset + strike.index_tables_size) return error.BadSfnt;
-
-    var previous: ?glyph_mod.GlyphId = null;
-    var match_index: ?usize = null;
-    for (0..glyph_count) |index| {
-        const current_glyph = try bin.readU16At(data, glyphs_offset + @as(usize, index) * 2);
-        // Format 5 is sparse, but the glyphCodeArray is still ordered and
-        // scoped by the IndexSubTableArray range. Enforcing that contract here
-        // prevents duplicate/out-of-range codes from making bitmap lookup
-        // depend on which valid glyph happens to trigger subtable parsing.
-        if (current_glyph < first or current_glyph > last) return error.BadSfnt;
-        if (previous) |prev| {
-            if (current_glyph <= prev) return error.BadSfnt;
-        }
-        previous = current_glyph;
-        if (current_glyph == glyph_id) match_index = @intCast(index);
-    }
-
-    const index = match_index orelse return null;
-    const start = try checkedCblcImageStart(index, image_size);
-    const end = try checkedCblcImageEnd(start, image_size);
-    return try cblcImageLocation(image_format, image_base, start, end, shared_metrics);
-}
-
-fn checkedCblcImageStart(index: usize, image_size: u32) FontError!usize {
-    const size: usize = @intCast(image_size);
-    if (index != 0 and size > std.math.maxInt(usize) / index) return error.BadSfnt;
-    return index * size;
-}
-
-fn checkedCblcImageEnd(start: usize, image_size: u32) FontError!usize {
-    const size: usize = @intCast(image_size);
-    if (size > std.math.maxInt(usize) - start) return error.BadSfnt;
-    return start + size;
-}
-
-fn checkedCblcPairArrayLength(pair_count: u32) FontError!usize {
-    if (@as(u64, pair_count) >= @as(u64, std.math.maxInt(usize))) return error.BadSfnt;
-    const count: usize = @intCast(pair_count);
-    const entries = count + 1;
-    if (entries > std.math.maxInt(usize) / 4) return error.BadSfnt;
-    return entries * 4;
-}
-
-fn readCblcOffset(data: []const u8, offset: usize, size: usize) FontError!usize {
-    return switch (size) {
-        2 => try bin.readU16At(data, offset),
-        4 => try bin.readU32At(data, offset),
-        else => error.BadSfnt,
-    };
-}
-
-fn cbdtGlyphInfo(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation, glyph_id: glyph_mod.GlyphId, source: BitmapStrikeSource) FontError!?BitmapGlyphInfo {
-    if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
-    const start = cbdt.offset + location.offset;
-    const end = start + location.length;
-    const slice = data[start..end];
-    const metrics_len: usize = switch (location.image_format) {
-        1, 2, 17 => 5,
-        6, 7, 18 => 8,
-        19 => 0,
-        else => return null,
-    };
-    const needs_embedded_length = switch (location.image_format) {
-        17, 18, 19 => true,
-        else => false,
-    };
-    if (slice.len < metrics_len + if (needs_embedded_length) @as(usize, 4) else 0) return error.BadSfnt;
-    const metrics = switch (location.image_format) {
-        1, 2, 17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
-        6, 7, 18 => readBigBitmapMetrics(slice, 0) catch unreachable,
-        19 => location.shared_metrics orelse return error.BadSfnt,
-        else => unreachable,
-    };
-    const payload = switch (location.image_format) {
-        1, 2, 6, 7 => slice[metrics_len..],
-        17, 18, 19 => payload: {
-            const data_len = try bin.readU32At(slice, metrics_len);
-            if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
-            break :payload slice[metrics_len + 4 .. metrics_len + 4 + data_len];
-        },
-        else => unreachable,
-    };
-    const is_png = isPngPayload(payload);
-    const dimensions = if (is_png)
-        try validatePngBitmapPayload(payload)
-    else
-        PngDimensions{ .width = metrics.width, .height = metrics.height };
-    return .{
-        .source = source,
-        .glyph_id = glyph_id,
-        .ppem = strike.ppem,
-        .ppi = strike.ppi,
-        .origin_offset_x = metrics.bearing_x,
-        .origin_offset_y = metrics.bearing_y,
-        .width = dimensions.width,
-        .height = dimensions.height,
-        .image_format = location.image_format,
-        .data_offset = @intFromPtr(payload.ptr) - @intFromPtr(data.ptr),
-        .data_length = payload.len,
-        .is_png = is_png,
-    };
-}
-
-fn cbdtGlyphPng(data: []const u8, cbdt: TableRecord, strike: CblcStrike, location: CblcGlyphLocation, source: BitmapStrikeSource) FontError!?BitmapGlyphPng {
-    if (location.offset > cbdt.length or location.length > cbdt.length - location.offset) return error.BadSfnt;
-    switch (location.image_format) {
-        17, 18, 19 => {},
-        // `bitmapGlyphPng` is intentionally a PNG-only API.  Non-PNG CBDT
-        // image formats may still be valid font data, so treat them as no PNG
-        // candidate after validating their declared CBDT byte range above.
-        else => return null,
-    }
-    const start = cbdt.offset + location.offset;
-    const end = start + location.length;
-    const slice = data[start..end];
-    const metrics_len: usize = switch (location.image_format) {
-        17 => 5,
-        18 => 8,
-        19 => 0,
-        else => unreachable,
-    };
-    if (slice.len < metrics_len + 4) return error.BadSfnt;
-    const metrics = switch (location.image_format) {
-        1, 2, 17 => readSmallBitmapMetrics(slice, 0) catch unreachable,
-        6, 7, 18 => readBigBitmapMetrics(slice, 0) catch unreachable,
-        19 => location.shared_metrics orelse return error.BadSfnt,
-        else => unreachable,
-    };
-    const data_len = try bin.readU32At(slice, metrics_len);
-    if (data_len > slice.len - metrics_len - 4) return error.BadSfnt;
-    const png = slice[metrics_len + 4 .. metrics_len + 4 + data_len];
-    return try bitmapGlyphPngFromData(png, source, strike.ppem, strike.ppi, metrics.bearing_x, metrics.bearing_y);
-}
-
-fn bitmapGlyphPngFromData(
-    png: []const u8,
-    source: BitmapStrikeSource,
-    ppem: u16,
-    ppi: u16,
-    origin_offset_x: i16,
-    origin_offset_y: i16,
-) FontError!BitmapGlyphPng {
-    const dimensions = try validatePngBitmapPayload(png);
-    return .{
-        .source = source,
-        .ppem = ppem,
-        .ppi = ppi,
-        .origin_offset_x = origin_offset_x,
-        .origin_offset_y = origin_offset_y,
-        .width = dimensions.width,
-        .height = dimensions.height,
-        .data = png,
-    };
-}
-
-const PngDimensions = struct {
-    width: u32,
-    height: u32,
-};
-
-fn isPngPayload(png: []const u8) bool {
-    return png.len >= png_signature.len and std.mem.eql(u8, png[0..png_signature.len], &png_signature);
-}
-
-fn validatePngBitmapPayload(png: []const u8) FontError!PngDimensions {
-    if (png.len < png_signature.len + 12) return error.BadSfnt;
-    if (!std.mem.eql(u8, png[0..png_signature.len], &png_signature)) return error.BadSfnt;
-
-    // OpenType bitmap tables embed a full PNG datastream. Validate enough of
-    // the container grammar to ensure callers do not accept arbitrary bytes
-    // that merely contain "PNG" at offsets 1..3, and to catch truncated or
-    // checksum-corrupt bitmap payloads before exposing dimensions to renderers.
-    var offset: usize = png_signature.len;
-    var saw_ihdr = false;
-    var saw_idat = false;
-    var dimensions = PngDimensions{ .width = 0, .height = 0 };
-    while (true) {
-        if (png.len - offset < 12) return error.BadSfnt;
-        const chunk_start = offset;
-        const data_len = try bin.readU32At(png, offset);
-        offset += 4;
-        const chunk_type = try bin.readTagAt(png, offset);
-        offset += 4;
-        if (data_len > png.len - offset - 4) return error.BadSfnt;
-        const chunk_data = png[offset .. offset + data_len];
-        offset += data_len;
-        const declared_crc = try bin.readU32At(png, offset);
-        offset += 4;
-        const computed_crc = std.hash.Crc32.hash(png[chunk_start + 4 .. offset - 4]);
-        if (computed_crc != declared_crc) return error.BadSfnt;
-
-        if (bin.tagEq(chunk_type, "IHDR")) {
-            if (saw_ihdr or data_len != 13) return error.BadSfnt;
-            dimensions = .{
-                .width = try bin.readU32At(chunk_data, 0),
-                .height = try bin.readU32At(chunk_data, 4),
-            };
-            if (dimensions.width == 0 or dimensions.height == 0) return error.BadSfnt;
-            saw_ihdr = true;
-        } else {
-            if (!saw_ihdr) return error.BadSfnt;
-            if (bin.tagEq(chunk_type, "IDAT")) saw_idat = true;
-            if (bin.tagEq(chunk_type, "IEND")) {
-                if (data_len != 0 or !saw_idat or offset != png.len) return error.BadSfnt;
-                return dimensions;
-            }
-        }
-    }
-}
-
-const png_signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
-
-fn readSmallBitmapMetrics(data: []const u8, offset: usize) FontError!BitmapMetrics {
-    if (offset + 5 > data.len) return error.BadSfnt;
-    return .{
-        .height = data[offset],
-        .width = data[offset + 1],
-        .bearing_x = @bitCast(data[offset + 2]),
-        .bearing_y = @bitCast(data[offset + 3]),
-        .advance = data[offset + 4],
-    };
-}
-
-fn readBigBitmapMetrics(data: []const u8, offset: usize) FontError!BitmapMetrics {
-    if (offset + 8 > data.len) return error.BadSfnt;
-    return .{
-        .height = data[offset],
-        .width = data[offset + 1],
-        .bearing_x = @bitCast(data[offset + 2]),
-        .bearing_y = @bitCast(data[offset + 3]),
-        .advance = data[offset + 4],
-    };
+) FontError!void {
+    return try bitmap_mod.cblc.validate(
+        data,
+        bitmapTable(location_table),
+        bitmapTable(data_table),
+        glyph_count,
+    );
 }
 
 /// Internal shaping backend. This is intentionally absent from `cangjie.font`;
@@ -14477,108 +13635,6 @@ test "Apple kern v1 format 0 pair glyph ids are validated at parse time" {
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
-test "sbix offsets cannot overlap table or strike metadata" {
-    var table_overlap: [32]u8 = .{0} ** 32;
-    writeU16Test(&table_overlap, 0, 1); // version
-    writeU32Test(&table_overlap, 4, 1); // one strike offset follows
-    writeU32Test(&table_overlap, 8, 8); // Points at the strike-offset array.
-    const sbix = TableRecord{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = table_overlap.len };
-    try std.testing.expectError(error.BadSfnt, sbixStrike(&table_overlap, sbix, 1, 0));
-
-    var glyph_overlap: [48]u8 = .{0} ** 48;
-    writeU16Test(&glyph_overlap, 0, 1); // version
-    writeU32Test(&glyph_overlap, 4, 1);
-    writeU32Test(&glyph_overlap, 8, 12); // First strike begins after sbix metadata.
-    writeU16Test(&glyph_overlap, 12, 16); // ppem
-    writeU16Test(&glyph_overlap, 14, 72); // ppi
-    writeU32Test(&glyph_overlap, 16, 4); // Non-empty glyph points back into the offset array.
-    writeU32Test(&glyph_overlap, 20, 20);
-
-    const strike = try sbixStrike(&glyph_overlap, sbix, 1, 0);
-    try std.testing.expectError(error.BadSfnt, sbixGlyphPng(&glyph_overlap, strike, 0, 1));
-}
-
-test "sbix parse validation checks every strike glyph offset" {
-    var bytes: [64]u8 = .{0} ** 64;
-    writeU16Test(&bytes, 0, 1); // sbix version
-    writeU32Test(&bytes, 4, 1); // one strike
-    writeU32Test(&bytes, 8, 12); // strike data starts after the strike-offset array
-    writeU16Test(&bytes, 12, 16); // ppem
-    writeU16Test(&bytes, 14, 72); // ppi
-
-    const sbix = TableRecord{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = bytes.len };
-
-    // Two glyphs require three offsets. The second glyph is "unused" for many
-    // runtime lookups, but parse-time validation must still reject its
-    // decreasing boundary so malformed payloads cannot hide behind glyph choice.
-    writeU32Test(&bytes, 16, 24);
-    writeU32Test(&bytes, 20, 32);
-    writeU32Test(&bytes, 24, 28);
-    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
-
-    writeU32Test(&bytes, 24, 36); // Non-empty glyph payload is shorter than the sbix origin+type header.
-    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
-
-    writeU32Test(&bytes, 24, 40);
-    try validateSbixTable(std.testing.allocator, &bytes, sbix, 2);
-}
-
-test "sbix dupe graph accepts shared chains and rejects cycles" {
-    // Longer than HarfBuzz's current retry cap: a finite, acyclic chain is
-    // valid regardless of depth and should not be rejected arbitrarily.
-    var valid = [_]SbixDupeNode{
-        .{ .target = 2 },
-        .{ .target = 2 },
-        .{ .target = 3 },
-        .{ .target = 4 },
-        .{ .target = 5 },
-        .{ .target = 6 },
-        .{ .target = 7 },
-        .{ .target = 8 },
-        .{ .target = 9 },
-        .{ .target = 10 },
-        .{ .target = 11 },
-        .{},
-    };
-    try validateSbixDupeGraph(&valid);
-
-    var self_cycle = [_]SbixDupeNode{.{ .target = 0 }};
-    try std.testing.expectError(error.BadSfnt, validateSbixDupeGraph(&self_cycle));
-
-    var indirect_cycle = [_]SbixDupeNode{ .{ .target = 1 }, .{ .target = 2 }, .{ .target = 0 } };
-    try std.testing.expectError(error.BadSfnt, validateSbixDupeGraph(&indirect_cycle));
-}
-
-test "sbix dupe records require one in-range glyph id" {
-    var bytes: [64]u8 = .{0} ** 64;
-    writeU16Test(&bytes, 0, 1);
-    writeU32Test(&bytes, 4, 1);
-    writeU32Test(&bytes, 8, 12);
-    writeU16Test(&bytes, 12, 16);
-    writeU16Test(&bytes, 14, 72);
-    writeU32Test(&bytes, 16, 16);
-    writeU32Test(&bytes, 20, 26);
-    writeU32Test(&bytes, 24, 36);
-    writeTagTest(&bytes, 28 + 4, "dupe");
-    writeU16Test(&bytes, 28 + 8, 1);
-    writeTagTest(&bytes, 38 + 4, "dupe");
-    writeU16Test(&bytes, 38 + 8, 0);
-
-    const sbix = TableRecord{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = 52 };
-    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
-
-    // Break the cycle, but make the remaining reference out of range.
-    writeTagTest(&bytes, 38 + 4, "jpg ");
-    writeU16Test(&bytes, 28 + 8, 2);
-    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
-
-    // A dupe payload must not carry ignored trailing bytes.
-    writeU16Test(&bytes, 28 + 8, 1);
-    writeU32Test(&bytes, 20, 28);
-    writeU32Test(&bytes, 24, 38);
-    try std.testing.expectError(error.BadSfnt, validateSbixTable(std.testing.allocator, &bytes, sbix, 2));
-}
-
 test "sbix public bitmap APIs revalidate borrowed strike offsets" {
     var bytes: [40]u8 = .{0} ** 40;
     writeU16Test(&bytes, 0, 1); // sbix version
@@ -14655,245 +13711,6 @@ test "public bitmap APIs reject non-finite and non-positive request sizes" {
     try std.testing.expectError(error.InvalidBitmapSize, font.bitmapGlyphPng(0, std.math.nan(f32)));
 }
 
-test "CBLC bitmap index subtables reject decreasing image offsets" {
-    const strike = CblcStrike{
-        .ppem = 16,
-        .ppi = 0,
-        .offset = 0,
-        .index_tables_size = 0,
-        .table_count = 0,
-        .start_glyph = 1,
-        .end_glyph = 1,
-    };
-
-    var format3_offsets: [4]u8 = .{0} ** 4;
-    writeU16Test(&format3_offsets, 0, 10);
-    writeU16Test(&format3_offsets, 2, 4);
-    var format3_strike = strike;
-    format3_strike.index_tables_size = format3_offsets.len;
-    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat1Or3(
-        &format3_offsets,
-        format3_strike,
-        0,
-        1,
-        1,
-        0,
-        17,
-        0,
-        2,
-    ));
-
-    var format4_pairs: [12]u8 = .{0} ** 12;
-    writeU32Test(&format4_pairs, 0, 1);
-    writeU16Test(&format4_pairs, 4, 1);
-    writeU16Test(&format4_pairs, 6, 10);
-    writeU16Test(&format4_pairs, 8, 2);
-    writeU16Test(&format4_pairs, 10, 4);
-    var format4_strike = strike;
-    format4_strike.index_tables_size = format4_pairs.len;
-    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat4(&format4_pairs, format4_strike, 0, 1, 17, 0));
-}
-
-test "CBLC fixed-size index formats validate dense and sparse invariants" {
-    const strike = CblcStrike{
-        .ppem = 16,
-        .ppi = 0,
-        .offset = 0,
-        .index_tables_size = 32,
-        .table_count = 1,
-        .start_glyph = 1,
-        .end_glyph = 3,
-    };
-
-    var format2: [12]u8 = .{0} ** 12;
-    writeU32Test(&format2, 0, 9); // One fixed-size image-format-17 CBDT payload.
-    format2[4] = 7;
-    format2[5] = 9;
-    format2[6] = @bitCast(@as(i8, -2));
-    format2[7] = 6;
-    format2[8] = 10;
-    const dense_location = (try cblcGlyphLocationFormat2(&format2, strike, 0, 1, 3, 2, 17, 0)).?;
-    try std.testing.expectEqual(@as(usize, 18), dense_location.offset);
-    try std.testing.expectEqual(@as(usize, 9), dense_location.length);
-    try std.testing.expectEqual(@as(i8, -2), dense_location.shared_metrics.?.bearing_x);
-    try std.testing.expectEqual(@as(i8, 6), dense_location.shared_metrics.?.bearing_y);
-
-    writeU32Test(&format2, 0, 0);
-    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat2(&format2, strike, 0, 1, 3, 0, 17, 0));
-
-    var data: [121]u8 = .{0} ** 121;
-    writeU16Test(&data, 0, 2); // CBLC major version.
-    writeU16Test(&data, 2, 0); // CBLC minor version.
-    writeU32Test(&data, 4, 1); // One bitmapSizeTable.
-    writeU32Test(&data, 8, 56); // IndexSubTableArray immediately after the strike directory.
-    writeU32Test(&data, 12, 38); // One array record plus one format-5 subtable.
-    writeU32Test(&data, 16, 1); // One IndexSubTableArray record.
-    writeU16Test(&data, 48, 1); // startGlyphIndex.
-    writeU16Test(&data, 50, 3); // endGlyphIndex.
-    data[52] = 16; // ppem.
-
-    writeU16Test(&data, 56, 1); // firstGlyphIndex.
-    writeU16Test(&data, 58, 3); // lastGlyphIndex.
-    writeU32Test(&data, 60, 8); // Subtable starts after the array record.
-    writeU16Test(&data, 64, 5); // indexFormat 5: sparse fixed-size images.
-    writeU16Test(&data, 66, 1); // imageFormat 1: byte-aligned bitmap payloads.
-    writeU32Test(&data, 68, 0); // imageDataOffset.
-    writeU32Test(&data, 72, 9); // imageSize.
-    data[76] = 7;
-    data[77] = 9;
-    data[78] = @bitCast(@as(i8, -2));
-    data[79] = 6;
-    data[80] = 10;
-    writeU32Test(&data, 84, 3); // Three glyph codes follow.
-    writeU16Test(&data, 88, 1);
-    writeU16Test(&data, 90, 3);
-    writeU16Test(&data, 92, 2); // Out of order; must be caught before lookup succeeds.
-
-    const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = 94 };
-    const cbdt = TableRecord{ .tag = .{ 'C', 'B', 'D', 'T' }, .checksum = 0, .offset = 94, .length = 27 };
-    try std.testing.expectError(error.BadSfnt, validateCblcCbdtTables(&data, cblc, cbdt, 4));
-
-    writeU16Test(&data, 90, 2);
-    writeU16Test(&data, 92, 3);
-    try validateCblcCbdtTables(&data, cblc, cbdt, 4);
-    const sparse_location = (try cblcGlyphLocation(&data, try cblcStrike(&data, cblc, 4, 0), 2)).?;
-    try std.testing.expectEqual(@as(i8, -2), sparse_location.shared_metrics.?.bearing_x);
-    try std.testing.expectEqual(@as(i8, 6), sparse_location.shared_metrics.?.bearing_y);
-
-    writeU16Test(&data, 92, 4); // Outside the subtable's declared 1...3 range.
-    try std.testing.expectError(error.BadSfnt, validateCblcCbdtTables(&data, cblc, cbdt, 4));
-}
-
-test "CBDT format 19 requires shared index-subtable metrics" {
-    const metrics = BitmapMetrics{
-        .height = 7,
-        .width = 9,
-        .bearing_x = -2,
-        .bearing_y = 6,
-        .advance = 10,
-    };
-    const valid = CblcGlyphLocation{
-        .image_format = 19,
-        .offset = 0,
-        .length = 4,
-        .shared_metrics = metrics,
-    };
-    var data: [4]u8 = .{0} ** 4;
-    const cbdt = TableRecord{ .tag = .{ 'C', 'B', 'D', 'T' }, .checksum = 0, .offset = 0, .length = data.len };
-
-    // The empty PNG length is structurally readable; this focused test is for
-    // the location-level metrics contract, before full PNG validation.
-    var missing = valid;
-    missing.shared_metrics = null;
-    try std.testing.expectError(error.BadSfnt, validateCbdtGlyphData(&data, cbdt, missing, 1));
-}
-
-test "CBLC strike glyph ranges stay within maxp glyph count" {
-    var bytes: [56]u8 = .{0} ** 56;
-    writeU16Test(&bytes, 0, 2); // major version.
-    writeU16Test(&bytes, 2, 0); // minor version.
-    writeU32Test(&bytes, 4, 1); // one strike.
-    writeU32Test(&bytes, 8, 56); // indexSubTableArrayOffset at end: empty index array.
-    writeU32Test(&bytes, 12, 0);
-    writeU32Test(&bytes, 16, 0);
-    writeU16Test(&bytes, 48, 0); // startGlyphIndex.
-    writeU16Test(&bytes, 50, 2); // endGlyphIndex exceeds a two-glyph font's max glyph id.
-    bytes[52] = 16;
-
-    const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadSfnt, cblcStrike(&bytes, cblc, 2, 0));
-}
-
-test "CBLC index arrays cannot overlap the strike directory" {
-    var bytes: [56]u8 = .{0} ** 56;
-    writeU16Test(&bytes, 0, 2); // major version.
-    writeU16Test(&bytes, 2, 0); // minor version.
-    writeU32Test(&bytes, 4, 1); // one bitmapSizeTable.
-    writeU32Test(&bytes, 8, 8); // Points back into the bitmapSizeTable.
-    writeU32Test(&bytes, 12, 48);
-    writeU32Test(&bytes, 16, 1);
-    writeU16Test(&bytes, 48, 1);
-    writeU16Test(&bytes, 50, 1);
-    bytes[52] = 16;
-
-    const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadSfnt, cblcStrike(&bytes, cblc, 2, 0));
-}
-
-test "CBLC index subtable array validates ordering before returning a location" {
-    const strike = CblcStrike{
-        .ppem = 16,
-        .ppi = 0,
-        .offset = 0,
-        .index_tables_size = 40,
-        .table_count = 2,
-        .start_glyph = 1,
-        .end_glyph = 4,
-    };
-
-    var overlapping: [40]u8 = .{0} ** 40;
-    writeU16Test(&overlapping, 0, 1);
-    writeU16Test(&overlapping, 2, 2);
-    writeU32Test(&overlapping, 4, 16);
-    writeU16Test(&overlapping, 8, 2); // Overlaps the previous inclusive range.
-    writeU16Test(&overlapping, 10, 3);
-    writeU32Test(&overlapping, 12, 28);
-    try std.testing.expectError(error.BadSfnt, cblcGlyphLocation(&overlapping, strike, 1));
-
-    var subtable_overlap = overlapping;
-    writeU16Test(&subtable_overlap, 8, 3); // Repair ordering.
-    writeU16Test(&subtable_overlap, 10, 4);
-    writeU32Test(&subtable_overlap, 12, 4); // Points into IndexSubTableArray records.
-    try std.testing.expectError(error.BadSfnt, cblcGlyphLocation(&subtable_overlap, strike, 1));
-}
-
-test "CBLC format 4 sparse pairs validate every glyph record" {
-    const strike = CblcStrike{
-        .ppem = 16,
-        .ppi = 0,
-        .offset = 0,
-        .index_tables_size = 24,
-        .table_count = 1,
-        .start_glyph = 1,
-        .end_glyph = 4,
-    };
-
-    var data: [24]u8 = .{0} ** 24;
-    writeU32Test(&data, 0, 2); // Two codeOffsetPair records plus a terminal offset.
-    writeU16Test(&data, 4, 1);
-    writeU16Test(&data, 6, 0);
-    writeU16Test(&data, 8, 2);
-    writeU16Test(&data, 10, 4);
-    writeU16Test(&data, 12, 3);
-    writeU16Test(&data, 14, 8);
-
-    const location = (try cblcGlyphLocationFormat4(&data, strike, 0, 1, 17, 0)).?;
-    try std.testing.expectEqual(@as(usize, 0), location.offset);
-    try std.testing.expectEqual(@as(usize, 4), location.length);
-
-    writeU16Test(&data, 8, 1); // Duplicate/decreasing glyph code after a valid match.
-    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat4(&data, strike, 0, 1, 17, 0));
-
-    writeU16Test(&data, 8, 5); // Outside the enclosing IndexSubTableArray range.
-    try std.testing.expectError(error.BadSfnt, cblcGlyphLocationFormat4(&data, strike, 0, 1, 17, 0));
-}
-
-test "CBLC image locations reject arithmetic overflow before CBDT slicing" {
-    const max = std.math.maxInt(usize);
-
-    try std.testing.expectError(error.BadSfnt, cblcImageLocation(17, max - 4, 8, 12, null));
-    try std.testing.expectError(error.BadSfnt, cblcImageLocation(17, max - 4, 2, 8, null));
-    try std.testing.expectError(error.BadSfnt, checkedCblcImageStart(max / 2 + 1, 2));
-    try std.testing.expectError(error.BadSfnt, checkedCblcImageEnd(max - 1, 2));
-
-    const missing = try cblcImageLocation(17, 10, 4, 4, null);
-    try std.testing.expectEqual(@as(?CblcGlyphLocation, null), missing);
-
-    const location = (try cblcImageLocation(17, 10, 4, 8, null)).?;
-    try std.testing.expectEqual(@as(usize, 14), location.offset);
-    try std.testing.expectEqual(@as(usize, 4), location.length);
-}
-
 test "CBLC CBDT parse validation checks every referenced bitmap payload" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -14956,32 +13773,6 @@ test "CBDT embedded PNG payloads require a valid PNG datastream" {
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
-test "PNG bitmap payload validation checks signature chunks and CRCs" {
-    const valid_png = [_]u8{
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
-        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
-        0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xd0,
-        0x00, 0x00, 0x04, 0x81, 0x01, 0x80, 0x2c, 0x55, 0xce, 0xb0, 0x00, 0x00,
-        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-    };
-
-    const dimensions = try validatePngBitmapPayload(&valid_png);
-    try std.testing.expectEqual(@as(u32, 1), dimensions.width);
-    try std.testing.expectEqual(@as(u32, 1), dimensions.height);
-
-    var bad_signature = valid_png;
-    bad_signature[0] = 0;
-    try std.testing.expectError(error.BadSfnt, validatePngBitmapPayload(&bad_signature));
-
-    var bad_crc = valid_png;
-    bad_crc[19] = 2; // Width byte changes but IHDR CRC remains the original value.
-    try std.testing.expectError(error.BadSfnt, validatePngBitmapPayload(&bad_crc));
-
-    var trailing = valid_png ++ [_]u8{0};
-    try std.testing.expectError(error.BadSfnt, validatePngBitmapPayload(&trailing));
-}
-
 test "CBDT non-PNG payloads validate metrics and compound glyph references" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -15016,34 +13807,6 @@ test "CBDT non-PNG payloads validate metrics and compound glyph references" {
         writeU16Test(bytes, cbdt_offset + 12, 2); // maxp declares glyph IDs 0 and 1 only.
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
-}
-
-test "CBDT non-PNG image formats are skipped by PNG lookup" {
-    var bytes: [80]u8 = .{0} ** 80;
-    writeU16Test(&bytes, 0, 2); // CBLC major version.
-    writeU16Test(&bytes, 2, 0);
-    writeU32Test(&bytes, 4, 1); // one bitmapSizeTable.
-
-    writeU32Test(&bytes, 8, 56); // IndexSubTableArray follows the strike directory.
-    writeU32Test(&bytes, 12, 20);
-    writeU32Test(&bytes, 16, 1);
-    writeU16Test(&bytes, 48, 1);
-    writeU16Test(&bytes, 50, 1);
-    bytes[52] = 16;
-
-    writeU16Test(&bytes, 56, 1);
-    writeU16Test(&bytes, 58, 1);
-    writeU32Test(&bytes, 60, 8);
-
-    writeU16Test(&bytes, 64, 3); // IndexSubTable format 3.
-    writeU16Test(&bytes, 66, 1); // CBDT image format 1 is not PNG data.
-    writeU32Test(&bytes, 68, 0);
-    writeU16Test(&bytes, 72, 0);
-    writeU16Test(&bytes, 74, 4);
-
-    const cblc = TableRecord{ .tag = .{ 'C', 'B', 'L', 'C' }, .checksum = 0, .offset = 0, .length = 76 };
-    const cbdt = TableRecord{ .tag = .{ 'C', 'B', 'D', 'T' }, .checksum = 0, .offset = 76, .length = 4 };
-    try std.testing.expectEqual(@as(?BitmapGlyphPng, null), try cblcGlyphPng(&bytes, cblc, cbdt, 2, 1, 16, .cblc_cbdt));
 }
 
 test "cmap format 4 idRangeOffset stays inside declared subtable length" {

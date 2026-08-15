@@ -10,4 +10,5 @@ test {
     _ = @import("math_aat_variation_tables.zig");
     _ = @import("../../../font/tests/bitmap/root.zig");
     _ = @import("../../../font/tests/cmap/root.zig");
+    _ = @import("../../../font/tests/truetype/root.zig");
 }

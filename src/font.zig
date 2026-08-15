@@ -12569,60 +12569,6 @@ test "simple glyf contours reject non-increasing end points" {
     try std.testing.expectError(error.InvalidGlyph, appendSimpleGlyph(&outline, null, &glyph_data, 2, Transform.identity(), null));
 }
 
-test "glyph outline API revalidates borrowed loca and glyf bytes" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        const loca_offset: usize = @intCast(try sfntTableOffset(bytes, "loca"));
-        writeU16Test(bytes, loca_offset, 7); // Makes glyph 0's loca entry decrease before glyph 1.
-        try std.testing.expectError(error.BadSfnt, font.glyphBounds(1));
-        try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
-    }
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        const glyf_offset: usize = @intCast(try sfntTableOffset(bytes, "glyf"));
-        // Glyph 0 is not requested below. Mutating its borrowed bytes after
-        // parsing must still be rejected before returning any glyph outline,
-        // because the Font object no longer owns an immutable glyf snapshot.
-        writeI16Test(bytes, glyf_offset, 1);
-        try std.testing.expectError(error.BadSfnt, font.glyphBounds(1));
-        try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
-    }
-}
-
-test "glyph outline API revalidates borrowed glyf checksum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildMinimalTtf(allocator);
-    defer allocator.free(bytes);
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    var outline = try font.glyphOutline(allocator, 1);
-    outline.deinit();
-
-    const glyf_offset: usize = @intCast(try sfntTableOffset(bytes, "glyf"));
-    const glyph_one = glyf_offset + 12;
-    // Keep the simple glyph grammar valid while changing a borrowed bounding
-    // box after parse. Lazy outline loading must reject the glyf table because
-    // it no longer matches the SFNT checksum that Font.parse accepted.
-    writeI16Test(bytes, glyph_one + 6, 600);
-    try std.testing.expectError(error.BadSfnt, font.glyphBounds(1));
-    try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 1));
-}
-
 test "simple glyf programs and coordinate streams validate at parse time" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -12794,57 +12740,6 @@ test "metric headers reject trailing bytes" {
     }));
 }
 
-test "horizontal metrics revalidate borrowed hhea bytes" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildMinimalTtf(allocator);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    const initial = try font.horizontalMetrics(1);
-    try std.testing.expectEqual(@as(u16, 800), initial.advance_width);
-
-    const hhea_offset: usize = @intCast(try sfntTableOffset(bytes, "hhea"));
-    writeU16Test(bytes, hhea_offset + 24, 1); // Reserved hhea fields must remain zero.
-    try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
-
-    writeU16Test(bytes, hhea_offset + 24, 0);
-    writeI16Test(bytes, hhea_offset + 4, 100);
-    writeI16Test(bytes, hhea_offset + 6, 200);
-    writeI16Test(bytes, hhea_offset + 8, 100);
-    try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
-
-    writeI16Test(bytes, hhea_offset + 4, 800);
-    writeI16Test(bytes, hhea_offset + 6, -200);
-    writeI16Test(bytes, hhea_offset + 8, 0);
-    writeU16Test(bytes, hhea_offset + 34, 1);
-    try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
-}
-
-test "horizontal metrics revalidate borrowed hmtx checksum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildMinimalTtf(allocator);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    const initial = try font.horizontalMetrics(1);
-    try std.testing.expectEqual(@as(u16, 800), initial.advance_width);
-
-    const hmtx_offset: usize = @intCast(try sfntTableOffset(bytes, "hmtx"));
-    // This mutation keeps the hmtx table length and metric count valid, and
-    // without checksum revalidation the lazy API would return a new advance
-    // width that Font.parse never authenticated.
-    writeU16Test(bytes, hmtx_offset + 4, 700);
-    try std.testing.expectError(error.BadSfnt, font.horizontalMetrics(1));
-}
-
 test "vertical metric tables validate paired count and vmtx length at parse time" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -12911,75 +12806,6 @@ test "vertical metric tables validate paired count and vmtx length at parse time
         defer font.deinit();
         try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
     }
-}
-
-test "vertical metrics revalidate borrowed vmtx checksum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    const initial = (try font.verticalMetrics(0)) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u16, 1000), initial.advance_height);
-
-    const vmtx_offset: usize = @intCast(try sfntTableOffset(bytes, "vmtx"));
-    writeU16Test(bytes, vmtx_offset, 900);
-    try std.testing.expectError(error.BadSfnt, font.verticalMetrics(0));
-}
-
-test "vertical metrics API revalidates borrowed vhea and vmtx bytes" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expect(font.hasVerticalMetrics());
-    const first = (try font.verticalMetrics(0)).?;
-    try std.testing.expectEqual(@as(u16, 1000), first.advance_height);
-    try std.testing.expectEqual(@as(i16, 0), first.top_side_bearing);
-
-    const second = (try font.verticalMetrics(1)).?;
-    try std.testing.expectEqual(@as(u16, 1000), second.advance_height);
-    try std.testing.expectEqual(@as(i16, 0), second.top_side_bearing);
-    try std.testing.expectError(error.InvalidGlyph, font.verticalMetrics(2));
-
-    const vhea_offset: usize = @intCast(try sfntTableOffset(bytes, "vhea"));
-    writeU16Test(bytes, vhea_offset + 24, 1); // Reserved vhea fields must remain zero.
-    try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
-
-    writeU16Test(bytes, vhea_offset + 24, 0);
-    writeI16Test(bytes, vhea_offset + 4, 100);
-    writeI16Test(bytes, vhea_offset + 6, 200);
-    writeI16Test(bytes, vhea_offset + 8, 100);
-    try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
-
-    writeI16Test(bytes, vhea_offset + 4, 800);
-    writeI16Test(bytes, vhea_offset + 6, -200);
-    writeI16Test(bytes, vhea_offset + 8, 0);
-    writeU16Test(bytes, vhea_offset + 34, 2); // The borrowed vmtx table has only one full metric.
-    try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
-}
-
-test "vertical metrics API reports absence without requiring vertical tables" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildMinimalTtf(allocator);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expect(!font.hasVerticalMetrics());
-    try std.testing.expectEqual(@as(?VerticalMetrics, null), try font.verticalMetrics(0));
 }
 
 test "loca offsets are validated against glyf at parse time" {

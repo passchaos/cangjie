@@ -2,11 +2,11 @@
 
 const std = @import("std");
 
-const bin = @import("../../../../../binary.zig");
-const bases = @import("bases.zig");
-const layers = @import("layers.zig");
-const paint = @import("paint/root.zig");
-const types = @import("types.zig");
+const bin = @import("../../../../../../binary.zig");
+const bases = @import("../bases.zig");
+const layers = @import("../layers.zig");
+const paint = @import("../paint/root.zig");
+const types = @import("../types.zig");
 
 pub fn validate(
     data: []const u8,

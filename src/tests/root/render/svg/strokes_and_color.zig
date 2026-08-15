@@ -1,7 +1,7 @@
 //! Integration coverage migrated from the former package root.
 
 const std = @import("std");
-const support = @import("../support.zig");
+const support = @import("../../support.zig");
 const LayoutBuffer = support.LayoutBuffer;
 const TextShaper = support.TextShaper;
 const Font = support.Font;
@@ -13,7 +13,7 @@ const testing = support.testing;
 
 test "renders OpenType SVG rect and circle strokes" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgStrokeTtf(allocator);
     defer allocator.free(bytes);
@@ -51,7 +51,7 @@ test "renders OpenType SVG rect and circle strokes" {
 
 test "renders OpenType SVG stroke line caps" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgLineCapTtf(allocator);
     defer allocator.free(bytes);
@@ -78,7 +78,7 @@ test "renders OpenType SVG stroke line caps" {
 
 test "renders OpenType SVG dashed strokes" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgDashTtf(allocator);
     defer allocator.free(bytes);
@@ -110,7 +110,7 @@ test "renders OpenType SVG dashed strokes" {
 
 test "renders OpenType SVG dash offsets" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgDashOffsetTtf(allocator);
     defer allocator.free(bytes);
@@ -133,7 +133,7 @@ test "renders OpenType SVG dash offsets" {
 
 test "renders OpenType SVG round stroke joins" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgLineJoinTtf(allocator);
     defer allocator.free(bytes);
@@ -164,7 +164,7 @@ test "renders OpenType SVG round stroke joins" {
 
 test "renders OpenType SVG defs and use references" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgUseTtf(allocator);
     defer allocator.free(bytes);
@@ -200,7 +200,7 @@ test "renders OpenType SVG defs and use references" {
 
 test "renders OpenType SVG rect clip paths" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgClipTtf(allocator);
     defer allocator.free(bytes);
@@ -237,7 +237,7 @@ test "renders OpenType SVG rect clip paths" {
 
 test "renders OpenType SVG alpha masks" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgMaskTtf(allocator);
     defer allocator.free(bytes);
@@ -288,7 +288,7 @@ test "renders OpenType SVG alpha masks" {
 
 test "honors OpenType SVG display and visibility" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgVisibilityTtf(allocator);
     defer allocator.free(bytes);
@@ -317,7 +317,7 @@ test "honors OpenType SVG display and visibility" {
 
 test "renders OpenType SVG path strokes" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgPathStrokeTtf(allocator);
     defer allocator.free(bytes);
@@ -352,7 +352,7 @@ test "renders OpenType SVG path strokes" {
 
 test "renders OpenType SVG line polyline and polygon shapes" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgPolylineTtf(allocator);
     defer allocator.free(bytes);
@@ -382,7 +382,7 @@ test "renders OpenType SVG line polyline and polygon shapes" {
 
 test "renders OpenType SVG ellipse fill and stroke" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgEllipseTtf(allocator);
     defer allocator.free(bytes);
@@ -417,7 +417,7 @@ test "renders OpenType SVG ellipse fill and stroke" {
 
 test "renders OpenType SVG linear gradient fills" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgGradientTtf(allocator);
     defer allocator.free(bytes);
@@ -445,7 +445,7 @@ test "renders OpenType SVG linear gradient fills" {
 
 test "renders OpenType SVG radial gradient fills" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgRadialGradientTtf(allocator);
     defer allocator.free(bytes);
@@ -472,7 +472,7 @@ test "renders OpenType SVG radial gradient fills" {
 
 test "renders OpenType SVG gradient spread methods" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgGradientSpreadTtf(allocator);
     defer allocator.free(bytes);
@@ -500,7 +500,7 @@ test "renders OpenType SVG gradient spread methods" {
 
 test "renders OpenType SVG gradient transforms" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildSvgGradientTransformTtf(allocator);
     defer allocator.free(bytes);
@@ -522,7 +522,7 @@ test "renders OpenType SVG gradient transforms" {
 
 test "renders COLR glyph layers into an RGBA target" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildColorTtf(allocator);
     defer allocator.free(bytes);
@@ -552,7 +552,7 @@ test "renders COLR glyph layers into an RGBA target" {
 
 test "renders shaped text with COLR glyph layers into an RGBA target" {
     const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
+    const test_font = @import("../../../../test_font.zig");
 
     const bytes = try test_font.buildColorTtf(allocator);
     defer allocator.free(bytes);

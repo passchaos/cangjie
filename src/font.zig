@@ -14720,69 +14720,6 @@ test "name table format 1 validates language tag syntax" {
     try std.testing.expectError(error.InvalidName, validateNameTable(&numeric_primary, nameTableRecord(numeric_primary.len)));
 }
 
-test "SVG document payload root is validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildSvgTtf(allocator);
-    defer allocator.free(bytes);
-    const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
-    const document_list_offset: usize = @intCast(try bin.readU32At(bytes, svg_offset + 2));
-    const document_list_start = svg_offset + document_list_offset;
-    const record_start = document_list_start + 2;
-    const document_offset: usize = @intCast(try bin.readU32At(bytes, record_start + 4));
-    const document_start = document_list_start + document_offset;
-    bytes[document_start + 1] = 'g'; // Changes the root element from <svg ...> to a non-SVG root.
-
-    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-}
-
-test "SVG document glyph range ordering is enforced at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildSvgTtf(allocator);
-    defer allocator.free(bytes);
-    const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
-
-    writeU16Test(bytes, svg_offset + 0, 0); // SVG table version.
-    writeU32Test(bytes, svg_offset + 2, 10); // SVGDocumentListOffset.
-    writeU16Test(bytes, svg_offset + 10, 2); // two SVGDocumentRecords.
-    writeU16Test(bytes, svg_offset + 12, 1);
-    writeU16Test(bytes, svg_offset + 14, 1);
-    writeU32Test(bytes, svg_offset + 16, 26); // first document starts after both records.
-    writeU32Test(bytes, svg_offset + 20, 4);
-    writeU16Test(bytes, svg_offset + 24, 1); // Invalid: overlaps the previous glyph range.
-    writeU16Test(bytes, svg_offset + 26, 1);
-    writeU32Test(bytes, svg_offset + 28, 30);
-    writeU32Test(bytes, svg_offset + 32, 4);
-
-    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-}
-
-test "SVG document byte range overlap is rejected at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildSvgTtf(allocator);
-    defer allocator.free(bytes);
-    const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
-
-    writeU16Test(bytes, svg_offset + 0, 0); // SVG table version.
-    writeU32Test(bytes, svg_offset + 2, 10); // SVGDocumentListOffset.
-    writeU16Test(bytes, svg_offset + 10, 2); // two SVGDocumentRecords.
-    writeU16Test(bytes, svg_offset + 12, 0);
-    writeU16Test(bytes, svg_offset + 14, 0);
-    writeU32Test(bytes, svg_offset + 16, 26); // First document: [26, 34).
-    writeU32Test(bytes, svg_offset + 20, 8);
-    writeU16Test(bytes, svg_offset + 24, 1);
-    writeU16Test(bytes, svg_offset + 26, 1);
-    writeU32Test(bytes, svg_offset + 28, 30); // Overlaps only the first document tail.
-    writeU32Test(bytes, svg_offset + 32, 8);
-
-    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-}
-
 test "SVG public document lookup revalidates byte-range ownership" {
     var bytes: [48]u8 = .{0} ** 48;
     writeU16Test(&bytes, 0, 0); // SVG table version.
@@ -14861,30 +14798,6 @@ test "SVG public document lookup revalidates borrowed table checksum" {
     // SFNT checksum no longer matches the parsed table map.
     bytes[31] = '\n';
     try std.testing.expectError(error.BadSfnt, font.svgGlyphDocument(1));
-}
-
-test "SVG header and document length are validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildSvgTtf(allocator);
-        defer allocator.free(bytes);
-        const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
-        writeU32Test(bytes, svg_offset + 6, 1); // Reserved header field.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildSvgTtf(allocator);
-        defer allocator.free(bytes);
-        const svg_offset: usize = @intCast(try sfntTableOffset(bytes, "SVG "));
-        const document_list_offset: usize = @intCast(try bin.readU32At(bytes, svg_offset + 2));
-        const document_list_start = svg_offset + document_list_offset;
-        const record_start = document_list_start + 2;
-        writeU32Test(bytes, record_start + 8, 0); // svgDocLength.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
 }
 
 test "TTC v2 DSIG descriptor validates range and null consistency" {

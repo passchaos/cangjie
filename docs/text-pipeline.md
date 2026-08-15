@@ -170,6 +170,17 @@ The stage returns explicit run properties to the GSUB planner rather than
 leaving cmap-local flags and temporary glyph state inside one monolithic
 shaping function.
 
+Shared GSUB infrastructure is grouped under `src/shaping/pipeline/gsub/`:
+
+- `executor.zig` centralizes proof-aware, cached, ordered, and merged feature
+  execution.
+- `features.zig` normalizes public feature overrides into GSUB applications.
+- `hangul.zig` owns Jamo source masks and cluster merging.
+- `fraction.zig` owns source-scoped numerator/fraction/denominator masks.
+
+Script shapers now share this small execution surface instead of duplicating
+cache/proof branches inside the main segment function.
+
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 

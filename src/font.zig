@@ -34,6 +34,7 @@ const sfnt = @import("font/sfnt/root.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
 const colr_v0_mod = color_tables.colr_v0;
+const colr_v1_mod = color_tables.colr_v1;
 const cpal_mod = color_tables.cpal;
 const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
@@ -761,6 +762,10 @@ fn colrV0Table(record: TableRecord) colr_v0_mod.Table {
     return .{ .offset = record.offset, .length = record.length };
 }
 
+fn colrV1Table(record: TableRecord) colr_v1_mod.Table {
+    return .{ .offset = record.offset, .length = record.length };
+}
+
 const NameIdIndex = name_mod.NameIdIndex;
 
 fn nameTableView(record: TableRecord) name_mod.Table {
@@ -1378,7 +1383,10 @@ pub const Font = struct {
         if (ift) |ift_table| try validateIftPatchMapTable(data, ift_table);
         if (iftx) |iftx_table| try validateIftPatchMapTable(data, iftx_table);
         if (colr) |colr_table| {
-            try validateColrV1TopLevelStructuralRanges(data, colr_table);
+            try colr_v1_mod.validateTopLevel(
+                data,
+                colrV1Table(colr_table),
+            );
             try validateColrVariationData(data, colr_table, fvar, glyph_count);
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
@@ -3894,49 +3902,74 @@ pub const Font = struct {
         const colr = self.colr orelse return null;
         try sfnt.checksum.validate(self.data, colr);
         if (colr.length < 34 or try bin.readU16At(self.data, colr.offset) != 1) return null;
-        try validateColrV1ClipList(self.data, colr, self.glyph_count);
-        const clip_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 22));
-        if (clip_list_offset == 0) return null;
-        const clip_list_start = colr.offset + clip_list_offset;
-        const clip_count: usize = @intCast(try bin.readU32At(self.data, clip_list_start + 1));
-        const records_start = clip_list_start + 5;
-        var low: usize = 0;
-        var high: usize = clip_count;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const record = records_start + mid * 7;
-            const start_glyph = try bin.readU16At(self.data, record);
-            const end_glyph = try bin.readU16At(self.data, record + 2);
-            if (glyph_id < start_glyph) {
-                high = mid;
-            } else if (glyph_id > end_glyph) {
-                low = mid + 1;
-            } else {
-                const relative: usize = @intCast(try readU24At(self.data, record + 4));
-                const box = clip_list_start + relative;
-                var result = ColorClipBox{
-                    .x_min = @floatFromInt(try bin.readI16At(self.data, box + 1)),
-                    .y_min = @floatFromInt(try bin.readI16At(self.data, box + 3)),
-                    .x_max = @floatFromInt(try bin.readI16At(self.data, box + 5)),
-                    .y_max = @floatFromInt(try bin.readI16At(self.data, box + 7)),
-                };
-                if (self.data[box] == 1) return result;
-
-                const var_index_base = try bin.readU32At(self.data, box + 9);
-                if (normalizedVariationCoordinatesAreDefault(normalized_coords) or var_index_base == no_colr_variation_index) return result;
-                // The Font borrows its backing bytes, so repeat cross-reference
-                // validation immediately before dereferencing a variation row.
-                // Static boxes stay on the cheaper ClipList-only path.
-                try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
-                const context = (try readColrVariationContext(self.data, colr)) orelse return error.BadSfnt;
-                result.x_min += @floatCast(try colrVariationDelta(self.data, colr, context, var_index_base, 0, normalized_coords));
-                result.y_min += @floatCast(try colrVariationDelta(self.data, colr, context, var_index_base, 1, normalized_coords));
-                result.x_max += @floatCast(try colrVariationDelta(self.data, colr, context, var_index_base, 2, normalized_coords));
-                result.y_max += @floatCast(try colrVariationDelta(self.data, colr, context, var_index_base, 3, normalized_coords));
-                return result;
-            }
+        const list = (try colr_v1_mod.validateClipList(
+            self.data,
+            colrV1Table(colr),
+            self.glyph_count,
+        )) orelse return null;
+        const box = (try colr_v1_mod.clipBoxForGlyph(
+            self.data,
+            colrV1Table(colr),
+            list,
+            glyph_id,
+        )) orelse return null;
+        var result = ColorClipBox{
+            .x_min = @floatFromInt(box.x_min),
+            .y_min = @floatFromInt(box.y_min),
+            .x_max = @floatFromInt(box.x_max),
+            .y_max = @floatFromInt(box.y_max),
+        };
+        const var_index_base = box.var_index_base orelse return result;
+        if (normalizedVariationCoordinatesAreDefault(normalized_coords) or
+            var_index_base == no_colr_variation_index)
+        {
+            return result;
         }
-        return null;
+        // The Font borrows its backing bytes, so repeat cross-reference
+        // validation immediately before dereferencing a variation row. Static
+        // boxes stay on the cheaper ClipList-only path.
+        try validateColrVariationData(
+            self.data,
+            colr,
+            self.fvar,
+            self.glyph_count,
+        );
+        const context =
+            (try readColrVariationContext(self.data, colr)) orelse
+            return error.BadSfnt;
+        result.x_min += @floatCast(try colrVariationDelta(
+            self.data,
+            colr,
+            context,
+            var_index_base,
+            0,
+            normalized_coords,
+        ));
+        result.y_min += @floatCast(try colrVariationDelta(
+            self.data,
+            colr,
+            context,
+            var_index_base,
+            1,
+            normalized_coords,
+        ));
+        result.x_max += @floatCast(try colrVariationDelta(
+            self.data,
+            colr,
+            context,
+            var_index_base,
+            2,
+            normalized_coords,
+        ));
+        result.y_max += @floatCast(try colrVariationDelta(
+            self.data,
+            colr,
+            context,
+            var_index_base,
+            3,
+            normalized_coords,
+        ));
+        return result;
     }
 
     fn validateColorPaletteIndex(self: *const Font, color_index: u16) FontError!void {
@@ -10884,7 +10917,11 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
 
 fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
     if (colr.length < 34) return error.BadSfnt;
-    try validateColrV1ClipList(data, colr, glyph_count);
+    _ = try colr_v1_mod.validateClipList(
+        data,
+        colrV1Table(colr),
+        glyph_count,
+    );
 
     const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
     var base_glyph_set: ?ColrV1BaseGlyphSet = null;
@@ -10940,162 +10977,7 @@ fn validateColrV1OptionalOffset(offset: usize, colr: TableRecord, min_size: usiz
     if (offset < 34 or offset > colr.length or min_size > colr.length - offset) return error.BadSfnt;
 }
 
-const ColrV1StructuralRange = struct {
-    start: usize,
-    end: usize,
-};
-
-const max_colr_clip_box_owned_ranges = 2048;
-
-const ColrClipBoxOwnership = struct {
-    ranges: [max_colr_clip_box_owned_ranges]ColrV1StructuralRange = undefined,
-    count: usize = 0,
-
-    fn claim(self: *ColrClipBoxOwnership, range: ColrV1StructuralRange) FontError!void {
-        if (range.start >= range.end) return error.BadSfnt;
-        for (self.ranges[0..self.count]) |owned| {
-            if (range.start == owned.start and range.end == owned.end) return;
-            if (colrRangesOverlap(range, owned)) return error.BadSfnt;
-        }
-        if (self.count == self.ranges.len) return error.BadSfnt;
-        self.ranges[self.count] = range;
-        self.count += 1;
-    }
-};
-
-fn validateColrV1TopLevelStructuralRanges(data: []const u8, colr: TableRecord) FontError!void {
-    if (colr.length < 2) return error.BadSfnt;
-    const version = try bin.readU16At(data, colr.offset);
-    if (version != 1) return;
-    if (colr.length < 34) return error.BadSfnt;
-
-    var ranges: [3]ColrV1StructuralRange = undefined;
-    var count: usize = 0;
-
-    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
-    if (base_glyph_list_offset != 0) {
-        ranges[count] = try colrV1BaseGlyphListStructuralRange(data, colr, base_glyph_list_offset);
-        count += 1;
-    }
-
-    const layer_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 18));
-    if (layer_list_offset != 0) {
-        ranges[count] = try colrV1LayerListStructuralRange(data, colr, layer_list_offset);
-        count += 1;
-    }
-
-    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
-    if (clip_list_offset != 0) {
-        ranges[count] = try colrV1ClipListStructuralRange(data, colr, clip_list_offset);
-        count += 1;
-    }
-
-    for (ranges[0..count], 0..) |lhs, lhs_index| {
-        for (ranges[lhs_index + 1 .. count]) |rhs| {
-            // These offsets name distinct top-level COLR v1 child tables. Their
-            // count/record arrays define how later relative offsets are
-            // interpreted, so even a zero-count alias must be rejected instead
-            // of letting one optional table borrow another table's header bytes.
-            if (colrRangesOverlap(lhs, rhs)) return error.BadSfnt;
-        }
-    }
-}
-
-fn colrV1BaseGlyphListStructuralRange(data: []const u8, colr: TableRecord, offset: usize) FontError!ColrV1StructuralRange {
-    try validateColrV1OptionalOffset(offset, colr, 4);
-    const start = colr.offset + offset;
-    const record_count: usize = @intCast(try bin.readU32At(data, start));
-    const records_start = start + 4;
-    if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
-    return .{ .start = offset, .end = offset + 4 + record_count * 6 };
-}
-
-fn colrV1LayerListStructuralRange(data: []const u8, colr: TableRecord, offset: usize) FontError!ColrV1StructuralRange {
-    try validateColrV1OptionalOffset(offset, colr, 4);
-    const start = colr.offset + offset;
-    const layer_count: usize = @intCast(try bin.readU32At(data, start));
-    const offsets_start = start + 4;
-    if (layer_count > (colr.offset + colr.length - offsets_start) / 4) return error.BadSfnt;
-    return .{ .start = offset, .end = offset + 4 + layer_count * 4 };
-}
-
-fn colrV1ClipListStructuralRange(data: []const u8, colr: TableRecord, offset: usize) FontError!ColrV1StructuralRange {
-    try validateColrV1OptionalOffset(offset, colr, 5);
-    const start = colr.offset + offset;
-    const format = data[start];
-    if (format != 1) return error.BadSfnt;
-    const clip_count: usize = @intCast(try bin.readU32At(data, start + 1));
-    const records_start = start + 5;
-    if (clip_count > (colr.offset + colr.length - records_start) / 7) return error.BadSfnt;
-    return .{ .start = offset, .end = offset + 5 + clip_count * 7 };
-}
-
-fn colrRangesOverlap(lhs: ColrV1StructuralRange, rhs: ColrV1StructuralRange) bool {
-    return lhs.start < rhs.end and rhs.start < lhs.end;
-}
-
-fn validateColrV1ClipList(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
-    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
-    if (clip_list_offset == 0) return;
-
-    // ClipList is one of COLR v1's optional offset subtables. Its offsets are
-    // relative to the ClipList table, not to COLR, and must not alias the
-    // ClipRecord array. Validate it while parsing so later renderers can trust
-    // clip metadata rather than reinterpreting records as ClipBox payload.
-    try validateColrV1OptionalOffset(clip_list_offset, colr, 5);
-    const clip_list_start = colr.offset + clip_list_offset;
-    const format = data[clip_list_start];
-    if (format != 1) return error.BadSfnt;
-
-    const clip_count: usize = @intCast(try bin.readU32At(data, clip_list_start + 1));
-    const records_start = clip_list_start + 5;
-    if (clip_count > (colr.offset + colr.length - records_start) / 7) return error.BadSfnt;
-    const clip_data_start = 5 + clip_count * 7;
-
-    var previous_end_glyph: ?u16 = null;
-    var clip_box_ownership = ColrClipBoxOwnership{};
-    for (0..clip_count) |index| {
-        const record = records_start + index * 7;
-        const start_glyph = try bin.readU16At(data, record);
-        const end_glyph = try bin.readU16At(data, record + 2);
-        if (start_glyph > end_glyph) return error.BadSfnt;
-        try validateGlyphIdInMaxp(start_glyph, glyph_count);
-        try validateGlyphIdInMaxp(end_glyph, glyph_count);
-        if (previous_end_glyph) |previous| {
-            if (start_glyph <= previous) return error.BadSfnt;
-        }
-        previous_end_glyph = end_glyph;
-
-        const clip_box_offset: usize = @intCast(try readU24At(data, record + 4));
-        if (clip_box_offset < clip_data_start) return error.BadSfnt;
-        if (clip_box_offset > colr.length - clip_list_offset) return error.BadSfnt;
-        const clip_box_range = try validateColrV1ClipBox(data, colr, clip_list_start + clip_box_offset);
-        try clip_box_ownership.claim(clip_box_range);
-    }
-}
-
-fn validateColrV1ClipBox(data: []const u8, colr: TableRecord, offset: usize) FontError!ColrV1StructuralRange {
-    const colr_end = colr.offset + colr.length;
-    if (offset >= colr_end) return error.BadSfnt;
-
-    const min_size: usize = switch (data[offset]) {
-        1 => 9,
-        2 => 13,
-        else => return error.BadSfnt,
-    };
-    if (min_size > colr_end - offset) return error.BadSfnt;
-
-    const x_min = try bin.readI16At(data, offset + 1);
-    const y_min = try bin.readI16At(data, offset + 3);
-    const x_max = try bin.readI16At(data, offset + 5);
-    const y_max = try bin.readI16At(data, offset + 7);
-    if (x_min > x_max or y_min > y_max) return error.BadSfnt;
-
-    // ClipRecords may share an identical ClipBox. Partially-overlapping boxes
-    // remain ambiguous because the same bytes would then be decoded at
-    // different typed boundaries.
-    return .{ .start = offset - colr.offset, .end = offset - colr.offset + min_size };
-}
+const ColrV1StructuralRange = colr_v1_mod.Range;
 
 const DeltaSetIndexMapInfo = struct {
     offset: usize,
@@ -11326,20 +11208,20 @@ fn validateColrVariationTopLevelRanges(store_offset: usize, store_end_offset: us
 fn validateColrVariationRangeDisjointFromOwnedColrData(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
     const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
     if (base_glyph_list_offset != 0) {
-        const structural_range = try colrV1BaseGlyphListStructuralRange(data, colr, base_glyph_list_offset);
-        if (colrRangesOverlap(variation_range, structural_range)) return error.BadSfnt;
+        const structural_range = try colr_v1_mod.baseGlyphListRange(data, colrV1Table(colr), base_glyph_list_offset);
+        if (colr_v1_mod.overlaps(variation_range, structural_range)) return error.BadSfnt;
     }
 
     const layer_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 18));
     if (layer_list_offset != 0) {
-        const structural_range = try colrV1LayerListStructuralRange(data, colr, layer_list_offset);
-        if (colrRangesOverlap(variation_range, structural_range)) return error.BadSfnt;
+        const structural_range = try colr_v1_mod.layerListRange(data, colrV1Table(colr), layer_list_offset);
+        if (colr_v1_mod.overlaps(variation_range, structural_range)) return error.BadSfnt;
     }
 
     const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
     if (clip_list_offset != 0) {
-        const structural_range = try colrV1ClipListStructuralRange(data, colr, clip_list_offset);
-        if (colrRangesOverlap(variation_range, structural_range)) return error.BadSfnt;
+        const structural_range = try colr_v1_mod.clipListRange(data, colrV1Table(colr), clip_list_offset);
+        if (colr_v1_mod.overlaps(variation_range, structural_range)) return error.BadSfnt;
     }
 
     try validateColrVariationRangeDisjointFromClipBoxes(data, colr, variation_range);
@@ -11347,29 +11229,23 @@ fn validateColrVariationRangeDisjointFromOwnedColrData(data: []const u8, colr: T
 }
 
 fn validateColrVariationRangeDisjointFromClipBoxes(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
-    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
-    if (clip_list_offset == 0) return;
-    try validateColrV1OptionalOffset(clip_list_offset, colr, 5);
-
-    const clip_list_start = colr.offset + clip_list_offset;
-    if (data[clip_list_start] != 1) return error.BadSfnt;
-    const clip_count: usize = @intCast(try bin.readU32At(data, clip_list_start + 1));
-    const records_start = clip_list_start + 5;
-    if (clip_count > (colr.offset + colr.length - records_start) / 7) return error.BadSfnt;
-    const clip_data_start = 5 + clip_count * 7;
-
-    for (0..clip_count) |index| {
-        const record = records_start + index * 7;
-        const clip_box_offset: usize = @intCast(try readU24At(data, record + 4));
-        if (clip_box_offset < clip_data_start) return error.BadSfnt;
-        if (clip_box_offset > colr.length - clip_list_offset) return error.BadSfnt;
-        const clip_box_range = try validateColrV1ClipBox(data, colr, clip_list_start + clip_box_offset);
+    const list = (try colr_v1_mod.clipListDirectory(
+        data,
+        colrV1Table(colr),
+    )) orelse return;
+    for (0..list.count) |index| {
+        const clip_box_range = (try colr_v1_mod.clipBoxAtIndex(
+            data,
+            colrV1Table(colr),
+            list,
+            index,
+        )).range;
         // ItemVariationStore and VarIndexMap are top-level COLR payloads, not
         // scratch space inside ClipBox bounds or varIndexBase fields. Keeping
         // these ranges disjoint preserves ClipRecord ownership even when the
         // overlapping bytes can be decoded as both a valid ClipBox and a valid
         // variation subtable.
-        if (colrRangesOverlap(variation_range, clip_box_range)) return error.BadSfnt;
+        if (colr_v1_mod.overlaps(variation_range, clip_box_range)) return error.BadSfnt;
     }
 }
 
@@ -11493,32 +11369,27 @@ fn validateColrVariationIndexSequence(data: []const u8, colr: TableRecord, conte
 }
 
 fn validateColrV1ClipListVariationRefs(data: []const u8, colr: TableRecord, glyph_count: u16, context: ?*const ColrVariationContext) FontError!void {
-    const clip_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 22));
-    if (clip_list_offset == 0) return;
-    try validateColrV1OptionalOffset(clip_list_offset, colr, 5);
-
-    const clip_list_start = colr.offset + clip_list_offset;
-    if (data[clip_list_start] != 1) return error.BadSfnt;
-    const clip_count: usize = @intCast(try bin.readU32At(data, clip_list_start + 1));
-    const records_start = clip_list_start + 5;
-    if (clip_count > (colr.offset + colr.length - records_start) / 7) return error.BadSfnt;
-    const clip_data_start = 5 + clip_count * 7;
-
-    for (0..clip_count) |index| {
-        const record = records_start + index * 7;
-        try validateGlyphIdInMaxp(try bin.readU16At(data, record), glyph_count);
-        try validateGlyphIdInMaxp(try bin.readU16At(data, record + 2), glyph_count);
-        const clip_box_offset: usize = @intCast(try readU24At(data, record + 4));
-        if (clip_box_offset < clip_data_start) return error.BadSfnt;
-        if (clip_box_offset > colr.length - clip_list_offset) return error.BadSfnt;
-        try validateColrV1ClipBoxVariationRefs(data, colr, clip_list_start + clip_box_offset, context);
+    const list = (try colr_v1_mod.validateClipList(
+        data,
+        colrV1Table(colr),
+        glyph_count,
+    )) orelse return;
+    for (0..list.count) |index| {
+        const box = try colr_v1_mod.clipBoxAtIndex(
+            data,
+            colrV1Table(colr),
+            list,
+            index,
+        );
+        const var_index_base = box.var_index_base orelse continue;
+        try validateColrVariationIndexSequence(
+            data,
+            colr,
+            context,
+            var_index_base,
+            4,
+        );
     }
-}
-
-fn validateColrV1ClipBoxVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext) FontError!void {
-    _ = try validateColrV1ClipBox(data, colr, offset);
-    if (data[offset] != 2) return;
-    try validateColrVariationIndexSequence(data, colr, context, try bin.readU32At(data, offset + 9), 4);
 }
 
 fn validateColorPaintVariationRefs(data: []const u8, colr: TableRecord, offset: usize, context: ?*const ColrVariationContext, guard: *ColorPaintGraphGuard) FontError!void {
@@ -17312,53 +17183,6 @@ test "COLR v1 optional top-level tables cannot alias one another" {
     writeU32Test(bytes, colr_offset + 34, 0); // Both zero-count headers would otherwise parse.
 
     try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-}
-
-test "COLR v1 ClipList allows shared but not partially overlapping ClipBoxes" {
-    var bytes: [92]u8 = .{0} ** 92;
-    writeU16Test(&bytes, 0, 1); // COLR version 1.
-    writeU32Test(&bytes, 22, 34); // ClipListOffset.
-
-    const clip_list = 34;
-    bytes[clip_list] = 1; // ClipList format 1.
-    writeU32Test(&bytes, clip_list + 1, 2);
-    writeU16Test(&bytes, clip_list + 5, 0);
-    writeU16Test(&bytes, clip_list + 7, 0);
-    writeU24Test(&bytes, clip_list + 9, 19); // First ClipBox at byte 53.
-    writeU16Test(&bytes, clip_list + 12, 1);
-    writeU16Test(&bytes, clip_list + 14, 1);
-    writeU24Test(&bytes, clip_list + 16, 28); // Second ClipBox starts exactly after the first.
-
-    const first_box = clip_list + 19;
-    bytes[first_box] = 1; // ClipBox format 1.
-    writeI16Test(&bytes, first_box + 1, 0);
-    writeI16Test(&bytes, first_box + 3, 0);
-    writeI16Test(&bytes, first_box + 5, 10);
-    writeI16Test(&bytes, first_box + 7, 10);
-
-    const second_box = clip_list + 28;
-    bytes[second_box] = 1;
-    writeI16Test(&bytes, second_box + 1, 20);
-    writeI16Test(&bytes, second_box + 3, 20);
-    writeI16Test(&bytes, second_box + 5, 30);
-    writeI16Test(&bytes, second_box + 7, 30);
-
-    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = second_box + 9 };
-    try validateColrGlyphBounds(&bytes, colr, 2);
-
-    var duplicate_box = bytes;
-    writeU24Test(&duplicate_box, clip_list + 16, 19); // Two ClipRecords reuse the same ClipBox payload.
-    try validateColrGlyphBounds(&duplicate_box, colr, 2);
-
-    var partial_overlap = bytes;
-    writeU24Test(&partial_overlap, clip_list + 16, 23); // Starts inside the first ClipBox payload.
-    const overlapping_box = clip_list + 23;
-    partial_overlap[overlapping_box] = 1; // Keep the aliased byte looking like a plausible ClipBox header.
-    writeI16Test(&partial_overlap, overlapping_box + 1, 0);
-    writeI16Test(&partial_overlap, overlapping_box + 3, 1);
-    writeI16Test(&partial_overlap, overlapping_box + 5, 10);
-    writeI16Test(&partial_overlap, overlapping_box + 7, 10);
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&partial_overlap, colr, 2));
 }
 
 test "COLR v1 variable ClipBoxes own varIndexBase bytes" {

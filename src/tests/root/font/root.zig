@@ -9,4 +9,5 @@ test {
     _ = @import("font_validation.zig");
     _ = @import("math_aat_variation_tables.zig");
     _ = @import("../../../font/tests/bitmap/root.zig");
+    _ = @import("../../../font/tests/cmap/root.zig");
 }

@@ -1,4 +1,4 @@
-//! Binary helpers shared by embedded-bitmap integration fixtures.
+//! Binary helpers shared by integration tests that mutate SFNT fixtures.
 
 const std = @import("std");
 
@@ -33,6 +33,10 @@ pub fn tableOffset(
 
 pub fn writeU16(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+pub fn writeI16(bytes: []u8, offset: usize, value: i16) void {
+    std.mem.writeInt(i16, bytes[offset..][0..2], value, .big);
 }
 
 pub fn writeU32(bytes: []u8, offset: usize, value: u32) void {

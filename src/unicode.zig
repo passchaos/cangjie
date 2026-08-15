@@ -4,14 +4,15 @@ const grapheme_boundary = @import("unicode/grapheme/iterator.zig");
 const word_boundary = @import("unicode/word/iterator.zig");
 const word_selection = @import("unicode/word/selection.zig");
 const sentence_boundary = @import("unicode/sentence/iterator.zig");
+const bidi_paragraph = @import("unicode/bidi/paragraph.zig");
 const canonical_combining_class = @import("unicode/canonical_combining_class.zig");
 const canonical_decomposition = @import("unicode/canonical_decomposition.zig");
 const nonspacing_mark = @import("unicode/nonspacing_mark.zig");
 
 /// Lightweight Unicode helpers used by the shaping/layout layers.
-/// The tables are intentionally compact and cover the scripts and boundaries
-/// currently exercised by Cangjie; they are not a replacement for the full UAX
-/// datasets yet.
+/// Boundary segmentation and bidirectional analysis use generated Unicode 17
+/// datasets. Script and shaping-specific helper tables remain intentionally
+/// focused on the scripts supported by Cangjie's OpenType pipeline.
 pub const Script = enum {
     common,
     inherited,
@@ -111,6 +112,11 @@ pub const BidiClass = enum {
     number,
     neutral,
 };
+
+pub const ExactBidiClass = bidi_paragraph.Class;
+pub const BidiBaseDirection = bidi_paragraph.BaseDirection;
+pub const BidiParagraph = bidi_paragraph.Paragraph;
+pub const bidi_unicode_version = bidi_paragraph.unicode_version;
 
 /// Unicode Joining_Type values used by cursive-script shaping.
 ///
@@ -535,6 +541,12 @@ pub const BidiMap = struct {
         if (logical_index >= self.logical_to_visual.len) return null;
         return self.logical_to_visual[logical_index];
     }
+};
+
+const BidiCluster = struct {
+    scalar_start: usize,
+    scalar_end: usize,
+    level: u8,
 };
 
 pub fn isDefaultIgnorableForShaping(codepoint: u21) bool {
@@ -2054,9 +2066,13 @@ pub fn bidiClassForCodepoint(codepoint: u21) BidiClass {
     return bidiClassForScript(scriptForCodepoint(codepoint));
 }
 
+pub fn exactBidiClassForCodepoint(codepoint: u21) ExactBidiClass {
+    return bidi_paragraph.classForCodepoint(codepoint);
+}
+
 fn bidiClassFast(codepoint: u21) ?BidiClass {
-    // ASCII dominates Latin word-list and UI shaping. Its coarse bidi class is
-    // fully determined without consulting the much broader script classifier.
+    // This is the legacy four-class compatibility view, not the UAX #9 input
+    // classifier. Exact paragraph analysis uses the generated property table.
     if (codepoint <= 0x7f) {
         if (codepoint >= '0' and codepoint <= '9') return .number;
         if ((codepoint >= 'A' and codepoint <= 'Z') or
@@ -2071,204 +2087,130 @@ fn bidiClassFast(codepoint: u21) ?BidiClass {
     {
         return .number;
     }
-    // The Arabic and Hebrew predicates are the authoritative Script ranges
-    // used below by scriptForCodepoint. Checking them directly avoids walking
-    // every unrelated historic and LTR script for the common RTL path.
     if (isArabicScriptCodepoint(codepoint) or
         isHebrewScriptCodepoint(codepoint))
     {
         return .rtl;
     }
-    // The complete Devanagari block is the authoritative Script range used by
-    // `scriptForCodepoint` below, and its coarse bidi class is always LTR.
-    // Hindi word shaping performs a post-shape "contains RTL?" scan; handling
-    // this modern high-traffic block here avoids walking every unrelated
-    // historic script predicate for each scalar in that scan.
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .ltr;
     return null;
 }
 
 fn bidiClassForScript(script: Script) BidiClass {
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .ugaritic, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
 
-test "coarse bidi fast path matches script classification over Unicode" {
-    var value: u32 = 0;
-    while (value <= 0x10ffff) : (value += 1) {
-        const codepoint: u21 = @intCast(value);
-        const fast = bidiClassFast(codepoint) orelse continue;
-        const reference = if (isBidiNumberCodepoint(codepoint))
-            BidiClass.number
-        else
-            bidiClassForScript(scriptForCodepoint(codepoint));
-        try std.testing.expectEqual(reference, fast);
-    }
+test "coarse bidi compatibility view derives from exact Unicode 17 classes" {
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint('A'));
+    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x0628));
+    try std.testing.expectEqual(BidiClass.number, bidiClassForCodepoint('1'));
+    try std.testing.expectEqual(BidiClass.neutral, bidiClassForCodepoint(' '));
+    try std.testing.expectEqual(ExactBidiClass.lri, exactBidiClassForCodepoint(0x2066));
 }
 
 /// Resolve a paragraph base direction from the first strong character.
 /// Numbers and neutral formatting characters do not decide direction.
 pub fn paragraphDirection(text: []const u8) error{InvalidUtf8}!BidiClass {
     if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
+    var isolate_depth: usize = 0;
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (it.nextCodepoint()) |codepoint| {
-        const class = bidiClassForCodepoint(codepoint);
-        if (class == .ltr or class == .rtl) return class;
+        switch (exactBidiClassForCodepoint(codepoint)) {
+            .lri, .rli, .fsi => isolate_depth += 1,
+            .pdi => if (isolate_depth != 0) {
+                isolate_depth -= 1;
+            },
+            .l => if (isolate_depth == 0) return .ltr,
+            .r, .al => if (isolate_depth == 0) return .rtl,
+            .b => break,
+            else => {},
+        }
     }
     return .ltr;
 }
 
+pub fn resolveBidiParagraph(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    base_direction: BidiBaseDirection,
+) !BidiParagraph {
+    return bidi_paragraph.resolve(allocator, text, base_direction);
+}
+
 pub fn itemizeBidiRuns(allocator: std.mem.Allocator, text: []const u8, base_direction: BidiClass) ![]BidiRun {
+    var paragraph = try resolveBidiParagraph(
+        allocator,
+        text,
+        if (base_direction == .rtl) .rtl else .ltr,
+    );
+    defer paragraph.deinit();
     var runs = std.ArrayList(BidiRun).empty;
     errdefer runs.deinit(allocator);
-    var builder = BidiRunBuilder{};
+    if (paragraph.scalars.len == 0) return try runs.toOwnedSlice(allocator);
 
-    // Neutral spans are attached to the surrounding run when possible. If text
-    // starts with neutrals, use the paragraph base direction as their run.
-    var cursor: usize = 0;
-    while (cursor < text.len) {
-        const cluster = cursor;
-        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
-        const codepoint = decoded.codepoint;
-        const next_index = decoded.next;
-        cursor = next_index;
-        const bidi_class = bidiClassForCodepoint(codepoint);
-        try builder.add(allocator, &runs, base_direction, cluster, next_index, bidi_class);
+    const cluster_levels = try graphemeClusterLevels(allocator, text, paragraph);
+    defer allocator.free(cluster_levels);
+    var run_start: usize = 0;
+    var run_level = cluster_levels[0].level;
+    for (cluster_levels[1..], 1..) |cluster, index| {
+        const level = cluster.level;
+        if (level == run_level) continue;
+        const byte_start = paragraph.scalars[cluster_levels[run_start].scalar_start].byte_start;
+        const byte_end = paragraph.scalars[cluster.scalar_start].byte_start;
+        try runs.append(allocator, .{
+            .direction = directionForLevel(run_level),
+            .byte_start = byte_start,
+            .byte_len = byte_end - byte_start,
+        });
+        run_start = index;
+        run_level = level;
     }
-    try builder.finish(allocator, &runs);
+    const byte_start = paragraph.scalars[cluster_levels[run_start].scalar_start].byte_start;
+    try runs.append(allocator, .{
+        .direction = directionForLevel(run_level),
+        .byte_start = byte_start,
+        .byte_len = text.len - byte_start,
+    });
     return try runs.toOwnedSlice(allocator);
 }
 
-const BidiRunBuilder = struct {
-    current_direction: ?BidiClass = null,
-    run_start: usize = 0,
-    run_end: usize = 0,
-    neutral_start: ?usize = null,
-
-    fn add(
-        self: *BidiRunBuilder,
-        allocator: std.mem.Allocator,
-        runs: *std.ArrayList(BidiRun),
-        base_direction: BidiClass,
-        cluster: usize,
-        next_index: usize,
-        bidi_class: BidiClass,
-    ) std.mem.Allocator.Error!void {
-        if (bidi_class == .neutral) {
-            if (self.neutral_start == null) self.neutral_start = cluster;
-            if (self.current_direction == null) {
-                self.current_direction = baseDirectionOrLtr(base_direction);
-                self.run_start = cluster;
-            }
-            self.run_end = next_index;
-            return;
-        }
-
-        if (self.current_direction == null) {
-            self.current_direction = bidi_class;
-            self.run_start = self.neutral_start orelse cluster;
-            self.run_end = next_index;
-            self.neutral_start = null;
-            return;
-        }
-
-        if (self.current_direction.? == bidi_class) {
-            self.run_end = next_index;
-            self.neutral_start = null;
-            return;
-        }
-
-        if (self.current_direction.? == .rtl and bidi_class == .number) {
-            // In an RTL paragraph, whitespace between RTL text and a following
-            // number remains visually between those two runs.  If it is moved
-            // to the beginning of the number run, left-to-right materialization
-            // produces a leading blank before the digits, shifting the visible
-            // number/Arabic cluster away from native Pango/CoreText behavior.
-            // Keep the neutral span attached to the preceding RTL run so that
-            // reversing that run places the space after the digits instead.
-            const split_at = cluster;
-            try runs.append(allocator, .{
-                .direction = self.current_direction.?,
-                .byte_start = self.run_start,
-                .byte_len = split_at - self.run_start,
-            });
-            self.current_direction = .number;
-            self.run_start = cluster;
-            self.run_end = next_index;
-            self.neutral_start = null;
-            return;
-        }
-
-        if (self.current_direction.? == .number and bidi_class == .rtl) {
-            const split_at = self.neutral_start orelse cluster;
-            try runs.append(allocator, .{
-                .direction = self.current_direction.?,
-                .byte_start = self.run_start,
-                .byte_len = split_at - self.run_start,
-            });
-            self.current_direction = .rtl;
-            self.run_start = self.neutral_start orelse cluster;
-            self.run_end = next_index;
-            self.neutral_start = null;
-            return;
-        }
-
-        const split_at = self.neutral_start orelse cluster;
-        try runs.append(allocator, .{
-            .direction = self.current_direction.?,
-            .byte_start = self.run_start,
-            .byte_len = split_at - self.run_start,
-        });
-        self.current_direction = bidi_class;
-        self.run_start = self.neutral_start orelse cluster;
-        self.run_end = next_index;
-        self.neutral_start = null;
-    }
-
-    fn finish(self: BidiRunBuilder, allocator: std.mem.Allocator, runs: *std.ArrayList(BidiRun)) std.mem.Allocator.Error!void {
-        const direction = self.current_direction orelse return;
-        try runs.append(allocator, .{
-            .direction = direction,
-            .byte_start = self.run_start,
-            .byte_len = self.run_end - self.run_start,
-        });
-    }
-};
-
 pub fn visualOrderBidiRuns(allocator: std.mem.Allocator, runs: []const BidiRun, base_direction: BidiClass) ![]usize {
-    // This is a deliberately small bidi reordering model: paragraph RTL reverses
-    // run order; individual RTL runs are reversed when materialized.
     const order = try allocator.alloc(usize, runs.len);
-    if (baseDirectionOrLtr(base_direction) == .rtl) {
-        for (order, 0..) |*slot, index| {
-            slot.* = runs.len - 1 - index;
-        }
+    if (base_direction == .rtl) {
+        for (order, 0..) |*slot, index| slot.* = runs.len - 1 - index;
     } else {
-        for (order, 0..) |*slot, index| {
-            slot.* = index;
-        }
+        for (order, 0..) |*slot, index| slot.* = index;
     }
     return order;
 }
 
 pub fn visualOrderCodepoints(allocator: std.mem.Allocator, text: []const u8, base_direction: BidiClass) ![]u21 {
-    const runs = try itemizeBidiRuns(allocator, text, base_direction);
-    defer allocator.free(runs);
-    const order = try visualOrderBidiRuns(allocator, runs, base_direction);
+    var paragraph = try resolveBidiParagraph(
+        allocator,
+        text,
+        if (base_direction == .rtl) .rtl else .ltr,
+    );
+    defer paragraph.deinit();
+    const cluster_order = try visualGraphemeClusters(allocator, text, paragraph);
+    defer allocator.free(cluster_order.clusters);
+    const order = cluster_order.order;
     defer allocator.free(order);
 
     var output = std.ArrayList(u21).empty;
     errdefer output.deinit(allocator);
-    for (order) |run_index| {
-        const run = runs[run_index];
-        const slice = text[run.byte_start .. run.byte_start + run.byte_len];
-        if (run.direction == .rtl) {
-            try appendRtlCodepointsByGrapheme(allocator, &output, slice);
-        } else {
-            try appendCodepoints(allocator, &output, slice);
+    for (order) |cluster_index| {
+        const cluster = cluster_order.clusters[cluster_index];
+        for (paragraph.scalars[cluster.scalar_start..cluster.scalar_end]) |scalar| {
+            if (isBidiFormatControl(scalar.codepoint)) continue;
+            const codepoint = if (cluster.level & 1 != 0)
+                bidi_paragraph.mirroredCodepoint(scalar.codepoint)
+            else
+                scalar.codepoint;
+            try output.append(allocator, codepoint);
         }
     }
     return try output.toOwnedSlice(allocator);
@@ -2290,28 +2232,40 @@ pub fn visualOrderUtf8(allocator: std.mem.Allocator, text: []const u8, base_dire
 pub fn buildBidiMap(allocator: std.mem.Allocator, text: []const u8, base_direction: BidiClass) !BidiMap {
     // The map keeps both visual order and logical-to-visual lookup, which lets
     // editor code move between byte offsets and rendered caret positions.
-    const logical = try collectLogicalBidiItems(allocator, text);
-    defer allocator.free(logical);
-    const runs = try bidiRunsForLogicalItems(allocator, logical, base_direction);
-    defer allocator.free(runs);
-    const order = try visualOrderBidiRuns(allocator, runs, base_direction);
+    var paragraph = try resolveBidiParagraph(
+        allocator,
+        text,
+        if (base_direction == .rtl) .rtl else .ltr,
+    );
+    defer paragraph.deinit();
+    const cluster_order = try visualGraphemeClusters(allocator, text, paragraph);
+    defer allocator.free(cluster_order.clusters);
+    const order = cluster_order.order;
     defer allocator.free(order);
 
     var items = std.ArrayList(BidiMapItem).empty;
     errdefer items.deinit(allocator);
-    const logical_to_visual = try allocator.alloc(usize, logical.len);
+    const logical_to_visual = try allocator.alloc(usize, paragraph.scalars.len);
     errdefer allocator.free(logical_to_visual);
 
-    for (order) |run_index| {
-        const run = runs[run_index];
-        const range = logicalRangeForBytes(logical, run.byte_start, run.byte_start + run.byte_len);
-        if (run.direction == .rtl) {
-            try appendRtlVisualBidiItemsByGrapheme(allocator, &items, logical_to_visual, logical, text, run, range);
-        } else {
-            var index = range.start;
-            while (index < range.end) : (index += 1) {
-                try appendVisualBidiItem(allocator, &items, logical_to_visual, logical[index], run.direction);
-            }
+    for (order) |cluster_index| {
+        const cluster = cluster_order.clusters[cluster_index];
+        for (cluster.scalar_start..cluster.scalar_end) |logical_index| {
+            const scalar = paragraph.scalars[logical_index];
+            const visual_index = items.items.len;
+            logical_to_visual[logical_index] = visual_index;
+            try items.append(allocator, .{
+                .logical_index = logical_index,
+                .visual_index = visual_index,
+                .byte_start = scalar.byte_start,
+                .byte_len = scalar.byte_len,
+                .codepoint = scalar.codepoint,
+                .visual_codepoint = if (cluster.level & 1 != 0)
+                    bidi_paragraph.mirroredCodepoint(scalar.codepoint)
+                else
+                    scalar.codepoint,
+                .direction = directionForLevel(cluster.level),
+            });
         }
     }
 
@@ -2322,44 +2276,76 @@ pub fn buildBidiMap(allocator: std.mem.Allocator, text: []const u8, base_directi
     };
 }
 
-fn bidiRunsForLogicalItems(allocator: std.mem.Allocator, logical: []const BidiMapItem, base_direction: BidiClass) ![]BidiRun {
-    var runs = std.ArrayList(BidiRun).empty;
-    errdefer runs.deinit(allocator);
-    var builder = BidiRunBuilder{};
-    for (logical) |item| {
-        try builder.add(
-            allocator,
-            &runs,
-            base_direction,
-            item.byte_start,
-            item.byte_start + item.byte_len,
-            item.direction,
-        );
+const VisualClusters = struct {
+    clusters: []BidiCluster,
+    order: []usize,
+};
+
+fn graphemeClusterLevels(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    paragraph: BidiParagraph,
+) ![]BidiCluster {
+    const graphemes = try itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(graphemes);
+    const result = try allocator.alloc(BidiCluster, graphemes.len);
+    for (graphemes, result) |grapheme, *cluster| {
+        const scalar_start = paragraph.scalarIndexForByte(grapheme.byte_start) orelse
+            return error.InvalidBidiMap;
+        const scalar_end = paragraph.scalarIndexForByte(
+            grapheme.byte_start + grapheme.byte_len,
+        ) orelse return error.InvalidBidiMap;
+        var level: u8 = paragraph.base_level;
+        for (paragraph.levels[scalar_start..scalar_end]) |candidate| {
+            if (candidate == 0xff) continue;
+            level = @max(level, candidate);
+        }
+        cluster.* = .{
+            .scalar_start = scalar_start,
+            .scalar_end = scalar_end,
+            .level = level,
+        };
     }
-    try builder.finish(allocator, &runs);
-    return try runs.toOwnedSlice(allocator);
+    return result;
 }
 
-test "bidi map reuses logical item classes without changing run boundaries" {
-    const allocator = std.testing.allocator;
-    const samples = [_]struct {
-        text: []const u8,
-        base_direction: BidiClass,
-    }{
-        .{ .text = "abc בגד 12 xyz", .base_direction = .ltr },
-        .{ .text = "ابت 12 xyz", .base_direction = .rtl },
-        .{ .text = "  ב", .base_direction = .rtl },
-        .{ .text = "א 12ב", .base_direction = .rtl },
-    };
+fn visualGraphemeClusters(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    paragraph: BidiParagraph,
+) !VisualClusters {
+    const clusters = try graphemeClusterLevels(allocator, text, paragraph);
+    errdefer allocator.free(clusters);
+    const order = try allocator.alloc(usize, clusters.len);
+    errdefer allocator.free(order);
+    for (order, 0..) |*slot, index| slot.* = index;
+    reorderBidiClusters(clusters, order);
+    return .{ .clusters = clusters, .order = order };
+}
 
-    for (samples) |sample| {
-        const logical = try collectLogicalBidiItems(allocator, sample.text);
-        defer allocator.free(logical);
-        const expected = try itemizeBidiRuns(allocator, sample.text, sample.base_direction);
-        defer allocator.free(expected);
-        const actual = try bidiRunsForLogicalItems(allocator, logical, sample.base_direction);
-        defer allocator.free(actual);
-        try std.testing.expectEqualSlices(BidiRun, expected, actual);
+fn reorderBidiClusters(clusters: []const BidiCluster, order: []usize) void {
+    var max_level: u8 = 0;
+    var minimum_odd: u8 = 0xff;
+    for (clusters) |cluster| {
+        max_level = @max(max_level, cluster.level);
+        if (cluster.level & 1 != 0) minimum_odd = @min(minimum_odd, cluster.level);
+    }
+    if (minimum_odd == 0xff) return;
+    var level = max_level;
+    while (true) : (level -= 1) {
+        var cursor: usize = 0;
+        while (cursor < order.len) {
+            if (clusters[order[cursor]].level < level) {
+                cursor += 1;
+                continue;
+            }
+            const start = cursor;
+            while (cursor < order.len and clusters[order[cursor]].level >= level) {
+                cursor += 1;
+            }
+            std.mem.reverse(usize, order[start..cursor]);
+        }
+        if (level == minimum_odd) break;
     }
 }
 
@@ -2531,116 +2517,8 @@ pub fn itemizeScriptRuns(allocator: std.mem.Allocator, text: []const u8) ![]Scri
     return try runs.toOwnedSlice(allocator);
 }
 
-fn baseDirectionOrLtr(direction: BidiClass) BidiClass {
-    return if (direction == .rtl) .rtl else .ltr;
-}
-
-fn isBidiNumberCodepoint(codepoint: u21) bool {
-    // Keep common European and Arabic-Indic decimal sequences in logical LTR
-    // order even when the surrounding paragraph/run order is RTL. This is a
-    // deliberately compact subset of UAX #9 weak-type handling, but it avoids
-    // the most visible failure mode of rendering "12" as "21" in Hebrew/Arabic
-    // text while preserving existing neutral punctuation behavior.
-    return (codepoint >= '0' and codepoint <= '9') or
-        (codepoint >= 0x0660 and codepoint <= 0x0669) or
-        (codepoint >= 0x06f0 and codepoint <= 0x06f9);
-}
-
-fn collectLogicalBidiItems(allocator: std.mem.Allocator, text: []const u8) ![]BidiMapItem {
-    var items = std.ArrayList(BidiMapItem).empty;
-    errdefer items.deinit(allocator);
-    var cursor: usize = 0;
-    while (cursor < text.len) {
-        const byte_start = cursor;
-        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
-        const codepoint = decoded.codepoint;
-        cursor = decoded.next;
-        try items.append(allocator, .{
-            .logical_index = items.items.len,
-            .visual_index = 0,
-            .byte_start = byte_start,
-            .byte_len = cursor - byte_start,
-            .codepoint = codepoint,
-            .visual_codepoint = codepoint,
-            .direction = bidiClassForCodepoint(codepoint),
-        });
-    }
-    return try items.toOwnedSlice(allocator);
-}
-
-const LogicalRange = struct { start: usize, end: usize };
-
-fn logicalRangeForBytes(logical: []const BidiMapItem, byte_start: usize, byte_end: usize) LogicalRange {
-    var start: ?usize = null;
-    var end: usize = 0;
-    for (logical, 0..) |item, index| {
-        const item_end = item.byte_start + item.byte_len;
-        if (item_end <= byte_start or item.byte_start >= byte_end) continue;
-        if (start == null) start = index;
-        end = index + 1;
-    }
-    return .{ .start = start orelse 0, .end = end };
-}
-
-fn appendRtlCodepointsByGrapheme(allocator: std.mem.Allocator, output: *std.ArrayList(u21), text: []const u8) !void {
-    const clusters = try itemizeGraphemeClusters(allocator, text);
-    defer allocator.free(clusters);
-    var cluster_index = clusters.len;
-    while (cluster_index > 0) {
-        cluster_index -= 1;
-        const cluster = clusters[cluster_index];
-        const start_len = output.items.len;
-        try appendCodepoints(allocator, output, text[cluster.byte_start .. cluster.byte_start + cluster.byte_len]);
-        for (output.items[start_len..]) |*codepoint| {
-            codepoint.* = mirroredCodepoint(codepoint.*);
-        }
-    }
-}
-
-fn appendRtlVisualBidiItemsByGrapheme(allocator: std.mem.Allocator, items: *std.ArrayList(BidiMapItem), logical_to_visual: []usize, logical: []const BidiMapItem, text: []const u8, run: BidiRun, range: LogicalRange) !void {
-    const clusters = try itemizeGraphemeClusters(allocator, text[run.byte_start .. run.byte_start + run.byte_len]);
-    defer allocator.free(clusters);
-    var logical_end = range.end;
-    var cluster_index = clusters.len;
-    while (cluster_index > 0) {
-        cluster_index -= 1;
-        const cluster = clusters[cluster_index];
-        const cluster_start = run.byte_start + cluster.byte_start;
-        var logical_start = logical_end;
-        // Clusters partition this run in logical byte order. Walking both
-        // sequences backward avoids rescanning the complete logical item array
-        // for every cluster, which made long RTL runs quadratic in their
-        // codepoint count.
-        while (logical_start > range.start and logical[logical_start - 1].byte_start >= cluster_start) {
-            logical_start -= 1;
-        }
-        if (rtlClusterNeedsCodepointOrder(logical[logical_start..logical_end])) {
-            var index = logical_end;
-            while (index > logical_start) {
-                index -= 1;
-                try appendVisualBidiItem(allocator, items, logical_to_visual, logical[index], run.direction);
-            }
-        } else {
-            var index = logical_start;
-            while (index < logical_end) : (index += 1) {
-                try appendVisualBidiItem(allocator, items, logical_to_visual, logical[index], run.direction);
-            }
-        }
-        logical_end = logical_start;
-    }
-    std.debug.assert(logical_end == range.start);
-}
-
-fn rtlClusterNeedsCodepointOrder(items: []const BidiMapItem) bool {
-    if (items.len < 2) return false;
-    for (items) |item| {
-        if (isRtlReorderedMark(item.codepoint) or isBidiFormatControl(item.codepoint)) return true;
-    }
-    return false;
-}
-
-fn isRtlReorderedMark(codepoint: u21) bool {
-    return isCombiningMark(codepoint) and !isVariationSelector(codepoint);
+fn directionForLevel(level: u8) BidiClass {
+    return if (level & 1 == 0) .ltr else .rtl;
 }
 
 fn isBidiFormatControl(codepoint: u21) bool {
@@ -2654,20 +2532,6 @@ fn isBidiFormatControl(codepoint: u21) bool {
         (codepoint >= 0x2060 and codepoint <= 0x206f) or
         codepoint == 0xfeff or
         (codepoint >= 0xe0000 and codepoint <= 0xe0fff);
-}
-
-fn appendVisualBidiItem(allocator: std.mem.Allocator, items: *std.ArrayList(BidiMapItem), logical_to_visual: []usize, logical: BidiMapItem, direction: BidiClass) !void {
-    const visual_index = items.items.len;
-    logical_to_visual[logical.logical_index] = visual_index;
-    try items.append(allocator, .{
-        .logical_index = logical.logical_index,
-        .visual_index = visual_index,
-        .byte_start = logical.byte_start,
-        .byte_len = logical.byte_len,
-        .codepoint = logical.codepoint,
-        .visual_codepoint = if (direction == .rtl) mirroredCodepoint(logical.codepoint) else logical.codepoint,
-        .direction = direction,
-    });
 }
 
 test "RTL bidi map walks long grapheme runs without losing item boundaries" {
@@ -2686,19 +2550,12 @@ test "RTL bidi map walks long grapheme runs without losing item boundaries" {
         const logical_cluster = grapheme_count - 1 - visual_cluster;
         const logical_base = logical_cluster * 2;
         const visual_base = visual_cluster * 2;
-        // Hebrew points retain the existing RTL intra-grapheme order while
-        // grapheme groups themselves are emitted from the end of the run.
-        try std.testing.expectEqual(logical_base + 1, map.visualToLogical(visual_base).?);
-        try std.testing.expectEqual(logical_base, map.visualToLogical(visual_base + 1).?);
-        try std.testing.expectEqual(visual_base + 1, map.logicalToVisual(logical_base).?);
-        try std.testing.expectEqual(visual_base, map.logicalToVisual(logical_base + 1).?);
-    }
-}
-
-fn appendCodepoints(allocator: std.mem.Allocator, output: *std.ArrayList(u21), text: []const u8) !void {
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.nextCodepoint()) |codepoint| {
-        try output.append(allocator, codepoint);
+        // UAX #9 reverses grapheme groups through their resolved level while
+        // preserving the logical base-before-mark order inside each group.
+        try std.testing.expectEqual(logical_base, map.visualToLogical(visual_base).?);
+        try std.testing.expectEqual(logical_base + 1, map.visualToLogical(visual_base + 1).?);
+        try std.testing.expectEqual(visual_base, map.logicalToVisual(logical_base).?);
+        try std.testing.expectEqual(visual_base + 1, map.logicalToVisual(logical_base + 1).?);
     }
 }
 
@@ -2708,95 +2565,7 @@ fn firstCodepoint(text: []const u8) ?u21 {
 }
 
 pub fn mirroredCodepoint(codepoint: u21) u21 {
-    return switch (codepoint) {
-        '(' => ')',
-        ')' => '(',
-        '[' => ']',
-        ']' => '[',
-        '{' => '}',
-        '}' => '{',
-        '<' => '>',
-        '>' => '<',
-        0x00ab => 0x00bb,
-        0x00bb => 0x00ab,
-        0x2039 => 0x203a,
-        0x203a => 0x2039,
-        0x2045 => 0x2046,
-        0x2046 => 0x2045,
-        0x207d => 0x207e,
-        0x207e => 0x207d,
-        0x208d => 0x208e,
-        0x208e => 0x208d,
-        0x2308 => 0x2309,
-        0x2309 => 0x2308,
-        0x230a => 0x230b,
-        0x230b => 0x230a,
-        0x2329 => 0x232a,
-        0x232a => 0x2329,
-        0x2768 => 0x2769,
-        0x2769 => 0x2768,
-        0x276a => 0x276b,
-        0x276b => 0x276a,
-        0x276c => 0x276d,
-        0x276d => 0x276c,
-        0x276e => 0x276f,
-        0x276f => 0x276e,
-        0x2770 => 0x2771,
-        0x2771 => 0x2770,
-        0x2772 => 0x2773,
-        0x2773 => 0x2772,
-        0x2774 => 0x2775,
-        0x2775 => 0x2774,
-        0x27c5 => 0x27c6,
-        0x27c6 => 0x27c5,
-        0x27e6 => 0x27e7,
-        0x27e7 => 0x27e6,
-        0x27e8 => 0x27e9,
-        0x27e9 => 0x27e8,
-        0x27ea => 0x27eb,
-        0x27eb => 0x27ea,
-        0x27ec => 0x27ed,
-        0x27ed => 0x27ec,
-        0x27ee => 0x27ef,
-        0x27ef => 0x27ee,
-        0x2983 => 0x2984,
-        0x2984 => 0x2983,
-        0x2985 => 0x2986,
-        0x2986 => 0x2985,
-        0x2987 => 0x2988,
-        0x2988 => 0x2987,
-        0x2989 => 0x298a,
-        0x298a => 0x2989,
-        0x298b => 0x298c,
-        0x298c => 0x298b,
-        0x298d => 0x2990,
-        0x298e => 0x298f,
-        0x298f => 0x298e,
-        0x2990 => 0x298d,
-        0x2991 => 0x2992,
-        0x2992 => 0x2991,
-        0x2993 => 0x2994,
-        0x2994 => 0x2993,
-        0x2995 => 0x2996,
-        0x2996 => 0x2995,
-        0x2997 => 0x2998,
-        0x2998 => 0x2997,
-        0x29d8 => 0x29d9,
-        0x29d9 => 0x29d8,
-        0x29da => 0x29db,
-        0x29db => 0x29da,
-        0x29fc => 0x29fd,
-        0x29fd => 0x29fc,
-        0x3008 => 0x3009,
-        0x3009 => 0x3008,
-        0x300a => 0x300b,
-        0x300b => 0x300a,
-        0x300c => 0x300d,
-        0x300d => 0x300c,
-        0x300e => 0x300f,
-        0x300f => 0x300e,
-        else => codepoint,
-    };
+    return bidi_paragraph.mirroredCodepoint(codepoint);
 }
 
 test "Latin extension letters stay in Latin script runs" {
@@ -2894,7 +2663,7 @@ test "Old Italic letters and numerals select Old Italic script primitives" {
     try std.testing.expectEqualStrings("\u{1032d}\u{1032e}", text[words[1].byte_start..][0..words[1].byte_len]);
 }
 
-test "Ugaritic letters select ugar RTL script and split on word divider" {
+test "Ugaritic letters select ugar LTR script and split on word divider" {
     const allocator = std.testing.allocator;
 
     const text = "\u{10380}\u{10381}\u{1039f}\u{10382}\u{1039d}";
@@ -2908,14 +2677,14 @@ test "Ugaritic letters select ugar RTL script and split on word divider" {
     try std.testing.expectEqual(OpenTypeScriptTag.ugar, openTypeScriptTag(scriptForCodepoint(0x10380)));
     try std.testing.expectEqual(OpenTypeScriptTag.ugar, openTypeScriptTag(scriptForCodepoint(0x1039f)));
     try std.testing.expectEqual(Script.unknown, scriptForCodepoint(0x1039e));
-    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x10380));
-    try std.testing.expectEqual(BidiClass.rtl, bidiClassForCodepoint(0x1039f));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x10380));
+    try std.testing.expectEqual(BidiClass.ltr, bidiClassForCodepoint(0x1039f));
 
-    const bidi_runs = try itemizeBidiRuns(allocator, text, .rtl);
+    const bidi_runs = try itemizeBidiRuns(allocator, text, .ltr);
     defer allocator.free(bidi_runs);
 
     try std.testing.expectEqual(@as(usize, 1), bidi_runs.len);
-    try std.testing.expectEqual(BidiClass.rtl, bidi_runs[0].direction);
+    try std.testing.expectEqual(BidiClass.ltr, bidi_runs[0].direction);
     try std.testing.expectEqual(@as(usize, 0), bidi_runs[0].byte_start);
     try std.testing.expectEqual(@as(usize, text.len), bidi_runs[0].byte_len);
 

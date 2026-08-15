@@ -481,8 +481,9 @@ Current local snapshot after the Nastaliq parity work:
   same-session HarfBuzz median was `796.355 ns/glyph`, leaving Cangjie about
   `11.4%` behind on this Amiri workload; the broad performance goal is still
   open.
-- `buildBidiMap` now feeds its already-decoded and already-classified logical
-  items into the same `BidiRunBuilder` used by public run itemization. It
+- The former coarse `buildBidiMap` fed already-decoded and
+  already-classified logical items into the same `BidiRunBuilder` used by
+  public run itemization. It
   previously decoded the UTF-8 and ran `bidiClassForCodepoint` /
   `scriptForCodepoint` a second time solely to rebuild run boundaries. Direct
   mixed LTR/RTL/number/neutral tests prove logical-item runs match the public

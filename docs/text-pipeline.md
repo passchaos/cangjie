@@ -17,6 +17,9 @@ than copying one API:
 - **UAX #14 Unicode 17.0** provides the line-breaking model used here: a
   zero-allocation forward iterator backed by generated Unicode properties and
   bounded context state for numeric, quote, emoji, and Brahmic rules.
+- **UAX #9 Unicode 17.0** provides exact paragraph embedding levels, isolate
+  handling, weak/neutral resolution, paired-bracket behavior, mirroring, and
+  per-line visual ordering.
 - **Parley** is the paragraph/reflow reference. Font-independent analysis,
   itemization, fallback, and shaping produce reusable paragraph content; line
   breaking, per-line bidi ordering, and alignment are later operations that can
@@ -155,6 +158,24 @@ segmentation layer:
 - All 512 cases from Unicode 17 `SentenceBreakTest.txt` run in the normal test
   suite. Language-specific abbreviation dictionaries remain an explicit
   future tailoring rather than being guessed by the default iterator.
+
+`src/unicode/bidi/` now owns the Unicode 17 bidirectional algorithm:
+
+- `resolveBidiParagraph` decodes valid UTF-8 once and returns exact scalar
+  `Bidi_Class` values, resolved embedding levels, source byte coordinates, and
+  reusable per-line L1/L2 visual ordering.
+- The resolver implements P2/P3, explicit embeddings/overrides and isolates
+  (X1–X10), weak types (W1–W7), paired brackets and neutral types (N0–N2),
+  implicit levels (I1/I2), line resets/reordering (L1/L2), and generated
+  mirroring data (L4).
+- Paragraph reflow resolves levels once for the complete logical paragraph,
+  then applies line-local resets and visual order after wrapping. Explicit
+  controls and isolates therefore keep paragraph context across line breaks.
+- The former four-value `BidiClass` remains as a compatibility view for old
+  callers. New analysis uses `ExactBidiClass`, `BidiBaseDirection`, and
+  `BidiParagraph`.
+- All 770,241 paragraph-level variants compiled from Unicode 17 `BidiTest.txt`
+  and all 91,707 `BidiCharacterTest.txt` rows run in the normal test suite.
 
 `WrapMode.no_wrap` is also enforced by reflow now: width does not introduce
 soft lines, but mandatory Unicode line separators still do.
@@ -367,6 +388,48 @@ The generated sentence property blob SHA-256 is
 `c163eb450ba6df51a31fe2ac4a74e3c1d9d154c37ec9124af46dffce6a5844e8`;
 the 512-case conformance fixture SHA-256 is
 `ad12cc4dc33a16ffe0da235ac34cb8f0ddfc3c9e85a62c657ee88bb3beeba5cc`.
+
+Unicode 17 bidi data and both official conformance suites are generated with:
+
+```sh
+tools/unicode/bidi/generate_data.py \
+  path/to/DerivedBidiClass.txt \
+  path/to/BidiBrackets.txt \
+  path/to/BidiMirroring.txt \
+  src/unicode/bidi/data.bin
+
+tools/unicode/bidi/generate_conformance.py \
+  path/to/BidiTest.txt \
+  path/to/BidiCharacterTest.txt \
+  src/unicode/bidi/conformance.bin
+```
+
+Reference input SHA-256:
+
+- `DerivedBidiClass.txt`:
+  `4867b4b7f0731ed1bfcd34cc6251211ff1542541fce0734b6fbda139ee80b3a4`
+- `BidiBrackets.txt`:
+  `dadbaf38a0d0246e5b805bf8725cb81b7c621f93d030595635f5ba2c2f179428`
+- `BidiMirroring.txt`:
+  `a2f16fb873ab4fcdf3221cb1a8a85a134ddd6ed03603181823ff5206af3741ce`
+- `BidiTest.txt`:
+  `888bdfc8090652272d1f859cdb00ae659e2dc6c26740be61ef1d03998a687620`
+- `BidiCharacterTest.txt`:
+  `a3e6e905ab5afbe318a96df5401d0372a04cd73ef139ab5e3cf0ae241c255488`
+
+The generated property/bracket/mirror blob SHA-256 is
+`9e9f9937100d6019f7308743916c3606bdb31c9cc4f142eb605becf45a210c3f`;
+the 861,948-case fixture SHA-256 is
+`40d4b9145779f8aad815e1f5ea5201ccd9cc5daeb73c8bf73b06c6f1c76d9a26`.
+
+On a fixed-core mixed Latin/Arabic/Hebrew paragraph microbenchmark, the
+compatibility `BidiMap` measured about `3.43 µs` versus `2.64 µs` for the
+former coarse model. The additional work provides exact explicit controls,
+isolates, weak/neutral resolution, bracket pairing, and levels rather than the
+old run-direction approximation. Ordinary Persian shaping keeps its pure-RTL
+non-allocating path; an unprofiled Amiri long-text run remained about
+`796 ns/glyph` after the upgrade. Bidi analysis remains reusable paragraph
+state so retained reflow does not resolve it once per visual line.
 
 ## Invariants
 

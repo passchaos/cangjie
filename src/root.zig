@@ -10,6 +10,10 @@ const std = @import("std");
 pub const Script = @import("unicode.zig").Script;
 pub const ScriptRun = @import("unicode.zig").ScriptRun;
 pub const BidiClass = @import("unicode.zig").BidiClass;
+pub const ExactBidiClass = @import("unicode.zig").ExactBidiClass;
+pub const BidiBaseDirection = @import("unicode.zig").BidiBaseDirection;
+pub const BidiParagraph = @import("unicode.zig").BidiParagraph;
+pub const bidi_unicode_version = @import("unicode.zig").bidi_unicode_version;
 pub const BidiMap = @import("unicode.zig").BidiMap;
 pub const BidiMapItem = @import("unicode.zig").BidiMapItem;
 pub const BidiRun = @import("unicode.zig").BidiRun;
@@ -354,6 +358,8 @@ pub const RenderTarget = @import("raster.zig").RenderTarget;
 pub const Rgba = @import("raster.zig").Rgba;
 pub const Rasterizer = @import("raster.zig").Rasterizer;
 pub const bidiClassForCodepoint = @import("unicode.zig").bidiClassForCodepoint;
+pub const exactBidiClassForCodepoint = @import("unicode.zig").exactBidiClassForCodepoint;
+pub const resolveBidiParagraph = @import("unicode.zig").resolveBidiParagraph;
 pub const testing = struct {
     pub const test_font = @import("test_font.zig");
     pub const font_container = @import("font_container.zig").testing;
@@ -3852,10 +3858,10 @@ test "detects bidi classes and itemizes bidi runs" {
     try std.testing.expectEqual(@as(usize, 3), runs.len);
     try std.testing.expectEqual(BidiClass.ltr, runs[0].direction);
     try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
-    try std.testing.expectEqual(@as(usize, 3), runs[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 4), runs[0].byte_len);
     try std.testing.expectEqual(BidiClass.rtl, runs[1].direction);
-    try std.testing.expectEqual(@as(usize, 3), runs[1].byte_start);
-    try std.testing.expectEqual(@as(usize, 7), runs[1].byte_len);
+    try std.testing.expectEqual(@as(usize, 4), runs[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 6), runs[1].byte_len);
     try std.testing.expectEqual(BidiClass.ltr, runs[2].direction);
     try std.testing.expectEqual(@as(usize, 10), runs[2].byte_start);
     try std.testing.expectEqual(@as(usize, 4), runs[2].byte_len);
@@ -3953,7 +3959,9 @@ test "builds bidi logical visual maps" {
     try std.testing.expectEqual(@as(usize, 1), number_map.visualToLogical(1).?);
     try std.testing.expectEqual(@as(usize, 2), number_map.visualToLogical(2).?);
     try std.testing.expectEqual(@as(usize, 0), number_map.visualToLogical(3).?);
-    try std.testing.expectEqual(BidiClass.number, number_map.items[1].direction);
+    // The compatibility direction is derived from the final embedding level;
+    // numeric identity remains available through the exact input class API.
+    try std.testing.expectEqual(BidiClass.ltr, number_map.items[1].direction);
 
     var neutral_number_map = try buildBidiMap(allocator, "א 12ב", .rtl);
     defer neutral_number_map.deinit();

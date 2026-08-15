@@ -156,7 +156,7 @@ test "styled bidi order carries paint fragments" {
     );
     defer result.deinit();
 
-    try std.testing.expectEqualSlices(u21, &.{ 'A', 0x05d1, 0x05d0, ' ' }, &.{
+    try std.testing.expectEqualSlices(u21, &.{ 'A', ' ', 0x05d1, 0x05d0 }, &.{
         result.glyphs[0].codepoint,
         result.glyphs[1].codepoint,
         result.glyphs[2].codepoint,

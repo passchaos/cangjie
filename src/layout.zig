@@ -2896,6 +2896,14 @@ fn normalizeParagraphGlyphsToLogicalOrder(buffer: *LayoutBuffer) !void {
 
 fn applyParagraphLineBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection) !void {
     if (buffer.glyphs.items.len == 0 or buffer.lines.items.len == 0) return;
+    const base_direction: unicode.BidiBaseDirection =
+        if (direction == .rtl) .rtl else .ltr;
+    var bidi_paragraph = try unicode.resolveBidiParagraph(
+        buffer.allocator,
+        text,
+        base_direction,
+    );
+    defer bidi_paragraph.deinit();
 
     const old_runs = try buffer.allocator.dupe(CascadeRun, buffer.runs.items);
     defer buffer.allocator.free(old_runs);
@@ -2920,21 +2928,44 @@ fn applyParagraphLineBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, di
     var visual_run_indices: std.ArrayList(usize) = .empty;
     defer visual_run_indices.deinit(buffer.allocator);
 
-    const base_direction: unicode.BidiClass = if (direction == .rtl) .rtl else .ltr;
     for (buffer.lines.items) |*line| {
         const visual_start = visual_glyphs.items.len;
         const old_line_start = line.glyph_start;
         const old_line_end = old_line_start + line.glyph_len;
         if (line.byte_len != 0 and old_line_start < old_line_end) {
-            var bidi_map = try unicode.buildBidiMap(
+            const scalar_start = bidi_paragraph.scalarIndexForByte(
+                line.byte_start,
+            ) orelse return error.InvalidBidiMap;
+            const scalar_end = bidi_paragraph.scalarIndexForByte(
+                line.byteEnd(),
+            ) orelse return error.InvalidBidiMap;
+            const visual_order = try bidi_paragraph.visualOrder(
                 buffer.allocator,
-                text[line.byte_start..line.byteEnd()],
-                base_direction,
+                scalar_start,
+                scalar_end,
             );
-            defer bidi_map.deinit();
-            for (bidi_map.items) |item_value| {
-                var item = item_value;
-                item.byte_start += line.byte_start;
+            defer buffer.allocator.free(visual_order);
+            const line_levels = try bidi_paragraph.lineLevels(
+                buffer.allocator,
+                scalar_start,
+                scalar_end,
+            );
+            defer buffer.allocator.free(line_levels);
+            for (visual_order) |scalar_index| {
+                const scalar = bidi_paragraph.scalars[scalar_index];
+                const level = line_levels[scalar_index - scalar_start];
+                const item = unicode.BidiMapItem{
+                    .logical_index = scalar_index,
+                    .visual_index = 0,
+                    .byte_start = scalar.byte_start,
+                    .byte_len = scalar.byte_len,
+                    .codepoint = scalar.codepoint,
+                    .visual_codepoint = if (level & 1 != 0)
+                        unicode.mirroredCodepoint(scalar.codepoint)
+                    else
+                        scalar.codepoint,
+                    .direction = if (level & 1 != 0) .rtl else .ltr,
+                };
                 try appendVisualGlyphsForBidiItem(
                     buffer.allocator,
                     old_glyphs,

@@ -5,7 +5,7 @@ const std = @import("std");
 const font_mod = @import("../../../font.zig");
 const test_font = @import("../../../test_font.zig");
 const sfnt_fixture = @import("../fixtures/sfnt.zig");
-const table_only = @import("../fixtures/table_only.zig");
+const support = @import("support.zig");
 
 const Font = font_mod.Font;
 
@@ -49,7 +49,7 @@ test "fvar public axes API revalidates borrowed table checksum" {
     const fvar_offset = try sfnt_fixture.tableOffset(bytes, "fvar");
     // Keep the range ordered and every NameID valid while changing user-facing
     // metadata after parse. The borrowed table no longer matches its checksum.
-    writeF16Dot16(bytes, fvar_offset + 20, 200.0);
+    support.writeF16Dot16(bytes, fvar_offset + 20, 200.0);
     try std.testing.expectError(
         error.BadSfnt,
         font.variationAxes(allocator),
@@ -60,7 +60,7 @@ test "fvar public axes API revalidates all table metadata" {
     const allocator = std.testing.allocator;
     var bytes = oneAxisFvarWithInstance();
 
-    const font = fvarFixture(&bytes);
+    const font = support.fvarFont(&bytes);
     const axes = try font.variationAxes(allocator);
     defer allocator.free(axes);
     try std.testing.expectEqual(@as(usize, 1), axes.len);
@@ -81,14 +81,14 @@ test "fvar public axes API revalidates all table metadata" {
     try expectAxesError(&reserved_instance_flags, allocator);
 
     var coordinate_past_axis_range = bytes;
-    writeF16Dot16(&coordinate_past_axis_range, 40, 950.0);
+    support.writeF16Dot16(&coordinate_past_axis_range, 40, 950.0);
     try expectAxesError(&coordinate_past_axis_range, allocator);
 }
 
 test "normalized variation coordinates reject duplicate and unknown public tags" {
     const allocator = std.testing.allocator;
     var bytes = twoAxisFvar();
-    const font = fvarFixture(&bytes);
+    const font = support.fvarFont(&bytes);
 
     const normalized = try font.normalizedVariationCoordinates(allocator, &.{
         .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 700.0 },
@@ -119,65 +119,24 @@ test "normalized variation coordinates reject duplicate and unknown public tags"
     });
 }
 
-fn fvarFixture(data: []const u8) Font {
-    var font = table_only.init(Font, data, 2, 2);
-    font.fvar = table_only.record(
-        data,
-        .{ 'f', 'v', 'a', 'r' },
-        0,
-        data.len,
-    );
-    return font;
-}
-
 fn oneAxisFvarWithInstance() [44]u8 {
     var bytes: [44]u8 = .{0} ** 44;
-    writeFvarHeader(&bytes, 1);
+    support.writeFvarHeader(&bytes, 1);
     sfnt_fixture.writeU16(&bytes, 12, 1);
     sfnt_fixture.writeU16(&bytes, 14, 8);
-    writeAxis(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    support.writeAxis(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
     sfnt_fixture.writeU16(&bytes, 36, 300);
     sfnt_fixture.writeU16(&bytes, 38, 0);
-    writeF16Dot16(&bytes, 40, 400.0);
+    support.writeF16Dot16(&bytes, 40, 400.0);
     return bytes;
 }
 
 fn twoAxisFvar() [56]u8 {
     var bytes: [56]u8 = .{0} ** 56;
-    writeFvarHeader(&bytes, 2);
-    writeAxis(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
-    writeAxis(&bytes, 36, "wdth", 50.0, 100.0, 200.0, 257);
+    support.writeFvarHeader(&bytes, 2);
+    support.writeAxis(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
+    support.writeAxis(&bytes, 36, "wdth", 50.0, 100.0, 200.0, 257);
     return bytes;
-}
-
-fn writeFvarHeader(bytes: []u8, axis_count: u16) void {
-    sfnt_fixture.writeU32(bytes, 0, 0x00010000);
-    sfnt_fixture.writeU16(bytes, 4, 16);
-    sfnt_fixture.writeU16(bytes, 6, 2);
-    sfnt_fixture.writeU16(bytes, 8, axis_count);
-    sfnt_fixture.writeU16(bytes, 10, 20);
-}
-
-fn writeAxis(
-    bytes: []u8,
-    offset: usize,
-    comptime tag: *const [4]u8,
-    minimum: f32,
-    default: f32,
-    maximum: f32,
-    name_id: u16,
-) void {
-    @memcpy(bytes[offset..][0..4], tag);
-    writeF16Dot16(bytes, offset + 4, minimum);
-    writeF16Dot16(bytes, offset + 8, default);
-    writeF16Dot16(bytes, offset + 12, maximum);
-    sfnt_fixture.writeU16(bytes, offset + 16, 0);
-    sfnt_fixture.writeU16(bytes, offset + 18, name_id);
-}
-
-fn writeF16Dot16(bytes: []u8, offset: usize, value: f32) void {
-    const fixed: i32 = @intFromFloat(value * 65536.0);
-    std.mem.writeInt(i32, bytes[offset..][0..4], fixed, .big);
 }
 
 fn expectAxes(font: *const Font, allocator: std.mem.Allocator, count: usize) !void {
@@ -188,7 +147,7 @@ fn expectAxes(font: *const Font, allocator: std.mem.Allocator, count: usize) !vo
 }
 
 fn expectAxesError(data: []const u8, allocator: std.mem.Allocator) !void {
-    const font = fvarFixture(data);
+    const font = support.fvarFont(data);
     try std.testing.expectError(
         error.BadSfnt,
         font.variationAxes(allocator),

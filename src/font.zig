@@ -30,6 +30,7 @@ const name_mod = @import("opentype/name.zig");
 const ot_layout = @import("opentype/layout.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
+const sfnt = @import("font/sfnt/root.zig");
 const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode_mod = @import("unicode.zig");
@@ -785,12 +786,7 @@ pub const GlyphClass = enum(u16) {
     _,
 };
 
-const TableRecord = struct {
-    tag: [4]u8,
-    checksum: u32,
-    offset: usize,
-    length: usize,
-};
+const TableRecord = sfnt.Record;
 
 fn svgTable(record: TableRecord) svg_mod.Table {
     return .{ .offset = record.offset, .length = record.length };
@@ -988,7 +984,7 @@ pub const KerxLookupForShaping = struct {
     pub fn anchorForShaping(self: KerxLookupForShaping, glyph_id: glyph_mod.GlyphId, anchor_index: usize) FontError!ankr_mod.Anchor {
         if (glyph_id >= self.font.glyph_count) return error.InvalidGlyph;
         const ankr = self.font.ankr orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.font.data, ankr);
+        try sfnt.checksum.validate(self.font.data, ankr);
         return try ankr_mod.anchor(
             self.font.data,
             ankr.offset,
@@ -1171,8 +1167,12 @@ pub const Font = struct {
         const search_range = try r.readU16();
         const entry_selector = try r.readU16();
         const range_shift = try r.readU16();
-        try validateSfntSearchParameters(num_tables, search_range, entry_selector, range_shift);
-        const directory_end = try sfntDirectoryEnd(data, start, num_tables);
+        try sfnt.validateSearchParameters(num_tables, search_range, entry_selector, range_shift);
+        const directory_end = try sfnt.directoryEnd(
+            data.len,
+            start,
+            num_tables,
+        );
         const ttc_header = try parseTtcHeader(data);
         const is_ttc_face = ttc_header != null;
         const reserved_prefix_end = if (ttc_header) |header| header.header_length else 0;
@@ -1193,69 +1193,78 @@ pub const Font = struct {
                 return error.BadSfnt;
             }
         }
-        try validateSfntTableDirectory(records);
-        try validateSfntTableRanges(records, reserved_prefix_end, start, directory_end);
-        try validateSfntTablePadding(data, records);
-        if (ttc_header) |header| try validateSfntTablesDoNotOverlapTtcDsig(records, header);
+        try sfnt.validateDirectory(records);
+        try sfnt.validateRanges(
+            records,
+            reserved_prefix_end,
+            .{ .start = start, .end = directory_end },
+        );
+        try sfnt.validatePadding(data, records);
+        if (ttc_header) |header| if (header.dsig_range) |dsig| {
+            try sfnt.validateDisjoint(records, .{
+                .start = dsig.start,
+                .end = dsig.end,
+            });
+        };
 
-        const head = findTable(records, "head") orelse return error.MissingTable;
-        const hhea = findTable(records, "hhea");
-        const maxp = findTable(records, "maxp") orelse return error.MissingTable;
-        const hmtx = findTable(records, "hmtx");
-        const hdmx = findTable(records, "hdmx");
-        const ltsh = findTable(records, "LTSH");
-        const ltag = findTable(records, "ltag");
-        const loca = findTable(records, "loca");
-        const cmap = findTable(records, "cmap") orelse return error.MissingTable;
-        const kern = findTable(records, "kern");
-        const kerx = findTable(records, "kerx");
-        const mort = findTable(records, "mort");
-        const morx = findTable(records, "morx");
-        const os2 = findTable(records, "OS/2");
-        const gasp = findTable(records, "gasp");
-        const gdef = findTable(records, "GDEF");
-        const gpos = findTable(records, "GPOS");
-        const gsub = findTable(records, "GSUB");
-        const ankr = findTable(records, "ankr");
-        const feat = findTable(records, "feat");
-        const trak = findTable(records, "trak");
-        const name = findTable(records, "name");
-        const math = findTable(records, "MATH");
-        const meta = findTable(records, "meta");
-        const post = findTable(records, "post");
-        const pclt = findTable(records, "PCLT");
-        const stat = findTable(records, "STAT");
-        const fvar = findTable(records, "fvar");
-        const avar = findTable(records, "avar");
-        const cvt = findTable(records, "cvt ");
-        const cvar = findTable(records, "cvar");
-        const fpgm = findTable(records, "fpgm");
-        const prep = findTable(records, "prep");
-        const colr = findTable(records, "COLR");
-        const cpal = findTable(records, "CPAL");
-        const base = findTable(records, "BASE");
-        const dsig = findTable(records, "DSIG");
-        const vorg = findTable(records, "VORG");
-        const svg = findTable(records, "SVG ");
-        const sbix = findTable(records, "sbix");
-        const cblc = findTable(records, "CBLC");
-        const cbdt = findTable(records, "CBDT");
-        const eblc = findTable(records, "EBLC");
-        const ebdt = findTable(records, "EBDT");
-        const glyf = findTable(records, "glyf");
-        const cff = findTable(records, "CFF ");
-        const cff2 = findTable(records, "CFF2");
-        const vhea = findTable(records, "vhea");
-        const vmtx = findTable(records, "vmtx");
-        const gvar = findTable(records, "gvar");
-        const hvar = findTable(records, "HVAR");
-        const mvar = findTable(records, "MVAR");
-        const vvar = findTable(records, "VVAR");
-        const varc = findTable(records, "VARC");
-        const ift = findTable(records, "IFT ");
-        const iftx = findTable(records, "IFTX");
+        const head = sfnt.find(records, "head") orelse return error.MissingTable;
+        const hhea = sfnt.find(records, "hhea");
+        const maxp = sfnt.find(records, "maxp") orelse return error.MissingTable;
+        const hmtx = sfnt.find(records, "hmtx");
+        const hdmx = sfnt.find(records, "hdmx");
+        const ltsh = sfnt.find(records, "LTSH");
+        const ltag = sfnt.find(records, "ltag");
+        const loca = sfnt.find(records, "loca");
+        const cmap = sfnt.find(records, "cmap") orelse return error.MissingTable;
+        const kern = sfnt.find(records, "kern");
+        const kerx = sfnt.find(records, "kerx");
+        const mort = sfnt.find(records, "mort");
+        const morx = sfnt.find(records, "morx");
+        const os2 = sfnt.find(records, "OS/2");
+        const gasp = sfnt.find(records, "gasp");
+        const gdef = sfnt.find(records, "GDEF");
+        const gpos = sfnt.find(records, "GPOS");
+        const gsub = sfnt.find(records, "GSUB");
+        const ankr = sfnt.find(records, "ankr");
+        const feat = sfnt.find(records, "feat");
+        const trak = sfnt.find(records, "trak");
+        const name = sfnt.find(records, "name");
+        const math = sfnt.find(records, "MATH");
+        const meta = sfnt.find(records, "meta");
+        const post = sfnt.find(records, "post");
+        const pclt = sfnt.find(records, "PCLT");
+        const stat = sfnt.find(records, "STAT");
+        const fvar = sfnt.find(records, "fvar");
+        const avar = sfnt.find(records, "avar");
+        const cvt = sfnt.find(records, "cvt ");
+        const cvar = sfnt.find(records, "cvar");
+        const fpgm = sfnt.find(records, "fpgm");
+        const prep = sfnt.find(records, "prep");
+        const colr = sfnt.find(records, "COLR");
+        const cpal = sfnt.find(records, "CPAL");
+        const base = sfnt.find(records, "BASE");
+        const dsig = sfnt.find(records, "DSIG");
+        const vorg = sfnt.find(records, "VORG");
+        const svg = sfnt.find(records, "SVG ");
+        const sbix = sfnt.find(records, "sbix");
+        const cblc = sfnt.find(records, "CBLC");
+        const cbdt = sfnt.find(records, "CBDT");
+        const eblc = sfnt.find(records, "EBLC");
+        const ebdt = sfnt.find(records, "EBDT");
+        const glyf = sfnt.find(records, "glyf");
+        const cff = sfnt.find(records, "CFF ");
+        const cff2 = sfnt.find(records, "CFF2");
+        const vhea = sfnt.find(records, "vhea");
+        const vmtx = sfnt.find(records, "vmtx");
+        const gvar = sfnt.find(records, "gvar");
+        const hvar = sfnt.find(records, "HVAR");
+        const mvar = sfnt.find(records, "MVAR");
+        const vvar = sfnt.find(records, "VVAR");
+        const varc = sfnt.find(records, "VARC");
+        const ift = sfnt.find(records, "IFT ");
+        const iftx = sfnt.find(records, "IFTX");
 
-        if (morx == null and mort == null and range_shift != try expectedSfntRangeShift(num_tables)) return error.BadSfnt;
+        if (morx == null and mort == null and range_shift != try sfnt.expectedRangeShift(num_tables)) return error.BadSfnt;
 
         const has_horizontal_metrics = hhea != null and hmtx != null;
         if ((hhea == null) != (hmtx == null)) return error.MissingTable;
@@ -1408,7 +1417,7 @@ pub const Font = struct {
         if (sbix) |sbix_table| try validateSbixTable(allocator, data, sbix_table, glyph_count);
         if (cblc != null and cbdt != null) try validateCblcCbdtTables(data, cblc.?, cbdt.?, glyph_count);
         if (eblc != null and ebdt != null) try validateCblcCbdtTables(data, eblc.?, ebdt.?, glyph_count);
-        if (!is_ttc_face) try validateSfntTableChecksums(data, records);
+        if (!is_ttc_face) try sfnt.checksum.validateAll(data, records);
 
         // Record all cmap subtables once. `glyphIndex` can then pick the best
         // supported Unicode mapping per lookup without reparsing the directory.
@@ -1498,7 +1507,7 @@ pub const Font = struct {
         const gvar = self.gvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
         const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateSfntTableChecksum(self.data, gvar);
+        try sfnt.checksum.validate(self.data, gvar);
         try gvar_mod.validate(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count);
         return try gvar_mod.info(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count);
     }
@@ -1509,7 +1518,7 @@ pub const Font = struct {
         const gvar = self.gvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
         const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateSfntTableChecksum(self.data, gvar);
+        try sfnt.checksum.validate(self.data, gvar);
         return try gvar_mod.glyphInfo(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id);
     }
 
@@ -1519,7 +1528,7 @@ pub const Font = struct {
         const gvar = self.gvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
         const fvar_info = try readFvarInfo(self.data, fvar);
-        try validateSfntTableChecksum(self.data, gvar);
+        try sfnt.checksum.validate(self.data, gvar);
         return try gvar_mod.tupleInfo(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id, tuple_index);
     }
 
@@ -1577,7 +1586,7 @@ pub const Font = struct {
     fn gvarPointDeltasAtCoordsPreparedNoShrinkWithCount(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, target_count: usize, has_delta: ?[]bool, read_mode: OutlineReadMode) FontError!?struct { []GvarScaledPointDelta, usize } {
         const gvar = self.gvar orelse return null;
         const axis_count = try self.fvarAxisCountForReadMode(read_mode);
-        if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, gvar);
+        if (read_mode.shouldRevalidate()) try sfnt.checksum.validate(self.data, gvar);
         if (target_count > @as(usize, std.math.maxInt(u16)) + 1) return error.BadSfnt;
         var inline_raw_scratch: [64]gvar_mod.PointDelta = undefined;
         const raw_scratch = if (target_count <= inline_raw_scratch.len)
@@ -1619,7 +1628,7 @@ pub const Font = struct {
     pub fn cff2FontDictIndex(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?u16 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.fontDictIndex(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count);
     }
@@ -1627,7 +1636,7 @@ pub const Font = struct {
     /// Borrow raw CFF2 Global Subr bytes, when the optional CFF2 table is present.
     pub fn cff2GlobalSubrData(self: *const Font, subr_index: usize) FontError!?[]const u8 {
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.globalSubrData(self.data, cff2.offset, cff2.length, subr_index);
     }
@@ -1635,7 +1644,7 @@ pub const Font = struct {
     /// Borrow a raw CFF2 Global Subr using a biased callgsubr operand.
     pub fn cff2GlobalSubrDataForOperand(self: *const Font, operand: i32) FontError!?[]const u8 {
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.globalSubrDataForOperand(self.data, cff2.offset, cff2.length, operand);
     }
@@ -1643,7 +1652,7 @@ pub const Font = struct {
     /// Read CFF2 Font DICT and Private DICT metadata for a font-dict index.
     pub fn cff2FontDictInfo(self: *const Font, font_dict_index: usize) FontError!?Cff2FontDictInfo {
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.fontDictInfo(self.data, cff2.offset, cff2.length, font_dict_index);
     }
@@ -1651,7 +1660,7 @@ pub const Font = struct {
     /// Borrow raw CFF2 Local Subr bytes for a font-dict index, when present.
     pub fn cff2LocalSubrData(self: *const Font, font_dict_index: usize, subr_index: usize) FontError!?[]const u8 {
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.localSubrData(self.data, cff2.offset, cff2.length, font_dict_index, subr_index);
     }
@@ -1659,7 +1668,7 @@ pub const Font = struct {
     /// Borrow a raw CFF2 Local Subr using a biased callsubr operand.
     pub fn cff2LocalSubrDataForOperand(self: *const Font, font_dict_index: usize, operand: i32) FontError!?[]const u8 {
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.localSubrDataForOperand(self.data, cff2.offset, cff2.length, font_dict_index, operand);
     }
@@ -1668,7 +1677,7 @@ pub const Font = struct {
     pub fn cff2CharStringData(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.charStringData(self.data, cff2.offset, cff2.length, glyph_id);
     }
@@ -1677,7 +1686,7 @@ pub const Font = struct {
     pub fn cff2CharStringScanInfo(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?Cff2CharStringScanInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.charStringScanInfo(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count);
     }
@@ -1692,7 +1701,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.charStringBoundsInfoAtCoords(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords);
     }
@@ -1713,7 +1722,7 @@ pub const Font = struct {
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const cff2 = self.cff2 orelse return null;
         if (read_mode.shouldRevalidate()) {
-            try validateSfntTableChecksum(self.data, cff2);
+            try sfnt.checksum.validate(self.data, cff2);
             try validateCff2Table(self.data, cff2);
         }
         const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
@@ -1730,7 +1739,7 @@ pub const Font = struct {
     /// Read validated top-level metadata from the optional OpenType `CFF2` table.
     pub fn cff2Info(self: *const Font) FontError!?Cff2Info {
         const cff2 = self.cff2 orelse return null;
-        try validateSfntTableChecksum(self.data, cff2);
+        try sfnt.checksum.validate(self.data, cff2);
         try validateCff2Table(self.data, cff2);
         return try cff2_mod.info(self.data, cff2.offset, cff2.length);
     }
@@ -1751,7 +1760,7 @@ pub const Font = struct {
     /// Read raw TrueType Control Value Table entries from the optional `cvt ` table.
     pub fn cvtValues(self: *const Font, allocator: std.mem.Allocator) FontError![]i16 {
         const cvt = self.cvt orelse return try allocator.alloc(i16, 0);
-        try validateSfntTableChecksum(self.data, cvt);
+        try sfnt.checksum.validate(self.data, cvt);
         _ = try validateCvtTable(cvt);
         return try readCvtValues(allocator, self.data, cvt);
     }
@@ -1761,11 +1770,11 @@ pub const Font = struct {
         const cvar = self.cvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
         const cvt = self.cvt orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
+        try sfnt.checksum.validate(self.data, fvar);
         try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, cvt);
+        try sfnt.checksum.validate(self.data, cvt);
         const cvt_value_count = try validateCvtTable(cvt);
-        try validateSfntTableChecksum(self.data, cvar);
+        try sfnt.checksum.validate(self.data, cvar);
         const fvar_info = try readFvarInfo(self.data, fvar);
         try validateCvarTable(self.data, cvar, fvar_info.axis_count, cvt_value_count);
         return try cvar_mod.info(allocator, self.data, cvar.offset, cvar.length, fvar_info.axis_count);
@@ -1778,7 +1787,7 @@ pub const Font = struct {
     /// Read validated chain, feature, and subtable metadata from the optional AAT `morx` table.
     pub fn morxInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?MorxInfo {
         const morx = self.morx orelse return null;
-        try validateSfntTableChecksum(self.data, morx);
+        try sfnt.checksum.validate(self.data, morx);
         try validateMorxTable(self.data, morx, self.glyph_count);
         return try morx_mod.info(allocator, self.data, morx.offset, morx.length, self.glyph_count);
     }
@@ -1804,7 +1813,7 @@ pub const Font = struct {
     /// Read validated top-level metadata from the optional IFT patch map table.
     pub fn iftPatchMapInfo(self: *const Font) FontError!?IftPatchMapInfo {
         const table = self.ift orelse return null;
-        try validateSfntTableChecksum(self.data, table);
+        try sfnt.checksum.validate(self.data, table);
         try validateIftPatchMapTable(self.data, table);
         return try ift_mod.info(self.data, table.offset, table.length);
     }
@@ -1812,7 +1821,7 @@ pub const Font = struct {
     /// Read validated top-level metadata from the optional IFTX patch map table.
     pub fn iftxPatchMapInfo(self: *const Font) FontError!?IftPatchMapInfo {
         const table = self.iftx orelse return null;
-        try validateSfntTableChecksum(self.data, table);
+        try sfnt.checksum.validate(self.data, table);
         try validateIftPatchMapTable(self.data, table);
         return try ift_mod.info(self.data, table.offset, table.length);
     }
@@ -1820,7 +1829,7 @@ pub const Font = struct {
     /// Read validated top-level metadata from the optional OpenType `VARC` table.
     pub fn varcInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?VarcInfo {
         const varc = self.varc orelse return null;
-        try validateSfntTableChecksum(self.data, varc);
+        try sfnt.checksum.validate(self.data, varc);
         try validateVarcTable(self.data, varc, self.glyph_count);
         return try varc_mod.info(allocator, self.data, varc.offset, varc.length, self.glyph_count);
     }
@@ -1832,7 +1841,7 @@ pub const Font = struct {
     /// Read validated metadata and format-0 pairs from the optional AAT `kerx` table.
     pub fn kerxInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?KerxInfo {
         const kerx = self.kerx orelse return null;
-        try validateSfntTableChecksum(self.data, kerx);
+        try sfnt.checksum.validate(self.data, kerx);
         try validateKerxTable(self.data, kerx, self.glyph_count);
         return try kerx_mod.info(allocator, self.data, kerx.offset, kerx.length, self.glyph_count);
     }
@@ -1844,7 +1853,7 @@ pub const Font = struct {
     /// Read validated anchor points from the optional AAT `ankr` table.
     pub fn ankrInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?AnkrInfo {
         const ankr = self.ankr orelse return null;
-        try validateSfntTableChecksum(self.data, ankr);
+        try sfnt.checksum.validate(self.data, ankr);
         try validateAnkrTable(self.data, ankr, self.glyph_count);
         return try ankr_mod.info(allocator, self.data, ankr.offset, ankr.length, self.glyph_count);
     }
@@ -1856,7 +1865,7 @@ pub const Font = struct {
     /// Decode the optional TrueType `fpgm` font program as structural bytecode.
     pub fn fontProgramInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?TrueTypeProgramInfo {
         const fpgm = self.fpgm orelse return null;
-        try validateSfntTableChecksum(self.data, fpgm);
+        try sfnt.checksum.validate(self.data, fpgm);
         try validateTrueTypeProgramTable(self.data, fpgm);
         return try tt_program_mod.info(allocator, .font, self.data[fpgm.offset .. fpgm.offset + fpgm.length]);
     }
@@ -1864,7 +1873,7 @@ pub const Font = struct {
     /// Decode the optional TrueType `prep` control-value program as structural bytecode.
     pub fn controlValueProgramInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?TrueTypeProgramInfo {
         const prep = self.prep orelse return null;
-        try validateSfntTableChecksum(self.data, prep);
+        try sfnt.checksum.validate(self.data, prep);
         try validateTrueTypeProgramTable(self.data, prep);
         return try tt_program_mod.info(allocator, .control_value, self.data[prep.offset .. prep.offset + prep.length]);
     }
@@ -1948,9 +1957,9 @@ pub const Font = struct {
     pub fn mvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?MvarInfo {
         const mvar = self.mvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
+        try sfnt.checksum.validate(self.data, fvar);
         try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, mvar);
+        try sfnt.checksum.validate(self.data, mvar);
         const fvar_info = try readFvarInfo(self.data, fvar);
         try validateMvarTable(self.data, mvar, fvar_info.axis_count);
         return try mvar_mod.info(allocator, self.data, mvar.offset, mvar.length);
@@ -2035,9 +2044,9 @@ pub const Font = struct {
             .vvar => .{ self.vvar orelse return null, @as(usize, 24) },
         };
         const fvar = self.fvar orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, fvar);
+        try sfnt.checksum.validate(self.data, fvar);
         try validateFvarTable(self.data, fvar);
-        try validateSfntTableChecksum(self.data, table);
+        try sfnt.checksum.validate(self.data, table);
         const fvar_info = try readFvarInfo(self.data, fvar);
         try validateMetricVariationTable(self.data, table, fvar_info.axis_count, minimum_length);
         return table;
@@ -2046,7 +2055,7 @@ pub const Font = struct {
     /// Read validated metadata from the optional OpenType `BASE` table.
     pub fn baseInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?BaseInfo {
         const base = self.base orelse return null;
-        try validateSfntTableChecksum(self.data, base);
+        try sfnt.checksum.validate(self.data, base);
         return try base_mod.info(allocator, self.data, base.offset, base.length);
     }
 
@@ -2060,15 +2069,15 @@ pub const Font = struct {
     /// Font. Revalidate the table checksum at this API boundary so mutations to
     /// borrowed bytes after parse do not escape as authoritative table data.
     pub fn tableData(self: *const Font, tag: [4]u8) FontError!?[]const u8 {
-        const record = findTableByTag(self.owned_tables, tag) orelse return null;
-        try validateSfntTableChecksum(self.data, record);
+        const record = sfnt.findTag(self.owned_tables, tag) orelse return null;
+        try sfnt.checksum.validate(self.data, record);
         return self.data[record.offset .. record.offset + record.length];
     }
 
     /// Read validated tracking data from the optional AAT `trak` table.
     pub fn trakInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?TrackTableInfo {
         const trak = self.trak orelse return null;
-        try validateSfntTableChecksum(self.data, trak);
+        try sfnt.checksum.validate(self.data, trak);
         return try trak_mod.info(allocator, self.data, trak.offset, trak.length);
     }
 
@@ -2086,7 +2095,7 @@ pub const Font = struct {
     /// Read validated records from the optional AAT `feat` table.
     pub fn featFeatures(self: *const Font, allocator: std.mem.Allocator) FontError![]FeatureNameInfo {
         const feat = self.feat orelse return try allocator.alloc(FeatureNameInfo, 0);
-        try validateSfntTableChecksum(self.data, feat);
+        try sfnt.checksum.validate(self.data, feat);
         return try feat_mod.features(allocator, self.data, feat.offset, feat.length);
     }
 
@@ -2097,7 +2106,7 @@ pub const Font = struct {
     /// Read validated records from the optional Apple SFNT `ltag` table.
     pub fn ltagRecords(self: *const Font, allocator: std.mem.Allocator) FontError![]LtagRecordInfo {
         const ltag = self.ltag orelse return try allocator.alloc(LtagRecordInfo, 0);
-        try validateSfntTableChecksum(self.data, ltag);
+        try sfnt.checksum.validate(self.data, ltag);
         return try ltag_mod.records(allocator, self.data, ltag.offset, ltag.length);
     }
 
@@ -2105,7 +2114,7 @@ pub const Font = struct {
     pub fn mathItalicsCorrection(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?MathValueRecordInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const math = self.math orelse return null;
-        try validateSfntTableChecksum(self.data, math);
+        try sfnt.checksum.validate(self.data, math);
         try validateMathTable(self.data, math);
         return try math_mod.glyphValueRecord(self.data, math.offset, math.length, glyph_id, .italics_correction);
     }
@@ -2114,7 +2123,7 @@ pub const Font = struct {
     pub fn mathTopAccentAttachment(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?MathValueRecordInfo {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const math = self.math orelse return null;
-        try validateSfntTableChecksum(self.data, math);
+        try sfnt.checksum.validate(self.data, math);
         try validateMathTable(self.data, math);
         return try math_mod.glyphValueRecord(self.data, math.offset, math.length, glyph_id, .top_accent_attachment);
     }
@@ -2123,7 +2132,7 @@ pub const Font = struct {
     pub fn mathIsExtendedShape(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!bool {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const math = self.math orelse return false;
-        try validateSfntTableChecksum(self.data, math);
+        try sfnt.checksum.validate(self.data, math);
         try validateMathTable(self.data, math);
         return try math_mod.isExtendedShape(self.data, math.offset, math.length, glyph_id);
     }
@@ -2179,7 +2188,7 @@ pub const Font = struct {
     /// Read one raw OpenType `MATH` constant, mirroring HarfBuzz's math constant selector.
     pub fn mathConstantRaw(self: *const Font, constant: MathConstant) FontError!?i32 {
         const math = self.math orelse return null;
-        try validateSfntTableChecksum(self.data, math);
+        try sfnt.checksum.validate(self.data, math);
         try validateMathTable(self.data, math);
         return try math_mod.constantValue(self.data, math.offset, math.length, constant);
     }
@@ -2187,7 +2196,7 @@ pub const Font = struct {
     /// Read validated constants metadata from the optional OpenType `MATH` table.
     pub fn mathInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?MathInfo {
         const math = self.math orelse return null;
-        try validateSfntTableChecksum(self.data, math);
+        try sfnt.checksum.validate(self.data, math);
         try validateMathTable(self.data, math);
         return try math_mod.info(allocator, self.data, math.offset, math.length);
     }
@@ -2199,20 +2208,20 @@ pub const Font = struct {
     /// Read validated records from the optional SFNT `meta` table.
     pub fn metaRecords(self: *const Font, allocator: std.mem.Allocator) FontError![]MetaRecordInfo {
         const meta = self.meta orelse return try allocator.alloc(MetaRecordInfo, 0);
-        try validateSfntTableChecksum(self.data, meta);
+        try sfnt.checksum.validate(self.data, meta);
         return try meta_mod.records(allocator, self.data, meta.offset, meta.length);
     }
 
     pub fn metaData(self: *const Font, tag: [4]u8) FontError!?[]const u8 {
         const meta = self.meta orelse return null;
-        try validateSfntTableChecksum(self.data, meta);
+        try sfnt.checksum.validate(self.data, meta);
         return try meta_mod.dataForTag(self.data, meta.offset, meta.length, tag);
     }
 
     /// Read validated metadata from the optional SFNT `DSIG` table.
     pub fn dsigInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?DsigInfo {
         const dsig = self.dsig orelse return null;
-        try validateSfntTableChecksum(self.data, dsig);
+        try sfnt.checksum.validate(self.data, dsig);
         try validateDsigTable(self.data, dsig);
         return try readDsigInfo(allocator, self.data, dsig);
     }
@@ -2224,7 +2233,7 @@ pub const Font = struct {
     /// Read validated metadata from the optional SFNT `gasp` table.
     pub fn gaspInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?GaspInfo {
         const gasp = self.gasp orelse return null;
-        try validateSfntTableChecksum(self.data, gasp);
+        try sfnt.checksum.validate(self.data, gasp);
         return try gasp_mod.info(allocator, self.data, gasp.offset, gasp.length);
     }
 
@@ -2235,7 +2244,7 @@ pub const Font = struct {
     /// Return gasp behavior flags for a PPEM value, or null when no table exists.
     pub fn gaspBehavior(self: *const Font, ppem: u16) FontError!?u16 {
         const gasp = self.gasp orelse return null;
-        try validateSfntTableChecksum(self.data, gasp);
+        try sfnt.checksum.validate(self.data, gasp);
         return try gasp_mod.behavior(self.data, gasp.offset, gasp.length, ppem);
     }
 
@@ -2245,7 +2254,7 @@ pub const Font = struct {
     /// callers to parse raw table bytes. The returned data is copied into a
     /// value type after the borrowed `head` bytes have been revalidated.
     pub fn headInfo(self: *const Font) FontError!FontHeaderInfo {
-        try validateSfntTableChecksum(self.data, self.head);
+        try sfnt.checksum.validate(self.data, self.head);
         try validateHeadTable(self.data, self.head, self.format);
         return try readFontHeaderInfo(self.data, self.head);
     }
@@ -2256,7 +2265,7 @@ pub const Font = struct {
     /// payload; CFF-backed OpenType faces expose the version-0.5 glyph count
     /// and leave TrueType-only maxima as null.
     pub fn maxpInfo(self: *const Font) FontError!MaxProfileInfo {
-        try validateSfntTableChecksum(self.data, self.maxp);
+        try sfnt.checksum.validate(self.data, self.maxp);
         try validateMaxpTable(self.data, self.maxp, self.format);
         return try readMaxProfileInfo(self.data, self.maxp);
     }
@@ -2265,7 +2274,7 @@ pub const Font = struct {
     pub fn horizontalHeaderInfo(self: *const Font) FontError!MetricHeaderInfo {
         const hhea = self.hhea orelse return error.MissingTable;
         const hmtx = self.hmtx orelse return error.MissingTable;
-        try validateSfntTableChecksum(self.data, hhea);
+        try sfnt.checksum.validate(self.data, hhea);
         _ = try validateHorizontalMetricsTables(self.data, hhea, hmtx, self.glyph_count);
         return try readMetricHeaderInfo(self.data, hhea);
     }
@@ -2276,13 +2285,13 @@ pub const Font = struct {
     /// malformed borrowed table reports InvalidMetrics/BadSfnt instead of
     /// silently falling back to horizontal metrics.
     pub fn verticalHeaderInfo(self: *const Font) FontError!?MetricHeaderInfo {
-        const vhea = findTable(self.owned_tables, "vhea") orelse {
-            if (findTable(self.owned_tables, "vmtx") != null) return error.InvalidMetrics;
+        const vhea = sfnt.find(self.owned_tables, "vhea") orelse {
+            if (sfnt.find(self.owned_tables, "vmtx") != null) return error.InvalidMetrics;
             return null;
         };
-        const vmtx = findTable(self.owned_tables, "vmtx") orelse return error.InvalidMetrics;
-        try validateSfntTableChecksum(self.data, vhea);
-        try validateSfntTableChecksum(self.data, vmtx);
+        const vmtx = sfnt.find(self.owned_tables, "vmtx") orelse return error.InvalidMetrics;
+        try sfnt.checksum.validate(self.data, vhea);
+        try sfnt.checksum.validate(self.data, vmtx);
         _ = try validateVerticalMetricsTables(self.data, self.glyph_count, vhea, vmtx);
         return try readMetricHeaderInfo(self.data, vhea);
     }
@@ -2440,7 +2449,7 @@ pub const Font = struct {
     fn validateCmapLookupSubtable(self: *const Font, subtable: CmapSubtable) FontError!void {
         const relative_offset = try tableRelativeOffset(self.cmap, subtable.offset);
         if (subtable.length > self.cmap.length - relative_offset) return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, self.cmap);
+        try sfnt.checksum.validate(self.data, self.cmap);
         try validateCachedCmapEncodingRecord(self.data, self.cmap, subtable, relative_offset);
         const format = try bin.readU16At(self.data, subtable.offset);
         if (format != subtable.format) return error.BadSfnt;
@@ -2459,7 +2468,7 @@ pub const Font = struct {
     /// Read validated horizontal device metrics from the optional SFNT `hdmx` table.
     pub fn hdmxInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?HdmxInfo {
         const hdmx = self.hdmx orelse return null;
-        try validateSfntTableChecksum(self.data, hdmx);
+        try sfnt.checksum.validate(self.data, hdmx);
         try validateHdmxTable(self.data, hdmx, self.glyph_count);
         return try readHdmxInfo(allocator, self.data, hdmx, self.glyph_count);
     }
@@ -2472,7 +2481,7 @@ pub const Font = struct {
     pub fn hdmxWidth(self: *const Font, ppem: u8, glyph_id: glyph_mod.GlyphId) FontError!?u8 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const hdmx = self.hdmx orelse return null;
-        try validateSfntTableChecksum(self.data, hdmx);
+        try sfnt.checksum.validate(self.data, hdmx);
         try validateHdmxTable(self.data, hdmx, self.glyph_count);
         return try readHdmxWidth(self.data, hdmx, self.glyph_count, ppem, glyph_id);
     }
@@ -2480,7 +2489,7 @@ pub const Font = struct {
     /// Read validated linear-threshold metrics from the optional SFNT `LTSH` table.
     pub fn ltshInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?LtshInfo {
         const ltsh = self.ltsh orelse return null;
-        try validateSfntTableChecksum(self.data, ltsh);
+        try sfnt.checksum.validate(self.data, ltsh);
         try validateLtshTable(self.data, ltsh, self.glyph_count);
         return try readLtshInfo(allocator, self.data, ltsh, self.glyph_count);
     }
@@ -2492,7 +2501,7 @@ pub const Font = struct {
     pub fn linearThreshold(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?u8 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const ltsh = self.ltsh orelse return null;
-        try validateSfntTableChecksum(self.data, ltsh);
+        try sfnt.checksum.validate(self.data, ltsh);
         try validateLtshTable(self.data, ltsh, self.glyph_count);
         return self.data[ltsh.offset + 4 + glyph_id];
     }
@@ -2514,8 +2523,8 @@ pub const Font = struct {
         const hmtx = self.hmtx orelse return error.MissingTable;
         const current_metric_count = try validateHorizontalMetricsTables(self.data, hhea, hmtx, self.glyph_count);
         if (current_metric_count != self.number_of_h_metrics) return error.InvalidMetrics;
-        try validateSfntTableChecksum(self.data, hhea);
-        try validateSfntTableChecksum(self.data, hmtx);
+        try sfnt.checksum.validate(self.data, hhea);
+        try sfnt.checksum.validate(self.data, hmtx);
         return current_metric_count;
     }
 
@@ -2544,7 +2553,7 @@ pub const Font = struct {
     }
 
     pub fn hasVerticalMetrics(self: *const Font) bool {
-        return findTable(self.owned_tables, "vhea") != null and findTable(self.owned_tables, "vmtx") != null;
+        return sfnt.find(self.owned_tables, "vhea") != null and sfnt.find(self.owned_tables, "vmtx") != null;
     }
 
     /// Expand the optional SFNT `vmtx` table into one metric record per glyph.
@@ -2566,14 +2575,14 @@ pub const Font = struct {
     };
 
     fn verticalMetricTablesForRead(self: *const Font) FontError!VerticalMetricReadContext {
-        const vhea = findTable(self.owned_tables, "vhea") orelse {
-            if (findTable(self.owned_tables, "vmtx") != null) return error.InvalidMetrics;
+        const vhea = sfnt.find(self.owned_tables, "vhea") orelse {
+            if (sfnt.find(self.owned_tables, "vmtx") != null) return error.InvalidMetrics;
             return .{ .vhea = null, .vmtx = null, .metric_count = null };
         };
-        const vmtx = findTable(self.owned_tables, "vmtx") orelse return error.InvalidMetrics;
+        const vmtx = sfnt.find(self.owned_tables, "vmtx") orelse return error.InvalidMetrics;
         const metric_count = (try validateVerticalMetricsTables(self.data, self.glyph_count, vhea, vmtx)) orelse return .{ .vhea = null, .vmtx = null, .metric_count = null };
-        try validateSfntTableChecksum(self.data, vhea);
-        try validateSfntTableChecksum(self.data, vmtx);
+        try sfnt.checksum.validate(self.data, vhea);
+        try sfnt.checksum.validate(self.data, vmtx);
         return .{ .vhea = vhea, .vmtx = vmtx, .metric_count = metric_count };
     }
 
@@ -2663,7 +2672,7 @@ pub const Font = struct {
         // read so post-parse mutations cannot introduce dangling glyph IDs or
         // unsorted format-0 records that binary search would otherwise observe
         // as an innocuous "no pair" result.
-        try validateSfntTableChecksum(self.data, kern);
+        try sfnt.checksum.validate(self.data, kern);
         try validateKernTable(self.data, kern, self.glyph_count);
         if (kern.length < 4) return 0;
         const version = try bin.readU32At(self.data, kern.offset);
@@ -2676,20 +2685,20 @@ pub const Font = struct {
 
     fn kernLookupForShaping(self: *const Font) FontError!KernLookupForShaping {
         const kern = self.kern;
-        if (kern) |kern_table| try validateSfntTableChecksum(self.data, kern_table);
+        if (kern) |kern_table| try sfnt.checksum.validate(self.data, kern_table);
         return .{ .font = self, .kern = kern };
     }
 
     fn kerxLookupForShaping(self: *const Font) FontError!?KerxLookupForShaping {
         const kerx = self.kerx orelse return null;
-        try validateSfntTableChecksum(self.data, kerx);
+        try sfnt.checksum.validate(self.data, kerx);
         return .{ .font = self, .kerx = kerx };
     }
 
     /// Read validated metadata from the optional SFNT `kern` table.
     pub fn kernInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?KernInfo {
         const kern = self.kern orelse return null;
-        try validateSfntTableChecksum(self.data, kern);
+        try sfnt.checksum.validate(self.data, kern);
         try validateKernTable(self.data, kern, self.glyph_count);
         return try readKernInfo(allocator, self.data, kern);
     }
@@ -2790,7 +2799,7 @@ pub const Font = struct {
         // Font objects borrow caller-owned SFNT bytes. Re-run the parse-time
         // GSUB glyph-bound walk before shaping so a post-parse mutation cannot
         // smuggle an out-of-range substitution result into the glyph stream.
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         var gdef_metadata = try self.gdefLookupMetadataForShaping(allocator);
         defer gdef_metadata.deinit(allocator);
@@ -2800,7 +2809,7 @@ pub const Font = struct {
     fn applyGsubWithOptionsUsingGdef(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         try self.applyGsubWithOptionsUsingGdefForShaping(glyphs, allocator, options, gdef_metadata);
         // A single public GSUB call is a complete shaping boundary. Internal
@@ -2816,13 +2825,13 @@ pub const Font = struct {
         // layout hot path may shape many small runs from the same validated
         // font, so repeat only the borrowed-table checksum proof here instead
         // of rewalking every lookup for every text node.
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         try self.applyGsubWithOptionsUsingGdefAfterProof(glyphs, allocator, options, gdef_metadata);
     }
 
     fn proveGsubTableForShaping(self: *const Font) FontError!void {
         const gsub = self.gsub orelse return;
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
     }
 
     /// Select the concrete OpenType Layout ScriptList tag for a Unicode script.
@@ -2837,7 +2846,7 @@ pub const Font = struct {
         explicit_tag: ?unicode_mod.OpenTypeScriptTag,
     ) FontError!LayoutScriptSelection {
         const record = table_record orelse return .{};
-        try validateSfntTableChecksum(self.data, record);
+        try sfnt.checksum.validate(self.data, record);
         return self.selectLayoutScriptAfterProof(record, script, explicit_tag);
     }
 
@@ -2880,7 +2889,7 @@ pub const Font = struct {
         explicit_tag: ?unicode_mod.OpenTypeScriptTag,
     ) FontError!LayoutScriptSelection {
         const gsub = self.gsub orelse return .{};
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         // Some deployed fonts contain only the version and three null top-level
         // GSUB offsets. HarfBuzz treats that exact topology as an inert table;
         // routing it through the generic selector would interpret version bytes
@@ -2934,7 +2943,7 @@ pub const Font = struct {
 
     fn selectGsubLookupsForShaping(self: *const Font, allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError![]u16 {
         const gsub = self.gsub orelse return try allocator.alloc(u16, 0);
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         var gsub_options = options;
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
@@ -2991,7 +3000,7 @@ pub const Font = struct {
 
     fn hasGsubFeatureForShaping(self: *const Font, feature_tag: u32) FontError!bool {
         const gsub = self.gsub orelse return false;
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         return try gsub_mod.hasFeature(self.data, gsub.offset, gsub.length, feature_tag);
     }
 
@@ -3002,13 +3011,13 @@ pub const Font = struct {
 
     fn gsubLookupAcceleratorsForShaping(self: *const Font, allocator: std.mem.Allocator) FontError![]gsub_mod.LookupAccelerator {
         const gsub = self.gsub orelse return try allocator.alloc(gsub_mod.LookupAccelerator, 0);
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         return try gsub_mod.buildLookupAccelerators(self.data, gsub.offset, gsub.length, allocator);
     }
 
     fn gsubFeatureLookupPlanForShaping(self: *const Font, allocator: std.mem.Allocator, applications: []const gsub_mod.FeatureApplication, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!gsub_mod.FeatureLookupPlan {
         const gsub = self.gsub orelse return .{ .entries = try allocator.alloc(gsub_mod.FeatureLookupPlanEntry, 0) };
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         var gsub_options = options;
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
@@ -3020,7 +3029,7 @@ pub const Font = struct {
             .lookups = try allocator.alloc(gsub_mod.MergedFeatureLookup, 0),
             .lookup_offsets = try allocator.alloc(usize, 0),
         };
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         var gsub_options = options;
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
@@ -3038,7 +3047,7 @@ pub const Font = struct {
     fn applyGsubFeatureSequenceWithOptions(self: *const Font, applications: []const gsub_mod.FeatureApplication, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         var gdef_metadata = try self.gdefLookupMetadataForShaping(allocator);
         defer gdef_metadata.deinit(allocator);
@@ -3048,7 +3057,7 @@ pub const Font = struct {
     fn applyGsubFeatureSequenceWithOptionsUsingGdef(self: *const Font, applications: []const gsub_mod.FeatureApplication, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         try gsub_mod.validateGlyphBoundsForShaping(self.data, gsub.offset, gsub.length, self.glyph_count);
         try self.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(applications, glyphs, allocator, options, gdef_metadata);
         try self.validateGlyphRun(glyphs.items);
@@ -3057,7 +3066,7 @@ pub const Font = struct {
     fn applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(self: *const Font, applications: []const gsub_mod.FeatureApplication, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
         try self.validateGlyphRun(glyphs.items);
         const gsub = self.gsub orelse return;
-        try validateSfntTableChecksum(self.data, gsub);
+        try sfnt.checksum.validate(self.data, gsub);
         try self.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(applications, glyphs, allocator, options, gdef_metadata);
     }
 
@@ -3141,7 +3150,7 @@ pub const Font = struct {
         // glyph references on every public positioning pass instead of only at
         // Font.parse time, keeping malformed replacement bytes from hiding in
         // unvisited lookups until a specific feature or glyph run reaches them.
-        try validateSfntTableChecksum(self.data, gpos);
+        try sfnt.checksum.validate(self.data, gpos);
         try gpos_mod.validateGlyphBounds(self.data, gpos.offset, gpos.length, self.glyph_count);
         var gdef_metadata = try self.gdefLookupMetadataForShaping(allocator);
         defer gdef_metadata.deinit(allocator);
@@ -3151,7 +3160,7 @@ pub const Font = struct {
     fn collectGposAdjustmentsWithOptionsUsingGdef(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
         try self.validateGlyphRun(glyphs);
         const gpos = self.gpos orelse return;
-        try validateSfntTableChecksum(self.data, gpos);
+        try sfnt.checksum.validate(self.data, gpos);
         try gpos_mod.validateGlyphBounds(self.data, gpos.offset, gpos.length, self.glyph_count);
         try self.collectGposAdjustmentsWithOptionsUsingGdefForShaping(glyphs, adjustments, allocator, options, gdef_metadata);
     }
@@ -3159,13 +3168,13 @@ pub const Font = struct {
     fn collectGposAdjustmentsWithOptionsUsingGdefForShaping(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
         try self.validateGlyphRun(glyphs);
         const gpos = self.gpos orelse return;
-        try validateSfntTableChecksum(self.data, gpos);
+        try sfnt.checksum.validate(self.data, gpos);
         try self.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(glyphs, adjustments, allocator, options, gdef_metadata);
     }
 
     fn proveGposTableForShaping(self: *const Font) FontError!void {
         const gpos = self.gpos orelse return;
-        try validateSfntTableChecksum(self.data, gpos);
+        try sfnt.checksum.validate(self.data, gpos);
     }
 
     /// Report whether this face has an OpenType positioning table.
@@ -3198,14 +3207,14 @@ pub const Font = struct {
         if (self.morx != null) return try self.applyMorxForShaping(glyphs, allocator, options);
         try self.validateGlyphRun(glyphs.items);
         const mort = self.mort orelse return;
-        try validateSfntTableChecksum(self.data, mort);
+        try sfnt.checksum.validate(self.data, mort);
         try aat_mort.apply(allocator, self.data, mort.offset, mort.length, self.glyph_count, glyphs, options);
     }
 
     fn applyMorxForShaping(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.LookupOptions) FontError!void {
         try self.validateGlyphRun(glyphs.items);
         const morx = self.morx orelse return;
-        try validateSfntTableChecksum(self.data, morx);
+        try sfnt.checksum.validate(self.data, morx);
         try validateMorxTable(self.data, morx, self.glyph_count);
         try aat_morx.apply(allocator, self.data, morx.offset, morx.length, self.glyph_count, glyphs, options);
     }
@@ -3221,7 +3230,7 @@ pub const Font = struct {
 
     fn selectGposLookupsForShaping(self: *const Font, allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError![]u16 {
         const gpos = self.gpos orelse return try allocator.alloc(u16, 0);
-        try validateSfntTableChecksum(self.data, gpos);
+        try sfnt.checksum.validate(self.data, gpos);
         var gpos_options = options;
         gpos_options.assume_validated = true;
         gdef_metadata.applyToGposOptions(&gpos_options);
@@ -3230,7 +3239,7 @@ pub const Font = struct {
 
     fn gposLookupAcceleratorsForShaping(self: *const Font, allocator: std.mem.Allocator) FontError![]gpos_mod.LookupAccelerator {
         const gpos = self.gpos orelse return try allocator.alloc(gpos_mod.LookupAccelerator, 0);
-        try validateSfntTableChecksum(self.data, gpos);
+        try sfnt.checksum.validate(self.data, gpos);
         return try gpos_mod.buildLookupAccelerators(self.data, gpos.offset, gpos.length, allocator);
     }
 
@@ -3247,7 +3256,7 @@ pub const Font = struct {
         // public glyphClass/markAttachClass APIs defensively revalidate GDEF on
         // every single glyph query; shaping only needs one call-boundary proof
         // for the already-parsed font before expanding dense metadata arrays.
-        try validateSfntTableChecksum(self.data, gdef);
+        try sfnt.checksum.validate(self.data, gdef);
         const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
         const table = self.data[gdef.offset .. gdef.offset + gdef.length];
 
@@ -3309,7 +3318,7 @@ pub const Font = struct {
 
     pub fn nameString(self: *const Font, name_id: NameId, out: []u8) FontError!?[]const u8 {
         const name = self.name orelse return null;
-        try validateSfntTableChecksum(self.data, name);
+        try sfnt.checksum.validate(self.data, name);
         return try readNameString(self.data, name, @intFromEnum(name_id), out);
     }
 
@@ -3322,7 +3331,7 @@ pub const Font = struct {
     /// `allocator.free(records)`.
     pub fn nameRecords(self: *const Font, allocator: std.mem.Allocator) FontError![]NameRecordInfo {
         const name = self.name orelse return try allocator.alloc(NameRecordInfo, 0);
-        try validateSfntTableChecksum(self.data, name);
+        try sfnt.checksum.validate(self.data, name);
         return try name_mod.records(allocator, self.data, nameTableView(name));
     }
 
@@ -3334,14 +3343,14 @@ pub const Font = struct {
     /// name tables and fonts without a name table return an empty array.
     pub fn nameLanguageTags(self: *const Font, allocator: std.mem.Allocator) FontError![]NameLanguageTagInfo {
         const name = self.name orelse return try allocator.alloc(NameLanguageTagInfo, 0);
-        try validateSfntTableChecksum(self.data, name);
+        try sfnt.checksum.validate(self.data, name);
         return try name_mod.languageTags(allocator, self.data, nameTableView(name));
     }
 
     /// Decode the BCP 47 language tag associated with a format-1 name language ID.
     pub fn nameLanguageTag(self: *const Font, language_id: u16, out: []u8) FontError!?[]const u8 {
         const name = self.name orelse return null;
-        try validateSfntTableChecksum(self.data, name);
+        try sfnt.checksum.validate(self.data, name);
         return try name_mod.languageTag(self.data, nameTableView(name), language_id, out);
     }
 
@@ -3362,7 +3371,7 @@ pub const Font = struct {
     /// Read validated metadata from the optional SFNT `post` table.
     pub fn postInfo(self: *const Font) FontError!?PostInfo {
         const post = self.post orelse return null;
-        try validateSfntTableChecksum(self.data, post);
+        try sfnt.checksum.validate(self.data, post);
         try validatePostTable(self.data, post, self.glyph_count, .{
             .custom_name_validation = .structural_only,
         });
@@ -3372,7 +3381,7 @@ pub const Font = struct {
     /// Read validated metadata from the optional SFNT `PCLT` table.
     pub fn pcltInfo(self: *const Font) FontError!?PcltInfo {
         const pclt = self.pclt orelse return null;
-        try validateSfntTableChecksum(self.data, pclt);
+        try sfnt.checksum.validate(self.data, pclt);
         try validatePcltTable(self.data, pclt);
         return try readPcltInfo(self.data, pclt);
     }
@@ -3387,7 +3396,7 @@ pub const Font = struct {
     pub fn glyphName(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const post = self.post orelse return null;
-        try validateSfntTableChecksum(self.data, post);
+        try sfnt.checksum.validate(self.data, post);
         try validatePostTable(self.data, post, self.glyph_count, .{
             .custom_name_validation = .allow_empty,
         });
@@ -3396,13 +3405,13 @@ pub const Font = struct {
 
     pub fn decorationMetrics(self: *const Font) FontError!FontDecorationMetrics {
         if (self.post) |post| {
-            try validateSfntTableChecksum(self.data, post);
+            try sfnt.checksum.validate(self.data, post);
             try validatePostTable(self.data, post, self.glyph_count, .{
                 .custom_name_validation = .structural_only,
             });
         }
         if (self.os2) |os2| {
-            try validateSfntTableChecksum(self.data, os2);
+            try sfnt.checksum.validate(self.data, os2);
             _ = try readOs2StyleAttributes(self.data, os2);
         }
         return try readFontDecorationMetrics(self.data, self.post, self.os2, self.units_per_em, self.ascender, self.descender);
@@ -3414,7 +3423,7 @@ pub const Font = struct {
 
     pub fn scriptMetrics(self: *const Font) FontError!?FontScriptMetrics {
         const os2 = self.os2 orelse return null;
-        try validateSfntTableChecksum(self.data, os2);
+        try sfnt.checksum.validate(self.data, os2);
         _ = try readOs2StyleAttributes(self.data, os2);
         return try readOs2ScriptMetrics(self.data, os2);
     }
@@ -3432,7 +3441,7 @@ pub const Font = struct {
     pub fn glyphClass(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!GlyphClass {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return .unclassified;
-        try validateSfntTableChecksum(self.data, gdef);
+        try sfnt.checksum.validate(self.data, gdef);
         const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
         const glyph_class_def_offset = try bin.readU16At(self.data, gdef.offset + 4);
         if (glyph_class_def_offset == 0) return .unclassified;
@@ -3448,7 +3457,7 @@ pub const Font = struct {
     pub fn markAttachClass(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!u16 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return 0;
-        try validateSfntTableChecksum(self.data, gdef);
+        try sfnt.checksum.validate(self.data, gdef);
         const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
         const mark_attach_class_def_offset = try bin.readU16At(self.data, gdef.offset + 10);
         if (mark_attach_class_def_offset == 0) return 0;
@@ -3458,7 +3467,7 @@ pub const Font = struct {
 
     fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {
         const gdef = self.gdef orelse return null;
-        try validateSfntTableChecksum(self.data, gdef);
+        try sfnt.checksum.validate(self.data, gdef);
         if (gdef.length < 4) return error.BadSfnt;
         const major = try bin.readU16At(self.data, gdef.offset);
         const minor = try bin.readU16At(self.data, gdef.offset + 2);
@@ -3484,14 +3493,14 @@ pub const Font = struct {
 
     pub fn styleAttributes(self: *const Font) FontError!StyleAttributes {
         const os2 = self.os2 orelse return .{};
-        try validateSfntTableChecksum(self.data, os2);
+        try sfnt.checksum.validate(self.data, os2);
         return try readOs2StyleAttributes(self.data, os2);
     }
 
     /// Read validated metadata from the optional SFNT `OS/2` table.
     pub fn os2Info(self: *const Font) FontError!?Os2Info {
         const os2 = self.os2 orelse return null;
-        try validateSfntTableChecksum(self.data, os2);
+        try sfnt.checksum.validate(self.data, os2);
         _ = try readOs2StyleAttributes(self.data, os2);
         return try readOs2Info(self.data, os2);
     }
@@ -3502,7 +3511,7 @@ pub const Font = struct {
         // this public API boundary so post-parse mutations cannot expose axis
         // records whose reserved flags, duplicate tags, or instance payloads
         // would have been rejected during Font.parse.
-        try validateSfntTableChecksum(self.data, fvar);
+        try sfnt.checksum.validate(self.data, fvar);
         try validateFvarTable(self.data, fvar);
         if (self.name) |name| {
             // This API exposes only axes. A stale named-instance label must not
@@ -3537,7 +3546,7 @@ pub const Font = struct {
         // piecewise interpolation and come back as a plausible endpoint.
         try validateNormalizedVariationCoordinate(normalized);
         const avar = self.avar orelse return normalized;
-        try validateSfntTableChecksum(self.data, avar);
+        try sfnt.checksum.validate(self.data, avar);
         if (avar.offset > self.data.len or avar.length > self.data.len - avar.offset) return error.BadSfnt;
         const table = self.data[avar.offset .. avar.offset + avar.length];
         if (avar.length < 8) return error.BadSfnt;
@@ -3546,7 +3555,7 @@ pub const Font = struct {
         if (major != 1 or minor != 0) return error.BadSfnt;
         const axis_count = try bin.readU16At(table, 6);
         if (self.fvar) |fvar| {
-            try validateSfntTableChecksum(self.data, fvar);
+            try sfnt.checksum.validate(self.data, fvar);
             const fvar_info = try readFvarInfo(self.data, fvar);
             if (axis_count != fvar_info.axis_count) return error.BadSfnt;
         } else if (axis_count != 0) {
@@ -3601,7 +3610,7 @@ pub const Font = struct {
 
     pub fn variationInstances(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationInstance {
         const fvar = self.fvar orelse return try allocator.alloc(VariationInstance, 0);
-        try validateSfntTableChecksum(self.data, fvar);
+        try sfnt.checksum.validate(self.data, fvar);
         try validateFvarTable(self.data, fvar);
         if (self.name) |name| {
             const name_index = try readNameIdIndex(self.data, name);
@@ -3653,8 +3662,8 @@ pub const Font = struct {
             name_index_storage = try readNameIdIndex(self.data, name);
             break :blk &name_index_storage;
         } else null;
-        try validateSfntTableChecksum(self.data, stat);
-        if (self.fvar) |fvar| try validateSfntTableChecksum(self.data, fvar);
+        try sfnt.checksum.validate(self.data, stat);
+        if (self.fvar) |fvar| try sfnt.checksum.validate(self.data, fvar);
         try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
         const info = try readStatInfo(self.data, stat);
         return if (info.minor >= 1) try bin.readU16At(self.data, stat.offset + 18) else null;
@@ -3671,8 +3680,8 @@ pub const Font = struct {
         // and name-reference validation before exposing axis metadata so
         // post-parse mutations cannot leave UI axis labels dangling or reorder
         // axes away from fvar while the cached table record still looks valid.
-        try validateSfntTableChecksum(self.data, stat);
-        if (self.fvar) |fvar| try validateSfntTableChecksum(self.data, fvar);
+        try sfnt.checksum.validate(self.data, stat);
+        if (self.fvar) |fvar| try sfnt.checksum.validate(self.data, fvar);
         try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
         const info = try readStatInfo(self.data, stat);
 
@@ -3696,8 +3705,8 @@ pub const Font = struct {
             name_index_storage = try readNameIdIndex(self.data, name);
             break :blk &name_index_storage;
         } else null;
-        try validateSfntTableChecksum(self.data, stat);
-        if (self.fvar) |fvar| try validateSfntTableChecksum(self.data, fvar);
+        try sfnt.checksum.validate(self.data, stat);
+        if (self.fvar) |fvar| try sfnt.checksum.validate(self.data, fvar);
         try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
         const info = try readStatInfo(self.data, stat);
 
@@ -3725,7 +3734,7 @@ pub const Font = struct {
     pub fn colorLayers(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError![]ColorLayer {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const colr = self.colr orelse return try allocator.alloc(ColorLayer, 0);
-        try validateSfntTableChecksum(self.data, colr);
+        try sfnt.checksum.validate(self.data, colr);
         if (colr.length < 14) return error.BadSfnt;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 0) return try allocator.alloc(ColorLayer, 0);
@@ -3773,7 +3782,7 @@ pub const Font = struct {
 
     pub fn paletteColor(self: *const Font, palette_index: u16, color_index: u16) FontError!?PaletteColor {
         const cpal = self.cpal orelse return null;
-        try validateSfntTableChecksum(self.data, cpal);
+        try sfnt.checksum.validate(self.data, cpal);
         if (cpal.length < 12) return error.BadSfnt;
         const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
         // CPAL v1 label arrays borrow name IDs from the same caller-owned SFNT
@@ -3799,7 +3808,7 @@ pub const Font = struct {
 
     pub fn paletteColors(self: *const Font, allocator: std.mem.Allocator, palette_index: u16) FontError![]PaletteColor {
         const cpal = self.cpal orelse return try allocator.alloc(PaletteColor, 0);
-        try validateSfntTableChecksum(self.data, cpal);
+        try sfnt.checksum.validate(self.data, cpal);
         if (cpal.length < 12) return error.BadSfnt;
         const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
         try validateCpalNameReferences(self.data, cpal, self.name);
@@ -3826,7 +3835,7 @@ pub const Font = struct {
 
     pub fn colorPalettes(self: *const Font, allocator: std.mem.Allocator) FontError![]PaletteInfo {
         const cpal = self.cpal orelse return try allocator.alloc(PaletteInfo, 0);
-        try validateSfntTableChecksum(self.data, cpal);
+        try sfnt.checksum.validate(self.data, cpal);
         if (cpal.length < 12) return error.BadSfnt;
         const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
         try validateCpalNameReferences(self.data, cpal, self.name);
@@ -3865,7 +3874,7 @@ pub const Font = struct {
 
     pub fn paletteEntryLabels(self: *const Font, allocator: std.mem.Allocator) FontError![]?u16 {
         const cpal = self.cpal orelse return try allocator.alloc(?u16, 0);
-        try validateSfntTableChecksum(self.data, cpal);
+        try sfnt.checksum.validate(self.data, cpal);
         if (cpal.length < 12) return error.BadSfnt;
         const palette_entries = try validateCpalPaletteEntries(self.data, cpal);
         try validateCpalNameReferences(self.data, cpal, self.name);
@@ -3897,7 +3906,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const colr = self.colr orelse return null;
-        try validateSfntTableChecksum(self.data, colr);
+        try sfnt.checksum.validate(self.data, colr);
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 1) return null;
@@ -3963,7 +3972,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const colr = self.colr orelse return null;
-        try validateSfntTableChecksum(self.data, colr);
+        try sfnt.checksum.validate(self.data, colr);
         if (colr.length < 34 or try bin.readU16At(self.data, colr.offset) != 1) return null;
         try validateColrV1ClipList(self.data, colr, self.glyph_count);
         const clip_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 22));
@@ -4025,7 +4034,7 @@ pub const Font = struct {
     /// Read validated metadata from the optional SFNT `VORG` table.
     pub fn verticalOrigins(self: *const Font, allocator: std.mem.Allocator) FontError!?VerticalOriginInfo {
         const vorg = self.vorg orelse return null;
-        try validateSfntTableChecksum(self.data, vorg);
+        try sfnt.checksum.validate(self.data, vorg);
         try validateVorgTable(self.data, vorg, self.glyph_count);
         return try readVorgInfo(allocator, self.data, vorg);
     }
@@ -4037,7 +4046,7 @@ pub const Font = struct {
     pub fn verticalOriginY(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?i16 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const vorg = self.vorg orelse return null;
-        try validateSfntTableChecksum(self.data, vorg);
+        try sfnt.checksum.validate(self.data, vorg);
         try validateVorgTable(self.data, vorg, self.glyph_count);
         return try vorgOriginY(self.data, vorg, glyph_id);
     }
@@ -4112,9 +4121,9 @@ pub const Font = struct {
     pub fn glyphLocations(self: *const Font, allocator: std.mem.Allocator) FontError![]GlyphLocationInfo {
         const loca = self.loca orelse return error.MissingTable;
         const glyf = self.glyf orelse return error.MissingTable;
-        try validateSfntTableChecksum(self.data, self.maxp);
-        try validateSfntTableChecksum(self.data, loca);
-        try validateSfntTableChecksum(self.data, glyf);
+        try sfnt.checksum.validate(self.data, self.maxp);
+        try sfnt.checksum.validate(self.data, loca);
+        try sfnt.checksum.validate(self.data, glyf);
         try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
 
         const locations = try allocator.alloc(GlyphLocationInfo, self.glyph_count);
@@ -4141,7 +4150,7 @@ pub const Font = struct {
     pub fn colorPaintLayerAtCoords(self: *const Font, layer_index: u32, normalized_coords: []const f32) FontError!?ColorPaint {
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const colr = self.colr orelse return null;
-        try validateSfntTableChecksum(self.data, colr);
+        try sfnt.checksum.validate(self.data, colr);
         if (colr.length < 34) return null;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 1) return null;
@@ -4175,7 +4184,7 @@ pub const Font = struct {
     pub fn colorPaintChildAtCoords(self: *const Font, child: ColorPaint.ChildRef, normalized_coords: []const f32) FontError!ColorPaint {
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const colr = self.colr orelse return error.BadSfnt;
-        try validateSfntTableChecksum(self.data, colr);
+        try sfnt.checksum.validate(self.data, colr);
         if (child.offset < colr.offset or child.offset >= colr.offset + colr.length) return error.BadSfnt;
         if (!normalizedVariationCoordinatesAreDefault(normalized_coords)) {
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
@@ -4201,7 +4210,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const colr = self.colr orelse return null;
-        try validateSfntTableChecksum(self.data, colr);
+        try sfnt.checksum.validate(self.data, colr);
         if (colr.length < 34 or try bin.readU16At(self.data, colr.offset) != 1) return null;
         try validateColrGlyphBounds(self.data, colr, self.glyph_count);
         try validateColrPaletteBounds(self.data, colr, self.cpal);
@@ -4234,7 +4243,7 @@ pub const Font = struct {
         var context: ?ColrVariationContext = null;
         if (color_line.variable and !normalizedVariationCoordinatesAreDefault(normalized_coords)) {
             const colr = self.colr orelse return error.BadSfnt;
-            try validateSfntTableChecksum(self.data, colr);
+            try sfnt.checksum.validate(self.data, colr);
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
             context = try readColrVariationContext(self.data, colr);
         }
@@ -4272,7 +4281,7 @@ pub const Font = struct {
         var context: ?ColrVariationContext = null;
         if (color_line.variable and !normalizedVariationCoordinatesAreDefault(normalized_coords)) {
             const colr = self.colr orelse return error.BadSfnt;
-            try validateSfntTableChecksum(self.data, colr);
+            try sfnt.checksum.validate(self.data, colr);
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
             context = try readColrVariationContext(self.data, colr);
         }
@@ -4295,7 +4304,7 @@ pub const Font = struct {
     fn rawSvgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const svg = self.svg orelse return null;
-        try validateSfntTableChecksum(self.data, svg);
+        try sfnt.checksum.validate(self.data, svg);
         return try svg_mod.rawDocument(
             self.allocator,
             self.data,
@@ -4329,7 +4338,7 @@ pub const Font = struct {
     ) FontError!?ResolvedSvgGlyphDocument {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const svg = self.svg orelse return null;
-        if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, svg);
+        if (read_mode.shouldRevalidate()) try sfnt.checksum.validate(self.data, svg);
         return try svg_mod.resolvedDocument(
             allocator,
             self.data,
@@ -4361,8 +4370,8 @@ pub const Font = struct {
         data_table: TableRecord,
         source: BitmapStrikeSource,
     ) FontError!void {
-        try validateSfntTableChecksum(self.data, location_table);
-        try validateSfntTableChecksum(self.data, data_table);
+        try sfnt.checksum.validate(self.data, location_table);
+        try sfnt.checksum.validate(self.data, data_table);
         try validateCblcCbdtTables(self.data, location_table, data_table, self.glyph_count);
         const strike_count = try cblcStrikeCount(self.data, location_table);
         try strikes.ensureUnusedCapacity(allocator, strike_count);
@@ -4385,8 +4394,8 @@ pub const Font = struct {
         size_px: f32,
         best_ppem: *?u16,
     ) FontError!void {
-        try validateSfntTableChecksum(self.data, location_table);
-        try validateSfntTableChecksum(self.data, data_table);
+        try sfnt.checksum.validate(self.data, location_table);
+        try sfnt.checksum.validate(self.data, data_table);
         try validateCblcCbdtTables(self.data, location_table, data_table, self.glyph_count);
         const strike_count = try cblcStrikeCount(self.data, location_table);
         for (0..strike_count) |strike_index| {
@@ -4400,7 +4409,7 @@ pub const Font = struct {
         errdefer strikes.deinit(allocator);
 
         if (self.sbix) |sbix| {
-            try validateSfntTableChecksum(self.data, sbix);
+            try sfnt.checksum.validate(self.data, sbix);
             try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             try strikes.ensureUnusedCapacity(allocator, strike_count);
@@ -4431,7 +4440,7 @@ pub const Font = struct {
         var best_ppem: ?u16 = null;
 
         if (self.sbix) |sbix| {
-            try validateSfntTableChecksum(self.data, sbix);
+            try sfnt.checksum.validate(self.data, sbix);
             // Bitmap tables are borrowed from the caller-owned font bytes.
             // Re-run the full parse-time sbix contract at the public API
             // boundary so post-parse byte mutations cannot hide a corrupt
@@ -4467,7 +4476,7 @@ pub const Font = struct {
         var best: ?BitmapGlyphInfo = null;
 
         if (self.sbix) |sbix| {
-            try validateSfntTableChecksum(self.data, sbix);
+            try sfnt.checksum.validate(self.data, sbix);
             try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             for (0..strike_count) |strike_index| {
@@ -4480,16 +4489,16 @@ pub const Font = struct {
         if (self.cblc != null and self.cbdt != null) {
             const cblc = self.cblc.?;
             const cbdt = self.cbdt.?;
-            try validateSfntTableChecksum(self.data, cblc);
-            try validateSfntTableChecksum(self.data, cbdt);
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
             try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
             if (try cblcGlyphInfo(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |info| return info;
         }
         if (self.eblc != null and self.ebdt != null) {
             const eblc = self.eblc.?;
             const ebdt = self.ebdt.?;
-            try validateSfntTableChecksum(self.data, eblc);
-            try validateSfntTableChecksum(self.data, ebdt);
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
             try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
             if (try cblcGlyphInfo(self.data, eblc, ebdt, self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |info| return info;
         }
@@ -4501,7 +4510,7 @@ pub const Font = struct {
         try validateBitmapRequestSize(size_px);
 
         if (self.sbix) |sbix| {
-            try validateSfntTableChecksum(self.data, sbix);
+            try sfnt.checksum.validate(self.data, sbix);
             try validateSbixTable(self.allocator, self.data, sbix, self.glyph_count);
             const strike_count = try sbixStrikeCount(self.data, sbix);
             var best: ?BitmapGlyphPng = null;
@@ -4518,16 +4527,16 @@ pub const Font = struct {
         if (self.cblc != null and self.cbdt != null) {
             const cblc = self.cblc.?;
             const cbdt = self.cbdt.?;
-            try validateSfntTableChecksum(self.data, cblc);
-            try validateSfntTableChecksum(self.data, cbdt);
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
             try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
             if (try cblcGlyphPng(self.data, cblc, cbdt, self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |png| return png;
         }
         if (self.eblc != null and self.ebdt != null) {
             const eblc = self.eblc.?;
             const ebdt = self.ebdt.?;
-            try validateSfntTableChecksum(self.data, eblc);
-            try validateSfntTableChecksum(self.data, ebdt);
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
             try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
             if (try cblcGlyphPng(self.data, eblc, ebdt, self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |png| return png;
         }
@@ -4546,7 +4555,7 @@ pub const Font = struct {
     pub fn glyphBounds(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         if (self.varc) |varc| {
-            try validateSfntTableChecksum(self.data, varc);
+            try sfnt.checksum.validate(self.data, varc);
             try validateVarcTable(self.data, varc, self.glyph_count);
             if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id) != null) {
                 var outline = try self.glyphOutline(std.heap.page_allocator, glyph_id);
@@ -4557,20 +4566,20 @@ pub const Font = struct {
         if (self.format == .truetype) {
             const loca = self.loca orelse return error.MissingTable;
             const glyf = self.glyf orelse return error.MissingTable;
-            try validateSfntTableChecksum(self.data, self.maxp);
-            try validateSfntTableChecksum(self.data, loca);
-            try validateSfntTableChecksum(self.data, glyf);
+            try sfnt.checksum.validate(self.data, self.maxp);
+            try sfnt.checksum.validate(self.data, loca);
+            try sfnt.checksum.validate(self.data, glyf);
             try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
             return try self.glyphBoundsFromParsedTables(glyph_id);
         }
         if (self.cff2) |cff2| {
-            try validateSfntTableChecksum(self.data, cff2);
+            try sfnt.checksum.validate(self.data, cff2);
             try validateCff2Table(self.data, cff2);
             const bounds = (try cff2_mod.charStringBoundsInfo(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count)) orelse return error.InvalidGlyph;
             return cff2BoundsInfoToGlyphBounds(bounds);
         }
         if (self.cff) |cff| {
-            try validateSfntTableChecksum(self.data, cff);
+            try sfnt.checksum.validate(self.data, cff);
             try validateCffGlyphCount(self.data, cff, self.glyph_count);
             var outline = try self.glyphOutline(std.heap.page_allocator, glyph_id);
             defer outline.deinit();
@@ -4582,7 +4591,7 @@ pub const Font = struct {
     pub fn glyphBoundsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.Bounds {
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.varc) |varc| {
-            try validateSfntTableChecksum(self.data, varc);
+            try sfnt.checksum.validate(self.data, varc);
             try validateVarcTable(self.data, varc, self.glyph_count);
             if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id) != null) {
                 var outline = try self.glyphOutlineAtCoords(std.heap.page_allocator, glyph_id, normalized_coords);
@@ -4625,9 +4634,9 @@ pub const Font = struct {
         if (self.format == .truetype) {
             const loca = self.loca orelse return error.MissingTable;
             const glyf = self.glyf orelse return error.MissingTable;
-            try validateSfntTableChecksum(self.data, self.maxp);
-            try validateSfntTableChecksum(self.data, loca);
-            try validateSfntTableChecksum(self.data, glyf);
+            try sfnt.checksum.validate(self.data, self.maxp);
+            try sfnt.checksum.validate(self.data, loca);
+            try sfnt.checksum.validate(self.data, glyf);
             try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
             // The SFNT bytes are borrowed from the caller. Re-run the same glyf
             // grammar and component-graph validation enforced by Font.parse so
@@ -4658,7 +4667,7 @@ pub const Font = struct {
         if (normalizedVariationCoordinatesAreDefault(normalized_coords)) return try self.glyphOutline(allocator, glyph_id);
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.varc) |varc| {
-            try validateSfntTableChecksum(self.data, varc);
+            try sfnt.checksum.validate(self.data, varc);
             try validateVarcTable(self.data, varc, self.glyph_count);
             if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id) != null) {
                 return try self.varcGlyphOutlineAtCoords(allocator, glyph_id, normalized_coords, .revalidate);
@@ -4714,7 +4723,7 @@ pub const Font = struct {
 
     fn simpleGlyphVariationContext(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!?SimpleGlyphVariation {
         const gvar = self.gvar orelse return null;
-        if (read_mode.shouldRevalidate()) try validateSfntTableChecksum(self.data, gvar);
+        if (read_mode.shouldRevalidate()) try sfnt.checksum.validate(self.data, gvar);
         return .{
             .data = self.data,
             .table_offset = gvar.offset,
@@ -4820,7 +4829,7 @@ pub const Font = struct {
         errdefer outline.deinit();
         if (self.varc) |varc| {
             if (read_mode.shouldRevalidate()) {
-                try validateSfntTableChecksum(self.data, varc);
+                try sfnt.checksum.validate(self.data, varc);
                 try validateVarcTable(self.data, varc, self.glyph_count);
             }
             if (try varc_mod.glyphCoverageIndex(self.data, varc.offset, varc.length, self.glyph_count, glyph_id)) |_| {
@@ -4836,7 +4845,7 @@ pub const Font = struct {
             try self.appendGlyphOutline(&outline, null, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
         } else if (self.cff2) |cff2| {
             if (read_mode.shouldRevalidate()) {
-                try validateSfntTableChecksum(self.data, cff2);
+                try sfnt.checksum.validate(self.data, cff2);
                 try validateCff2Table(self.data, cff2);
             }
             if (try cff2_mod.appendGlyphOutline(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, &outline)) |bounds_info| {
@@ -4849,7 +4858,7 @@ pub const Font = struct {
                 // Public outline APIs re-check borrowed CFF bytes before
                 // serving a glyph so post-parse mutation cannot hide a
                 // truncated CharStrings INDEX behind still-present glyph ids.
-                try validateSfntTableChecksum(self.data, cff);
+                try sfnt.checksum.validate(self.data, cff);
                 try validateCffGlyphCount(self.data, cff, self.glyph_count);
                 try cff_mod.appendGlyphOutline(allocator, cff_data, try cff_mod.parseInfo(cff_data), &outline, glyph_id);
             } else {
@@ -4872,7 +4881,7 @@ pub const Font = struct {
     ) FontError!glyph_mod.GlyphOutline {
         const varc = self.varc orelse return error.UnsupportedGlyph;
         if (read_mode.shouldRevalidate()) {
-            try validateSfntTableChecksum(self.data, varc);
+            try sfnt.checksum.validate(self.data, varc);
             try validateVarcTable(self.data, varc, self.glyph_count);
         }
         const metrics = try self.horizontalMetricsAtCoordsForReadMode(glyph_id, normalized_coords, read_mode);
@@ -5034,7 +5043,7 @@ pub const Font = struct {
         const command_start = outline.commands.items.len;
         if (self.cff2) |cff2| {
             if (read_mode.shouldRevalidate()) {
-                try validateSfntTableChecksum(self.data, cff2);
+                try sfnt.checksum.validate(self.data, cff2);
                 try validateCff2Table(self.data, cff2);
             }
             if (normalizedVariationCoordinatesAreDefault(normalized_coords)) {
@@ -5046,7 +5055,7 @@ pub const Font = struct {
             const cff = self.cff orelse return error.MissingTable;
             const cff_data = self.data[cff.offset .. cff.offset + cff.length];
             if (read_mode.shouldRevalidate()) {
-                try validateSfntTableChecksum(self.data, cff);
+                try sfnt.checksum.validate(self.data, cff);
                 try validateCffGlyphCount(self.data, cff, self.glyph_count);
                 try cff_mod.appendGlyphOutline(outline.allocator, cff_data, try cff_mod.parseInfo(cff_data), outline, glyph_id);
             } else {
@@ -6276,20 +6285,6 @@ fn readBigBitmapMetrics(data: []const u8, offset: usize) FontError!BitmapMetrics
     };
 }
 
-fn findTable(records: []const TableRecord, comptime table_tag: []const u8) ?TableRecord {
-    for (records) |record| {
-        if (bin.tagEq(record.tag, table_tag)) return record;
-    }
-    return null;
-}
-
-fn findTableByTag(records: []const TableRecord, table_tag: [4]u8) ?TableRecord {
-    for (records) |record| {
-        if (std.mem.eql(u8, &record.tag, &table_tag)) return record;
-    }
-    return null;
-}
-
 /// Internal shaping backend. This is intentionally absent from `cangjie.font`;
 /// only repository pipeline modules import `font.zig` directly.
 pub const shaping = struct {
@@ -6344,203 +6339,8 @@ pub const raster_backend = struct {
     pub const glyphOutline = Font.glyphOutlineForRaster;
 };
 
-fn validateSfntSearchParameters(num_tables: u16, search_range: u16, entry_selector: u16, range_shift: u16) FontError!void {
-    if (num_tables == 0) return error.BadSfnt;
-
-    var max_power_of_two: usize = 1;
-    var expected_entry_selector: u16 = 0;
-    while (max_power_of_two * 2 <= num_tables) {
-        max_power_of_two *= 2;
-        expected_entry_selector += 1;
-    }
-
-    const expected_search_range = max_power_of_two * 16;
-    const table_record_bytes = @as(usize, num_tables) * 16;
-    if (expected_search_range > std.math.maxInt(u16) or table_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
-    _ = range_shift;
-    if (search_range != expected_search_range or entry_selector != expected_entry_selector) {
-        return error.BadSfnt;
-    }
-}
-
-fn expectedSfntRangeShift(num_tables: u16) FontError!u16 {
-    var max_power_of_two: usize = 1;
-    while (max_power_of_two * 2 <= num_tables) {
-        max_power_of_two *= 2;
-    }
-    const expected_search_range = max_power_of_two * 16;
-    const table_record_bytes = @as(usize, num_tables) * 16;
-    if (expected_search_range > std.math.maxInt(u16) or table_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
-    return @intCast(table_record_bytes - expected_search_range);
-}
-
-fn validateSfntTableDirectory(records: []const TableRecord) FontError!void {
-    var previous_tag: ?[4]u8 = null;
-    for (records) |record| {
-        try validateSfntTableTag(record.tag);
-        if (previous_tag) |previous| {
-            // The SFNT directory is specified as a lexicographically sorted map
-            // keyed by tag. Requiring strict order rejects duplicates and keeps
-            // required-table lookup from depending on malformed record order.
-            if (std.mem.order(u8, &previous, &record.tag) != .lt) return error.BadSfnt;
-        }
-        previous_tag = record.tag;
-    }
-}
-
-fn validateSfntTableTag(table_tag: [4]u8) FontError!void {
-    try validateOpenTypeTag(table_tag);
-}
-
-fn validateOpenTypeTag(tag: [4]u8) FontError!void {
-    for (tag) |byte| {
-        // OpenType tags are printable ASCII identifiers. Rejecting
-        // controls/non-ASCII bytes at every tag-bearing table boundary keeps
-        // directory, variation-axis, and style-axis metadata representable by
-        // diagnostics and higher-level font matching code.
-        if (byte < 0x20 or byte > 0x7e) return error.BadSfnt;
-    }
-}
-
-fn sfntDirectoryEnd(data: []const u8, start: usize, num_tables: u16) FontError!usize {
-    const record_bytes = @as(usize, num_tables) * 16;
-    if (start > data.len or data.len - start < 12) return error.BadSfnt;
-    if (record_bytes > data.len - start - 12) return error.BadSfnt;
-    return start + 12 + record_bytes;
-}
-
-fn validateSfntTableRanges(records: []const TableRecord, reserved_prefix_end: usize, directory_start: usize, directory_end: usize) FontError!void {
-    for (records, 0..) |record, index| {
-        // OpenType table payloads are independent ranges that must not alias
-        // reserved SFNT/TTC metadata or another table in the same face. TTCs
-        // can share table payloads across faces, and shared payloads may sit
-        // before this face's directory, so validate interval
-        // overlap rather than requiring every offset to be after `directory_end`.
-        if (record.length == 0) continue;
-        // SFNT table payloads begin on four-byte boundaries; only their
-        // unpadded lengths are recorded in the directory. Enforce the start
-        // alignment here so malformed fonts cannot make table parsers consume
-        // bytes from the padding tail of a preceding table as if it were a new
-        // table header.
-        if ((record.offset & 3) != 0) return error.BadSfnt;
-        const record_end = record.offset + record.length;
-        if (record.offset < reserved_prefix_end) return error.BadSfnt;
-        if (rangesOverlap(record.offset, record_end, directory_start, directory_end)) return error.BadSfnt;
-        for (records[index + 1 ..]) |other| {
-            if (other.length == 0) continue;
-            const other_end = other.offset + other.length;
-            if (rangesOverlap(record.offset, record_end, other.offset, other_end)) return error.BadSfnt;
-        }
-    }
-}
-
-fn validateSfntTablePadding(data: []const u8, records: []const TableRecord) FontError!void {
-    for (records) |record| {
-        if (record.offset > data.len or record.length > data.len - record.offset) return error.BadSfnt;
-
-        const record_end = record.offset + record.length;
-        const padding_len = (4 - (record.length & 3)) & 3;
-        if (padding_len == 0 or record_end == data.len) continue;
-
-        // SFNT directory lengths intentionally exclude the zero padding that
-        // aligns the next table. Checksums also treat those bytes as zero, so a
-        // non-zero physical padding byte would be invisible to checksum
-        // validation while still being attacker-controlled data between table
-        // payloads. Reject it at the container boundary instead of letting a
-        // later lazy parser accidentally reinterpret padding as child data.
-        const present_padding_len = @min(padding_len, data.len - record_end);
-        for (data[record_end .. record_end + present_padding_len]) |byte| {
-            if (byte != 0) return error.BadSfnt;
-        }
-    }
-}
-
-fn validateSfntTablesDoNotOverlapTtcDsig(records: []const TableRecord, header: TtcHeader) FontError!void {
-    const dsig = header.dsig_range orelse return;
-    for (records) |record| {
-        if (record.length == 0) continue;
-        // The TTC DSIG payload is collection metadata outside every face's
-        // table map.  Allowing an SFNT table to borrow those bytes would make
-        // Cangjie's lazy table APIs observe signature data as font payload.
-        if (rangesOverlap(record.offset, record.offset + record.length, dsig.start, dsig.end)) return error.BadSfnt;
-    }
-}
-
-fn validateSfntTableChecksums(data: []const u8, records: []const TableRecord) FontError!void {
-    // AAT tooling commonly rewrites mort/morx payloads without refreshing the
-    // font-wide head adjustment. Keep table-local checks strict while matching
-    // HarfBuzz's compatibility behavior for the aggregate head checksum.
-    const tolerate_stale_head_checksum = findTable(records, "morx") != null or
-        findTable(records, "mort") != null;
-    for (records) |record| {
-        if (tolerate_stale_head_checksum and bin.tagEq(record.tag, "head")) continue;
-        try validateSfntTableChecksum(data, record);
-    }
-}
-
-fn validateSfntTableChecksum(data: []const u8, record: TableRecord) FontError!void {
-    // Table directory checksums are the SFNT table map's lightweight integrity
-    // contract. Validate every advertised payload after structural passes have
-    // established table-local bounds, while treating head.checkSumAdjustment as
-    // zero as required by OpenType's checksum algorithm. Public lazy APIs call
-    // the same helper because Font keeps borrowed bytes and must not surface
-    // post-parse table mutations as newly trusted metrics or glyph mappings.
-    const actual = if (bin.tagEq(record.tag, "head"))
-        try checksumHeadTable(data, record)
-    else
-        try checksumSfntTable(data, record);
-    if (actual != record.checksum) return error.BadSfnt;
-}
-
-fn checksumSfntTable(data: []const u8, record: TableRecord) FontError!u32 {
-    if (record.offset > data.len or record.length > data.len - record.offset) return error.BadSfnt;
-
-    var sum: u32 = 0;
-    var cursor: usize = 0;
-    while (cursor < record.length) : (cursor += 4) {
-        var word: u32 = 0;
-        for (0..4) |byte_index| {
-            word <<= 8;
-            const table_index = cursor + byte_index;
-            if (table_index < record.length) word |= data[record.offset + table_index];
-        }
-        sum +%= word;
-    }
-    return sum;
-}
-
-fn checksumHeadTable(data: []const u8, head: TableRecord) FontError!u32 {
-    if (head.offset > data.len or head.length > data.len - head.offset) return error.BadSfnt;
-
-    var sum: u32 = 0;
-    var cursor: usize = 0;
-    while (cursor < head.length) : (cursor += 4) {
-        var word: u32 = 0;
-        for (0..4) |byte_index| {
-            word <<= 8;
-            const table_index = cursor + byte_index;
-            if (table_index < head.length) {
-                // The head table's checkSumAdjustment field participates in
-                // whole-font validation, but its four bytes are defined as zero
-                // when computing the table directory checksum.
-                if (table_index < 8 or table_index >= 12) word |= data[head.offset + table_index];
-            }
-        }
-        sum +%= word;
-    }
-    return sum;
-}
-
-fn rangesOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) bool {
-    return a_start < b_end and b_start < a_end;
-}
-
-fn requireTableLength(record: TableRecord, minimum_length: usize) FontError!void {
-    if (record.length < minimum_length) return error.BadSfnt;
-}
-
 fn readFontHeaderInfo(data: []const u8, head: TableRecord) FontError!FontHeaderInfo {
-    try requireTableLength(head, 54);
+    try sfnt.requireLength(head, 54);
     return .{
         .table_version = try bin.readU32At(data, head.offset),
         .font_revision = fixed16_16ToF32(try bin.readI32At(data, head.offset + 4)),
@@ -6569,7 +6369,7 @@ fn readI64At(data: []const u8, offset: usize) FontError!i64 {
 }
 
 fn validateHeadTable(data: []const u8, head: TableRecord, format: FontFormat) FontError!void {
-    try requireTableLength(head, 54);
+    try sfnt.requireLength(head, 54);
 
     const version = try bin.readU32At(data, head.offset);
     const magic_number = try bin.readU32At(data, head.offset + 12);
@@ -6612,14 +6412,14 @@ fn validateHeadTable(data: []const u8, head: TableRecord, format: FontFormat) Fo
 }
 
 fn readMaxProfileInfo(data: []const u8, maxp: TableRecord) FontError!MaxProfileInfo {
-    try requireTableLength(maxp, 6);
+    try sfnt.requireLength(maxp, 6);
     const version = try bin.readU32At(data, maxp.offset);
     var info = MaxProfileInfo{
         .version = version,
         .glyph_count = try bin.readU16At(data, maxp.offset + 4),
     };
     if (version == 0x00010000) {
-        try requireTableLength(maxp, 32);
+        try sfnt.requireLength(maxp, 32);
         info.max_points = try bin.readU16At(data, maxp.offset + 6);
         info.max_contours = try bin.readU16At(data, maxp.offset + 8);
         info.max_composite_points = try bin.readU16At(data, maxp.offset + 10);
@@ -6638,7 +6438,7 @@ fn readMaxProfileInfo(data: []const u8, maxp: TableRecord) FontError!MaxProfileI
 }
 
 fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) FontError!void {
-    try requireTableLength(maxp, 6);
+    try sfnt.requireLength(maxp, 6);
     const version = try bin.readU32At(data, maxp.offset);
     switch (format) {
         .truetype => {
@@ -6666,7 +6466,7 @@ fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) Fo
 }
 
 fn selectOutlineFormat(data: []const u8, maxp: TableRecord, declared_format: FontFormat, has_glyf_outlines: bool, has_cff_outlines: bool) FontError!FontFormat {
-    try requireTableLength(maxp, 6);
+    try sfnt.requireLength(maxp, 6);
     const version = try bin.readU32At(data, maxp.offset);
     // Some text-rendering fixtures deliberately carry both glyf and CFF under
     // conflicting sfnt flavors. HarfBuzz selects the internally complete
@@ -6712,7 +6512,7 @@ fn validateMathTable(data: []const u8, math: TableRecord) FontError!void {
 }
 
 fn validateDsigTable(data: []const u8, dsig: TableRecord) FontError!void {
-    try requireTableLength(dsig, 8);
+    try sfnt.requireLength(dsig, 8);
     if (try bin.readU32At(data, dsig.offset) != 1) return error.BadSfnt;
     const signature_count = try bin.readU16At(data, dsig.offset + 4);
     const flags = try bin.readU16At(data, dsig.offset + 6);
@@ -6761,7 +6561,7 @@ fn readDsigInfo(allocator: std.mem.Allocator, data: []const u8, dsig: TableRecor
 }
 
 fn validateVorgTable(data: []const u8, vorg: TableRecord, glyph_count: u16) FontError!void {
-    try requireTableLength(vorg, 8);
+    try sfnt.requireLength(vorg, 8);
     if (try bin.readU32At(data, vorg.offset) != 0x00010000) return error.BadSfnt;
     const count = try bin.readU16At(data, vorg.offset + 6);
     if (@as(usize, count) * 4 > vorg.length - 8) return error.BadSfnt;
@@ -6837,9 +6637,9 @@ fn validateOs2Table(data: []const u8, os2: TableRecord) FontError!void {
 }
 
 fn readOs2Info(data: []const u8, os2: TableRecord) FontError!Os2Info {
-    try requireTableLength(os2, 2);
+    try sfnt.requireLength(os2, 2);
     const version = try bin.readU16At(data, os2.offset);
-    try requireTableLength(os2, try minimumOs2TableLength(version));
+    try sfnt.requireLength(os2, try minimumOs2TableLength(version));
 
     var info = Os2Info{
         .version = version,
@@ -6903,9 +6703,9 @@ fn readArray10At(data: []const u8, offset: usize) FontError![10]u8 {
 }
 
 fn readOs2StyleAttributes(data: []const u8, os2: TableRecord) FontError!StyleAttributes {
-    try requireTableLength(os2, 2);
+    try sfnt.requireLength(os2, 2);
     const version = try bin.readU16At(data, os2.offset);
-    try requireTableLength(os2, try minimumOs2TableLength(version));
+    try sfnt.requireLength(os2, try minimumOs2TableLength(version));
 
     const weight = try bin.readU16At(data, os2.offset + 4);
     const width = try bin.readU16At(data, os2.offset + 6);
@@ -6955,7 +6755,7 @@ fn readFontDecorationMetrics(
 }
 
 fn readPostDecorationMetrics(data: []const u8, post: TableRecord) FontError!struct { position: i16, thickness: i16 } {
-    try requireTableLength(post, 12);
+    try sfnt.requireLength(post, 12);
     return .{
         .position = try bin.readI16At(data, post.offset + 8),
         .thickness = try bin.readI16At(data, post.offset + 10),
@@ -6963,7 +6763,7 @@ fn readPostDecorationMetrics(data: []const u8, post: TableRecord) FontError!stru
 }
 
 fn readOs2StrikeoutMetrics(data: []const u8, os2: TableRecord) FontError!struct { position: i16, thickness: i16 } {
-    try requireTableLength(os2, 30);
+    try sfnt.requireLength(os2, 30);
     return .{
         .thickness = try bin.readI16At(data, os2.offset + 26),
         .position = try bin.readI16At(data, os2.offset + 28),
@@ -6971,7 +6771,7 @@ fn readOs2StrikeoutMetrics(data: []const u8, os2: TableRecord) FontError!struct 
 }
 
 fn readOs2ScriptMetrics(data: []const u8, os2: TableRecord) FontError!FontScriptMetrics {
-    try requireTableLength(os2, 26);
+    try sfnt.requireLength(os2, 26);
     const metrics = FontScriptMetrics{
         .subscript_x_size = try bin.readI16At(data, os2.offset + 10),
         .subscript_y_size = try bin.readI16At(data, os2.offset + 12),
@@ -7032,7 +6832,7 @@ fn validateLtagTable(data: []const u8, ltag: TableRecord) FontError!void {
 }
 
 fn validateLtshTable(data: []const u8, ltsh: TableRecord, glyph_count: u16) FontError!void {
-    try requireTableLength(ltsh, 4);
+    try sfnt.requireLength(ltsh, 4);
     if (try bin.readU16At(data, ltsh.offset) != 0) return error.BadSfnt;
     const count = try bin.readU16At(data, ltsh.offset + 2);
     if (count != glyph_count) return error.BadSfnt;
@@ -7047,7 +6847,7 @@ fn readLtshInfo(allocator: std.mem.Allocator, data: []const u8, ltsh: TableRecor
 }
 
 fn validateHdmxTable(data: []const u8, hdmx: TableRecord, glyph_count: u16) FontError!void {
-    try requireTableLength(hdmx, 8);
+    try sfnt.requireLength(hdmx, 8);
     if (try bin.readU16At(data, hdmx.offset) != 0) return error.BadSfnt;
     const record_count = try bin.readU16At(data, hdmx.offset + 2);
     const record_size = try bin.readU32At(data, hdmx.offset + 4);
@@ -7103,7 +6903,7 @@ fn readHdmxWidth(data: []const u8, hdmx: TableRecord, glyph_count: u16, ppem: u8
 }
 
 fn readMetricHeaderInfo(data: []const u8, header: TableRecord) FontError!MetricHeaderInfo {
-    try requireTableLength(header, 36);
+    try sfnt.requireLength(header, 36);
     return .{
         .version = try bin.readU32At(data, header.offset),
         .ascender = try bin.readI16At(data, header.offset + 4),
@@ -7222,14 +7022,14 @@ fn validateMetricHeaderReservedFields(data: []const u8, header: TableRecord) Fon
 }
 
 fn validatePcltTable(data: []const u8, pclt: TableRecord) FontError!void {
-    try requireTableLength(pclt, 54);
+    try sfnt.requireLength(pclt, 54);
     if (pclt.length != 54) return error.BadSfnt;
     const version = try bin.readU32At(data, pclt.offset);
     if (version != 0x00010000) return error.BadSfnt;
 }
 
 fn readPcltInfo(data: []const u8, pclt: TableRecord) FontError!PcltInfo {
-    try requireTableLength(pclt, 54);
+    try sfnt.requireLength(pclt, 54);
     return .{
         .version = try bin.readU32At(data, pclt.offset),
         .font_number = try bin.readU32At(data, pclt.offset + 4),
@@ -7270,7 +7070,7 @@ fn readArray6At(data: []const u8, offset: usize) FontError![6]u8 {
 }
 
 fn readPostInfo(data: []const u8, post: TableRecord) FontError!PostInfo {
-    try requireTableLength(post, 32);
+    try sfnt.requireLength(post, 32);
     const format = try bin.readU32At(data, post.offset);
     const glyph_name_count: ?u16 = switch (format) {
         0x00020000, 0x00025000 => try bin.readU16At(data, post.offset + 32),
@@ -7301,7 +7101,7 @@ const PostValidationOptions = struct {
 };
 
 fn validatePostTable(data: []const u8, post: TableRecord, glyph_count: u16, options: PostValidationOptions) FontError!void {
-    try requireTableLength(post, 32);
+    try sfnt.requireLength(post, 32);
     const version = try bin.readU32At(data, post.offset);
     switch (version) {
         0x00010000 => {
@@ -7707,7 +7507,7 @@ const post_standard_glyph_names = [_][]const u8{
 };
 
 fn readKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: TableRecord) FontError!KernInfo {
-    try requireTableLength(kern, 4);
+    try sfnt.requireLength(kern, 4);
     const version = try bin.readU32At(data, kern.offset);
     if (version == 0x00010000) return try readAppleKernInfo(allocator, data, kern);
     if ((version >> 16) != 0) {
@@ -7782,7 +7582,7 @@ fn validateMorxTable(data: []const u8, morx: TableRecord, glyph_count: u16) Font
 }
 
 fn validateKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
-    try requireTableLength(kern, 4);
+    try sfnt.requireLength(kern, 4);
     const version = try bin.readU32At(data, kern.offset);
     if (version == 0x00010000) {
         try validateAppleKernTable(data, kern, glyph_count);
@@ -7830,7 +7630,7 @@ fn validateLegacyKernTable(data: []const u8, kern: TableRecord, glyph_count: u16
 }
 
 fn validateAppleKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
-    try requireTableLength(kern, 8);
+    try sfnt.requireLength(kern, 8);
     const table_count = try bin.readU32At(data, kern.offset + 4);
     const table_end = kern.offset + kern.length;
     var subtable_offset = kern.offset + 8;
@@ -8386,7 +8186,10 @@ fn parseTtcHeader(data: []const u8) FontError!?TtcHeader {
         if (face_offset < header_length) return error.BadSfnt;
         if (face_offset > data.len - 12) return error.BadSfnt;
         if (dsig_range) |dsig| {
-            if (rangesOverlap(face_offset, face_offset + 12, dsig.start, dsig.end)) return error.BadSfnt;
+            if (sfnt.overlaps(
+                .{ .start = face_offset, .end = face_offset + 12 },
+                .{ .start = dsig.start, .end = dsig.end },
+            )) return error.BadSfnt;
         }
     }
 
@@ -8408,7 +8211,10 @@ fn sfntOffset(data: []const u8, face_index: usize) FontError!usize {
         // TTC v2 DSIG is a collection-level table, not an SFNT face.  Reject a
         // face offset that lands inside the signature payload before the SFNT
         // parser can reinterpret a signed blob as a plausible offset table.
-        if (rangesOverlap(offset, sfnt_header_end, dsig.start, dsig.end)) return error.BadSfnt;
+        if (sfnt.overlaps(
+            .{ .start = offset, .end = sfnt_header_end },
+            .{ .start = dsig.start, .end = dsig.end },
+        )) return error.BadSfnt;
     }
     return offset;
 }
@@ -10750,7 +10556,7 @@ fn validateFvarTable(data: []const u8, fvar: TableRecord) FontError!void {
         if ((flags & ~@as(u16, 0x0001)) != 0) return error.BadSfnt;
 
         const tag = try bin.readTagAt(data, axis_offset);
-        try validateOpenTypeTag(tag);
+        try sfnt.validateTag(tag);
         for (0..axis_index) |previous_index| {
             const previous_offset = fvarAxisOffset(fvar, info, previous_index);
             const previous_tag = try bin.readTagAt(data, previous_offset);
@@ -10781,7 +10587,7 @@ fn validateStatTable(allocator: std.mem.Allocator, data: []const u8, stat: Table
     for (0..info.design_axis_count) |index| {
         const stat_axis = stat.offset + info.design_axes_offset + index * info.design_axis_size;
         const stat_tag = try bin.readTagAt(data, stat_axis);
-        try validateOpenTypeTag(stat_tag);
+        try sfnt.validateTag(stat_tag);
         try validateStatDesignAxisOrder(data, stat, fvar, info.design_axes_offset, info.design_axis_size, index, &stat_tag);
         try validateNameIdReference(name_index, try bin.readU16At(data, stat_axis + 4));
     }
@@ -18920,7 +18726,7 @@ test "CPAL palette lookup revalidates borrowed label name IDs" {
 
     var font = cpalOnlyFont(&bytes);
     const cpal_record = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = name_offset };
-    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = try checksumSfntTable(&bytes, cpal_record), .offset = 0, .length = name_offset };
+    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = try sfnt.checksum.table(&bytes, cpal_record), .offset = 0, .length = name_offset };
     font.name = .{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = name_offset, .length = bytes.len - name_offset };
 
     const color = (try font.paletteColor(0, 0)).?;
@@ -18965,7 +18771,7 @@ test "CPAL palette entry labels public API revalidates borrowed names" {
 
     var font = cpalOnlyFont(&bytes);
     const cpal_record = TableRecord{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = name_offset };
-    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = try checksumSfntTable(&bytes, cpal_record), .offset = 0, .length = name_offset };
+    font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = try sfnt.checksum.table(&bytes, cpal_record), .offset = 0, .length = name_offset };
     font.name = .{ .tag = .{ 'n', 'a', 'm', 'e' }, .checksum = 0, .offset = name_offset, .length = bytes.len - name_offset };
 
     const labels = try font.paletteEntryLabels(allocator);
@@ -21771,7 +21577,7 @@ fn gdefOnlyFont(data: []const u8) Font {
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
     const gdef_record: TableRecord = .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = data.len };
-    const gdef_checksum = checksumSfntTable(data, gdef_record) catch 0;
+    const gdef_checksum = sfnt.checksum.table(data, gdef_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -21848,7 +21654,7 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
     const os2_record: TableRecord = .{ .tag = .{ 'O', 'S', '/', '2' }, .checksum = 0, .offset = 0, .length = declared_length };
-    const os2_checksum = checksumSfntTable(data, os2_record) catch 0;
+    const os2_checksum = sfnt.checksum.table(data, os2_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -21925,7 +21731,7 @@ fn colrOnlyFont(data: []const u8) Font {
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
     const colr_record: TableRecord = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = data.len };
-    const colr_checksum = checksumSfntTable(data, colr_record) catch 0;
+    const colr_checksum = sfnt.checksum.table(data, colr_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -22000,10 +21806,10 @@ fn colrOnlyFont(data: []const u8) Font {
 fn colrCpalOnlyFont(data: []const u8, colr_length: usize) Font {
     var font = colrOnlyFont(data);
     const colr_record: TableRecord = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = colr_length };
-    const colr_checksum = checksumSfntTable(data, colr_record) catch 0;
+    const colr_checksum = sfnt.checksum.table(data, colr_record) catch 0;
     font.colr = .{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = colr_checksum, .offset = 0, .length = colr_length };
     const cpal_record: TableRecord = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = colr_length, .length = data.len - colr_length };
-    const cpal_checksum = checksumSfntTable(data, cpal_record) catch 0;
+    const cpal_checksum = sfnt.checksum.table(data, cpal_record) catch 0;
     font.cpal = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = cpal_checksum, .offset = colr_length, .length = data.len - colr_length };
     return font;
 }
@@ -22013,7 +21819,7 @@ fn cpalOnlyFont(data: []const u8) Font {
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
     const cpal_record: TableRecord = .{ .tag = .{ 'C', 'P', 'A', 'L' }, .checksum = 0, .offset = 0, .length = data.len };
-    const cpal_checksum = checksumSfntTable(data, cpal_record) catch 0;
+    const cpal_checksum = sfnt.checksum.table(data, cpal_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -22090,7 +21896,7 @@ fn svgOnlyFont(data: []const u8) Font {
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
     const svg_record: TableRecord = .{ .tag = .{ 'S', 'V', 'G', ' ' }, .checksum = 0, .offset = 0, .length = data.len };
-    const svg_checksum = checksumSfntTable(data, svg_record) catch 0;
+    const svg_checksum = sfnt.checksum.table(data, svg_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -22167,7 +21973,7 @@ fn sbixOnlyFont(data: []const u8) Font {
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
     const sbix_record: TableRecord = .{ .tag = .{ 's', 'b', 'i', 'x' }, .checksum = 0, .offset = 0, .length = data.len };
-    const sbix_checksum = checksumSfntTable(data, sbix_record) catch 0;
+    const sbix_checksum = sfnt.checksum.table(data, sbix_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -22244,7 +22050,7 @@ fn fvarOnlyFont(data: []const u8) Font {
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
     const fvar_record: TableRecord = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len };
-    const fvar_checksum = checksumSfntTable(data, fvar_record) catch 0;
+    const fvar_checksum = sfnt.checksum.table(data, fvar_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -22320,7 +22126,7 @@ fn avarOnlyFont(data: []const u8) Font {
     var font = fvarOnlyFont(data);
     font.fvar = null;
     const avar_record: TableRecord = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = data.len };
-    const avar_checksum = checksumSfntTable(data, avar_record) catch 0;
+    const avar_checksum = sfnt.checksum.table(data, avar_record) catch 0;
     font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = avar_checksum, .offset = 0, .length = data.len };
     return font;
 }
@@ -22328,10 +22134,10 @@ fn avarOnlyFont(data: []const u8) Font {
 fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
     var font = fvarOnlyFont(data);
     const fvar_record: TableRecord = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = fvar_length };
-    const fvar_checksum = checksumSfntTable(data, fvar_record) catch 0;
+    const fvar_checksum = sfnt.checksum.table(data, fvar_record) catch 0;
     font.fvar = .{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = fvar_checksum, .offset = 0, .length = fvar_length };
     const avar_record: TableRecord = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = 0, .offset = fvar_length, .length = data.len - fvar_length };
-    const avar_checksum = checksumSfntTable(data, avar_record) catch 0;
+    const avar_checksum = sfnt.checksum.table(data, avar_record) catch 0;
     font.avar = .{ .tag = .{ 'a', 'v', 'a', 'r' }, .checksum = avar_checksum, .offset = fvar_length, .length = data.len - fvar_length };
     return font;
 }
@@ -22341,7 +22147,7 @@ fn kernOnlyFont(data: []const u8) Font {
     const empty_cmaps: []CmapSubtable = &.{};
     const dummy_table: TableRecord = .{ .tag = .{ 0, 0, 0, 0 }, .checksum = 0, .offset = 0, .length = 0 };
     const kern_record: TableRecord = .{ .tag = .{ 'k', 'e', 'r', 'n' }, .checksum = 0, .offset = 0, .length = data.len };
-    const kern_checksum = checksumSfntTable(data, kern_record) catch 0;
+    const kern_checksum = sfnt.checksum.table(data, kern_record) catch 0;
     return .{
         .data = data,
         .format = .truetype,
@@ -22427,9 +22233,9 @@ fn updateSfntTableChecksum(bytes: []u8, comptime table_tag: []const u8) FontErro
             .length = try bin.readU32At(bytes, record_offset + 12),
         };
         const value = if (bin.tagEq(record.tag, "head"))
-            try checksumHeadTable(bytes, record)
+            try sfnt.checksum.head(bytes, record)
         else
-            try checksumSfntTable(bytes, record);
+            try sfnt.checksum.table(bytes, record);
         writeU32Test(bytes, record_offset + 4, value);
         return;
     }

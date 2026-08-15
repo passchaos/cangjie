@@ -4,6 +4,7 @@ const std = @import("std");
 
 const Font = @import("../../../font.zig").Font;
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
+const run_types = @import("../../types/runs.zig");
 const unicode = @import("../../../unicode.zig");
 
 pub const ClusterEntry = struct {
@@ -202,7 +203,7 @@ fn appendGlyph(
         if (codepoint == glyph.codepoint) break :mirror;
         const run_index = glyph_run_indices[glyph_index];
         const font = if (run_index < old_runs.len)
-            old_runs[run_index].font
+            run_types.fontForBackend(old_runs[run_index])
         else
             single_font orelse break :mirror;
         const mirrored_glyph = font.glyphIndex(codepoint) catch break :mirror;

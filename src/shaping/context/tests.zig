@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
 const layout = @import("../../layout.zig");
 const context_mod = @import("root.zig");
@@ -14,7 +15,8 @@ test "engine owns reusable caches and resets them together" {
     const engine = try context_mod.Engine.init(std.testing.allocator, .{});
     defer engine.deinit();
 
-    const first = try engine.shape(&font, .{ .text = "AAA", .font_size = 20 });
+    const face = face_mod.backend.face(&font);
+    const first = try engine.shape(face, .{ .text = "AAA", .font_size = 20 });
     try std.testing.expectEqual(@as(usize, 3), first.glyphs.len);
     const first_stats = engine.stats();
     try std.testing.expect(first_stats.glyph_indices.misses > 0);
@@ -22,7 +24,7 @@ test "engine owns reusable caches and resets them together" {
     // lookup without retaining an owned metadata record.
     try std.testing.expect(first_stats.lookup_selection.misses > 0);
 
-    _ = try engine.shape(&font, .{ .text = "AAA", .font_size = 20 });
+    _ = try engine.shape(face, .{ .text = "AAA", .font_size = 20 });
     const reused = engine.stats();
     try std.testing.expect(
         reused.glyph_indices.hits > first_stats.glyph_indices.hits,
@@ -42,7 +44,7 @@ test "engine optionally retains complete cascade runs" {
     var font = try Font.parse(std.testing.allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
 
     const engine = try context_mod.Engine.init(
         std.testing.allocator,
@@ -70,7 +72,10 @@ test "engine can bypass all font-derived caches" {
     );
     defer engine.deinit();
 
-    const run = try engine.shape(&font, .{ .text = "AA", .font_size = 20 });
+    const run = try engine.shape(
+        face_mod.backend.face(&font),
+        .{ .text = "AA", .font_size = 20 },
+    );
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectEqual(context_mod.Engine.Stats{}, engine.stats());
 }
@@ -82,7 +87,7 @@ test "engine owns styled metadata and paragraph measurement" {
     var font = try Font.parse(std.testing.allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
 
     const engine = try context_mod.Engine.init(std.testing.allocator, .{});
     defer engine.deinit();

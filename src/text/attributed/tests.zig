@@ -411,19 +411,31 @@ test "font database resolves attributed families weights and fallback" {
     );
     defer result.deinit();
 
-    const primary = font_database.match(.{ .family = "Primary Sans" }).?.font;
-    const alternate = font_database.match(.{ .family = "Alternate Sans" }).?.font;
-    const fallback = font_database.match(.{ .family = "Fallback Sans" }).?.font;
+    const primary = font_database.match(.{ .family = "Primary Sans" }).?.face;
+    const alternate = font_database.match(.{ .family = "Alternate Sans" }).?.face;
+    const fallback = font_database.match(.{ .family = "Fallback Sans" }).?.face;
     const bold_italic = font_database.match(.{
         .family = "Weighted Sans",
         .weight = 700,
         .style = .italic,
-    }).?.font;
+    }).?.face;
     try std.testing.expectEqual(@as(usize, 4), result.font_runs.len);
-    try std.testing.expectEqual(primary, result.font_runs[0].font);
-    try std.testing.expectEqual(alternate, result.font_runs[1].font);
-    try std.testing.expectEqual(fallback, result.font_runs[2].font);
-    try std.testing.expectEqual(bold_italic, result.font_runs[3].font);
+    try std.testing.expectEqual(
+        primary,
+        result.font_runs[0].font,
+    );
+    try std.testing.expectEqual(
+        alternate,
+        result.font_runs[1].font,
+    );
+    try std.testing.expectEqual(
+        fallback,
+        result.font_runs[2].font,
+    );
+    try std.testing.expectEqual(
+        bold_italic,
+        result.font_runs[3].font,
+    );
     try std.testing.expectEqual(@as(usize, 0), result.font_runs[0].font_index);
     try std.testing.expectEqual(@as(usize, 1), result.font_runs[1].font_index);
     try std.testing.expectEqual(@as(usize, 2), result.font_runs[2].font_index);

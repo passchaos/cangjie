@@ -2,6 +2,7 @@ const std = @import("std");
 
 const context_mod = @import("../../shaping/context/root.zig");
 const dictionary_mod = @import("../../text/segmentation/root.zig");
+const face_mod = @import("../../font/face/root.zig");
 const font_mod = @import("../../font.zig");
 const layout = @import("../../layout.zig");
 const test_font = @import("../../test_font.zig");
@@ -25,7 +26,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
 
     const dictionary = try dictionary_mod.WordBreakDictionary.init(
         allocator,
@@ -124,7 +125,7 @@ test "dictionary opportunities cannot bypass shaped boundary safety" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
     const dictionary = try dictionary_mod.WordBreakDictionary.init(
         allocator,
         .thai,

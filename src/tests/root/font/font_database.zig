@@ -1,6 +1,7 @@
 //! Integration coverage migrated from the former package root.
 
 const std = @import("std");
+const face_mod = @import("../../../font/face/root.zig");
 const support = @import("../support.zig");
 const LayoutBuffer = support.LayoutBuffer;
 const TextShaper = support.TextShaper;
@@ -42,12 +43,18 @@ test "matches font database faces by family weight and style" {
     try std.testing.expectEqual(@as(usize, 1), database.familyCount());
 
     const regular_match = database.match(.{ .family = "cangjie sans", .weight = 400, .style = .normal }).?;
-    try std.testing.expectEqual(@as(*const Font, &regular), regular_match.font);
+    try std.testing.expectEqual(
+        face_mod.backend.face(&regular),
+        regular_match.face,
+    );
     try std.testing.expectEqual(@as(u16, 400), regular_match.weight);
     try std.testing.expectEqual(FontStyle.normal, regular_match.style);
 
     const bold_match = database.match(.{ .family = "Cangjie Sans", .weight = 700, .style = .italic }).?;
-    try std.testing.expectEqual(@as(*const Font, &bold_italic), bold_match.font);
+    try std.testing.expectEqual(
+        face_mod.backend.face(&bold_italic),
+        bold_match.face,
+    );
     try std.testing.expectEqual(@as(u16, 700), bold_match.weight);
     try std.testing.expectEqual(FontStyle.italic, bold_match.style);
 
@@ -591,7 +598,10 @@ test "uses OS/2 style attributes for database matching" {
     _ = try database.addFont(&narrow_italic);
 
     const matched = database.match(.{ .family = "Metric Sans", .weight = 650, .stretch = 75, .style = .italic }).?;
-    try std.testing.expectEqual(@as(*const Font, &narrow_italic), matched.font);
+    try std.testing.expectEqual(
+        face_mod.backend.face(&narrow_italic),
+        matched.face,
+    );
     try std.testing.expectEqual(@as(u16, 650), matched.weight);
     try std.testing.expectEqual(@as(u16, 75), matched.stretch);
     try std.testing.expectEqual(FontStyle.italic, matched.style);

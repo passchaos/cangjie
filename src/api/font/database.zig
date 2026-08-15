@@ -1,9 +1,10 @@
 //! Font discovery, matching, manifests, and fallback-cascade construction.
 
+const public = @import("../../font/database/api.zig");
 const impl = @import("../../database.zig");
 
-pub const Database = impl.FontDatabase;
-pub const FaceInfo = impl.FontFaceInfo;
+pub const Database = public.Database;
+pub const FaceInfo = public.FaceInfo;
 pub const ManifestEntry = impl.FontManifestEntry;
 pub const Query = impl.FontQuery;
 pub const Source = impl.FontSource;

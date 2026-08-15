@@ -1,4 +1,5 @@
 const std = @import("std");
+const face_mod = @import("font/face/root.zig");
 const font_shaping = @import("font.zig").shaping;
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
@@ -713,7 +714,7 @@ pub const LayoutBuffer = struct {
     }
 
     pub fn run(self: *const LayoutBuffer, font: *const Font, font_size: f32) GlyphRun {
-        return .{ .font = font, .font_size = font_size, .glyphs = self.glyphs.items };
+        return run_types.initGlyphRun(font, font_size, self.glyphs.items);
     }
 
     pub fn shapedText(self: *const LayoutBuffer) ShapedText {
@@ -1200,8 +1201,8 @@ const StyledParagraphDriver = struct {
 
     pub fn validateSpan(_: *@This(), span: StyledParagraphSpan) !void {
         try validateShapingFontSize(span.font_size);
-        if (span.fonts) |fonts| {
-            if (fonts.len == 0) return error.EmptyFontCascade;
+        if (span.faces) |faces| {
+            if (faces.len == 0) return error.EmptyFontCascade;
         }
         try validateFeatureOverrides(span.features);
         try validateNormalizedVariationCoords(span.normalized_variation_coords);
@@ -1226,7 +1227,7 @@ const StyledParagraphDriver = struct {
         // diagnostics and render integrations see one stable index space.
         for (self.buffer.runs.items[run_start..]) |*run| {
             for (self.cascade.fonts, 0..) |font, font_index| {
-                if (font != run.font) continue;
+                if (font != run_types.fontForBackend(run.*)) continue;
                 run.font_index = font_index;
                 break;
             }
@@ -1241,7 +1242,12 @@ const StyledParagraphDriver = struct {
         span: StyledParagraphSpan,
     ) !void {
         const item_text = self.text[byte_start..byte_end];
-        const item_cascade = FontCascade.init(span.fonts orelse self.cascade.fonts);
+        const item_cascade = FontCascade.init(
+            if (span.faces) |faces|
+                face_mod.backend.fonts(faces)
+            else
+                self.cascade.fonts,
+        );
         const run_start = self.buffer.runs.items.len;
         self.pen = try shapeCascadeSegmentInto(
             item_cascade,
@@ -1271,7 +1277,7 @@ const StyledParagraphDriver = struct {
                 .all_ascii = textIsAscii(item_text),
             },
         );
-        if (span.fonts != null) {
+        if (span.faces != null) {
             self.normalizeNewRunFontIndices(run_start);
         }
     }
@@ -1746,7 +1752,7 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // line-to-run range calculations.
     if (glyph_len == 0) return pen;
     try buffer.runs.append(buffer.allocator, .{
-        .font = font,
+        .font = face_mod.backend.face(font),
         .font_index = font_index,
         .font_size = font_size,
         .glyph_start = glyph_start,

@@ -1,6 +1,5 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
-const font_shaping = cangjie.testing.font_shaping;
 
 const cluster_normalization = @import("cluster_normalization.zig");
 const options_mod = @import("options.zig");
@@ -145,15 +144,15 @@ fn writeSfntSearchParameters(data: []u8, table_count: u16) void {
     std.mem.writeInt(u16, data[10..12], table_count * 16 - search_range, .big);
 }
 
-pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !cangjie.font.Face {
-    return try cangjie.font.Face.parseFace(allocator, font_bytes, options.face_index);
+pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !*cangjie.font.Face {
+    return try cangjie.font.Face.parseIndex(allocator, font_bytes, options.face_index);
 }
 
 pub fn resolvedVariationCoords(allocator: std.mem.Allocator, font: *const cangjie.font.Face, options: *const options_mod.Options) ![]f32 {
     if (options.designVariationCoords().len == 0) {
         return try allocator.dupe(f32, options.normalizedVariationCoords());
     }
-    return try font.normalizedVariationCoordinates(allocator, options.designVariationCoords());
+    return try font.variations().normalize(allocator, options.designVariationCoords());
 }
 
 pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, options: options_mod.Options) !BenchResult {
@@ -334,8 +333,8 @@ fn glyphXOffsets(
         if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) {
             const origin = try syntheticVerticalOriginX(font, glyph.glyph_id, options, normalized_variation_coords);
             if (preserve_vertical_position_delta) {
-                const default_runtime_origin = @as(f32, @floatFromInt((try font.horizontalMetricsAtCoords(glyph.glyph_id, normalized_variation_coords)).advance_width)) *
-                    0.5 * font_size / @as(f32, @floatFromInt(font.units_per_em));
+                const default_runtime_origin = @as(f32, @floatFromInt((try font.metrics().horizontalAt(glyph.glyph_id, normalized_variation_coords)).advance_width)) *
+                    0.5 * font_size / @as(f32, @floatFromInt(font.properties().units_per_em));
                 const runtime_delta = fontUnitPosition(
                     font,
                     font_size,
@@ -377,7 +376,10 @@ fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.font.Face, f
             if (options.font_slant != 0 or options.font_bold_x != 0 or options.font_bold_y != 0) {
                 break :vertical -try syntheticVerticalOriginY(font, glyph.glyph_id, options, normalized_variation_coords);
             }
-            break :vertical -try font_shaping.verticalOriginYAtCoords(font, glyph.glyph_id, normalized_variation_coords);
+            break :vertical -try font.metrics().shapingVerticalOrigin(
+                glyph.glyph_id,
+                normalized_variation_coords,
+            );
         } else fontUnitPosition(font, font_size, glyph.y_offset);
     }
     return values;
@@ -402,7 +404,7 @@ fn glyphExtents(allocator: std.mem.Allocator, font: *const cangjie.font.Face, fo
     const values = try allocator.alloc(i32, glyphs.len * 4);
     for (glyphs, 0..) |glyph, index| {
         const base = index * 4;
-        const bounds = font.glyphBoundsAtCoords(@intCast(glyph.glyph_id), normalized_variation_coords) catch {
+        const bounds = font.glyphs().boundsAt(@intCast(glyph.glyph_id), normalized_variation_coords) catch {
             if (try bitmapGlyphExtents(font, glyph.glyph_id, font_size, values[base..][0..4])) continue;
             values[base + 0] = 0;
             values[base + 1] = 0;
@@ -423,9 +425,9 @@ fn glyphExtents(allocator: std.mem.Allocator, font: *const cangjie.font.Face, fo
 
 fn bitmapGlyphExtents(font: *const cangjie.font.Face, glyph_id: u32, font_size: f32, out: []i32) !bool {
     if (out.len < 4) return false;
-    const bitmap_info = (try font.bitmapGlyphInfo(@intCast(glyph_id), font_size)) orelse return false;
+    const bitmap_info = (try font.color().bitmapInfo(@intCast(glyph_id), font_size)) orelse return false;
     const ppem = @max(bitmap_info.ppem, 1);
-    const scale = @as(f32, @floatFromInt(font.units_per_em)) / @as(f32, @floatFromInt(ppem));
+    const scale = @as(f32, @floatFromInt(font.properties().units_per_em)) / @as(f32, @floatFromInt(ppem));
     out[0] = scaleRound(i32, @as(f32, @floatFromInt(bitmap_info.origin_offset_x)) * scale);
     out[1] = switch (bitmap_info.source) {
         .sbix => scaleRound(i32, (@as(f32, @floatFromInt(bitmap_info.origin_offset_y)) + @as(f32, @floatFromInt(bitmap_info.height))) * scale),
@@ -449,13 +451,13 @@ fn textContainsCodepoint(text: []const u8, target: u21) bool {
 }
 
 fn syntheticVerticalOriginX(font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, normalized_variation_coords: []const f32) !i32 {
-    var advance = @as(i32, (try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords)).advance_width);
+    var advance = @as(i32, (try font.metrics().horizontalAt(glyph_id, normalized_variation_coords)).advance_width);
     if (options.font_bold_x != 0 and advance != 0) advance += syntheticStrength(font, options.font_bold_x);
     return @divTrunc(advance, 2) + syntheticStrength(font, options.font_bold_x);
 }
 
 fn syntheticVerticalOriginY(font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, normalized_coords: []const f32) !i32 {
-    var bounds = try font.glyphBoundsAtCoords(glyph_id, normalized_coords);
+    var bounds = try font.glyphs().boundsAt(glyph_id, normalized_coords);
     if (options.font_slant != 0) {
         const x1 = @as(f32, @floatFromInt(bounds.x_min));
         const x2 = @as(f32, @floatFromInt(bounds.x_max));
@@ -470,26 +472,26 @@ fn syntheticVerticalOriginY(font: *const cangjie.font.Face, glyph_id: cangjie.fo
     const y_strength = syntheticStrength(font, options.font_bold_y);
     bounds.y_max += @intCast(y_strength);
 
-    const font_advance = @as(i32, font.ascender) + y_strength - @as(i32, font.descender);
+    const font_advance = @as(i32, font.properties().ascender) + y_strength - @as(i32, font.properties().descender);
     const glyph_height = @as(i32, bounds.y_max) - @as(i32, bounds.y_min);
     return @as(i32, bounds.y_max) + @divTrunc(font_advance - glyph_height, 2) + y_strength;
 }
 
 fn syntheticStrength(font: *const cangjie.font.Face, value: f32) i32 {
-    return @intFromFloat(@round(@as(f32, @floatFromInt(font.units_per_em)) * value));
+    return @intFromFloat(@round(@as(f32, @floatFromInt(font.properties().units_per_em)) * value));
 }
 
 fn harfBuzzVerticalAdvance(font: *const cangjie.font.Face, glyph: cangjie.shaping.Glyph) !i32 {
-    if (try font.verticalMetrics(glyph.glyph_id)) |metrics| return -@as(i32, @intCast(metrics.advance_height));
+    if (try font.metrics().vertical(glyph.glyph_id)) |metrics| return -@as(i32, @intCast(metrics.advance_height));
     return -defaultVerticalAdvance(font);
 }
 
 fn defaultVerticalAdvance(font: *const cangjie.font.Face) i32 {
-    return @as(i32, font.ascender) - @as(i32, font.descender);
+    return @as(i32, font.properties().ascender) - @as(i32, font.properties().descender);
 }
 
 fn fontUnitPosition(font: *const cangjie.font.Face, font_size: f32, value: f32) i32 {
-    const font_units = value * @as(f32, @floatFromInt(font.units_per_em)) / font_size;
+    const font_units = value * @as(f32, @floatFromInt(font.properties().units_per_em)) / font_size;
     return @intFromFloat(@round(font_units));
 }
 

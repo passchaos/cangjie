@@ -2,12 +2,13 @@
 
 const bridge = @import("../../render_bridge.zig");
 const raster = @import("../../raster.zig");
+const public_raster = @import("../../render/api/root.zig");
 
 pub const GrayTarget = raster.RenderTarget;
 pub const ColorTarget = raster.ColorRenderTarget;
 pub const Rgba = raster.Rgba;
-pub const Rasterizer = raster.Rasterizer;
-pub const PreparedGlyph = raster.PreparedGlyph;
+pub const Rasterizer = public_raster.Rasterizer;
+pub const Prepared = public_raster.Prepared;
 
 pub const BridgeOptions = bridge.BridgeOptions;
 pub const ColorGlyphPaint = bridge.ColorGlyphPaint;

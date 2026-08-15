@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const face_mod = @import("font/face/root.zig");
 const Font = @import("font.zig").Font;
 const font_container = @import("font_container.zig");
 const layout = @import("layout.zig");
@@ -12,7 +13,7 @@ pub const FontStyle = enum {
 };
 
 pub const FontFaceInfo = struct {
-    font: *const Font,
+    face: *const face_mod.Face,
     family: []const u8,
     subfamily: []const u8,
     full_name: []const u8,
@@ -253,7 +254,7 @@ pub const FontDatabase = struct {
         }
 
         const face = FontFaceInfo{
-            .font = font,
+            .face = face_mod.backend.face(font),
             .family = family,
             .subfamily = subfamily,
             .full_name = full_name,
@@ -483,7 +484,7 @@ pub const FontDatabase = struct {
             self.allocator.destroy(owned);
             return err;
         };
-        if (self.faces.items[index].font != &owned.font) {
+        if (face_mod.backend.font(self.faces.items[index].face) != &owned.font) {
             _ = self.owned_fonts.pop();
             owned.font.deinit();
             self.allocator.free(owned.bytes);
@@ -535,13 +536,23 @@ pub const FontDatabase = struct {
         errdefer fonts.deinit(allocator);
 
         const primary = self.match(query);
-        if (primary) |face| try appendUniqueFont(allocator, &fonts, face.font);
+        if (primary) |face| {
+            try appendUniqueFont(
+                allocator,
+                &fonts,
+                face_mod.backend.font(face.face),
+            );
+        }
 
         var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
         while (it.nextCodepoint()) |codepoint| {
             if (fontListCovers(fonts.items, codepoint)) continue;
             if (self.findFallbackFace(codepoint, query)) |fallback| {
-                try appendUniqueFont(allocator, &fonts, fallback.font);
+                try appendUniqueFont(
+                    allocator,
+                    &fonts,
+                    face_mod.backend.font(fallback.face),
+                );
             }
         }
 
@@ -657,8 +668,12 @@ pub const FontDatabase = struct {
                 .subfamily = subfamily,
                 .full_name = full_name,
                 .postscript_name = postscript_name,
-                .content_hash = self.contentHashForFont(face.font),
-                .content_size = self.contentSizeForFont(face.font),
+                .content_hash = self.contentHashForFont(
+                    face_mod.backend.font(face.face),
+                ),
+                .content_size = self.contentSizeForFont(
+                    face_mod.backend.font(face.face),
+                ),
                 .weight = face.weight,
                 .stretch = face.stretch,
                 .style = face.style,
@@ -682,7 +697,7 @@ pub const FontDatabase = struct {
         var best: ?usize = null;
         var best_score: u32 = std.math.maxInt(u32);
         for (self.faces.items, 0..) |face, index| {
-            if (!fontCovers(face.font, codepoint)) continue;
+            if (!fontCovers(face_mod.backend.font(face.face), codepoint)) continue;
             const score = matchScore(face, query) + if (familyMatches(face.family, query.family)) @as(u32, 0) else 5000;
             if (score < best_score) {
                 best = index;
@@ -722,7 +737,7 @@ pub const FontDatabase = struct {
             // tables from different bytes than the caller supplied.
             if (!std.mem.eql(u8, owned.bytes, bytes)) continue;
             for (self.faces.items, 0..) |face, index| {
-                if (face.font == &owned.font) return index;
+                if (face_mod.backend.font(face.face) == &owned.font) return index;
             }
         }
         return null;

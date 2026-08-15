@@ -1,4 +1,5 @@
 const std = @import("std");
+const face_mod = @import("font/face/root.zig");
 const font_raster = @import("font.zig").raster_backend;
 const imx = @import("imx");
 const font_mod = @import("font.zig");
@@ -874,14 +875,15 @@ pub const Rasterizer = struct {
 
     pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
+        const font = face_mod.backend.font(run.font);
         const use_default_outline = normalizedVariationCoordinatesAreDefault(normalized_variation_coords);
         for (run.glyphs) |position| {
             var outline = if (use_default_outline)
-                try font_raster.glyphOutline(run.font, self.allocator, position.glyph_id)
+                try font_raster.glyphOutline(font, self.allocator, position.glyph_id)
             else
-                try font_raster.glyphOutlineAtCoords(run.font, self.allocator, position.glyph_id, normalized_variation_coords);
+                try font_raster.glyphOutlineAtCoords(font, self.allocator, position.glyph_id, normalized_variation_coords);
             defer outline.deinit();
-            try self.renderGlyph(target, &outline, pen_x + position.x_offset, baseline_y + position.y_offset, run.font_size, run.font.units_per_em);
+            try self.renderGlyph(target, &outline, pen_x + position.x_offset, baseline_y + position.y_offset, run.font_size, font.units_per_em);
             pen_x += position.x_advance;
         }
     }
@@ -903,7 +905,7 @@ pub const Rasterizer = struct {
     pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
         for (run.glyphs) |position| {
-            try self.renderColorGlyphAtCoords(target, run.font, position.glyph_id, run.font_size, pen_x + position.x_offset, baseline_y + position.y_offset, palette_index, normalized_variation_coords);
+            try self.renderColorGlyphAtCoords(target, face_mod.backend.font(run.font), position.glyph_id, run.font_size, pen_x + position.x_offset, baseline_y + position.y_offset, palette_index, normalized_variation_coords);
             pen_x += position.x_advance;
         }
     }

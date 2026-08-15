@@ -1,4 +1,5 @@
 const std = @import("std");
+const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
 const layout = @import("../../layout.zig");
 const paragraph = @import("paragraph.zig");
@@ -129,7 +130,10 @@ const ResolvedFonts = struct {
         if (result.all_fonts.items.len == 0) {
             const default_face = font_database.match(default_query) orelse
                 return error.FontFamilyNotFound;
-            try result.all_fonts.append(allocator, default_face.font);
+            try result.all_fonts.append(
+                allocator,
+                face_mod.backend.font(default_face.face),
+            );
         }
         return result;
     }

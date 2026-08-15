@@ -4,10 +4,17 @@
 //! records live under `metadata`, container decoding under `container`, and
 //! collection/fallback discovery under `database`.
 
+const face = @import("../../font/face/root.zig");
 const font_mod = @import("../../font.zig");
 const glyph = @import("../../glyph.zig");
 
-pub const Face = font_mod.Font;
+pub const Face = face.Face;
+pub const Properties = face.Properties;
+pub const Glyphs = face.Glyphs;
+pub const Metrics = face.Metrics;
+pub const Names = face.Names;
+pub const Variations = face.Variations;
+pub const Color = face.Color;
 pub const Error = font_mod.FontError;
 pub const Format = font_mod.FontFormat;
 
@@ -17,7 +24,7 @@ pub const Outline = glyph.GlyphOutline;
 pub const OutlineBuilder = glyph.OutlineBuilder;
 
 /// An ordered list of faces used for cluster-safe fallback.
-pub const Cascade = @import("../../layout.zig").FontCascade;
+pub const Cascade = face.Cascade;
 
 pub const metadata = @import("metadata.zig");
 pub const container = @import("container.zig");

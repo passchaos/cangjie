@@ -9,6 +9,7 @@ const std = @import("std");
 const Font = @import("../../../font.zig").Font;
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
+const run_types = @import("../../types/runs.zig");
 
 pub const BaselineMetrics = struct {
     ascent: f32,
@@ -67,7 +68,10 @@ pub fn lineRunInfo(
         if (run_end <= glyph_start or run_start >= glyph_end) continue;
         if (first_run == null) first_run = run_index;
         run_end_index = run_index + 1;
-        const run_metrics = defaultBaselineMetrics(run.font, run.font_size);
+        const run_metrics = defaultBaselineMetrics(
+            run_types.fontForBackend(run),
+            run.font_size,
+        );
         metrics.ascent = @max(metrics.ascent, run_metrics.ascent);
         metrics.descent = @max(metrics.descent, run_metrics.descent);
         metrics.leading = @max(metrics.leading, run_metrics.leading);

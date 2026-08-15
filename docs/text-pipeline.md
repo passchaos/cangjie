@@ -366,10 +366,10 @@ tags, OpenType features, normalized variation coordinates, letter/word
 spacing, and minimum line height are applied per span; visual style fragments
 retain color, background, and decoration metadata for renderers. Font-family
 name resolution remains a separate `cangjie.font.database.Database`
-responsibility: the unified entry consumes an already selected `FontCascade`
+responsibility: the unified entry consumes an already selected `font.Cascade`
 and does not guess how a family name maps to loaded font bytes.
 
-`cangjie.font.database.Database.layoutAttributedParagraphUtf8` is the
+`cangjie.font.database.Database.layoutAttributed` is the
 integrated entry point for callers that do want that resolution. It maps each
 normalized style run's family, weight, stretch, and normal/italic/oblique
 request to a database face, builds a coverage-aware fallback cascade for that

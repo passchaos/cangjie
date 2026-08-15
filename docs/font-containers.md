@@ -22,8 +22,11 @@ TTC/OTC, web fonts, or current color-font formats.
 
 ## Ownership And Limits
 
-`cangjie.font.Face.parse` and `parseFace` are zero-copy APIs: a `Face` borrows
-the caller's SFNT bytes. Compressed containers and DFONT resources require
+`cangjie.font.Face.parse` and `parseIndex` are zero-copy APIs: a `Face` borrows
+the caller's SFNT bytes. Both return an opaque parsed-face handle; use
+`properties()`, `glyphs()`, `metrics()`, `names()`, `variations()`, and
+`color()` rather than depending on parser table records. Compressed containers
+and DFONT resources require
 newly reconstructed bytes, so `cangjie.font.container.OwnedFace` owns both the
 decoded allocation and the `Face` borrowing it. Destroying `OwnedFace`
 deinitializes the parser before releasing those bytes.

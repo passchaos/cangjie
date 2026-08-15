@@ -109,7 +109,10 @@ test "FontDatabase loads and scans WOFF1 font sources" {
     try std.testing.expectEqual(@as(usize, 0), try database.addFontBytes(woff));
     const face = database.match(.{ .family = "Database WOFF" }) orelse
         return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(GlyphId, 1), try face.font.glyphIndex('A'));
+    try std.testing.expectEqual(
+        @as(GlyphId, 1),
+        try face.face.glyphs().index('A'),
+    );
     const manifest = try database.manifest(allocator);
     defer FontDatabase.freeManifest(allocator, manifest);
     try std.testing.expectEqual(@as(usize, 1), manifest.len);

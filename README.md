@@ -18,13 +18,13 @@ paragraph layout, and CPU rasterization behind domain-oriented APIs:
 ```zig
 const cangjie = @import("cangjie");
 
-var face = try cangjie.font.Face.parse(allocator, font_bytes);
+const face = try cangjie.font.Face.parse(allocator, font_bytes);
 defer face.deinit();
 
 const engine = try cangjie.Engine.init(allocator, .{});
 defer engine.deinit();
 
-const run = try engine.shape(&face, .{
+const run = try engine.shape(face, .{
     .text = "Hello, 世界",
     .font_size = 32,
 });
@@ -32,8 +32,9 @@ const run = try engine.shape(&face, .{
 var target = try cangjie.render.GrayTarget.init(allocator, 640, 96);
 defer target.deinit();
 
-var rasterizer = cangjie.render.Rasterizer.init(allocator);
-try rasterizer.renderRun(&target, run, 16, 64);
+const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+defer rasterizer.deinit();
+try rasterizer.drawRun(&target, run, 16, 64);
 ```
 
 Returned shaping and one-shot layout views borrow `Engine` storage and remain

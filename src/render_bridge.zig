@@ -1,4 +1,5 @@
 const std = @import("std");
+const face_mod = @import("font/face/root.zig");
 const font_raster = @import("font.zig").raster_backend;
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
@@ -46,7 +47,7 @@ pub const GlyphAtlasCacheKey = struct {
 };
 
 pub const GlyphAtlasRequest = struct {
-    font: *const font_mod.Font,
+    font: *const face_mod.Face,
     glyph_id: glyph_mod.GlyphId,
     font_size: f32,
     palette_index: ?u16 = null,
@@ -86,7 +87,7 @@ pub const GlyphPathCacheKey = struct {
 };
 
 pub const GlyphPathRequest = struct {
-    font: *const font_mod.Font,
+    font: *const face_mod.Face,
     glyph_id: glyph_mod.GlyphId,
     font_size: f32,
     normalized_variation_coords: []const f32 = &.{},
@@ -107,7 +108,7 @@ pub const GlyphPathRequest = struct {
 };
 
 pub const PositionedGlyph = struct {
-    font: *const font_mod.Font,
+    font: *const face_mod.Face,
     glyph_id: glyph_mod.GlyphId,
     codepoint: u21,
     cluster: usize,
@@ -123,7 +124,7 @@ pub const PositionedGlyph = struct {
 };
 
 pub const GlyphRunDrawCommand = struct {
-    font: *const font_mod.Font,
+    font: *const face_mod.Face,
     font_size: f32,
     glyph_start: usize,
     glyph_len: usize,
@@ -305,17 +306,18 @@ const BridgeBuilder = struct {
     }
 
     fn appendGlyphsInRange(self: *BridgeBuilder, run: layout.CascadeRun, start: usize, end: usize, line: layout.ParagraphLine, baseline_y: f32) !void {
+        const font = face_mod.backend.font(run.font);
         const line_glyph_end = line.glyph_start + line.glyph_len;
         var pen_x = self.options.origin_x + line.x + advanceBefore(self.paragraph.glyphs[line.glyph_start..line_glyph_end], start - line.glyph_start);
         for (self.paragraph.glyphs[start..end]) |glyph| {
             const output_index = self.glyphs.items.len;
             const color_index: ?usize = if (self.options.include_color_glyphs)
-                try self.appendColorGlyph(run.font, run.font_size, glyph.glyph_id, output_index)
+                try self.appendColorGlyph(font, run.font_size, glyph.glyph_id, output_index)
             else
                 null;
             const embedded_png = if (color_index) |index| self.color_glyphs.items[index].embedded_png else null;
             const atlas_content: GlyphAtlasContent = if (embedded_png != null) .premultiplied_rgba else .alpha_mask;
-            const atlas_index: ?usize = if (run.font.hasOutlineData() or embedded_png != null)
+            const atlas_index: ?usize = if (font.hasOutlineData() or embedded_png != null)
                 try self.atlasRequestIndex(.{
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,
@@ -332,7 +334,7 @@ const BridgeBuilder = struct {
             // both its color images and intentionally empty spacing glyphs so a
             // backend cannot accidentally turn a valid draw list into a
             // MissingTable error while preparing optional vector fallbacks.
-            if (self.options.include_path_requests and run.font.hasOutlineData()) {
+            if (self.options.include_path_requests and font.hasOutlineData()) {
                 path_index = try self.pathRequestIndex(.{
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,
@@ -373,7 +375,7 @@ const BridgeBuilder = struct {
         defer self.allocator.free(layers);
         for (layers) |layer| {
             const atlas_index = try self.atlasRequestIndex(.{
-                .font = font,
+                .font = face_mod.backend.face(font),
                 .glyph_id = layer.glyph_id,
                 .font_size = font_size,
                 .palette_index = layer.palette_index,
@@ -1070,7 +1072,7 @@ test "render bridge variation cache identity preserves coordinates" {
     try std.testing.expect(normalizedVariationHash(&.{0.5}) != 0);
     try std.testing.expect(normalizedVariationHash(&.{0.5}) != normalizedVariationHash(&.{0.25}));
 
-    const font_ptr: *const font_mod.Font = @ptrFromInt(4096);
+    const font_ptr: *const face_mod.Face = @ptrFromInt(4096);
     const a = GlyphAtlasRequest{
         .font = font_ptr,
         .glyph_id = 1,

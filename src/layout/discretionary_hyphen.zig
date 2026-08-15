@@ -6,6 +6,7 @@
 
 const Font = @import("../font.zig").Font;
 const GlyphId = @import("../glyph.zig").GlyphId;
+const run_types = @import("types/runs.zig");
 
 pub const soft_hyphen: u21 = 0x00ad;
 
@@ -41,7 +42,7 @@ pub fn resolveForGlyph(
             continue;
         }
         return resolve(
-            run.font,
+            run_types.fontForBackend(run),
             run.font_size,
             normalized_variation_coords,
         );

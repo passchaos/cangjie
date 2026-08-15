@@ -1,5 +1,8 @@
 //! Glyph shaping requests, options, results, and diagnostics.
 
+const std = @import("std");
+
+const face_mod = @import("../../font/face/root.zig");
 const layout = @import("../../layout.zig");
 const unicode = @import("../../unicode.zig");
 const context = @import("../../shaping/context/root.zig");
@@ -33,7 +36,51 @@ pub const CaretDiagnostic = layout.ClusterCaretDiagnostic;
 pub const CaretConsistencyReport = layout.ClusterCaretConsistencyReport;
 
 pub const diagnostics = struct {
-    pub const fontFallback = layout.diagnoseFontFallbackUtf8;
-    pub const caretConsistency = layout.diagnoseClusterCaretConsistencyUtf8;
-    pub const quality = layout.diagnoseShapeQualityUtf8;
+    pub fn fontFallback(
+        allocator: std.mem.Allocator,
+        cascade: face_mod.Cascade,
+        text: []const u8,
+    ) ![]FontFallbackDecision {
+        return layout.diagnoseFontFallbackUtf8(
+            allocator,
+            internalCascade(cascade),
+            text,
+        );
+    }
+
+    pub fn caretConsistency(
+        allocator: std.mem.Allocator,
+        cascade: face_mod.Cascade,
+        text: []const u8,
+        font_size: f32,
+        options: Options,
+    ) !CaretConsistencyReport {
+        return layout.diagnoseClusterCaretConsistencyUtf8(
+            allocator,
+            internalCascade(cascade),
+            text,
+            font_size,
+            options,
+        );
+    }
+
+    pub fn quality(
+        allocator: std.mem.Allocator,
+        cascade: face_mod.Cascade,
+        text: []const u8,
+        font_size: f32,
+        options: Options,
+    ) !QualityReport {
+        return layout.diagnoseShapeQualityUtf8(
+            allocator,
+            internalCascade(cascade),
+            text,
+            font_size,
+            options,
+        );
+    }
+
+    fn internalCascade(cascade: face_mod.Cascade) layout.FontCascade {
+        return .{ .fonts = face_mod.backend.fonts(cascade.faces) };
+    }
 };

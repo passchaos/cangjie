@@ -1,4 +1,5 @@
 const std = @import("std");
+const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
 const layout = @import("../../layout.zig");
 const unicode = @import("../../unicode.zig");
@@ -191,7 +192,7 @@ pub fn layoutSpansForResolvedRuns(
     errdefer allocator.free(spans);
     for (spans, fonts) |*span, run_fonts| {
         if (run_fonts.len == 0) return error.EmptyFontCascade;
-        span.fonts = run_fonts;
+        span.faces = face_mod.backend.faces(run_fonts);
     }
     return spans;
 }

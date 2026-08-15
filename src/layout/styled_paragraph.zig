@@ -1,5 +1,5 @@
 const std = @import("std");
-const Font = @import("../font.zig").Font;
+const face_mod = @import("../font/face/root.zig");
 const unicode = @import("../unicode.zig");
 
 /// One contiguous style item for unified paragraph shaping.
@@ -14,7 +14,7 @@ pub const Span = struct {
     font_size: f32,
     /// Optional style-resolved cascade. A null slice inherits the paragraph
     /// cascade; a non-null slice is owned by the caller for the layout call.
-    fonts: ?[]const *const Font = null,
+    faces: ?[]const *const face_mod.Face = null,
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
     features: []const unicode.FeatureOverride = &.{},
@@ -124,7 +124,7 @@ pub fn spanForCluster(spans: []const Span, cluster: usize) ?Span {
 pub fn shapeEquivalent(a: Span, b: Span) bool {
     if (a.byteEnd() != b.byte_start or
         a.font_size != b.font_size or
-        !optionalFontSlicesEqual(a.fonts, b.fonts) or
+        !optionalFontSlicesEqual(a.faces, b.faces) or
         a.script_tag != b.script_tag or
         a.language_tag != b.language_tag or
         !featureSlicesEqual(a.features, b.features) or
@@ -139,8 +139,8 @@ pub fn shapeEquivalent(a: Span, b: Span) bool {
 }
 
 fn optionalFontSlicesEqual(
-    a: ?[]const *const Font,
-    b: ?[]const *const Font,
+    a: ?[]const *const face_mod.Face,
+    b: ?[]const *const face_mod.Face,
 ) bool {
     if ((a == null) != (b == null)) return false;
     const lhs = a orelse return true;

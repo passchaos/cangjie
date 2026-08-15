@@ -1,12 +1,14 @@
 //! Public shaped glyph and run records.
 
+const face_mod = @import("../../font/face/root.zig");
+const Face = face_mod.Face;
 const Font = @import("../../font.zig").Font;
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
 const unicode = @import("../../unicode.zig");
 
 /// A contiguous range of glyphs rendered by one font at one size.
 pub const GlyphRun = struct {
-    font: *const Font,
+    font: *const Face,
     font_size: f32,
     glyphs: []const GlyphPosition,
 
@@ -23,10 +25,22 @@ pub const GlyphRun = struct {
     }
 };
 
+pub fn initGlyphRun(
+    font: *const Font,
+    font_size: f32,
+    glyphs: []const GlyphPosition,
+) GlyphRun {
+    return .{
+        .font = face_mod.backend.face(font),
+        .font_size = font_size,
+        .glyphs = glyphs,
+    };
+}
+
 /// A subrange of the shaped glyph stream selected from a font cascade.
 /// Multiple cascade runs can exist inside a single paragraph line.
 pub const CascadeRun = struct {
-    font: *const Font,
+    font: *const Face,
     font_index: usize,
     font_size: f32,
     glyph_start: usize,
@@ -42,6 +56,13 @@ pub const CascadeRun = struct {
         return .{ .font = self.font, .font_size = self.font_size, .glyphs = self.glyphs(shaped) };
     }
 };
+
+/// Internal bridge for layout/raster modules. Keeping this off the public
+/// record's method set prevents implementation fonts from leaking through
+/// `cangjie.shaping.FontRun`.
+pub fn fontForBackend(run: CascadeRun) *const Font {
+    return face_mod.backend.font(run.font);
+}
 
 /// Flat shaping result. Glyphs are stored once, while runs describe which font
 /// owns each contiguous range.

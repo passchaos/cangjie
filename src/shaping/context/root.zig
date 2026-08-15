@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const Font = @import("../../font.zig").Font;
+const face_mod = @import("../../font/face/root.zig");
 const layout_mod = @import("../../layout.zig");
 const state_mod = @import("state.zig");
 const stats_mod = @import("stats.zig");
@@ -127,10 +127,11 @@ pub const Engine = opaque {
 
     pub fn shape(
         self: *Engine,
-        font: *const Font,
+        face: *const face_mod.Face,
         request: ShapeRequest,
     ) !layout_mod.GlyphRun {
         const state = self.getState();
+        const font = face_mod.backend.font(face);
         if (request.feature_ranges.len != 0) {
             return text_shaper.TextShaper
                 .shapeUtf8WithCachesAndGsubFeatureRanges(
@@ -158,12 +159,12 @@ pub const Engine = opaque {
     /// Shape text through an ordered fallback cascade.
     pub fn shapeText(
         self: *Engine,
-        cascade: layout_mod.FontCascade,
+        cascade: face_mod.Cascade,
         request: CascadeRequest,
     ) !layout_mod.ShapedText {
         const state = self.getState();
         return layout_mod.TextShaper.shapeUtf8CascadeWithCaches(
-            cascade,
+            internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
             if (state.cache_font_data) &state.glyph_indices else null,
@@ -178,12 +179,12 @@ pub const Engine = opaque {
     /// Shape text and retain its script-itemization boundaries.
     pub fn itemize(
         self: *Engine,
-        cascade: layout_mod.FontCascade,
+        cascade: face_mod.Cascade,
         request: CascadeRequest,
     ) !layout_mod.ScriptedText {
         const state = self.getState();
         return layout_mod.TextShaper.shapeUtf8ScriptRuns(
-            cascade,
+            internalCascade(cascade),
             &state.output,
             request.text,
             request.font_size,
@@ -194,13 +195,13 @@ pub const Engine = opaque {
     /// Prepare width-independent paragraph content for repeated reflow.
     pub fn prepareParagraph(
         self: *Engine,
-        cascade: layout_mod.FontCascade,
+        cascade: face_mod.Cascade,
         request: ParagraphRequest,
     ) !layout_mod.ShapedParagraph {
         const state = self.getState();
         return layout_mod.TextShaper.shapeParagraphUtf8WithCaches(
             state.allocator,
-            cascade,
+            internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
             if (state.cache_font_data) &state.glyph_indices else null,
@@ -215,12 +216,12 @@ pub const Engine = opaque {
     /// Shape and lay out a paragraph in one call.
     pub fn layout(
         self: *Engine,
-        cascade: layout_mod.FontCascade,
+        cascade: face_mod.Cascade,
         request: ParagraphRequest,
     ) !layout_mod.ParagraphLayout {
         const state = self.getState();
         return layout_mod.TextShaper.layoutParagraphUtf8WithCaches(
-            cascade,
+            internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
             if (state.cache_font_data) &state.glyph_indices else null,
@@ -234,12 +235,12 @@ pub const Engine = opaque {
 
     pub fn layoutStyled(
         self: *Engine,
-        cascade: layout_mod.FontCascade,
+        cascade: face_mod.Cascade,
         request: StyledParagraphRequest,
     ) !StyledParagraph {
         const state = self.getState();
         const paragraph = try layout_mod.TextShaper.layoutStyledParagraphUtf8(
-            cascade,
+            internalCascade(cascade),
             &state.output,
             &state.styled_output,
             request.text,
@@ -255,7 +256,7 @@ pub const Engine = opaque {
 
     pub fn measure(
         self: *Engine,
-        cascade: layout_mod.FontCascade,
+        cascade: face_mod.Cascade,
         request: ParagraphRequest,
     ) !layout_mod.TextMetrics {
         const paragraph = try self.layout(cascade, request);
@@ -288,3 +289,7 @@ pub const Engine = opaque {
         return @ptrCast(@alignCast(self));
     }
 };
+
+fn internalCascade(cascade: face_mod.Cascade) layout_mod.FontCascade {
+    return .{ .fonts = face_mod.backend.fonts(cascade.faces) };
+}

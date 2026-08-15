@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const geometry = @import("geometry.zig");
+const run_types = @import("../../types/runs.zig");
 
 pub fn apply(
     buffer: anytype,
@@ -68,10 +69,11 @@ fn appendEllipsisToLastLine(
     const ellipsis_count: usize = 3;
     const run_index = line.run_start + line.run_len - 1;
     var run = &buffer.runs.items[run_index];
+    const font = run_types.fontForBackend(run.*);
     const dot_metrics =
-        try run.font.horizontalMetrics(try run.font.glyphIndex('.'));
+        try font.horizontalMetrics(try font.glyphIndex('.'));
     const dot_advance = @as(f32, @floatFromInt(dot_metrics.advance_width)) *
-        (run.font_size / @as(f32, @floatFromInt(run.font.units_per_em)));
+        (run.font_size / @as(f32, @floatFromInt(font.units_per_em)));
     const ellipsis_width =
         dot_advance * @as(f32, @floatFromInt(ellipsis_count));
     const width_limit = if (std.math.isFinite(max_width))
@@ -103,7 +105,7 @@ fn appendEllipsisToLastLine(
         if (run.glyph_len > 0) run.glyph_len -= 1;
     }
 
-    const dot_glyph = try run.font.glyphIndex('.');
+    const dot_glyph = try font.glyphIndex('.');
     const cluster = if (line.glyph_len > 0)
         buffer.glyphs.items[line.glyph_start + line.glyph_len - 1].cluster
     else

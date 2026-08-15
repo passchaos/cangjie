@@ -1,6 +1,5 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
-const font_raster = cangjie.testing.font_raster;
 
 const options_mod = @import("options.zig");
 const report = @import("report.zig");
@@ -52,7 +51,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.F
 fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) !cangjie.font.GlyphId {
     if (options.glyph_id) |glyph_id| return glyph_id;
     if (options.font_path == null and options.builtin_font == .gvar_compound) return 2;
-    return try font.glyphIndex(options.codepoint);
+    return try font.glyphs().index(options.codepoint);
 }
 
 fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
@@ -69,9 +68,9 @@ fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var outline = if (coords.len == 0)
-            try font_raster.glyphOutline(font, allocator, glyph_id)
+            try font.glyphs().outline(allocator, glyph_id)
         else
-            try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
+            try font.glyphs().outlineAt(allocator, glyph_id, coords);
         checksum.* = updateChecksum(checksum.*, outlineChecksum(outline));
         outline.deinit();
     }
@@ -80,20 +79,22 @@ fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.
 fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    var rasterizer = cangjie.render.Rasterizer.init(allocator);
-    rasterizer.hint_size_px = options.font_size;
-    rasterizer.samples_per_axis = options.samples_per_axis;
+    const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    rasterizer.setHintSize(options.font_size);
+    rasterizer.setSampling(options.samples_per_axis);
+    const units_per_em = font.properties().units_per_em;
     const coords = options.normalizedVariationCoords();
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         target.clear(0);
         {
             var outline = if (coords.len == 0)
-                try font_raster.glyphOutline(font, allocator, glyph_id)
+                try font.glyphs().outline(allocator, glyph_id)
             else
-                try font_raster.glyphOutlineAtCoords(font, allocator, glyph_id, coords);
+                try font.glyphs().outlineAt(allocator, glyph_id, coords);
             defer outline.deinit();
-            try rasterizer.renderGlyph(&target, &outline, 0, options.font_size, options.font_size, font.units_per_em);
+            try rasterizer.drawOutline(&target, &outline, 0, options.font_size, options.font_size, units_per_em);
         }
         checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
     }
@@ -102,20 +103,22 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.F
 fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     var outline = if (coords.len == 0)
-        try font_raster.glyphOutline(font, allocator, glyph_id)
+        try font.glyphs().outline(allocator, glyph_id)
     else
-        try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
+        try font.glyphs().outlineAt(allocator, glyph_id, coords);
     defer outline.deinit();
 
     var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    var rasterizer = cangjie.render.Rasterizer.init(allocator);
-    rasterizer.hint_size_px = options.font_size;
-    rasterizer.samples_per_axis = options.samples_per_axis;
+    const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    rasterizer.setHintSize(options.font_size);
+    rasterizer.setSampling(options.samples_per_axis);
+    const units_per_em = font.properties().units_per_em;
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         target.clear(0);
-        try rasterizer.renderGlyph(&target, &outline, 0, options.font_size, options.font_size, font.units_per_em);
+        try rasterizer.drawOutline(&target, &outline, 0, options.font_size, options.font_size, units_per_em);
         checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
     }
 }
@@ -123,23 +126,30 @@ fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.f
 fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     var outline = if (coords.len == 0)
-        try font_raster.glyphOutline(font, allocator, glyph_id)
+        try font.glyphs().outline(allocator, glyph_id)
     else
-        try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
+        try font.glyphs().outlineAt(allocator, glyph_id, coords);
     defer outline.deinit();
 
     var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    var rasterizer = cangjie.render.Rasterizer.init(allocator);
-    rasterizer.hint_size_px = options.font_size;
-    rasterizer.samples_per_axis = options.samples_per_axis;
-    var prepared = try rasterizer.prepareGlyph(&outline, 0, options.font_size, options.font_size, font.units_per_em);
+    const rasterizer = try cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    rasterizer.setHintSize(options.font_size);
+    rasterizer.setSampling(options.samples_per_axis);
+    const prepared = try rasterizer.prepare(
+        &outline,
+        0,
+        options.font_size,
+        options.font_size,
+        font.properties().units_per_em,
+    );
     defer prepared.deinit();
 
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         target.clear(0);
-        try rasterizer.renderPreparedGlyph(&target, &prepared);
+        try rasterizer.drawPrepared(&target, prepared);
         checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
     }
 }

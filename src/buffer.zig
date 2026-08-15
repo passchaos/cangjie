@@ -1,4 +1,5 @@
 const std = @import("std");
+const face_mod = @import("font/face/root.zig");
 const Font = @import("font.zig").Font;
 const layout = @import("layout.zig");
 const unicode = @import("unicode.zig");
@@ -38,7 +39,7 @@ pub const Selection = struct {
 };
 
 pub const LayoutConfig = struct {
-    cascade: layout.FontCascade,
+    cascade: face_mod.Cascade,
     font_size: f32,
     paragraph: layout.ParagraphOptions,
 };
@@ -239,7 +240,13 @@ pub const TextBuffer = struct {
 
     pub fn ensureLayout(self: *TextBuffer, config: LayoutConfig) !layout.ParagraphLayout {
         if (!self.layout_valid) {
-            _ = try layout.TextShaper.layoutParagraphUtf8(config.cascade, &self.layout_buffer, self.text.items, config.font_size, config.paragraph);
+            _ = try layout.TextShaper.layoutParagraphUtf8(
+                .{ .fonts = face_mod.backend.fonts(config.cascade.faces) },
+                &self.layout_buffer,
+                self.text.items,
+                config.font_size,
+                config.paragraph,
+            );
             self.layout_valid = true;
             self.dirty_range = DirtyRange.empty();
         }
@@ -651,7 +658,7 @@ test "TextBuffer returns bidi visual selection rects" {
 
     const fonts = [_]*const Font{ &latin, &hebrew };
     const config = LayoutConfig{
-        .cascade = layout.FontCascade.init(&fonts),
+        .cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts)),
         .font_size = 20,
         .paragraph = .{
             .max_width = 200,
@@ -696,7 +703,7 @@ test "TextBuffer vertical cursor keeps folded glyph trailing byte offsets" {
 
     const fonts = [_]*const Font{&font};
     const config = LayoutConfig{
-        .cascade = layout.FontCascade.init(&fonts),
+        .cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts)),
         .font_size = 20,
         .paragraph = .{
             .max_width = 100,
@@ -729,7 +736,7 @@ test "TextBuffer visible dirty check catches deleting all text" {
 
     const fonts = [_]*const Font{&font};
     const config = LayoutConfig{
-        .cascade = layout.FontCascade.init(&fonts),
+        .cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts)),
         .font_size = 20,
         .paragraph = .{ .max_width = 100, .line_height = 24 },
     };
@@ -758,7 +765,7 @@ test "TextBuffer marks trailing deletions dirty after layout" {
 
     const fonts = [_]*const Font{&font};
     const config = LayoutConfig{
-        .cascade = layout.FontCascade.init(&fonts),
+        .cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts)),
         .font_size = 20,
         .paragraph = .{ .max_width = 100, .line_height = 24 },
     };
@@ -787,7 +794,7 @@ test "TextBuffer relayout supports hit testing cursor and selection geometry" {
 
     const fonts = [_]*const Font{&font};
     const config = LayoutConfig{
-        .cascade = layout.FontCascade.init(&fonts),
+        .cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts)),
         .font_size = 20,
         .paragraph = .{
             .max_width = 42,
@@ -836,7 +843,7 @@ test "TextBuffer moves cursor vertically between layout lines" {
 
     const fonts = [_]*const Font{&font};
     const config = LayoutConfig{
-        .cascade = layout.FontCascade.init(&fonts),
+        .cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts)),
         .font_size = 20,
         .paragraph = .{
             .max_width = 42,
@@ -879,7 +886,7 @@ test "TextBuffer preserves preferred x across vertical cursor moves" {
 
     const fonts = [_]*const Font{&font};
     const config = LayoutConfig{
-        .cascade = layout.FontCascade.init(&fonts),
+        .cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts)),
         .font_size = 20,
         .paragraph = .{
             .max_width = 200,
@@ -921,7 +928,7 @@ test "TextBuffer tracks visible line range and scrolls cursor into view" {
 
     const fonts = [_]*const Font{&font};
     const config = LayoutConfig{
-        .cascade = layout.FontCascade.init(&fonts),
+        .cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts)),
         .font_size = 20,
         .paragraph = .{
             .max_width = 200,

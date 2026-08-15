@@ -15,7 +15,7 @@ const VerticalMetricInfo = support.VerticalMetricInfo;
 const VerticalOriginMetric = support.VerticalOriginMetric;
 const GlyphId = support.GlyphId;
 const Bounds = support.Bounds;
-const GlyphRun = support.GlyphRun;
+const initGlyphRun = @import("../../../layout/types/runs.zig").initGlyphRun;
 const GlyphPosition = support.GlyphPosition;
 const openTypeTag = support.openTypeTag;
 const ColorRenderTarget = support.ColorRenderTarget;
@@ -43,7 +43,7 @@ test "rasterizer renders variable outlines at normalized coordinates" {
         .source_byte_len = 1,
         .x_advance = 200,
     }};
-    const run = GlyphRun{ .font = &font, .font_size = 200, .glyphs = &glyphs };
+    const run = initGlyphRun(&font, 200, &glyphs);
 
     var default_target = try RenderTarget.init(allocator, 220, 220);
     defer default_target.deinit();

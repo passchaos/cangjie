@@ -10457,6 +10457,7 @@ fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
 }
 
 test {
+    _ = @import("layout/tests/cjk_justification.zig");
     _ = @import("layout/tests/positioning_break_safety.zig");
     _ = @import("text/attributed/tests.zig");
     std.testing.refAllDecls(@This());

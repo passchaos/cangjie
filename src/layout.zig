@@ -20,6 +20,7 @@ const shaping_sections = @import("shaping_sections.zig");
 const run_metadata = @import("shaping/run_metadata.zig");
 const discretionary_hyphen = @import("layout/discretionary_hyphen.zig");
 const glyph_position = @import("layout/glyph_position.zig");
+const horizontal_justification = @import("layout/justification/horizontal.zig");
 const shaped_boundary = @import("layout/line_break/shaped_boundary.zig");
 const styled_bidi = @import("layout/styled_bidi.zig");
 const styled_buffer = @import("layout/styled_buffer.zig");
@@ -354,9 +355,11 @@ pub const TextAlign = enum {
     /// Physical right edge, independent of paragraph direction.
     right,
     /// Fill each non-terminal soft-wrapped line by expanding its breakable
-    /// inter-word spaces. Hard-break lines, the final line of a paragraph,
-    /// ellipsized last lines, unbounded layouts, and lines without expansion
-    /// opportunities retain their natural width.
+    /// inter-word spaces. Lines without spaces may use conservative
+    /// inter-character expansion between adjacent CJK source atoms.
+    /// Hard-break lines, the final line of a paragraph, ellipsized last lines,
+    /// unbounded layouts, and lines without safe opportunities retain their
+    /// natural width.
     justify,
     /// Align to the logical inline start: left in LTR, right in RTL.
     start,
@@ -3163,7 +3166,7 @@ fn buildParagraphLines(
                 buffer.lines.items.len + 1 < max_lines;
             const indent = lineIndent(line_in_paragraph, options);
             if (justify_line and alignment == .justify) {
-                break_width = justifyInterWordSpaces(
+                break_width = horizontal_justification.apply(
                     buffer.glyphs.items[line_start..break_end],
                     break_width,
                     lineWidthLimitForIndent(max_width, indent),
@@ -3590,109 +3593,6 @@ fn alignedLineX(width: f32, max_width: f32, alignment: TextAlign) f32 {
         .right => @max(0, max_width - width),
         .start, .end => unreachable, // Resolved once at the reflow boundary.
     };
-}
-
-fn justifyInterWordSpaces(glyphs: []GlyphPosition, natural_width: f32, target_width: f32) f32 {
-    if (glyphs.len == 0 or
-        !std.math.isFinite(target_width) or
-        target_width <= natural_width)
-    {
-        return natural_width;
-    }
-
-    // Count source atoms rather than output glyphs. GSUB may expand one source
-    // space into multiple glyphs, but it still represents one typographic
-    // opportunity and must receive the line's extra width only once.
-    var opportunity_count: usize = 0;
-    var previous_space_cluster: ?usize = null;
-    for (glyphs) |glyph| {
-        if (!isJustificationSpace(glyph.codepoint)) {
-            previous_space_cluster = null;
-            continue;
-        }
-        if (previous_space_cluster != null and previous_space_cluster.? == glyph.cluster) continue;
-        previous_space_cluster = glyph.cluster;
-        opportunity_count += 1;
-    }
-    if (opportunity_count == 0) return natural_width;
-
-    const total_extra = target_width - natural_width;
-    const extra_per_space = total_extra / @as(f32, @floatFromInt(opportunity_count));
-    var applied_extra: f32 = 0;
-    var applied_count: usize = 0;
-    previous_space_cluster = null;
-    for (glyphs) |*glyph| {
-        if (!isJustificationSpace(glyph.codepoint)) {
-            previous_space_cluster = null;
-            continue;
-        }
-        if (previous_space_cluster != null and previous_space_cluster.? == glyph.cluster) continue;
-        previous_space_cluster = glyph.cluster;
-        applied_count += 1;
-        // Give the final opportunity the floating-point residual so the
-        // reported line width and summed advances share one exact endpoint.
-        const extra = if (applied_count == opportunity_count)
-            total_extra - applied_extra
-        else
-            extra_per_space;
-        glyph.x_advance += extra;
-        applied_extra += extra;
-    }
-    return natural_width + applied_extra;
-}
-
-fn isJustificationSpace(codepoint: u21) bool {
-    // UAX #14 SP includes ordinary and Unicode breakable space separators.
-    // Tabs retain tab-stop semantics, and non-breaking glue is deliberately
-    // excluded even though both can be visually blank.
-    return unicode.lineBreakClassForCodepoint(codepoint) == .space;
-}
-
-test "inter-word justification counts one opportunity per source atom" {
-    var glyphs = [_]GlyphPosition{
-        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 10 },
-        .{ .glyph_id = 2, .codepoint = ' ', .cluster = 1, .x_advance = 3 },
-        .{ .glyph_id = 3, .codepoint = ' ', .cluster = 1, .x_advance = 2 },
-        .{ .glyph_id = 4, .codepoint = 'A', .cluster = 2, .x_advance = 10 },
-    };
-
-    try std.testing.expectApproxEqAbs(
-        @as(f32, 30),
-        justifyInterWordSpaces(&glyphs, 25, 30),
-        0.001,
-    );
-    try std.testing.expectApproxEqAbs(@as(f32, 8), glyphs[1].x_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 2), glyphs[2].x_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 30), lineWidth(&glyphs), 0.001);
-
-    // A malformed/non-monotone test stream may reuse a cluster after a
-    // different source atom. Deduplication is local to adjacent GSUB outputs,
-    // not a paragraph-global cluster set.
-    var reused_cluster = [_]GlyphPosition{
-        .{ .glyph_id = 1, .codepoint = ' ', .cluster = 1, .x_advance = 5 },
-        .{ .glyph_id = 2, .codepoint = 'A', .cluster = 2, .x_advance = 10 },
-        .{ .glyph_id = 3, .codepoint = ' ', .cluster = 1, .x_advance = 5 },
-    };
-    try std.testing.expectApproxEqAbs(
-        @as(f32, 30),
-        justifyInterWordSpaces(&reused_cluster, 20, 30),
-        0.001,
-    );
-    try std.testing.expectApproxEqAbs(@as(f32, 10), reused_cluster[0].x_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 10), reused_cluster[2].x_advance, 0.001);
-
-    // Non-breaking space is UAX #14 glue, not an expandable SP opportunity.
-    var glued = [_]GlyphPosition{
-        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 10 },
-        .{ .glyph_id = 2, .codepoint = 0x00a0, .cluster = 1, .x_advance = 5 },
-        .{ .glyph_id = 3, .codepoint = 'A', .cluster = 3, .x_advance = 10 },
-    };
-    try std.testing.expectApproxEqAbs(
-        @as(f32, 25),
-        justifyInterWordSpaces(&glued, 25, 30),
-        0.001,
-    );
-    try std.testing.expectApproxEqAbs(@as(f32, 5), glued[1].x_advance, 0.001);
 }
 
 fn lineWidth(glyphs: []const GlyphPosition) f32 {

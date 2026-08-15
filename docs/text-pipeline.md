@@ -191,18 +191,21 @@ materialized X9 atom at the visual line end without inventing a new source
 range. This is explicit soft-hyphen support, not language-specific automatic
 hyphenation.
 
-`TextAlign.justify` now provides portable inter-word justification. Reflow
-expands UAX #14 `SP` source atoms on non-terminal soft-wrapped lines until the
-line reaches its available width (after first-line indentation). Hard-break
-lines, final paragraph lines, ellipsized terminal lines, tabs, non-breaking
-glue, unbounded layouts, and lines without spaces retain their natural width.
+`TextAlign.justify` now provides portable inter-word and CJK inter-character
+justification. Reflow first expands UAX #14 `SP` source atoms on non-terminal
+soft-wrapped lines. If no expandable space exists, it distributes the remaining
+width between adjacent Han/Kana/Hangul/Yi/Nushu source atoms. The conservative
+CJK fallback excludes punctuation, nonstarters, combining output, and repeated
+GSUB outputs for one source atom; language-specific punctuation compression and
+hanging remain separate tailoring. Hard-break lines, final paragraph lines,
+ellipsized terminal lines, tabs, non-breaking glue, unbounded layouts, and
+lines without safe opportunities retain their natural width.
 The expansion is stored in glyph advances, so rendering, hit testing,
 selection geometry, bidi visual reordering, and debug overlays consume one
 consistent layout result. Retained reflow restores pristine advances before
 every width/alignment change, preventing justification from accumulating.
-This is intentionally the mainstream space-expansion model; script-specific
-Arabic kashida insertion and CJK inter-character justification remain separate
-future tailoring rather than being guessed by the generic path.
+Arabic kashida insertion remains a separate future tailoring rather than being
+guessed by the generic path.
 
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
@@ -473,9 +476,9 @@ Future changes must preserve these rules:
 3. Add optional dictionary segmentation and hyphenation as tailoring layers;
    do not bake language-specific guesses into the default UAX #14 state
    machine.
-4. Add script-specific justification tailoring where portable references exist,
-   including Arabic kashida and CJK inter-character expansion, without changing
-   the generic inter-word contract.
+4. Add Arabic kashida and language-specific CJK punctuation
+   compression/hanging where portable references exist, without changing the
+   generic inter-word and inter-character contracts.
 5. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
    does not by itself establish end-to-end superiority over reference engines.
 

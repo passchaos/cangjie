@@ -115,6 +115,18 @@ than embedded in the shaping implementation:
 points only. This keeps shaping, boundary selection, geometry, and truncation
 independently testable without changing the `TextContext` surface.
 
+Post-shaping bidi output reconstruction is similarly isolated under
+`src/layout/bidi/reorder/`:
+
+- `root.zig` selects whole-buffer, logical-normalization, or per-line policy.
+- `mapping.zig` maps bidi scalars back to equal-cluster glyph output and
+  applies visual mirroring through the glyph's owning cascade font.
+- `runs.zig` rebuilds contiguous font runs and their output offsets after a
+  glyph permutation.
+
+Styled glyph metadata keeps its separate `styled_bidi` permutation sidecar;
+ordinary shaping therefore does not pay for attributed-text state.
+
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 

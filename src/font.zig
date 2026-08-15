@@ -37,6 +37,7 @@ const colr_v0_mod = color_tables.colr_v0;
 const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
 const colr_bases = colr_v1_mod.bases;
+const colr_glyphs = colr_v1_mod.glyphs;
 const colr_layers = colr_v1_mod.layers;
 const colr_palette = colr_v1_mod.palette;
 const cpal_mod = color_tables.cpal;
@@ -10638,7 +10639,11 @@ fn validateColrGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16
     const version = try bin.readU16At(data, colr.offset);
     switch (version) {
         0 => try validateColrV0GlyphBounds(data, colr, glyph_count),
-        1 => try validateColrV1GlyphBounds(data, colr, glyph_count),
+        1 => try colr_glyphs.validate(
+            data,
+            colrV1Table(colr),
+            glyph_count,
+        ),
         else => {},
     }
 }
@@ -10649,48 +10654,6 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
         colrV0Table(colr),
         glyph_count,
     );
-}
-
-fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
-    if (colr.length < 34) return error.BadSfnt;
-    _ = try colr_v1_mod.validateClipList(
-        data,
-        colrV1Table(colr),
-        glyph_count,
-    );
-
-    const base_glyph_set = try colr_bases.read(data, colrV1Table(colr));
-    if (base_glyph_set) |base_list| {
-        for (0..base_list.record_count) |index| {
-            const record = try colr_bases.recordAt(
-                data,
-                colrV1Table(colr),
-                base_list,
-                index,
-            );
-            const base_glyph = record.glyph_id;
-            try validateGlyphIdInMaxp(base_glyph, glyph_count);
-            var base_guard = ColrV1BaseGlyphGraphGuard{};
-            try validateColrBaseGlyphPaintGraph(
-                data,
-                colr,
-                glyph_count,
-                base_list,
-                base_glyph,
-                record.paint_offset,
-                &base_guard,
-            );
-        }
-    }
-
-    if (try colr_layers.read(data, colrLayerTable(colr))) |layer_list| {
-        for (0..layer_list.layer_count) |layer_index| {
-            const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, @intCast(layer_index));
-            var paint_guard = colr_paint.Guard{};
-            var base_guard = ColrV1BaseGlyphGraphGuard{};
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, paint_offset, &paint_guard, &base_guard);
-        }
-    }
 }
 
 const ColrV1StructuralRange = colr_v1_mod.Range;
@@ -11183,104 +11146,8 @@ fn validateColorPaintGradientVariationRefs(data: []const u8, colr: TableRecord, 
     }
 }
 
-fn validateColorPaintGlyphBounds(
-    data: []const u8,
-    colr: TableRecord,
-    glyph_count: u16,
-    base_glyph_set: ?colr_bases.List,
-    offset: usize,
-    guard: *colr_paint.Guard,
-    base_graph_guard: *ColrV1BaseGlyphGraphGuard,
-) FontError!void {
-    const info = try validateColrPaintRecord(data, colr, offset);
-    try guard.enter(offset);
-    defer guard.leave();
-    try guard.claimPaintRecord(data, colrPaintTable(colr), offset, info);
-
-    switch (info.kind) {
-        .colr_layers => {
-            const layer_count = data[offset + 1];
-            const first_layer_index = try bin.readU32At(data, offset + 2);
-            if (layer_count == 0) return;
-            const layer_list = (try colr_layers.read(data, colrLayerTable(colr))) orelse return error.BadSfnt;
-            const first: usize = @intCast(first_layer_index);
-            if (first > layer_list.layer_count or @as(usize, layer_count) > layer_list.layer_count - first) return error.BadSfnt;
-            for (0..layer_count) |layer_offset| {
-                const paint_offset = try colr_layers.paintOffset(data, colrLayerTable(colr), layer_list, first_layer_index + @as(u32, @intCast(layer_offset)));
-                try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, paint_offset, guard, base_graph_guard);
-            }
-        },
-        .glyph => {
-            try validateGlyphIdInMaxp(try bin.readU16At(data, offset + 4), glyph_count);
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), guard, base_graph_guard);
-        },
-        .colr_glyph => {
-            const referenced_glyph = try bin.readU16At(data, offset + 1);
-            try validateGlyphIdInMaxp(referenced_glyph, glyph_count);
-            const set = base_glyph_set orelse return error.BadSfnt;
-            _ = (try colr_bases.paintOffsetForGlyph(
-                data,
-                colrV1Table(colr),
-                set,
-                referenced_glyph,
-            )) orelse return error.BadSfnt;
-            // Cross-glyph recursion is a traversal concern: one cyclic color
-            // glyph must not make all unrelated COLR glyphs unusable. Lazy paint
-            // traversal carries its own glyph stack. Parse-time validation still
-            // proves that the target BaseGlyphPaintRecord exists and is in maxp.
-        },
-        .single_child => try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), guard, base_graph_guard),
-        .composite => {
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 1), guard, base_graph_guard);
-            try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, try colr_paint.childOffset(data, colrPaintTable(colr), offset, info.min_size, 5), guard, base_graph_guard);
-        },
-        .solid, .color_line, .terminal => return,
-    }
-}
-
 fn validateGlyphIdInMaxp(glyph_id: u32, glyph_count: u16) FontError!void {
     if (glyph_id >= glyph_count) return error.BadSfnt;
-}
-
-const max_colr_paint_graph_depth = 64;
-
-const ColrV1BaseGlyphGraphGuard = struct {
-    stack: [max_colr_paint_graph_depth]glyph_mod.GlyphId = undefined,
-    depth: usize = 0,
-
-    fn enter(self: *ColrV1BaseGlyphGraphGuard, glyph_id: glyph_mod.GlyphId) FontError!void {
-        for (self.stack[0..self.depth]) |active_glyph| {
-            if (active_glyph == glyph_id) return error.BadSfnt;
-        }
-        if (self.depth == self.stack.len) return error.BadSfnt;
-        self.stack[self.depth] = glyph_id;
-        self.depth += 1;
-    }
-
-    fn leave(self: *ColrV1BaseGlyphGraphGuard) void {
-        std.debug.assert(self.depth > 0);
-        self.depth -= 1;
-    }
-};
-
-fn validateColrBaseGlyphPaintGraph(
-    data: []const u8,
-    colr: TableRecord,
-    glyph_count: u16,
-    base_glyph_set: colr_bases.List,
-    base_glyph: glyph_mod.GlyphId,
-    paint_offset: usize,
-    base_graph_guard: *ColrV1BaseGlyphGraphGuard,
-) FontError!void {
-    try base_graph_guard.enter(base_glyph);
-    defer base_graph_guard.leave();
-
-    // PaintColrGlyph references another base color glyph by id rather than by
-    // byte offset. Use a fresh paint-byte guard for each referenced base graph:
-    // the target BaseGlyphPaintRecord still owns its own paint payload, while
-    // the base-glyph stack above carries the cross-record recursion state.
-    var paint_guard = colr_paint.Guard{};
-    try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, paint_offset, &paint_guard, base_graph_guard);
 }
 
 fn validateColrPaintRecord(

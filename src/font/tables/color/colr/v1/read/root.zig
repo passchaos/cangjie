@@ -17,3 +17,7 @@ pub const colorLine = color_lines.read;
 pub const colorStop = color_lines.stop;
 pub const colorStops = color_lines.stops;
 pub const clipBox = clip_boxes.resolve;
+
+test {
+    _ = @import("tests/root.zig");
+}

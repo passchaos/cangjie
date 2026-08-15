@@ -4,13 +4,11 @@ const Font = @import("font.zig").Font;
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
 const GlyphId = @import("glyph.zig").GlyphId;
 const gpos = @import("gpos.zig");
-const khmer = @import("khmer.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const gsub = @import("gsub.zig");
 const indic = @import("indic.zig");
 const layout_cache = @import("shaping/context/cache/root.zig");
 const layout_scratch = @import("shaping/context/scratch.zig");
-const myanmar = @import("myanmar.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const pipeline_types = @import("shaping/pipeline/types.zig");
@@ -21,6 +19,9 @@ const gsub_features = gsub_pipeline.features;
 const gsub_fraction = gsub_pipeline.fraction;
 const gsub_hangul = gsub_pipeline.hangul;
 const gsub_arabic = gsub_pipeline.shapers.arabic;
+const gsub_khmer = gsub_pipeline.shapers.khmer;
+const gsub_myanmar = gsub_pipeline.shapers.myanmar;
+const gsub_use = gsub_pipeline.shapers.use;
 const positioning = @import("shaping/pipeline/positioning/root.zig");
 const position_adjustments = positioning.adjustments;
 const position_attachments = positioning.attachments;
@@ -2034,9 +2035,15 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         gsub_options.source_codepoints = codepoints.items;
         source_boundaries.bindSourceByteStarts(clusters.items);
     }
-    const use_shape = use_shaper.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
-    const myanmar_shape = myanmar.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
-    const khmer_shape = khmer.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
+    const use_shape =
+        gsub_use.supports(lookup_options.script_tag) and
+        codepoints.items.len != 0;
+    const myanmar_shape =
+        gsub_myanmar.supports(lookup_options.script_tag) and
+        codepoints.items.len != 0;
+    const khmer_shape =
+        gsub_khmer.supports(lookup_options.script_tag) and
+        codepoints.items.len != 0;
     const early_zero_mark_shape = use_shape or myanmar_shape;
     if (use_shape or myanmar_shape) {
         // Cluster ownership for source text must be established before vowel
@@ -2129,242 +2136,73 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         });
         arabic_joining_features = arabic_result.joining_features;
     } else if (myanmar_shape) {
-        try source_syllables.resize(buffer.allocator, codepoints.items.len);
-        myanmar.markSourceSyllables(
-            source_syllables.items,
-            glyph_source_indices.items,
-            codepoints.items,
-        );
-        var myanmar_options = gsub_options;
-        myanmar_options.source_syllables = source_syllables.items;
-
-        // Myanmar marks syllables before `locl`/`ccmp`, but HarfBuzz applies
-        // those features before dotted-circle insertion and reordering.
-        try gsub_executor.apply(
-            font,
-            gsub_context,
-            gsub_after_proof,
-            &.{ .{ .tag = unicode.tag("locl") }, .{ .tag = unicode.tag("ccmp") } },
-            glyph_ids,
-            gsub_options,
-            gdef_metadata.*,
-        );
-        const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-        try myanmar.insertDottedCirclesForBrokenSyllables(
-            buffer.allocator,
-            glyph_ids,
-            glyph_source_indices,
-            glyph_cluster_indices,
-            glyph_substituted,
-            ligature_components,
-            source_syllables.items,
-            dotted_circle_glyph,
-        );
-        try myanmar.reorder(
-            buffer.allocator,
-            glyph_ids,
-            glyph_source_indices,
-            glyph_cluster_indices,
-            glyph_substituted,
-            ligature_components,
-            glyph_script_positions,
-            source_syllables.items,
-            codepoints.items,
-        );
-        try gsub.validateScriptShaperRunMetadata(myanmar_options, glyph_ids.items.len);
-        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, myanmar.featureApplications(.rphf), glyph_ids, myanmar_options, gdef_metadata.*);
-        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, myanmar.featureApplications(.pref), glyph_ids, myanmar_options, gdef_metadata.*);
-        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, myanmar.featureApplications(.blwf), glyph_ids, myanmar_options, gdef_metadata.*);
-        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, myanmar.featureApplications(.pstf), glyph_ids, myanmar_options, gdef_metadata.*);
-
-        var myanmar_final_buf: [20]gsub.FeatureApplication = undefined;
-        var myanmar_final_count: usize = 0;
-        for (myanmar.featureApplications(.final)) |application| {
-            if (!gsub_features.enabled(application.tag, lookup_options.features, true)) continue;
-            myanmar_final_buf[myanmar_final_count] = application;
-            myanmar_final_count += 1;
-        }
-        const myanmar_typographic_features = [_]gsub.FeatureApplication{
-            .{ .tag = unicode.tag("rlig") },
-            .{ .tag = unicode.tag("calt") },
-            .{ .tag = unicode.tag("clig") },
-            .{ .tag = unicode.tag("liga") },
-        };
-        for (myanmar_typographic_features) |application| {
-            if (!gsub_features.enabled(application.tag, lookup_options.features, true)) continue;
-            myanmar_final_buf[myanmar_final_count] = application;
-            myanmar_final_count += 1;
-        }
-        myanmar_final_count += gsub_features.appendExplicitOptional(
-            myanmar_final_buf[myanmar_final_count..],
-            lookup_options.features,
-        );
-        // HarfBuzz places Myanmar's four post-reorder features and the common
-        // typographic features in one map stage. Merge them before sorting by
-        // LookupList index; applying two batches changes authored lookup order.
-        try gsub_executor.applyMergedAfterRunProof(
-            font,
-            gsub_context,
-            gsub_after_proof,
-            myanmar_final_buf[0..myanmar_final_count],
-            glyph_ids,
-            gsub_options,
-            gdef_metadata.*,
-        );
+        const dotted_circle_glyph =
+            try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+        try gsub_myanmar.run(.{
+            .allocator = buffer.allocator,
+            .font = font,
+            .context = gsub_context,
+            .table_proved = gsub_after_proof,
+            .glyph_ids = glyph_ids,
+            .glyph_source_indices = glyph_source_indices,
+            .glyph_cluster_indices = glyph_cluster_indices,
+            .glyph_substituted = glyph_substituted,
+            .ligature_components = ligature_components,
+            .glyph_script_positions = glyph_script_positions,
+            .source_syllables = source_syllables,
+            .codepoints = codepoints.items,
+            .base_gsub_options = gsub_options,
+            .lookup_options = lookup_options,
+            .gdef_metadata = gdef_metadata.*,
+            .dotted_circle_glyph = dotted_circle_glyph,
+        });
     } else if (khmer_shape) {
-        try khmer.decomposeSplitMatraSources(
-            buffer.allocator,
-            font,
-            glyph_ids,
-            codepoints,
-            clusters,
-            source_ends,
-            glyph_source_indices,
-            glyph_cluster_indices,
-            glyph_substituted,
-            ligature_components,
-        );
-        try source_features.resize(buffer.allocator, codepoints.items.len);
-        try source_syllables.resize(buffer.allocator, codepoints.items.len);
-        khmer.markSourceFeatures(source_features.items, source_syllables.items, codepoints.items);
-        var khmer_options = gsub_options;
-        khmer_options.source_codepoints = codepoints.items;
-        source_boundaries.bindSourceByteStarts(clusters.items);
-        khmer_options.source_features = source_features.items;
-        khmer_options.source_syllables = source_syllables.items;
-
-        const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-        try khmer.insertDottedCirclesForBrokenMarks(
-            buffer.allocator,
-            glyph_ids,
-            glyph_source_indices,
-            glyph_cluster_indices,
-            glyph_substituted,
-            ligature_components,
-            source_syllables.items,
-            codepoints.items,
-            dotted_circle_glyph,
-        );
-        khmer.reorder(
-            glyph_ids,
-            glyph_source_indices,
-            glyph_cluster_indices,
-            glyph_substituted,
-            ligature_components,
-            source_syllables.items,
-            codepoints.items,
-        );
-        khmer.assignJoinerClusterOwners(glyph_cluster_indices, glyph_source_indices, codepoints.items);
-        try gsub.validateScriptShaperRunMetadata(khmer_options, glyph_ids.items.len);
-        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, khmer.featureApplications(.basic), glyph_ids, khmer_options, gdef_metadata.*);
-        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, khmer.featureApplications(.final), glyph_ids, khmer_options, gdef_metadata.*);
+        const dotted_circle_glyph =
+            try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+        try gsub_khmer.run(.{
+            .allocator = buffer.allocator,
+            .font = font,
+            .context = gsub_context,
+            .table_proved = gsub_after_proof,
+            .glyph_ids = glyph_ids,
+            .codepoints = codepoints,
+            .clusters = clusters,
+            .source_ends = source_ends,
+            .glyph_source_indices = glyph_source_indices,
+            .glyph_cluster_indices = glyph_cluster_indices,
+            .glyph_substituted = glyph_substituted,
+            .ligature_components = ligature_components,
+            .source_features = source_features,
+            .source_syllables = source_syllables,
+            .source_boundaries = source_boundaries,
+            .base_gsub_options = gsub_options,
+            .gdef_metadata = gdef_metadata.*,
+            .dotted_circle_glyph = dotted_circle_glyph,
+        });
     } else if (use_shape) {
-        try source_features.resize(buffer.allocator, codepoints.items.len);
-        try source_syllables.resize(buffer.allocator, codepoints.items.len);
-        try source_rphf_substituted.resize(buffer.allocator, codepoints.items.len);
-        try source_pref_substituted.resize(buffer.allocator, codepoints.items.len);
-        @memset(source_rphf_substituted.items, false);
-        @memset(source_pref_substituted.items, false);
-        try use_shaper.markSourceFeatures(
-            buffer.allocator,
-            source_features.items,
-            source_syllables.items,
-            codepoints.items,
-            glyph_source_indices.items,
-        );
-        if (useShapeUsesArabicJoiningMasks(lookup_options.script_tag)) {
-            gsub_arabic.joining.overlayNativeOrder(
-                source_features.items,
-                codepoints.items,
-                glyph_source_indices.items,
-            );
-        }
-        var use_options = gsub_options;
-        use_options.source_features = source_features.items;
-        use_options.source_syllables = source_syllables.items;
-
-        if (useShapeUsesDirectionFeatures(lookup_options.script_tag)) {
-            var direction_features_buf: [2]gsub.FeatureApplication = undefined;
-            var direction_feature_count: usize = 0;
-            const direction_features = if (lookup_options.direction == .rtl)
-                [_]gsub.FeatureApplication{
-                    .{ .tag = unicode.tag("rtla") },
-                    .{ .tag = unicode.tag("rtlm") },
-                }
-            else
-                [_]gsub.FeatureApplication{
-                    .{ .tag = unicode.tag("ltra") },
-                    .{ .tag = unicode.tag("ltrm") },
-                };
-            for (direction_features) |application| {
-                if (!gsub_features.enabled(application.tag, lookup_options.features, true)) continue;
-                direction_features_buf[direction_feature_count] = application;
-                direction_feature_count += 1;
-            }
-            try gsub_executor.applyMerged(font, gsub_context, gsub_after_proof, direction_features_buf[0..direction_feature_count], glyph_ids, use_options, gdef_metadata.*);
-        }
-        try gsub_executor.apply(font, gsub_context, gsub_after_proof, use_shaper.defaultPreprocessingFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
-        @memset(glyph_stage_substituted.items, false);
-        var rphf_options = use_options;
-        rphf_options.glyph_stage_substituted = glyph_stage_substituted;
-        try gsub_executor.apply(font, gsub_context, gsub_after_proof, use_shaper.rphfFeatureApplications(), glyph_ids, rphf_options, gdef_metadata.*);
-        use_shaper.recordRphfSubstitutions(
-            glyph_source_indices.items,
-            glyph_stage_substituted.items,
-            source_features.items,
-            source_syllables.items,
-            source_rphf_substituted.items,
-        );
-        glyph_stage_substituted.clearRetainingCapacity();
-        try glyph_stage_substituted.resize(buffer.allocator, glyph_ids.items.len);
-        @memset(glyph_stage_substituted.items, false);
-        var pref_options = use_options;
-        pref_options.glyph_stage_substituted = glyph_stage_substituted;
-        try gsub_executor.apply(font, gsub_context, gsub_after_proof, use_shaper.prefFeatureApplications(), glyph_ids, pref_options, gdef_metadata.*);
-        use_shaper.recordPrefSubstitutions(
-            glyph_source_indices.items,
-            glyph_stage_substituted.items,
-            source_pref_substituted.items,
-        );
-        glyph_stage_substituted.clearRetainingCapacity();
-        // Every earlier public stage has validated the run it received, and
-        // GSUB mutation helpers preserve source-parallel cardinalities even
-        // when a format-1 delta temporarily leaves maxp's renderable range.
-        // Prove the current maximal USE metadata contract once after stage-only
-        // scratch is detached, then reuse it through all remaining stages.
-        try gsub.validateScriptShaperRunMetadata(use_options, glyph_ids.items.len);
-        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, use_shaper.basicFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        if (use_shaper.hasBrokenSyllable(source_syllables.items)) {
-            const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-            try use_shaper.insertDottedCirclesForBrokenSyllables(
-                buffer.allocator,
-                glyph_ids,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                source_syllables.items,
-                source_rphf_substituted.items,
-                source_pref_substituted.items,
-                codepoints.items,
-                dotted_circle_glyph,
-            );
-        }
-        use_shaper.reorderGlyphs(
-            glyph_ids.items,
-            glyph_source_indices.items,
-            glyph_cluster_indices.items,
-            glyph_substituted.items,
-            ligature_components.infos.items,
-            source_syllables.items,
-            source_rphf_substituted.items,
-            source_pref_substituted.items,
-            codepoints.items,
-        );
-        try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, use_shaper.topographicalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, use_shaper.finalFeatureApplications(), glyph_ids, use_options, gdef_metadata.*);
-        try gsub_executor.applyMergedAfterRunProof(font, gsub_context, gsub_after_proof, use_shaper.typographicFeatureApplications(), glyph_ids, gsub_options, gdef_metadata.*);
+        const dotted_circle_glyph =
+            try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
+        try gsub_use.run(.{
+            .allocator = buffer.allocator,
+            .font = font,
+            .context = gsub_context,
+            .table_proved = gsub_after_proof,
+            .glyph_ids = glyph_ids,
+            .codepoints = codepoints.items,
+            .glyph_source_indices = glyph_source_indices,
+            .glyph_cluster_indices = glyph_cluster_indices,
+            .glyph_substituted = glyph_substituted,
+            .glyph_stage_substituted = glyph_stage_substituted,
+            .ligature_components = ligature_components,
+            .source_features = source_features,
+            .source_syllables = source_syllables,
+            .source_rphf_substituted = source_rphf_substituted,
+            .source_pref_substituted = source_pref_substituted,
+            .base_gsub_options = gsub_options,
+            .lookup_options = lookup_options,
+            .gdef_metadata = gdef_metadata.*,
+            .dotted_circle_glyph = dotted_circle_glyph,
+        });
     } else {
         const indic_shape = indic.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
         if (indic_shape) {
@@ -2806,14 +2644,6 @@ test "beginning item dotted circle creates a synthetic base source" {
     try std.testing.expectEqualSlices(u21, &.{ 0x25cc, 0x064e }, codepoints.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, cluster_owners.items);
-}
-
-fn useShapeUsesArabicJoiningMasks(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .phag;
-}
-
-fn useShapeUsesDirectionFeatures(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .phag;
 }
 
 const isShapeNativeDirectionDecimalNumber = source_pipeline.isDecimalNumber;

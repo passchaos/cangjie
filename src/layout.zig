@@ -1,6 +1,5 @@
 const std = @import("std");
 const aat_kerx = @import("aat_kerx.zig");
-const arabic_normalization = @import("arabic_normalization.zig");
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
 const fallback_mark = @import("shaping/fallback/mark.zig");
@@ -18,6 +17,7 @@ const myanmar = @import("myanmar.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const run_metadata = @import("shaping/run_metadata.zig");
+const source_pipeline = @import("shaping/pipeline/source/root.zig");
 const diagnostics = @import("shaping/diagnostics/root.zig");
 const diagnostic_caret = diagnostics.caret;
 const diagnostic_quality = diagnostics.quality;
@@ -37,7 +37,6 @@ const bidi = @import("text/bidi.zig");
 const segmentation = @import("text/segmentation/root.zig");
 const space_fallback = @import("space_fallback.zig");
 const unicode = @import("unicode.zig");
-const unicode_glyph_fallback = @import("unicode_glyph_fallback.zig");
 const use_shaper = @import("use_shaper.zig");
 pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
 pub const GdefMetadataCache = layout_cache.GdefMetadataCache;
@@ -1532,24 +1531,8 @@ fn nextVariationSelector(text: []const u8, byte_index: usize) ?u21 {
     return if (unicode.isVariationSelector(selector)) selector else null;
 }
 
-const ArabicCompositionMatch = struct {
-    codepoint: u21,
-    glyph_id: GlyphId,
-    byte_end: usize,
-};
-
-fn arabicCompositionForFontAt(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, starter: u21, text: []const u8, mark_byte_start: usize) !?ArabicCompositionMatch {
-    if (!arabic_normalization.canStartComposition(starter)) return null;
-    if (mark_byte_start >= text.len) return null;
-    var lookahead = std.unicode.Utf8Iterator{ .bytes = text, .i = mark_byte_start };
-    const mark = lookahead.nextCodepoint() orelse return null;
-    const composition = try arabic_normalization.composePairForFont(font, glyph_index_cache, starter, mark) orelse return null;
-    return .{
-        .codepoint = composition.codepoint,
-        .glyph_id = composition.glyph_id,
-        .byte_end = lookahead.i,
-    };
-}
+const ArabicCompositionMatch = source_pipeline.ArabicCompositionMatch;
+const arabicCompositionForFontAt = source_pipeline.arabicCompositionForFontAt;
 
 fn selectFontForCluster(
     cascade: FontCascade,
@@ -1954,7 +1937,6 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     }
     const gpos_script_tag = gpos_script.tag orelse selected_lookup_options.script_tag;
     const scratch = &buffer.shape_scratch;
-    scratch.clear();
     const glyph_ids = &scratch.glyph_ids;
     const codepoints = &scratch.codepoints;
     const clusters = &scratch.clusters;
@@ -1977,225 +1959,27 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const shape_profile = buffer.shape_profile;
     const profile_io = buffer.profile_io;
     const cmap_start = shapeProfileNow(shape_profile, profile_io);
-
-    // Keep three parallel arrays through GSUB: glyph ids are mutable, while
-    // codepoints and clusters retain source-text identity for rendering,
-    // hit-testing, and debug output after substitutions.
-    // Valid UTF-8 has at most one retained source per input byte; variation
-    // selectors only lower that count. Reserve every parallel cmap array once
-    // so the scalar loop does not repeat eight capacity checks per glyph.
-    try glyph_ids.ensureUnusedCapacity(buffer.allocator, text.len);
-    try codepoints.ensureUnusedCapacity(buffer.allocator, text.len);
-    try clusters.ensureUnusedCapacity(buffer.allocator, text.len);
-    try source_ends.ensureUnusedCapacity(buffer.allocator, text.len);
-    try glyph_source_indices.ensureUnusedCapacity(buffer.allocator, text.len);
-    try glyph_cluster_indices.ensureUnusedCapacity(buffer.allocator, text.len);
-    try glyph_substituted.ensureUnusedCapacity(buffer.allocator, text.len);
-    try ligature_components.infos.ensureUnusedCapacity(buffer.allocator, text.len);
-
-    var has_default_ignorable = false;
-    var run_has_decimal_number = false;
-    var run_has_letter = false;
-    var default_ignorable_invisible_glyph_id: ?GlyphId = null;
-    if (resolved_lookup_options.all_ascii and selected_lookup_options.direction == .ltr) {
-        // `lookupOptionsForText` already scanned the complete validated run to
-        // infer script/language. Reuse its all-ASCII proof: one byte is one
-        // source scalar, no variation selector/default-ignorable exists, and
-        // LTR shaping needs neither bidi mirroring nor inherited clustering.
-        for (text, 0..) |byte, cluster| {
-            const glyph_id = try glyphIndexWithOptionalCache(font, glyph_index_cache, byte);
-            run_has_decimal_number = run_has_decimal_number or isShapeNativeDirectionDecimalNumber(byte);
-            run_has_letter = run_has_letter or isShapeNativeDirectionLetter(byte);
-            glyph_ids.appendAssumeCapacity(glyph_id);
-            codepoints.appendAssumeCapacity(byte);
-            clusters.appendAssumeCapacity(cluster_base + cluster);
-            source_ends.appendAssumeCapacity(cluster_base + cluster + 1);
-            glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
-            glyph_cluster_indices.appendAssumeCapacity(glyph_cluster_indices.items.len);
-            glyph_substituted.appendAssumeCapacity(false);
-            ligature_components.infos.appendAssumeCapacity(.{});
-        }
-    } else {
-        var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-        while (it.i < text.len) {
-            const cluster = it.i;
-            const codepoint = it.nextCodepoint() orelse break;
-            run_has_decimal_number = run_has_decimal_number or isShapeNativeDirectionDecimalNumber(codepoint);
-            run_has_letter = run_has_letter or isShapeNativeDirectionLetter(codepoint);
-            if (unicode.isVariationSelector(codepoint)) {
-                if (glyph_ids.items.len != 0) {
-                    if (selected_lookup_options.script_tag != .mym2) {
-                        if (try font.variationGlyphIndex(codepoints.items[codepoints.items.len - 1], codepoint)) |variant_glyph| {
-                            glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
-                            source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
-                            continue;
-                        }
-                    }
-                    // Myanmar's syllable grammar gives VS an explicit category,
-                    // so mym2 keeps the selector's nominal glyph (or glyph 0)
-                    // instead of folding a cmap-14 variant into the base.
-                    const selector_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint);
-                    has_default_ignorable = true;
-                    source_ends.items[source_ends.items.len - 1] = cluster_base + it.i;
-                    glyph_ids.appendAssumeCapacity(selector_glyph);
-                    codepoints.appendAssumeCapacity(codepoint);
-                    const source_cluster = if ((selected_lookup_options.cluster_level == null or selected_lookup_options.cluster_level.?.groupsGraphemes()) and clusters.items.len != 0)
-                        clusters.items[clusters.items.len - 1] - cluster_base
-                    else
-                        cluster;
-                    clusters.appendAssumeCapacity(cluster_base + source_cluster);
-                    source_ends.appendAssumeCapacity(cluster_base + it.i);
-                    glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
-                    const cluster_owner_index = if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
-                        glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
-                    else
-                        glyph_cluster_indices.items.len;
-                    glyph_cluster_indices.appendAssumeCapacity(cluster_owner_index);
-                    glyph_substituted.appendAssumeCapacity(false);
-                    ligature_components.infos.appendAssumeCapacity(.{});
-                    continue;
-                }
-                // Variation selectors refine the preceding scalar and do not
-                // advance text themselves. Keeping them out of the glyph stream
-                // preserves caret/cluster identity on the base character while
-                // still allowing cmap format 14 to select emoji/text or IVS glyphs.
-                continue;
-            }
-            has_default_ignorable = has_default_ignorable or isDefaultIgnorableForShaping(codepoint);
-            if (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoSaraAm(codepoint)) {
-                const source_end = cluster_base + it.i;
-                const cluster_level = selected_lookup_options.cluster_level orelse .monotone_graphemes;
-                const source_cluster = if (cluster_level.groupsGraphemes() and clusters.items.len != 0)
-                    clusters.items[clusters.items.len - 1] - cluster_base
-                else
-                    cluster;
-                const nikhahit = nikhahitFromSaraAm(codepoint);
-                const sara_aa = saraAaFromSaraAm(codepoint);
-                const nikhahit_glyph = try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, nikhahit);
-                const sara_aa_glyph = try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, sara_aa);
-
-                const nikhahit_index = glyph_ids.items.len;
-                glyph_ids.appendAssumeCapacity(nikhahit_glyph);
-                codepoints.appendAssumeCapacity(nikhahit);
-                clusters.appendAssumeCapacity(cluster_base + source_cluster);
-                source_ends.appendAssumeCapacity(source_end);
-                glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
-                glyph_cluster_indices.appendAssumeCapacity(if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
-                    glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
-                else
-                    glyph_cluster_indices.items.len);
-                glyph_substituted.appendAssumeCapacity(false);
-                ligature_components.infos.appendAssumeCapacity(.{});
-
-                glyph_ids.appendAssumeCapacity(sara_aa_glyph);
-                codepoints.appendAssumeCapacity(sara_aa);
-                clusters.appendAssumeCapacity(cluster_base + source_cluster);
-                source_ends.appendAssumeCapacity(source_end);
-                glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
-                glyph_cluster_indices.appendAssumeCapacity(if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
-                    glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
-                else
-                    glyph_cluster_indices.items.len);
-                glyph_substituted.appendAssumeCapacity(false);
-                ligature_components.infos.appendAssumeCapacity(.{});
-
-                var nikhahit_destination = nikhahit_index;
-                while (nikhahit_destination > 0) {
-                    const previous_source = glyph_source_indices.items[nikhahit_destination - 1];
-                    if (previous_source >= codepoints.items.len or !isThaiLaoSaraAmAboveBaseMark(codepoints.items[previous_source])) break;
-                    nikhahit_destination -= 1;
-                }
-                if (nikhahit_destination != nikhahit_index) {
-                    shaping_metadata.move(
-                        glyph_ids,
-                        glyph_source_indices,
-                        glyph_cluster_indices,
-                        glyph_substituted,
-                        ligature_components,
-                        nikhahit_index,
-                        nikhahit_destination,
-                    );
-                }
-                const merge_start = nikhahit_destination;
-                const merge_end = glyph_ids.items.len;
-                if (merge_start < merge_end and merge_start < glyph_cluster_indices.items.len and cluster_level.isMonotone()) {
-                    shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, merge_start, merge_end);
-                }
-                const grapheme_merge_start = if (nikhahit_destination > 0) nikhahit_destination - 1 else nikhahit_destination;
-                if (grapheme_merge_start < merge_end and cluster_level.groupsGraphemes()) {
-                    if (cluster_level.isMonotone()) {
-                        shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, grapheme_merge_start, merge_end);
-                    } else {
-                        shaping_metadata.mergeClusterRange(glyph_cluster_indices.items, grapheme_merge_start, merge_end);
-                    }
-                }
-                continue;
-            }
-            const composition = try arabicCompositionForFontAt(font, glyph_index_cache, codepoint, text, it.i);
-            const source_end = if (composition) |value| value.byte_end else it.i;
-            const normalized_codepoint = if (composition) |value| value.codepoint else codepoint;
-            const glyph_id = if (composition) |value| glyph: {
-                it.i = value.byte_end;
-                break :glyph value.glyph_id;
-            } else glyph: {
-                const shaped_codepoint = try presentationCodepointForShaping(font, glyph_index_cache, codepoint, selected_lookup_options);
-                break :glyph try fallbackGlyphIndexWithOptionalCache(font, glyph_index_cache, shaped_codepoint);
-            };
-            const explicit_cluster_level = selected_lookup_options.cluster_level;
-            const inherit_grapheme_cluster = if (explicit_cluster_level) |level| level.groupsGraphemes() else true;
-            const leading_default_ignorable_cluster = codepoints.items.len == 1 and
-                clusters.items.len == 1 and
-                inheritsLeadingDefaultIgnorableCluster(codepoints.items, clusters.items, if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
-                    const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
-                    default_ignorable_invisible_glyph_id = glyph;
-                    break :resolve glyph;
-                });
-            const previous_zwnj_cluster = selected_lookup_options.direction == .rtl and
-                codepoints.items.len != 0 and
-                codepoints.items[codepoints.items.len - 1] == 0x200c and
-                inheritsPreviousZwnjClusterInRtlShaping(
-                    selected_lookup_options.direction,
-                    codepoints.items,
-                    if (default_ignorable_invisible_glyph_id) |glyph| glyph else resolve: {
-                        const glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
-                        default_ignorable_invisible_glyph_id = glyph;
-                        break :resolve glyph;
-                    },
-                );
-            const inherits_previous_cluster = leading_default_ignorable_cluster or
-                codepoint == 0x200d or
-                (explicit_cluster_level != null and unicode.isUnicodeMarkCodepoint(codepoint)) or
-                (selected_lookup_options.script_tag == .tibt and isTibetanClusterExtender(codepoint)) or
-                (usesThaiLaoSaraAmPreprocess(selected_lookup_options.script_tag) and isThaiLaoClusterExtender(codepoint)) or
-                previous_zwnj_cluster or
-                (selected_lookup_options.direction == .rtl and unicode.inheritsPreviousClusterInRtlShaping(codepoint));
-            const source_cluster = if (inherit_grapheme_cluster and inherits_previous_cluster and
-                clusters.items.len != 0)
-                clusters.items[clusters.items.len - 1] - cluster_base
-            else
-                cluster;
-            glyph_ids.appendAssumeCapacity(glyph_id);
-            codepoints.appendAssumeCapacity(normalized_codepoint);
-            clusters.appendAssumeCapacity(cluster_base + source_cluster);
-            source_ends.appendAssumeCapacity(cluster_base + source_end);
-            glyph_source_indices.appendAssumeCapacity(glyph_source_indices.items.len);
-            const cluster_owner_index = if (source_cluster != cluster and glyph_cluster_indices.items.len != 0)
-                glyph_cluster_indices.items[glyph_cluster_indices.items.len - 1]
-            else
-                glyph_cluster_indices.items.len;
-            glyph_cluster_indices.appendAssumeCapacity(cluster_owner_index);
-            glyph_substituted.appendAssumeCapacity(false);
-            ligature_components.infos.appendAssumeCapacity(.{});
-        }
-    }
+    const source_result = try source_pipeline.populate(
+        buffer.allocator,
+        font,
+        glyph_index_cache,
+        scratch,
+        text,
+        cluster_base,
+        resolved_lookup_options.all_ascii,
+        selected_lookup_options,
+    );
+    const has_default_ignorable = source_result.has_default_ignorable;
+    var default_ignorable_invisible_glyph_id =
+        source_result.default_ignorable_invisible_glyph_id;
     if (shape_profile) |p| {
         p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);
         p.glyph_count += glyph_ids.items.len;
     }
     source_boundaries.reset(cluster_base, text.len, clusters.items);
 
-    selected_lookup_options.run_has_decimal_number = run_has_decimal_number;
-    selected_lookup_options.run_has_letter = run_has_letter;
+    selected_lookup_options.run_has_decimal_number = source_result.run_has_decimal_number;
+    selected_lookup_options.run_has_letter = source_result.run_has_letter;
     const lookup_options = selected_lookup_options;
 
     const shape_in_native_direction = shouldShapeInNativeDirection(lookup_options);
@@ -3933,17 +3717,6 @@ fn usesArabicJoiningShaper(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .arab or script_tag == .syrc or script_tag == .adlm or script_tag == .mong;
 }
 
-fn inheritsPreviousZwnjClusterInRtlShaping(direction: TextDirection, prior_codepoints: []const u21, invisible_glyph_id: GlyphId) bool {
-    return direction == .rtl and invisible_glyph_id == 0 and prior_codepoints.len != 0 and prior_codepoints[prior_codepoints.len - 1] == 0x200c;
-}
-
-test "RTL shaping makes glyph after ZWNJ inherit join-control cluster" {
-    try std.testing.expect(inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{ 0x0628, 0x200c }, 0));
-    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{ 0x0628, 0x200c }, 3));
-    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.ltr, &.{ 0x0628, 0x200c }, 0));
-    try std.testing.expect(!inheritsPreviousZwnjClusterInRtlShaping(.rtl, &.{0x0628}, 0));
-}
-
 fn useShapeUsesArabicJoiningMasks(script_tag: unicode.OpenTypeScriptTag) bool {
     return script_tag == .phag;
 }
@@ -3997,48 +3770,6 @@ fn usesLateGdefMarkZeroing(script_tag: unicode.OpenTypeScriptTag) bool {
         .arab, .hebr, .thai, .lao, .dflt => true,
         else => false,
     };
-}
-
-fn usesThaiLaoSaraAmPreprocess(script_tag: unicode.OpenTypeScriptTag) bool {
-    return script_tag == .thai or script_tag == .lao;
-}
-
-fn isTibetanClusterExtender(codepoint: u21) bool {
-    return codepoint == 0x0f35 or
-        codepoint == 0x0f37 or
-        codepoint == 0x0f39 or
-        (codepoint >= 0x0f71 and codepoint <= 0x0f84) or
-        (codepoint >= 0x0f86 and codepoint <= 0x0f87) or
-        (codepoint >= 0x0f8d and codepoint <= 0x0f97) or
-        (codepoint >= 0x0f99 and codepoint <= 0x0fbc) or
-        codepoint == 0x0fc6;
-}
-
-fn isThaiLaoSaraAm(codepoint: u21) bool {
-    return (codepoint & ~@as(u21, 0x80)) == 0x0e33;
-}
-
-fn nikhahitFromSaraAm(codepoint: u21) u21 {
-    return codepoint - 0x0e33 + 0x0e4d;
-}
-
-fn saraAaFromSaraAm(codepoint: u21) u21 {
-    return codepoint - 1;
-}
-
-fn isThaiLaoSaraAmAboveBaseMark(codepoint: u21) bool {
-    const normalized = codepoint & ~@as(u21, 0x80);
-    return (normalized >= 0x0e34 and normalized <= 0x0e37) or
-        (normalized >= 0x0e47 and normalized <= 0x0e4e) or
-        normalized == 0x0e31 or
-        normalized == 0x0e3b;
-}
-
-fn isThaiLaoClusterExtender(codepoint: u21) bool {
-    const normalized = codepoint & ~@as(u21, 0x80);
-    return normalized == 0x0e31 or
-        (normalized >= 0x0e34 and normalized <= 0x0e3a) or
-        (normalized >= 0x0e47 and normalized <= 0x0e4e);
 }
 
 fn inheritMongolianVariationSelectorFeatures(source_features: []u32, codepoints: []const u21) void {
@@ -4315,11 +4046,7 @@ fn isFractionDecimalNumber(codepoint: u21) bool {
         (codepoint >= 0x0660 and codepoint <= 0x0669);
 }
 
-fn isShapeNativeDirectionDecimalNumber(codepoint: u21) bool {
-    return (codepoint >= '0' and codepoint <= '9') or
-        (codepoint >= 0x0660 and codepoint <= 0x0669) or
-        (codepoint >= 0x06f0 and codepoint <= 0x06f9);
-}
+const isShapeNativeDirectionDecimalNumber = source_pipeline.isDecimalNumber;
 
 fn isShapeNativeDirectionLetter(codepoint: u21) bool {
     if (isShapeNativeDirectionDecimalNumber(codepoint) or
@@ -4802,23 +4529,6 @@ fn variationSelectorFallbackShouldRender(glyph_index: usize, source_index: usize
     return source_index > sources[0] and source_index < sources[sources.len - 1];
 }
 
-fn presentationCodepointForShaping(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21, lookup_options: LookupOptions) !u21 {
-    if (lookup_options.writing_mode.isVertical()) {
-        const vertical_source = if (lookup_options.writing_mode == .vertical_lr)
-            unicode.mirroredCodepoint(codepoint)
-        else
-            codepoint;
-        if (unicode.verticalPresentationCodepoint(vertical_source)) |vertical| {
-            if (try glyphIndexWithOptionalCache(font, glyph_index_cache, vertical) != 0) return vertical;
-        }
-        return codepoint;
-    }
-    if (lookup_options.direction != .rtl) return codepoint;
-    const mirrored = unicode.mirroredCodepoint(codepoint);
-    if (mirrored == codepoint) return codepoint;
-    return if (try glyphIndexWithOptionalCache(font, glyph_index_cache, mirrored) != 0) mirrored else codepoint;
-}
-
 fn reorderMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, cluster_level: ?ClusterLevel) void {
     var run_start: ?usize = null;
     for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
@@ -4937,36 +4647,12 @@ fn markSortClass(source_index: usize, codepoints: []const u21) u8 {
     return unicode.modifiedCombiningClassForShaping(codepoints[source_index]);
 }
 
-fn inheritsLeadingDefaultIgnorableCluster(codepoints: []const u21, clusters: []const usize, invisible_glyph_id: GlyphId) bool {
-    return codepoints.len == 1 and clusters.len == 1 and
-        invisible_glyph_id == 0 and
-        unicode.isDefaultIgnorableForShaping(codepoints[0]) and
-        unicode.joiningTypeForCodepoint(codepoints[0]) != .join_causing;
-}
-
 fn isDefaultIgnorableForShaping(codepoint: u21) bool {
     return unicode.isDefaultIgnorableForShaping(codepoint);
 }
 
-fn glyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {
-    if (cache) |glyph_cache| return try glyph_cache.glyphIndex(font, codepoint);
-    return try font.glyphIndex(codepoint);
-}
-
-fn fallbackGlyphIndexWithOptionalCache(font: *const Font, cache: ?*GlyphIndexCache, codepoint: u21) !GlyphId {
-    const glyph = try glyphIndexWithOptionalCache(font, cache, codepoint);
-    if (glyph != 0) return glyph;
-
-    // Space fallback is needed only after the primary cmap proved this Unicode
-    // space missing. Resolve U+0020 through the same optional cache rather than
-    // bypassing it through Font.glyphIndex: ordinary spaces dominate prose and
-    // must not revalidate a borrowed cmap table once per occurrence.
-    if (space_fallback.mayUseSpaceGlyphFallback(codepoint)) {
-        const space_glyph = try glyphIndexWithOptionalCache(font, cache, ' ');
-        if (space_glyph != 0) return space_glyph;
-    }
-    return (try unicode_glyph_fallback.glyphForMissingCodepoint(font, codepoint)) orelse glyph;
-}
+const glyphIndexWithOptionalCache = source_pipeline.glyphIndex;
+const fallbackGlyphIndexWithOptionalCache = source_pipeline.fallbackGlyphIndex;
 
 test "mapped spaces use the glyph index cache before fallback" {
     const test_font = @import("test_font.zig");

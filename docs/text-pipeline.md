@@ -157,6 +157,19 @@ The public `diagnose*Utf8` functions remain thin orchestration entry points in
 the layout surface, while report storage and pure analysis no longer depend on
 the shaping executor.
 
+The first executable shaping stage is isolated under
+`src/shaping/pipeline/source/`:
+
+- `root.zig` decodes UTF-8 and establishes source/glyph cluster ownership.
+- `buffer.zig` centralizes parallel source-sidecar appends.
+- `support.zig` owns cmap, variation, presentation, and Arabic composition
+  helpers.
+- `thai_lao.zig` owns SARA AM decomposition and cluster merging.
+
+The stage returns explicit run properties to the GSUB planner rather than
+leaving cmap-local flags and temporary glyph state inside one monolithic
+shaping function.
+
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
 

@@ -33,6 +33,7 @@ const tt_program_mod = @import("opentype/tt_program.zig");
 const sfnt = @import("font/sfnt/root.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
+const colr_v0_mod = color_tables.colr_v0;
 const cpal_mod = color_tables.cpal;
 const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
@@ -506,10 +507,7 @@ pub const StatAxisValueCoordinate = struct {
     value: f32,
 };
 
-pub const ColorLayer = struct {
-    glyph_id: glyph_mod.GlyphId,
-    palette_index: u16,
-};
+pub const ColorLayer = colr_v0_mod.Layer;
 
 // Preserve the established public color metadata surface while CPAL parsing
 // lives in the focused modern color-table module.
@@ -756,6 +754,10 @@ fn bitmapTable(record: TableRecord) bitmap_mod.Table {
 }
 
 fn cpalTable(record: TableRecord) cpal_mod.Table {
+    return .{ .offset = record.offset, .length = record.length };
+}
+
+fn colrV0Table(record: TableRecord) colr_v0_mod.Table {
     return .{ .offset = record.offset, .length = record.length };
 }
 
@@ -3711,49 +3713,46 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const colr = self.colr orelse return try allocator.alloc(ColorLayer, 0);
         try sfnt.checksum.validate(self.data, colr);
+        // Preserve the established lazy API contract: even non-v0 tables need
+        // the complete legacy header prefix before this method can conclude
+        // that no layer-list representation is available.
         if (colr.length < 14) return error.BadSfnt;
         const version = try bin.readU16At(self.data, colr.offset);
         if (version != 0) return try allocator.alloc(ColorLayer, 0);
-        // COLR data is borrowed from the caller. Re-run the parse-time glyph
-        // reference walk for lazy v0 layer reads so a post-parse byte mutation
-        // cannot turn a valid LayerRecord into an out-of-range glyph id that
-        // rendering code would then trust.
-        try validateColrGlyphBounds(self.data, colr, self.glyph_count);
-        // Palette indices in COLR are part of the same borrowed color contract
-        // as glyph IDs: parse-time validation proved every layer references a
-        // CPAL entry, but callers can still mutate either table afterwards.
-        // Recheck the full COLR/CPAL relationship before returning public
-        // ColorLayers so malformed palette IDs do not surface as renderable
-        // colors or depend on which glyph happens to be queried first.
-        try validateColrPaletteBounds(self.data, colr, self.cpal);
-        const base_count = try bin.readU16At(self.data, colr.offset + 2);
-        const base_offset = try bin.readU32At(self.data, colr.offset + 4);
-        const layer_offset = try bin.readU32At(self.data, colr.offset + 8);
-        const layer_count = try bin.readU16At(self.data, colr.offset + 12);
-        if (base_offset > colr.length or layer_offset > colr.length) return error.BadSfnt;
-        if (@as(usize, base_count) * 6 > colr.length - base_offset) return error.BadSfnt;
-        if (@as(usize, layer_count) * 4 > colr.length - layer_offset) return error.BadSfnt;
-
-        for (0..base_count) |index| {
-            const record = colr.offset + base_offset + index * 6;
-            const base_glyph = try bin.readU16At(self.data, record);
-            if (base_glyph != glyph_id) continue;
-            const first_layer = try bin.readU16At(self.data, record + 2);
-            const num_layers = try bin.readU16At(self.data, record + 4);
-            if (first_layer > layer_count or num_layers > layer_count - first_layer) return error.BadSfnt;
-            const layers = try allocator.alloc(ColorLayer, num_layers);
-            errdefer allocator.free(layers);
-            for (layers, 0..) |*layer, layer_index| {
-                const layer_record = colr.offset + layer_offset + (@as(usize, first_layer) + layer_index) * 4;
-                layer.* = .{
-                    .glyph_id = try bin.readU16At(self.data, layer_record),
-                    .palette_index = try bin.readU16At(self.data, layer_record + 2),
-                };
-                try self.validateColorPaletteIndex(layer.palette_index);
-            }
-            return layers;
+        // Both COLR and CPAL borrow caller-owned bytes. Revalidate the complete
+        // v0 directory and every glyph/palette reference before materializing
+        // one selected base glyph.
+        const palette_entries = if (self.cpal) |cpal|
+            (try cpal_mod.validateStructure(
+                self.data,
+                cpalTable(cpal),
+            )).palette_entries
+        else
+            null;
+        const layout = try colr_v0_mod.validate(
+            self.data,
+            colrV0Table(colr),
+            self.glyph_count,
+            palette_entries,
+        );
+        const result = try colr_v0_mod.layers(
+            allocator,
+            self.data,
+            colrV0Table(colr),
+            layout,
+            glyph_id,
+        );
+        errdefer allocator.free(result);
+        for (result) |layer| {
+            // Preserve the established lazy trust boundary: a CPAL checksum
+            // and label-name proof is needed only when returned layers consume
+            // an actual palette slot. Foreground-only and missing glyph reads
+            // do not touch CPAL payload bytes.
+            if (layer.palette_index == 0xffff) continue;
+            _ = try self.validatedCpalLayout(self.cpal orelse return error.BadSfnt);
+            break;
         }
-        return try allocator.alloc(ColorLayer, 0);
+        return result;
     }
 
     pub fn paletteColor(self: *const Font, palette_index: u16, color_index: u16) FontError!?PaletteColor {
@@ -10797,13 +10796,11 @@ fn validateColrPaletteIndexBounds(palette_index: u16, cpal_palette_entries: ?u16
 }
 
 fn validateColrV0PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16) FontError!void {
-    const ranges = try validateColrV0TopLevelRanges(data, colr);
-    const layer_offset = ranges.layer.start;
-    const layer_count = try bin.readU16At(data, colr.offset + 12);
-    for (0..layer_count) |index| {
-        const palette_index = try bin.readU16At(data, colr.offset + layer_offset + index * 4 + 2);
-        try validateColrPaletteIndexBounds(palette_index, cpal_palette_entries);
-    }
+    _ = try colr_v0_mod.validatePalettes(
+        data,
+        colrV0Table(colr),
+        cpal_palette_entries,
+    );
 }
 
 fn validateColrV1PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16) FontError!void {
@@ -10878,28 +10875,11 @@ fn validateColrGlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16
 }
 
 fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
-    const ranges = try validateColrV0TopLevelRanges(data, colr);
-    const base_count = try bin.readU16At(data, colr.offset + 2);
-    const base_offset = ranges.base.start;
-    const layer_offset = ranges.layer.start;
-    const layer_count = try bin.readU16At(data, colr.offset + 12);
-
-    var previous_base_glyph: ?u16 = null;
-    var previous_layer_slice_end: ?u16 = null;
-    for (0..base_count) |index| {
-        const record = colr.offset + base_offset + index * 6;
-        const base_glyph = try bin.readU16At(data, record);
-        try validateColrBaseGlyphOrder(base_glyph, &previous_base_glyph);
-        try validateGlyphIdInMaxp(base_glyph, glyph_count);
-        const first_layer = try bin.readU16At(data, record + 2);
-        const num_layers = try bin.readU16At(data, record + 4);
-        if (first_layer > layer_count or num_layers > layer_count - first_layer) return error.BadSfnt;
-        try validateColrLayerSliceOrder(first_layer, num_layers, &previous_layer_slice_end);
-    }
-    for (0..layer_count) |index| {
-        const layer_record = colr.offset + layer_offset + index * 4;
-        try validateGlyphIdInMaxp(try bin.readU16At(data, layer_record), glyph_count);
-    }
+    _ = try colr_v0_mod.validateGlyphs(
+        data,
+        colrV0Table(colr),
+        glyph_count,
+    );
 }
 
 fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u16) FontError!void {
@@ -10940,39 +10920,6 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
     }
 }
 
-const ColrV0TopLevelRanges = struct {
-    base: ColrV1StructuralRange,
-    layer: ColrV1StructuralRange,
-};
-
-fn validateColrV0TopLevelRanges(data: []const u8, colr: TableRecord) FontError!ColrV0TopLevelRanges {
-    if (colr.length < 14) return error.BadSfnt;
-    const version = try bin.readU16At(data, colr.offset);
-    if (version != 0) return error.BadSfnt;
-
-    const base_count = try bin.readU16At(data, colr.offset + 2);
-    const base_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 4));
-    const layer_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 8));
-    const layer_count = try bin.readU16At(data, colr.offset + 12);
-    const base = try validateColrV0TopLevelRange(colr, base_offset, base_count, 6);
-    const layer = try validateColrV0TopLevelRange(colr, layer_offset, layer_count, 4);
-
-    // COLR v0 has two independently typed top-level arrays. Requiring both to
-    // start after the fixed header and occupy disjoint bytes prevents a broken
-    // table from making BaseGlyphRecords double as LayerRecords or vice versa.
-    if (colrRangesOverlap(base, layer)) return error.BadSfnt;
-    return .{ .base = base, .layer = layer };
-}
-
-fn validateColrV0TopLevelRange(colr: TableRecord, offset: usize, count: u16, record_size: usize) FontError!ColrV1StructuralRange {
-    if (offset > colr.length) return error.BadSfnt;
-    if (count == 0) return .{ .start = offset, .end = offset };
-    if (offset < 14) return error.BadSfnt;
-    const byte_len = @as(usize, count) * record_size;
-    if (byte_len > colr.length - offset) return error.BadSfnt;
-    return .{ .start = offset, .end = offset + byte_len };
-}
-
 fn validateColrBaseGlyphOrder(base_glyph: u16, previous_base_glyph: *?u16) FontError!void {
     if (previous_base_glyph.*) |previous| {
         // COLR base glyph arrays are binary-search records keyed by glyph ID.
@@ -10982,17 +10929,6 @@ fn validateColrBaseGlyphOrder(base_glyph: u16, previous_base_glyph: *?u16) FontE
         if (base_glyph <= previous) return error.BadSfnt;
     }
     previous_base_glyph.* = base_glyph;
-}
-
-fn validateColrLayerSliceOrder(first_layer: u16, num_layers: u16, previous_layer_slice_end: *?u16) FontError!void {
-    if (previous_layer_slice_end.*) |previous_end| {
-        // Each COLR v0 BaseGlyphRecord owns a contiguous LayerRecord slice.
-        // Keeping those slices in BaseGlyphRecord order and non-overlapping
-        // prevents two glyphs from sharing mutable layer metadata or making
-        // layer ownership depend on how a renderer traverses the base array.
-        if (first_layer < previous_end) return error.BadSfnt;
-    }
-    previous_layer_slice_end.* = first_layer + num_layers;
 }
 
 fn validateColrV1OptionalOffset(offset: usize, colr: TableRecord, min_size: usize) FontError!void {
@@ -17206,66 +17142,6 @@ test "COLR glyph references stay within maxp glyph count" {
 
     writeU16Test(&colr_v1, 48, 1);
     try validateColrGlyphBounds(&colr_v1, colr_v1_record, 2);
-}
-
-test "COLR v0 top-level arrays cannot alias header or each other" {
-    var bytes: [28]u8 = .{0} ** 28;
-    writeU16Test(&bytes, 0, 0); // COLR version 0.
-    writeU16Test(&bytes, 2, 1); // one BaseGlyphRecord.
-    writeU32Test(&bytes, 4, 14);
-    writeU32Test(&bytes, 8, 20);
-    writeU16Test(&bytes, 12, 1); // one LayerRecord.
-    writeU16Test(&bytes, 14, 1);
-    writeU16Test(&bytes, 16, 0);
-    writeU16Test(&bytes, 18, 1);
-    writeU16Test(&bytes, 20, 1);
-    writeU16Test(&bytes, 22, 0);
-
-    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateColrGlyphBounds(&bytes, colr, 2);
-
-    var base_in_header = bytes;
-    writeU32Test(&base_in_header, 4, 12); // Reinterprets numLayers as BaseGlyphRecord data.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&base_in_header, colr, 2));
-
-    var layer_in_header = bytes;
-    writeU32Test(&layer_in_header, 8, 10); // Reinterprets array offsets/count as LayerRecord data.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&layer_in_header, colr, 2));
-
-    var arrays_overlap = bytes;
-    writeU32Test(&arrays_overlap, 8, 18); // LayerRecord starts inside the BaseGlyphRecord.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&arrays_overlap, colr, 2));
-}
-
-test "COLR v0 layer slices are ordered and non-overlapping" {
-    var bytes: [38]u8 = .{0} ** 38;
-    writeU16Test(&bytes, 0, 0); // COLR version 0.
-    writeU16Test(&bytes, 2, 2); // two BaseGlyphRecords.
-    writeU32Test(&bytes, 4, 14);
-    writeU32Test(&bytes, 8, 26);
-    writeU16Test(&bytes, 12, 3); // three LayerRecords.
-    writeU16Test(&bytes, 14, 1);
-    writeU16Test(&bytes, 16, 0);
-    writeU16Test(&bytes, 18, 2); // base glyph 1 owns layers 0 and 1.
-    writeU16Test(&bytes, 20, 3);
-    writeU16Test(&bytes, 22, 2);
-    writeU16Test(&bytes, 24, 1); // base glyph 3 owns the adjacent layer 2.
-    writeU16Test(&bytes, 26, 1);
-    writeU16Test(&bytes, 30, 2);
-    writeU16Test(&bytes, 34, 3);
-
-    const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateColrGlyphBounds(&bytes, colr, 4);
-
-    var overlapping_slice = bytes;
-    writeU16Test(&overlapping_slice, 22, 1); // Starts inside the first base glyph's layer slice.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&overlapping_slice, colr, 4));
-
-    var decreasing_slice = bytes;
-    writeU16Test(&decreasing_slice, 16, 2);
-    writeU16Test(&decreasing_slice, 18, 1);
-    writeU16Test(&decreasing_slice, 22, 0); // Disjoint but not in BaseGlyphRecord order.
-    try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&decreasing_slice, colr, 4));
 }
 
 test "COLR v1 PaintColrGlyph references declared base glyphs" {

@@ -36,6 +36,7 @@ const color_tables = @import("font/tables/color/root.zig");
 const colr_v0_mod = color_tables.colr_v0;
 const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
+const colr_bases = colr_v1_mod.bases;
 const colr_layers = colr_v1_mod.layers;
 const cpal_mod = color_tables.cpal;
 const svg_mod = @import("font/tables/svg/root.zig");
@@ -3665,31 +3666,19 @@ pub const Font = struct {
             else
                 try readColrVariationContext(self.data, colr),
         };
-        const base_glyph_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 14));
-        if (base_glyph_list_offset == 0) return null;
-        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
-        const list_start = colr.offset + base_glyph_list_offset;
-        const record_count = try bin.readU32At(self.data, list_start);
-        const records_start = list_start + 4;
-        if (@as(usize, record_count) * 6 > colr.offset + colr.length - records_start) return error.BadSfnt;
-        const paint_data_start = 4 + @as(usize, record_count) * 6;
-        for (0..record_count) |index| {
-            const record = records_start + index * 6;
-            const base_glyph = try bin.readU16At(self.data, record);
-            if (base_glyph != glyph_id) continue;
-            const paint_offset: usize = @intCast(try bin.readU32At(self.data, record + 2));
-            // BaseGlyphPaintRecord offsets are child-table offsets, not raw
-            // cursors into the BaseGlyphList header. Reject overlaps with the
-            // declared record array so malformed fonts cannot reinterpret
-            // glyph ids or offset bytes as PaintSolid/PaintGlyph payloads.
-            if (paint_offset < paint_data_start) return error.BadSfnt;
-            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
-            const paint_start = list_start + paint_offset;
-            var graph_guard = colr_paint.Guard{};
-            try validateColorPaintGraph(self, paint_start, &graph_guard);
-            return try readColorPaint(self, paint_start, read_context);
-        }
-        return null;
+        const base_list = (try colr_bases.read(
+            self.data,
+            colrV1Table(colr),
+        )) orelse return null;
+        const paint_start = (try colr_bases.paintOffsetForGlyph(
+            self.data,
+            colrV1Table(colr),
+            base_list,
+            glyph_id,
+        )) orelse return null;
+        var graph_guard = colr_paint.Guard{};
+        try validateColorPaintGraph(self, paint_start, &graph_guard);
+        return try readColorPaint(self, paint_start, read_context);
     }
 
     pub fn colorClipBox(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorClipBox {
@@ -3977,13 +3966,16 @@ pub const Font = struct {
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
         }
 
-        const base_glyph_list_offset: usize = @intCast(try bin.readU32At(self.data, colr.offset + 14));
-        if (base_glyph_list_offset == 0) return null;
-        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
-        const list_start = colr.offset + base_glyph_list_offset;
-        const record_count: usize = @intCast(try bin.readU32At(self.data, list_start));
-        const set = ColrV1BaseGlyphSet{ .list_start = list_start, .record_count = record_count };
-        const paint_offset = (try set.paintOffsetForGlyph(self.data, colr, glyph_id)) orelse return null;
+        const base_list = (try colr_bases.read(
+            self.data,
+            colrV1Table(colr),
+        )) orelse return null;
+        const paint_offset = (try colr_bases.paintOffsetForGlyph(
+            self.data,
+            colrV1Table(colr),
+            base_list,
+            glyph_id,
+        )) orelse return null;
         return try readColorPaint(self, paint_offset, .{
             .normalized_coords = normalized_coords,
             .variation = if (normalizedVariationCoordinatesAreDefault(normalized_coords))
@@ -10644,21 +10636,16 @@ fn validateColrV0PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette
 
 fn validateColrV1PaletteBounds(data: []const u8, colr: TableRecord, cpal_palette_entries: ?u16) FontError!void {
     if (colr.length < 34) return error.BadSfnt;
-    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
-    if (base_glyph_list_offset != 0) {
-        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
-        const list_start = colr.offset + base_glyph_list_offset;
-        const record_count: usize = @intCast(try bin.readU32At(data, list_start));
-        const records_start = list_start + 4;
-        if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
-        const paint_data_start = 4 + record_count * 6;
-        for (0..record_count) |index| {
-            const record = records_start + index * 6;
-            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
-            if (paint_offset < paint_data_start) return error.BadSfnt;
-            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
+    if (try colr_bases.read(data, colrV1Table(colr))) |base_list| {
+        for (0..base_list.record_count) |index| {
+            const paint_offset = try colr_bases.paintOffsetAt(
+                data,
+                colrV1Table(colr),
+                base_list,
+                index,
+            );
             var guard = colr_paint.Guard{};
-            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, list_start + paint_offset, &guard);
+            try validateColorPaintPaletteBounds(data, colr, cpal_palette_entries, paint_offset, &guard);
         }
     }
 
@@ -10729,27 +10716,27 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
         glyph_count,
     );
 
-    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
-    var base_glyph_set: ?ColrV1BaseGlyphSet = null;
-    if (base_glyph_list_offset != 0) {
-        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
-        const list_start = colr.offset + base_glyph_list_offset;
-        const record_count: usize = @intCast(try bin.readU32At(data, list_start));
-        const records_start = list_start + 4;
-        if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
-        const paint_data_start = 4 + record_count * 6;
-        var previous_base_glyph: ?u16 = null;
-        base_glyph_set = .{ .list_start = list_start, .record_count = record_count };
-        for (0..record_count) |index| {
-            const record = records_start + index * 6;
-            const base_glyph = try bin.readU16At(data, record);
-            try validateColrBaseGlyphOrder(base_glyph, &previous_base_glyph);
+    const base_glyph_set = try colr_bases.read(data, colrV1Table(colr));
+    if (base_glyph_set) |base_list| {
+        for (0..base_list.record_count) |index| {
+            const record = try colr_bases.recordAt(
+                data,
+                colrV1Table(colr),
+                base_list,
+                index,
+            );
+            const base_glyph = record.glyph_id;
             try validateGlyphIdInMaxp(base_glyph, glyph_count);
-            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
-            if (paint_offset < paint_data_start) return error.BadSfnt;
-            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
             var base_guard = ColrV1BaseGlyphGraphGuard{};
-            try validateColrBaseGlyphPaintGraph(data, colr, glyph_count, base_glyph_set.?, base_glyph, list_start + paint_offset, &base_guard);
+            try validateColrBaseGlyphPaintGraph(
+                data,
+                colr,
+                glyph_count,
+                base_list,
+                base_glyph,
+                record.paint_offset,
+                &base_guard,
+            );
         }
     }
 
@@ -10761,26 +10748,6 @@ fn validateColrV1GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
             try validateColorPaintGlyphBounds(data, colr, glyph_count, base_glyph_set, paint_offset, &paint_guard, &base_guard);
         }
     }
-}
-
-fn validateColrBaseGlyphOrder(base_glyph: u16, previous_base_glyph: *?u16) FontError!void {
-    if (previous_base_glyph.*) |previous| {
-        // COLR base glyph arrays are binary-search records keyed by glyph ID.
-        // Enforce the spec's strict ordering during parse validation so
-        // duplicate or decreasing records cannot make color glyph selection
-        // depend on a renderer's search strategy.
-        if (base_glyph <= previous) return error.BadSfnt;
-    }
-    previous_base_glyph.* = base_glyph;
-}
-
-fn validateColrV1OptionalOffset(offset: usize, colr: TableRecord, min_size: usize) FontError!void {
-    // COLR v1's optional top-level offsets are all relative to the start of
-    // the COLR table and must identify child tables, not bytes in the fixed
-    // version-1 header. Header aliasing can otherwise reinterpret offset fields
-    // as BaseGlyphList/LayerList counts or paint formats during parse-time
-    // validation and later color rendering.
-    if (offset < 34 or offset > colr.length or min_size > colr.length - offset) return error.BadSfnt;
 }
 
 const ColrV1StructuralRange = colr_v1_mod.Range;
@@ -10872,30 +10839,6 @@ fn colorPaintDelta(font: *const Font, colr: TableRecord, context: ColorPaintRead
     return try colrVariationDelta(font.data, colr, variation, var_index_base, sequence_index, context.normalized_coords);
 }
 
-const ColrV1BaseGlyphSet = struct {
-    list_start: usize,
-    record_count: usize,
-
-    fn paintOffsetForGlyph(self: ColrV1BaseGlyphSet, data: []const u8, colr: TableRecord, glyph_id: glyph_mod.GlyphId) FontError!?usize {
-        var previous_base_glyph: ?u16 = null;
-        const base_glyph_list_offset = self.list_start - colr.offset;
-        const paint_data_start = 4 + self.record_count * 6;
-        for (0..self.record_count) |index| {
-            const record = self.list_start + 4 + index * 6;
-            const base_glyph = try bin.readU16At(data, record);
-            try validateColrBaseGlyphOrder(base_glyph, &previous_base_glyph);
-            if (base_glyph > glyph_id) return null;
-            if (base_glyph != glyph_id) continue;
-
-            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
-            if (paint_offset < paint_data_start) return error.BadSfnt;
-            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
-            return self.list_start + paint_offset;
-        }
-        return null;
-    }
-};
-
 fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRecord, glyph_count: u16) FontError!void {
     if (colr.length < 2) return error.BadSfnt;
     const version = try bin.readU16At(data, colr.offset);
@@ -10932,21 +10875,16 @@ fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRe
 
     try validateColrV1ClipListVariationRefs(data, colr, glyph_count, context);
 
-    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
-    if (base_glyph_list_offset != 0) {
-        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
-        const list_start = colr.offset + base_glyph_list_offset;
-        const record_count: usize = @intCast(try bin.readU32At(data, list_start));
-        const records_start = list_start + 4;
-        if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
-        const paint_data_start = 4 + record_count * 6;
-        for (0..record_count) |index| {
-            const record = records_start + index * 6;
-            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
-            if (paint_offset < paint_data_start) return error.BadSfnt;
-            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
+    if (try colr_bases.read(data, colrV1Table(colr))) |base_list| {
+        for (0..base_list.record_count) |index| {
+            const paint_offset = try colr_bases.paintOffsetAt(
+                data,
+                colrV1Table(colr),
+                base_list,
+                index,
+            );
             var guard = colr_paint.Guard{};
-            try validateColorPaintVariationRefs(data, colr, list_start + paint_offset, context, &guard);
+            try validateColorPaintVariationRefs(data, colr, paint_offset, context, &guard);
         }
     }
 
@@ -11012,9 +10950,11 @@ fn validateColrVariationTopLevelRanges(store_offset: usize, store_end_offset: us
 }
 
 fn validateColrVariationRangeDisjointFromOwnedColrData(data: []const u8, colr: TableRecord, variation_range: ColrV1StructuralRange) FontError!void {
-    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
-    if (base_glyph_list_offset != 0) {
-        const structural_range = try colr_v1_mod.baseGlyphListRange(data, colrV1Table(colr), base_glyph_list_offset);
+    if (try colr_bases.read(data, colrV1Table(colr))) |base_list| {
+        const structural_range = colr_bases.range(
+            colrV1Table(colr),
+            base_list,
+        );
         if (colr_v1_mod.overlaps(variation_range, structural_range)) return error.BadSfnt;
     }
 
@@ -11061,21 +11001,16 @@ fn validateColrVariationRangeDisjointFromPaintPayloads(data: []const u8, colr: T
         .end = colr.offset + variation_range.end,
     };
 
-    const base_glyph_list_offset: usize = @intCast(try bin.readU32At(data, colr.offset + 14));
-    if (base_glyph_list_offset != 0) {
-        try validateColrV1OptionalOffset(base_glyph_list_offset, colr, 4);
-        const list_start = colr.offset + base_glyph_list_offset;
-        const record_count: usize = @intCast(try bin.readU32At(data, list_start));
-        const records_start = list_start + 4;
-        if (record_count > (colr.offset + colr.length - records_start) / 6) return error.BadSfnt;
-        const paint_data_start = 4 + record_count * 6;
-        for (0..record_count) |index| {
-            const record = records_start + index * 6;
-            const paint_offset: usize = @intCast(try bin.readU32At(data, record + 2));
-            if (paint_offset < paint_data_start) return error.BadSfnt;
-            if (paint_offset > colr.length - base_glyph_list_offset) return error.BadSfnt;
+    if (try colr_bases.read(data, colrV1Table(colr))) |base_list| {
+        for (0..base_list.record_count) |index| {
+            const paint_offset = try colr_bases.paintOffsetAt(
+                data,
+                colrV1Table(colr),
+                base_list,
+                index,
+            );
             var guard = colr_paint.Guard{ .forbidden_range = forbidden };
-            try validateColorPaintPayloadsDisjointFromRange(data, colr, list_start + paint_offset, &guard);
+            try validateColorPaintPayloadsDisjointFromRange(data, colr, paint_offset, &guard);
         }
     }
 
@@ -11309,7 +11244,7 @@ fn validateColorPaintGlyphBounds(
     data: []const u8,
     colr: TableRecord,
     glyph_count: u16,
-    base_glyph_set: ?ColrV1BaseGlyphSet,
+    base_glyph_set: ?colr_bases.List,
     offset: usize,
     guard: *colr_paint.Guard,
     base_graph_guard: *ColrV1BaseGlyphGraphGuard,
@@ -11340,7 +11275,12 @@ fn validateColorPaintGlyphBounds(
             const referenced_glyph = try bin.readU16At(data, offset + 1);
             try validateGlyphIdInMaxp(referenced_glyph, glyph_count);
             const set = base_glyph_set orelse return error.BadSfnt;
-            _ = (try set.paintOffsetForGlyph(data, colr, referenced_glyph)) orelse return error.BadSfnt;
+            _ = (try colr_bases.paintOffsetForGlyph(
+                data,
+                colrV1Table(colr),
+                set,
+                referenced_glyph,
+            )) orelse return error.BadSfnt;
             // Cross-glyph recursion is a traversal concern: one cyclic color
             // glyph must not make all unrelated COLR glyphs unusable. Lazy paint
             // traversal carries its own glyph stack. Parse-time validation still
@@ -11384,7 +11324,7 @@ fn validateColrBaseGlyphPaintGraph(
     data: []const u8,
     colr: TableRecord,
     glyph_count: u16,
-    base_glyph_set: ColrV1BaseGlyphSet,
+    base_glyph_set: colr_bases.List,
     base_glyph: glyph_mod.GlyphId,
     paint_offset: usize,
     base_graph_guard: *ColrV1BaseGlyphGraphGuard,

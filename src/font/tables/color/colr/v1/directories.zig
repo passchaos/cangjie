@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const bin = @import("../../../../../binary.zig");
+const bases = @import("bases.zig");
 const types = @import("types.zig");
 
 pub fn validateTopLevel(
@@ -51,14 +52,7 @@ pub fn baseGlyphListRange(
     table: types.Table,
     offset: usize,
 ) types.Error!types.Range {
-    try validateOptionalOffset(offset, table, 4);
-    const start = table.offset + offset;
-    const count: usize = @intCast(try bin.readU32At(data, start));
-    const records_start = start + 4;
-    if (count > (table.offset + table.length - records_start) / 6) {
-        return error.BadSfnt;
-    }
-    return .{ .start = offset, .end = offset + 4 + count * 6 };
+    return try bases.directoryRange(data, table, offset);
 }
 
 pub fn layerListRange(

@@ -3997,35 +3997,17 @@ pub const Font = struct {
     /// explicit avoids embedding a pointer to a possibly stack-allocated Font
     /// value in long-lived render metadata.
     pub fn colorStopAtCoords(self: *const Font, color_line: ColorPaint.ColorLine, index: usize, normalized_coords: []const f32) FontError!?ColorPaint.ColorStop {
-        try validateNormalizedVariationCoordinateSlice(normalized_coords);
-        var context: ?ColrVariationContext = null;
-        if (color_line.variable and !normalizedVariationCoordinatesAreDefault(normalized_coords)) {
-            const colr = self.colr orelse return error.BadSfnt;
-            try sfnt.checksum.validate(self.data, colr);
-            try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
-            context = try readColrVariationContext(self.data, colr);
-        }
-        return try self.colorStopAtCoordsValidated(color_line, index, normalized_coords, context);
-    }
-
-    fn colorStopAtCoordsValidated(
-        self: *const Font,
-        color_line: ColorPaint.ColorLine,
-        index: usize,
-        normalized_coords: []const f32,
-        context: ?ColrVariationContext,
-    ) FontError!?ColorPaint.ColorStop {
-        var result = color_line.stop(index) orelse return null;
-        if (!color_line.variable or normalizedVariationCoordinatesAreDefault(normalized_coords)) return result;
-
-        const colr = self.colr orelse return error.BadSfnt;
-        const variation = context orelse return error.BadSfnt;
-        const start = index * colr_paint.colorStopSize(true);
-        if (start + 10 > color_line.stops_data.len) return error.BadSfnt;
-        const var_index_base = std.mem.readInt(u32, color_line.stops_data[start + 6 ..][0..4], .big);
-        result.offset += @floatCast((try colrVariationDelta(self.data, colr, variation, var_index_base, 0, normalized_coords)) / 16384.0);
-        result.alpha += @floatCast((try colrVariationDelta(self.data, colr, variation, var_index_base, 1, normalized_coords)) / 16384.0);
-        return result;
+        const read_state = try self.colorLineReadState(
+            color_line,
+            normalized_coords,
+        );
+        return try colr_read.colorStop(
+            self.data,
+            read_state.table,
+            color_line,
+            index,
+            read_state.context,
+        );
     }
 
     /// Resolve a color line into caller-owned stops and sort by varied offset.
@@ -4035,6 +4017,24 @@ pub const Font = struct {
     /// retained consumers the same stable, resolved representation used by the
     /// rasterizer without storing variation coordinates in borrowed metadata.
     pub fn colorStopsAtCoords(self: *const Font, allocator: std.mem.Allocator, color_line: ColorPaint.ColorLine, normalized_coords: []const f32) FontError![]ColorPaint.ColorStop {
+        const read_state = try self.colorLineReadState(
+            color_line,
+            normalized_coords,
+        );
+        return try colr_read.colorStops(
+            allocator,
+            self.data,
+            read_state.table,
+            color_line,
+            read_state.context,
+        );
+    }
+
+    fn colorLineReadState(
+        self: *const Font,
+        color_line: ColorPaint.ColorLine,
+        normalized_coords: []const f32,
+    ) FontError!ColorLineReadState {
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         var context: ?ColrVariationContext = null;
         if (color_line.variable and !normalizedVariationCoordinatesAreDefault(normalized_coords)) {
@@ -4043,20 +4043,17 @@ pub const Font = struct {
             try validateColrVariationData(self.data, colr, self.fvar, self.glyph_count);
             context = try readColrVariationContext(self.data, colr);
         }
-        const stops = try allocator.alloc(ColorPaint.ColorStop, color_line.stop_count);
-        errdefer allocator.free(stops);
-        for (stops, 0..) |*stop, index| {
-            stop.* = (try self.colorStopAtCoordsValidated(color_line, index, normalized_coords, context)) orelse return error.BadSfnt;
-        }
-        for (1..stops.len) |index| {
-            const current = stops[index];
-            var destination = index;
-            while (destination > 0 and current.offset < stops[destination - 1].offset) : (destination -= 1) {
-                stops[destination] = stops[destination - 1];
-            }
-            stops[destination] = current;
-        }
-        return stops;
+        const colr = self.colr;
+        return .{
+            .table = if (colr) |record| colrV1Table(record) else .{
+                .offset = 0,
+                .length = self.data.len,
+            },
+            .context = .{
+                .normalized_coords = normalized_coords,
+                .variation = context,
+            },
+        };
     }
 
     fn rawSvgGlyphDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?SvgGlyphDocument {
@@ -10580,6 +10577,11 @@ const ColrVariationContext = colr_variation.Context;
 const no_colr_variation_index = colr_variation.no_index;
 
 const ColorPaintReadContext = colr_read.Context;
+
+const ColorLineReadState = struct {
+    table: colr_v1_mod.Table,
+    context: ColorPaintReadContext,
+};
 
 fn readColrVariationContext(data: []const u8, colr: TableRecord) FontError!?ColrVariationContext {
     return try colr_variation.read(data, colrV1Table(colr));

@@ -1,8 +1,9 @@
-//! Runtime decoding for COLR v1 gradient Paints and ColorLines.
+//! Runtime decoding for COLR v1 gradient geometry.
 
 const std = @import("std");
 
 const bin = @import("../../../../../../binary.zig");
+const color_lines = @import("color_line.zig");
 const model = @import("../../../model.zig");
 const paint = @import("../paint/root.zig");
 const table_types = @import("../types.zig");
@@ -85,7 +86,12 @@ pub fn linearGradient(
                     5,
                 ))),
         },
-        .color_line = try colorLine(data, table, line_offset, format == 5),
+        .color_line = try color_lines.read(
+            data,
+            table,
+            line_offset,
+            format == 5,
+        ),
     };
 }
 
@@ -161,7 +167,12 @@ pub fn radialGradient(
                 base,
                 5,
             ))),
-        .color_line = try colorLine(data, table, line_offset, format == 7),
+        .color_line = try color_lines.read(
+            data,
+            table,
+            line_offset,
+            format == 7,
+        ),
     };
 }
 
@@ -219,35 +230,12 @@ pub fn sweepGradient(
                 base,
                 3,
             )) / 16384.0))) * 180.0 + 180.0,
-        .color_line = try colorLine(data, table, line_offset, format == 9),
-    };
-}
-
-pub fn colorLine(
-    data: []const u8,
-    table: table_types.Table,
-    offset: usize,
-    variable: bool,
-) Error!model.Paint.ColorLine {
-    if (offset < table.offset or
-        offset > table.offset + table.length or
-        table.offset + table.length - offset < 3)
-    {
-        return error.BadSfnt;
-    }
-    const extend =
-        std.enums.fromInt(model.Paint.Extend, data[offset]) orelse
-        return error.BadSfnt;
-    const stop_count = try bin.readU16At(data, offset + 1);
-    if (stop_count == 0) return error.BadSfnt;
-    const stops_data = data[offset + 3 .. table.offset + table.length];
-    const stop_size = paint.colorStopSize(variable);
-    if (stop_count > stops_data.len / stop_size) return error.BadSfnt;
-    return .{
-        .extend = extend,
-        .stops_data = stops_data[0 .. @as(usize, stop_count) * stop_size],
-        .stop_count = stop_count,
-        .variable = variable,
+        .color_line = try color_lines.read(
+            data,
+            table,
+            line_offset,
+            format == 9,
+        ),
     };
 }
 

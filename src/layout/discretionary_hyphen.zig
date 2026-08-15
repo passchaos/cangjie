@@ -57,7 +57,7 @@ pub fn materialize(glyph: anytype, resolved: Resolved) void {
     glyph.y_advance = 0;
     glyph.x_offset = 0;
     glyph.y_offset = 0;
-    glyph.discretionary_hyphen = true;
+    glyph.flags.discretionary_hyphen = true;
 }
 
 test "non-soft-hyphen scalars are never discretionary candidates" {

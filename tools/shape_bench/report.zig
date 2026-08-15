@@ -268,8 +268,18 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         printI32Array(" y_advances", summary.y_advances);
         printI32Array(" x_offsets", summary.x_offsets);
         printI32Array(" y_offsets", summary.y_offsets);
+        printU32Array(" glyph_flags", summary.glyph_flags);
         printI32Array(" glyph_extents", summary.glyph_extents);
         std.debug.print("\n", .{});
+    }
+}
+
+fn printU32Array(label: []const u8, values: []const u32) void {
+    if (values.len == 0) return;
+    std.debug.print("{s}=", .{label});
+    for (values, 0..) |value, index| {
+        if (index != 0) std.debug.print(",", .{});
+        std.debug.print("{d}", .{value});
     }
 }
 

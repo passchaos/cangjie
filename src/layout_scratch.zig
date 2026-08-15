@@ -2,6 +2,7 @@ const std = @import("std");
 
 const GlyphId = @import("glyph.zig").GlyphId;
 const aat_kerx = @import("aat_kerx.zig");
+const cluster_safety = @import("shaping/cluster_safety.zig");
 const gpos = @import("gpos.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const unicode = @import("unicode.zig");
@@ -24,6 +25,7 @@ pub const ShapeScratch = struct {
     glyph_script_positions: std.ArrayList(u8) = .empty,
     glyph_output_indices: std.ArrayList(usize) = .empty,
     stch_actions: std.ArrayList(u8) = .empty,
+    source_boundaries: cluster_safety.SourceBoundaries = .{},
     kerx_simple_pair_eligible: std.ArrayList(bool) = .empty,
     kerx_adjustments: std.ArrayList(aat_kerx.Adjustment) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
@@ -34,6 +36,7 @@ pub const ShapeScratch = struct {
         self.gpos_adjustments.deinit(allocator);
         self.kerx_adjustments.deinit(allocator);
         self.kerx_simple_pair_eligible.deinit(allocator);
+        self.source_boundaries.deinit(allocator);
         self.stch_actions.deinit(allocator);
         self.glyph_output_indices.deinit(allocator);
         self.glyph_script_positions.deinit(allocator);

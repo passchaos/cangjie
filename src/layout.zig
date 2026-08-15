@@ -18,6 +18,7 @@ const myanmar = @import("myanmar.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const discretionary_hyphen = @import("layout/discretionary_hyphen.zig");
+const glyph_position = @import("layout/glyph_position.zig");
 const styled_bidi = @import("layout/styled_bidi.zig");
 const styled_buffer = @import("layout/styled_buffer.zig");
 const styled_paragraph = @import("layout/styled_paragraph.zig");
@@ -36,38 +37,7 @@ pub const GsubTableProofCache = layout_cache.GsubTableProofCache;
 pub const LookupSelectionCache = layout_cache.LookupSelectionCache;
 pub const VerticalGlyphMetrics = layout_cache.VerticalGlyphMetrics;
 pub const ClusterLevel = shaping_metadata.ClusterLevel;
-
-/// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
-/// adjustment. `cluster` is a byte offset into the original UTF-8 text, so
-/// hit testing and selection can map glyph positions back to source text.
-pub const GlyphPosition = struct {
-    glyph_id: GlyphId,
-    /// Optional synthetic glyph id used only for shaping-diagnostic parity
-    /// knobs such as HarfBuzz's not-found variation-selector glyph. The real
-    /// OpenType pipeline still uses `glyph_id` for GSUB, GPOS, metrics, and
-    /// rendering.
-    synthetic_glyph_id: ?u32 = null,
-    codepoint: u21,
-    cluster: usize,
-    /// Number of UTF-8 bytes in the source span represented by this glyph.
-    /// This is usually one scalar, but it can include skipped variation
-    /// selectors or all components collapsed into a GSUB ligature. Keeping the
-    /// extent next to the cluster start lets caret logic recover the trailing
-    /// source byte offset even when there is no following glyph.
-    source_byte_len: usize = 0,
-    x_advance: f32,
-    y_advance: f32 = 0,
-    x_offset: f32 = 0,
-    y_offset: f32 = 0,
-    vertical: bool = false,
-    /// An invisible U+00AD source atom materialized at a selected line break.
-    /// UAX #9 X9 otherwise removes the original scalar from visual ordering.
-    discretionary_hyphen: bool = false,
-
-    pub fn outputGlyphId(self: GlyphPosition) u32 {
-        return self.synthetic_glyph_id orelse self.glyph_id;
-    }
-};
+pub const GlyphPosition = glyph_position.GlyphPosition;
 
 /// A contiguous range of glyphs rendered by one font at one size.
 pub const GlyphRun = struct {
@@ -2946,7 +2916,7 @@ fn applyParagraphLineBidiVisualOrder(buffer: *LayoutBuffer, text: []const u8, di
             var retained_x9: [1]usize = undefined;
             var retained_x9_count: usize = 0;
             for (old_glyphs[old_line_start..old_line_end]) |source_glyph| {
-                if (!source_glyph.discretionary_hyphen) continue;
+                if (!source_glyph.isDiscretionaryHyphen()) continue;
                 retained_x9[0] = bidi_paragraph.scalarIndexForByte(
                     source_glyph.cluster,
                 ) orelse return error.InvalidBidiMap;
@@ -3284,6 +3254,7 @@ fn recordSoftLineBreak(
     normalized_variation_coords: []const f32,
 ) !void {
     if (glyphs.len == 0) return;
+    if (breakBoundaryIsUnsafe(glyphs, byte_offset, index)) return;
     const current = glyphs[index];
     if (isDiscardableBreak(current.codepoint) and glyphSourceEnd(current) == byte_offset) {
         if (index > line_start) {
@@ -3333,6 +3304,32 @@ fn recordSoftLineBreak(
         width_at_break.* = lineWidth(glyphs[line_start..break_index]);
         last_break_hyphen.* = null;
     }
+}
+
+fn breakBoundaryIsUnsafe(
+    glyphs: []const GlyphPosition,
+    byte_offset: usize,
+    current_index: usize,
+) bool {
+    if (glyphs.len == 0) return false;
+    const current = @min(current_index, glyphs.len - 1);
+
+    // Line-break opportunities are consumed as soon as the current shaped
+    // atom ends, so an unsafe boundary can only be carried by that glyph or
+    // the immediately following atom. Every output sharing a cluster queries
+    // the same source-byte sidecar bit during construction, making one glyph
+    // per atom sufficient. This keeps ordinary UAX #14 reflow strictly O(1)
+    // per opportunity instead of rescanning the paragraph or cluster.
+    const current_glyph = glyphs[current];
+    if (current_glyph.cluster == byte_offset and
+        current_glyph.isUnsafeToBreakBefore())
+    {
+        return true;
+    }
+    if (current + 1 >= glyphs.len) return false;
+    const next_glyph = glyphs[current + 1];
+    return next_glyph.cluster == byte_offset and
+        next_glyph.isUnsafeToBreakBefore();
 }
 
 test "soft line break mapping never splits a shaped source atom" {
@@ -3386,6 +3383,42 @@ test "soft line break mapping never splits a shaped source atom" {
     );
     try std.testing.expectEqual(@as(?usize, 2), last_break);
     try std.testing.expectApproxEqAbs(@as(f32, 15), width_at_break, 0.001);
+}
+
+test "soft line break mapping rejects contextual unsafe boundaries" {
+    const glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 0,
+            .source_byte_len = 1,
+            .x_advance = 10,
+        },
+        .{
+            .glyph_id = 2,
+            .codepoint = 'B',
+            .cluster = 1,
+            .source_byte_len = 1,
+            .x_advance = 10,
+            .flags = .{ .unsafe_to_break_before = true },
+        },
+    };
+    var last_break: ?usize = null;
+    var width_at_break: f32 = 0;
+    var last_break_hyphen: ?discretionary_hyphen.Candidate = null;
+    try recordSoftLineBreak(
+        &glyphs,
+        &.{},
+        1,
+        0,
+        0,
+        10,
+        &last_break,
+        &width_at_break,
+        &last_break_hyphen,
+        &.{},
+    );
+    try std.testing.expectEqual(@as(?usize, null), last_break);
 }
 
 const LineBreakCursor = struct {
@@ -3572,7 +3605,7 @@ fn appendEllipsisToLastLine(buffer: *LayoutBuffer, max_width: f32, alignment: Te
     while (line.glyph_len > 0 and
         buffer.glyphs.items[
             line.glyph_start + line.glyph_len - 1
-        ].discretionary_hyphen)
+        ].isDiscretionaryHyphen())
     {
         const remove_index = line.glyph_start + line.glyph_len - 1;
         line.width -= buffer.glyphs.items[remove_index].x_advance;
@@ -4080,6 +4113,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const glyph_script_positions = &scratch.glyph_script_positions;
     const glyph_output_indices = &scratch.glyph_output_indices;
     const stch_actions = &scratch.stch_actions;
+    const source_boundaries = &scratch.source_boundaries;
 
     const shape_profile = buffer.shape_profile;
     const profile_io = buffer.profile_io;
@@ -4299,6 +4333,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);
         p.glyph_count += glyph_ids.items.len;
     }
+    source_boundaries.reset(cluster_base, text.len, clusters.items);
 
     selected_lookup_options.run_has_decimal_number = run_has_decimal_number;
     selected_lookup_options.run_has_letter = run_has_letter;
@@ -4340,6 +4375,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .cluster_level = lookup_options.cluster_level orelse .monotone_characters,
         .glyph_substituted = glyph_substituted,
         .ligature_components = ligature_components,
+        .source_boundaries = source_boundaries,
         // The LTR ASCII cmap fast path proves there is no CGJ, joiner, or
         // default-ignorable scalar for contextual/ligature skipping. Omit the
         // source slice so generic Latin GSUB avoids scanning the identity
@@ -4388,6 +4424,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             dotted_circle_glyph,
         );
         gsub_options.source_codepoints = codepoints.items;
+        source_boundaries.bindSourceByteStarts(clusters.items);
     }
     const use_shape = use_shaper.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
     const myanmar_shape = myanmar.shouldShape(lookup_options.script_tag) and codepoints.items.len != 0;
@@ -4435,6 +4472,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
         }
         gsub_options.source_codepoints = codepoints.items;
+        source_boundaries.bindSourceByteStarts(clusters.items);
     }
     // HarfBuzz normalizes every shaping buffer before script-specific GSUB.
     // Keep immutable source codepoints in logical order, but reorder the glyph
@@ -4726,6 +4764,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         khmer.markSourceFeatures(source_features.items, source_syllables.items, codepoints.items);
         var khmer_options = gsub_options;
         khmer_options.source_codepoints = codepoints.items;
+        source_boundaries.bindSourceByteStarts(clusters.items);
         khmer_options.source_features = source_features.items;
         khmer_options.source_syllables = source_syllables.items;
 
@@ -4888,6 +4927,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 lookup_options.cluster_level orelse .monotone_graphemes,
             );
             gsub_options.source_codepoints = codepoints.items;
+            source_boundaries.bindSourceByteStarts(clusters.items);
         }
         if (lookup_options.script_tag == .hang and hasHangulJamo(codepoints.items)) {
             try source_features.resize(buffer.allocator, codepoints.items.len);
@@ -5476,6 +5516,11 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .codepoint = source_codepoint,
             .cluster = source_span.start,
             .source_byte_len = source_span.end - source_span.start,
+            .flags = .{
+                .unsafe_to_break_before = source_boundaries.isUnsafeBeforeByte(
+                    source_span.start,
+                ),
+            },
             .x_advance = if (visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
             .y_advance = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
             .x_offset = output_x_offset,

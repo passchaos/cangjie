@@ -7726,7 +7726,7 @@ test "soft hyphen becomes visible only at a selected wrap" {
     try std.testing.expect(rtl_wrapped.lines.len >= 2);
     const rtl_first = rtl_wrapped.lines[0].glyphs(rtl_wrapped);
     try std.testing.expect(rtl_first.len != 0);
-    try std.testing.expect(rtl_first[0].discretionary_hyphen);
+    try std.testing.expect(rtl_first[0].isDiscretionaryHyphen());
 }
 
 test "retained reflow restores an unselected soft hyphen" {
@@ -7795,7 +7795,7 @@ test "retained reflow restores an unselected soft hyphen" {
     });
     try std.testing.expectEqual(@as(usize, 1), ellipsized.lines.len);
     for (ellipsized.lines[0].glyphs(ellipsized)) |glyph| {
-        try std.testing.expect(!glyph.discretionary_hyphen);
+        try std.testing.expect(!glyph.isDiscretionaryHyphen());
     }
 }
 
@@ -9671,6 +9671,8 @@ test "applies GSUB contextual substitution with nested lookup" {
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[0].glyph_id);
     try std.testing.expectEqual(@as(GlyphId, 3), run.glyphs[1].glyph_id);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "applies GSUB coverage-based contextual substitution" {
@@ -9690,6 +9692,8 @@ test "applies GSUB coverage-based contextual substitution" {
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[0].glyph_id);
     try std.testing.expectEqual(@as(GlyphId, 3), run.glyphs[1].glyph_id);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "applies GSUB class-based contextual substitution" {
@@ -9709,6 +9713,8 @@ test "applies GSUB class-based contextual substitution" {
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[0].glyph_id);
     try std.testing.expectEqual(@as(GlyphId, 3), run.glyphs[1].glyph_id);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "applies GSUB chaining contextual substitution with nested lookup" {
@@ -9729,6 +9735,9 @@ test "applies GSUB chaining contextual substitution with nested lookup" {
     try std.testing.expectEqual(@as(GlyphId, 3), run.glyphs[0].glyph_id);
     try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[1].glyph_id);
     try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[2].glyph_id);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[2].isUnsafeToBreakBefore());
 }
 
 test "applies GSUB reverse chaining single substitution" {

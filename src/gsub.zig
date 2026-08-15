@@ -1,5 +1,6 @@
 const std = @import("std");
 const bin = @import("binary.zig");
+const cluster_safety = @import("shaping/cluster_safety.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
@@ -110,6 +111,10 @@ pub const LookupOptions = struct {
     /// needed by default-ignorable handling.
     glyph_stage_substituted: ?*std.ArrayList(bool) = null,
     ligature_components: ?*ligature_provenance.Store = null,
+    /// Source-boundary flags emitted by successful Context/ChainContext
+    /// matches. The recorder owns the transient source-byte view so adding
+    /// cluster safety does not enlarge this frequently copied options value.
+    source_boundaries: ?*cluster_safety.SourceBoundaries = null,
     /// Optional source-level feature assignment. `active_source_feature` gates
     /// a lookup to glyphs whose original source index carries that tag. Context
     /// and chaining lookups still see the complete surrounding glyph stream;
@@ -5881,6 +5886,7 @@ fn applyAcceleratedContextClassSubstitutionAt(table: Table, subtable: ContextCla
         if (rule.hash != hash) continue;
         const expected_input = subtable.classes[rule.classes_start .. rule.classes_start + extra_input_count];
         if (!std.mem.eql(u16, expected_input, input_classes[0..extra_input_count])) continue;
+        try markUnsafeContextMatch(allocator, options, input_indices[0..rule.input_count]);
         const glyph_count_before = glyphs.items.len;
         try applySubstitutionRecordsMapped(table, glyphs, rule.records_offset, rule.subst_count, input_indices[0..rule.input_count], allocator, options);
         const original_next = input_indices[rule.input_count - 1] + 1;
@@ -5915,6 +5921,7 @@ fn applyClassRuleSet(table: Table, rule_set_offset: usize, class_def_offset: usi
         // Once the input classes match, each substitution record points at a
         // glyph within the matched input sequence and a nested lookup index.
         const records_offset = rule_offset + 4 + (@as(usize, glyph_count) - 1) * 2;
+        try markUnsafeContextMatch(allocator, options, input_indices_buf[0..glyph_count]);
         try applySubstitutionRecordsMapped(table, glyphs, records_offset, subst_count, input_indices_buf[0..glyph_count], allocator, options);
         return true;
     }
@@ -5943,6 +5950,7 @@ fn applyContextCoverageSubstitution(table: Table, subtable_offset: usize, glyphs
             }
         }
         if (!matched) continue;
+        try markUnsafeContextMatch(allocator, options, input_indices_buf[0..glyph_count]);
         try applySubstitutionRecordsMapped(table, glyphs, subst_records_pos, subst_count, input_indices_buf[0..glyph_count], allocator, options);
         pos += glyph_count - 1;
     }
@@ -5965,6 +5973,7 @@ fn applyContextCoverageSubstitutionAt(table: Table, subtable_offset: usize, glyp
     }
     const subst_count = try readU16(table, subtable_offset + 4);
     const subst_records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
+    try markUnsafeContextMatch(allocator, options, input_indices_buf[0..glyph_count]);
     const glyph_count_before = glyphs.items.len;
     try applySubstitutionRecordsMapped(table, glyphs, subst_records_pos, subst_count, input_indices_buf[0..glyph_count], allocator, options);
     const original_next = input_indices_buf[glyph_count - 1] + 1;
@@ -6036,6 +6045,11 @@ fn applyContextCoverageLookupAccelerated(
             }
             if (!matched) continue;
 
+            try markUnsafeContextMatch(
+                allocator,
+                options,
+                input_indices_buf[0..subtable.glyph_count],
+            );
             const glyph_count_before = glyphs.items.len;
             try applySubstitutionRecordsMapped(
                 table,
@@ -6077,6 +6091,7 @@ fn applyContextRuleSet(table: Table, rule_set_offset: usize, glyphs: *std.ArrayL
         if (!matched) continue;
 
         const records_offset = rule_offset + 4 + (@as(usize, glyph_count) - 1) * 2;
+        try markUnsafeContextMatch(allocator, options, input_indices_buf[0..glyph_count]);
         try applySubstitutionRecordsMapped(table, glyphs, records_offset, subst_count, input_indices_buf[0..glyph_count], allocator, options);
         return true;
     }
@@ -7031,6 +7046,13 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
 
         const subst_count = try readU16(table, cursor);
         cursor += 2;
+        try markUnsafeChainingMatch(
+            allocator,
+            options,
+            window.backtrack_indices[0..backtrack_count],
+            input_indices,
+            window.lookahead_indices[0..lookahead_count],
+        );
         const glyph_count_before = glyphs.items.len;
         try applySubstitutionRecordsMapped(table, glyphs, cursor, subst_count, input_indices, allocator, options);
         const original_next = input_indices[input_count - 1] + 1;
@@ -7068,6 +7090,13 @@ fn applyChainingCoverageSubstitutionAt(table: Table, subtable_info: ChainingCove
     if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable_info.lookahead_count], true, pos)) return .{};
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, backtrack_indices_buf[0..subtable_info.backtrack_count], subtable_info.backtrack_offsets_pos)) return .{};
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, lookahead_indices_buf[0..subtable_info.lookahead_count], subtable_info.lookahead_offsets_pos)) return .{};
+    try markUnsafeChainingMatch(
+        allocator,
+        options,
+        backtrack_indices_buf[0..subtable_info.backtrack_count],
+        input_indices_buf[0..subtable_info.input_count],
+        lookahead_indices_buf[0..subtable_info.lookahead_count],
+    );
     if (try applyFastChainingSingleRecords(table, subtable_info, glyphs, input_indices_buf[0..subtable_info.input_count], options)) {
         return .{ .matched = true, .next_pos = input_indices_buf[subtable_info.input_count - 1] + 1 };
     }
@@ -7099,6 +7128,13 @@ fn applyAcceleratedChainingCoverageSubstitutionAt(table: Table, subtable_info: C
     if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable_info.lookahead_count], true, pos)) return .{};
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, backtrack_indices_buf[0..subtable_info.backtrack_count], subtable_info.backtrack_offsets_pos)) return .{};
     if (!try coverageIndicesMatch(table, subtable_info.subtable_offset, glyphs.items, lookahead_indices_buf[0..subtable_info.lookahead_count], subtable_info.lookahead_offsets_pos)) return .{};
+    try markUnsafeChainingMatch(
+        allocator,
+        options,
+        backtrack_indices_buf[0..subtable_info.backtrack_count],
+        input_indices_buf[0..subtable_info.input_count],
+        lookahead_indices_buf[0..subtable_info.lookahead_count],
+    );
     const glyph_count_before = glyphs.items.len;
     try applySubstitutionRecordsMapped(table, glyphs, subtable_info.records_pos, subtable_info.subst_count, input_indices_buf[0..subtable_info.input_count], allocator, options);
     const original_next = input_indices_buf[subtable_info.input_count - 1] + 1;
@@ -7133,6 +7169,7 @@ fn applyAcceleratedChainingCoverageNoContextAt(table: Table, subtable_info: Chai
             try checkedRequiredCoverageOffset(table, subtable_info.subtable_offset, try readU16(table, subtable_info.input_offsets_pos + 4));
         if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices[2]]) == null) return .{};
     }
+    try markUnsafeContextMatch(allocator, options, input_indices);
     if (try applyFastChainingSingleRecords(table, subtable_info, glyphs, input_indices, options)) {
         return .{ .matched = true, .next_pos = input_indices[input_indices.len - 1] + 1 };
     }
@@ -7302,6 +7339,13 @@ fn applyChainingRuleSet(table: Table, chain_set_offset: usize, glyphs: *std.Arra
 
         const subst_count = try readU16(table, cursor);
         cursor += 2;
+        try markUnsafeChainingMatch(
+            allocator,
+            options,
+            backtrack_indices_buf[0..backtrack_count],
+            input_indices_buf[0..input_count],
+            lookahead_indices_buf[0..lookahead_count],
+        );
         const glyph_count_before = glyphs.items.len;
         try applySubstitutionRecordsMapped(table, glyphs, cursor, subst_count, input_indices_buf[0..input_count], allocator, options);
         const original_next = input_indices_buf[input_count - 1] + 1;
@@ -7339,6 +7383,38 @@ fn contextNextPosAfterMutation(original_next: usize, match_start: usize, glyph_c
     // before the position immediately after the current match start. This is
     // essential when adjacent candidates move into the just-consumed range.
     return @max(match_start + 1, original_next -| (glyph_count_before - glyph_count_after));
+}
+
+fn markUnsafeContextMatch(
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+    glyph_indices: []const usize,
+) std.mem.Allocator.Error!void {
+    const safety = options.source_boundaries orelse return;
+    const sources = options.glyph_source_indices orelse return;
+    try safety.markMatchedGlyphs(
+        allocator,
+        sources.items,
+        glyph_indices,
+    );
+}
+
+fn markUnsafeChainingMatch(
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+    backtrack: []const usize,
+    input: []const usize,
+    lookahead: []const usize,
+) std.mem.Allocator.Error!void {
+    const safety = options.source_boundaries orelse return;
+    const sources = options.glyph_source_indices orelse return;
+    try safety.markMatchedRegions(
+        allocator,
+        sources.items,
+        backtrack,
+        input,
+        lookahead,
+    );
 }
 
 fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -8751,6 +8827,13 @@ fn applyAcceleratedChainingClassSubstitutionAt(table: Table, subtable: ChainingC
         const expected_lookahead = subtable.classes[rule.classes_start + extra_input_count .. rule.classes_start + extra_input_count + rule.lookahead_count];
         if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
 
+        try markUnsafeChainingMatch(
+            allocator,
+            options,
+            window.backtrack_indices[0..0],
+            input_indices,
+            window.lookahead_indices[0..rule.lookahead_count],
+        );
         const glyph_count_before = glyphs.items.len;
         _ = try applyNestedGlyphLookup(table, glyphs, input_indices[0], rule.lookup_index, allocator, options);
         const original_next = input_indices[rule.input_count - 1] + 1;
@@ -8822,6 +8905,13 @@ noinline fn applyAcceleratedChainingClassSubstitutionWithBacktrackAt(table: Tabl
         const expected_lookahead = subtable.classes[lookahead_start .. lookahead_start + rule.lookahead_count];
         if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
 
+        try markUnsafeChainingMatch(
+            allocator,
+            options,
+            window.backtrack_indices[0..backtrack_count],
+            input_indices,
+            window.lookahead_indices[0..rule.lookahead_count],
+        );
         const glyph_count_before = glyphs.items.len;
         _ = try applyNestedGlyphLookup(table, glyphs, input_indices[0], rule.lookup_index, allocator, options);
         const original_next = input_indices[rule.input_count - 1] + 1;
@@ -10303,7 +10393,11 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
     var sources = std.ArrayList(usize).empty;
     defer sources.deinit(allocator);
     try sources.appendSlice(allocator, &.{ 0, 1, 2, 3 });
+    const source_byte_starts = [_]usize{ 0, 1, 2, 3 };
     const source_syllables = [_]u8{ 1, 1, 1, 2 };
+    var source_boundaries = cluster_safety.SourceBoundaries{};
+    defer source_boundaries.deinit(allocator);
+    source_boundaries.reset(0, 4, &source_byte_starts);
 
     const result = try applyAcceleratedContextClassSubstitutionAt(
         .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
@@ -10314,6 +10408,7 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
         0,
         .{
             .glyph_source_indices = &sources,
+            .source_boundaries = &source_boundaries,
             .source_syllables = &source_syllables,
             .match_source_syllable = true,
         },
@@ -10322,6 +10417,10 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
     try std.testing.expect(result.matched);
     try std.testing.expectEqual(@as(usize, 3), result.next_pos);
     try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3, 9 }, glyphs.items);
+    try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(0));
+    try std.testing.expect(source_boundaries.isUnsafeBeforeByte(1));
+    try std.testing.expect(source_boundaries.isUnsafeBeforeByte(2));
+    try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(3));
 }
 
 test "GSUB direct and extension context class builders share first-group sidecars" {
@@ -10507,6 +10606,13 @@ test "GSUB accelerated chaining class matching keeps shorter rules at run end" {
     var glyphs = std.ArrayList(GlyphId).empty;
     defer glyphs.deinit(allocator);
     try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(allocator);
+    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
+    const source_byte_starts = [_]usize{ 0, 1, 2 };
+    var source_boundaries = cluster_safety.SourceBoundaries{};
+    defer source_boundaries.deinit(allocator);
+    source_boundaries.reset(0, 3, &source_byte_starts);
 
     const result = try applyAcceleratedChainingClassSubstitutionAt(
         .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
@@ -10515,12 +10621,18 @@ test "GSUB accelerated chaining class matching keeps shorter rules at run end" {
         0,
         allocator,
         0,
-        .{},
+        .{
+            .glyph_source_indices = &sources,
+            .source_boundaries = &source_boundaries,
+        },
     );
 
     try std.testing.expect(result.matched);
     try std.testing.expectEqual(@as(usize, 2), result.next_pos);
     try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3 }, glyphs.items);
+    try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(0));
+    try std.testing.expect(source_boundaries.isUnsafeBeforeByte(1));
+    try std.testing.expect(source_boundaries.isUnsafeBeforeByte(2));
 }
 
 test "GSUB accelerated chaining class matching preserves backtrack order and boundaries" {
@@ -10586,6 +10698,10 @@ test "GSUB accelerated chaining class matching preserves backtrack order and bou
     var sources = std.ArrayList(usize).empty;
     defer sources.deinit(allocator);
     try sources.appendSlice(allocator, &.{ 0, 1, 2, 3, 4, 5 });
+    const source_byte_starts = [_]usize{ 0, 1, 2, 3, 4, 5 };
+    var source_boundaries = cluster_safety.SourceBoundaries{};
+    defer source_boundaries.deinit(allocator);
+    source_boundaries.reset(0, 6, &source_byte_starts);
     var glyph_classes = [_]u16{0} ** 10;
     glyph_classes[8] = 3;
     glyph_classes[9] = 3;
@@ -10603,12 +10719,14 @@ test "GSUB accelerated chaining class matching preserves backtrack order and bou
         .{
             .glyph_classes = &glyph_classes,
             .glyph_source_indices = &sources,
+            .source_boundaries = &source_boundaries,
             .source_syllables = &split_syllables,
             .match_source_syllable = true,
         },
     );
     try std.testing.expect(!result.matched);
     try std.testing.expectEqualSlices(GlyphId, &.{ 4, 9, 5, 1, 8, 3 }, glyphs.items);
+    try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(3));
 
     const one_syllable = [_]u8{2} ** 6;
     result = try applyAcceleratedChainingClassSubstitutionWithBacktrackAt(
@@ -10621,6 +10739,7 @@ test "GSUB accelerated chaining class matching preserves backtrack order and bou
         .{
             .glyph_classes = &glyph_classes,
             .glyph_source_indices = &sources,
+            .source_boundaries = &source_boundaries,
             .source_syllables = &one_syllable,
             .match_source_syllable = true,
         },
@@ -10628,6 +10747,9 @@ test "GSUB accelerated chaining class matching preserves backtrack order and bou
     try std.testing.expect(result.matched);
     try std.testing.expectEqual(@as(usize, 4), result.next_pos);
     try std.testing.expectEqualSlices(GlyphId, &.{ 4, 9, 5, 11, 8, 3 }, glyphs.items);
+    for (1..6) |boundary| {
+        try std.testing.expect(source_boundaries.isUnsafeBeforeByte(boundary));
+    }
 }
 
 test "GSUB direct and extension chaining class builders preserve backtrack rules" {

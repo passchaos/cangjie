@@ -15178,41 +15178,6 @@ test "SVG header and document length are validated at parse time" {
     }
 }
 
-test "CPAL color records cannot overlap palette index array" {
-    var bytes: [20]u8 = .{0} ** 20;
-    writeU16Test(&bytes, 0, 0); // version
-    writeU16Test(&bytes, 2, 1); // numPaletteEntries
-    writeU16Test(&bytes, 4, 2); // numPalettes: first-color-index array is 4 bytes.
-    writeU16Test(&bytes, 6, 1); // numColorRecords
-    writeU32Test(&bytes, 8, 14); // Must be at least 16 to sit after both palette entries.
-    writeU16Test(&bytes, 12, 0);
-    writeU16Test(&bytes, 14, 0);
-    bytes[16] = 10;
-    bytes[17] = 20;
-    bytes[18] = 30;
-    bytes[19] = 40;
-
-    const font = cpalOnlyFont(&bytes);
-    try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
-}
-
-test "CPAL palette entries stay inside declared color records" {
-    var bytes: [18]u8 = .{0} ** 18;
-    writeU16Test(&bytes, 0, 0); // version
-    writeU16Test(&bytes, 2, 2); // numPaletteEntries claims two colors.
-    writeU16Test(&bytes, 4, 1); // numPalettes
-    writeU16Test(&bytes, 6, 1); // numColorRecords only has one color.
-    writeU32Test(&bytes, 8, 14);
-    writeU16Test(&bytes, 12, 0);
-    bytes[14] = 10;
-    bytes[15] = 20;
-    bytes[16] = 30;
-    bytes[17] = 40;
-
-    const font = cpalOnlyFont(&bytes);
-    try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
-}
-
 test "CPAL palette lookup revalidates borrowed label name IDs" {
     var bytes: [54]u8 = .{0} ** 54;
     writeU16Test(&bytes, 0, 1); // CPAL version 1 includes optional label arrays.
@@ -15295,30 +15260,6 @@ test "CPAL palette entry labels public API revalidates borrowed names" {
 
     writeU16Test(&bytes, name_offset + 12, 257);
     try std.testing.expectError(error.InvalidName, font.paletteEntryLabels(allocator));
-}
-
-test "CPAL palette lookup revalidates borrowed table checksum" {
-    var bytes: [18]u8 = .{0} ** 18;
-    writeU16Test(&bytes, 0, 0); // CPAL version 0.
-    writeU16Test(&bytes, 2, 1); // numPaletteEntries.
-    writeU16Test(&bytes, 4, 1); // numPalettes.
-    writeU16Test(&bytes, 6, 1); // numColorRecords.
-    writeU32Test(&bytes, 8, 14); // ColorRecordsArray after firstColorIndex[0].
-    writeU16Test(&bytes, 12, 0);
-    bytes[14] = 10; // blue
-    bytes[15] = 20; // green
-    bytes[16] = 30; // red
-    bytes[17] = 40; // alpha
-
-    const font = cpalOnlyFont(&bytes);
-    const color = (try font.paletteColor(0, 0)).?;
-    try std.testing.expectEqual(@as(u8, 30), color.red);
-
-    // Keep the CPAL shape and color index in range while changing the borrowed
-    // color record after construction. The lazy public API must reject it
-    // because the table no longer matches the SFNT checksum.
-    bytes[16] = 31;
-    try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
 }
 
 test "COLR v1 variable ClipBoxes own varIndexBase bytes" {

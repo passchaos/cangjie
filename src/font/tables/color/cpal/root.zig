@@ -132,6 +132,39 @@ test "palette slices are ordered and non-overlapping" {
     );
 }
 
+test "color records follow palette metadata and contain every entry" {
+    var header_overlap: [20]u8 = .{0} ** 20;
+    writeU16(&header_overlap, 0, 0);
+    writeU16(&header_overlap, 2, 1);
+    writeU16(&header_overlap, 4, 2);
+    writeU16(&header_overlap, 6, 1);
+    writeU32(&header_overlap, 8, 14);
+    writeU16(&header_overlap, 12, 0);
+    writeU16(&header_overlap, 14, 0);
+    try std.testing.expectError(
+        error.BadSfnt,
+        validateStructure(
+            &header_overlap,
+            .{ .offset = 0, .length = header_overlap.len },
+        ),
+    );
+
+    var truncated_palette: [18]u8 = .{0} ** 18;
+    writeU16(&truncated_palette, 0, 0);
+    writeU16(&truncated_palette, 2, 2);
+    writeU16(&truncated_palette, 4, 1);
+    writeU16(&truncated_palette, 6, 1);
+    writeU32(&truncated_palette, 8, 14);
+    writeU16(&truncated_palette, 12, 0);
+    try std.testing.expectError(
+        error.BadSfnt,
+        validateStructure(
+            &truncated_palette,
+            .{ .offset = 0, .length = truncated_palette.len },
+        ),
+    );
+}
+
 test "v1 labels resolve through the name table" {
     var bytes: [54]u8 = .{0} ** 54;
     writeU16(&bytes, 0, 1);

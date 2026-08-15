@@ -9,6 +9,24 @@ const writeU16 = support.writeU16Test;
 const writeU32 = support.writeU32Test;
 const test_font = @import("../../../../test_font.zig");
 
+test "CPAL palette lookup revalidates borrowed table bytes" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildColorTtf(allocator);
+    defer allocator.free(bytes);
+
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const color = (try font.paletteColor(0, 0)).?;
+    try std.testing.expectEqual(@as(u8, 255), color.red);
+
+    const cpal = try tableOffset(bytes, "CPAL");
+    bytes[cpal + 18] -%= 1;
+    try std.testing.expectError(
+        error.BadSfnt,
+        font.paletteColor(0, 0),
+    );
+}
+
 test "COLR palette indices are validated at parse time" {
     const allocator = std.testing.allocator;
 

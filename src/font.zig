@@ -15321,98 +15321,6 @@ test "CPAL palette lookup revalidates borrowed table checksum" {
     try std.testing.expectError(error.BadSfnt, font.paletteColor(0, 0));
 }
 
-test "COLR palette indices are validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildColorTtf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        writeU16Test(bytes, colr_offset + 22, 2); // CPAL declares palette entries 0 and 1 only.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildColorV1Ttf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        writeU16Test(bytes, colr_offset + 45, 2); // PaintSolid palette index.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildColorV1GlyphTtf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        writeU16Test(bytes, colr_offset + 51, 2); // Nested PaintGlyph child PaintSolid palette index.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildColorV1LayersTtf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        writeU16Test(bytes, colr_offset + 80, 2); // PaintColrLayers-reachable layer paint.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-}
-
-test "COLR v1 reachable paint formats are validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildColorV1Ttf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        bytes[colr_offset + 44] = 0; // Reserved, not a valid COLR v1 Paint format.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildColorV1LayersTtf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        bytes[colr_offset + 73] = 33; // Reserved format reachable through PaintColrLayers.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-}
-
-test "COLR v1 top-level offsets cannot alias the header" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildColorV1Ttf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        writeU32Test(bytes, colr_offset + 14, 30); // BaseGlyphListOffset points into ItemVariationStoreOffset.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildColorV1LayersTtf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        writeU32Test(bytes, colr_offset + 18, 26); // LayerListOffset points into VarIndexMapOffset.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-}
-
-test "COLR v1 optional top-level tables cannot alias one another" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildColorV1Ttf(allocator);
-    defer allocator.free(bytes);
-    const colr_offset = try sfntTableOffset(bytes, "COLR");
-    writeU32Test(bytes, colr_offset + 18, 34); // LayerListOffset aliases BaseGlyphListOffset.
-    writeU32Test(bytes, colr_offset + 34, 0); // Both zero-count headers would otherwise parse.
-
-    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-}
-
 test "COLR v1 variable ClipBoxes own varIndexBase bytes" {
     var bytes: [176]u8 = .{0} ** 176;
     writeU32Test(&bytes, 0, 0x00010000);
@@ -16238,27 +16146,6 @@ test "COLR v1 PaintTransform child header cannot overlap matrix payload" {
 
     const colr = TableRecord{ .tag = .{ 'C', 'O', 'L', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
     try std.testing.expectError(error.BadSfnt, validateColrGlyphBounds(&bytes, colr, 2));
-}
-
-test "COLR v1 PaintSolid alpha is validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildColorV1Ttf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        writeI16Test(bytes, colr_offset + 47, -1); // Negative opacity is outside PaintSolid's semantic range.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildColorV1Ttf(allocator);
-        defer allocator.free(bytes);
-        const colr_offset = try sfntTableOffset(bytes, "COLR");
-        writeI16Test(bytes, colr_offset + 47, 0x4001); // Alpha may not exceed 1.0.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
 }
 
 test "COLR v1 paint offsets cannot overlap parent metadata" {

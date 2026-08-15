@@ -2,6 +2,7 @@
 
 test {
     _ = @import("bitmap_and_cmap_tables.zig");
+    _ = @import("color/root.zig");
     _ = @import("containers_and_caches.zig");
     _ = @import("font_database.zig");
     _ = @import("font_metadata_tables.zig");

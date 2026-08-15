@@ -1,4 +1,4 @@
-//! Stable aggregate cache counters exposed by `TextContext`.
+//! Stable aggregate cache counters exposed by `Engine`.
 
 pub const Counter = struct {
     hits: usize = 0,

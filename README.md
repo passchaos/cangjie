@@ -6,7 +6,8 @@ paragraph layout, and CPU rasterization behind domain-oriented APIs:
 
 - `cangjie.font` — font faces, outlines, containers, metadata, and databases
 - `cangjie.text` — Unicode boundaries, bidi, scripts, styles, and OpenType tags
-- `cangjie.shaping` — reusable shaping context, requests, results, and fallback
+- `cangjie.Engine` — reusable shaping/layout state and font-derived caches
+- `cangjie.shaping` — shaping requests, options, results, and diagnostics
 - `cangjie.paragraph` — retained paragraphs, reflow, lines, and hit-test records
 - `cangjie.render` — grayscale/color targets, rasterization, and draw lists
 - `cangjie.editor` — text buffers and editor-oriented helpers
@@ -17,13 +18,13 @@ paragraph layout, and CPU rasterization behind domain-oriented APIs:
 ```zig
 const cangjie = @import("cangjie");
 
-var font = try cangjie.font.Font.parse(allocator, font_bytes);
-defer font.deinit();
+var face = try cangjie.font.Face.parse(allocator, font_bytes);
+defer face.deinit();
 
-const context = try cangjie.shaping.Context.init(allocator, .{});
-defer context.deinit();
+const engine = try cangjie.Engine.init(allocator, .{});
+defer engine.deinit();
 
-const run = try context.shape(&font, .{
+const run = try engine.shape(&face, .{
     .text = "Hello, 世界",
     .font_size = 32,
 });
@@ -35,10 +36,19 @@ var rasterizer = cangjie.render.Rasterizer.init(allocator);
 try rasterizer.renderRun(&target, run, 16, 64);
 ```
 
-Returned shaping and one-shot layout views borrow `Context` storage and remain
-valid until its next shaping or layout call. Parsed fonts borrow their source
-bytes. Fonts and bytes must therefore outlive the context, or the context's
-font-derived caches must be cleared before a font is destroyed.
+Returned shaping and one-shot layout views borrow `Engine` storage and remain
+valid until its next shaping or layout call. Parsed faces borrow their source
+bytes. Faces and bytes must therefore outlive the engine, or the engine's
+font-derived caches must be cleared before a face is destroyed.
 
 See `docs/text-pipeline.md` for the shaping/reflow architecture and
 `docs/font-containers.md` for owned web-font container loading.
+
+## API organization
+
+The facade intentionally has no deprecated aliases. Unicode APIs are grouped
+under `text.bidi`, `text.segmentation`, `text.script`, `text.opentype`,
+`text.style`, and `text.attributed`. Font inspection records are grouped under
+`font.metadata.core`, `metrics`, `variations`, `color`, `layout`, `math`, and
+`incremental`; AAT-specific records live one level deeper at
+`font.metadata.layout.aat`.

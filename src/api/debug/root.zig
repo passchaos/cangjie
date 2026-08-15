@@ -1,11 +1,13 @@
 //! Optional diagnostic dumps and paragraph overlay construction.
 
 const impl = @import("../../debug.zig");
+const layout = @import("../../layout.zig");
 
 pub const OverlayKind = impl.OverlayKind;
 pub const Overlay = impl.DebugOverlay;
 pub const OverlayList = impl.DebugOverlayList;
 pub const OverlayOptions = impl.OverlayOptions;
+pub const ShapeProfile = layout.ShapeStageProfile;
 
 pub const buildOverlays = impl.buildDebugOverlays;
 pub const dumpBidiMap = impl.dumpBidiMap;

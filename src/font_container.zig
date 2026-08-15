@@ -20,22 +20,22 @@ pub const Format = enum {
 /// Explicit APIs can raise this for unusually large, trusted collections.
 pub const default_max_decoded_size = 64 * 1024 * 1024;
 
-/// Owns decoded SFNT bytes together with a `Font` that borrows those bytes.
+/// Owns decoded SFNT bytes together with a `Face` that borrows those bytes.
 ///
-/// `Font.parse` intentionally remains a zero-copy API for callers that already
+/// `Face.parse` intentionally remains a zero-copy API for callers that already
 /// own SFNT data. Container loading needs a separate owner because WOFF input
 /// is reconstructed into a new SFNT allocation whose address must remain valid
-/// for the complete lifetime of `font`.
-pub const LoadedFont = struct {
+/// for the complete lifetime of `face`.
+pub const OwnedFace = struct {
     allocator: std.mem.Allocator,
     bytes: []u8,
-    font: Font,
+    face: Font,
 
     pub fn load(
         allocator: std.mem.Allocator,
         data: []const u8,
         max_decoded_size: usize,
-    ) !LoadedFont {
+    ) !OwnedFace {
         return loadFace(allocator, data, 0, max_decoded_size);
     }
 
@@ -44,18 +44,18 @@ pub const LoadedFont = struct {
         data: []const u8,
         face_index: usize,
         max_decoded_size: usize,
-    ) !LoadedFont {
+    ) !OwnedFace {
         const bytes = try decodeFontContainerAlloc(allocator, data, max_decoded_size);
         errdefer allocator.free(bytes);
         return .{
             .allocator = allocator,
             .bytes = bytes,
-            .font = try Font.parseFace(allocator, bytes, face_index),
+            .face = try Font.parseFace(allocator, bytes, face_index),
         };
     }
 
-    pub fn deinit(self: *LoadedFont) void {
-        self.font.deinit();
+    pub fn deinit(self: *OwnedFace) void {
+        self.face.deinit();
         self.allocator.free(self.bytes);
         self.* = undefined;
     }
@@ -1065,13 +1065,13 @@ test "font container decodes compressed WOFF1 and owns parsed bytes" {
     defer allocator.free(woff);
 
     try std.testing.expectEqual(Format.woff1, try detectFormat(woff));
-    var loaded = try LoadedFont.load(allocator, woff, sfnt.len);
+    var loaded = try OwnedFace.load(allocator, woff, sfnt.len);
     defer loaded.deinit();
     try std.testing.expectEqualSlices(u8, sfnt, loaded.bytes);
     var name_buffer: [128]u8 = undefined;
     try std.testing.expectEqualStrings(
         "WOFF Demo",
-        (try loaded.font.familyName(&name_buffer)) orelse
+        (try loaded.face.familyName(&name_buffer)) orelse
             return error.TestUnexpectedResult,
     );
     try std.testing.expectError(

@@ -2,7 +2,7 @@
 //! omits spaces between words.
 //!
 //! The public dictionary is an opaque immutable handle that can be shared by
-//! multiple `TextContext` instances. Internally, words are stored as a
+//! multiple `Engine` instances. Internally, words are stored as a
 //! Unicode-scalar trie; segmentation returns UTF-8 byte boundaries so it
 //! composes directly with paragraph coordinates and shaping safety checks.
 

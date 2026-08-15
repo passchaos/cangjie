@@ -20,7 +20,7 @@ const IndicSyllableCluster = struct {
 pub fn glyphClusters(
     allocator: std.mem.Allocator,
     text: []const u8,
-    glyphs: []const cangjie.shaping.GlyphPosition,
+    glyphs: []const cangjie.shaping.Glyph,
     normalize: bool,
 ) ![]const u32 {
     const clusters = try allocator.alloc(u32, glyphs.len);
@@ -152,7 +152,7 @@ fn isPreBaseMatraCluster(text: []const u8, byte_offset: usize) bool {
 
 fn normalizedPreBaseMatraClusterFromRun(
     indic_syllables: []const IndicSyllableCluster,
-    glyphs: []const cangjie.shaping.GlyphPosition,
+    glyphs: []const cangjie.shaping.Glyph,
     glyph_index: usize,
 ) usize {
     const matra_cluster = glyphs[glyph_index].cluster;

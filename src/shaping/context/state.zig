@@ -1,4 +1,4 @@
-//! Private cache and output ownership for `TextContext`.
+//! Private cache and output ownership for `Engine`.
 
 const std = @import("std");
 

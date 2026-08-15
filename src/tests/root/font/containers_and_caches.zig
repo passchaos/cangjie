@@ -11,7 +11,7 @@ const TextShaper = support.TextShaper;
 const FontDatabase = support.FontDatabase;
 const manifestEntryMatchesBytes = support.manifestEntryMatchesBytes;
 const Font = support.Font;
-const LoadedFont = support.LoadedFont;
+const OwnedFace = support.OwnedFace;
 const FontFormat = support.FontFormat;
 const GlyphId = support.GlyphId;
 const FontCascade = support.FontCascade;
@@ -214,14 +214,14 @@ test "loads retained HarfBuzz DFONT fixture when installed" {
     };
     defer std.testing.allocator.free(bytes);
 
-    var loaded = try LoadedFont.loadFace(
+    var loaded = try OwnedFace.loadFace(
         std.testing.allocator,
         bytes,
         0,
         16 * 1024 * 1024,
     );
     defer loaded.deinit();
-    try std.testing.expectEqual(@as(GlyphId, 6), try loaded.font.glyphIndex(0x2026));
+    try std.testing.expectEqual(@as(GlyphId, 6), try loaded.face.glyphIndex(0x2026));
 }
 
 test "loads real WOFF1 and WOFF2 fonts when fixtures are installed" {
@@ -260,14 +260,14 @@ test "loads real WOFF1 and WOFF2 fonts when fixtures are installed" {
             else => return err,
         };
         defer std.testing.allocator.free(input);
-        var loaded = try LoadedFont.load(
+        var loaded = try OwnedFace.load(
             std.testing.allocator,
             input,
             64 * 1024 * 1024,
         );
         defer loaded.deinit();
-        try std.testing.expect((try loaded.font.glyphIndex(case.codepoint)) != 0);
-        const axes = try loaded.font.variationAxes(std.testing.allocator);
+        try std.testing.expect((try loaded.face.glyphIndex(case.codepoint)) != 0);
+        const axes = try loaded.face.variationAxes(std.testing.allocator);
         defer std.testing.allocator.free(axes);
         if (case.expect_variations) try std.testing.expect(axes.len != 0);
 

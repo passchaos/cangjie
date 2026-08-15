@@ -117,7 +117,7 @@ pub const Font = @import("../../font.zig").Font;
 pub const FontContainerError = @import("../../font_container.zig").Error;
 pub const FontContainerFormat = @import("../../font_container.zig").Format;
 pub const default_max_decoded_font_size = @import("../../font_container.zig").default_max_decoded_size;
-pub const LoadedFont = @import("../../font_container.zig").LoadedFont;
+pub const OwnedFace = @import("../../font_container.zig").OwnedFace;
 pub const decodeFontContainerAlloc = @import("../../font_container.zig").decodeFontContainerAlloc;
 pub const detectFontContainerFormat = @import("../../font_container.zig").detectFormat;
 pub const AnkrAnchorInfo = @import("../../font.zig").AnkrAnchorInfo;
@@ -298,7 +298,7 @@ pub const WritingMode = @import("../../layout.zig").WritingMode;
 pub const TextPosition = @import("../../layout.zig").TextPosition;
 pub const TextRect = @import("../../layout.zig").TextRect;
 pub const TextSelectionGeometry = @import("../../render_bridge.zig").TextSelectionGeometry;
-pub const TextContext = @import("../../shaping/context/root.zig").TextContext;
+pub const Engine = @import("../../shaping/context/root.zig").Engine;
 pub const buildBidiMap = @import("../../unicode.zig").buildBidiMap;
 pub const buildDebugOverlays = @import("../../debug.zig").buildDebugOverlays;
 pub const buildGlyphDrawList = @import("../../render_bridge.zig").buildGlyphDrawList;
@@ -361,7 +361,6 @@ pub const testing = struct {
     /// They are intentionally not part of the supported font-stack API.
     pub const shaping_cluster = @import("../../unicode/grapheme/shaping_cluster.zig");
 };
-
 
 pub fn renderTargetPixelDifference(a: *const RenderTarget, b: *const RenderTarget) usize {
     if (a.width != b.width or a.height != b.height or a.pixels.len != b.pixels.len) return std.math.maxInt(usize);

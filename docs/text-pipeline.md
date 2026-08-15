@@ -388,25 +388,27 @@ without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
-`cangjie.shaping.Context` is the public ownership boundary for this pipeline.
+`cangjie.Engine` is the public ownership boundary for this pipeline.
 It is an opaque, heap-backed handle that owns reusable output/scratch arrays
 plus cmap, metric, fallback, GDEF, GSUB/GPOS proof/plan, and optional whole-run
-caches. `Context.Options` independently controls font-derived and whole-run
-caching. Its methods accept named `cangjie.shaping.ShapeRequest`,
-`cangjie.shaping.CascadeRequest`, `cangjie.paragraph.Request`, or
+caches. `Engine.Options` independently controls font-derived and whole-run
+caching. Its methods accept named `cangjie.shaping.Request`,
+`cangjie.shaping.TextRequest`, `cangjie.paragraph.Request`, or
 `cangjie.paragraph.StyledRequest` records rather than long positional argument
 lists. `shape` handles both ordinary runs and uncommon UTF-8 byte-scoped
 feature ranges, avoiding a second nearly identical shaping entry point.
 Cascade, script-run, retained-paragraph, one-shot layout, styled layout, and
-measurement operations share the same context and request model.
-Returned run and layout slices borrow the context and remain valid until its
-next shaping/layout call. Fonts must outlive the context, or the caller must
+measurement operations share the same engine and request model.
+Returned run and layout slices borrow the engine and remain valid until its
+next shaping/layout call. Faces must outlive the engine, or the caller must
 invoke `clearCaches` before destroying them.
 
 The package root is intentionally small and grouped by responsibility:
-`cangjie.font`, `cangjie.text`, `cangjie.shaping`, `cangjie.paragraph`,
+`cangjie.Engine`, `cangjie.font`, `cangjie.text`, `cangjie.shaping`, `cangjie.paragraph`,
 `cangjie.render`, `cangjie.editor`, and `cangjie.debug`. Specialized font-table
-records live under `font.metadata`; container and database APIs live under
+records are grouped by responsibility under `font.metadata`; Unicode analysis
+is similarly split under `text.bidi`, `text.segmentation`, `text.script`, and
+`text.opentype`. Container and database APIs live under
 `font.container` and `font.database`. This prevents unrelated low-level table
 types, editor helpers, and renderer commands from competing in one flat
 namespace. The root integration suite is likewise split under
@@ -634,7 +636,7 @@ Future changes must preserve these rules:
 1. Extend the existing HarfBuzz-compatible shaping-boundary flags only when a
    new portable shaping relationship can change retained-run reuse semantics.
 2. Continue moving internal cache and scratch implementations under the
-   `shaping/context` module boundary now that `cangjie.shaping.Context` owns
+   `shaping/context` module boundary now that `cangjie.Engine` owns
    their public lifetime.
 3. Add language-aware hyphenation as the next optional tailoring layer; keep
    dictionary segmentation and hyphenation outside the default UAX #14 state

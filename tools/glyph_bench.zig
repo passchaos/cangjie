@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
         report.print(options, result);
         return;
     }
-    var font = try cangjie.font.Font.parse(allocator, font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
     defer font.deinit();
 
     if (options.engine == .compare_freetype) {

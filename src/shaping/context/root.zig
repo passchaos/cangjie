@@ -1,12 +1,12 @@
 //! Public reusable ownership boundary for shaping and paragraph layout.
 //!
-//! The context is a small heap-backed handle. Internal scratch arrays and
+//! The engine is a small heap-backed handle. Internal scratch arrays and
 //! caches cannot be accidentally copied or rewired by callers.
 
 const std = @import("std");
 
 const Font = @import("../../font.zig").Font;
-const layout = @import("../../layout.zig");
+const layout_mod = @import("../../layout.zig");
 const state_mod = @import("state.zig");
 const stats_mod = @import("stats.zig");
 const text_shaper = @import("../text_shaper.zig");
@@ -20,7 +20,7 @@ pub const ShapeRequest = struct {
     text: []const u8,
     /// Positive, finite font size in output units.
     font_size: f32,
-    options: layout.ShapeOptions = .{},
+    options: layout_mod.ShapeOptions = .{},
     feature_ranges: []const unicode.GsubFeatureRange = &.{},
 };
 
@@ -28,7 +28,7 @@ pub const ShapeRequest = struct {
 pub const CascadeRequest = struct {
     text: []const u8,
     font_size: f32,
-    options: layout.ShapeOptions = .{},
+    options: layout_mod.ShapeOptions = .{},
 };
 
 /// Paragraph shaping and layout input. Keeping text, size, and options in one
@@ -36,7 +36,7 @@ pub const CascadeRequest = struct {
 pub const ParagraphRequest = struct {
     text: []const u8,
     font_size: f32,
-    options: layout.ParagraphOptions,
+    options: layout_mod.ParagraphOptions,
 };
 
 /// Styled paragraph input. Spans and their backing style data are borrowed for
@@ -44,36 +44,32 @@ pub const ParagraphRequest = struct {
 pub const StyledParagraphRequest = struct {
     text: []const u8,
     default_font_size: f32,
-    spans: []const layout.StyledParagraphSpan,
-    options: layout.ParagraphOptions,
+    spans: []const layout_mod.StyledParagraphSpan,
+    options: layout_mod.ParagraphOptions,
 };
 
 /// Owns reusable shaping output, transient arrays, and font-derived caches.
 ///
 /// Returned runs and layouts borrow the context and remain valid until its next
-/// shaping/layout call. Fonts referenced by cache keys and returned runs must
-/// outlive the context, or `clearCaches` must be called before they are freed.
-/// A context is not thread-safe; use one context per concurrent worker.
-pub const TextContext = opaque {
+/// shaping/layout call. Faces referenced by cache keys and returned runs must
+/// outlive the engine, or `clearCaches` must be called before they are freed.
+/// An engine is not thread-safe; use one engine per concurrent worker.
+pub const Engine = opaque {
     pub const Options = struct {
         cache_font_data: bool = true,
         cache_shaped_runs: bool = false,
     };
     pub const Stats = stats_mod.Stats;
     pub const Counter = stats_mod.Counter;
-    pub const ShapeInput = ShapeRequest;
-    pub const CascadeInput = CascadeRequest;
-    pub const ParagraphInput = ParagraphRequest;
-    pub const StyledParagraphInput = StyledParagraphRequest;
     pub const StyledParagraph = struct {
-        layout: layout.ParagraphLayout,
-        glyph_metadata: []const layout.StyledGlyphMetadata,
+        layout: layout_mod.ParagraphLayout,
+        glyph_metadata: []const layout_mod.StyledGlyphMetadata,
     };
 
     pub fn init(
         allocator: std.mem.Allocator,
         options: Options,
-    ) !*TextContext {
+    ) !*Engine {
         const state = try allocator.create(state_mod.State);
         state.* = state_mod.State.init(
             allocator,
@@ -84,7 +80,7 @@ pub const TextContext = opaque {
         return @ptrCast(state);
     }
 
-    pub fn deinit(self: *TextContext) void {
+    pub fn deinit(self: *Engine) void {
         const state: *state_mod.State = @ptrCast(@alignCast(self));
         const allocator = state.allocator;
         state.deinit();
@@ -92,27 +88,27 @@ pub const TextContext = opaque {
     }
 
     /// Enable or disable complete shaped-run caching without discarding entries.
-    pub fn setShapedRunCaching(self: *TextContext, enabled: bool) void {
+    pub fn setShapedRunCaching(self: *Engine, enabled: bool) void {
         self.getState().cache_shaped_runs = enabled;
     }
 
     /// Clear result arrays while retaining allocated capacity.
-    pub fn clearOutput(self: *TextContext) void {
+    pub fn clearOutput(self: *Engine) void {
         self.getState().output.clear();
     }
 
     /// Discard every font-derived cache and reset aggregate counters.
-    pub fn clearCaches(self: *TextContext) void {
+    pub fn clearCaches(self: *Engine) void {
         self.getState().clearCaches();
     }
 
-    pub fn stats(self: *const TextContext) Stats {
+    pub fn stats(self: *const Engine) Stats {
         return self.getStateConst().stats();
     }
 
     pub fn enableProfiling(
-        self: *TextContext,
-        profile: *layout.ShapeStageProfile,
+        self: *Engine,
+        profile: *layout_mod.ShapeStageProfile,
         io: std.Io,
         fast_path: bool,
     ) void {
@@ -122,7 +118,7 @@ pub const TextContext = opaque {
         state.output.profile_fast_path = fast_path;
     }
 
-    pub fn disableProfiling(self: *TextContext) void {
+    pub fn disableProfiling(self: *Engine) void {
         const state = self.getState();
         state.output.shape_profile = null;
         state.output.profile_io = null;
@@ -130,10 +126,10 @@ pub const TextContext = opaque {
     }
 
     pub fn shape(
-        self: *TextContext,
+        self: *Engine,
         font: *const Font,
         request: ShapeRequest,
-    ) !layout.GlyphRun {
+    ) !layout_mod.GlyphRun {
         const state = self.getState();
         if (request.feature_ranges.len != 0) {
             return text_shaper.TextShaper
@@ -159,13 +155,14 @@ pub const TextContext = opaque {
         );
     }
 
-    pub fn shapeCascade(
-        self: *TextContext,
-        cascade: layout.FontCascade,
+    /// Shape text through an ordered fallback cascade.
+    pub fn shapeText(
+        self: *Engine,
+        cascade: layout_mod.FontCascade,
         request: CascadeRequest,
-    ) !layout.ShapedText {
+    ) !layout_mod.ShapedText {
         const state = self.getState();
-        return layout.TextShaper.shapeUtf8CascadeWithCaches(
+        return layout_mod.TextShaper.shapeUtf8CascadeWithCaches(
             cascade,
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
@@ -178,13 +175,14 @@ pub const TextContext = opaque {
         );
     }
 
-    pub fn shapeScriptRuns(
-        self: *TextContext,
-        cascade: layout.FontCascade,
+    /// Shape text and retain its script-itemization boundaries.
+    pub fn itemize(
+        self: *Engine,
+        cascade: layout_mod.FontCascade,
         request: CascadeRequest,
-    ) !layout.ScriptedText {
+    ) !layout_mod.ScriptedText {
         const state = self.getState();
-        return layout.TextShaper.shapeUtf8ScriptRuns(
+        return layout_mod.TextShaper.shapeUtf8ScriptRuns(
             cascade,
             &state.output,
             request.text,
@@ -193,13 +191,14 @@ pub const TextContext = opaque {
         );
     }
 
-    pub fn shapeParagraph(
-        self: *TextContext,
-        cascade: layout.FontCascade,
+    /// Prepare width-independent paragraph content for repeated reflow.
+    pub fn prepareParagraph(
+        self: *Engine,
+        cascade: layout_mod.FontCascade,
         request: ParagraphRequest,
-    ) !layout.ShapedParagraph {
+    ) !layout_mod.ShapedParagraph {
         const state = self.getState();
-        return layout.TextShaper.shapeParagraphUtf8WithCaches(
+        return layout_mod.TextShaper.shapeParagraphUtf8WithCaches(
             state.allocator,
             cascade,
             if (state.cache_font_data) &state.font_fallback else null,
@@ -213,13 +212,14 @@ pub const TextContext = opaque {
         );
     }
 
-    pub fn layoutParagraph(
-        self: *TextContext,
-        cascade: layout.FontCascade,
+    /// Shape and lay out a paragraph in one call.
+    pub fn layout(
+        self: *Engine,
+        cascade: layout_mod.FontCascade,
         request: ParagraphRequest,
-    ) !layout.ParagraphLayout {
+    ) !layout_mod.ParagraphLayout {
         const state = self.getState();
-        return layout.TextShaper.layoutParagraphUtf8WithCaches(
+        return layout_mod.TextShaper.layoutParagraphUtf8WithCaches(
             cascade,
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
@@ -232,13 +232,13 @@ pub const TextContext = opaque {
         );
     }
 
-    pub fn layoutStyledParagraph(
-        self: *TextContext,
-        cascade: layout.FontCascade,
+    pub fn layoutStyled(
+        self: *Engine,
+        cascade: layout_mod.FontCascade,
         request: StyledParagraphRequest,
     ) !StyledParagraph {
         const state = self.getState();
-        const paragraph = try layout.TextShaper.layoutStyledParagraphUtf8(
+        const paragraph = try layout_mod.TextShaper.layoutStyledParagraphUtf8(
             cascade,
             &state.output,
             &state.styled_output,
@@ -253,12 +253,12 @@ pub const TextContext = opaque {
         };
     }
 
-    pub fn measureParagraph(
-        self: *TextContext,
-        cascade: layout.FontCascade,
+    pub fn measure(
+        self: *Engine,
+        cascade: layout_mod.FontCascade,
         request: ParagraphRequest,
-    ) !layout.TextMetrics {
-        const paragraph = try self.layoutParagraph(cascade, request);
+    ) !layout_mod.TextMetrics {
+        const paragraph = try self.layout(cascade, request);
         if (paragraph.lines.len == 0) {
             return .{
                 .width = 0,
@@ -280,11 +280,11 @@ pub const TextContext = opaque {
         };
     }
 
-    fn getState(self: *TextContext) *state_mod.State {
+    fn getState(self: *Engine) *state_mod.State {
         return @ptrCast(@alignCast(self));
     }
 
-    fn getStateConst(self: *const TextContext) *const state_mod.State {
+    fn getStateConst(self: *const Engine) *const state_mod.State {
         return @ptrCast(@alignCast(self));
     }
 };

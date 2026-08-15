@@ -21,13 +21,13 @@ pub fn main(init: std.process.Init) !void {
 
     const font_bytes = try cangjie.testing.test_font.buildMinimalTtf(allocator);
     defer allocator.free(font_bytes);
-    var font = try cangjie.font.Font.parse(allocator, font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
     defer font.deinit();
-    const fonts = [_]*const cangjie.font.Font{&font};
-    const cascade = cangjie.shaping.FontCascade.init(&fonts);
-    const uncached_context = try cangjie.shaping.Context.init(allocator, .{});
+    const fonts = [_]*const cangjie.font.Face{&font};
+    const cascade = cangjie.font.Cascade.init(&fonts);
+    const uncached_context = try cangjie.Engine.init(allocator, .{});
     defer uncached_context.deinit();
-    const cached_context = try cangjie.shaping.Context.init(
+    const cached_context = try cangjie.Engine.init(
         allocator,
         .{ .cache_shaped_runs = true },
     );
@@ -36,7 +36,7 @@ pub fn main(init: std.process.Init) !void {
     // Warm the shaping and layout allocation paths before measuring either
     // strategy so compile/startup and first-capacity costs do not decide the
     // comparison.
-    _ = try uncached_context.layoutParagraph(
+    _ = try uncached_context.layout(
         cascade,
         .{
             .text = default_text,
@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
     var shape_each_checksum: usize = 0;
     const shape_each_start = std.Io.Clock.now(.awake, init.io).nanoseconds;
     for (0..iterations) |iteration| {
-        const layout = try uncached_context.layoutParagraph(
+        const layout = try uncached_context.layout(
             cascade,
             .{
                 .text = default_text,
@@ -60,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
     }
     const shape_each_ns = std.Io.Clock.now(.awake, init.io).nanoseconds - shape_each_start;
 
-    _ = try cached_context.layoutParagraph(
+    _ = try cached_context.layout(
         cascade,
         .{
             .text = default_text,
@@ -71,7 +71,7 @@ pub fn main(init: std.process.Init) !void {
     var cached_layout_checksum: usize = 0;
     const cached_layout_start = std.Io.Clock.now(.awake, init.io).nanoseconds;
     for (0..iterations) |iteration| {
-        const layout = try cached_context.layoutParagraph(
+        const layout = try cached_context.layout(
             cascade,
             .{
                 .text = default_text,
@@ -83,7 +83,7 @@ pub fn main(init: std.process.Init) !void {
     }
     const cached_layout_ns = std.Io.Clock.now(.awake, init.io).nanoseconds - cached_layout_start;
 
-    var paragraph = try uncached_context.shapeParagraph(
+    var paragraph = try uncached_context.prepareParagraph(
         cascade,
         .{
             .text = default_text,

@@ -1,4 +1,4 @@
-//! Internal caches owned by `TextContext`.
+//! Internal caches owned by `Engine`.
 
 const metadata = @import("metadata.zig");
 const lookup = @import("lookup.zig");

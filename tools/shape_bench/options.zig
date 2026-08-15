@@ -205,8 +205,8 @@ pub const Options = struct {
     end_of_text: bool = false,
     cluster_level: ?cangjie.shaping.ClusterLevel = null,
     normalize_clusters_to_graphemes: bool = false,
-    script_tag: ?cangjie.text.OpenTypeScript = null,
-    language_tag: ?cangjie.text.OpenTypeLanguage = null,
+    script_tag: ?cangjie.text.opentype.Script = null,
+    language_tag: ?cangjie.text.opentype.Language = null,
     script_position: cangjie.shaping.ScriptPosition = .normal,
     use_caches: bool = true,
     use_shaped_cache: bool = false,
@@ -233,7 +233,7 @@ pub const Options = struct {
     feature_range_count: usize = 0,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
     variation_coord_count: usize = 0,
-    variation_design_coord_buf: [max_variation_coords]cangjie.font.metadata.VariationCoordinate = undefined,
+    variation_design_coord_buf: [max_variation_coords]cangjie.font.metadata.variations.Coordinate = undefined,
     variation_design_coord_count: usize = 0,
 
     pub fn fontLabel(self: Options) []const u8 {
@@ -266,7 +266,7 @@ pub const Options = struct {
         return self.variation_coord_buf[0..self.variation_coord_count];
     }
 
-    pub fn designVariationCoords(self: *const Options) []const cangjie.font.metadata.VariationCoordinate {
+    pub fn designVariationCoords(self: *const Options) []const cangjie.font.metadata.variations.Coordinate {
         return self.variation_design_coord_buf[0..self.variation_design_coord_count];
     }
 };
@@ -642,7 +642,7 @@ pub fn clusterLevelArgument(level: cangjie.shaping.ClusterLevel) []const u8 {
     };
 }
 
-fn parseLanguageTag(text: []const u8) ?cangjie.text.OpenTypeLanguage {
+fn parseLanguageTag(text: []const u8) ?cangjie.text.opentype.Language {
     if (std.ascii.eqlIgnoreCase(text, "dflt")) return .dflt;
     if (std.ascii.eqlIgnoreCase(text, "ara")) return .ara;
     if (std.ascii.eqlIgnoreCase(text, "far") or std.ascii.eqlIgnoreCase(text, "fa")) return .far;
@@ -653,10 +653,10 @@ fn parseLanguageTag(text: []const u8) ?cangjie.text.OpenTypeLanguage {
     if (std.ascii.eqlIgnoreCase(text, "zht")) return .zht;
     if (std.ascii.eqlIgnoreCase(text, "hin")) return .hin;
     if (std.ascii.eqlIgnoreCase(text, "dhv") or std.ascii.eqlIgnoreCase(text, "dv")) return .dhv;
-    return cangjie.text.openTypeLanguageForLocale(text);
+    return cangjie.text.opentype.languageForLocale(text);
 }
 
-pub fn harfrustLanguageArgument(tag_value: cangjie.text.OpenTypeLanguage) ?[]const u8 {
+pub fn harfrustLanguageArgument(tag_value: cangjie.text.opentype.Language) ?[]const u8 {
     return switch (tag_value) {
         .dflt => null,
         .ara => "ar",
@@ -678,10 +678,10 @@ fn parseScriptPosition(text: []const u8) ?cangjie.shaping.ScriptPosition {
     return null;
 }
 
-fn parseScriptTag(text: []const u8) ?cangjie.text.OpenTypeScript {
+fn parseScriptTag(text: []const u8) ?cangjie.text.opentype.Script {
     if (text.len != 4) return null;
     const tag_value = runtimeOpenTypeTag(text[0..4]);
-    return std.enums.fromInt(cangjie.text.OpenTypeScript, tag_value);
+    return std.enums.fromInt(cangjie.text.opentype.Script, tag_value);
 }
 
 pub fn printUsage(args: []const []const u8) void {

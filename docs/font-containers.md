@@ -22,10 +22,10 @@ TTC/OTC, web fonts, or current color-font formats.
 
 ## Ownership And Limits
 
-`cangjie.font.Font.parse` and `parseFace` are zero-copy APIs: a `Font` borrows
+`cangjie.font.Face.parse` and `parseFace` are zero-copy APIs: a `Face` borrows
 the caller's SFNT bytes. Compressed containers and DFONT resources require
-newly reconstructed bytes, so `cangjie.font.container.LoadedFont` owns both the
-decoded allocation and the `Font` borrowing it. Destroying `LoadedFont`
+newly reconstructed bytes, so `cangjie.font.container.OwnedFace` owns both the
+decoded allocation and the `Face` borrowing it. Destroying `OwnedFace`
 deinitializes the parser before releasing those bytes.
 
 `cangjie.font.container.decodeAlloc` always returns owned bytes, including a
@@ -57,7 +57,7 @@ strictly tag-sorted directory, printable tags, bounded and aligned payloads,
 non-overlapping tightly packed tables, correctly placed metadata/private
 blocks, exact reconstructed size, and exact zlib consumption. Reconstruction
 preserves physical table order so the SFNT-wide `head.checkSumAdjustment`
-remains meaningful. The normal `Font` parser then validates reconstructed table
+remains meaningful. The normal face parser then validates reconstructed table
 maps, checksums, and supported OpenType table grammars.
 
 Tests cover single/multi-face DFONT reconstruction, malformed resource maps,

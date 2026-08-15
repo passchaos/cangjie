@@ -40,13 +40,13 @@ pub fn main(init: std.process.Init) !void {
     const font_bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, options.font_path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(font_bytes);
 
-    var font = try cangjie.font.Font.parse(allocator, font_bytes);
-    defer font.deinit();
+    var face = try cangjie.font.Face.parse(allocator, font_bytes);
+    defer face.deinit();
 
-    const text_context = try cangjie.shaping.Context.init(allocator, .{});
-    defer text_context.deinit();
-    const run = try text_context.shape(
-        &font,
+    const engine = try cangjie.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const run = try engine.shape(
+        &face,
         .{ .text = options.text, .font_size = options.size },
     );
 

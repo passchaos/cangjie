@@ -33,13 +33,13 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
         &.{ "ก", "ขคง" },
     );
     defer dictionary.deinit();
-    const context = try context_mod.TextContext.init(allocator, .{});
-    defer context.deinit();
+    const engine = try context_mod.Engine.init(allocator, .{});
+    defer engine.deinit();
 
     // UAX #14 treats this SA run as one alphabetic fragment by default. Its
     // emergency fallback fills two glyphs, whereas the dictionary makes the
     // one-glyph word the preferred opportunity before overflow.
-    const default_layout = try context.layoutParagraph(
+    const default_layout = try engine.layout(
         cascade,
         .{
             .text = thai_text,
@@ -49,7 +49,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
     );
     try std.testing.expectEqual(@as(usize, 2), default_layout.lines[0].glyph_len);
 
-    const one_shot = try context.layoutParagraph(
+    const one_shot = try engine.layout(
         cascade,
         .{
             .text = thai_text,
@@ -62,7 +62,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
     );
     try expectDictionaryFirstLine(one_shot);
 
-    var shaped = try context.shapeParagraph(
+    var shaped = try engine.prepareParagraph(
         cascade,
         .{
             .text = thai_text,
@@ -92,7 +92,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
         .style_index = 4,
         .font_size = 20,
     }};
-    const styled = try context.layoutStyledParagraph(
+    const styled = try engine.layoutStyled(
         cascade,
         .{
             .text = thai_text,
@@ -131,10 +131,10 @@ test "dictionary opportunities cannot bypass shaped boundary safety" {
         &.{ "ก", "ขคง" },
     );
     defer dictionary.deinit();
-    const context = try context_mod.TextContext.init(allocator, .{});
-    defer context.deinit();
+    const engine = try context_mod.Engine.init(allocator, .{});
+    defer engine.deinit();
 
-    const paragraph = try context.layoutParagraph(
+    const paragraph = try engine.layout(
         cascade,
         .{
             .text = thai_text,

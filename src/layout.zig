@@ -1,4 +1,5 @@
 const std = @import("std");
+const font_shaping = @import("font.zig").shaping;
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
@@ -672,7 +673,7 @@ fn gdefMetadataForShaping(font: *const Font, allocator: std.mem.Allocator, cache
     if (cache) |metadata_cache| {
         return try metadata_cache.metadata(font);
     }
-    out_owned.* = try font.gdefLookupMetadataForShaping(allocator);
+    out_owned.* = try font_shaping.gdefLookupMetadataForShaping(font, allocator);
     return &out_owned.*.?;
 }
 
@@ -1893,8 +1894,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         try cache.layoutScripts(font, resolved_lookup_options.lookup.script, explicit_script_tag)
     else
         .{
-            .gsub = try font.selectGsubScriptForShaping(resolved_lookup_options.lookup.script, explicit_script_tag),
-            .gpos = try font.selectGposScriptForShaping(resolved_lookup_options.lookup.script, explicit_script_tag),
+            .gsub = try font_shaping.selectGsubScriptForShaping(font, resolved_lookup_options.lookup.script, explicit_script_tag),
+            .gpos = try font_shaping.selectGposScriptForShaping(font, resolved_lookup_options.lookup.script, explicit_script_tag),
         };
     const gsub_script = layout_scripts.gsub;
     const gpos_script = layout_scripts.gpos;
@@ -2264,7 +2265,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // OpenType SingleSubst format 1 is a modulo-16-bit graph. Individual
     // lookups may use IDs above maxp as internal states, but no such transient
     // value may escape the complete GSUB stage into GPOS, metrics, or outlines.
-    try font.validateShapedGlyphRunForShaping(glyph_ids.items);
+    try font_shaping.validateShapedGlyphRunForShaping(font, glyph_ids.items);
 
     if (shape_profile) |p| p.gsub_ns += shapeProfileElapsed(gsub_start, profile_io);
 
@@ -2398,7 +2399,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     }
     if (!lookup_options.writing_mode.isVertical()) {
         const tracking_start = shapeProfileNow(shape_profile, profile_io);
-        if (try font.horizontalTrackingForShaping(buffer.allocator, font_size)) |tracking| {
+        if (try font_shaping.horizontalTrackingForShaping(font, buffer.allocator, font_size)) |tracking| {
             if (tracking != 0) {
                 const tracking_advance = tracking * scale;
                 for (buffer.glyphs.items[segment_glyph_start..]) |*glyph| {
@@ -3186,7 +3187,7 @@ test "vertical shaping centers glyph extents when vmtx is absent" {
     const expected_origin = @as(i32, bounds.y_max) + @divFloor(font_height - glyph_height, 2);
     try std.testing.expectEqual(
         expected_origin,
-        try font.shapingVerticalOriginYAtCoords(1, &.{}),
+        try font_shaping.verticalOriginYAtCoords(&font, 1, &.{}),
     );
 
     const font_size: f32 = @floatFromInt(font.units_per_em);

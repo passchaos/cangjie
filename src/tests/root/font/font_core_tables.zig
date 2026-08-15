@@ -1,6 +1,7 @@
 //! Integration coverage migrated from the former package root.
 
 const std = @import("std");
+const font_raster = @import("../../../font.zig").raster_backend;
 const support = @import("../support.zig");
 const Font = support.Font;
 const CharmapMapping = support.CharmapMapping;
@@ -479,7 +480,7 @@ test "VARC non-default outlines apply HVAR metrics" {
     try std.testing.expectEqual(@as(u16, 804), varied.advance_width);
     try std.testing.expectEqual(@as(i16, 4), varied.left_side_bearing);
 
-    var raster = try font.glyphOutlineForRasterAtCoords(allocator, 1, &.{0.5});
+    var raster = try font_raster.glyphOutlineAtCoords(font, allocator, 1, &.{0.5});
     defer raster.deinit();
     try std.testing.expectEqual(varied.advance_width, raster.advance_width);
     try std.testing.expectEqual(varied.left_side_bearing, raster.left_side_bearing);

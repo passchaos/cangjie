@@ -1,4 +1,5 @@
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 
 const Font = @import("../../../font.zig").Font;
 const GdefLookupMetadata = @import("../../../font.zig").GdefLookupMetadata;
@@ -47,7 +48,7 @@ pub const GdefMetadataCache = struct {
         }
 
         self.misses += 1;
-        var metadata_value = try font.gdefLookupMetadataForShaping(self.allocator);
+        var metadata_value = try font_shaping.gdefLookupMetadataForShaping(font, self.allocator);
         errdefer metadata_value.deinit(self.allocator);
         try self.entries.append(self.allocator, .{
             .key = key,
@@ -104,7 +105,9 @@ pub const GsubTableProofCache = struct {
             return;
         }
         self.misses += 1;
-        try font.proveGsubTableForShaping();
+        try font_shaping.proveGsubTableForShaping(
+            font,
+        );
         try self.entries.put(key, {});
         self.last_font_addr = font_addr;
     }
@@ -149,7 +152,9 @@ pub const GposTableProofCache = struct {
             return;
         }
         self.misses += 1;
-        try font.proveGposTableForShaping();
+        try font_shaping.proveGposTableForShaping(
+            font,
+        );
         try self.entries.put(key, {});
         self.last_font_addr = font_addr;
     }

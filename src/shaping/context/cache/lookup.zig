@@ -1,6 +1,8 @@
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 
-const Font = @import("../../../font.zig").Font;
+const font_mod = @import("../../../font.zig");
+const Font = font_mod.Font;
 const GdefLookupMetadata = @import("../../../font.zig").GdefLookupMetadata;
 const gpos = @import("../../../gpos.zig");
 const gsub = @import("../../../gsub.zig");
@@ -22,8 +24,8 @@ const LookupSelectionKey = struct {
 };
 
 pub const LayoutScriptSelections = struct {
-    gsub: Font.LayoutScriptSelection,
-    gpos: Font.LayoutScriptSelection,
+    gsub: font_mod.LayoutScriptSelection,
+    gpos: font_mod.LayoutScriptSelection,
 };
 
 pub const LookupSelectionCache = struct {
@@ -44,8 +46,8 @@ pub const LookupSelectionCache = struct {
         font_addr: usize,
         script: unicode.Script,
         explicit_tag: ?unicode.OpenTypeScriptTag,
-        gsub: Font.LayoutScriptSelection,
-        gpos: Font.LayoutScriptSelection,
+        gsub: font_mod.LayoutScriptSelection,
+        gpos: font_mod.LayoutScriptSelection,
     };
     const FeaturePlanEntry = struct {
         key: LookupSelectionKey,
@@ -121,7 +123,7 @@ pub const LookupSelectionCache = struct {
         if (self.lookup(key, options.features)) |lookups| return lookups;
 
         self.misses += 1;
-        const lookups = try font.selectGsubLookupsForShaping(self.allocator, options, gdef_metadata);
+        const lookups = try font_shaping.selectGsubLookupsForShaping(font, self.allocator, options, gdef_metadata);
         errdefer self.allocator.free(lookups);
         const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
         errdefer self.allocator.free(features);
@@ -138,7 +140,7 @@ pub const LookupSelectionCache = struct {
         }
 
         self.misses += 1;
-        const accelerators = try font.gsubLookupAcceleratorsForShaping(self.allocator);
+        const accelerators = try font_shaping.gsubLookupAcceleratorsForShaping(font, self.allocator);
         errdefer self.allocator.free(accelerators);
         try self.gsub_accelerator_entries.append(self.allocator, .{
             .font_addr = font_addr,
@@ -158,7 +160,7 @@ pub const LookupSelectionCache = struct {
         }
 
         self.misses += 1;
-        const plan = try font.gsubFeatureLookupPlanForShaping(self.allocator, applications, options, gdef_metadata);
+        const plan = try font_shaping.gsubFeatureLookupPlanForShaping(font, self.allocator, applications, options, gdef_metadata);
         errdefer {
             var mutable_plan = plan;
             mutable_plan.deinit(self.allocator);
@@ -187,7 +189,7 @@ pub const LookupSelectionCache = struct {
         }
 
         self.misses += 1;
-        const plan = try font.gsubMergedFeatureLookupPlanForShaping(self.allocator, applications, options, gdef_metadata);
+        const plan = try font_shaping.gsubMergedFeatureLookupPlanForShaping(font, self.allocator, applications, options, gdef_metadata);
         errdefer {
             var mutable_plan = plan;
             mutable_plan.deinit(self.allocator);
@@ -214,7 +216,7 @@ pub const LookupSelectionCache = struct {
         }
 
         self.misses += 1;
-        const accelerators = try font.gposLookupAcceleratorsForShaping(self.allocator);
+        const accelerators = try font_shaping.gposLookupAcceleratorsForShaping(font, self.allocator);
         errdefer self.allocator.free(accelerators);
         try self.gpos_accelerator_entries.append(self.allocator, .{
             .font_addr = font_addr,
@@ -228,7 +230,7 @@ pub const LookupSelectionCache = struct {
         if (self.lookup(key, options.features)) |lookups| return lookups;
 
         self.misses += 1;
-        const lookups = try font.selectGposLookupsForShaping(self.allocator, options, gdef_metadata);
+        const lookups = try font_shaping.selectGposLookupsForShaping(font, self.allocator, options, gdef_metadata);
         errdefer self.allocator.free(lookups);
         const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
         errdefer self.allocator.free(features);
@@ -252,8 +254,8 @@ pub const LookupSelectionCache = struct {
             .font_addr = font_addr,
             .script = script,
             .explicit_tag = explicit_tag,
-            .gsub = try font.selectGsubScriptForShaping(script, explicit_tag),
-            .gpos = try font.selectGposScriptForShaping(script, explicit_tag),
+            .gsub = try font_shaping.selectGsubScriptForShaping(font, script, explicit_tag),
+            .gpos = try font_shaping.selectGposScriptForShaping(font, script, explicit_tag),
         };
         try self.script_selection_entries.append(self.allocator, entry);
         return .{ .gsub = entry.gsub, .gpos = entry.gpos };

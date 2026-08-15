@@ -1,5 +1,6 @@
 //! Common GSUB feature override and application planning.
 
+const font_shaping = @import("../../../font.zig").shaping;
 const Font = @import("../../../font.zig").Font;
 const gsub = @import("../../../gsub.zig");
 const unicode = @import("../../../unicode.zig");
@@ -81,14 +82,15 @@ pub fn needsValueAwareSelection(
     if (rand_disabled) return false;
     if (table_proved) {
         if (lookup_accelerators) |accelerators| {
-            if (font.hasGsubRandomFeatureWithAcceleratorsForShaping(
+            if (font_shaping.hasGsubRandomFeatureWithAcceleratorsForShaping(
+                font,
                 accelerators,
             )) |has_random| {
                 return has_random;
             }
         }
     }
-    return font.hasGsubFeatureForShaping(unicode.tag("rand")) catch false;
+    return font_shaping.hasGsubFeatureForShaping(font, unicode.tag("rand")) catch false;
 }
 
 pub fn scriptPositionApplication(

@@ -1,5 +1,6 @@
 //! Per-glyph advance, origin, and fallback-mark geometry.
 
+const font_shaping = @import("../../../../font.zig").shaping;
 const aat_kerx = @import("../../../../aat_kerx.zig");
 const fallback_mark = @import("../../../fallback/mark.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
@@ -153,7 +154,8 @@ pub fn resolve(
         0.0;
     const vertical_y_offset =
         if (input.options.writing_mode.isVertical()) origin: {
-            const origin_y = try input.font.shapingVerticalOriginYForShaping(
+            const origin_y = try font_shaping.shapingVerticalOriginYForShaping(
+                input.font,
                 glyph_id,
                 input.options.normalized_variation_coords,
             );

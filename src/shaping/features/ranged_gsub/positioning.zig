@@ -1,6 +1,7 @@
 //! Final positioned-glyph emission for the first ranged-GSUB contract.
 
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 
 const attachment = @import("../../../attachment.zig");
 const Font = @import("../../../font.zig").Font;
@@ -38,7 +39,8 @@ pub fn collect(
         sources.text_byte_len,
         sources.source_byte_starts.items,
     );
-    try font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(
+    try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefForShaping(
+        font,
         sources.glyph_ids.items,
         &sources.gpos_adjustments,
         allocator,
@@ -131,7 +133,9 @@ pub fn collect(
         @import("../../../unicode.zig").tag("kern"),
         options.features,
     )) {
-        const kern = try font.kernLookupForShaping();
+        const kern = try font_shaping.kernLookupForShaping(
+            font,
+        );
         for (layout_buffer.glyphs.items[layout_buffer.glyphs.items.len - sources.glyph_ids.items.len ..], 0..) |*glyph, index| {
             if (index == 0) continue;
             const value = try kern.kerning(

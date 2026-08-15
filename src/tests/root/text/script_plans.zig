@@ -1,6 +1,7 @@
 //! Integration coverage migrated from the former package root.
 
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 const support = @import("../support.zig");
 const LayoutBuffer = support.LayoutBuffer;
 const ShapePlanCache = support.ShapePlanCache;
@@ -395,7 +396,7 @@ test "GSUB lookup flags ignore GDEF glyph classes" {
     try glyphs.append(allocator, 2);
     try glyphs.append(allocator, 3);
 
-    try font.applyGsub(&glyphs, allocator);
+    try font_shaping.applyGsub(&font, &glyphs, allocator);
 
     try std.testing.expectEqual(@as(usize, 3), glyphs.items.len);
     try std.testing.expectEqual(@as(GlyphId, 1), glyphs.items[0]);
@@ -417,7 +418,7 @@ test "GPOS lookup flags ignore GDEF glyph classes" {
     var adjustments = std.ArrayList(@import("../../../gpos.zig").Adjustment).empty;
     defer adjustments.deinit(allocator);
 
-    try font.collectGposAdjustments(&glyphs, &adjustments, allocator);
+    try font_shaping.collectGposAdjustments(&font, &glyphs, &adjustments, allocator);
 
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }

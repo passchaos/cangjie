@@ -1,5 +1,6 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
+const font_shaping = cangjie.testing.font_shaping;
 
 const cluster_normalization = @import("cluster_normalization.zig");
 const options_mod = @import("options.zig");
@@ -376,7 +377,7 @@ fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.font.Face, f
             if (options.font_slant != 0 or options.font_bold_x != 0 or options.font_bold_y != 0) {
                 break :vertical -try syntheticVerticalOriginY(font, glyph.glyph_id, options, normalized_variation_coords);
             }
-            break :vertical -try font.shapingVerticalOriginYAtCoords(glyph.glyph_id, normalized_variation_coords);
+            break :vertical -try font_shaping.verticalOriginYAtCoords(font, glyph.glyph_id, normalized_variation_coords);
         } else fontUnitPosition(font, font_size, glyph.y_offset);
     }
     return values;

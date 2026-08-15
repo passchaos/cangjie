@@ -1,6 +1,7 @@
 //! Shared GSUB feature-plan execution across script-specific stages.
 
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 
 const cache = @import("../../context/cache/root.zig");
 const Font = @import("../../../font.zig").Font;
@@ -37,7 +38,8 @@ pub fn apply(
                 options,
                 gdef_metadata,
             );
-        return try font.applyGsubFeatureLookupPlanUsingGdefAfterProof(
+        return try font_shaping.applyGsubFeatureLookupPlanUsingGdefAfterProof(
+            font,
             plan,
             glyph_ids,
             context.allocator,
@@ -46,7 +48,8 @@ pub fn apply(
         );
     }
     if (table_proved) {
-        return try font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(
+        return try font_shaping.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(
+            font,
             applications,
             glyph_ids,
             context.allocator,
@@ -54,7 +57,8 @@ pub fn apply(
             gdef_metadata,
         );
     }
-    return try font.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(
+    return try font_shaping.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(
+        font,
         applications,
         glyph_ids,
         context.allocator,
@@ -90,7 +94,8 @@ pub fn applyAfterRunProof(
         options,
         gdef_metadata,
     );
-    return try font.applyGsubFeatureLookupPlanUsingGdefAfterRunProof(
+    return try font_shaping.applyGsubFeatureLookupPlanUsingGdefAfterRunProof(
+        font,
         plan,
         glyph_ids,
         context.allocator,
@@ -117,7 +122,8 @@ pub fn applyMerged(
             gdef_metadata,
         )
     else
-        try font.gsubMergedFeatureLookupPlanForShaping(
+        try font_shaping.gsubMergedFeatureLookupPlanForShaping(
+            font,
             context.allocator,
             applications,
             options,
@@ -127,7 +133,8 @@ pub fn applyMerged(
         var mutable_plan = plan;
         mutable_plan.deinit(context.allocator);
     };
-    return try font.applyGsubMergedFeatureLookupPlanUsingGdefAfterProof(
+    return try font_shaping.applyGsubMergedFeatureLookupPlanUsingGdefAfterProof(
+        font,
         plan,
         glyph_ids,
         context.allocator,
@@ -165,7 +172,8 @@ pub fn applyMergedAfterRunProof(
             gdef_metadata,
         )
     else
-        try font.gsubMergedFeatureLookupPlanForShaping(
+        try font_shaping.gsubMergedFeatureLookupPlanForShaping(
+            font,
             context.allocator,
             applications,
             options,
@@ -175,7 +183,8 @@ pub fn applyMergedAfterRunProof(
         var mutable_plan = plan;
         mutable_plan.deinit(context.allocator);
     };
-    return try font.applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof(
+    return try font_shaping.applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof(
+        font,
         plan,
         glyph_ids,
         context.allocator,
@@ -192,13 +201,15 @@ pub noinline fn applyGenericAfterTableProof(
     options: gsub.LookupOptions,
     gdef_metadata: GdefLookupMetadata,
 ) linksection(shaping_sections.isolated_hotpaths) !void {
-    if (try font.applyGsubCachedLookupSelectionUsingGdefAfterRunProof(
+    if (try font_shaping.applyGsubCachedLookupSelectionUsingGdefAfterRunProof(
+        font,
         glyph_ids,
         context.allocator,
         options,
         gdef_metadata,
     )) return;
-    return try font.applyGsubWithOptionsUsingGdefAfterProof(
+    return try font_shaping.applyGsubWithOptionsUsingGdefAfterProof(
+        font,
         glyph_ids,
         context.allocator,
         options,

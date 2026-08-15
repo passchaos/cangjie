@@ -1,6 +1,7 @@
 //! GPOS collection and OpenType-versus-AAT engine selection.
 
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 
 const Font = @import("../../../font.zig").Font;
 const GdefLookupMetadata = @import("../../../font.zig").GdefLookupMetadata;
@@ -71,13 +72,23 @@ pub fn run(input: Input) !Result {
         .visible_variation_selectors = input.options.not_found_variation_selector_glyph != null,
     };
     const apply_aat_substitution =
-        input.font.hasAatSubstitutionForShaping() and
+        font_shaping.hasAatSubstitutionForShaping(
+            input.font,
+        ) and
         (!input.options.writing_mode.isVertical() or
-            !input.font.hasGsubTableForShaping());
-    const use_kerx_positioning = input.font.hasKerxTableForShaping() and
+            !font_shaping.hasGsubTableForShaping(
+                input.font,
+            ));
+    const use_kerx_positioning = font_shaping.hasKerxTableForShaping(
+        input.font,
+    ) and
         (apply_aat_substitution or
-            !(input.font.hasGsubTableForShaping() and
-                input.font.hasGposTableForShaping()));
+            !(font_shaping.hasGsubTableForShaping(
+                input.font,
+            ) and
+                font_shaping.hasGposTableForShaping(
+                    input.font,
+                )));
 
     if (!use_kerx_positioning) {
         if (input.lookup_selection_cache) |selection_cache| {
@@ -91,7 +102,8 @@ pub fn run(input: Input) !Result {
         }
         if (input.gpos_table_proof_cache) |proof_cache| {
             try proof_cache.prove(input.font);
-            try input.font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(
+            try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(
+                input.font,
                 input.glyph_ids,
                 input.adjustments,
                 input.allocator,
@@ -99,7 +111,8 @@ pub fn run(input: Input) !Result {
                 input.gdef_metadata,
             );
         } else {
-            try input.font.collectGposAdjustmentsWithOptionsUsingGdefForShaping(
+            try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefForShaping(
+                input.font,
                 input.glyph_ids,
                 input.adjustments,
                 input.allocator,

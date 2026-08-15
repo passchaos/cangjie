@@ -5,6 +5,7 @@
 //! path shared by paragraph layout and fallback itemization.
 
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 
 const Font = @import("../../../font.zig").Font;
 const GlyphMetricsCache = @import("../../context/cache/root.zig").GlyphMetricsCache;
@@ -80,7 +81,8 @@ fn shapeValidated(
     options: layout.ShapeOptions,
 ) !layout.GlyphRun {
     const inferred_script = unicode.inferOpenTypeScript(text);
-    const script_selection = try font.selectGsubScriptForShaping(
+    const script_selection = try font_shaping.selectGsubScriptForShaping(
+        font,
         inferred_script,
         options.script_tag,
     );
@@ -100,9 +102,11 @@ fn shapeValidated(
         ranges,
     );
 
-    var gdef_metadata = try font.gdefLookupMetadataForShaping(buffer.allocator);
+    var gdef_metadata = try font_shaping.gdefLookupMetadataForShaping(font, buffer.allocator);
     defer gdef_metadata.deinit(buffer.allocator);
-    try font.proveGsubTableForShaping();
+    try font_shaping.proveGsubTableForShaping(
+        font,
+    );
 
     var run_limits = try gsub.RunLimits.init(sources.glyph_ids.items.len);
     var random_state: u32 = 1;
@@ -123,7 +127,8 @@ fn shapeValidated(
     };
     run_limits.applyTo(&gsub_options);
 
-    try font.applyGsubWithOptionsUsingGdefAfterProof(
+    try font_shaping.applyGsubWithOptionsUsingGdefAfterProof(
+        font,
         &sources.glyph_ids,
         buffer.allocator,
         gsub_options,
@@ -138,7 +143,7 @@ fn shapeValidated(
         gsub_options,
         gdef_metadata,
     );
-    try font.validateShapedGlyphRunForShaping(sources.glyph_ids.items);
+    try font_shaping.validateShapedGlyphRunForShaping(font, sources.glyph_ids.items);
     try positioning.collect(
         font,
         metrics_cache,

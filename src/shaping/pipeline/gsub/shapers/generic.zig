@@ -1,6 +1,7 @@
 //! Generic GSUB/AAT execution, including Hangul Jamo feature setup.
 
 const std = @import("std");
+const font_shaping = @import("../../../../font.zig").shaping;
 
 const Font = @import("../../../../font.zig").Font;
 const GdefLookupMetadata =
@@ -35,11 +36,16 @@ pub fn run(input: Input) !void {
     try applyHangul(input);
 
     const apply_aat_substitution =
-        input.font.hasAatSubstitutionForShaping() and
+        font_shaping.hasAatSubstitutionForShaping(
+            input.font,
+        ) and
         (!input.lookup_options.writing_mode.isVertical() or
-            !input.font.hasGsubTableForShaping());
+            !font_shaping.hasGsubTableForShaping(
+                input.font,
+            ));
     if (apply_aat_substitution) {
-        return try input.font.applyAatSubstitutionForShaping(
+        return try font_shaping.applyAatSubstitutionForShaping(
+            input.font,
             input.glyph_ids,
             input.allocator,
             input.options.*,
@@ -81,7 +87,8 @@ pub fn run(input: Input) !void {
                 input.gdef_metadata,
             );
         } else {
-            try input.font.applyGsubWithOptionsUsingGdefAfterProof(
+            try font_shaping.applyGsubWithOptionsUsingGdefAfterProof(
+                input.font,
                 input.glyph_ids,
                 input.allocator,
                 input.options.*,
@@ -89,7 +96,8 @@ pub fn run(input: Input) !void {
             );
         }
     } else {
-        try input.font.applyGsubWithOptionsUsingGdefForShaping(
+        try font_shaping.applyGsubWithOptionsUsingGdefForShaping(
+            input.font,
             input.glyph_ids,
             input.allocator,
             input.options.*,
@@ -100,8 +108,8 @@ pub fn run(input: Input) !void {
         input.lookup_options.script_position,
     )) |application| {
         if (input.table_proved) {
-            try input.font
-                .applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(
+            try font_shaping.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(
+                input.font,
                 &.{application},
                 input.glyph_ids,
                 input.allocator,
@@ -109,8 +117,8 @@ pub fn run(input: Input) !void {
                 input.gdef_metadata,
             );
         } else {
-            try input.font
-                .applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(
+            try font_shaping.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(
+                input.font,
                 &.{application},
                 input.glyph_ids,
                 input.allocator,
@@ -149,14 +157,16 @@ fn applyHangul(input: Input) !void {
     var options = input.options.*;
     options.features = overrides;
     if (input.table_proved) {
-        try input.font.applyGsubWithOptionsUsingGdefAfterProof(
+        try font_shaping.applyGsubWithOptionsUsingGdefAfterProof(
+            input.font,
             input.glyph_ids,
             input.allocator,
             options,
             input.gdef_metadata,
         );
     } else {
-        try input.font.applyGsubWithOptionsUsingGdefForShaping(
+        try font_shaping.applyGsubWithOptionsUsingGdefForShaping(
+            input.font,
             input.glyph_ids,
             input.allocator,
             options,

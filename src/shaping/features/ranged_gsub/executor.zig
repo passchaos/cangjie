@@ -1,6 +1,7 @@
 //! GSUB lookup selection and source-value application for ranged features.
 
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 
 const Font = @import("../../../font.zig").Font;
 const GdefLookupMetadata = @import("../../../font.zig").GdefLookupMetadata;
@@ -39,7 +40,8 @@ pub fn apply(
     var value_index: usize = 0;
     while (value_index < sources.tag_values.items.len) {
         const tag = sources.tag_values.items[value_index].tag;
-        const lookups = try font.selectGsubFeatureLookupsAfterProof(
+        const lookups = try font_shaping.selectGsubFeatureLookupsAfterProof(
+            font,
             allocator,
             tag,
             selection_options,
@@ -61,7 +63,8 @@ pub fn apply(
                 scoped_options.features = &.{};
                 scoped_options.selected_lookups = null;
                 scoped_options.source_features = sources.source_features.items;
-                try font.applyGsubSelectedSourceFeatureAfterProof(
+                try font_shaping.applyGsubSelectedSourceFeatureAfterProof(
+                    font,
                     lookups,
                     tag,
                     tag_value.value,

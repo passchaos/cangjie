@@ -1,6 +1,7 @@
 //! AAT kerx and legacy kern planning after GPOS engine selection.
 
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 
 const aat_kerx = @import("../../../aat_kerx.zig");
 const fallback_mark = @import("../../fallback/mark.zig");
@@ -41,7 +42,9 @@ pub fn prepare(input: Input) !Result {
     const has_gdef_glyph_classes =
         input.gdef_metadata.glyph_classes != null;
     const has_gpos_positioning =
-        input.font.hasGposTableForShaping() and
+        font_shaping.hasGposTableForShaping(
+            input.font,
+        ) and
         !input.use_kerx_positioning;
     const kerning_enabled = gsub_features.enabled(
         if (input.options.writing_mode.isVertical())
@@ -52,7 +55,9 @@ pub fn prepare(input: Input) !Result {
         !input.options.writing_mode.isVertical(),
     );
     const kerx_lookup = if (input.use_kerx_positioning)
-        try input.font.kerxLookupForShaping()
+        try font_shaping.kerxLookupForShaping(
+            input.font,
+        )
     else
         null;
     var summary = aat_kerx.Summary{};
@@ -114,11 +119,15 @@ pub fn prepare(input: Input) !Result {
         input.options.writing_mode.isVertical(),
     );
     const kern_lookup = if (kerx_lookup == null and
-        !input.font.hasKerxTableForShaping() and
+        !font_shaping.hasKerxTableForShaping(
+            input.font,
+        ) and
         !input.options.writing_mode.isVertical() and
         shouldApplyLegacyKernFallback(input.options.script_tag) and
         kerning_enabled)
-        try input.font.kernLookupForShaping()
+        try font_shaping.kernLookupForShaping(
+            input.font,
+        )
     else
         null;
     return .{

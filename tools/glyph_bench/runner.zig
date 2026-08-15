@@ -1,5 +1,6 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
+const font_raster = cangjie.testing.font_raster;
 
 const options_mod = @import("options.zig");
 const report = @import("report.zig");
@@ -68,7 +69,7 @@ fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var outline = if (coords.len == 0)
-            try font.glyphOutlineForRaster(allocator, glyph_id)
+            try font_raster.glyphOutline(font, allocator, glyph_id)
         else
             try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
         checksum.* = updateChecksum(checksum.*, outlineChecksum(outline));
@@ -88,9 +89,9 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.F
         target.clear(0);
         {
             var outline = if (coords.len == 0)
-                try font.glyphOutlineForRaster(allocator, glyph_id)
+                try font_raster.glyphOutline(font, allocator, glyph_id)
             else
-                try font.glyphOutlineForRasterAtCoords(allocator, glyph_id, coords);
+                try font_raster.glyphOutlineAtCoords(font, allocator, glyph_id, coords);
             defer outline.deinit();
             try rasterizer.renderGlyph(&target, &outline, 0, options.font_size, options.font_size, font.units_per_em);
         }
@@ -101,7 +102,7 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.F
 fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     var outline = if (coords.len == 0)
-        try font.glyphOutlineForRaster(allocator, glyph_id)
+        try font_raster.glyphOutline(font, allocator, glyph_id)
     else
         try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
     defer outline.deinit();
@@ -122,7 +123,7 @@ fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.f
 fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     var outline = if (coords.len == 0)
-        try font.glyphOutlineForRaster(allocator, glyph_id)
+        try font_raster.glyphOutline(font, allocator, glyph_id)
     else
         try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
     defer outline.deinit();

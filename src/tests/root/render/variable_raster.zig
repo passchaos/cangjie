@@ -1,6 +1,7 @@
 //! Integration coverage migrated from the former package root.
 
 const std = @import("std");
+const font_raster = @import("../../../font.zig").raster_backend;
 const support = @import("../support.zig");
 const LayoutBuffer = support.LayoutBuffer;
 const TextShaper = support.TextShaper;
@@ -166,7 +167,7 @@ test "CFF2 raster outline uses parsed-font fast path" {
     bytes[cff2_tail orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 0));
-    var outline = try font.glyphOutlineForRaster(allocator, 0);
+    var outline = try font_raster.glyphOutline(&font, allocator, 0);
     defer outline.deinit();
     try std.testing.expectEqual(@as(usize, 4), outline.commands.items.len);
     try std.testing.expectEqual(@as(i16, 50), outline.bounds.x_min);
@@ -194,7 +195,7 @@ test "CFF2 variation raster outline uses parsed-font fast path" {
     bytes[cff2_tail orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.glyphOutlineAtCoords(allocator, 0, &.{0.5}));
-    var outline = try font.glyphOutlineForRasterAtCoords(allocator, 0, &.{0.5});
+    var outline = try font_raster.glyphOutlineAtCoords(&font, allocator, 0, &.{0.5});
     defer outline.deinit();
     try std.testing.expectEqual(@as(i16, 60), outline.bounds.x_min);
     try std.testing.expectEqual(@as(i16, 70), outline.bounds.x_max);
@@ -221,7 +222,7 @@ test "CFF2 default variation raster outline skips variation table reread" {
     bytes[cff2_tail orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.glyphOutlineAtCoords(allocator, 0, &.{0.5}));
-    var outline = try font.glyphOutlineForRasterAtCoords(allocator, 0, &.{0.0});
+    var outline = try font_raster.glyphOutlineAtCoords(&font, allocator, 0, &.{0.0});
     defer outline.deinit();
     try std.testing.expectEqual(@as(i16, 50), outline.bounds.x_min);
     try std.testing.expectEqual(@as(i16, 60), outline.bounds.x_max);
@@ -248,7 +249,7 @@ test "gvar raster outline uses parsed-font fast path" {
     bytes[gvar_tail orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.glyphOutlineAtCoords(allocator, 1, &.{0.5}));
-    var outline = try font.glyphOutlineForRasterAtCoords(allocator, 1, &.{0.5});
+    var outline = try font_raster.glyphOutlineAtCoords(&font, allocator, 1, &.{0.5});
     defer outline.deinit();
     try std.testing.expectEqual(@as(i16, 5), outline.bounds.x_min);
     try std.testing.expectEqual(@as(f32, 5), outline.commands.items[0].move_to.x);
@@ -274,7 +275,7 @@ test "gvar default raster outline skips gvar reread" {
     bytes[gvar_tail orelse return error.MissingTable] +%= 1;
 
     try std.testing.expectError(error.BadSfnt, font.glyphOutlineAtCoords(allocator, 1, &.{0.5}));
-    var outline = try font.glyphOutlineForRasterAtCoords(allocator, 1, &.{0.0});
+    var outline = try font_raster.glyphOutlineAtCoords(&font, allocator, 1, &.{0.0});
     defer outline.deinit();
     try std.testing.expectEqual(@as(i16, 0), outline.bounds.x_min);
     try std.testing.expectEqual(@as(f32, 0), outline.commands.items[0].move_to.x);
@@ -305,7 +306,7 @@ test "gvar raster outline reuses parsed fvar axis count" {
     writeU16Test(bytes, (fvar_offset orelse return error.MissingTable) + 8, 2);
 
     try std.testing.expectError(error.BadSfnt, font.glyphOutlineAtCoords(allocator, 1, &.{0.5}));
-    var outline = try font.glyphOutlineForRasterAtCoords(allocator, 1, &.{0.5});
+    var outline = try font_raster.glyphOutlineAtCoords(&font, allocator, 1, &.{0.5});
     defer outline.deinit();
     try std.testing.expectEqual(@as(i16, 5), outline.bounds.x_min);
     try std.testing.expectEqual(@as(f32, 5), outline.commands.items[0].move_to.x);

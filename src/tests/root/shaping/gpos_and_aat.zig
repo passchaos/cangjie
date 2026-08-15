@@ -1,6 +1,7 @@
 //! Integration coverage migrated from the former package root.
 
 const std = @import("std");
+const font_shaping = @import("../../../font.zig").shaping;
 const support = @import("../support.zig");
 const LayoutBuffer = support.LayoutBuffer;
 const TextShaper = support.TextShaper;
@@ -39,7 +40,7 @@ test "empty GSUB topology does not suppress independent GPOS shaping" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const selection = try font.selectGsubScriptForShaping(.latin, null);
+    const selection = try font_shaping.selectGsubScriptForShaping(&font, .latin, null);
     try std.testing.expectEqual(@as(?OpenTypeScriptTag, null), selection.tag);
     try std.testing.expect(!selection.requested);
 

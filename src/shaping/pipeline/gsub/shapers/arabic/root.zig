@@ -1,6 +1,7 @@
 //! Arabic, Syriac, Adlam, and Mongolian GSUB stage orchestration.
 
 const std = @import("std");
+const font_shaping = @import("../../../../../font.zig").shaping;
 
 const Font = @import("../../../../../font.zig").Font;
 const GdefLookupMetadata =
@@ -204,8 +205,8 @@ fn applyJoiningStages(
             const stage_start = profileNow(input.profile_io);
             const lookup_count_before = profile.gsub_lookup_count;
             if (input.table_proved) {
-                try input.font
-                    .applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(
+                try font_shaping.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof(
+                    input.font,
                     &.{application},
                     input.glyph_ids,
                     input.allocator,
@@ -213,8 +214,8 @@ fn applyJoiningStages(
                     input.gdef_metadata,
                 );
             } else {
-                try input.font
-                    .applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(
+                try font_shaping.applyGsubFeatureSequenceWithOptionsUsingGdefForShaping(
+                    input.font,
                     &.{application},
                     input.glyph_ids,
                     input.allocator,

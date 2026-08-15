@@ -1,4 +1,5 @@
 const std = @import("std");
+const font_raster = @import("font.zig").raster_backend;
 const imx = @import("imx");
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
@@ -876,9 +877,9 @@ pub const Rasterizer = struct {
         const use_default_outline = normalizedVariationCoordinatesAreDefault(normalized_variation_coords);
         for (run.glyphs) |position| {
             var outline = if (use_default_outline)
-                try run.font.glyphOutlineForRaster(self.allocator, position.glyph_id)
+                try font_raster.glyphOutline(run.font, self.allocator, position.glyph_id)
             else
-                try run.font.glyphOutlineForRasterAtCoords(self.allocator, position.glyph_id, normalized_variation_coords);
+                try font_raster.glyphOutlineAtCoords(run.font, self.allocator, position.glyph_id, normalized_variation_coords);
             defer outline.deinit();
             try self.renderGlyph(target, &outline, pen_x + position.x_offset, baseline_y + position.y_offset, run.font_size, run.font.units_per_em);
             pen_x += position.x_advance;
@@ -937,7 +938,7 @@ pub const Rasterizer = struct {
                 }
                 return;
             }
-            if (try font.resolvedSvgGlyphDocumentForRaster(self.allocator, glyph_id)) |resolved_value| {
+            if (try font_raster.resolvedSvgGlyphDocument(font, self.allocator, glyph_id)) |resolved_value| {
                 var resolved = resolved_value;
                 defer resolved.deinit();
                 var maybe_svg_paint = try parseSvgPaint(self.allocator, glyph_id, resolved.data);
@@ -1332,9 +1333,9 @@ pub const Rasterizer = struct {
 
     fn glyphOutlineForRenderAtCoords(self: *Rasterizer, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, normalized_variation_coords: []const f32) !glyph_mod.GlyphOutline {
         return if (normalizedVariationCoordinatesAreDefault(normalized_variation_coords))
-            try font.glyphOutlineForRaster(self.allocator, glyph_id)
+            try font_raster.glyphOutline(font, self.allocator, glyph_id)
         else
-            try font.glyphOutlineForRasterAtCoords(self.allocator, glyph_id, normalized_variation_coords);
+            try font_raster.glyphOutlineAtCoords(font, self.allocator, glyph_id, normalized_variation_coords);
     }
 
     fn renderSvgGlyphMask(self: *Rasterizer, target: *RenderTarget, outline: *const glyph_mod.GlyphOutline, transform: SvgTransform, view_box: ViewBox, x: f32, baseline_y: f32, font_size: f32) !void {

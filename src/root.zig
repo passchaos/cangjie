@@ -23,6 +23,11 @@ pub const testing = struct {
     pub const test_font = @import("test_font.zig");
     pub const font_container = @import("font_container.zig").testing;
     pub const shaping_cluster = @import("unicode/grapheme/shaping_cluster.zig");
+
+    /// Repository benchmark/parity backends. These bypass defensive public
+    /// boundaries and therefore must not be used by applications.
+    pub const font_shaping = @import("font.zig").shaping;
+    pub const font_raster = @import("font.zig").raster_backend;
 };
 
 test {

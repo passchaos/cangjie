@@ -24,4 +24,16 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(
         !@hasDecl(cangjie.font.metadata, "VariationCoordinate"),
     );
+
+    const Face = cangjie.font.Face;
+    try std.testing.expect(!@hasDecl(Face, "applyGsub"));
+    try std.testing.expect(!@hasDecl(Face, "collectGposAdjustments"));
+    try std.testing.expect(!@hasDecl(Face, "LayoutScriptSelection"));
+    try std.testing.expect(!@hasDecl(Face, "proveGsubTableForShaping"));
+    try std.testing.expect(!@hasDecl(Face, "selectGsubLookupsForShaping"));
+    try std.testing.expect(!@hasDecl(Face, "gdefLookupMetadataForShaping"));
+    try std.testing.expect(!@hasDecl(Face, "glyphOutlineForRaster"));
+    try std.testing.expect(
+        !@hasDecl(Face, "resolvedSvgGlyphDocumentForRaster"),
+    );
 }

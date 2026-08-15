@@ -1,4 +1,5 @@
 const std = @import("std");
+const font_raster = @import("font.zig").raster_backend;
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
 const layout = @import("layout.zig");
@@ -392,7 +393,7 @@ const BridgeBuilder = struct {
         // COLR has priority over SVG. Avoid decoding a lower-priority gzip SVG
         // document when the same glyph already selected a COLR source.
         var resolved_svg = if (layer_start == self.color_layers.items.len and color_paint == null)
-            try font.resolvedSvgGlyphDocumentForRaster(self.allocator, glyph_id)
+            try font_raster.resolvedSvgGlyphDocument(font, self.allocator, glyph_id)
         else
             null;
         defer if (resolved_svg) |*document| document.deinit();

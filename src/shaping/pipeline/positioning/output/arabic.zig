@@ -1,5 +1,6 @@
 //! Positional cmap fallback for Arabic-family fonts without GSUB.
 
+const font_shaping = @import("../../../../font.zig").shaping;
 const cache = @import("../../../context/cache/root.zig");
 const Font = @import("../../../../font.zig").Font;
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
@@ -15,7 +16,9 @@ pub fn fallbackGlyph(
     source: usize,
     source_features: []const u32,
 ) !?GlyphId {
-    if (font.hasGsubTableForShaping()) return null;
+    if (font_shaping.hasGsubTableForShaping(
+        font,
+    )) return null;
     if (source >= source_features.len) return null;
     const fallback_codepoint = fallbackCodepoint(
         codepoint,

@@ -1,5 +1,6 @@
 const std = @import("std");
 const bin = @import("../binary.zig");
+const delta_map = @import("variation/root.zig").delta_set_index_map;
 
 pub const Error = error{
     BadSfnt,
@@ -151,57 +152,32 @@ fn readIndexMapAtField(allocator: std.mem.Allocator, data: []const u8, table_off
 }
 
 fn readIndexMap(allocator: std.mem.Allocator, data: []const u8, table_offset: usize, table_length: usize, map_offset: usize, minimum_map_offset: usize) Error!IndexMap {
-    if (map_offset < minimum_map_offset or map_offset > table_length or table_length - map_offset < 4) return error.BadSfnt;
-    const map_start = table_offset + map_offset;
-    const format = data[map_start];
-    const entry_format = data[map_start + 1];
-    if ((entry_format & 0xc0) != 0) return error.BadSfnt;
-
-    const entry_size: usize = @as(usize, ((entry_format & 0x30) >> 4)) + 1;
-    const inner_bit_count: usize = @as(usize, entry_format & 0x0f) + 1;
-    if (inner_bit_count > entry_size * 8) return error.BadSfnt;
-
-    const map_count, const map_data_start = switch (format) {
-        0 => .{ @as(usize, @intCast(try bin.readU16At(data, map_start + 2))), map_start + 4 },
-        1 => blk: {
-            if (table_length - map_offset < 6) return error.BadSfnt;
-            break :blk .{ @as(usize, @intCast(try bin.readU32At(data, map_start + 2))), map_start + 6 };
-        },
-        else => return error.BadSfnt,
-    };
-    if (map_count != 0 and map_count > (table_offset + table_length - map_data_start) / entry_size) return error.BadSfnt;
-
-    const entries = try allocator.alloc(IndexMapEntry, map_count);
+    const map = try delta_map.read(
+        data,
+        .{ .offset = table_offset, .length = table_length },
+        map_offset,
+        minimum_map_offset,
+    );
+    const entries = try allocator.alloc(IndexMapEntry, map.map_count);
     errdefer allocator.free(entries);
-    const map = IndexMap{
+    const result = IndexMap{
         .offset = map_offset,
-        .end_offset = map_data_start - table_offset + map_count * entry_size,
-        .format = format,
-        .entry_format = entry_format,
-        .entry_size = @intCast(entry_size),
-        .inner_index_bit_count = @intCast(inner_bit_count),
-        .map_data_offset = map_data_start - table_offset,
+        .end_offset = map.end_offset,
+        .format = map.format,
+        .entry_format = map.entry_format,
+        .entry_size = map.entry_size,
+        .inner_index_bit_count = map.inner_index_bit_count,
+        .map_data_offset = map.map_data_start - table_offset,
         .entries = entries,
     };
     for (entries, 0..) |*entry, index| {
-        entry.* = readIndexMapEntry(data, map_data_start, map.entry_size, map.inner_index_bit_count, index);
+        const parsed = try delta_map.entry(data, map, index);
+        entry.* = .{
+            .delta_set_outer_index = @intCast(parsed.outer),
+            .delta_set_inner_index = @intCast(parsed.inner),
+        };
     }
-    return map;
-}
-
-fn readIndexMapEntry(data: []const u8, map_data_start: usize, entry_size: u8, inner_index_bit_count: u8, index: usize) IndexMapEntry {
-    const entry_offset = map_data_start + index * @as(usize, entry_size);
-    var value: u32 = 0;
-    for (0..entry_size) |byte_index| {
-        value = (value << 8) | data[entry_offset + byte_index];
-    }
-
-    const inner_bit_count: u5 = @intCast(inner_index_bit_count);
-    const inner_mask = (@as(u32, 1) << inner_bit_count) - 1;
-    return .{
-        .delta_set_outer_index = value >> inner_bit_count,
-        .delta_set_inner_index = value & inner_mask,
-    };
+    return result;
 }
 
 pub const DeltaSetIndex = struct {
@@ -210,42 +186,14 @@ pub const DeltaSetIndex = struct {
 };
 
 fn deltaSetIndexForMappedItem(data: []const u8, table_offset: usize, table_length: usize, map_offset: usize, minimum_map_offset: usize, item_index: usize) Error!DeltaSetIndex {
-    if (map_offset < minimum_map_offset or map_offset > table_length or table_length - map_offset < 4) return error.BadSfnt;
-    const map_start = table_offset + map_offset;
-    const format = data[map_start];
-    const entry_format = data[map_start + 1];
-    if ((entry_format & 0xc0) != 0) return error.BadSfnt;
-
-    const entry_size = @as(usize, ((entry_format & 0x30) >> 4)) + 1;
-    const inner_bit_count = @as(usize, entry_format & 0x0f) + 1;
-    if (inner_bit_count > entry_size * 8) return error.BadSfnt;
-
-    const map_count, const map_data_start = switch (format) {
-        0 => .{ @as(usize, @intCast(try bin.readU16At(data, map_start + 2))), map_start + 4 },
-        1 => blk: {
-            if (table_length - map_offset < 6) return error.BadSfnt;
-            break :blk .{ @as(usize, @intCast(try bin.readU32At(data, map_start + 2))), map_start + 6 };
-        },
-        else => return error.BadSfnt,
-    };
-    if (map_count == 0) return .{ .outer = item_index >> 16, .inner = item_index & 0xffff };
-    if (map_count > (table_offset + table_length - map_data_start) / entry_size) return error.BadSfnt;
-
-    // The OpenType variation-common format deliberately reuses the final map
-    // entry when an item id is beyond mapCount. This is required for production
-    // HVAR tables with truncated advance maps and matches fontations/HarfBuzz.
-    const mapped_index = @min(item_index, map_count - 1);
-    const entry_offset = map_data_start + mapped_index * entry_size;
-    var value: u32 = 0;
-    for (0..entry_size) |byte_index| {
-        value = (value << 8) | data[entry_offset + byte_index];
-    }
-    const inner_shift: u5 = @intCast(inner_bit_count);
-    const inner_mask = (@as(u32, 1) << inner_shift) - 1;
-    return .{
-        .outer = @intCast(value >> inner_shift),
-        .inner = @intCast(value & inner_mask),
-    };
+    const map = try delta_map.read(
+        data,
+        .{ .offset = table_offset, .length = table_length },
+        map_offset,
+        minimum_map_offset,
+    );
+    const index = try delta_map.mappedIndex(data, map, item_index);
+    return .{ .outer = index.outer, .inner = index.inner };
 }
 
 pub fn itemVariationDelta(data: []const u8, table_offset: usize, table_length: usize, store_offset: usize, index: DeltaSetIndex, normalized_coords: []const f32) Error!i32 {

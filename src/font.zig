@@ -23,6 +23,7 @@ const ltag_mod = @import("opentype/ltag.zig");
 const math_mod = @import("opentype/math.zig");
 const meta_mod = @import("opentype/meta.zig");
 const metric_variation_mod = @import("opentype/metric_variation.zig");
+const delta_map = @import("opentype/variation/root.zig").delta_set_index_map;
 const macintosh_encoding = @import("opentype/macintosh_encoding.zig");
 const mvar_mod = @import("opentype/mvar.zig");
 const morx_mod = @import("opentype/morx.zig");
@@ -10658,14 +10659,7 @@ fn validateColrV0GlyphBounds(data: []const u8, colr: TableRecord, glyph_count: u
 
 const ColrV1StructuralRange = colr_v1_mod.Range;
 
-const DeltaSetIndexMapInfo = struct {
-    offset: usize,
-    end_offset: usize,
-    map_count: usize,
-    entry_format: u8,
-    entry_size: usize,
-    map_data_start: usize,
-};
+const DeltaSetIndexMapInfo = delta_map.Map;
 
 const ColrVariationContext = struct {
     store_offset: usize,
@@ -10713,17 +10707,8 @@ fn colrVariationDelta(
     const logical_index: u32 = var_index_base + @as(u32, @intCast(sequence_index));
 
     const outer_index, const inner_index = if (context.map) |map| blk: {
-        if (map.map_count == 0) {
-            // An explicitly empty DeltaSetIndexMap uses the standard packed
-            // identity mapping, unlike an absent COLR map whose implicit outer
-            // index is always zero.
-            break :blk .{
-                @as(usize, @intCast(logical_index >> 16)),
-                @as(usize, @intCast(logical_index & 0xffff)),
-            };
-        }
-        const mapped_index = @min(@as(usize, logical_index), map.map_count - 1);
-        break :blk try readDeltaSetIndexMapEntry(data, map, mapped_index);
+        const mapped = try delta_map.mappedIndex(data, map, logical_index);
+        break :blk .{ mapped.outer, mapped.inner };
     } else blk: {
         if (logical_index > std.math.maxInt(u16)) return error.BadSfnt;
         break :blk .{ @as(usize, 0), @as(usize, logical_index) };
@@ -10806,45 +10791,30 @@ fn validateColrVariationData(data: []const u8, colr: TableRecord, fvar: ?TableRe
 fn validateDeltaSetIndexMap(data: []const u8, table: TableRecord, store_offset: usize, item_data_count: usize, map_offset: usize, minimum_map_offset: usize) FontError!DeltaSetIndexMapInfo {
     const info = try readDeltaSetIndexMapInfo(data, table, map_offset, minimum_map_offset);
     for (0..info.map_count) |index| {
-        const outer_index, const inner_index = try readDeltaSetIndexMapEntry(data, info, index);
+        const mapped = try delta_map.entry(data, info, index);
         // 0xFFFF_FFFF is the variation-common no-delta sentinel. Production
         // COLR maps use it for sparse logical indexes, so it is not a dangling
         // reference to outer item-data index 65535.
-        if (outer_index == 0xffff and inner_index == 0xffff) continue;
-        try validateDeltaSetReference(data, table, store_offset, item_data_count, outer_index, inner_index);
+        if (mapped.outer == 0xffff and mapped.inner == 0xffff) continue;
+        try validateDeltaSetReference(
+            data,
+            table,
+            store_offset,
+            item_data_count,
+            mapped.outer,
+            mapped.inner,
+        );
     }
     return info;
 }
 
 fn readDeltaSetIndexMapInfo(data: []const u8, table: TableRecord, map_offset: usize, minimum_map_offset: usize) FontError!DeltaSetIndexMapInfo {
-    if (map_offset < minimum_map_offset or map_offset > table.length or table.length - map_offset < 4) return error.BadSfnt;
-    const map_start = table.offset + map_offset;
-    const format = data[map_start];
-    const entry_format = data[map_start + 1];
-    if ((entry_format & 0xc0) != 0) return error.BadSfnt;
-
-    const entry_size = @as(usize, ((entry_format & 0x30) >> 4)) + 1;
-    const inner_bit_count = @as(usize, entry_format & 0x0f) + 1;
-    if (inner_bit_count > entry_size * 8) return error.BadSfnt;
-
-    const map_count, const map_data_start = switch (format) {
-        0 => .{ @as(usize, @intCast(try bin.readU16At(data, map_start + 2))), map_start + 4 },
-        1 => blk: {
-            if (table.length - map_offset < 6) return error.BadSfnt;
-            break :blk .{ @as(usize, @intCast(try bin.readU32At(data, map_start + 2))), map_start + 6 };
-        },
-        else => return error.BadSfnt,
-    };
-    if (map_count != 0 and map_count > (table.offset + table.length - map_data_start) / entry_size) return error.BadSfnt;
-
-    return .{
-        .offset = map_offset,
-        .end_offset = map_data_start - table.offset + map_count * entry_size,
-        .map_count = map_count,
-        .entry_format = entry_format,
-        .entry_size = entry_size,
-        .map_data_start = map_data_start,
-    };
+    return try delta_map.read(
+        data,
+        .{ .offset = table.offset, .length = table.length },
+        map_offset,
+        minimum_map_offset,
+    );
 }
 
 fn validateColrVariationTopLevelRanges(store_offset: usize, store_end_offset: usize, map_offset: usize, map_end_offset: usize) FontError!void {
@@ -10957,21 +10927,6 @@ fn validateColorPaintPayloadsDisjointFromRange(data: []const u8, colr: TableReco
     }
 }
 
-fn readDeltaSetIndexMapEntry(data: []const u8, map: DeltaSetIndexMapInfo, index: usize) FontError!struct { usize, usize } {
-    const entry_offset = map.map_data_start + index * map.entry_size;
-    var entry: u32 = 0;
-    for (0..map.entry_size) |byte_index| {
-        entry = (entry << 8) | data[entry_offset + byte_index];
-    }
-
-    const inner_bit_count = @as(u5, @intCast((map.entry_format & 0x0f) + 1));
-    const inner_mask = (@as(u32, 1) << inner_bit_count) - 1;
-    return .{
-        @as(usize, @intCast(entry >> inner_bit_count)),
-        @as(usize, @intCast(entry & inner_mask)),
-    };
-}
-
 fn validateDeltaSetReference(data: []const u8, table: TableRecord, store_offset: usize, item_data_count: usize, outer_index: usize, inner_index: usize) FontError!void {
     if (outer_index >= item_data_count) return error.BadSfnt;
     const item_count = try itemVariationDataItemCount(data, table, store_offset, outer_index);
@@ -10997,10 +10952,16 @@ fn validateColrVariationIndexSequence(data: []const u8, colr: TableRecord, conte
         }
         for (0..item_count) |sequence_index| {
             const logical_index = @as(usize, var_index_base) + sequence_index;
-            const mapped_index = if (logical_index >= map.map_count) map.map_count - 1 else logical_index;
-            const outer_index, const inner_index = try readDeltaSetIndexMapEntry(data, map, mapped_index);
-            if (outer_index == 0xffff and inner_index == 0xffff) continue;
-            try validateDeltaSetReference(data, colr, ctx.store_offset, ctx.item_data_count, outer_index, inner_index);
+            const mapped = try delta_map.mappedIndex(data, map, logical_index);
+            if (mapped.outer == 0xffff and mapped.inner == 0xffff) continue;
+            try validateDeltaSetReference(
+                data,
+                colr,
+                ctx.store_offset,
+                ctx.item_data_count,
+                mapped.outer,
+                mapped.inner,
+            );
         }
         return;
     }
